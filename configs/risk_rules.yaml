@@ -1,0 +1,50 @@
+{
+  "default": {
+    "max_loss_pct": 0.5,
+    "daily_loss_stop_pct": 1.25,
+    "event_window_size_multiplier": 0.4,
+    "position_size_pct": 8,
+    "min_signal_strength": 60,
+    "min_confidence": 55,
+    "risk_reward_min": 1.8,
+    "trade_quality": {
+      "effective_leverage": 5,
+      "min_target_equity_return_pct": 1.0,
+      "min_reward_to_risk": 1.8,
+      "cost_buffer_price_move_pct": 0.02,
+      "daily_min_trade_samples": 3,
+      "daily_target_trade_samples_low": 5,
+      "daily_target_trade_samples_high": 10,
+      "min_daily_executed_trades_per_strategy": 2
+    },
+    "paper_execution_costs": {
+      "spread_pct": 0.01,
+      "slippage_pct": 0.005,
+      "commission_pct_notional": 0.001,
+      "commission_per_order": 0.0,
+      "min_commission": 0.0
+    }
+  },
+  "asset_class_overrides": {
+    "crypto": {
+      "position_size_pct": 6,
+      "stop_loss_pct": 3.5,
+      "target_pct": 7.0
+    },
+    "commodity": {
+      "position_size_pct": 8,
+      "stop_loss_pct": 2.0,
+      "target_pct": 4.0
+    },
+    "us_stock": {
+      "position_size_pct": 10,
+      "stop_loss_pct": 4.0,
+      "target_pct": 8.0
+    },
+    "a_share": {
+      "position_size_pct": 8,
+      "stop_loss_pct": 5.0,
+      "target_pct": 10.0
+    }
+  }
+}

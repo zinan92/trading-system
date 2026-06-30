@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>交易记录 · gold_1m_macd</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0A0E16;--surface:#101622;--card:#131A27;--raise:#18202F;--border:#26303F;--hair:rgba(255,255,255,.05);
+--ink:#F1F5F9;--muted:#94A1B5;--dim:#637087;--faint:#3F4B5D;--blue:#3B82F6;--blue-l:#60A5FA;--blue-soft:rgba(59,130,246,.13);
+--up:#22C55E;--down:#EF4444;--amber:#F59E0B;--gold:#CDA351;--up-soft:rgba(34,197,94,.12);--down-soft:rgba(239,68,68,.12);
+--r:12px;--ri:8px;--sh:0 8px 26px -14px rgba(0,0,0,.7)}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans","PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{min-height:100vh;background:radial-gradient(1100px 520px at 86% -10%,rgba(59,130,246,.055),transparent 60%),var(--bg)}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1320px;margin:0 auto;padding:22px 28px 44px}
+.neg{color:var(--down)}.pos{color:var(--up)}.amb{color:var(--amber)}.mut{color:var(--muted)}.dimc{color:var(--dim)}
+svg.ic{width:1em;height:1em;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:inline-block;vertical-align:-.13em}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.top{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:4px 2px 16px;border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:13px}
+.logo{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(145deg,var(--blue),#2563EB);box-shadow:0 4px 14px -4px rgba(59,130,246,.6)}.logo svg{width:19px;height:19px;color:#fff;stroke-width:2}
+.bn{font-weight:700;font-size:18px;letter-spacing:-.01em}.bs{font-size:12px;color:var(--muted);margin-top:2px}
+.hk{text-align:right}.hk .k{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}.hk .v{font-size:18px;font-weight:700;margin-top:2px}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--sh)}
+/* summary */
+.sum{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:18px}
+.sc{background:var(--card);border:1px solid var(--border);border-radius:var(--ri);padding:14px 17px;transition:transform .2s,border-color .2s}
+.sc:hover{transform:translateY(-2px);border-color:var(--dim)}
+.sc .k{font-size:11.5px;color:var(--muted)}.sc .v{font-size:21px;font-weight:600;margin-top:6px;letter-spacing:-.02em}.sc .v small{font-size:11px;color:var(--dim);font-weight:400}
+.insight{margin-top:14px;display:flex;gap:12px;padding:15px 18px;border-radius:var(--r);background:linear-gradient(180deg,rgba(245,158,11,.06),transparent 60%),var(--card);border:1px solid var(--border);border-left:3px solid var(--amber)}
+.insight .ii{flex:none;color:var(--amber)}.insight .ii svg{width:19px;height:19px}
+.insight .ix{font-size:13.5px;line-height:1.6}.insight .ix b{color:var(--ink);font-weight:600}.insight .ix .r{color:var(--down);font-weight:600}
+.sect{display:flex;align-items:center;gap:11px;margin:24px 2px 12px}
+.sect .ix{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--blue-l);background:var(--blue-soft);border-radius:5px;padding:2px 7px;font-weight:600}
+.sect h2{font-size:14px;font-weight:600}.sect .hint{font-size:12px;color:var(--dim)}.sect .rule{flex:1;height:1px;background:var(--hair)}
+/* table */
+.tbl{border:1px solid var(--border);border-radius:var(--r);overflow:hidden;background:var(--card)}
+.th,.tr{display:grid;grid-template-columns:80px 90px 70px 1.4fr 104px 92px 70px 50px 24px;align-items:center;gap:10px;padding:0 16px}
+.th{height:40px;background:var(--surface);border-bottom:1px solid var(--border);font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;font-family:"IBM Plex Mono",monospace}
+.tr{height:46px;border-bottom:1px solid var(--hair);border-left:3px solid transparent;font-size:13.5px;cursor:pointer;transition:background .15s}
+.tr:hover{background:var(--raise)}.tr:last-child{border-bottom:0}
+.tr.win{border-left-color:var(--up)}.tr.loss{border-left-color:var(--down)}.tr.open{border-left-color:var(--blue);background:rgba(59,130,246,.04)}
+.dt{font-size:12.5px;color:var(--muted)}
+.side{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.side .a{font-size:11px;padding:1px 7px;border-radius:5px;font-family:"IBM Plex Mono",monospace}
+.side.s .a{color:var(--down);background:var(--down-soft)}.side.l .a{color:var(--up);background:var(--up-soft)}
+.rg{font-size:12px;color:var(--muted)}
+.px{font-size:13px}.px .ar{color:var(--dim);margin:0 5px}
+.pnl{font-weight:700;text-align:right}
+.rsn{display:inline-flex;align-items:center;gap:6px;font-size:12px}.rsn .d{width:7px;height:7px;border-radius:50%}
+.rsn.stop{color:var(--down)}.rsn.stop .d{background:var(--down)}.rsn.target{color:var(--up)}.rsn.target .d{background:var(--up)}.rsn.hold{color:var(--blue-l)}.rsn.hold .d{background:var(--blue)}
+.hold{font-size:12.5px;color:var(--muted);text-align:right}.prot{text-align:center;color:var(--up)}.prot svg{width:15px;height:15px;stroke-width:2.4}.chev{text-align:center;color:var(--dim)}
+.grp{padding:9px 16px;background:var(--surface);font-size:11px;color:var(--dim);letter-spacing:.4px;text-transform:uppercase;font-family:"IBM Plex Mono",monospace;border-bottom:1px solid var(--border)}
+.detail{grid-column:1/-1;padding:14px 4px 16px;border-top:1px dashed var(--border);display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.detail .dk{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px}.detail .dv{font-size:13px;margin-top:4px}
+.foot{margin-top:24px;display:flex;justify-content:space-between;font-size:11px;color:var(--faint);font-family:"IBM Plex Mono",monospace}
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-act" viewBox="0 0 24 24"><polyline points="3,12 7,12 10,5 14,19 17,12 21,12"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><polyline points="4,7 10,13 14,9 20,16"/><polyline points="20,11 20,16 15,16"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><polyline points="5,12.5 10,17.5 19,6.5"/></symbol>
+</defs></svg>
+<div class="wrap">
+  <div class="top"><div class="brand"><div class="logo"><svg class="ic"><use href="#i-act"/></svg></div>
+    <div><div class="bn">交易记录 · gold_1m_macd</div><div class="bs">MACD 金叉/死叉 · 每一笔：为什么进 / 为什么出 / 守没守规矩</div></div></div>
+    <div class="hk"><div class="k">已平仓 / 持仓</div><div class="v mono">19 平 · 3 持</div></div></div>
+
+  <div class="sum">
+    <div class="sc"><div class="k">胜率</div><div class="v mono neg">16% <small>3 胜 / 16 负</small></div></div>
+    <div class="sc"><div class="k">每笔赢</div><div class="v mono pos">+$31.8</div></div>
+    <div class="sc"><div class="k">每笔亏</div><div class="v mono neg">−$16.25</div></div>
+    <div class="sc"><div class="k">盈亏比</div><div class="v mono">≈ 2 : 1</div></div>
+    <div class="sc"><div class="k">已实现合计</div><div class="v mono neg">−$164.7</div></div>
+  </div>
+  <div class="insight"><div class="ii"><svg class="ic"><use href="#i-down"/></svg></div>
+    <div class="ix">盈亏比其实<b>不差（赢 +$31.8 vs 亏 −$16.25 ≈ 2:1）</b>，病在 <span class="r">胜率只有 16%</span>——2:1 要 ~34% 胜率才打平。而且 <b>16 笔亏几乎全是金叉做多</b>，6 月下跌金市里反复抄多被止损；少数死叉做空反而到目标。是<b>进场择时</b>的问题，不是赢得不够大。</div></div>
+
+  <div class="sect"><span class="ix">·</span><h2>成交清单</h2><span class="hint">点开任意一行看进出场细节</span><span class="rule"></span></div>
+  <div class="tbl">
+    <div class="th"><span>日期</span><span>方向</span><span>信号</span><span>进场 → 出场</span><span>盈亏</span><span>退出</span><span>持有</span><span>护单</span><span></span></div>
+    <div class="grp">持仓中 · 3 笔（净空 0.59 oz · 浮盈 +$28.5）</div>
+    <div class="tr open"><span class="dt">06-29</span><span class="side s"><span class="a">空▼</span></span><span class="rg">死叉</span><span class="px mono">4061.1 <span class="ar">→</span> <span class="dimc">现 4051</span></span><span class="pnl mono pos">+$6.07</span><span class="rsn hold"><span class="d"></span>持仓</span><span class="hold mono">7h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr open"><span class="dt">06-24</span><span class="side s"><span class="a">空▼</span></span><span class="rg">死叉</span><span class="px mono">4047.1 <span class="ar">→</span> <span class="dimc">现 4051</span></span><span class="pnl mono pos">+$3.32</span><span class="rsn hold"><span class="d"></span>持仓</span><span class="hold mono">5d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr open"><span class="dt">06-23</span><span class="side s"><span class="a">空▼</span></span><span class="rg">死叉</span><span class="px mono">4129.0 <span class="ar">→</span> <span class="dimc">现 4051</span></span><span class="pnl mono pos">+$19.12</span><span class="rsn hold"><span class="d"></span>持仓</span><span class="hold mono">6d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="grp">已平仓 · 近期在前</div>
+    <div class="tr loss"><span class="dt">06-24</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4140.1 <span class="ar">→</span> 4056.9</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">11h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss" style="height:auto;display:block;padding:0 16px 4px">
+      <div class="tr loss" style="border-left:0;padding:0;height:46px"><span class="dt">06-24</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4126.4 <span class="ar">→</span> 4043.5</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">30h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev" style="color:var(--blue-l)">⌄</span></div>
+      <div class="detail">
+        <div><div class="dk">进场理由</div><div class="dv">MACD 金叉(12/26/9) 形成，多头入场 · 强度 70 / 置信 63</div></div>
+        <div><div class="dk">止损 / 目标</div><div class="dv mono">SL 4209 · TP 3963 · 风险 −$16.25</div></div>
+        <div><div class="dk">退出</div><div class="dv">触及止损 4043.5（金价继续下跌，做多被打损）</div></div>
+        <div><div class="dk">护单 / 回测</div><div class="dv">TP+SL 已挂 · 回测样本薄(thin，不挡)</div></div>
+      </div>
+    </div>
+    <div class="tr loss"><span class="dt">06-23</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4217.5 <span class="ar">→</span> 4132.8</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">11d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-23</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4216.4 <span class="ar">→</span> 4131.7</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">10d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-23</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4195.0 <span class="ar">→</span> 4110.7</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">4d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-19</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4275.4 <span class="ar">→</span> 4189.5</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">4d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr win"><span class="dt">06-14</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4096.9 <span class="ar">→</span> 4260.8</span><span class="pnl mono pos">+$31.82</span><span class="rsn target"><span class="d"></span>到目标</span><span class="hold mono">3d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-11</span><span class="side s"><span class="a">空▼</span></span><span class="rg">死叉</span><span class="px mono">4130.6 <span class="ar">→</span> 4213.6</span><span class="pnl mono neg">−$16.26</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">27h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-11</span><span class="side s"><span class="a">空▼</span></span><span class="rg">死叉</span><span class="px mono">4125.9 <span class="ar">→</span> 4208.9</span><span class="pnl mono neg">−$16.26</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">26h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-10</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4226.0 <span class="ar">→</span> 4141.0</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">12h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-10</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4208.5 <span class="ar">→</span> 4123.9</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">15h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr win"><span class="dt">06-10</span><span class="side s"><span class="a">空▼</span></span><span class="rg">死叉</span><span class="px mono">4320.1 <span class="ar">→</span> 4147.7</span><span class="pnl mono pos">+$31.75</span><span class="rsn target"><span class="d"></span>到目标</span><span class="hold mono">4.7d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-10</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4310.1 <span class="ar">→</span> 4223.5</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">42h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-09</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4323.8 <span class="ar">→</span> 4236.9</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">4d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-08</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4387.6 <span class="ar">→</span> 4299.4</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">2.7d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr win"><span class="dt">06-05</span><span class="side s"><span class="a">空▼</span></span><span class="rg">死叉</span><span class="px mono">4500.8 <span class="ar">→</span> 4321.2</span><span class="pnl mono pos">+$31.75</span><span class="rsn target"><span class="d"></span>到目标</span><span class="hold mono">3.1d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-05</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4416.0 <span class="ar">→</span> 4327.2</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">5.5h</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-05</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4498.3 <span class="ar">→</span> 4407.9</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">3.4d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+    <div class="tr loss"><span class="dt">06-05</span><span class="side l"><span class="a">多▲</span></span><span class="rg">金叉</span><span class="px mono">4511.7 <span class="ar">→</span> 4421.0</span><span class="pnl mono neg">−$16.25</span><span class="rsn stop"><span class="d"></span>止损</span><span class="hold mono">3.3d</span><span class="prot"><svg class="ic"><use href="#i-check"/></svg></span><span class="chev">›</span></div>
+  </div>
+  <div class="foot"><span>v3 · 交易记录 · gold_1m_macd 真实成交 · 06-02 → 06-29</span><span>DARK · DATA-DENSE · TRUST-BLUE · IBM PLEX</span></div>
+</div>
+</body></html>

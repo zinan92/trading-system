@@ -1,0 +1,142 @@
+{
+  "kline_base_url": "local_gold_api",
+  "intel_base_url": "http://localhost:8001",
+  "output_root": "outputs",
+  "local_market_db": "data/market_data.db",
+  "copilot_base_url": "http://localhost:8200",
+  "backtest_base_url": "http://localhost:8300",
+  "timeframes": ["5m"],
+  "factor_timeframes": ["1d"],
+  "signal_lookback_bars": 240,
+  "backtest_lookback_bars": 1000,
+  "chart_display_bars": 3500,
+  "local_backtest_enabled": true,
+  "data_quality_gate": {
+    "enabled": true,
+    "min_clean_rows": 200,
+    "max_missing_ratio": 0.05,
+    "max_synthetic_ratio": 0.20,
+    "max_spike_flags": 0
+  },
+  "execution_mode": "paper",
+  "live_trading_enabled": false,
+  "paper_account": {
+    "starting_equity": 10000,
+    "max_allowed_leverage": 5,
+    "base_currency": "USD",
+    "default_ticker": "XAU"
+  },
+  "broker": {
+    "provider": "binance_usdm",
+    "dry_run": true,
+    "environment": "demo",
+    "base_url": "https://demo-fapi.binance.com",
+    "api_key_env": "BINANCE_API_KEY",
+    "api_secret_env": "BINANCE_API_SECRET",
+    "allowed_symbols": ["GOLD", "XAUUSD"],
+    "instrument_map": {
+      "GOLD": "XAUUSDT",
+      "XAUUSD": "XAUUSDT"
+    },
+    "request_dir": "live_order_requests",
+    "outbox_dir": "data/broker_outbox/mt5",
+    "inbox_dir": "data/broker_inbox/mt5",
+    "receipt_pattern": "*.json"
+  },
+  "fallback_to_mock": false,
+  "intel_fallback_to_mock": true,
+  "analysis_fallback_to_mock": true,
+  "allow_synthetic_seed": true,
+  "_note_allow_public_snapshot_bar_for_paper": "DEPRECATED / no-op. gold-api/env spot snapshots are now always stored as quotes only, never written to the bars table as degenerate candles (see services/kline_client._fetch_local_gold_5m). This flag is still accepted for backward compatibility but no longer changes behavior.",
+  "allow_public_snapshot_bar_for_paper": true,
+  "gold_5m_backfill": {
+    "enabled": true,
+    "provider": "yahoo_chart",
+    "yahoo_symbol": "GC=F",
+    "range": "5d",
+    "min_non_seed_rows": 240
+  },
+  "market_data_sources": {
+    "gold_5m": {
+      "public_providers": ["gold-api.com", "yahoo_chart:GC=F", "binance_usdm"],
+      "execution_venue_providers": ["binance_usdm"],
+      "official_broker_providers": ["broker_csv", "mt5_csv", "ibkr", "oanda"],
+      "require_official_for_live": false,
+      "allow_execution_venue_for_live": true,
+      "max_live_bar_lag_minutes": 15,
+      "max_public_quote_age_minutes": 15,
+      "price_sanity": {
+        "enabled": true,
+        "min_price": 3000,
+        "max_price": 6000,
+        "max_quote_bar_deviation_pct": 3
+      }
+    }
+  },
+  "broker_feed": {
+    "input_dir": "data/broker_feeds/gold_5m",
+    "pattern": "*.csv",
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "provider": "mt5_csv"
+  },
+  "oanda_feed": {
+    "environment": "practice",
+    "token_env": "OANDA_API_TOKEN",
+    "account_id_env": "OANDA_ACCOUNT_ID",
+    "instrument": "XAU_USD",
+    "granularity": "M5",
+    "price": "M",
+    "count": 500,
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "timeout_seconds": 10
+  },
+  "binance_usdm_feed": {
+    "environment": "demo",
+    "base_url": "https://demo-fapi.binance.com",
+    "symbol": "XAUUSDT",
+    "interval": "5m",
+    "output_symbol": "GOLD",
+    "timeframe": "5m",
+    "limit": 500,
+    "timeout_seconds": 10
+  },
+  "binance_usdm_1m_feed": {
+    "environment": "demo",
+    "base_url": "https://demo-fapi.binance.com",
+    "symbol": "XAUUSDT",
+    "interval": "1m",
+    "output_symbol": "GOLD",
+    "timeframe": "1m",
+    "limit": 500,
+    "timeout_seconds": 10
+  },
+  "broker_profiles": {
+    "binance_usdm": {
+      "provider": "binance_usdm",
+      "environment": "demo",
+      "base_url": "https://demo-fapi.binance.com",
+      "dry_run": true,
+      "api_key_env": "BINANCE_API_KEY",
+      "api_secret_env": "BINANCE_API_SECRET",
+      "allowed_symbols": ["GOLD", "XAUUSD"],
+      "instrument_map": {
+        "GOLD": "XAUUSDT",
+        "XAUUSD": "XAUUSDT"
+      },
+      "request_dir": "live_order_requests",
+      "timeout_seconds": 10
+    }
+  },
+  "demo_trading": {
+    "enabled": true,
+    "active_strategy_id": "gold_1m_chan",
+    "broker_profile": "binance_usdm",
+    "request_dir": "demo_order_requests",
+    "max_order_quantity": 0.002,
+    "require_flat_before_entry": true,
+    "protective_failure_action": "reduce_only_close",
+    "note": "Only gold_1m_chan (1m Chan theory 2/2s buy-sell) may submit real Binance Futures Demo XAUUSDT orders. Other strategies remain paper."
+  }
+}

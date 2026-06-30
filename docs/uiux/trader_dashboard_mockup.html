@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gold Trader UX Mockup</title>
+  <style>
+    :root{
+      --bg:#070807;
+      --panel:#111315;
+      --panel-2:#161616;
+      --line:#2b2d30;
+      --line-hot:#c99c32;
+      --text:#f4f0e7;
+      --muted:#9ca3ad;
+      --soft:#d7c08a;
+      --green:#2dd4bf;
+      --red:#ef6767;
+      --blue:#8fb7ff;
+      --amber:#f4c542;
+      --shadow:0 28px 80px rgba(0,0,0,.38);
+      font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:
+        radial-gradient(circle at 18% 0%, rgba(201,156,50,.10), transparent 30%),
+        linear-gradient(180deg,#0d0c08 0%,#070807 34%,#050606 100%);
+      color:var(--text);
+      min-width:1280px;
+    }
+    .page{width:min(1600px,calc(100vw - 80px));margin:0 auto;padding:28px 0 64px}
+    header{
+      display:flex;align-items:center;justify-content:space-between;
+      padding-bottom:18px;border-bottom:1px solid rgba(244,197,66,.22);
+    }
+    .brand{display:flex;align-items:center;gap:14px}
+    .badge{
+      width:38px;height:38px;border:1px solid rgba(244,197,66,.5);border-radius:10px;
+      display:grid;place-items:center;color:var(--amber);font-weight:900;background:rgba(244,197,66,.08)
+    }
+    h1{margin:0;font-size:22px;letter-spacing:0;font-weight:850}
+    .sub{margin-top:3px;color:var(--muted);font-size:12px}
+    .header-actions{display:flex;gap:10px;align-items:center}
+    .btn{
+      border:1px solid rgba(244,197,66,.28);border-radius:8px;background:#111315;color:var(--text);
+      padding:9px 12px;font-weight:760;font-size:12px
+    }
+    .btn.primary{border-color:rgba(45,212,191,.5);background:rgba(45,212,191,.11)}
+    .status{
+      margin:18px 0 14px;padding:12px 14px;border:1px solid rgba(239,103,103,.35);
+      border-radius:8px;background:rgba(239,103,103,.08);display:flex;justify-content:space-between;align-items:center;
+      font-size:13px;font-weight:800
+    }
+    .status span{color:var(--muted);font-weight:650}
+    nav{display:flex;gap:22px;margin:18px 0 20px}
+    nav a{color:var(--muted);font-weight:820;font-size:13px;text-decoration:none;padding-bottom:10px;border-bottom:2px solid transparent}
+    nav a.active{color:var(--text);border-color:var(--amber)}
+    .section-title{display:flex;justify-content:space-between;align-items:end;margin:28px 0 12px}
+    .section-title h2{margin:0;font-size:18px}
+    .section-title small{color:var(--muted);font-weight:760}
+    .panel{
+      background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.018));
+      border:1px solid rgba(255,255,255,.09);border-radius:8px;box-shadow:var(--shadow)
+    }
+    .portfolio-grid{display:grid;grid-template-columns:1.7fr .9fr;gap:14px}
+    .chart-panel{height:350px;padding:18px;position:relative;overflow:hidden}
+    .chart-head{display:flex;justify-content:space-between;align-items:center}
+    .chart-head b{font-size:16px}
+    .chart-head em{font-style:normal;color:var(--muted);font-size:12px}
+    .fake-chart{position:absolute;left:26px;right:26px;top:82px;bottom:44px}
+    .gridline{position:absolute;left:0;right:0;height:1px;background:rgba(255,255,255,.07)}
+    .gridline:nth-child(1){top:20%}.gridline:nth-child(2){top:45%}.gridline:nth-child(3){top:70%}
+    .line{position:absolute;left:0;right:0;height:100%;border-bottom:2px solid var(--green);transform:skewY(-5deg);opacity:.9}
+    .line.gold{border-color:var(--amber);transform:skewY(1deg);opacity:.75}
+    .line.purple{border-color:#8b5cf6;transform:skewY(-3deg);opacity:.82}
+    .legend{position:absolute;right:22px;top:58px;display:flex;gap:12px;color:var(--muted);font-size:11px}
+    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:var(--green)}
+    .dot.gold{background:var(--amber)}.dot.purple{background:#8b5cf6}
+    .book{padding:18px;display:grid;gap:12px}
+    .metric{padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:rgba(255,255,255,.025)}
+    .metric span{display:block;color:var(--muted);font-size:11px;font-weight:760}
+    .metric b{display:block;margin-top:8px;font-size:22px}
+    .metric.good b{color:var(--green)}.metric.bad b{color:var(--red)}
+    .leaderboard{margin-top:14px;overflow:hidden}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    th,td{padding:13px 14px;border-bottom:1px solid rgba(255,255,255,.07);text-align:left}
+    th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+    td b{font-size:13px}
+    .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:5px 8px;color:var(--soft);font-size:11px;font-weight:800}
+    .pill.good{color:var(--green);border-color:rgba(45,212,191,.35)}.pill.bad{color:var(--red);border-color:rgba(239,103,103,.35)}
+    .journey{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
+    .journey article{padding:16px}
+    .journey b{display:block;margin-bottom:8px}
+    .journey p{margin:0;color:var(--muted);font-size:12px;line-height:1.55}
+    .replay-grid{display:grid;grid-template-columns:1.7fr .9fr;gap:14px}
+    .main-chart{height:520px;padding:14px;position:relative}
+    .context-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .mini-chart{height:254px;padding:12px;position:relative}
+    .candle-field{
+      position:absolute;left:18px;right:18px;top:62px;bottom:54px;
+      background:
+        linear-gradient(90deg,transparent 0 12%,rgba(255,255,255,.045) 12% 12.4%,transparent 12.4% 24%),
+        repeating-linear-gradient(0deg,transparent 0 48px,rgba(255,255,255,.05) 49px);
+    }
+    .candle{position:absolute;bottom:32%;width:9px;background:var(--green);border-radius:1px}
+    .candle.red{background:var(--red)}
+    .mark{position:absolute;width:16px;height:16px;border-radius:50%;background:var(--amber);right:26%;bottom:41%;box-shadow:0 0 0 5px rgba(244,197,66,.14)}
+    .decision-strip{
+      margin-top:12px;display:grid;grid-template-columns:140px 1fr 1fr 1fr 1.2fr;gap:10px;padding:12px
+    }
+    .decision-strip div{border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:10px;background:rgba(255,255,255,.025)}
+    .decision-strip span{display:block;color:var(--muted);font-size:11px}.decision-strip b{display:block;margin-top:4px}
+    .showcase{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
+    .info-card{padding:16px}
+    .info-card h3{margin:0 0 10px;font-size:15px}.info-card ul{margin:0;padding-left:18px;color:var(--muted);font-size:12px;line-height:1.65}
+    .tag-row{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+    .tag{font-size:11px;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:5px 8px;color:var(--muted)}
+    .tag.show{color:var(--green);border-color:rgba(45,212,191,.35)}
+    .tag.fold{color:var(--amber);border-color:rgba(244,197,66,.35)}
+    .tag.hide{color:#a78bfa;border-color:rgba(167,139,250,.35)}
+    .wire-note{
+      margin:18px 0 0;padding:12px 14px;border-left:3px solid var(--amber);background:rgba(244,197,66,.07);
+      color:var(--soft);font-size:12px;line-height:1.55
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div class="brand">
+        <div class="badge">Au</div>
+        <div>
+          <h1>黄金交易驾驶舱 UX Mockup</h1>
+          <div class="sub">纯 UI/UX 蓝图：先确认信息架构，再改真实 dashboard</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn">OPS 入口</button>
+        <button class="btn primary">打开 Replay</button>
+      </div>
+    </header>
+
+    <div class="status">
+      <strong>暂停新增仓位 · 只复盘，不加仓</strong>
+      <span>这里展示用户必须知道的 blocker；细节进入 OPS</span>
+    </div>
+
+    <nav>
+      <a class="active" href="#portfolio">组合</a>
+      <a href="#strategy">策略</a>
+      <a href="#replay">交易回放</a>
+      <a href="#rules">信息分层</a>
+    </nav>
+
+    <section id="portfolio">
+      <div class="section-title">
+        <h2>1. PM 首屏：组合表现 + 今天该看什么</h2>
+        <small>不是删内容，而是把最有决策价值的东西放回来</small>
+      </div>
+      <div class="portfolio-grid">
+        <article class="panel chart-panel">
+          <div class="chart-head">
+            <b>策略 NAV vs 黄金基准</b>
+            <em>默认展示 Top 3 策略；其余在下方策略表里选</em>
+          </div>
+          <div class="legend">
+            <span><i class="dot"></i>5m ADX</span>
+            <span><i class="dot purple"></i>缠论对照</span>
+            <span><i class="dot gold"></i>黄金基准</span>
+          </div>
+          <div class="fake-chart">
+            <i class="gridline"></i><i class="gridline"></i><i class="gridline"></i>
+            <div class="line gold"></div>
+            <div class="line purple"></div>
+            <div class="line"></div>
+          </div>
+        </article>
+        <aside class="panel book">
+          <div class="metric good"><span>今日已实现 PnL</span><b>+$82.40</b></div>
+          <div class="metric bad"><span>未实现 PnL</span><b>-$13.10</b></div>
+          <div class="metric"><span>真实成交 / 持仓</span><b>8 / 2</b></div>
+          <div class="metric"><span>下一步</span><b style="font-size:16px">复盘最新亏损持仓</b></div>
+        </aside>
+      </div>
+      <div class="panel leaderboard">
+        <table>
+          <thead>
+            <tr><th>策略</th><th>类别</th><th>今日成交</th><th>已实现</th><th>未实现</th><th>Edge 判断</th><th>下一步</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><b>5m ADX 回踩</b></td><td>趋势跟随</td><td>2</td><td style="color:var(--green)">+$74</td><td style="color:var(--red)">-$8</td><td><span class="pill">样本不足</span></td><td>看最新持仓 TP/SL</td></tr>
+            <tr><td><b>布林均值回归</b></td><td>反转</td><td>3</td><td style="color:var(--green)">+$22</td><td>$0</td><td><span class="pill good">接近有效</span></td><td>复核止盈是否过近</td></tr>
+            <tr><td><b>缠论 1m 二买</b></td><td>结构信号</td><td>0</td><td>$0</td><td>$0</td><td><span class="pill bad">频率不足</span></td><td>检查信号漏斗</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="wire-note">这里把“很多内容”放回主页面：PnL、成交数、持仓、策略表、下一步复盘任务都应该可见。隐藏的是 OPS 细节，不是交易决策信息。</div>
+    </section>
+
+    <section id="strategy">
+      <div class="section-title">
+        <h2>2. Trader / PM 策略页：一个策略一本账</h2>
+        <small>每个 Trader 负责一个策略族；PM 看状态和行动</small>
+      </div>
+      <div class="showcase">
+        <article class="panel info-card">
+          <h3>策略概览应该展示</h3>
+          <ul>
+            <li>今日成交、持仓、已平仓</li>
+            <li>已实现 / 未实现 PnL</li>
+            <li>风险状态和 blocker</li>
+            <li>最近 3-5 笔交易</li>
+          </ul>
+          <div class="tag-row"><span class="tag show">主页面展示</span></div>
+        </article>
+        <article class="panel info-card">
+          <h3>复盘证据可以折叠</h3>
+          <ul>
+            <li>为什么赚钱 / 不赚钱</li>
+            <li>TP 是否太远</li>
+            <li>SL 是否太近</li>
+            <li>方向是否错</li>
+          </ul>
+          <div class="tag-row"><span class="tag fold">默认折叠</span></div>
+        </article>
+        <article class="panel info-card">
+          <h3>后台诊断只进 OPS</h3>
+          <ul>
+            <li>raw artifact path</li>
+            <li>schema / audit wording</li>
+            <li>collector run detail</li>
+            <li>debug payload</li>
+          </ul>
+          <div class="tag-row"><span class="tag hide">不在 Trader 主路径</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="replay">
+      <div class="section-title">
+        <h2>3. Replay 首屏：主图 + context + 单根 K 线决策</h2>
+        <small>主视觉焦点是左侧回放 K 线，不是下方 cards</small>
+      </div>
+      <div class="replay-grid">
+        <article class="panel main-chart">
+          <div class="chart-head"><b>1m 主复盘 K 线</b><em>用户当前正在 replay 的时间级别</em></div>
+          <div class="candle-field">
+            <i class="candle" style="left:10%;height:70px"></i>
+            <i class="candle red" style="left:16%;height:46px"></i>
+            <i class="candle" style="left:22%;height:88px"></i>
+            <i class="candle red" style="left:28%;height:58px"></i>
+            <i class="candle" style="left:34%;height:94px"></i>
+            <i class="candle red" style="left:40%;height:64px"></i>
+            <i class="candle" style="left:46%;height:82px"></i>
+            <i class="candle red" style="left:52%;height:50px"></i>
+            <i class="candle" style="left:58%;height:72px"></i>
+            <span class="mark"></span>
+          </div>
+        </article>
+        <div class="context-grid">
+          <article class="panel mini-chart"><div class="chart-head"><b>1D</b><em>大方向</em></div><div class="candle-field"><span class="mark"></span></div></article>
+          <article class="panel mini-chart"><div class="chart-head"><b>4H</b><em>位置</em></div><div class="candle-field"><span class="mark"></span></div></article>
+          <article class="panel mini-chart"><div class="chart-head"><b>15m</b><em>结构</em></div><div class="candle-field"><span class="mark"></span></div></article>
+          <article class="panel mini-chart"><div class="chart-head"><b>5m</b><em>触发</em></div><div class="candle-field"><span class="mark"></span></div></article>
+        </div>
+      </div>
+      <div class="panel decision-strip">
+        <div><span>决策</span><b>NO-GO</b></div>
+        <div><span>方向</span><b>观望 / 做多候选</b></div>
+        <div><span>Entry / TP / SL</span><b>未生成</b></div>
+        <div><span>原因</span><b>候选太薄</b></div>
+        <div><span>下一步</span><b>展开病历，看是哪一关拦住</b></div>
+      </div>
+      <div class="wire-note">Replay 首屏应该允许展示有用信息：Go/No-Go、方向、Entry/TP/SL、原因、下一步。折叠的是技术横截面，不是这些结论。</div>
+    </section>
+
+    <section id="rules">
+      <div class="section-title">
+        <h2>4. 展示 / 折叠 / 隐藏的规则</h2>
+        <small>下一轮改版按这个表执行</small>
+      </div>
+      <div class="showcase">
+        <article class="panel info-card">
+          <h3>展示</h3>
+          <ul>
+            <li>组合 NAV、黄金基准</li>
+            <li>真实成交数和 PnL</li>
+            <li>策略排行榜</li>
+            <li>单笔交易 Entry / TP / SL</li>
+            <li>当前 blocker 和下一步</li>
+          </ul>
+          <div class="tag-row"><span class="tag show">Show</span></div>
+        </article>
+        <article class="panel info-card">
+          <h3>折叠</h3>
+          <ul>
+            <li>NAV 读法</li>
+            <li>完整交易病历</li>
+            <li>技术指标横截面</li>
+            <li>归因 worksheet</li>
+            <li>其他交易列表</li>
+          </ul>
+          <div class="tag-row"><span class="tag fold">Collapse</span></div>
+        </article>
+        <article class="panel info-card">
+          <h3>隐藏到 OPS</h3>
+          <ul>
+            <li>collector / artifact / schema</li>
+            <li>raw JSON and audit wording</li>
+            <li>backend payload debug</li>
+            <li>replay boundary internals</li>
+            <li>server health internals</li>
+          </ul>
+          <div class="tag-row"><span class="tag hide">OPS only</span></div>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+

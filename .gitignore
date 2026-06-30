@@ -1,0 +1,25 @@
+# python
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# secrets
+configs/live.env
+
+# runtime state / artifacts
+.DS_Store
+outputs/
+*.db
+*.db.bak-*
+*.sqlite
+*.sqlite3
+data/broker_bridge_smoke/
+data/broker_feed_smoke/
+data/broker_feeds/
+data/broker_inbox/
+data/broker_outbox/
+
+# local tooling
+$CODEX_HOME/
+.claude/
+.playwright-mcp/

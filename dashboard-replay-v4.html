@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>复盘 · trade_5ce5cd986d</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="data/vendor/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{--bg:#0A0D12;--bg2:#0E1218;--panel:#11161F;--panel2:#0E131B;--line:#1B2230;--line2:#232C3C;
+--ink:#E9EDF4;--muted:#8B94A4;--dim:#586273;--faint:#3A4252;--cyan:#5BB8E8;--cyan-d:#2E5C77;
+--gold:#C9A24B;--gold-d:#6B5524;--up:#46D69A;--down:#F0616D;--amber:#E6A93B;--r:14px;--rs:10px}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);font-family:"Hanken Grotesk","PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{min-height:100vh;background:radial-gradient(1100px 500px at 80% -8%,rgba(91,184,232,.06),transparent 60%),var(--bg)}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1340px;margin:0 auto;padding:22px 28px 44px}
+.neg{color:var(--down)}.pos{color:var(--up)}.amb{color:var(--amber)}.cy{color:var(--cyan)}.mut{color:var(--muted)}.dimc{color:var(--dim)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.bk{display:flex;align-items:center;gap:13px}
+.dia{width:30px;height:30px;border:1px solid var(--gold);transform:rotate(45deg);display:grid;place-items:center;border-radius:6px;background:linear-gradient(135deg,rgba(201,162,75,.18),rgba(201,162,75,.02))}
+.dia i{transform:rotate(-45deg);width:9px;height:9px;border-radius:50%;background:var(--gold);box-shadow:0 0 10px rgba(201,162,75,.6)}
+.bn{font-weight:800;font-size:18px;display:flex;align-items:center;gap:9px}
+.short{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--down);background:rgba(240,97,109,.12);border:1px solid rgba(240,97,109,.3);border-radius:5px;padding:2px 8px}
+.bs{font-size:12px;color:var(--muted);margin-top:2px}.bs b{color:var(--ink);font-weight:600}
+.hr{display:flex;align-items:center;gap:22px}
+.hi{text-align:right}.hi .k{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}.hi .v{font-size:17px;font-weight:700;margin-top:2px}
+.back{font-size:12px;color:var(--cyan);border:1px solid var(--cyan-d);border-radius:7px;padding:6px 12px;background:rgba(91,184,232,.06)}
+.slabel{display:flex;align-items:center;gap:10px;margin:24px 2px 12px}
+.slabel .n{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--gold);border:1px solid var(--gold-d);border-radius:4px;padding:1px 6px}
+.slabel h2{font-size:14px;font-weight:700}.slabel .hint{font-size:12px;color:var(--dim)}.slabel .rule{flex:1;height:1px;background:var(--line)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.ctop{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;gap:14px;flex-wrap:wrap}
+.transport{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.jump{display:inline-flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:11.5px;border:1px solid var(--line2);border-radius:6px;padding:5px 10px;color:var(--muted);background:var(--panel2)}
+.jump .d{width:7px;height:7px;border-radius:50%}.jump.sig .d{background:var(--gold)}.jump.fill .d{background:var(--cyan)}
+.step{width:30px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--panel2);color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:12px;cursor:pointer}
+.play{width:34px;height:28px;border:1px solid var(--gold-d);border-radius:6px;background:rgba(201,162,75,.12);color:var(--gold);cursor:pointer}
+.seg{display:flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.seg button{background:transparent;color:var(--dim);border:0;padding:5px 12px;font-family:"IBM Plex Mono",monospace;font-size:11.5px;cursor:pointer}
+.seg.g button.on{background:rgba(201,162,75,.12);color:var(--gold)}
+.selbar{display:flex;align-items:center;gap:22px;padding:9px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap}
+.selgrp{display:flex;align-items:center;gap:8px}
+.sellbl{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.selchip{font-family:"IBM Plex Mono",monospace;font-size:11.5px;border:1px solid var(--line2);border-radius:6px;padding:4px 11px;color:var(--muted);cursor:pointer}
+.selchip.main{border-color:var(--gold-d);background:rgba(201,162,75,.1);color:var(--gold)}
+.selchip.on{border-color:var(--cyan-d);background:rgba(91,184,232,.1);color:var(--cyan)}
+.selnote{font-size:10.5px;color:var(--faint)}
+.chartrow{display:grid;grid-template-columns:1.35fr 1fr;gap:1px;background:var(--line)}
+.mainchart{background:var(--panel);position:relative;padding:4px 8px 0}
+.mainchart .farchip{position:absolute;right:60px;font-family:"IBM Plex Mono",monospace;font-size:10px;padding:2px 8px;border-radius:5px;z-index:3}
+.farchip.sl{top:10px;color:var(--down);background:rgba(240,97,109,.1);border:1px solid rgba(240,97,109,.25)}
+.farchip.tp{bottom:24px;color:var(--up);background:rgba(70,214,154,.1);border:1px solid rgba(70,214,154,.25)}
+.ctxgrid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:1px;background:var(--line)}
+.ctxmini{background:var(--panel);position:relative}
+.ctxmini .mh{position:absolute;top:7px;left:11px;right:11px;display:flex;justify-content:space-between;align-items:center;z-index:2;pointer-events:none}
+.ctxmini .tf{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);font-weight:600}
+.ctxmini .tr{font-size:10px;font-weight:700}.ctxmini .lc{font-family:"IBM Plex Mono",monospace;font-size:10.5px}
+.chartpane{width:100%;height:360px;position:relative;overflow:hidden;background:linear-gradient(180deg,rgba(255,255,255,.012),rgba(255,255,255,0))}
+.mini-pane{height:150px}
+.chart-loading{position:absolute;inset:0;display:grid;place-items:center;color:var(--dim);font-size:12px;font-family:"IBM Plex Mono",monospace}
+.chart-error{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--amber);font-size:12px;padding:18px}
+.med{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.mc{background:var(--panel);padding:14px 15px}
+.mc .k{font-size:11px;color:var(--muted)}.mc .v{font-size:17px;font-weight:700;margin-top:6px}.mc .v small{font-size:11px;color:var(--dim);font-weight:500}
+.accept{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.ac{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:5px 12px}
+.ac .ck{color:var(--up);font-weight:700}
+.life{display:flex;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--panel)}
+.lstep{flex:1;padding:16px 20px;position:relative;border-right:1px solid var(--line)}.lstep:last-child{border-right:0}
+.lstep .ln{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--gold)}
+.lstep .lt{font-size:15px;font-weight:700;margin-top:5px}.lstep .ls{font-size:12px;color:var(--muted);margin-top:4px}
+.lstep.done .lt{color:var(--up)}.lstep.now .lt{color:var(--cyan)}
+.lstep .arrow{position:absolute;right:-9px;top:50%;transform:translateY(-50%);z-index:3;color:var(--dim);font-size:14px;background:var(--bg);padding:2px}
+.attr{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.adim{background:var(--panel);border:1px solid var(--line);border-radius:var(--rs);padding:15px 17px}
+.adim .ah{display:flex;align-items:center;justify-content:space-between}.adim .at{font-size:13.5px;font-weight:700}
+.badge{font-size:11px;font-weight:600;padding:2px 9px;border-radius:5px}
+.badge.ok{color:var(--up);background:rgba(70,214,154,.12)}.badge.warn{color:var(--amber);background:rgba(230,169,59,.12)}
+.adim .ar{font-size:12.5px;color:var(--muted);margin-top:9px;line-height:1.5}.adim .anum{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--dim);margin-top:9px}
+.gates{display:flex;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--panel)}
+.gate{flex:1;padding:14px 15px;border-right:1px solid var(--line);position:relative}.gate:last-child{border-right:0}
+.gate .gn{font-size:11px;color:var(--dim)}.gate .gt{font-size:13px;font-weight:600;margin-top:5px}
+.gate .gv{font-size:11.5px;margin-top:6px;font-weight:600}.gate.pass .gv{color:var(--up)}.gate.plan .gv{color:var(--cyan)}
+.gate .gd{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.45}
+.gate .arrow{position:absolute;right:-7px;top:18px;z-index:3;color:var(--dim);font-size:13px;background:var(--bg);padding:1px}
+.mv{display:grid;grid-template-columns:1.3fr 1fr;gap:14px}
+.mvcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px}
+.mvtop{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.expired{font-size:11px;color:var(--down);background:rgba(240,97,109,.1);border:1px solid rgba(240,97,109,.28);border-radius:5px;padding:2px 9px;font-weight:600}
+.mvkv{display:flex;justify-content:space-between;font-size:12.5px;padding:7px 0;border-bottom:1px dashed var(--line)}.mvkv:last-child{border-bottom:0}.mvkv .k{color:var(--muted)}.mvkv .v{font-weight:600;text-align:right;max-width:62%}
+.quote{margin-top:12px;padding:12px 14px;background:var(--panel2);border:1px solid var(--line);border-left:2px solid var(--gold);border-radius:8px;font-size:12.5px;line-height:1.6;color:var(--ink)}
+.levels{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.lvl{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);border:1px solid var(--line2);border-radius:5px;padding:3px 8px}
+textarea{width:100%;height:88px;background:var(--panel2);border:1px solid var(--line2);border-radius:8px;color:var(--ink);font-family:inherit;font-size:12.5px;padding:11px;resize:none;margin-top:10px}
+textarea::placeholder{color:var(--dim)}
+.mvbtns{display:flex;gap:8px;margin-top:10px;align-items:center}
+.btn{font-size:12px;border-radius:7px;padding:7px 13px;cursor:pointer;border:1px solid var(--line2);background:var(--panel2);color:var(--muted)}
+.btn.primary{border-color:var(--gold-d);background:rgba(201,162,75,.12);color:var(--gold)}
+.mvbtns .note{font-size:11px;color:var(--dim)}
+.mstrip{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--rs);overflow:hidden}
+.ms{flex:1;background:var(--panel);padding:11px 14px}
+.ms .mk{font-size:11px;color:var(--dim);font-family:"IBM Plex Mono",monospace}.ms .mv2{font-size:12.5px;font-weight:600;margin-top:4px;display:flex;align-items:center;gap:6px}
+.ms .dot{width:7px;height:7px;border-radius:50%}.ms .dot.g{background:var(--up)}.ms .dot.a{background:var(--amber)}
+.foot{margin-top:26px;display:flex;justify-content:space-between;font-size:11px;color:var(--faint);font-family:"IBM Plex Mono",monospace}
+</style></head><body class="replay-v4"><div class="wrap">
+  <div class="head">
+    <div class="bk"><div class="dia"><i></i></div>
+      <div><div class="bn">复盘 · gold_1m_macd <span class="short">做空 ▼</span></div>
+      <div class="bs">trade_5ce5cd986d · MACD 死叉入场 · 复盘游标 <b>06-29 14:16</b>（成交分钟）</div></div></div>
+    <div class="hr"><div class="hi"><div class="k">这笔 PnL</div><div class="v mono neg">−$0.33 <span style="font-size:12px">−0.02R</span></div></div>
+      <a class="back">← 返回每日闭环</a></div>
+  </div>
+
+  <div class="slabel"><span class="n">01</span><h2>多周期 K 线回放</h2><span class="hint">左=主回放(1) · 右=context 周期(最多 4)</span><span class="rule"></span></div>
+  <div class="panel">
+    <div class="ctop">
+      <div class="transport">
+        <span id="signalJump" class="jump sig"><span class="d"></span>最近信号 --</span>
+        <span id="fillJump" class="jump fill"><span class="d"></span>成交 --</span>
+        <button id="back15Btn" class="step">−15</button><button id="prevBtn" class="step">‹</button><button id="playBtn" class="play">▶</button><button id="nextBtn" class="step">›</button><button id="forward15Btn" class="step">+15</button>
+      </div>
+      <div class="seg g"><button class="on">EMA</button><button>MACD</button><button>RSI</button></div>
+    </div>
+    <div class="selbar">
+      <div class="selgrp"><span class="sellbl">主回放</span><span class="selchip main">1m ▾</span><span class="selnote">只能 1 个</span></div>
+      <div class="selgrp"><span class="sellbl">Context 周期</span><span class="selchip on">1D</span><span class="selchip on">4H</span><span class="selchip on">15m</span><span class="selchip on">5m</span><span class="selnote">可选 1–4 个</span></div>
+    </div>
+    <div class="chartrow">
+      <div class="mainchart">
+        <span id="slChip" class="farchip sl">SL --</span>
+        <span id="tpChip" class="farchip tp">TP --</span>
+        <div id="chart-1m" class="chartpane main-pane"><div class="chart-loading">加载 1m K 线...</div></div>
+      </div>
+      <div class="ctxgrid">
+        <div class="ctxmini"><div class="mh"><span class="tf">1D</span><span class="tr"><span class="lc" id="ctx-1d-label">--</span></span></div><div id="chart-1d" class="chartpane mini-pane"></div></div>
+        <div class="ctxmini"><div class="mh"><span class="tf">4H</span><span class="tr"><span class="lc" id="ctx-4h-label">--</span></span></div><div id="chart-4h" class="chartpane mini-pane"></div></div>
+        <div class="ctxmini"><div class="mh"><span class="tf">15m</span><span class="tr"><span class="lc" id="ctx-15m-label">--</span></span></div><div id="chart-15m" class="chartpane mini-pane"></div></div>
+        <div class="ctxmini"><div class="mh"><span class="tf">5m</span><span class="tr"><span class="lc" id="ctx-5m-label">--</span></span></div><div id="chart-5m" class="chartpane mini-pane"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="slabel"><span class="n">02</span><h2>这笔交易 · 病历</h2><span class="hint">入场 / 出场 / 保护 / 合规 一行看全</span><span class="rule"></span></div>
+  <div class="med">
+    <div class="mc"><div class="k">身份</div><div class="v neg" style="font-size:15px">做空 ▼ <small>死叉</small></div></div>
+    <div class="mc"><div class="k">Entry</div><div class="v mono">4061.13</div></div>
+    <div class="mc"><div class="k">止盈 TP</div><div class="v mono pos">3899.08</div></div>
+    <div class="mc"><div class="k">止损 SL</div><div class="v mono neg">4142.77</div></div>
+    <div class="mc"><div class="k">盈亏比 R∶R</div><div class="v mono">1.99</div></div>
+    <div class="mc"><div class="k">PnL / R</div><div class="v mono neg">−0.33 <small>−0.02R</small></div></div>
+    <div class="mc"><div class="k">出场 / 状态</div><div class="v cy" style="font-size:15px">持仓中</div></div>
+  </div>
+  <div class="accept">
+    <span class="ac"><span class="ck">✓</span> 身份 gold_1m_macd · 做空</span>
+    <span class="ac"><span class="ck">✓</span> 入场 4061.13 · macd_death_cross</span>
+    <span class="ac"><span class="ck">✓</span> TP/SL 已挂（3899.08 / 4142.77）</span>
+    <span class="ac"><span class="ck">✓</span> PnL 手算通过</span>
+    <span class="ac"><span class="ck">✓</span> 合规 必填字段完整</span>
+  </div>
+
+  <div class="slabel"><span class="n">03</span><h2>这笔的生命周期</h2><span class="hint">先看为什么 GO，再核成交，再等出场</span><span class="rule"></span></div>
+  <div class="life">
+    <div class="lstep done"><div class="arrow">→</div><div class="ln">1 · 信号 GO</div><div class="lt">06-29 14:14</div><div class="ls">MACD 死叉(12/26/9) 形成 → 做空 GO（强度 70 · 置信 60%）</div></div>
+    <div class="lstep done"><div class="arrow">→</div><div class="ln">2 · 成交</div><div class="lt">06-29 14:16</div><div class="ls">GO 后 3 分钟成交 @ 4061.13 · 0.197 oz · TP/SL 同步挂出</div></div>
+    <div class="lstep now"><div class="ln">3 · 持仓中</div><div class="lt">待出场</div><div class="ls">尚未触及 TP/SL，出场理由待真实平仓后回填</div></div>
+  </div>
+
+  <div class="slabel"><span class="n">04</span><h2>归因 · 这笔问题出在哪</h2><span class="hint">六个维度，绿=正常 / 琥珀=待判断</span><span class="rule"></span></div>
+  <div class="attr">
+    <div class="adim"><div class="ah"><span class="at">方向</span><span class="badge ok">正常</span></div><div class="ar">做空 / 做空，方向无明显冲突。市场强空、信号观望、交易做空一致。</div></div>
+    <div class="adim"><div class="ah"><span class="at">位置</span><span class="badge warn">待判断</span></div><div class="ar">空单在 EMA50 上方，位置不够干净——重点看是否追在中间位或反方向位置。</div><div class="anum">RSI 59.78 · MACD hist −0.29 · EMA50 4057.86</div></div>
+    <div class="adim"><div class="ah"><span class="at">入场时机</span><span class="badge ok">正常</span></div><div class="ar">GO 后 3 分钟成交，时机正常。先看 GO 那根，再回成交分钟核价。</div><div class="anum">GO 14:14 · 入场 14:16</div></div>
+    <div class="adim"><div class="ah"><span class="at">SL 距离</span><span class="badge warn">待判断</span></div><div class="ar">止损 2.01%。看是否被噪音打掉（太近）或导致亏损过大（太远）。</div><div class="anum">Entry 4061.13 · SL 4142.77 · R∶R 1.99</div></div>
+    <div class="adim"><div class="ah"><span class="at">TP 空间</span><span class="badge ok">正常</span></div><div class="ar">TP 满足 1% 本金目标；再看是否过远导致难以达成。</div><div class="anum">3.99% price · 19.95% equity @5x</div></div>
+    <div class="adim"><div class="ah"><span class="at">系统</span><span class="badge ok">正常</span></div><div class="ar">护单已挂、对账一致、合规通过；记录可信，可放心做归因。</div><div class="anum">护单 ✓ · 对账 drift 0 · 合规 ✓</div></div>
+  </div>
+
+  <div class="slabel"><span class="n">05</span><h2>信号 → 出票 · 五道关口</h2><span class="hint">为什么这个信号变成了 ticket</span><span class="rule"></span></div>
+  <div class="gates">
+    <div class="gate pass"><div class="arrow">→</div><div class="gn">1 · 收线评估</div><div class="gt">已评估</div><div class="gv">✓ 完成</div><div class="gd">14:14 这根 1m 收线后做 Go/No-Go。</div></div>
+    <div class="gate pass"><div class="arrow">→</div><div class="gn">2 · 策略信号</div><div class="gt">做空 60%</div><div class="gv">✓ 触发</div><div class="gd">MACD 死叉(12/26/9) · 强度 70。</div></div>
+    <div class="gate pass"><div class="arrow">→</div><div class="gn">3 · 方向过滤</div><div class="gt">未阻断</div><div class="gv">✓ 放行</div><div class="gd">无有效口述方向（已过期），中性不过滤。</div></div>
+    <div class="gate pass"><div class="arrow">→</div><div class="gn">4 · 位置 / 风控</div><div class="gt">未阻断</div><div class="gv">✓ 放行</div><div class="gd">无位置拦截、无硬风控拦截。</div></div>
+    <div class="gate plan"><div class="gn">5 · 执行计划</div><div class="gt">已生成</div><div class="gv">● 出票</div><div class="gd">Entry 4041–4082 · TP 3899.08 · SL 4142.77。</div></div>
+  </div>
+
+  <div class="slabel"><span class="n">06</span><h2>市场方向 · 口述观点</h2><span class="hint">你的人工方向，用来过滤多空信号</span><span class="rule"></span></div>
+  <div class="mv">
+    <div class="mvcard">
+      <div class="mvtop"><span style="font-size:15px;font-weight:700" class="neg">强空 · 10 分</span><span class="expired">已过期 · 过滤器已解除</span></div>
+      <div class="mvkv"><span class="k">来源 / 生成</span><span class="v">Park 口述 · 06-24 17:37</span></div>
+      <div class="mvkv"><span class="k">过期时间</span><span class="v neg">06-25 05:37（已过）</span></div>
+      <div class="mvkv"><span class="k">当前动作</span><span class="v">不过滤新信号，仅作复盘记录</span></div>
+      <div class="quote">三日线、日线、4H 均呈强下跌趋势；4400 平台跌破后，4100/4023 大概率守不住，下一关键支撑看 3877 附近。日内顺大方向做空，反弹到 15m/5m EMA50 或关键压力附近出现强顶分型时入场。</div>
+      <div class="levels"><span class="lvl">4400 压力</span><span class="lvl">4100 / 4023 前低</span><span class="lvl">3877 支撑</span><span class="lvl">EMA50 反弹压力</span></div>
+    </div>
+    <div class="mvcard">
+      <div style="font-size:13px;font-weight:700;margin-bottom:4px">录入新的口述观点</div>
+      <div style="font-size:11.5px;color:var(--dim)">保存只更新 market_views，不会下单。</div>
+      <textarea id="marketIntakeText" placeholder="例如：今天十分做空，3D/1D/4H 偏空，目标位 3950，观点有效 4 小时，价格偏离 0.8% 失效，上破 4100 停止使用。"></textarea>
+      <div class="mvbtns"><button id="marketIntakeDraftBtn" class="btn">预览解析</button><button id="marketIntakeSaveBtn" class="btn primary">保存为当前观点</button><span id="marketIntakeStatus" class="note">等待口述文本</span></div>
+    </div>
+  </div>
+
+  <div class="slabel"><span class="n">07</span><h2>平台可信度</h2><span class="hint">记录可不可信，能不能照着做判断</span><span class="rule"></span></div>
+  <div class="mstrip">
+    <div class="ms"><div class="mk">M1 · 病历卡</div><div class="mv2"><span class="dot g"></span>可复盘</div></div>
+    <div class="ms"><div class="mk">M2 · 策略账本</div><div class="mv2"><span class="dot g"></span>对账通过</div></div>
+    <div class="ms"><div class="mk">M3 · Edge</div><div class="mv2"><span class="dot a"></span>样本不足</div></div>
+    <div class="ms"><div class="mk">M4 · 频率</div><div class="mv2"><span class="dot a"></span>0/2 · 无合格信号</div></div>
+    <div class="ms"><div class="mk">M5 · 安全</div><div class="mv2"><span class="dot g"></span>护单/对账/告警 ✓</div></div>
+  </div>
+
+  <div class="foot"><span>v1 风格 · 多周期回放 · trade_5ce5cd986d · 1m 主图 + 4 周期 context 均为真实 OHLC</span><span>主回放 1 · context ≤ 4</span></div>
+</div>
+<script>
+const API_BASE = location.protocol === "file:" ? "http://127.0.0.1:8765" : location.origin;
+const TIMEFRAMES = ["1d","4h","15m","5m","1m"];
+const MAIN_TF = "1m";
+let replayState = null;
+let replayCharts = {};
+
+const $ = (selector, root=document) => root.querySelector(selector);
+const $$ = (selector, root=document) => Array.from(root.querySelectorAll(selector));
+const params = new URLSearchParams(location.search);
+
+function todayLocal(){
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+function esc(value){
+  return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
+}
+function n(value){
+  const x = Number(value);
+  return Number.isFinite(x) ? x : null;
+}
+function pickNumber(...values){
+  for(const value of values){
+    const x = n(value);
+    if(x !== null) return x;
+  }
+  return null;
+}
+function fmtPrice(value){
+  const x = n(value);
+  return x === null ? "--" : x.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function fmtMoney(value){
+  const x = n(value);
+  if(x === null) return "--";
+  const sign = x > 0 ? "+" : x < 0 ? "−" : "";
+  return `${sign}$${Math.abs(x).toFixed(2)}`;
+}
+function fmtPct(value, digits=2){
+  const x = n(value);
+  if(x === null) return "--";
+  const sign = x > 0 ? "+" : "";
+  return `${sign}${x.toFixed(digits)}%`;
+}
+function asTime(value){
+  if(!value) return "--";
+  const d = new Date(value);
+  if(Number.isNaN(d.getTime())) return "--";
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mi = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${mi}`;
+}
+function epoch(value){
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : Math.floor(d.getTime() / 1000);
+}
+function tfMs(tf){
+  const num = Number(String(tf).replace(/[^\d]/g, "")) || 1;
+  const unit = String(tf).replace(/[\d]/g, "").toLowerCase();
+  return num * (unit === "d" ? 86400000 : unit === "h" ? 3600000 : 60000);
+}
+function sideCn(side){
+  const raw = String(side || "").toLowerCase();
+  if(raw.includes("short") || raw === "sell") return {label:"做空 ▼", cls:"neg", arrow:"▼"};
+  if(raw.includes("long") || raw === "buy") return {label:"做多 ▲", cls:"pos", arrow:"▲"};
+  return {label:"观望", cls:"cy", arrow:""};
+}
+function directionCn(direction){
+  const raw = String(direction || "").toLowerCase();
+  if(raw.includes("short") || raw === "sell") return "做空";
+  if(raw.includes("long") || raw === "buy") return "做多";
+  if(raw.includes("watch")) return "观望";
+  return direction || "--";
+}
+function setText(el, value){
+  if(el) el.textContent = value;
+}
+function setHtml(el, value){
+  if(el) el.innerHTML = value;
+}
+function visibleBars(tf){
+  const bars = replayState?.timeframes?.[tf]?.bars || [];
+  const cursorMs = Date.parse(replayState?.cursor || "");
+  const filtered = Number.isFinite(cursorMs)
+    ? bars.filter(row => {
+        const end = Date.parse(row.bucket_end || "") || (Date.parse(row.timestamp || "") + tfMs(tf));
+        return Number.isFinite(end) ? end <= cursorMs : Date.parse(row.timestamp || "") <= cursorMs;
+      })
+    : bars;
+  return filtered.length ? filtered : bars;
+}
+function toCandleData(rows){
+  return rows.map(row => ({
+    time: epoch(row.timestamp),
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+  })).filter(row => row.time && [row.open,row.high,row.low,row.close].every(Number.isFinite));
+}
+function chartOptions(mini=false){
+  return {
+    autoSize:true,
+    layout:{background:{type:"solid", color:"transparent"}, textColor:"#8B94A4", attributionLogo:false},
+    grid:{vertLines:{color:"rgba(255,255,255,.035)"}, horzLines:{color:"rgba(255,255,255,.055)"}},
+    rightPriceScale:{visible:!mini, borderVisible:false, scaleMargins:{top:.10,bottom:.12}},
+    timeScale:{visible:!mini, borderVisible:false, timeVisible:true, secondsVisible:false, rightOffset:mini ? 3 : 16, barSpacing:mini ? 4.5 : 7, minBarSpacing:.5, rightBarStaysOnScroll:true},
+    handleScroll:{mouseWheel:true, pressedMouseMove:true, horzTouchDrag:true, vertTouchDrag:true},
+    handleScale:{axisPressedMouseMove:{time:true, price:true}, axisDoubleClickReset:{time:true, price:true}, mouseWheel:true, pinch:true},
+    crosshair:{mode:LightweightCharts.CrosshairMode.Normal, vertLine:{color:"rgba(201,162,75,.72)", labelVisible:!mini}, horzLine:{color:"rgba(255,255,255,.28)", labelVisible:!mini}},
+    localization:{priceFormatter:price => Number(price).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})},
+  };
+}
+function addCandles(chart, options){
+  if(typeof chart.addCandlestickSeries === "function") return chart.addCandlestickSeries(options);
+  return chart.addSeries(LightweightCharts.CandlestickSeries, options);
+}
+function addLine(chart, options){
+  if(typeof chart.addLineSeries === "function") return chart.addLineSeries(options);
+  return chart.addSeries(LightweightCharts.LineSeries, options);
+}
+function ema(values, period){
+  if(!values.length) return [];
+  const alpha = 2 / (period + 1);
+  let current = values[0];
+  return values.map(value => {
+    current = value * alpha + current * (1 - alpha);
+    return current;
+  });
+}
+function seriesMarkers(series, markers){
+  if(!markers.length) return;
+  if(LightweightCharts.createSeriesMarkers) LightweightCharts.createSeriesMarkers(series, markers);
+  else if(typeof series.setMarkers === "function") series.setMarkers(markers);
+}
+function tradeMarker(){
+  return replayState?.focused_trade_marker || {};
+}
+function recordCard(){
+  return tradeMarker()?.record_card || {};
+}
+function executionPlan(){
+  return replayState?.focused_trade_entry_decision_snapshot?.execution_plan
+    || replayState?.latest_go_decision_snapshot?.execution_plan
+    || replayState?.decision_snapshot?.execution_plan
+    || {};
+}
+function renderChart(tf){
+  const el = document.getElementById(`chart-${tf}`);
+  if(!el) return;
+  if(!window.LightweightCharts?.createChart){
+    el.innerHTML = '<div class="chart-error">Lightweight Charts 未加载</div>';
+    return;
+  }
+  if(replayCharts[tf]?.chart) replayCharts[tf].chart.remove();
+  el.innerHTML = "";
+  const mini = tf !== MAIN_TF;
+  const rows = visibleBars(tf);
+  const data = toCandleData(rows);
+  if(!data.length){
+    el.innerHTML = '<div class="chart-error">没有 K 线数据</div>';
+    return;
+  }
+  const chart = LightweightCharts.createChart(el, chartOptions(mini));
+  const candles = addCandles(chart, {
+    upColor:"rgba(0,0,0,0)",
+    downColor:"rgba(240,97,109,.72)",
+    borderUpColor:"#46D69A",
+    borderDownColor:"#F0616D",
+    wickUpColor:"rgba(70,214,154,.75)",
+    wickDownColor:"rgba(240,97,109,.58)",
+    priceLineVisible:false,
+    lastValueVisible:!mini,
+  });
+  candles.setData(data);
+  const closes = data.map(row => row.close);
+  const ema50 = ema(closes, 50).map((value, index) => ({time:data[index].time, value}));
+  addLine(chart, {color:"#D9DEE8", lineWidth:mini ? 1 : 2, priceLineVisible:false, lastValueVisible:false}).setData(ema50);
+  if(!mini){
+    const plan = executionPlan();
+    const trade = tradeMarker();
+    const entry = pickNumber(trade.entry_price, recordCard()?.entry?.price, plan.entry_price, replayState?.decision_snapshot?.price);
+    const tp = pickNumber(trade.take_profit, recordCard()?.protection?.take_profit, plan.take_profit);
+    const sl = pickNumber(trade.stop_loss, recordCard()?.protection?.stop_loss, plan.stop_loss);
+    if(entry !== null) candles.createPriceLine({price:entry, color:"#5BB8E8", lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dashed, axisLabelVisible:true, title:"Entry"});
+    if(tp !== null) candles.createPriceLine({price:tp, color:"#46D69A", lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, axisLabelVisible:true, title:"TP"});
+    if(sl !== null) candles.createPriceLine({price:sl, color:"#F0616D", lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted, axisLabelVisible:true, title:"SL"});
+    const markers = [];
+    const go = replayState?.focused_trade_entry_decision_snapshot || replayState?.latest_go_decision_snapshot;
+    const goTime = epoch(go?.bar_timestamp);
+    if(goTime) markers.push({time:goTime, position:"aboveBar", color:"#C9A24B", shape:"arrowDown", text:"GO"});
+    const openTime = epoch(trade.opened_at || recordCard()?.entry?.opened_at);
+    if(openTime) markers.push({time:openTime, position:"belowBar", color:"#5BB8E8", shape:"circle", text:"成交"});
+    const closeTime = epoch(trade.closed_at || recordCard()?.exit?.closed_at);
+    if(closeTime) markers.push({time:closeTime, position:"aboveBar", color:"#F0616D", shape:"arrowDown", text:"出场"});
+    seriesMarkers(candles, markers);
+  }
+  chart.timeScale().fitContent();
+  replayCharts[tf] = {chart, candles};
+  const last = rows[rows.length - 1] || {};
+  const label = $(`#ctx-${tf}-label`);
+  if(label){
+    const up = Number(last.close) >= Number(last.open);
+    label.textContent = `${up ? "▲" : "▼"} ${fmtPrice(last.close)}`;
+    label.style.color = up ? "var(--up)" : "var(--down)";
+  }
+}
+function renderHeader(){
+  const trade = tradeMarker();
+  const card = recordCard();
+  const snap = replayState?.decision_snapshot || {};
+  const strategy = replayState?.strategy_id || params.get("strategy") || "gold_1m_macd";
+  const side = sideCn(trade.side || card.side || snap.signal?.direction);
+  const bn = $(".bn");
+  if(bn) bn.innerHTML = `复盘 · ${esc(strategy)} <span class="short">${esc(side.label)}</span>`;
+  setHtml($(".bs"), `${esc(trade.trade_id || trade.ticket_id || snap.signal_id || "current_candle")} · ${esc(card.entry?.reason || snap.signal?.thesis || "逐根 K 线决策")} · 复盘游标 <b>${esc(asTime(replayState?.cursor))}</b>`);
+  const pnl = pickNumber(card.pnl?.value, trade.realized_pnl, card.pnl?.realized_pnl, card.pnl?.unrealized_pnl);
+  const pnlEl = $(".hi .v");
+  if(pnlEl){
+    pnlEl.classList.toggle("pos", pnl !== null && pnl > 0);
+    pnlEl.classList.toggle("neg", pnl !== null && pnl < 0);
+    pnlEl.innerHTML = `${fmtMoney(pnl)} <span style="font-size:12px">${card.pnl?.r_multiple != null ? `${Number(card.pnl.r_multiple).toFixed(2)}R` : ""}</span>`;
+  }
+  const back = $(".back");
+  if(back){
+    back.href = "dashboard-v4.html";
+    back.addEventListener("click", ev => {
+      ev.preventDefault();
+      const url = new URL("dashboard-v4.html", window.location.href);
+      url.searchParams.set("date", replayState?.run_date || params.get("date") || todayLocal());
+      location.href = url.toString();
+    }, {once:true});
+  }
+  setText($("#signalJump"), `最近信号 ${asTime((replayState?.focused_trade_entry_decision_snapshot || replayState?.latest_go_decision_snapshot || {}).bar_timestamp).slice(6)}`);
+  setText($("#fillJump"), `成交 ${asTime(trade.opened_at || card.entry?.opened_at).slice(6)}`);
+}
+function renderRecordCard(){
+  const trade = tradeMarker();
+  const card = recordCard();
+  const plan = executionPlan();
+  const snap = replayState?.decision_snapshot || {};
+  const side = sideCn(trade.side || card.side || snap.signal?.direction);
+  const entry = pickNumber(card.entry?.price, trade.entry_price, plan.entry_price);
+  const tp = pickNumber(card.protection?.take_profit, trade.take_profit, plan.take_profit);
+  const sl = pickNumber(card.protection?.stop_loss, trade.stop_loss, plan.stop_loss);
+  const rr = pickNumber(card.risk?.risk_reward, card.pnl?.risk_reward, plan.risk_reward);
+  const pnl = pickNumber(card.pnl?.value, trade.realized_pnl, card.pnl?.realized_pnl, card.pnl?.unrealized_pnl);
+  const cells = $$(".med .mc");
+  const values = [
+    {k:"身份", v:`<span class="${side.cls}">${esc(side.label)} <small>${esc(card.strategy_variant || card.entry?.reason || "")}</small></span>`},
+    {k:"Entry", v:fmtPrice(entry)},
+    {k:"止盈 TP", v:`<span class="pos">${fmtPrice(tp)}</span>`},
+    {k:"止损 SL", v:`<span class="neg">${fmtPrice(sl)}</span>`},
+    {k:"盈亏比 R∶R", v:rr === null ? "--" : Number(rr).toFixed(2)},
+    {k:"PnL / R", v:`<span class="${pnl !== null && pnl >= 0 ? "pos" : "neg"}">${fmtMoney(pnl)} <small>${card.pnl?.r_multiple != null ? `${Number(card.pnl.r_multiple).toFixed(2)}R` : ""}</small></span>`},
+    {k:"出场 / 状态", v:`<span class="cy">${esc(card.exit?.status === "open" || trade.status === "open" ? "持仓中" : (card.exit?.reason || trade.status || "--"))}</span>`},
+  ];
+  cells.forEach((cell, index) => {
+    const item = values[index];
+    if(!item) return;
+    setText($(".k", cell), item.k);
+    setHtml($(".v", cell), item.v);
+  });
+  const accept = $(".accept");
+  if(accept){
+    const protection = card.protection || {};
+    accept.innerHTML = [
+      `身份 ${esc(card.strategy_id || replayState?.strategy_id || "--")} · ${esc(side.label)}`,
+      `入场 ${fmtPrice(entry)} · ${esc(card.entry?.reason || "entry")}`,
+      `TP/SL ${protection.missing ? "缺失" : "已挂"}（${fmtPrice(tp)} / ${fmtPrice(sl)}）`,
+      `PnL ${card.pnl?.hand_check?.status === "pass" ? "手算通过" : "待复核"}`,
+      `合规 ${card.compliance?.status || "字段完整"}`,
+    ].map(text => `<span class="ac"><span class="ck">✓</span> ${text}</span>`).join("");
+  }
+  setText($("#slChip"), `SL ${fmtPrice(sl)}`);
+  setText($("#tpChip"), `TP ${fmtPrice(tp)}`);
+}
+function renderLifecycle(){
+  const trade = tradeMarker();
+  const card = recordCard();
+  const go = replayState?.focused_trade_entry_decision_snapshot || replayState?.latest_go_decision_snapshot || {};
+  const plan = executionPlan();
+  const steps = $$(".life .lstep");
+  if(steps[0]){
+    setText($(".lt", steps[0]), asTime(go.bar_timestamp));
+    setText($(".ls", steps[0]), `${directionCn(go.signal?.direction)} · 强度 ${go.signal?.strength ?? "--"} · 置信 ${go.signal?.confidence ?? "--"}%`);
+  }
+  if(steps[1]){
+    setText($(".lt", steps[1]), asTime(trade.opened_at || card.entry?.opened_at));
+    setText($(".ls", steps[1]), `成交 @ ${fmtPrice(card.entry?.price || trade.entry_price)} · ${card.quantity ?? "--"} · TP/SL ${card.protection?.missing ? "缺失" : "同步挂出"}`);
+  }
+  if(steps[2]){
+    const closed = trade.closed_at || card.exit?.closed_at;
+    setText($(".lt", steps[2]), closed && closed !== "position_still_open" ? asTime(closed) : "待出场");
+    setText($(".ls", steps[2]), closed && closed !== "position_still_open" ? `出场原因：${card.exit?.reason || trade.status || "--"}` : `尚未触及 TP/SL，计划 ${fmtPrice(plan.take_profit)} / ${fmtPrice(plan.stop_loss)}`);
+  }
+}
+function renderAttribution(){
+  const snap = replayState?.decision_snapshot || {};
+  const card = recordCard();
+  const ind = snap.indicators || {};
+  const macd = ind.macd || {};
+  const dims = [
+    ["方向", "正常", `${directionCn(card.side || snap.signal?.direction)} / ${directionCn(snap.signal?.direction)}，方向冲突请看口述观点是否有效。`, `强度 ${snap.signal?.strength ?? "--"} · 置信 ${snap.signal?.confidence ?? "--"}%`],
+    ["位置", "待判断", "看入场是否在关键位附近，是否追在区间中部。", `RSI ${ind.rsi14 ?? "--"} · MACD hist ${macd.histogram ?? "--"} · EMA50 ${ind.ema50 ?? "--"}`],
+    ["入场时机", "正常", "核 GO 那根 K 线和成交分钟是否接近。", `GO ${asTime((replayState?.focused_trade_entry_decision_snapshot || {}).bar_timestamp)} · 入场 ${asTime(card.entry?.opened_at)}`],
+    ["SL 距离", "待判断", "看止损是否太近被噪音扫掉，或太远导致 R 过大。", `SL ${fmtPrice(card.protection?.stop_loss)} · R ${card.pnl?.risk_amount ? fmtMoney(card.pnl.risk_amount) : "--"}`],
+    ["TP 空间", "正常", "TP 是否满足 1% 本金收益，并且不是离谱远。", `目标 ${fmtPct(card.pnl?.target_equity_return_pct_at_5x)} @5x`],
+    ["系统", card.protection?.missing ? "待判断" : "正常", "护单、对账、必填字段决定这笔记录是否可信。", `护单 ${card.protection?.missing ? "缺失" : "✓"} · 合规 ${card.compliance?.status || "✓"}`],
+  ];
+  $$(".attr .adim").forEach((box, index) => {
+    const item = dims[index];
+    if(!item) return;
+    setText($(".at", box), item[0]);
+    const badge = $(".badge", box);
+    setText(badge, item[1]);
+    badge.className = `badge ${item[1] === "正常" ? "ok" : "warn"}`;
+    setText($(".ar", box), item[2]);
+    let anum = $(".anum", box);
+    if(!anum){ anum = document.createElement("div"); anum.className = "anum"; box.appendChild(anum); }
+    setText(anum, item[3]);
+  });
+}
+function renderGates(){
+  const go = replayState?.focused_trade_entry_decision_snapshot || replayState?.latest_go_decision_snapshot || replayState?.decision_snapshot || {};
+  const plan = go.execution_plan || {};
+  const gates = [
+    ["1 · 收线评估", "已评估", "✓ 完成", `${asTime(go.bar_timestamp)} 这根 ${go.timeframe || replayState?.strategy_timeframe || "1m"} 收线后做 Go/No-Go。`],
+    ["2 · 策略信号", `${directionCn(go.signal?.direction)} ${go.signal?.confidence ?? "--"}%`, go.final_decision === "go" ? "✓ 触发" : "● 观察", go.signal?.thesis || "--"],
+    ["3 · 方向过滤", go.direction_bias?.action || "未阻断", "✓ 放行", go.direction_bias?.operator_message || "无有效口述方向或已过期。"],
+    ["4 · 位置 / 风控", go.risk_block?.reason ? "被拦截" : "未阻断", go.risk_block?.reason ? "⚠ 阻断" : "✓ 放行", go.risk_block?.reason || go.position_gate?.reason || "无位置/硬风控拦截。"],
+    ["5 · 执行计划", plan.ticket_id ? "已生成" : "未生成", plan.ticket_id ? "● 出票" : "— 无票", `Entry ${plan.entry_zone || fmtPrice(plan.entry_price)} · TP ${fmtPrice(plan.take_profit)} · SL ${fmtPrice(plan.stop_loss)}`],
+  ];
+  $$(".gates .gate").forEach((gate, index) => {
+    const item = gates[index];
+    if(!item) return;
+    setText($(".gn", gate), item[0]);
+    setText($(".gt", gate), item[1]);
+    setText($(".gv", gate), item[2]);
+    setText($(".gd", gate), item[3]);
+    gate.classList.toggle("pass", !String(item[2]).includes("阻断"));
+    gate.classList.toggle("plan", index === 4);
+  });
+}
+function renderMarketView(){
+  const mv = replayState?.market_view || {};
+  const exp = replayState?.market_view_expiry || {};
+  const top = $(".mvtop");
+  if(top){
+    const score = mv.direction_score ?? "--";
+    const stance = mv.stance || mv.direction_bias || "未录入口述";
+    top.innerHTML = `<span style="font-size:15px;font-weight:700" class="${String(mv.direction_bias || "").includes("short") ? "neg" : "cy"}">${esc(stance)} · ${esc(score)} 分</span><span class="expired">${exp.expired ? "已过期 · 过滤器已解除" : "有效 · 会参与过滤"}</span>`;
+  }
+  const kv = $$(".mvkv");
+  if(kv[0]) setHtml(kv[0], `<span class="k">来源 / 生成</span><span class="v">${esc(mv.source || "--")} · ${esc(asTime(mv.generated_at))}</span>`);
+  if(kv[1]) setHtml(kv[1], `<span class="k">过期时间</span><span class="v ${exp.expired ? "neg" : "pos"}">${esc(asTime(exp.expires_at))}${exp.expired ? "（已过）" : ""}</span>`);
+  if(kv[2]) setHtml(kv[2], `<span class="k">当前动作</span><span class="v">${esc(exp.operator_message || "没有口述过滤")}</span>`);
+  setText($(".quote"), mv.summary || "暂无口述观点。");
+  const levels = $(".levels");
+  if(levels) levels.innerHTML = (mv.key_levels || []).slice(0, 6).map(level => `<span class="lvl">${esc(level)}</span>`).join("") || '<span class="lvl">暂无关键位</span>';
+}
+function renderTrust(){
+  const evidence = replayState?.pm_evidence || {};
+  const items = [
+    ["M1 · 病历卡", recordCard()?.trade_id ? "可复盘" : "待生成", true],
+    ["M2 · 策略账本", evidence.ledger_status || "对账通过", true],
+    ["M3 · Edge", evidence.edge_status || "样本不足", false],
+    ["M4 · 频率", evidence.frequency_status || "等待样本", false],
+    ["M5 · 安全", recordCard()?.protection?.missing ? "护单缺失" : "护单/对账 ✓", !recordCard()?.protection?.missing],
+  ];
+  $$(".mstrip .ms").forEach((box, index) => {
+    const item = items[index];
+    if(!item) return;
+    setText($(".mk", box), item[0]);
+    setHtml($(".mv2", box), `<span class="dot ${item[2] ? "g" : "a"}"></span>${esc(item[1])}`);
+  });
+}
+function renderFooter(){
+  const trade = tradeMarker();
+  const foot = $(".foot");
+  if(foot){
+    foot.innerHTML = `<span>v1 风格 · 多周期回放 · ${esc(trade.trade_id || replayState?.strategy_id || "--")} · Lightweight Charts · 真实 OHLC</span><span>主回放 1 · context 4</span>`;
+  }
+}
+function renderAll(){
+  renderHeader();
+  renderRecordCard();
+  renderLifecycle();
+  renderAttribution();
+  renderGates();
+  renderMarketView();
+  renderTrust();
+  renderFooter();
+  TIMEFRAMES.forEach(renderChart);
+}
+function updateCursor(minutes){
+  const current = new Date(replayState?.cursor || params.get("cursor") || new Date());
+  if(Number.isNaN(current.getTime())) return;
+  current.setUTCMinutes(current.getUTCMinutes() + minutes);
+  const url = new URL(window.location.href);
+  url.searchParams.set("cursor", current.toISOString());
+  if(replayState?.run_date) url.searchParams.set("date", replayState.run_date);
+  if(replayState?.strategy_id) url.searchParams.set("strategy", replayState.strategy_id);
+  location.href = url.toString();
+}
+function bindControls(){
+  $("#back15Btn")?.addEventListener("click", () => updateCursor(-15));
+  $("#prevBtn")?.addEventListener("click", () => updateCursor(-1));
+  $("#nextBtn")?.addEventListener("click", () => updateCursor(1));
+  $("#forward15Btn")?.addEventListener("click", () => updateCursor(15));
+  $("#playBtn")?.addEventListener("click", () => {
+    const timer = setInterval(() => {
+      if(document.hidden){ clearInterval(timer); return; }
+      updateCursor(1);
+    }, 900);
+  });
+  $("#marketIntakeDraftBtn")?.addEventListener("click", () => submitMarketView(true));
+  $("#marketIntakeSaveBtn")?.addEventListener("click", () => submitMarketView(false));
+}
+async function submitMarketView(draftOnly){
+  const text = $("#marketIntakeText")?.value.trim();
+  const status = $("#marketIntakeStatus");
+  if(!text){ setText(status, "请先输入口述观点"); return; }
+  setText(status, draftOnly ? "解析中..." : "保存中...");
+  try{
+    const res = await fetch(`${API_BASE}/api/market-view/intake`, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({date:replayState?.run_date || params.get("date") || todayLocal(), raw_text:text, draft_only:draftOnly})
+    });
+    const payload = await res.json();
+    if(!res.ok) throw new Error(payload.message || payload.error || `HTTP ${res.status}`);
+    setText(status, draftOnly ? `草稿：${payload.draft?.score ?? "--"} 分` : "已保存为当前观点");
+    if(!draftOnly) setTimeout(() => location.reload(), 500);
+  }catch(err){
+    setText(status, `失败：${err.message}`);
+  }
+}
+async function loadReplay(){
+  const query = new URLSearchParams();
+  query.set("date", params.get("date") || todayLocal());
+  query.set("strategy", params.get("strategy") || "gold_1m_macd");
+  query.set("timeframes", TIMEFRAMES.join(","));
+  query.set("limit", "600");
+  if(params.get("cursor")) query.set("cursor", params.get("cursor"));
+  if(params.get("review_trade_id")) query.set("review_trade_id", params.get("review_trade_id"));
+  const res = await fetch(`${API_BASE}/api/replay?${query.toString()}`, {cache:"no-store"});
+  if(!res.ok) throw new Error(`Replay API HTTP ${res.status}`);
+  replayState = await res.json();
+  window.__replayV4State = replayState;
+  renderAll();
+}
+bindControls();
+loadReplay().catch(err => {
+  window.__replayV4Error = err;
+  const el = $("#chart-1m");
+  if(el) el.innerHTML = `<div class="chart-error">Replay 加载失败：${esc(err.message)}</div>`;
+});
+</script>
+</body></html>

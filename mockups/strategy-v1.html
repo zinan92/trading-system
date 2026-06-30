@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>策略记分卡 · gold_1m_macd</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0A0D12;--bg2:#0E1218;--panel:#11161F;--panel2:#0E131B;
+  --line:#1B2230;--line2:#232C3C;
+  --ink:#E9EDF4;--muted:#8B94A4;--dim:#586273;--faint:#3A4252;
+  --cyan:#5BB8E8;--gold:#C9A24B;--gold-d:#6B5524;
+  --up:#46D69A;--down:#F0616D;--amber:#E6A93B;
+  --r:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);font-family:"Hanken Grotesk","PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{background:radial-gradient(1100px 500px at 80% -8%,rgba(240,97,109,.05),transparent 60%),radial-gradient(900px 520px at 8% 4%,rgba(201,162,75,.045),transparent 55%),var(--bg);min-height:100vh}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.025;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{position:relative;z-index:1;max-width:1340px;margin:0 auto;padding:26px 30px 40px}
+.neg{color:var(--down)}.pos{color:var(--up)}.amb{color:var(--amber)}.mut{color:var(--muted)}.dimc{color:var(--dim)}
+
+/* header */
+.head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:14px}
+.diamond{width:30px;height:30px;border:1px solid var(--gold);transform:rotate(45deg);display:grid;place-items:center;border-radius:6px;background:linear-gradient(135deg,rgba(201,162,75,.18),rgba(201,162,75,.02))}
+.diamond i{transform:rotate(-45deg);width:9px;height:9px;border-radius:50%;background:var(--gold);box-shadow:0 0 10px rgba(201,162,75,.6)}
+.bname{font-weight:800;font-size:19px;display:flex;align-items:center;gap:8px}
+.switch{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--dim);border:1px dashed var(--line2);border-radius:5px;padding:2px 8px;cursor:default}
+.bsub{font-size:12px;color:var(--muted);margin-top:2px}
+.bsub b{color:var(--ink);font-weight:600}
+.tag{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:1px;padding:3px 8px;border:1px solid var(--line2);border-radius:5px;color:var(--muted);text-transform:uppercase}
+.hr{ text-align:right}
+.hr .k{font-size:10.5px;color:var(--dim);letter-spacing:.6px;text-transform:uppercase}
+.hr .v{font-size:22px;font-weight:700;margin-top:3px}
+
+/* identity strip */
+.idstrip{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 4px}
+.idchip{font-size:11.5px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:4px 10px}
+.idchip b{color:var(--ink);font-weight:600}
+
+.slabel{display:flex;align-items:baseline;gap:10px;margin:22px 2px 11px}
+.slabel .n{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--gold);border:1px solid var(--gold-d);border-radius:4px;padding:1px 6px;letter-spacing:1px}
+.slabel h2{font-size:13px;font-weight:700}
+.slabel .en{font-size:11px;color:var(--dim);font-family:"IBM Plex Mono",monospace}
+
+/* zone 01: verdict + tiles */
+.scorewrap{display:grid;grid-template-columns:1.15fr 2fr;gap:16px}
+.verdict{border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:var(--r);background:linear-gradient(180deg,rgba(230,169,59,.07),rgba(230,169,59,.012));padding:20px 22px;display:flex;flex-direction:column}
+.vd-lbl{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--amber);letter-spacing:1px;text-transform:uppercase}
+.vd-h{font-size:24px;font-weight:800;margin-top:10px;line-height:1.25}
+.vd-h .r{color:var(--down)}
+.vd-sub{font-size:13.5px;color:var(--ink);margin-top:12px;line-height:1.55}
+.vd-sub b{color:var(--down);font-weight:600}
+.vd-meter{margin-top:16px}
+.vd-meter .ml{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-bottom:6px}
+.bar{height:8px;background:var(--panel2);border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--amber),#caa14b);border-radius:6px}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.tile{background:var(--panel);padding:16px 18px}
+.tile .tk{font-size:11.5px;color:var(--muted);letter-spacing:.3px}
+.tile .tv{font-size:26px;font-weight:700;margin-top:7px;letter-spacing:.3px}
+.tile .ts{font-size:11.5px;color:var(--dim);margin-top:5px}
+.tile.bad{background:linear-gradient(180deg,rgba(240,97,109,.06),var(--panel))}
+.tile.warn{background:linear-gradient(180deg,rgba(230,169,59,.05),var(--panel))}
+
+/* zone 02: why losing */
+.panel{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);padding:18px 22px}
+.ptitle{font-size:13px;font-weight:700;margin-bottom:4px}
+.psub{font-size:12px;color:var(--dim);margin-bottom:16px}
+.exitbar{display:flex;height:42px;border-radius:9px;overflow:hidden;border:1px solid var(--line)}
+.exitbar .seg{display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#0A0D12;gap:6px}
+.exitbar .stop{background:linear-gradient(180deg,#f0616d,#d4505c);}
+.exitbar .targ{background:linear-gradient(180deg,#46d69a,#37b07f)}
+.exleg{display:flex;gap:24px;margin-top:14px;font-size:12.5px;color:var(--muted)}
+.exleg .d{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:7px;vertical-align:middle}
+.insight{margin-top:18px;padding:14px 16px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;font-size:13px;line-height:1.6;color:var(--ink)}
+.insight b{color:var(--down);font-weight:600}
+.insight .lab{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;display:block;margin-bottom:6px}
+
+/* zone 03: funnel + live block */
+.funnelgrid{display:grid;grid-template-columns:1.3fr 1fr;gap:16px}
+.frow{display:flex;align-items:center;gap:12px;padding:7px 0}
+.frow .fl{width:140px;font-size:13px;color:var(--ink)}
+.frow .ftrack{flex:1;height:24px;background:var(--panel2);border-radius:6px;overflow:hidden;border:1px solid var(--line);position:relative}
+.frow .ffill{height:100%;border-radius:6px;display:flex;align-items:center;padding-left:9px;font-size:11.5px;font-weight:700;color:#0A0D12}
+.frow .fc{width:54px;text-align:right;font-size:13px;font-weight:600}
+.f-nosig .ffill{background:#3a4252} .f-nosig .fc{color:var(--dim)}
+.f-thin .ffill{background:#5a6f8a} .f-thin .fc{color:var(--mut)}
+.f-cand .ffill{background:var(--amber)} .f-cand .fc{color:var(--amber)}
+.f-exec .ffill{background:var(--up)} .f-exec .fc{color:var(--up)}
+.liveblock{border:1px solid rgba(240,97,109,.35);border-left:3px solid var(--down);border-radius:var(--r);background:linear-gradient(180deg,rgba(240,97,109,.07),rgba(240,97,109,.012));padding:18px 20px}
+.lb-top{display:flex;align-items:center;gap:11px;margin-bottom:12px}
+.lb-ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:rgba(240,97,109,.14);border:1px solid rgba(240,97,109,.3);color:var(--down);font-size:16px}
+.lb-h{font-size:16px;font-weight:800}
+.lb-row{font-size:13px;line-height:1.55;color:var(--ink);margin-top:8px}
+.lb-row b{font-weight:600}
+.lb-sig b{color:var(--up)} .lb-blk b{color:var(--down)}
+.freq{margin-top:14px;padding-top:13px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted)}
+.freq b{color:var(--ink)}
+.foot{margin-top:26px;display:flex;justify-content:space-between;font-size:11px;color:var(--faint);font-family:"IBM Plex Mono",monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <div class="brand">
+      <div class="diamond"><i></i></div>
+      <div>
+        <div class="bname">gold_1m_macd <span class="switch">切换策略 ▾ · 将来多策略</span></div>
+        <div class="bsub">MACD 金叉/死叉 &nbsp;·&nbsp; GOLD &nbsp;·&nbsp; 1m &nbsp;·&nbsp; <b>当前唯一在跑的策略</b></div>
+      </div>
+    </div>
+    <div class="hr">
+      <div class="k">这策略行不行</div>
+      <div class="v amb">⚠ 尚不可判定</div>
+    </div>
+  </div>
+
+  <div class="idstrip">
+    <span class="idchip">家族 <b>动量 momentum</b></span>
+    <span class="idchip">风格 <b>MACD 金叉/死叉</b></span>
+    <span class="idchip">方向 <b>多空</b></span>
+    <span class="idchip">角色 <b>动量基线</b></span>
+    <span class="idchip">持有 <b>日内/超短</b></span>
+    <span class="idchip">期望频率 <b>2–8 单/天</b></span>
+    <span class="idchip">风险档 <b>medium-high</b></span>
+    <span class="idchip">日风险上限 <b>1.25%</b></span>
+  </div>
+
+  <!-- 01 EDGE SCORECARD -->
+  <div class="slabel"><span class="n">01</span><h2>Edge 记分卡</h2><span class="en">这策略到底有没有赚钱能力</span></div>
+  <div class="scorewrap">
+    <div class="verdict">
+      <span class="vd-lbl">edge 判定 · insufficient_sample</span>
+      <div class="vd-h">尚不可判定<br><span class="r">但现有证据强烈偏负</span></div>
+      <div class="vd-sub">已平仓 <b>19 / 20</b> 笔，差 1 笔到判定门槛。现有 19 笔证据：<b>负期望（−0.70R）</b>、<b>盈亏比 0.23</b> —— 若维持，将被判为 <b>亏损策略</b>，不是赢家。</div>
+      <div class="vd-meter">
+        <div class="ml"><span>样本进度</span><span class="mono">19 / 20</span></div>
+        <div class="bar"><i style="width:95%"></i></div>
+      </div>
+    </div>
+    <div class="tiles">
+      <div class="tile bad"><div class="tk">净盈亏</div><div class="tv mono neg">−$196.87</div><div class="ts">已实现 −212.81 · 浮盈 +15.94</div></div>
+      <div class="tile bad"><div class="tk">胜率</div><div class="tv mono neg">10.53%</div><div class="ts">2 胜 / 17 负</div></div>
+      <div class="tile bad"><div class="tk">盈亏比 PF</div><div class="tv mono neg">0.23</div><div class="ts">&lt; 1 = 亏多于赚</div></div>
+      <div class="tile bad"><div class="tk">期望值</div><div class="tv mono neg">−0.70 R</div><div class="ts">每笔平均亏 0.70 倍风险</div></div>
+      <div class="tile warn"><div class="tk">最大回撤</div><div class="tv mono amb">−2.25%</div><div class="ts">当前 −2.07%</div></div>
+      <div class="tile"><div class="tk">运行 / 交易</div><div class="tv mono">27<span style="font-size:14px;color:var(--dim)">天</span> · 22<span style="font-size:14px;color:var(--dim)">单</span></div><div class="ts">19 平仓 + 3 持仓</div></div>
+    </div>
+  </div>
+
+  <!-- 02 WHY LOSING -->
+  <div class="slabel"><span class="n">02</span><h2>为什么这样输</h2><span class="en">退出方式 = 亏损的根</span></div>
+  <div class="panel">
+    <div class="ptitle">平仓退出原因 · 19 笔</div>
+    <div class="psub">WHY IT LOSES · exit-reason breakdown</div>
+    <div class="exitbar">
+      <div class="seg stop" style="width:89.5%">17 笔 止损 · 89%</div>
+      <div class="seg targ" style="width:10.5%">2 · 11%</div>
+    </div>
+    <div class="exleg">
+      <span><span class="d" style="background:#f0616d"></span>止损出场 17 笔</span>
+      <span><span class="d" style="background:#46d69a"></span>到目标 2 笔</span>
+      <span class="dimc">| 信号构成：金叉 14 · 死叉 5</span>
+    </div>
+    <div class="insight">
+      <span class="lab">诊断</span>
+      典型的"<b>频繁被止损</b>"形态：近 9 成交易被止损打掉，只有 2 笔到目标，而且赢的不够大——盈亏比仅 <b>0.23</b>，意味着 2 个赢家加起来都盖不住 17 个亏家。这不是运气差，是<b>这套 MACD 进出场规则在 1m 黄金上当前就是负期望</b>。要么改规则（止损/目标/过滤），要么停。
+    </div>
+  </div>
+
+  <!-- 03 FUNNEL + LIVE BLOCK -->
+  <div class="slabel"><span class="n">03</span><h2>信号漏斗 · 为什么不开仓</h2><span class="en">今日 K 线评估去向 + 此刻拦截</span></div>
+  <div class="funnelgrid">
+    <div class="panel">
+      <div class="ptitle">今日 ~175 次 K 线评估的去向</div>
+      <div class="psub">SIGNAL FUNNEL · 频率诊断（非硬指标）</div>
+      <div class="frow f-nosig"><span class="fl">无金叉/死叉</span><span class="ftrack"><span class="ffill" style="width:82%">无信号</span></span><span class="fc mono">143</span></div>
+      <div class="frow f-thin"><span class="fl">回测样本薄</span><span class="ftrack"><span class="ffill" style="width:18%">不挡 paper</span></span><span class="fc mono">28</span></div>
+      <div class="frow f-cand"><span class="fl">有信号未出票</span><span class="ftrack"><span class="ffill" style="width:8%"></span></span><span class="fc mono">3</span></div>
+      <div class="frow f-exec"><span class="fl">实际成交</span><span class="ftrack"><span class="ffill" style="width:4%"></span></span><span class="fc mono">1</span></div>
+      <div class="freq">期望 <b>2–8 单/天</b> · 今日成交 <b>1</b> · 阶段判定 <b class="amb">成交不足 (low_volume)</b>，主因「有方向信号但未出票」。<span class="dimc">频率是诊断、不是必须达标的 SLA。</span></div>
+    </div>
+    <div class="liveblock">
+      <div class="lb-top"><div class="lb-ic">⏸</div><div class="lb-h">此刻不开新仓</div></div>
+      <div class="lb-row lb-sig">信号：<b>有 · 多头金叉</b>（强度 70）"GOLD MACD 金叉(12/26/9) 形成，多头入场"</div>
+      <div class="lb-row lb-blk">拦截：<b>持仓已达上限</b> —— 已有 <b>3 笔空单</b>未平，护栏不允许再加仓（`open_exposure: block`）。</div>
+      <div class="lb-row mut" style="margin-top:12px;font-size:12.5px">含义：策略正<b style="color:var(--ink)">净空</b>持有，却同时收到<b style="color:var(--ink)">做多</b>信号——方向打架，且仓位到顶。属正常风控拦截，非故障。</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>MOCKUP · 策略记分卡 v1 · gold_1m_macd 真实快照 @ 2026-06-29</span>
+    <span>ONE QUESTION: 行不行 / 为什么 / 为什么不开仓</span>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>每日闭环 · gold_1m_macd</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0A0D12;--panel:#11161F;--panel2:#0E131B;--line:#1B2230;--line2:#232C3C;--ink:#E9EDF4;--muted:#8B94A4;--dim:#586273;--faint:#3A4252;--cyan:#5BB8E8;--gold:#C9A24B;--gold-d:#6B5524;--up:#46D69A;--down:#F0616D;--amber:#E6A93B;--r:14px}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);font-family:"Hanken Grotesk","PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{background:radial-gradient(1000px 480px at 50% -10%,rgba(201,162,75,.05),transparent 60%),var(--bg);min-height:100vh}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1340px;margin:0 auto;padding:26px 30px 40px}
+.neg{color:var(--down)}.pos{color:var(--up)}.amb{color:var(--amber)}.mut{color:var(--muted)}.dimc{color:var(--dim)}.cy{color:var(--cyan)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:14px}
+.diamond{width:30px;height:30px;border:1px solid var(--gold);transform:rotate(45deg);display:grid;place-items:center;border-radius:6px;background:linear-gradient(135deg,rgba(201,162,75,.18),rgba(201,162,75,.02))}
+.diamond i{transform:rotate(-45deg);width:9px;height:9px;border-radius:50%;background:var(--gold);box-shadow:0 0 10px rgba(201,162,75,.6)}
+.bname{font-weight:800;font-size:19px}.bsub{font-size:12px;color:var(--muted);margin-top:2px}.bsub b{color:var(--ink);font-weight:600}
+.hr{text-align:right}.hr .k{font-size:10.5px;color:var(--dim);letter-spacing:.6px;text-transform:uppercase}.hr .v{font-size:18px;font-weight:700;margin-top:3px}
+
+/* day glance bar */
+.glance{display:flex;align-items:center;gap:26px;margin:18px 0 6px;padding:14px 20px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.glance .g{display:flex;flex-direction:column}
+.glance .gk{font-size:10.5px;color:var(--dim);letter-spacing:.5px;text-transform:uppercase}
+.glance .gv{font-size:16px;font-weight:700;margin-top:3px}
+.glance .sep{width:1px;height:30px;background:var(--line2)}
+.glance .right{margin-left:auto;font-size:12px;color:var(--muted)}
+
+.slabel{display:flex;align-items:baseline;gap:10px;margin:24px 2px 13px}
+.slabel .n{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--gold);border:1px solid var(--gold-d);border-radius:4px;padding:1px 6px;letter-spacing:1px}
+.slabel h2{font-size:13px;font-weight:700}.slabel .en{font-size:11px;color:var(--dim);font-family:"IBM Plex Mono",monospace}
+
+/* 4-phase flow */
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:0;position:relative}
+.phase{position:relative;padding:0 9px}
+.phase:first-child{padding-left:0}.phase:last-child{padding-right:0}
+.arrow{position:absolute;right:-9px;top:64px;width:18px;height:18px;z-index:3;color:var(--dim);display:grid;place-items:center;font-size:15px}
+.pcard{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);height:100%;overflow:hidden;display:flex;flex-direction:column}
+.pcard.acc-a{border-top:3px solid var(--amber)}
+.pcard.acc-c{border-top:3px solid var(--cyan)}
+.pcard.acc-r{border-top:3px solid var(--down)}
+.pcard.acc-g{border-top:3px solid var(--gold)}
+.ph-head{padding:14px 16px 10px}
+.ph-num{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--dim);letter-spacing:1px}
+.ph-title{font-size:15px;font-weight:800;margin-top:5px;display:flex;align-items:center;gap:8px}
+.ph-en{font-size:10.5px;color:var(--faint);font-family:"IBM Plex Mono",monospace;text-transform:uppercase;letter-spacing:.5px;margin-top:3px}
+.pill{font-size:10.5px;padding:2px 8px;border-radius:20px;font-weight:600;font-family:"IBM Plex Mono",monospace;letter-spacing:.3px}
+.pill.a{color:var(--amber);background:rgba(230,169,59,.13);border:1px solid rgba(230,169,59,.3)}
+.pill.c{color:var(--cyan);background:rgba(91,184,232,.12);border:1px solid rgba(91,184,232,.28)}
+.pill.r{color:var(--down);background:rgba(240,97,109,.12);border:1px solid rgba(240,97,109,.3)}
+.pill.g{color:var(--gold);background:rgba(201,162,75,.1);border:1px solid var(--gold-d)}
+.ph-body{padding:4px 16px 16px;flex:1;display:flex;flex-direction:column;gap:11px}
+.ln{font-size:13px;line-height:1.5}
+.ln .lk{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px}
+.ln b{font-weight:600}
+.box{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.box.warn{border-left:2px solid var(--amber)} .box.bad{border-left:2px solid var(--down)} .box.good{border-left:2px solid var(--up)} .box.info{border-left:2px solid var(--cyan)}
+.kv{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0}
+.kv .k{color:var(--muted)} .kv .v{font-weight:600}
+.tiny{font-size:11px;color:var(--dim);line-height:1.5}
+.hyp{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;line-height:1.45;padding:4px 0}
+.hyp .n{flex:none;width:18px;height:18px;border-radius:5px;background:rgba(201,162,75,.12);color:var(--gold);font-size:11px;display:grid;place-items:center;font-family:"IBM Plex Mono",monospace;margin-top:1px}
+.loopnote{margin-top:14px;text-align:center;font-size:11.5px;color:var(--dim)}
+.loopnote b{color:var(--gold)}
+.foot{margin-top:24px;display:flex;justify-content:space-between;font-size:11px;color:var(--faint);font-family:"IBM Plex Mono",monospace}
+</style></head>
+<body><div class="wrap">
+
+<div class="head">
+  <div class="brand"><div class="diamond"><i></i></div>
+    <div><div class="bname">每日闭环 · gold_1m_macd</div>
+    <div class="bsub">早盘计划 → 盘中执行 → 晚盘复盘 → 明日假设 &nbsp;·&nbsp; <b>2026-06-29</b></div></div></div>
+  <div class="hr"><div class="k">今日 PnL</div><div class="v mono pos">+0.19%</div></div>
+</div>
+
+<div class="glance">
+  <div class="g"><span class="gk">账户净值</span><span class="gv mono">$9,808 <span class="neg" style="font-size:12px">−1.92%</span></span></div>
+  <div class="sep"></div>
+  <div class="g"><span class="gk">今日成交</span><span class="gv mono">1 开 · 0 平</span></div>
+  <div class="sep"></div>
+  <div class="g"><span class="gk">当前持仓</span><span class="gv mono">3 空 · 浮盈 +$15.9</span></div>
+  <div class="sep"></div>
+  <div class="g"><span class="gk">今日裁决</span><span class="gv amb">受限交易</span></div>
+  <div class="right">这一天的流程，从计划到复盘，一条线讲清</div>
+</div>
+
+<div class="slabel"><span class="n">LOOP</span><h2>今日闭环</h2><span class="en">DAILY LOOP · 单操盘手视角（已移除 PM 行动队列 / 晋级复核）</span></div>
+
+<div class="flow">
+
+  <!-- 1 morning -->
+  <div class="phase">
+    <div class="arrow">→</div>
+    <div class="pcard acc-a">
+      <div class="ph-head">
+        <div class="ph-num">01</div>
+        <div class="ph-title">早盘计划 <span class="pill a">受限</span></div>
+        <div class="ph-en">Morning Plan</div>
+      </div>
+      <div class="ph-body">
+        <div class="ln"><span class="lk">开局姿态</span>带着 <b>3 笔空单</b>进场（均价 4078），方向<b>偏空</b>。</div>
+        <div class="box warn">
+          <div class="ln"><span class="lk">今日计划</span>继续<b>持有</b>现有空单；<b>不主动加仓</b>——持仓已达 3 笔上限，新信号需先腾出仓位。</div>
+        </div>
+        <div class="kv"><span class="k">允许开新仓</span><span class="v amb">否 · 已满仓</span></div>
+        <div class="kv"><span class="k">金价位置</span><span class="v mono">4051 · 区间偏低</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2 intraday -->
+  <div class="phase">
+    <div class="arrow">→</div>
+    <div class="pcard acc-c">
+      <div class="ph-head">
+        <div class="ph-num">02</div>
+        <div class="ph-title">盘中执行 <span class="pill c">1 开 / 1 拦</span></div>
+        <div class="ph-en">Intraday Execution</div>
+      </div>
+      <div class="ph-body">
+        <div class="box info">
+          <div class="kv"><span class="k">06:16 新开空单</span><span class="v pos">✓ 成交</span></div>
+          <div class="tiny">死叉信号 · 0.197 oz @ 4061 · TP/SL 已挂</div>
+        </div>
+        <div class="box bad">
+          <div class="kv"><span class="k">多头金叉信号</span><span class="v neg">✕ 被拦</span></div>
+          <div class="tiny">强度 70，但持仓达上限（open_exposure block），未出票</div>
+        </div>
+        <div class="kv"><span class="k">今日平仓</span><span class="v mono">0 笔</span></div>
+        <div class="kv"><span class="k">日内盈亏</span><span class="v pos mono">+$19.0 · +0.19%</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 evening -->
+  <div class="phase">
+    <div class="arrow">→</div>
+    <div class="pcard acc-r">
+      <div class="ph-head">
+        <div class="ph-num">03</div>
+        <div class="ph-title">晚盘复盘 <span class="pill r">负期望</span></div>
+        <div class="ph-en">Evening Review</div>
+      </div>
+      <div class="ph-body">
+        <div class="ln"><span class="lk">今日结果</span>3 笔空单浮盈 <b class="pos">+$15.9</b>，无平仓，日 <b class="pos">+0.19%</b>。</div>
+        <div class="box bad">
+          <div class="ln"><span class="lk">运行裁决（截至今日）</span>胜率 <b>16%</b> · 盈亏比 <b>≈2:1</b> · 期望 <b class="neg">−0.70R</b>。盈亏比不差，<b>胜率太低</b>——2:1 需 ~34% 胜率才打平。</div>
+        </div>
+        <div class="kv"><span class="k">edge 判定</span><span class="v amb">样本不足 19/20</span></div>
+        <div class="kv"><span class="k">主问题</span><span class="v">金叉做多反复被止损</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 hypothesis -->
+  <div class="phase">
+    <div class="pcard acc-g">
+      <div class="ph-head">
+        <div class="ph-num">04</div>
+        <div class="ph-title">明日假设 <span class="pill g">待验证</span></div>
+        <div class="ph-en">Tomorrow's Hypothesis</div>
+      </div>
+      <div class="ph-body">
+        <div class="ln"><span class="lk">由今日证据提出</span>核心病是<b>进场胜率低</b>，尤其下跌市里反复抄多。</div>
+        <div class="hyp"><span class="n">1</span><span>给 MACD 加<b>趋势过滤</b>：只顺更大周期方向做（下跌市不做多）。</span></div>
+        <div class="hyp"><span class="n">2</span><span><b>缩短持有</b>（系统标记 best_experiment = shorter_hold）。</span></div>
+        <div class="box">
+          <div class="tiny">⚠ 这是<b style="color:var(--ink)">数据提示的候选假设</b>，本策略<b style="color:var(--ink)">尚未</b>生成正式影子实验。需要你确认后才进入验证，而非自动改参。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="loopnote">○ 明日开盘，<b>明日假设</b>将变成新的 <b>早盘计划</b> —— 闭环。</div>
+
+<div class="foot"><span>MOCKUP · 每日闭环 v1 · gold_1m_macd 真实快照 @ 2026-06-29</span><span>四阶段叙事 · 已砍 PM 队列/晋级复核 · 语义色</span></div>
+</div></body></html>

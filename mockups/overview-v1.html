@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview · gold_1m_chan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0A0D12; --bg2:#0E1218; --panel:#11161F; --panel2:#0E131B;
+  --line:#1B2230; --line2:#232C3C;
+  --ink:#E9EDF4; --muted:#8B94A4; --dim:#586273; --faint:#3A4252;
+  --cyan:#5BB8E8; --cyan-d:#2E5C77;
+  --gold:#C9A24B; --gold-d:#6B5524;
+  --up:#46D69A; --down:#F0616D; --amber:#E6A93B;
+  --r:14px; --rs:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);
+  font-family:"Hanken Grotesk","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;}
+body{
+  background:
+    radial-gradient(1100px 500px at 78% -8%, rgba(91,184,232,.06), transparent 60%),
+    radial-gradient(900px 520px at 8% 4%, rgba(201,162,75,.05), transparent 55%),
+    var(--bg);
+  min-height:100vh;
+}
+/* subtle grain */
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.025;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;}
+.wrap{position:relative;z-index:1;max-width:1340px;margin:0 auto;padding:26px 30px 40px;}
+
+/* ---------- header ---------- */
+.head{display:flex;align-items:center;justify-content:space-between;gap:20px;
+  padding-bottom:18px;border-bottom:1px solid var(--line);}
+.brand{display:flex;align-items:center;gap:14px;}
+.diamond{width:30px;height:30px;border:1px solid var(--gold);transform:rotate(45deg);
+  display:grid;place-items:center;border-radius:6px;
+  background:linear-gradient(135deg,rgba(201,162,75,.18),rgba(201,162,75,.02));}
+.diamond i{transform:rotate(-45deg);width:9px;height:9px;border-radius:50%;
+  background:var(--gold);box-shadow:0 0 10px rgba(201,162,75,.6);}
+.bname{font-weight:800;font-size:19px;letter-spacing:.2px;}
+.bsub{font-size:12px;color:var(--muted);margin-top:2px;letter-spacing:.3px;}
+.bsub b{color:var(--ink);font-weight:600}
+.tag{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:1px;
+  padding:3px 8px;border:1px solid var(--line2);border-radius:5px;color:var(--muted);
+  text-transform:uppercase;vertical-align:middle;margin-left:8px}
+.tag.paper{color:var(--gold);border-color:var(--gold-d);background:rgba(201,162,75,.07)}
+.hright{display:flex;align-items:center;gap:26px;text-align:right}
+.hr-item .k{font-size:10.5px;color:var(--dim);letter-spacing:.6px;text-transform:uppercase}
+.hr-item .v{font-size:15px;font-weight:600;margin-top:3px}
+.hr-nav .v{font-size:22px}
+.neg{color:var(--down)} .pos{color:var(--up)}
+
+/* ---------- section label ---------- */
+.slabel{display:flex;align-items:baseline;gap:10px;margin:22px 2px 11px}
+.slabel .n{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--gold);
+  border:1px solid var(--gold-d);border-radius:4px;padding:1px 6px;letter-spacing:1px}
+.slabel h2{font-size:13px;font-weight:700;letter-spacing:.4px;color:var(--ink)}
+.slabel .en{font-size:11px;color:var(--dim);font-family:"IBM Plex Mono",monospace;letter-spacing:.5px}
+
+/* ---------- zone 1 health ---------- */
+.health{display:grid;grid-template-columns:1fr 1.05fr;gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.vitals{background:var(--panel);padding:18px 20px;}
+.vitals .vt{font-size:11px;color:var(--dim);letter-spacing:.8px;text-transform:uppercase;margin-bottom:14px}
+.chip{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px dashed var(--line)}
+.chip:last-child{border-bottom:0}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;position:relative}
+.dot.g{background:var(--up);box-shadow:0 0 0 3px rgba(70,214,154,.13)}
+.dot.g::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1px solid rgba(70,214,154,.4);animation:pulse 2.6s infinite}
+.dot.n{background:var(--dim)}
+.dot.a{background:var(--amber);box-shadow:0 0 0 3px rgba(230,169,59,.13)}
+@keyframes pulse{0%{transform:scale(1);opacity:.9}70%{transform:scale(1.8);opacity:0}100%{opacity:0}}
+.chip .cl{font-size:13.5px;font-weight:600;min-width:74px}
+.chip .cv{font-size:12.5px;color:var(--muted);margin-left:auto}
+.chip .cv b{color:var(--up);font-weight:600}
+.chip .cv.dim b{color:var(--dim)}
+
+.verdict{background:linear-gradient(180deg,rgba(230,169,59,.07),rgba(230,169,59,.015));
+  padding:20px 24px;display:flex;flex-direction:column;justify-content:center;position:relative}
+.verdict::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--amber)}
+.vd-top{display:flex;align-items:center;gap:13px}
+.vd-ic{width:38px;height:38px;border-radius:9px;display:grid;place-items:center;flex:none;
+  background:rgba(230,169,59,.14);border:1px solid rgba(230,169,59,.3);color:var(--amber);font-size:18px}
+.vd-h{font-size:23px;font-weight:800;letter-spacing:.3px}
+.vd-h .st{color:var(--amber)}
+.vd-reason{font-size:14px;color:var(--ink);margin-top:12px;line-height:1.5}
+.vd-reason b{color:var(--amber);font-weight:600}
+.vd-tags{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.vtag{font-size:11.5px;color:var(--muted);padding:4px 10px;border:1px solid var(--line2);
+  border-radius:20px;background:var(--panel2)}
+.vtag b{color:var(--ink);font-weight:600}
+.vtag.ok b{color:var(--up)}
+
+/* ---------- zone 2 chart ---------- */
+.chartcard{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);overflow:hidden}
+.cc-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 4px}
+.legend{display:flex;gap:20px;align-items:center}
+.lg{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.lg .sw{width:18px;height:3px;border-radius:2px}
+.lg .sw.s{background:var(--cyan)} .lg .sw.g{background:var(--gold)}
+.lg .nm{color:var(--muted)} .lg .vl{font-weight:700}
+.lg .vl.s{color:var(--cyan)} .lg .vl.g{color:var(--gold)}
+.toggle{display:flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.toggle button{background:transparent;color:var(--dim);border:0;padding:5px 12px;
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;cursor:pointer;letter-spacing:.5px}
+.toggle button.on{background:rgba(91,184,232,.12);color:var(--cyan)}
+.svgbox{padding:6px 16px 2px}
+.cc-foot{padding:6px 22px 18px;font-size:12.5px;color:var(--muted);line-height:1.55;border-top:1px solid var(--line);margin-top:4px;padding-top:13px}
+.cc-foot b{color:var(--ink);font-weight:600}
+.cc-foot .warn{color:var(--amber);font-weight:600}
+
+/* ---------- zone 3 cards ---------- */
+.cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+.card{border:1px solid var(--line);border-radius:var(--r);background:var(--panel);padding:18px 20px}
+.card .ch{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.card .ct{font-size:12.5px;font-weight:700;letter-spacing:.3px}
+.card .cen{font-size:10px;color:var(--dim);font-family:"IBM Plex Mono",monospace;letter-spacing:.5px;text-transform:uppercase}
+.rows{margin-top:8px}
+.row{display:flex;align-items:baseline;justify-content:space-between;padding:9px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.row .rk{font-size:13px;color:var(--muted)}
+.row .rv{font-size:16px;font-weight:600}
+.row .rv.big{font-size:18px}
+.row .rv small{font-size:11px;color:var(--dim);font-weight:500;margin-left:5px}
+.flat{display:flex;align-items:center;gap:10px;margin:4px 0 14px}
+.flat .fb{font-size:26px;font-weight:800;letter-spacing:1px;color:var(--muted)}
+.flat .fp{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:1px;
+  border:1px solid var(--line2);border-radius:5px;padding:3px 9px;color:var(--dim)}
+.muted{color:var(--muted)} .dimc{color:var(--dim)}
+.foot{margin-top:26px;display:flex;justify-content:space-between;align-items:center;
+  font-size:11px;color:var(--faint);font-family:"IBM Plex Mono",monospace;letter-spacing:.4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="head">
+    <div class="brand">
+      <div class="diamond"><i></i></div>
+      <div>
+        <div class="bname">gold_1m_chan<span class="tag paper">Paper</span></div>
+        <div class="bsub">缠论 <b>二买 / 二卖</b> &nbsp;·&nbsp; GOLD &nbsp;·&nbsp; 1m &nbsp;·&nbsp; binance_usdm</div>
+      </div>
+    </div>
+    <div class="hright">
+      <div class="hr-item hr-nav">
+        <div class="k">净值 NAV</div>
+        <div class="v mono">$9,934.99 <span class="neg" style="font-size:14px">−0.65%</span></div>
+      </div>
+      <div class="hr-item">
+        <div class="k">数据更新</div>
+        <div class="v mono"><span class="pos">●</span> 0.5m 前</div>
+      </div>
+      <div class="hr-item">
+        <div class="k">当前时间</div>
+        <div class="v mono">06-29 12:35<span class="dimc" style="font-size:11px"> UTC</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ZONE 1 -->
+  <div class="slabel"><span class="n">01</span><h2>系统健康</h2><span class="en">SYSTEM HEALTH · 机器活着吗 / 现在能不能开仓</span></div>
+  <div class="health">
+    <div class="vitals">
+      <div class="vt">基础运行 · 每根 K 线都在被评估</div>
+      <div class="chip"><span class="dot g"></span><span class="cl">数据 Feed</span><span class="cv">新鲜 · <b>0.5m 前</b> · binance_usdm</span></div>
+      <div class="chip"><span class="dot g"></span><span class="cl">K 线评估</span><span class="cv">实时 · 最新 bar <b>12:35</b> · 7200 根</span></div>
+      <div class="chip"><span class="dot g"></span><span class="cl">Runner</span><span class="cv">正常 · 约 <b>7 分钟</b>/轮</span></div>
+      <div class="chip"><span class="dot g"></span><span class="cl">交易所对账</span><span class="cv">一致 · <b>drift 0</b></span></div>
+      <div class="chip"><span class="dot n"></span><span class="cl">护单 TP/SL</span><span class="cv dim">空仓 · <b>无敞口</b></span></div>
+    </div>
+    <div class="verdict">
+      <div class="vd-top">
+        <div class="vd-ic">⏸</div>
+        <div class="vd-h">现在 <span class="st">不开新仓</span> · 等信号</div>
+      </div>
+      <div class="vd-reason">原因：<b>没有新鲜的缠论二买 / 二卖信号</b> —— 最近一个二买在 10:10 形成，已超过 3 根 K 线"过期"，按缠论设计不追旧结构。</div>
+      <div class="vd-tags">
+        <span class="vtag ok">系统健康 · <b>无拦截</b></span>
+        <span class="vtag">Kill switch <b>OFF</b></span>
+        <span class="vtag">风控 <b>未触发</b></span>
+        <span class="vtag">已空仓 <b>19 天</b></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ZONE 2 -->
+  <div class="slabel"><span class="n">02</span><h2>净值 vs 黄金</h2><span class="en">NAV vs GOLD · 你的策略 对比 干脆持有黄金</span></div>
+  <div class="chartcard">
+    <div class="cc-head">
+      <div class="legend">
+        <div class="lg"><span class="sw s"></span><span class="nm">策略 NAV</span><span class="vl s mono">−0.65%</span></div>
+        <div class="lg"><span class="sw g"></span><span class="nm">黄金 Buy&amp;Hold</span><span class="vl g mono">−10.19%</span></div>
+      </div>
+      <div class="toggle">
+        <button class="on">建仓至今</button><button>1M</button><button>3M</button><button>6M</button>
+      </div>
+    </div>
+    <div class="svgbox">
+      <svg viewBox="0 0 1180 330" width="100%" preserveAspectRatio="none" style="display:block;height:330px">
+        <defs>
+          <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#5BB8E8" stop-opacity=".22"/>
+            <stop offset="1" stop-color="#5BB8E8" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <!-- gridlines -->
+        <line x1="8" y1="34.1" x2="1172" y2="34.1" stroke="#232C3C" stroke-width="1" stroke-dasharray="3 4"/>
+        <line x1="8" y1="147.4" x2="1172" y2="147.4" stroke="#1B2230" stroke-width="1"/>
+        <line x1="8" y1="260.7" x2="1172" y2="260.7" stroke="#1B2230" stroke-width="1"/>
+        <text x="14" y="30" fill="#586273" font-size="11" font-family="IBM Plex Mono">10,000 起始</text>
+        <text x="14" y="143" fill="#3A4252" font-size="11" font-family="IBM Plex Mono">9,500</text>
+        <text x="14" y="256" fill="#3A4252" font-size="11" font-family="IBM Plex Mono">9,000</text>
+        <!-- area + lines (real data) -->
+        <path d="M 8.0,34.3 L 8.0,34.3 L 51.1,40.4 L 94.2,38.9 L 137.3,45.2 L 180.4,45.2 L 223.6,45.2 L 266.7,43.9 L 309.8,46.4 L 352.9,48.9 L 396.0,48.9 L 439.1,48.9 L 482.2,48.9 L 525.3,48.9 L 568.4,48.9 L 611.6,48.9 L 654.7,48.9 L 697.8,48.9 L 740.9,48.9 L 784.0,48.9 L 827.1,48.9 L 870.2,48.9 L 913.3,48.9 L 956.4,48.9 L 999.6,48.9 L 1042.7,48.9 L 1085.8,48.9 L 1128.9,48.9 L 1172.0,48.9 L 1172.0,306.0 L 8.0,306.0 Z" fill="url(#sg)"/>
+        <path d="M 8.0,34.1 L 51.1,64.5 L 94.2,47.1 L 137.3,120.4 L 180.4,132.6 L 223.6,126.2 L 266.7,118.0 L 309.8,148.8 L 352.9,226.6 L 396.0,242.6 L 439.1,180.7 L 482.2,173.9 L 525.3,174.2 L 568.4,107.0 L 611.6,118.5 L 654.7,106.7 L 697.8,172.0 L 740.9,210.7 L 784.0,207.8 L 827.1,203.4 L 870.2,196.3 L 913.3,217.8 L 956.4,286.1 L 999.6,265.9 L 1042.7,242.4 L 1085.8,243.6 L 1128.9,247.3 L 1172.0,264.9" fill="none" stroke="#C9A24B" stroke-width="2" stroke-linejoin="round" opacity=".92"/>
+        <path d="M 8.0,34.3 L 51.1,40.4 L 94.2,38.9 L 137.3,45.2 L 180.4,45.2 L 223.6,45.2 L 266.7,43.9 L 309.8,46.4 L 352.9,48.9 L 396.0,48.9 L 439.1,48.9 L 482.2,48.9 L 525.3,48.9 L 568.4,48.9 L 611.6,48.9 L 654.7,48.9 L 697.8,48.9 L 740.9,48.9 L 784.0,48.9 L 827.1,48.9 L 870.2,48.9 L 913.3,48.9 L 956.4,48.9 L 999.6,48.9 L 1042.7,48.9 L 1085.8,48.9 L 1128.9,48.9 L 1172.0,48.9" fill="none" stroke="#5BB8E8" stroke-width="2.5" stroke-linejoin="round"/>
+        <!-- endpoint dots -->
+        <circle cx="1172" cy="48.9" r="4" fill="#5BB8E8"/><circle cx="1172" cy="48.9" r="8" fill="none" stroke="#5BB8E8" stroke-opacity=".35"/>
+        <circle cx="1172" cy="264.9" r="4" fill="#C9A24B"/>
+        <!-- annotation: dormant -->
+        <line x1="352.9" y1="48.9" x2="352.9" y2="300" stroke="#586273" stroke-width="1" stroke-dasharray="2 3"/>
+        <text x="360" y="296" fill="#586273" font-size="11" font-family="IBM Plex Mono">↑ 06/10 最后一笔成交，此后空仓 → NAV 走平</text>
+        <!-- x ticks -->
+        <text x="8" y="324" fill="#586273" font-size="11" font-family="IBM Plex Mono">06-02</text>
+        <text x="330" y="324" fill="#586273" font-size="11" font-family="IBM Plex Mono">06-10</text>
+        <text x="632" y="324" fill="#586273" font-size="11" font-family="IBM Plex Mono">06-17</text>
+        <text x="934" y="324" fill="#586273" font-size="11" font-family="IBM Plex Mono">06-24</text>
+        <text x="1135" y="324" fill="#586273" font-size="11" font-family="IBM Plex Mono">06-29</text>
+      </svg>
+    </div>
+    <div class="cc-foot">
+      策略 <b>−0.65%</b> vs 黄金 <b>−10.19%</b> ，跑赢 <b style="color:var(--up)">+9.54 个点</b>。
+      <span class="warn">但这不是 edge：</span>策略近乎空仓、躲过了金价这波下跌，跑赢来自"没参与"，而非交易能力。最近成交 06/10（19 天前）。
+    </div>
+  </div>
+
+  <!-- ZONE 3 -->
+  <div class="slabel"><span class="n">03</span><h2>策略数据</h2><span class="en">STRATEGY · 概况 / 阶段表现 / 当前持仓</span></div>
+  <div class="cards">
+    <div class="card">
+      <div class="ch"><span class="ct">运行概况</span><span class="cen">Overview</span></div>
+      <div class="rows">
+        <div class="row"><span class="rk">运行天数</span><span class="rv mono">27 天 <small>06/02 → 06/29</small></span></div>
+        <div class="row"><span class="rk">总交易</span><span class="rv mono">4 笔 <small>全平仓</small></span></div>
+        <div class="row"><span class="rk">胜率</span><span class="rv mono neg">0% <small>0 胜 4 负 · 样本不足</small></span></div>
+        <div class="row"><span class="rk">年化回报</span><span class="rv mono dimc">— <small>样本不足 4/20，不显示</small></span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ch"><span class="ct">阶段表现</span><span class="cen">Trailing</span></div>
+      <div class="rows">
+        <div class="row"><span class="rk">近 3 天</span><span class="rv mono muted">0.00% <small>无成交</small></span></div>
+        <div class="row"><span class="rk">近 7 天</span><span class="rv mono muted">0.00% <small>无成交</small></span></div>
+        <div class="row"><span class="rk">近 30 天</span><span class="rv mono neg">−0.65% <small>≈ 全程</small></span></div>
+        <div class="row"><span class="rk">最大回撤</span><span class="rv mono neg">−0.65%</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ch"><span class="ct">当前持仓</span><span class="cen">Position</span></div>
+      <div class="flat"><span class="fb">空仓</span><span class="fp">FLAT · 无敞口</span></div>
+      <div class="rows">
+        <div class="row"><span class="rk">方向 / 仓位</span><span class="rv mono dimc">— / —</span></div>
+        <div class="row"><span class="rk">浮动盈亏</span><span class="rv mono">$0.00</span></div>
+        <div class="row"><span class="rk">最近平仓</span><span class="rv mono muted" style="font-size:14px">06/10 <small>19 天前</small></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>MOCKUP · OVERVIEW v1 · 数据为 gold_1m_chan 真实快照 @ 2026-06-29 12:35 UTC</span>
+    <span>SINGLE-OPERATOR DAILY-LOOP COCKPIT</span>
+  </div>
+
+</div>
+</body>
+</html>

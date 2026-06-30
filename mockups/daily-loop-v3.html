@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>每日闭环 · gold_1m_macd</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0A0E16;--surface:#101622;--card:#131A27;--raise:#18202F;--border:#26303F;--hair:rgba(255,255,255,.05);
+--ink:#F1F5F9;--muted:#94A1B5;--dim:#637087;--faint:#3F4B5D;--blue:#3B82F6;--blue-l:#60A5FA;--blue-soft:rgba(59,130,246,.13);
+--up:#22C55E;--down:#EF4444;--amber:#F59E0B;--gold:#CDA351;--up-soft:rgba(34,197,94,.12);--down-soft:rgba(239,68,68,.12);--amber-soft:rgba(245,158,11,.12);
+--r:12px;--ri:8px;--sh:0 8px 26px -14px rgba(0,0,0,.7)}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans","PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{min-height:100vh;background:radial-gradient(1000px 480px at 50% -10%,rgba(59,130,246,.06),transparent 60%),var(--bg)}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1320px;margin:0 auto;padding:22px 28px 44px}
+.neg{color:var(--down)}.pos{color:var(--up)}.amb{color:var(--amber)}.bl{color:var(--blue-l)}.mut{color:var(--muted)}.dimc{color:var(--dim)}
+svg.ic{width:1em;height:1em;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:inline-block;vertical-align:-.13em}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.top{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:4px 2px 16px;border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:13px}
+.logo{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(145deg,var(--blue),#2563EB);box-shadow:0 4px 14px -4px rgba(59,130,246,.6)}.logo svg{width:19px;height:19px;color:#fff;stroke-width:2}
+.bn{font-weight:700;font-size:18px;letter-spacing:-.01em}.bs{font-size:12px;color:var(--muted);margin-top:2px}
+.hk{text-align:right}.hk .k{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}.hk .v{font-size:18px;font-weight:700;margin-top:2px}
+/* glance */
+.glance{display:flex;align-items:center;gap:24px;margin:18px 0 4px;padding:15px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--sh)}
+.g{display:flex;flex-direction:column}.g .gk{font-size:10px;color:var(--dim);letter-spacing:.5px;text-transform:uppercase}.g .gv{font-size:16px;font-weight:700;margin-top:3px}
+.gsep{width:1px;height:30px;background:var(--border)}.gright{margin-left:auto;font-size:12px;color:var(--muted)}
+.sect{display:flex;align-items:center;gap:11px;margin:24px 2px 14px}
+.sect .ix{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--blue-l);background:var(--blue-soft);border-radius:5px;padding:2px 7px;font-weight:600}
+.sect h2{font-size:14px;font-weight:600}.sect .hint{font-size:12px;color:var(--dim)}.sect .rule{flex:1;height:1px;background:var(--hair)}
+/* flow */
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:0}
+.phase{position:relative;padding:0 9px}.phase:first-child{padding-left:0}.phase:last-child{padding-right:0}
+.arrow{position:absolute;right:-8px;top:60px;z-index:3;color:var(--dim);font-size:15px}
+.pc{background:var(--card);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--sh);height:100%;overflow:hidden;display:flex;flex-direction:column;transition:transform .2s,border-color .2s}
+.pc:hover{transform:translateY(-3px);border-color:var(--dim)}
+.pc.a{border-top:3px solid var(--amber)}.pc.c{border-top:3px solid var(--blue)}.pc.r{border-top:3px solid var(--down)}.pc.g{border-top:3px solid var(--gold)}
+.ph{padding:15px 17px 11px}
+.pn{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--dim)}
+.pt{font-size:15px;font-weight:700;margin-top:5px;display:flex;align-items:center;gap:8px;letter-spacing:-.01em}
+.pe{font-size:10px;color:var(--faint);font-family:"IBM Plex Mono",monospace;text-transform:uppercase;letter-spacing:.4px;margin-top:3px}
+.pill{font-size:10.5px;padding:2px 9px;border-radius:6px;font-weight:600;font-family:"IBM Plex Mono",monospace}
+.pill.a{color:var(--amber);background:var(--amber-soft)}.pill.c{color:var(--blue-l);background:var(--blue-soft)}.pill.r{color:var(--down);background:var(--down-soft)}.pill.g{color:var(--gold);background:rgba(205,163,81,.12)}
+.pb{padding:3px 17px 17px;flex:1;display:flex;flex-direction:column;gap:11px}
+.ln{font-size:13px;line-height:1.5}.ln .lk{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px}.ln b{font-weight:600}
+.box{background:var(--surface);border:1px solid var(--border);border-radius:var(--ri);padding:10px 12px}
+.box.a{border-left:2px solid var(--amber)}.box.r{border-left:2px solid var(--down)}.box.c{border-left:2px solid var(--blue)}
+.kv{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0}.kv .k{color:var(--muted)}.kv .v{font-weight:600}
+.tiny{font-size:11px;color:var(--dim);line-height:1.5}
+.hyp{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;line-height:1.45;padding:3px 0}
+.hyp .n{flex:none;width:18px;height:18px;border-radius:5px;background:rgba(205,163,81,.14);color:var(--gold);font-size:11px;display:grid;place-items:center;font-family:"IBM Plex Mono",monospace;margin-top:1px}
+.loopnote{margin-top:14px;text-align:center;font-size:11.5px;color:var(--dim)}.loopnote b{color:var(--gold)}
+.foot{margin-top:24px;display:flex;justify-content:space-between;font-size:11px;color:var(--faint);font-family:"IBM Plex Mono",monospace}
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-act" viewBox="0 0 24 24"><polyline points="3,12 7,12 10,5 14,19 17,12 21,12"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><polyline points="5,12.5 10,17.5 19,6.5"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></symbol>
+</defs></svg>
+<div class="wrap">
+  <div class="top"><div class="brand"><div class="logo"><svg class="ic"><use href="#i-act"/></svg></div>
+    <div><div class="bn">每日闭环 · gold_1m_macd</div><div class="bs">早盘计划 → 盘中执行 → 晚盘复盘 → 明日假设 · 2026-06-29</div></div></div>
+    <div class="hk"><div class="k">今日 PnL</div><div class="v mono pos">+0.27%</div></div></div>
+
+  <div class="glance">
+    <div class="g"><span class="gk">账户净值</span><span class="gv mono">$9,816 <span class="neg" style="font-size:12px">−1.84%</span></span></div>
+    <div class="gsep"></div><div class="g"><span class="gk">今日成交</span><span class="gv mono">1 开 · 0 平</span></div>
+    <div class="gsep"></div><div class="g"><span class="gk">当前持仓</span><span class="gv mono">3 空 · 浮盈 +$28.5</span></div>
+    <div class="gsep"></div><div class="g"><span class="gk">今日裁决</span><span class="gv amb">满仓 · 暂停加仓</span></div>
+    <div class="gright">这一天的流程，从计划到复盘，一条线讲清</div>
+  </div>
+
+  <div class="sect"><span class="ix">LOOP</span><h2>今日闭环</h2><span class="hint">单操盘手视角（已移除 PM 行动队列 / 晋级复核）</span><span class="rule"></span></div>
+  <div class="flow">
+    <div class="phase"><div class="arrow">→</div><div class="pc a">
+      <div class="ph"><div class="pn">01</div><div class="pt">早盘计划 <span class="pill a">受限</span></div><div class="pe">Morning Plan</div></div>
+      <div class="pb">
+        <div class="ln"><span class="lk">开局姿态</span>带着 <b>3 笔空单</b>进场（均价 4078），方向<b>偏空</b>。</div>
+        <div class="box a"><div class="ln"><span class="lk">今日计划</span>继续<b>持有</b>现有空单；<b>不主动加仓</b>——持仓已达 3 笔上限。</div></div>
+        <div class="kv"><span class="k">允许开新仓</span><span class="v amb">否 · 已满仓</span></div>
+        <div class="kv"><span class="k">金价位置</span><span class="v mono">4051 · 区间偏低</span></div>
+      </div></div></div>
+    <div class="phase"><div class="arrow">→</div><div class="pc c">
+      <div class="ph"><div class="pn">02</div><div class="pt">盘中执行 <span class="pill c">1 开 / 1 拦</span></div><div class="pe">Intraday Execution</div></div>
+      <div class="pb">
+        <div class="box c"><div class="kv"><span class="k">06:16 新开空单</span><span class="v pos">✓ 成交</span></div><div class="tiny">死叉信号 · 0.197 oz @ 4061 · TP/SL 已挂</div></div>
+        <div class="box r"><div class="kv"><span class="k">多头金叉信号</span><span class="v neg">✕ 被拦</span></div><div class="tiny">强度 70，但持仓达上限，未出票</div></div>
+        <div class="kv"><span class="k">今日平仓</span><span class="v mono">0 笔</span></div>
+        <div class="kv"><span class="k">日内盈亏</span><span class="v pos mono">+0.27%</span></div>
+      </div></div></div>
+    <div class="phase"><div class="arrow">→</div><div class="pc r">
+      <div class="ph"><div class="pn">03</div><div class="pt">晚盘复盘 <span class="pill r">负期望</span></div><div class="pe">Evening Review</div></div>
+      <div class="pb">
+        <div class="ln"><span class="lk">今日结果</span>3 笔空单浮盈 <b class="pos">+$28.5</b>，无平仓，日 <b class="pos">+0.27%</b>。</div>
+        <div class="box r"><div class="ln"><span class="lk">运行裁决（截至今日）</span>胜率 <b>16%</b> · 盈亏比 <b>≈2:1</b> · 期望 <b class="neg">−0.70R</b>。盈亏比不差，<b>胜率太低</b>——2:1 需 ~34% 才打平。</div></div>
+        <div class="kv"><span class="k">edge 判定</span><span class="v amb">样本不足 19/20</span></div>
+        <div class="kv"><span class="k">主问题</span><span class="v">金叉做多反复被止损</span></div>
+      </div></div></div>
+    <div class="phase"><div class="pc g">
+      <div class="ph"><div class="pn">04</div><div class="pt">明日假设 <span class="pill g">待验证</span></div><div class="pe">Tomorrow's Hypothesis</div></div>
+      <div class="pb">
+        <div class="ln"><span class="lk">由今日证据提出</span>核心病是<b>进场胜率低</b>，尤其下跌市里反复抄多。</div>
+        <div class="hyp"><span class="n">1</span><span>给 MACD 加<b>趋势过滤</b>：只顺更大周期方向做（下跌市不做多）。</span></div>
+        <div class="hyp"><span class="n">2</span><span><b>缩短持有</b>（系统标记 best_experiment = shorter_hold）。</span></div>
+        <div class="box"><div class="tiny">这是<b style="color:var(--ink)">数据提示的候选假设</b>，本策略<b style="color:var(--ink)">尚未</b>生成正式影子实验。需你确认后才进入验证，而非自动改参。</div></div>
+      </div></div></div>
+  </div>
+  <div class="loopnote">○ 明日开盘，<b>明日假设</b>将变成新的 <b>早盘计划</b> —— 闭环。</div>
+  <div class="foot"><span>v3 · 每日闭环 · gold_1m_macd 真实快照 @ 2026-06-29</span><span>四阶段叙事 · 已砍 PM · 语义色 · IBM PLEX</span></div>
+</div>
+</body></html>

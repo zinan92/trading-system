@@ -1,0 +1,429 @@
+from typing import Generic, List, Optional, TypeVar
+
+from Bi.Bi import CBi
+from BuySellPoint.BSPointConfig import CPointConfig
+from Common.ChanException import CChanException, ErrCode
+from Common.func_util import has_overlap
+from KLine.KLine_Unit import CKLine_Unit
+from Seg.Seg import CSeg
+
+LINE_TYPE = TypeVar('LINE_TYPE', CBi, "CSeg")
+
+
+class CZS(Generic[LINE_TYPE]):
+    def __init__(self, lst: Optional[List[LINE_TYPE]], is_sure=True):
+        # begin/end：永远指向 klu
+        # low/high: 中枢的范围
+        # peak_low/peak_high: 中枢所涉及到的笔的最大值，最小值
+        self.__is_sure = is_sure
+        self.__sub_zs_lst: List[CZS] = []
+
+        if lst is None:
+            return
+
+        self.__begin: CKLine_Unit = lst[0].get_begin_klu()
+        self.__begin_bi: LINE_TYPE = lst[0]  # 中枢内部的笔
+
+        # self.__low = None
+        # self.__high = None
+        # self.__mid = None
+        self.update_zs_range(lst)
+
+        # self.__end: CKLine_Unit = None
+        # self.__end_bi: CBi = None  # 中枢内部的笔
+        self.__peak_high = float("-inf")
+        self.__peak_low = float("inf")
+        for item in lst:
+            self.update_zs_end(item)
+
+        self.__bi_in: Optional[LINE_TYPE] = None  # 进中枢那一笔
+        self.__bi_out: Optional[LINE_TYPE] = None  # 出中枢那一笔
+
+        self.__bi_lst: List[LINE_TYPE] = []  # begin_bi~end_bi之间的笔，在update_zs_in_seg函数中更新
+
+    def clean_cache(self):
+        self._memoize_cache = {}
+
+    @property
+    def is_sure(self): return self.__is_sure
+
+    @property
+    def sub_zs_lst(self): return self.__sub_zs_lst
+
+    @property
+    def begin(self): return self.__begin
+
+    @property
+    def begin_bi(self): return self.__begin_bi
+
+    @property
+    def low(self): return self.__low
+
+    @property
+    def high(self): return self.__high
+
+    @property
+    def mid(self): return self.__mid
+
+    @property
+    def end(self): return self.__end
+
+    @property
+    def end_bi(self): return self.__end_bi
+
+    @property
+    def peak_high(self): return self.__peak_high
+
+    @property
+    def peak_low(self): return self.__peak_low
+
+    @property
+    def bi_in(self): return self.__bi_in
+
+    @property
+    def bi_out(self): return self.__bi_out
+
+    @property
+    def bi_lst(self): return self.__bi_lst
+
+    def update_zs_range(self, lst):
+        self.__low: float = max(bi._low() for bi in lst)
+        self.__high: float = min(bi._high() for bi in lst)
+        self.__mid: float = (self.__low + self.__high) / 2  # 中枢的中点
+        self.clean_cache()
+
+    def is_one_bi_zs(self):
+        assert self.end_bi is not None
+        return self.begin_bi.idx == self.end_bi.idx
+
+    def update_zs_end(self, item):
+        self.__end: CKLine_Unit = item.get_end_klu()
+        self.__end_bi: CBi = item
+        if item._low() < self.peak_low:
+            self.__peak_low = item._low()
+        if item._high() > self.peak_high:
+            self.__peak_high = item._high()
+        self.clean_cache()
+
+    def __str__(self):
+        _str = f"{self.begin_bi.idx}->{self.end_bi.idx}"
+        if _str2 := ",".join([str(sub_zs) for sub_zs in self.sub_zs_lst]):
+            return f"{_str}({_str2})"
+        else:
+            return _str
+
+    def combine(self, zs2: 'CZS', combine_mode) -> bool:
+        if zs2.is_one_bi_zs():
+            return False
+        if self.begin_bi.seg_idx != zs2.begin_bi.seg_idx:
+            return False
+        if combine_mode == 'zs':
+            if not has_overlap(self.low, self.high, zs2.low, zs2.high, equal=True):
+                return False
+            self.do_combine(zs2)
+            return True
+        elif combine_mode == 'peak':
+            if has_overlap(self.peak_low, self.peak_high, zs2.peak_low, zs2.peak_high):
+                self.do_combine(zs2)
+                return True
+            else:
+                return False
+        else:
+            raise CChanException(f"{combine_mode} is unsupport zs conbine mode", ErrCode.PARA_ERROR)
+
+    def do_combine(self, zs2: 'CZS'):
+        if len(self.sub_zs_lst) == 0:
+            self.__sub_zs_lst.append(self.make_copy())
+        self.__sub_zs_lst.append(zs2)
+
+        self.__low = min([self.low, zs2.low])
+        self.__high = max([self.high, zs2.high])
+        self.__peak_low = min([self.peak_low, zs2.peak_low])
+        self.__peak_high = max([self.peak_high, zs2.peak_high])
+        self.__end = zs2.end
+        self.__bi_out = zs2.bi_out
+        self.__end_bi = zs2.end_bi
+        self.clean_cache()
+
+    def try_add_to_end(self, item):
+        if not self.in_range(item):
+            return False
+        if self.is_one_bi_zs():
+            self.update_zs_range([self.begin_bi, item])
+        self.update_zs_end(item)
+        return True
+
+    def in_range(self, item):
+        return has_overlap(self.low, self.high, item._low(), item._high())
+
+    def is_inside(self, seg: CSeg):
+        return seg.start_bi.idx <= self.begin_bi.idx <= seg.end_bi.idx
+
+    def is_divergence(self, config: CPointConfig, out_bi=None):
+        if not self.end_bi_break(out_bi):  # 最后一笔必须突破中枢
+            return False, None
+        in_metric = self.get_bi_in().cal_macd_metric(config.macd_algo,)
+        if out_bi is None:
+            out_metric = self.get_bi_out().cal_macd_metric(config.macd_algo)
+        else:
+            out_metric = out_bi.cal_macd_metric(config.macd_algo)
+
+        if config.divergence_rate > 100:  # 保送
+            return True, out_metric/in_metric
+        else:
+            return out_metric <= config.divergence_rate*in_metric, out_metric/in_metric
+    def is_Seg_divergence_back(self, config: CPointConfig, out_bi=None,only_area=False):
+        '''
+        最好的判断是等到这一段线段走完，要不完你可能只拿了这段线段的一小部分和前一个线段对比，自然就背驰了
+
+        '''
+        if not self.end_bi_break(out_bi):  # 最后一笔必须突破中枢
+            return False, None
+
+        if len(out_bi.bi_list)<3 : #必须走完至少三个次级别，走势终完美
+            return False, None
+
+        # if len(out_bi.bi_list)==3 and   not out_bi.bi_list[-1].is_sure : #必须走完至少三个次级别，走势终完美
+        #     return False, None
+
+        # if not out_bi.bi_list[-1].is_down():
+        #     return False, None
+
+        in_metric = self.get_bi_in().cal_macd_metric(config.macd_algo, is_reverse=False)
+
+        from Common.CEnum import BI_DIR, BI_TYPE, DATA_FIELD, FX_TYPE, MACD_ALGO
+        # if out_bi.idx-self.bi_out.idx>=2: # 说明在中枢之后走过来3，5，7.。个新线段，要有最新的同向线段判断背驰
+        #     in_bi=
+
+        Seg_in_metric,in_max_cross = self.get_bi_in().cal_Seg_macd_metric(MACD_ALGO.AREA, is_reverse=False)
+
+        if out_bi is None:
+            out_metric = self.get_bi_out().cal_macd_metric(config.macd_algo, is_reverse=True)
+        else:
+            out_metric = out_bi.cal_macd_metric(config.macd_algo, is_reverse=True)
+            Seg_out_metric,out_max_cross = out_bi.cal_Seg_macd_metric(MACD_ALGO.AREA, is_reverse=True,)
+
+        if not only_area:
+            if out_max_cross is not None:
+                if out_max_cross/in_max_cross <= config.divergence_rate:  # diff dea 背驰
+                    Seg_out_metric=out_max_cross
+                    Seg_in_metric=in_max_cross
+
+
+        if config.divergence_rate > 100:  # 保送
+            return True, out_metric/in_metric
+        else:
+            return Seg_out_metric <= config.divergence_rate*Seg_in_metric, Seg_out_metric/Seg_in_metric
+    def is_Seg_divergence(self, config: CPointConfig, out_bi=None,use_cross=True):
+        '''
+        最好的判断是等到这一段线段走完，要不完你可能只拿了这段线段的一小部分和前一个线段对比，自然就背驰了
+
+        '''
+        if not self.end_bi_break(out_bi):  # 最后一笔必须突破中枢
+            return False, None
+
+        if not isinstance(out_bi, CBi):
+            if len(out_bi.bi_list) < 3:  # 必须走完至少三个次级别，走势终完美 或者这是在判断笔中枢
+                return False, None
+        # 如果是 CBI 类型，直接继续执行后续逻辑
+
+        # if len(out_bi.bi_list)==3 and   not out_bi.bi_list[-1].is_sure : #必须走完至少三个次级别，走势终完美
+        #     return False, None
+
+        # if not out_bi.bi_list[-1].is_down():
+        #     return False, None
+
+        in_metric = self.get_bi_in().cal_macd_metric(config.macd_algo)
+
+        from Common.CEnum import BI_DIR, BI_TYPE, DATA_FIELD, FX_TYPE, MACD_ALGO
+        # if out_bi.idx-self.bi_out.idx>=2: # 说明在中枢之后走过来3，5，7.。个新线段，要有最新的同向线段判断背驰
+        #     in_bi=
+
+        Seg_in_metric,in_max_cross = self.get_bi_in().cal_Seg_macd_metric(MACD_ALGO.AREA)
+
+        if out_bi is None:
+            out_metric = self.get_bi_out().cal_macd_metric(config.macd_algo)
+        else:
+            out_metric = out_bi.cal_macd_metric(config.macd_algo)
+            Seg_out_metric,out_max_cross = out_bi.cal_Seg_macd_metric(MACD_ALGO.AREA)
+
+        if use_cross:
+            if out_max_cross is not None:
+                if out_max_cross>10: # 刚擦边的不算
+                    if not (out_max_cross/in_max_cross <= config.divergence_rate and Seg_out_metric/Seg_in_metric <= config.divergence_rate):  # diff dea 背驰
+                        return False,None
+                else:
+                    return False, None
+
+            else:
+                return False,None
+
+
+        if config.divergence_rate > 100:  # 保送
+            return True, out_metric/in_metric
+        else:
+            if use_cross:
+                divs = min(Seg_out_metric / Seg_in_metric, out_max_cross / in_max_cross)
+            else:
+                divs = Seg_out_metric / Seg_in_metric
+
+            return divs <= config.divergence_rate, divs
+    def is_SegPZ_divergence(self, config: CPointConfig, out_bi=None,num_bis=3,use_cross=True):
+        '''
+        num_bis 用来附着判断，这一个5笔的线段还是3笔的线段F
+        对于5笔的完备线段，完备中枢，计算出笔和入笔的背驰
+        对于3笔的简易中枢，计算相邻两个同向线段的背驰
+        '''
+        if not self.end_bi_break(out_bi):  # 最后一笔必须突破中枢
+            return False, None
+        if len(out_bi.bi_list) <1: #少于5 肯定形不成2个中枢，肯定成为不了一个线段，盘整背驰要求后者级别大于等于in
+            return False, None
+
+        from Common.CEnum import BI_DIR, BI_TYPE, DATA_FIELD, FX_TYPE, MACD_ALGO
+
+        if num_bis<=3:
+
+            Seg_in_metric,in_max_cross = self.bi_lst[0].cal_Seg_macd_metric(MACD_ALGO.AREA)
+            Seg_in_metric=abs(Seg_in_metric)
+
+            Seg_out_metric,out_max_cross = self.bi_lst[-1].cal_Seg_macd_metric(MACD_ALGO.AREA)
+            Seg_out_metric=abs(Seg_out_metric)
+        else:
+
+            Seg_in_metric,in_max_cross = self.get_bi_in().cal_Seg_macd_metric(MACD_ALGO.AREA)
+            Seg_in_metric=abs(Seg_in_metric)
+
+            Seg_out_metric,out_max_cross = out_bi.cal_Seg_macd_metric(MACD_ALGO.AREA)
+            Seg_out_metric=abs(Seg_out_metric)
+
+        # if self.bi_out is not None:
+        #     if self.bi_in.dir != self.bi_out.dir:
+        #         use_cross=True
+
+
+        if  use_cross:
+            if out_max_cross is not None:
+                if out_max_cross>10: # 刚擦边的不算
+                    if not (out_max_cross/in_max_cross <= config.divergence_rate and Seg_out_metric/Seg_in_metric <= config.divergence_rate):  # diff dea 背驰
+                        return False,None
+                else:
+                    return False, None
+
+            else:
+                return False,None
+
+
+
+        if config.divergence_rate > 100:  # 保送
+            return True, Seg_out_metric/Seg_in_metric
+        else:
+            if use_cross:
+                divs=min(Seg_out_metric/Seg_in_metric,out_max_cross/in_max_cross)
+            else:
+                divs=Seg_out_metric/Seg_in_metric
+
+            return divs <= config.divergence_rate, divs
+
+    def is_Reverse_SegPZ_divergence(self, config: CPointConfig, out_bi=None):
+        if not self.end_bi_break(out_bi):  # 最后一笔必须突破中枢
+            return False, None
+
+        if len(out_bi.bi_list) <3: #少于5 肯定形不成2个中枢，肯定成为不了一个线段，盘整背驰要求后者级别大于等于in
+            return False, None
+
+
+        from Common.CEnum import BI_DIR, BI_TYPE, DATA_FIELD, FX_TYPE, MACD_ALGO
+        Seg_in_metric,above_below_zero = self.bi_lst[0].cal_Seg_macd_metric(MACD_ALGO.AREA)
+        Seg_in_metric=abs(Seg_in_metric)
+
+        Seg_out_metric,above_below_zero = self.bi_lst[-1].cal_Seg_macd_metric(MACD_ALGO.AREA)
+        Seg_out_metric=abs(Seg_out_metric)
+
+        if config.divergence_rate > 100:  # 保送
+            return True, Seg_out_metric/Seg_in_metric
+        else:
+            return Seg_out_metric <= config.divergence_rate*Seg_in_metric, Seg_out_metric/Seg_in_metric
+
+    def init_from_zs(self, zs: 'CZS'):
+        self.__begin = zs.begin
+        self.__end = zs.end
+        self.__low = zs.low
+        self.__high = zs.high
+        self.__peak_high = zs.peak_high
+        self.__peak_low = zs.peak_low
+        self.__begin_bi = zs.begin_bi
+        self.__end_bi = zs.end_bi
+        self.__bi_in = zs.bi_in
+        self.__bi_out = zs.bi_out
+
+    def make_copy(self) -> 'CZS':
+        copy = CZS(lst=None, is_sure=self.is_sure)
+        copy.init_from_zs(zs=self)
+        return copy
+
+    def end_bi_break(self, end_bi=None) -> bool:
+        if end_bi is None:
+            end_bi = self.get_bi_out()
+        assert end_bi is not None
+        return (end_bi.is_down() and end_bi._low() < self.low) or \
+            (end_bi.is_up() and end_bi._high() > self.high)
+    def afterzs_end_bi_break(self, end_bi=None) -> bool:
+        if end_bi is None:
+            end_bi = self.get_bi_out()
+        assert end_bi is not None
+        return (end_bi.is_down() and end_bi._low() < self.low) or \
+            (end_bi.is_up() and end_bi._high() > self.high)
+
+    def out_bi_is_peak(self, end_bi_idx: int):
+        # 返回 (是否最低点，bi_out与中枢里面尾部最接近它的差距比例)
+        assert len(self.bi_lst) > 0
+        if self.bi_out is None:
+            return False, None
+        peak_rate = float("inf")
+        for bi in self.bi_lst:
+            if bi.idx > end_bi_idx:
+                break
+
+            if (self.bi_out.is_down() and bi._low() < self.bi_out._low()) or (self.bi_out.is_up() and bi._high() > self.bi_out._high()):
+                return False, None
+            r = abs(bi.get_end_val()-self.bi_out.get_end_val())/self.bi_out.get_end_val()
+            if r < peak_rate:
+                peak_rate = r
+        return True, peak_rate
+
+    def out_bi_is_peak_vszs(self, end_bi_idx: int):
+        '''
+        这个比较方式是用出笔的low 比较中枢的下缘，而不是中枢里面所有的点的最大最小值
+        '''
+        assert len(self.bi_lst) > 0
+        if self.bi_out is None:
+            return False, None
+        peak_rate = float("inf")
+        x=self.bi_out._low()
+        if (self.bi_out.is_down() and self.low > self.bi_out._low()) or (
+                self.bi_out.is_up() and self.high < self.bi_out._high()):
+            return True, None
+        else:
+            return False, None
+
+
+
+    def get_bi_in(self) -> LINE_TYPE:
+        assert self.bi_in is not None
+        return self.bi_in
+
+    def get_bi_out(self) -> LINE_TYPE:
+        assert self.__bi_out is not None
+        return self.__bi_out
+
+    def set_bi_in(self, bi):
+        self.__bi_in = bi
+        self.clean_cache()
+
+    def set_bi_out(self, bi):
+        self.__bi_out = bi
+        self.clean_cache()
+
+    def set_bi_lst(self, bi_lst):
+        self.__bi_lst = bi_lst
+        self.clean_cache()

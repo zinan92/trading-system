@@ -1,0 +1,3444 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>黄金交易后台监控</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f6efe4;
+  --panel: #fffaf1;
+  --ink: #17130c;
+  --muted: #675f51;
+  --line: rgba(38,31,18,.16);
+  --gold: #b78322;
+  --green: #1f7a55;
+  --red: #b64232;
+  --blue: #2f5f9f;
+  --mono: "SFMono-Regular", Consolas, Menlo, monospace;
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+html { max-width: 100%; overflow-x: hidden; }
+body {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+}
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255,250,241,.9);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+h1 { margin: 0; font-size: 20px; }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.lang-toggle { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.lang-toggle button {
+  background: var(--panel);
+  color: var(--ink);
+  padding: 6px 8px;
+}
+.lang-toggle button.active {
+  background: var(--ink);
+  color: var(--panel);
+}
+input, button {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  padding: 7px 9px;
+  max-width: 100%;
+}
+button { cursor: pointer; background: var(--ink); color: var(--panel); }
+.shell { width: 100%; max-width: 1420px; margin: 0 auto; padding: 16px; }
+.grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 12px; }
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 14px;
+  min-height: 180px;
+  min-width: 0;
+}
+.panel h2 {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.panel h2 span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.metrics { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 8px; }
+.metric { border: 1px solid var(--line); padding: 10px; min-height: 74px; }
+.metric small { display: block; font-family: var(--mono); color: var(--muted); font-size: 10px; }
+.metric strong { display: block; margin-top: 8px; font-size: 22px; }
+.ops-action-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.ops-action-title { display: grid; gap: 4px; }
+.ops-action-title h2 { margin: 0; font-size: 17px; }
+.ops-action-copy { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.ops-shift-brief {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr 1.15fr .85fr;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.ops-shift-card {
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.34);
+  padding: 11px;
+  min-width: 0;
+  min-height: 116px;
+  display: grid;
+  gap: 7px;
+  align-content: start;
+}
+.ops-shift-card.buy { background: rgba(31,122,85,.06); }
+.ops-shift-card.watch { background: rgba(47,95,159,.06); }
+.ops-shift-card.sell { background: rgba(182,66,50,.06); }
+.ops-shift-card small { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.ops-shift-card strong { font-size: 17px; line-height: 1.2; overflow-wrap: anywhere; }
+.ops-shift-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.ops-shift-card a {
+  justify-self: start;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: var(--ink);
+  color: var(--panel);
+  text-decoration: none;
+  font-size: 12px;
+}
+.ops-runbook-strip {
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.35);
+  padding: 12px;
+  margin: 0 0 12px;
+  display: grid;
+  grid-template-columns: minmax(0,1.15fr) minmax(260px,.85fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.ops-runbook-strip.buy { background: rgba(31,122,85,.06); }
+.ops-runbook-strip.watch { background: rgba(47,95,159,.06); }
+.ops-runbook-strip.sell { background: rgba(182,66,50,.06); }
+.ops-runbook-primary { display: grid; gap: 6px; min-width: 0; }
+.ops-runbook-primary small,
+.ops-runbook-command small { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.ops-runbook-primary strong { font-size: 20px; line-height: 1.2; overflow-wrap: anywhere; }
+.ops-runbook-primary p { margin: 0; color: var(--muted); line-height: 1.35; overflow-wrap: anywhere; }
+.ops-runbook-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.ops-runbook-command {
+  border-left: 1px solid var(--line);
+  padding-left: 12px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+.ops-runbook-command code {
+  display: block;
+  font-family: var(--mono);
+  border: 1px solid rgba(38,31,18,.12);
+  background: rgba(255,250,241,.72);
+  padding: 7px 8px;
+  overflow-wrap: anywhere;
+}
+.ops-runbook-command a {
+  justify-self: start;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  background: var(--ink);
+  color: var(--panel);
+  text-decoration: none;
+}
+.ops-command-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.ops-copy-command {
+  border: 1px solid var(--line);
+  background: rgba(255,250,241,.78);
+  color: var(--ink);
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ops-copy-command:hover { background: rgba(38,31,18,.08); }
+.ops-copy-command:focus-visible { outline: 2px solid rgba(47,95,159,.45); outline-offset: 2px; }
+.ops-copy-status {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.ops-command-block {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.ops-incident-queue {
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.28);
+  padding: 12px;
+  margin: 0 0 12px;
+  display: grid;
+  gap: 10px;
+}
+.ops-incident-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.ops-incident-title { display: grid; gap: 4px; min-width: 0; }
+.ops-incident-title small {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.ops-incident-title strong { font-size: 17px; line-height: 1.25; overflow-wrap: anywhere; }
+.ops-incident-title p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.ops-incident-list { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+.ops-incident-item {
+  border: 1px solid var(--line);
+  background: rgba(255,250,241,.62);
+  padding: 10px;
+  min-width: 0;
+  min-height: 190px;
+  display: grid;
+  gap: 7px;
+  align-content: start;
+}
+.ops-incident-item.sell { background: rgba(182,66,50,.06); }
+.ops-incident-item.watch { background: rgba(47,95,159,.06); }
+.ops-incident-item.buy { background: rgba(31,122,85,.06); }
+.ops-incident-meta { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+.ops-incident-meta span:first-child,
+.ops-incident-item small,
+.ops-incident-step small { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.ops-incident-item strong { font-size: 14px; line-height: 1.25; overflow-wrap: anywhere; }
+.ops-incident-item p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.ops-incident-step {
+  display: grid;
+  gap: 5px;
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+}
+.ops-incident-step code {
+  font-family: var(--mono);
+  color: var(--ink);
+  border: 1px solid rgba(38,31,18,.12);
+  background: rgba(255,250,241,.72);
+  padding: 5px 6px;
+  overflow-wrap: anywhere;
+}
+.ops-incident-item a {
+  justify-self: start;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: var(--ink);
+  color: var(--panel);
+  text-decoration: none;
+  font-size: 13px;
+}
+.ops-action-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+.ops-action-card {
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.35);
+  min-width: 0;
+  min-height: 168px;
+  padding: 11px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+.ops-action-card.buy { background: rgba(31,122,85,.06); }
+.ops-action-card.watch { background: rgba(47,95,159,.06); }
+.ops-action-card.sell { background: rgba(182,66,50,.06); }
+.ops-action-card small { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.ops-action-card strong { font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
+.ops-action-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.ops-action-card code {
+  font-family: var(--mono);
+  color: var(--ink);
+  border: 1px solid rgba(38,31,18,.12);
+  background: rgba(255,250,241,.72);
+  padding: 5px 6px;
+  overflow-wrap: anywhere;
+}
+.ops-action-card a {
+  justify-self: start;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: var(--ink);
+  color: var(--panel);
+  text-decoration: none;
+  font-size: 13px;
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.row span:first-child, .row b { min-width: 0; overflow-wrap: anywhere; }
+.row:first-of-type { border-top: 0; }
+.pill { border: 1px solid var(--line); padding: 2px 6px; color: var(--muted); max-width: 100%; overflow-wrap: anywhere; }
+.buy { color: var(--green); border-color: rgba(31,122,85,.3); }
+.sell { color: var(--red); border-color: rgba(182,66,50,.3); }
+.watch { color: var(--blue); border-color: rgba(47,95,159,.3); }
+.chart {
+  height: 180px;
+  border: 1px solid var(--line);
+  margin-bottom: 10px;
+  background:
+    linear-gradient(180deg, transparent 24%, rgba(38,31,18,.08) 25%, transparent 26%, transparent 49%, rgba(38,31,18,.08) 50%, transparent 51%, transparent 74%, rgba(38,31,18,.08) 75%, transparent 76%),
+    #fbf6ed;
+}
+svg { width: 100%; height: 100%; display: block; }
+.wide { grid-column: 1 / -1; }
+.empty { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.error { color: var(--red); font-family: var(--mono); font-size: 12px; margin-top: 10px; }
+@media (max-width: 900px) {
+  .grid, .metrics, .ops-action-grid, .ops-incident-list, .ops-shift-brief { grid-template-columns: 1fr; }
+  .topbar { align-items: flex-start; flex-direction: column; }
+  .wide { grid-column: auto; }
+  .panel h2 { align-items: flex-start; flex-direction: column; }
+  .ops-action-head { flex-direction: column; }
+  .ops-incident-head { flex-direction: column; }
+  .ops-runbook-strip { grid-template-columns: 1fr; }
+  .ops-runbook-command { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 10px; }
+  .row { grid-template-columns: minmax(0, 1fr); }
+  .pill { justify-self: start; }
+}
+</style>
+</head>
+<body>
+<script>
+if (window.location.protocol === 'file:') {
+  window.location.replace('http://127.0.0.1:8765/ops-dashboard.html');
+}
+</script>
+<div class="topbar">
+  <h1 id="ops-title">OPS Console / 黄金交易后台监控</h1>
+  <div class="controls">
+    <a id="trader-link" href="dashboard-v3.html" style="color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 7px 9px; background: var(--panel);">Trader Console / 交易看板</a>
+    <div id="ops-lang-toggle" class="lang-toggle" aria-label="Language / 语言">
+      <button type="button" data-ops-lang="zh">中文</button>
+      <button type="button" data-ops-lang="en">EN</button>
+      <button type="button" data-ops-lang="bi">双语</button>
+    </div>
+    <label id="run-date-label" for="run-date">Date / 日期</label>
+    <input id="run-date" inputmode="numeric">
+    <button id="load">Refresh / 刷新</button>
+    <button id="load-full">Full Diagnostics / 完整诊断</button>
+  </div>
+</div>
+<main class="shell">
+  <section class="panel wide" id="ops-action-board-panel">
+    <div class="ops-action-head">
+      <div class="ops-action-title">
+        <h2 id="ops-action-heading">Operations Action Board / 运维行动板</h2>
+        <div id="ops-action-copy" class="ops-action-copy">Start here: public access, market feed, execution safety, and evidence repair. This board links to diagnostics below; it does not execute trades.</div>
+      </div>
+      <span id="ops-action-summary" class="pill watch">loading</span>
+    </div>
+    <div id="ops-shift-brief" class="ops-shift-brief"></div>
+    <div id="ops-runbook-strip" class="ops-runbook-strip watch"></div>
+    <div id="ops-incident-queue" class="ops-incident-queue"></div>
+    <div id="ops-action-board" class="ops-action-grid"></div>
+  </section>
+  <section class="panel wide">
+    <h2><span id="runtime-heading">Runtime Snapshot / 运行快照</span> <span id="status">loading</span></h2>
+    <div class="metrics">
+      <div class="metric"><small data-ops-label="latest_close">Latest close / 最新价</small><strong id="latest-close">--</strong></div>
+      <div class="metric"><small data-ops-label="signal">Signal / 信号</small><strong id="signal-direction">--</strong></div>
+      <div class="metric"><small data-ops-label="strength">Strength / 强度</small><strong id="signal-strength">--</strong></div>
+      <div class="metric"><small data-ops-label="regime">Regime / 行情状态</small><strong id="signal-regime">--</strong></div>
+      <div class="metric"><small data-ops-label="data_source">Data source / 数据源</small><strong id="data-source">--</strong></div>
+      <div class="metric"><small data-ops-label="data_truth">Data truth / 数据可信度</small><strong id="data-truth">--</strong></div>
+      <div class="metric"><small data-ops-label="runner">Runner / 运行器</small><strong id="runner-state">--</strong></div>
+      <div class="metric"><small data-ops-label="health">Health / 健康</small><strong id="health-state">--</strong></div>
+      <div class="metric"><small data-ops-label="data_age">Data age / 数据年龄</small><strong id="data-age">--</strong></div>
+      <div class="metric"><small data-ops-label="refreshed">Refreshed / 已刷新</small><strong id="refreshed-at">--</strong></div>
+    </div>
+    <div id="error" class="error"></div>
+  </section>
+  <section class="panel wide">
+    <h2>Backend Signals / 后台信号 <span>alerts / data health / reconciliation</span></h2>
+    <div id="backend-signals"></div>
+  </section>
+  <section class="panel wide">
+    <h2>Doctor / 系统诊断 <span>readiness / 就绪度</span></h2>
+    <div id="doctor"></div>
+  </section>
+  <section class="panel wide">
+    <h2>Public Access / 公网入口 <span>domain / Cloudflare tunnel</span></h2>
+    <div id="public-access"></div>
+  </section>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Gold Chart / 黄金K线 <span>clean 5m bars / 清洗后5分钟数据</span></h2>
+      <div class="chart"><svg id="chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
+      <div id="quality" class="empty"></div>
+    </section>
+    <section class="panel">
+      <h2>Risk Envelope / 风险边界 <span>paper only / 仅纸面交易</span></h2>
+      <div id="risk"></div>
+    </section>
+    <section class="panel">
+      <h2>Data Quality Gate / 数据质量闸门 <span>trade permission / 交易许可</span></h2>
+      <div id="data-quality"></div>
+    </section>
+    <section class="panel">
+      <h2>System Health / 系统健康 <span>local checks / 本地检查</span></h2>
+      <div id="health"></div>
+    </section>
+    <section class="panel">
+      <h2>Completion Audit / 完整性审计 <span>objective evidence / 证据面</span></h2>
+      <div id="audit"></div>
+    </section>
+    <section class="panel">
+      <h2>Broker Readiness / 券商就绪 <span>live gate / 实盘闸门</span></h2>
+      <div id="broker"></div>
+    </section>
+    <section class="panel">
+      <h2>Mock Runtime / 模拟运行时 <span>paper loop / 纸面闭环</span></h2>
+      <div id="mock-runtime"></div>
+    </section>
+    <section class="panel">
+      <h2>Mock UAT / 模拟验收 <span>closed-loop evidence / 闭环证据</span></h2>
+      <div id="mock-uat"></div>
+    </section>
+    <section class="panel">
+      <h2>Live Readiness / 实盘就绪 <span>real money gate / 真实资金闸门</span></h2>
+      <div id="live-readiness"></div>
+    </section>
+    <section class="panel">
+      <h2>Live Activation / 实盘激活 <span>approval gate / 审批闸门</span></h2>
+      <div id="live-activation"></div>
+    </section>
+    <section class="panel">
+      <h2>Live Submission Safety / 下单安全 <span>hard stop / 硬阻断</span></h2>
+      <div id="live-submission-safety"></div>
+    </section>
+    <section class="panel">
+      <h2>Live Broker Preflight / 实盘券商预检 <span>credentials / 凭证</span></h2>
+      <div id="live-broker-preflight"></div>
+    </section>
+    <section class="panel">
+      <h2>Live Dry-Run Drill / 实盘演练 <span>go/no-go / 放行判断</span></h2>
+      <div id="live-dry-run-drill"></div>
+    </section>
+    <section class="panel">
+      <h2>Live Switch Plan / 实盘切换计划 <span>paper to live / 纸面到实盘</span></h2>
+      <div id="live-switch-plan"></div>
+    </section>
+    <section class="panel">
+      <h2>Live Cutover / 实盘切换包 <span>real money package / 真实资金包</span></h2>
+      <div id="live-cutover"></div>
+    </section>
+    <section class="panel">
+      <h2>OHLC Quality Gate / K线质量门 <span>official feed action / 官方行情动作</span></h2>
+      <div id="ohlc-quality-gate"></div>
+    </section>
+    <section class="panel">
+      <h2>Market Data Source / 市场数据源 <span>provenance / 来源证明</span></h2>
+      <div id="data-source-preflight"></div>
+    </section>
+    <section class="panel">
+      <h2>Database Lineage / 数据库血缘 <span>local truth / 本地真相</span></h2>
+      <div id="data-source-lineage"></div>
+    </section>
+    <section class="panel">
+      <h2>Data Trust / 数据可信 <span>price guard / 价格保护</span></h2>
+      <div id="data-trust"></div>
+    </section>
+    <section class="panel">
+      <h2>Official Feed Receipt / 官方行情回执 <span>live data proof / 实时数据证明</span></h2>
+      <div id="official-feed-receipt"></div>
+    </section>
+    <section class="panel">
+      <h2>Official Feed Onboarding / 官方行情接入 <span>MT5 / OANDA setup / 设置</span></h2>
+      <div id="official-feed-onboarding"></div>
+    </section>
+    <section class="panel">
+      <h2>Broker Feed Bridge / 券商行情桥 <span>MT5 / CSV</span></h2>
+      <div id="broker-feed"></div>
+    </section>
+    <section class="panel">
+      <h2>Official API Feed / 官方API行情 <span>OANDA</span></h2>
+      <div id="oanda-feed"></div>
+    </section>
+    <section class="panel">
+      <h2>OANDA Account / OANDA账户 <span>read-only preflight / 只读预检</span></h2>
+      <div id="oanda-account"></div>
+    </section>
+    <section class="panel">
+      <h2>Binance USDM Feed / Binance模拟行情 <span>XAUUSDT 5m</span></h2>
+      <div id="binance-usdm-feed"></div>
+    </section>
+    <section class="panel">
+      <h2>Morning Plan / 早盘计划 <span>trade loop / 交易闭环</span></h2>
+      <div id="trading-plan"></div>
+    </section>
+    <section class="panel">
+      <h2>Evening Review / 晚盘复盘 <span>feedback loop / 反馈闭环</span></h2>
+      <div id="evening-review"></div>
+    </section>
+    <section class="panel">
+      <h2>Broker Receipts / 券商回执 <span>MT5 inbox / 收件箱</span></h2>
+      <div id="broker-receipts"></div>
+    </section>
+    <section class="panel">
+      <h2>Signal Queue / 信号队列 <span>evidence / 证据</span></h2>
+      <div id="signals"></div>
+    </section>
+    <section class="panel">
+      <h2>Backtest Evidence / 回测证据 <span>local 5m / 本地5分钟</span></h2>
+      <div id="backtests"></div>
+    </section>
+    <section class="panel">
+      <h2>Strategy Config / 策略配置 <span>runtime config / 运行配置</span></h2>
+      <div id="strategy"></div>
+    </section>
+    <section class="panel">
+      <h2>Paper Orders / 纸面订单 <span>local account / 本地账户</span></h2>
+      <div id="orders"></div>
+    </section>
+    <section class="panel">
+      <h2>Paper Positions / 纸面持仓 <span>mark to market / 盯市</span></h2>
+      <div id="positions"></div>
+    </section>
+    <section class="panel">
+      <h2>Paper Reconciliation / 纸面对账 <span>orders / trades / journal / 订单交易日志</span></h2>
+      <div id="paper-reconciliation"></div>
+    </section>
+    <section class="panel">
+      <h2>Trade Attribution / 交易归因 <span>review evidence / 复盘证据</span></h2>
+      <div id="paper-attribution"></div>
+    </section>
+    <section class="panel">
+      <h2>Trade Lifecycle / 交易生命周期 <span>open / closed / 开仓平仓</span></h2>
+      <div id="trades"></div>
+    </section>
+    <section class="panel">
+      <h2>Exit Monitor / 出场监控 <span>stop / target / 止损止盈</span></h2>
+      <div id="paper-exit-monitor"></div>
+    </section>
+    <section class="panel">
+      <h2>Exit Decisions / 出场决策 <span>manual paper exits / 手动纸面出场</span></h2>
+      <div id="paper-exit-decisions"></div>
+    </section>
+    <section class="panel">
+      <h2>Risk Actions / 风险动作 <span>next commands / 下一步命令</span></h2>
+      <div id="paper-risk-actions"></div>
+    </section>
+    <section class="panel">
+      <h2>Equity Curve / 权益曲线 <span>paper account / 纸面账户</span></h2>
+      <div id="equity-curve"></div>
+    </section>
+    <section class="panel">
+      <h2>Strategy Learning / 策略学习 <span>review ledger / 复盘账本</span></h2>
+      <div id="learning"></div>
+    </section>
+    <section class="panel">
+      <h2>Strategy Guardrails / 策略护栏 <span>next run gate / 下轮闸门</span></h2>
+      <div id="strategy-guardrails"></div>
+    </section>
+    <section class="panel">
+      <h2>Risk Monitor / 风险监控 <span>kill switch / 熔断开关</span></h2>
+      <div id="risk-monitor"></div>
+    </section>
+    <section class="panel">
+      <h2>Auto Approval Gate / 自动审批闸门 <span>paper only / 仅纸面</span></h2>
+      <div id="paper-auto-gate"></div>
+    </section>
+    <section class="panel">
+      <h2>Daily Review / 每日复盘 <span>EOD receipt / 日终回执</span></h2>
+      <div id="daily-review"></div>
+    </section>
+    <section class="panel">
+      <h2>Operation Runbook / 运维手册 <span>today's gate / 今日闸门</span></h2>
+      <div id="operation-runbook"></div>
+    </section>
+    <section class="panel">
+      <h2>Bot Runner / 机器人运行器 <span>5m loop / 5分钟循环</span></h2>
+      <div id="bot-runner"></div>
+    </section>
+    <section class="panel">
+      <h2>Bot Supervisor / 机器人监管 <span>heartbeat SLA / 心跳SLA</span></h2>
+      <div id="bot-supervisor"></div>
+    </section>
+    <section class="panel">
+      <h2>Bot Checkpoint / 机器人检查点 <span>resume state / 恢复状态</span></h2>
+      <div id="bot-checkpoint"></div>
+    </section>
+    <section class="panel">
+      <h2>Local Schedule / 本地调度 <span>launchd</span></h2>
+      <div id="schedule"></div>
+    </section>
+    <section class="panel">
+      <h2>Data Coverage / 数据覆盖 <span>local SQLite / 本地数据库</span></h2>
+      <div id="coverage"></div>
+    </section>
+    <section class="panel">
+      <h2>Data Archive / 数据归档 <span>local manifest / 本地清单</span></h2>
+      <div id="data-archive"></div>
+    </section>
+    <section class="panel">
+      <h2>Data Integrity / 数据完整性 <span>restore proof / 恢复证明</span></h2>
+      <div id="data-integrity"></div>
+    </section>
+    <section class="panel wide">
+      <h2>Journal Feed / 日志流 <span>manual decisions / 人工决策</span></h2>
+      <div id="journal"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const API_BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:8765' : '';
+const readJson = async (path, fallback) => {
+  const res = await fetch(path, { cache: 'no-store' });
+  if (!res.ok) return fallback;
+  return await res.json();
+};
+const readText = async (path, fallback='') => {
+  const res = await fetch(path, { cache: 'no-store' });
+  if (!res.ok) return fallback;
+  return await res.text();
+};
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, char => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[char]));
+function initialOpsLang() {
+  const browserDefault = navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+  const params = new URLSearchParams(window.location.search);
+  const urlLang = params.get('ops_lang') || params.get('lang');
+  if (['zh', 'en', 'bi'].includes(urlLang)) return urlLang;
+  try {
+    const saved = localStorage.getItem('goldbot_ops_lang');
+    return ['zh', 'en', 'bi'].includes(saved) ? saved : browserDefault;
+  } catch {
+    return browserDefault;
+  }
+}
+let opsLang = initialOpsLang();
+function opsText(en, zh) {
+  if (opsLang === 'zh') return zh;
+  if (opsLang === 'en') return en;
+  return `${en} / ${zh}`;
+}
+function setOpsLang(lang) {
+  opsLang = ['zh', 'en', 'bi'].includes(lang) ? lang : 'en';
+  try { localStorage.setItem('goldbot_ops_lang', opsLang); } catch {}
+  renderOpsStaticLabels();
+  renderOpsActionBoard(opsActionContext);
+}
+function parseOpsBilingualPair(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text.includes(' / ')) return null;
+  const parts = text.split(' / ');
+  const zhIndex = parts.findIndex((part, index) => index > 0 && /[\u3400-\u9fff]/.test(part));
+  if (zhIndex < 0) return null;
+  const en = parts.slice(0, zhIndex).join(' / ').trim();
+  const zh = parts.slice(zhIndex).join(' / ').trim();
+  if (!en || !zh) return null;
+  return { en, zh };
+}
+function opsLocalizeMixed(value) {
+  const text = String(value ?? '');
+  if (opsLang === 'bi' || !text) return text;
+  const parts = text.split(' / ');
+  if (parts.length === 2) {
+    const hasCjk = (part) => /[\u3400-\u9fff]/.test(part);
+    const firstIsZh = hasCjk(parts[0]);
+    const secondIsZh = hasCjk(parts[1]);
+    if (firstIsZh !== secondIsZh) return opsLang === 'zh' ? (firstIsZh ? parts[0] : parts[1]) : (firstIsZh ? parts[1] : parts[0]);
+  }
+  for (const sep of [' · ', '; ']) {
+    if (text.includes(sep)) return text.split(sep).map(opsLocalizeMixed).join(sep);
+  }
+  return text;
+}
+function opsLookupKey(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+function opsLooksTechnicalValue(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return false;
+  if (/^https?:\/\//i.test(text)) return true;
+  if (/^(python3|cloudflared|curl|jq|sqlite3|bash|zsh)\b/.test(text)) return true;
+  if (/(^|\/)(outputs|configs|data|logs|scripts|pipelines|artifacts|dashboard|tests)\//.test(text)) return true;
+  if (/\.(json|jsonl|csv|db|sqlite|log|md|py|html|txt)(\b|$)/i.test(text)) return true;
+  if (/^[A-Z][A-Z0-9_]{2,}$/.test(text)) return true;
+  if (/^[A-Z]{2,}_[A-Z]{2,}$/.test(text)) return true;
+  if (/^gold_(?:\d+[mhd]_)?[a-z0-9_]+$/i.test(text)) return true;
+  if (/^[a-f0-9]{8,}$/i.test(text)) return true;
+  if (/^\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2})?/.test(text)) return true;
+  if (/^[<>]=?\s*-?\d/.test(text)) return true;
+  return false;
+}
+function opsRowLabelText(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '--';
+  const pair = parseOpsBilingualPair(text);
+  if (pair) return opsText(pair.en, pair.zh);
+  const key = opsLookupKey(text);
+  const labels = {
+    status: ['Status', '状态'],
+    summary: ['Summary', '摘要'],
+    performance: ['Performance', '表现'],
+    proposal: ['Proposal', '提案'],
+    overall: ['Overall', '总体'],
+    'operator action': ['Operator action', '运维动作'],
+    'health / audit': ['Health / audit', '健康/审计'],
+    'paper / live': ['Paper / live', '纸面/实盘'],
+    'mode / provider': ['Mode / provider', '模式/提供方'],
+    ready: ['Ready', '就绪'],
+    'allowed symbols': ['Allowed symbols', '允许标的'],
+    'live requests': ['Live requests', '实盘请求'],
+    'mt5 outbox': ['MT5 outbox', 'MT5 发件箱'],
+    'mt5 inbox': ['MT5 inbox', 'MT5 收件箱'],
+    'mt5 templates': ['MT5 templates', 'MT5 模板'],
+    'oanda endpoint': ['OANDA endpoint', 'OANDA 端点'],
+    'oanda env': ['OANDA env', 'OANDA 环境'],
+    runner: ['Runner', '运行器'],
+    checks: ['Checks', '检查'],
+    'live env': ['Live env', '实盘环境'],
+    'env keys': ['Env keys', '环境变量'],
+    'secret hygiene': ['Secret hygiene', '密钥卫生'],
+    'dry-run / money': ['Dry-run / money', '演练/真钱'],
+    approval: ['Approval', '审批'],
+    'activation gate': ['Activation gate', '激活门'],
+    'network call': ['Network call', '网络提交'],
+    'dry run': ['Dry run', '演练模式'],
+    env: ['Env', '环境'],
+    'oanda account': ['OANDA account', 'OANDA 账户'],
+    activation: ['Activation', '激活'],
+    'safe submit': ['Safe submit', '安全提交'],
+    'open trades': ['Open trades', '持仓交易'],
+    'orders / trades': ['Orders / trades', '订单/交易'],
+    positions: ['Positions', '持仓'],
+    coverage: ['Coverage', '覆盖率'],
+    'updated today': ['Updated today', '今日更新'],
+    'legacy quality': ['Legacy quality', '历史质量'],
+    'net marked': ['Net marked', '盯市净值'],
+    'execution costs': ['Execution costs', '执行成本'],
+    expectancy: ['Expectancy', '期望值'],
+    'open risk': ['Open risk', '持仓风险'],
+    'current equity': ['Current equity', '当前权益'],
+    'current drawdown': ['Current drawdown', '当前回撤'],
+    'config hash': ['Config hash', '配置哈希'],
+    'strategy hash': ['Strategy hash', '策略哈希'],
+    'ma windows': ['MA windows', '均线窗口'],
+    'long threshold': ['Long threshold', '做多阈值'],
+    'event block': ['Event block', '事件阻断'],
+    'stop / target': ['Stop / target', '止损/止盈'],
+    'max hold': ['Max hold', '最长持有'],
+    'risk caps': ['Risk caps', '风险上限'],
+    'trade results': ['Trade results', '交易结果'],
+    'cumulative days': ['Cumulative days', '累计天数'],
+    'paper orders': ['Paper orders', '纸面订单'],
+    'cumulative pnl': ['Cumulative PnL', '累计盈亏'],
+    'signal/backtest': ['Signal/backtest', '信号/回测'],
+    'backtest scan': ['Backtest scan', '回测扫描'],
+    'learning actions': ['Learning actions', '学习动作'],
+    'shadow experiments': ['Shadow experiments', '影子实验'],
+    'best variant': ['Best variant', '最佳变体'],
+    'experiment safety': ['Experiment safety', '实验安全'],
+    'improvement plan': ['Improvement plan', '改进计划'],
+    'improvement safety': ['Improvement safety', '改进安全'],
+    'promotion gate': ['Promotion gate', '晋级门'],
+    'promotion candidate': ['Promotion candidate', '晋级候选'],
+    'promotion safety': ['Promotion safety', '晋级安全'],
+    'new paper order': ['New paper order', '新纸面订单'],
+    'kill switch': ['Kill switch', '熔断开关'],
+    'paper auto': ['Paper auto', '纸面自动'],
+    'auto requested': ['Auto requested', '自动请求'],
+    'selected ticket': ['Selected ticket', '选中工单'],
+    'risk monitor': ['Risk monitor', '风控监控'],
+    guardrails: ['Guardrails', '护栏'],
+    'mock / uat': ['Mock / UAT', '模拟/UAT'],
+    'paper reconcile': ['Paper reconcile', '纸面对账'],
+    'live cutover': ['Live cutover', '实盘切换'],
+    doctor: ['Doctor', '系统诊断'],
+    journal: ['Journal', '交易日志'],
+    'local gateway': ['Local gateway', '本地网关'],
+    'public domain': ['Public domain', '公网域名'],
+    'tunnel log': ['Tunnel log', '隧道日志'],
+    'allows trading': ['Allows trading', '允许交易'],
+    'latest bar provider': ['Latest bar provider', '最新K线来源'],
+    'latest synthetic': ['Latest synthetic', '最新合成行情'],
+    'missing ratio': ['Missing ratio', '缺失比例'],
+    'gap doctor': ['Gap doctor', '缺口诊断'],
+    'latest gap': ['Latest gap', '最新缺口'],
+    'repair request': ['Repair request', '修复请求'],
+    'synthetic ratio': ['Synthetic ratio', '合成比例'],
+    reasons: ['Reasons', '原因'],
+    mode: ['Mode', '模式'],
+    state: ['State', '状态'],
+    cadence: ['Cadence', '节奏'],
+    collector: ['Collector', '采集器'],
+    'data truth': ['Data truth', '数据可信度'],
+    'db rows': ['DB rows', '数据库行数'],
+    'live safety': ['Live safety', '实盘安全'],
+    'mock runtime': ['Mock runtime', '模拟运行时'],
+    'execution block': ['Execution block', '执行阻断'],
+    'mock bot': ['Mock bot', '模拟 bot'],
+    'latest price': ['Latest price', '最新价格'],
+    'data age': ['Data age', '数据年龄'],
+    'live gate': ['Live gate', '实盘门'],
+    recoverable: ['Recoverable', '可恢复'],
+    'paper state': ['Paper state', '纸面状态'],
+    risk: ['Risk', '风险'],
+    improvement: ['Improvement', '改进'],
+    'install status': ['Install status', '安装状态'],
+    'installed / loaded': ['Installed / loaded', '已安装/已加载'],
+    'launch agents': ['Launch agents', '启动代理'],
+    'gold 5m total': ['GOLD 5m total', 'GOLD 5m 总行数'],
+    'gold 5m non-seed': ['GOLD 5m non-seed', 'GOLD 5m 非种子行数'],
+    files: ['Files', '文件'],
+    'gold 5m rows': ['GOLD 5m rows', 'GOLD 5m 行数'],
+    'market db': ['Market DB', '行情数据库'],
+    'snapshot package': ['Snapshot package', '快照包'],
+    'snapshot files': ['Snapshot files', '快照文件'],
+    'daily trading journal': ['Daily trading journal', '每日交易日志'],
+    'strategy review notes': ['Strategy review notes', '策略复盘笔记'],
+    'paper manual': ['Paper manual', '纸面人工'],
+    'live trading': ['Live trading', '实盘交易'],
+    'price sanity': ['Price sanity', '价格合理性'],
+    'official rows': ['Official rows', '官方行情行数'],
+    'journal/review': ['Journal/review', '日志/复盘'],
+    'runner freshness': ['Runner freshness', '运行器新鲜度'],
+    runner_freshness: ['Runner freshness', '运行器新鲜度'],
+    runtime: ['Runtime', '运行时'],
+    'runner 5m': ['Runner 5m', '5分钟运行器'],
+    runner_5m: ['Runner 5m', '5分钟运行器'],
+    'market data': ['Market data', '行情数据'],
+    market_data: ['Market data', '行情数据'],
+    'sqlite market db': ['SQLite market DB', 'SQLite 行情库'],
+    sqlite_market_db: ['SQLite market DB', 'SQLite 行情库'],
+    mock_runtime: ['Mock runtime', '模拟运行时'],
+    strategies: ['Strategies', '策略调度'],
+    positions_match_open_trades: ['Positions match open trades', '持仓与交易匹配'],
+    'positions match open trades': ['Positions match open trades', '持仓与交易匹配'],
+    submission_safety: ['Submission safety', '提交安全'],
+    'submission safety': ['Submission safety', '提交安全'],
+  };
+  const dynamic = key.match(/^(next|action|change|reason|suggestion|exp blocker|promo blocker|improve)\s+(\d+)$/);
+  if (dynamic) {
+    const names = {
+      next: ['Next', '下一步'],
+      action: ['Action', '动作'],
+      change: ['Change', '变更'],
+      reason: ['Reason', '原因'],
+      suggestion: ['Suggestion', '建议'],
+      'exp blocker': ['Experiment blocker', '实验阻断'],
+      'promo blocker': ['Promotion blocker', '晋级阻断'],
+      improve: ['Improvement', '改进'],
+    };
+    const pairDynamic = names[dynamic[1]];
+    return opsText(`${pairDynamic[0]} ${dynamic[2]}`, `${pairDynamic[1]} ${dynamic[2]}`);
+  }
+  const label = labels[key];
+  if (label) return opsText(label[0], label[1]);
+  return opsLocalizeMixed(opsHumanizeToken(text) || text);
+}
+function opsMetricPhraseText(text) {
+  const metric = String(text || '').trim();
+  const metricMatch = metric.match(/^(realized|open r|open|win|pf|pnl|cost|score|delta|audit|expectancy|risk blocks|blocks|warnings|pending|filled|closed|failed checks|samples|bars|setups|candidate\(s\)|step\(s\)|high|nearest stop|runner|official|venue|public|records|decisions|missing|bytes)\s+(.+)$/i);
+  if (!metricMatch) return null;
+  const labels = {
+    realized: ['realized', '已实现'],
+    'open r': ['open R', '未平仓R'],
+    open: ['open', '未平仓'],
+    win: ['win', '胜率'],
+    pf: ['PF', '盈亏比'],
+    pnl: ['PnL', '盈亏'],
+    cost: ['cost', '成本'],
+    score: ['score', '评分'],
+    delta: ['delta', '差值'],
+    audit: ['audit', '审计'],
+    expectancy: ['expectancy', '期望值'],
+    'risk blocks': ['risk blocks', '风险阻断'],
+    blocks: ['blocks', '阻断'],
+    warnings: ['warnings', '警告'],
+    pending: ['pending', '待处理'],
+    filled: ['filled', '已成交'],
+    closed: ['closed', '已平仓'],
+    'failed checks': ['failed checks', '失败检查'],
+    samples: ['samples', '样本'],
+    bars: ['bars', 'K线'],
+    setups: ['setups', '形态'],
+    'candidate(s)': ['candidate(s)', '候选'],
+    'step(s)': ['step(s)', '步骤'],
+    high: ['high', '高优先级'],
+    'nearest stop': ['nearest stop', '最近止损'],
+    runner: ['runner', '运行器'],
+    official: ['official', '官方行情'],
+    venue: ['venue', '执行场所'],
+    public: ['public', '公网'],
+    records: ['records', '记录'],
+    decisions: ['decisions', '决策'],
+    missing: ['missing', '缺失'],
+    bytes: ['bytes', '字节'],
+  };
+  const pair = labels[metricMatch[1].toLowerCase()];
+  return pair ? `${opsText(pair[0], pair[1])} ${opsRowValueText(metricMatch[2])}` : null;
+}
+function opsRowValueText(value) {
+  if (value === null || value === undefined || value === '') return '--';
+  if (typeof value === 'boolean') return value ? opsText('Yes', '是') : opsText('No', '否');
+  const text = String(value).trim();
+  const pair = parseOpsBilingualPair(text);
+  if (pair) return opsText(pair.en, pair.zh);
+  if (opsLooksTechnicalValue(text)) return text;
+  for (const sep of [' / ', ' · ', '; ']) {
+    if (text.includes(sep)) return text.split(sep).map(part => opsRowValueText(part)).join(sep);
+  }
+  const countUnit = text.match(/^(-?\d+(?:\.\d+)?)\s+(fail|fails|gap|gaps|record|records|row|rows|decision|decisions|pending)$/i);
+  if (countUnit) {
+    const unitLabels = {
+      fail: ['fail', '失败'],
+      fails: ['fails', '失败'],
+      gap: ['gap', '缺口'],
+      gaps: ['gaps', '缺口'],
+      record: ['record', '记录'],
+      records: ['records', '记录'],
+      row: ['row', '行'],
+      rows: ['rows', '行'],
+      decision: ['decision', '决策'],
+      decisions: ['decisions', '决策'],
+      pending: ['pending', '待处理'],
+    };
+    const unit = unitLabels[countUnit[2].toLowerCase()];
+    return `${countUnit[1]} ${opsText(unit[0], unit[1])}`;
+  }
+  const key = opsLookupKey(text);
+  const goldRows = text.match(/^gold 5m rows=(\d+)$/i);
+  if (goldRows) return opsText(`GOLD 5m rows=${goldRows[1]}`, `GOLD 5m 行数=${goldRows[1]}`);
+  const values = {
+    yes: ['Yes', '是'],
+    no: ['No', '否'],
+    none: ['None', '无'],
+    'n/a': ['N/A', '不适用'],
+    available: ['Available', '可用'],
+    missing: ['Missing', '缺失'],
+    present: ['Present', '已配置'],
+    guard: ['Guard', '保护'],
+    artifacts: ['Artifacts', '产物'],
+    daily: ['Daily', '每日'],
+    review: ['Review', '复盘'],
+    writable: ['Writable', '可写'],
+    'not writable': ['Not writable', '不可写'],
+    'request ok': ['Request OK', '请求模板正常'],
+    'receipt ok': ['Receipt OK', '回执模板正常'],
+    'dry-run': ['Dry-run', '演练模式'],
+    live: ['Live', '实盘'],
+    paper: ['Paper', '纸面'],
+    filled: ['Filled', '已成交'],
+    closed: ['Closed', '已平仓'],
+    open: ['Open', '未平仓'],
+    allowed: ['Allowed', '允许'],
+    'not allowed': ['Not allowed', '不允许'],
+    blocked: ['Blocked', '阻断'],
+    history: ['History', '历史'],
+    inactive: ['Inactive', '未激活'],
+    active: ['Active', '已激活'],
+    enabled: ['Enabled', '已启用'],
+    disabled: ['Disabled', '已禁用'],
+    'auto allowed': ['Auto allowed', '自动允许'],
+    'auto blocked': ['Auto blocked', '自动阻断'],
+    'new paper allowed': ['New paper allowed', '允许新纸面订单'],
+    'new paper blocked': ['New paper blocked', '阻断新纸面订单'],
+    'paper auto allowed': ['Paper auto allowed', '纸面自动允许'],
+    'paper auto blocked': ['Paper auto blocked', '纸面自动阻断'],
+    'orders/trades': ['Orders/trades', '订单/交易'],
+    'system check': ['System check', '系统检查'],
+    'review ok': ['Review OK', '复盘正常'],
+    'review missing': ['Review missing', '缺少复盘'],
+    attempted: ['Attempted', '已尝试'],
+    'not attempted': ['Not attempted', '未尝试'],
+    'submission smoke': ['Submission smoke', '提交冒烟测试'],
+    'blocked by gate': ['Blocked by gate', '被 gate 阻断'],
+    'not blocked': ['Not blocked', '未阻断'],
+    'manual review required': ['Manual review required', '需要人工复核'],
+    'blocked by default': ['Blocked by default', '默认阻断'],
+    gate: ['Gate', '准入门'],
+    quality: ['Quality', '质量'],
+    action: ['Action', '动作'],
+    'auto apply': ['Auto apply', '自动应用'],
+    'manual only': ['Manual only', '仅人工'],
+    'paper only': ['Paper only', '仅纸面'],
+    unknown: ['Unknown', '未知'],
+    requestable: ['Requestable', '可请求'],
+    supportive: ['Supportive', '支持'],
+    'eligible for small experiment': ['Eligible for small experiment', '可进入小实验'],
+    'review required': ['Review required', '需要复核'],
+    'experiment ready': ['Experiment ready', '实验就绪'],
+    'action required': ['Action required', '需要处理'],
+    'promotion review': ['Promotion review', '晋级复核'],
+    'real money ready': ['Real-money ready', '真钱就绪'],
+    fresh: ['Fresh', '新鲜'],
+    stale: ['Stale', '过期'],
+    'run-at-load': ['Run at load', '加载时运行'],
+    keepalive: ['Keepalive', '常驻运行'],
+    scheduled: ['Scheduled', '定时运行'],
+    normal: ['Normal', '正常'],
+    'mock running': ['Mock running', '模拟运行中'],
+    'running runner': ['Running runner', '运行器运行中'],
+    binance_usdm: ['Binance USDM market data', 'Binance USDM 行情'],
+    oanda_rest: ['OANDA broker data', 'OANDA 券商行情'],
+    oanda_csv: ['OANDA broker CSV', 'OANDA 券商 CSV'],
+    broker_csv: ['Broker CSV feed', '券商 CSV 行情'],
+    'safety smoke proves real submit is blocked before any network call.': ['Safety smoke proves real submit is blocked before any network call.', '安全冒烟测试证明：真实提交在任何网络请求前已被阻断。'],
+    'safety smoke must prove activation blocks live submission and no network call was attempted.': ['Safety smoke must prove activation blocks live submission and no network call was attempted.', '安全冒烟测试必须证明：激活门阻断实盘提交，且未发起网络请求。'],
+    'paper positions reconcile with open trades.': ['Paper positions reconcile with open trades.', '纸面持仓与未平仓交易一致。'],
+    'paper positions do not reconcile with open trades.': ['Paper positions do not reconcile with open trades.', '纸面持仓与未平仓交易不一致。'],
+    'mock trading runtime is ready and fresh.': ['Mock trading runtime is ready and fresh.', '模拟交易运行时已就绪且数据新鲜。'],
+    'mock trading 本地 5m 闭环已运行并可验证': ['Mock trading local 5m loop has run and is verifiable', '模拟交易本地5分钟闭环已运行并可验证'],
+    'mock trading uat 未通过，本地模拟闭环证据不完整': ['Mock trading UAT failed; local simulation loop evidence is incomplete', '模拟交易 UAT 未通过，本地模拟闭环证据不完整'],
+    'paper market data is available for gold 5m.': ['Paper market data is available for GOLD 5m.', 'GOLD 5m 纸面行情数据可用。'],
+    'mock runtime is ready; runner freshness is tracked separately.': ['Mock runtime is ready; runner freshness is tracked separately.', '模拟运行时已就绪；运行器新鲜度单独跟踪。'],
+    'mock runtime is ready': ['Mock runtime is ready', '模拟运行时已就绪'],
+    'runner freshness is tracked separately.': ['Runner freshness is tracked separately.', '运行器新鲜度单独跟踪。'],
+    'runner has completed a fresh 5m mock trading cycle.': ['Runner has completed a fresh 5m mock trading cycle.', '运行器已完成新鲜的5分钟模拟交易循环。'],
+    'runner is healthy or actively running on the 5m cadence.': ['Runner is healthy or actively running on the 5m cadence.', '运行器健康，或正在按5分钟节奏运行。'],
+    'mock trading loop is healthy and fresh.': ['Mock trading loop is healthy and fresh.', '模拟交易闭环健康且数据新鲜。'],
+    'runner heartbeat is fresh for the 5m cadence': ['Runner heartbeat is fresh for the 5m cadence', '5分钟运行器心跳新鲜。'],
+    'gold 5m paper data is fresh enough for mock trading': ['GOLD 5m paper data is fresh enough for mock trading', 'GOLD 5m 纸面数据足够新鲜，可用于模拟交易。'],
+    'mock runtime is ready and running': ['Mock runtime is ready and running', '模拟运行时已就绪并运行中。'],
+    'sqlite integrity=ok': ['SQLite integrity=ok', 'SQLite 完整性=正常'],
+  };
+  const exact = values[key];
+  if (exact) return opsText(exact[0], exact[1]);
+  if (['ok', 'pass', 'warn', 'fail', 'error', 'running', 'skipped', 'ready'].includes(key)) return opsStatusText(key);
+  const metricPhrase = opsMetricPhraseText(text);
+  if (metricPhrase) return metricPhrase;
+  return opsLocalizeMixed(text);
+}
+function renderOpsSectionHeadings() {
+  document.querySelectorAll('h2').forEach(heading => {
+    if (heading.id === 'ops-action-heading') return;
+    const sub = Array.from(heading.children).find(child => child.tagName === 'SPAN');
+    if (!heading.dataset.opsTitleEn || !heading.dataset.opsTitleZh) {
+      const titleText = Array.from(heading.childNodes)
+        .filter(node => node.nodeType === Node.TEXT_NODE)
+        .map(node => node.textContent)
+        .join(' ');
+      const pair = parseOpsBilingualPair(titleText);
+      if (pair) {
+        heading.dataset.opsTitleEn = pair.en;
+        heading.dataset.opsTitleZh = pair.zh;
+      }
+    }
+    if (sub && (!heading.dataset.opsSubEn || !heading.dataset.opsSubZh)) {
+      const pair = parseOpsBilingualPair(sub.textContent);
+      if (pair) {
+        heading.dataset.opsSubEn = pair.en;
+        heading.dataset.opsSubZh = pair.zh;
+      }
+    }
+    if (!heading.dataset.opsTitleEn || !heading.dataset.opsTitleZh) return;
+    const title = opsText(heading.dataset.opsTitleEn, heading.dataset.opsTitleZh);
+    const subText = heading.dataset.opsSubEn && heading.dataset.opsSubZh
+      ? opsText(heading.dataset.opsSubEn, heading.dataset.opsSubZh)
+      : '';
+    heading.textContent = title;
+    if (subText) {
+      heading.append(' ');
+      const subEl = document.createElement('span');
+      subEl.textContent = subText;
+      heading.appendChild(subEl);
+    }
+  });
+}
+function renderOpsStaticLabels() {
+  const set = (id, en, zh) => { const el = $(id); if (el) el.textContent = opsText(en, zh); };
+  document.title = opsText('GoldBot OPS Console', '黄金运维控制台');
+  set('ops-title', 'GoldBot OPS Console', '黄金运维控制台');
+  set('trader-link', 'Trader Console', '交易看板');
+  set('run-date-label', 'Date', '日期');
+  set('load', 'Refresh', '刷新');
+  set('load-full', 'Full Diagnostics', '完整诊断');
+  set('ops-action-heading', 'OPS Shift Brief', '运维值班简报');
+  set('runtime-heading', 'Runtime Snapshot', '运行快照');
+  const copy = $('ops-action-copy');
+  if (copy) copy.textContent = opsText(
+    'Start here during an incident. This console tells the operator what is broken, what can still be trusted, and which safe command to run next. It never executes trades.',
+    '事故时从这里开始。这个控制台告诉值班人哪里坏了、什么还能信、下一条安全命令是什么；它不会执行交易。'
+  );
+  const labels = {
+    latest_close: ['Latest close', '最新价'],
+    signal: ['Signal', '信号'],
+    strength: ['Strength', '强度'],
+    regime: ['Regime', '行情状态'],
+    data_source: ['Data source', '数据源'],
+    data_truth: ['Data truth', '数据可信度'],
+    runner: ['Runner', '运行器'],
+    health: ['Health', '健康'],
+    data_age: ['Data age', '数据年龄'],
+    refreshed: ['Refreshed', '已刷新'],
+  };
+  document.querySelectorAll('[data-ops-label]').forEach(el => {
+    const pair = labels[el.dataset.opsLabel];
+    if (pair) el.textContent = opsText(pair[0], pair[1]);
+  });
+  document.querySelectorAll('[data-ops-lang]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.opsLang === opsLang);
+  });
+  renderOpsSectionHeadings();
+}
+const row = (left, mid, right, cls='') => `<div class="row"><span>${escapeHtml(opsRowLabelText(left))}</span><b>${escapeHtml(opsRowValueText(mid))}</b><span class="pill ${cls}">${escapeHtml(opsRowValueText(right))}</span></div>`;
+const pathFor = (date, name) => `outputs/${name}/${date}.json`;
+const loadApiSnapshot = async (date, mode='ops') => {
+  try {
+    const query = new URLSearchParams();
+    query.set('date', date);
+    if (mode) query.set('view', mode);
+    const res = await fetch(`${API_BASE}/api/dashboard?${query.toString()}`, { cache: 'no-store' });
+    if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+};
+const loadPublicAccessHealth = async () => {
+  const res = await fetch(`${API_BASE}/api/public-access-health`, { cache: 'no-store' });
+  if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return await res.json();
+};
+let opsDataProvenance = {};
+let opsDataSourceLineage = {};
+let opsActionContext = {};
+let latestPublicAccessHealth = { status: 'checking' };
+window.goldbotOps = {};
+
+async function loadDashboard(full=false) {
+  const date = $('run-date').value.trim();
+  const mode = full ? 'full' : 'ops';
+  $('status').textContent = `loading ${date} · ${mode}`;
+  $('error').textContent = '';
+  refreshPublicAccess();
+  try {
+    const api = await loadApiSnapshot(date, mode);
+    let bars, manifest, signals, backtests, tickets, orders, positions, decisions, pending, review, journal, latestQuote, riskState, riskBlocks, openTrades, closedTrades, paperExecutionBlocks, performance, paperPerformance, paperExitMonitor, paperExitDecisions, paperRiskActions, equityCurve, paperReconciliation, paperAttribution, dailyReview, operationRunbook, schedule, scheduleStatus, runner, botSupervisor, botCheckpoint, marketDb, dataProvenance, ohlcQuality, marketDataGate, strategyConfig, riskRules, brokerPreflight, dataSourcePreflight, dataSourceLineage, dataTrust, officialFeedReceipt, officialFeedOnboarding, brokerFeedDoctor, brokerFeed, brokerFeedSmoke, oandaFeed, oandaAccount, binanceFeed, tradingPlan, eveningReview, brokerReceipts, brokerReceiptSummary, mt5BridgeSmoke, liveOrderRequests, mockRuntime, mockUat, liveReadiness, liveEnv, liveActivation, liveApproval, liveSubmissionSafety, liveBrokerPreflight, liveDryRunDrill, liveSwitchPlan, liveCutover, strategyReview, strategySnapshot, learningLedger, strategyProposal, strategyLearningActions, strategyExperiments, strategyImprovementPlan, strategyPromotionGate, strategyGuardrails, riskMonitor, paperAutoGate, dataQuality, dataGaps, dataGapRepair, dataArchive, dataIntegrity, health, audit, doctor, alerts, collectorRuns, dataHealth, liveReconciliation;
+    if (api) {
+      ({ bars, manifest, signals, backtests, tickets, orders, positions, decisions, pending, review } = api);
+      journal = api.journal || '';
+      latestQuote = api.latest_quote || {};
+      riskState = api.risk;
+      riskBlocks = api.risk_blocks || [];
+      openTrades = api.open_trades || [];
+      closedTrades = api.closed_trades || [];
+      paperExecutionBlocks = api.paper_execution_blocks || [];
+      performance = api.performance || {};
+      paperPerformance = api.paper_performance || {};
+      paperExitMonitor = api.paper_exit_monitor || {};
+      paperExitDecisions = api.paper_exit_decisions || {};
+      paperRiskActions = api.paper_risk_action_plan || {};
+      equityCurve = api.equity_curve || {};
+      paperReconciliation = api.paper_reconciliation || {};
+      paperAttribution = api.paper_trade_attribution || {};
+      dailyReview = api.daily_review || {};
+      operationRunbook = api.operation_runbook || {};
+      schedule = api.schedule || {};
+      scheduleStatus = api.schedule_status || {};
+      runner = api.runner || {};
+      botSupervisor = api.bot_supervisor || {};
+      botCheckpoint = api.bot_checkpoint || {};
+      marketDb = api.market_db || {};
+      dataProvenance = api.data_provenance || {};
+      ohlcQuality = api.ohlc_quality || {};
+      marketDataGate = api.market_data_gate || {};
+      strategyConfig = api.strategy_config || {};
+      riskRules = api.risk_rules || {};
+      brokerPreflight = api.broker_preflight || {};
+      dataSourcePreflight = api.data_source_preflight || {};
+      dataSourceLineage = api.data_source_lineage || {};
+      dataTrust = api.data_trust || {};
+      officialFeedReceipt = api.official_feed_receipt || {};
+      officialFeedOnboarding = api.official_feed_onboarding || {};
+      brokerFeedDoctor = api.broker_feed_doctor || {};
+      brokerFeed = api.broker_feed || {};
+      brokerFeedSmoke = api.broker_feed_smoke || {};
+      oandaFeed = api.oanda_feed || {};
+      oandaAccount = api.oanda_account || {};
+      binanceFeed = api.binance_usdm_feed || {};
+      tradingPlan = api.trading_plan || {};
+      eveningReview = api.evening_review || {};
+      brokerReceipts = api.broker_receipts || [];
+      brokerReceiptSummary = api.broker_receipt_summary || {};
+      mt5BridgeSmoke = api.mt5_bridge_smoke || {};
+      liveOrderRequests = api.live_order_requests || [];
+      mockRuntime = api.mock_runtime || {};
+      mockUat = api.mock_uat || {};
+      liveReadiness = api.live_readiness || {};
+      liveEnv = api.live_env || {};
+      liveActivation = api.live_activation || {};
+      liveApproval = api.live_approval || {};
+      liveSubmissionSafety = api.live_submission_safety || {};
+      liveBrokerPreflight = api.live_broker_preflight || {};
+      liveDryRunDrill = api.live_dry_run_drill || {};
+      liveSwitchPlan = api.live_switch_plan || {};
+      liveCutover = api.live_cutover || {};
+      strategyReview = api.strategy_review || {};
+      strategySnapshot = api.strategy_snapshot || {};
+      learningLedger = api.learning_ledger || {};
+      strategyProposal = api.strategy_change_proposal || {};
+      strategyLearningActions = api.strategy_learning_actions || {};
+      strategyExperiments = api.strategy_experiments || {};
+      strategyImprovementPlan = api.strategy_improvement_plan || {};
+      strategyPromotionGate = api.strategy_promotion_gate || {};
+      strategyGuardrails = api.strategy_guardrails || {};
+      riskMonitor = api.risk_monitor || {};
+      paperAutoGate = api.paper_auto_approval_gate || {};
+      dataQuality = api.data_quality || {};
+      dataGaps = api.data_gaps || {};
+      dataGapRepair = api.data_gap_repair || {};
+      dataArchive = api.data_archive || {};
+      dataIntegrity = api.data_integrity || {};
+      health = api.health || {};
+      audit = api.audit || {};
+      doctor = api.doctor || {};
+      alerts = api.alerts || {};
+      collectorRuns = api.collector_runs || {};
+      dataHealth = api.data_health || {};
+      liveReconciliation = api.live_reconciliation || {};
+    } else {
+      [bars, manifest, signals, backtests, tickets, orders, positions, decisions, pending, review] = await Promise.all([
+      readJson(`outputs/clean_bars/${date}/GOLD_5m.json`, []),
+      readJson(`outputs/clean_bars/${date}/manifest.json`, []),
+      readJson(pathFor(date, 'signals'), []),
+      readJson(pathFor(date, 'backtests'), []),
+      readJson(pathFor(date, 'trade_tickets'), []),
+      readJson(pathFor(date, 'paper_orders'), []),
+      readJson('outputs/paper_positions/current.json', {}),
+      readJson(pathFor(date, 'journal_decisions'), []),
+      readJson(pathFor(date, 'journal_pending'), []),
+      readText(`outputs/review_notes/${date}.md`, ''),
+      ]);
+      journal = await readText(`outputs/journals/${date}.md`, '');
+      latestQuote = {};
+      riskBlocks = await readJson(pathFor(date, 'risk_blocks'), []);
+      openTrades = [];
+      closedTrades = [];
+      paperExecutionBlocks = [];
+      performance = {};
+      paperPerformance = {};
+      paperExitMonitor = {};
+      paperExitDecisions = {};
+      paperRiskActions = {};
+      equityCurve = {};
+      paperReconciliation = {};
+      paperAttribution = {};
+      dailyReview = {};
+      operationRunbook = {};
+      schedule = {};
+      scheduleStatus = {};
+      runner = {};
+      botSupervisor = {};
+      botCheckpoint = {};
+      marketDb = {};
+      dataProvenance = {};
+      ohlcQuality = {};
+      marketDataGate = {};
+      strategyConfig = {};
+      riskRules = {};
+      brokerPreflight = {};
+      dataSourcePreflight = {};
+      dataSourceLineage = {};
+      dataTrust = {};
+      officialFeedReceipt = {};
+      officialFeedOnboarding = {};
+      brokerFeedDoctor = {};
+      brokerFeed = {};
+      brokerFeedSmoke = {};
+      oandaFeed = {};
+      oandaAccount = {};
+      binanceFeed = {};
+      tradingPlan = {};
+      eveningReview = {};
+      brokerReceipts = [];
+      brokerReceiptSummary = {};
+      mt5BridgeSmoke = {};
+      liveOrderRequests = [];
+      mockRuntime = {};
+      mockUat = {};
+      liveReadiness = {};
+      liveEnv = {};
+      liveActivation = {};
+      liveApproval = {};
+      liveSubmissionSafety = {};
+      liveBrokerPreflight = {};
+      liveDryRunDrill = {};
+      liveSwitchPlan = {};
+      liveCutover = {};
+      strategyReview = {};
+      strategySnapshot = {};
+      learningLedger = {};
+      strategyProposal = {};
+      strategyLearningActions = {};
+      strategyExperiments = {};
+      strategyImprovementPlan = {};
+      strategyPromotionGate = {};
+      strategyGuardrails = {};
+      riskMonitor = {};
+      paperAutoGate = {};
+      dataQuality = {};
+      dataGaps = {};
+      dataGapRepair = {};
+      dataArchive = {};
+      dataIntegrity = {};
+      health = {};
+      audit = {};
+      doctor = {};
+      alerts = {};
+      collectorRuns = {};
+      dataHealth = {};
+      liveReconciliation = {};
+    }
+    const goldSignal = signals.find(s => s.asset === 'GOLD') || signals[0] || {};
+    const latest = bars[bars.length - 1] || {};
+    const displayLatest = latestQuote.close ? latestQuote : latest;
+    $('latest-close').textContent = displayLatest.close ? Number(displayLatest.close).toFixed(2) : '--';
+    $('signal-direction').textContent = opsSignalText(goldSignal.direction || '--');
+    $('signal-strength').textContent = goldSignal.strength ?? '--';
+    $('signal-regime').textContent = opsSignalText(goldSignal.regime || '--');
+    $('data-source').textContent = opsProviderText(dataProvenance.latest_provider || displayLatest.provider || '--');
+    $('data-truth').textContent = opsTruthText(dataProvenance.mode || '--');
+    opsDataProvenance = dataProvenance || {};
+    opsDataSourceLineage = dataSourceLineage || {};
+    $('runner-state').textContent = opsStatusText(runner.state || '--');
+    $('health-state').textContent = opsStatusText(health.status || '--');
+    $('data-age').textContent = formatAge(dataSourcePreflight.latest_record_age_minutes);
+    $('refreshed-at').textContent = formatClock(new Date());
+    drawChart(bars);
+    renderQuality(manifest, bars);
+    renderRisk(tickets, goldSignal, riskState);
+    renderDataQuality(dataQuality, dataGaps, dataGapRepair);
+    renderBackendSignals(alerts, dataHealth, collectorRuns, liveReconciliation);
+    renderDoctor(doctor);
+    renderHealth(health);
+    renderAudit(audit);
+    renderBroker(brokerPreflight, liveOrderRequests);
+    renderMockRuntime(mockRuntime);
+    renderMockUat(mockUat);
+    renderLiveReadiness(liveReadiness, liveEnv);
+    renderLiveActivation(liveActivation, liveApproval);
+    renderLiveSubmissionSafety(liveSubmissionSafety);
+    renderLiveBrokerPreflight(liveBrokerPreflight);
+    renderLiveDryRunDrill(liveDryRunDrill);
+    renderLiveSwitchPlan(liveSwitchPlan);
+    renderLiveCutover(liveCutover);
+    renderOhlcQualityGate(marketDataGate, ohlcQuality);
+    renderDataSourcePreflight(dataSourcePreflight, dataProvenance);
+    renderDataSourceLineage(dataSourceLineage);
+    renderDataTrust(dataTrust);
+    renderOfficialFeedReceipt(officialFeedReceipt);
+    renderOfficialFeedOnboarding(officialFeedOnboarding);
+    renderBrokerFeed(brokerFeedDoctor, brokerFeed, brokerFeedSmoke);
+    renderOandaFeed(oandaFeed);
+    renderOandaAccount(oandaAccount);
+    renderBinanceFeed(binanceFeed);
+    renderTradingPlan(tradingPlan);
+    renderEveningReview(eveningReview);
+    renderBrokerReceipts(brokerReceipts, brokerReceiptSummary, mt5BridgeSmoke);
+    renderSignals(signals);
+    renderBacktests(backtests || []);
+    renderStrategy(strategyConfig, riskRules, strategySnapshot);
+    renderOrders(orders);
+    renderPositions(positions);
+    renderPaperReconciliation(paperReconciliation);
+    renderPaperAttribution(paperAttribution);
+    renderTrades(openTrades, closedTrades, performance, paperExecutionBlocks, paperPerformance, mockRuntime);
+    renderPaperExitMonitor(paperExitMonitor);
+    renderPaperExitDecisions(paperExitDecisions);
+    renderPaperRiskActions(paperRiskActions);
+    renderEquityCurve(equityCurve);
+    renderLearning(strategyReview, learningLedger, strategyProposal, strategySnapshot, strategyLearningActions, strategyExperiments, strategyImprovementPlan, strategyPromotionGate);
+    renderStrategyGuardrails(strategyGuardrails);
+    renderRiskMonitor(riskMonitor);
+    renderPaperAutoGate(paperAutoGate);
+    renderDailyReview(dailyReview);
+    renderOperationRunbook(operationRunbook);
+    renderBotRunner(runner);
+    renderBotSupervisor(botSupervisor);
+    renderBotCheckpoint(botCheckpoint);
+    renderSchedule(schedule, scheduleStatus);
+    renderCoverage(marketDb);
+    renderDataArchive(dataArchive);
+    renderDataIntegrity(dataIntegrity);
+    renderJournal(decisions, pending, review, journal, riskBlocks);
+    opsActionContext = { api: api || {}, health, doctor, marketDataGate, riskMonitor, operationRunbook, botCheckpoint, paperReconciliation, dataIntegrity, alerts, dataHealth, collectorRuns, liveReconciliation };
+    renderOpsActionBoard(opsActionContext);
+    const payloadMode = api?.ops_payload?.mode || mode;
+    const barsNote = api?.ops_payload ? ` · ${api.ops_payload.bars_returned}/${api.ops_payload.bars_total} bars` : '';
+    $('status').textContent = `${date} · ${payloadMode}${barsNote} · auto 30s`;
+  } catch (err) {
+    $('error').textContent = `Dashboard load failed. Serve this folder with: python3 -m http.server 8765. ${err.message}`;
+    $('status').textContent = `error ${date}`;
+  }
+}
+
+async function refreshPublicAccess() {
+  latestPublicAccessHealth = { status: 'checking' };
+  renderPublicAccess(latestPublicAccessHealth);
+  renderOpsActionBoard(opsActionContext);
+  try {
+    latestPublicAccessHealth = await loadPublicAccessHealth();
+    renderPublicAccess(latestPublicAccessHealth);
+    renderOpsActionBoard(opsActionContext);
+  } catch (err) {
+    latestPublicAccessHealth = { status: 'fail', diagnosis: 'health_endpoint_failed', operator_action: err.message };
+    renderPublicAccess(latestPublicAccessHealth);
+    renderOpsActionBoard(opsActionContext);
+  }
+}
+
+function renderOpsActionBoard(ctx = {}) {
+  const el = $('ops-action-board');
+  if (!el) return;
+  const cards = [
+    publicAccessOpsAction(latestPublicAccessHealth),
+    marketFeedOpsAction(ctx.marketDataGate || {}),
+    executionSafetyOpsAction(ctx.riskMonitor || {}, ctx.operationRunbook || {}, ctx.botCheckpoint || {}),
+    evidenceOpsAction(ctx.api?.dashboard_health || {}, ctx.doctor || {}, ctx.dataIntegrity || {}, ctx.paperReconciliation || {}),
+    backendSignalsOpsAction(ctx.alerts || {}, ctx.dataHealth || {}, ctx.collectorRuns || {}, ctx.liveReconciliation || {}),
+  ];
+  const red = cards.filter(card => card.cls === 'sell').length;
+  const amber = cards.filter(card => card.cls === 'watch').length;
+  const summary = red ? opsText(`${red} critical`, `${red} 个关键`) : (amber ? opsText(`${amber} watch`, `${amber} 个关注`) : opsText('all clear', '全部正常'));
+  $('ops-action-summary').textContent = summary;
+  $('ops-action-summary').className = `pill ${red ? 'sell' : (amber ? 'watch' : 'buy')}`;
+  renderOpsShiftBrief(cards, ctx, red, amber);
+  renderOpsRunbookStrip(cards, ctx, red, amber);
+  renderOpsIncidentQueue(cards, ctx, red, amber);
+  el.innerHTML = cards.map(opsActionCard).join('');
+}
+
+function renderOpsShiftBrief(cards = [], ctx = {}, red = 0, amber = 0) {
+  const el = $('ops-shift-brief');
+  if (!el) return;
+  const primary = cards.find(card => card.cls === 'sell') || cards.find(card => card.cls === 'watch') || cards[0] || {};
+  const health = ctx.api?.dashboard_health || {};
+  const opsPayload = ctx.api?.ops_payload || {};
+  const mode = opsPayload.mode || 'ops';
+  const run = ctx.api?.run_date || $('run-date')?.value || '--';
+  const trustTone = red ? 'sell' : (amber ? 'watch' : 'buy');
+  const trustTitle = red
+    ? opsText('Manual control first', '先人工接管')
+    : (amber ? opsText('Review before action', '行动前先复核') : opsText('Automation readable', '自动化可读'));
+  const trustBody = red
+    ? opsText('Do not trust automation until the critical queue is cleared.', '关键队列清空前，不要信任自动化。')
+    : (amber
+      ? opsText('Read diagnostics before changing feed, risk, or execution state.', '调整行情、风控或执行状态前，先读诊断。')
+      : opsText('No critical OPS blocker is open; keep scheduled monitoring running.', '当前没有关键 OPS 阻断；继续保持定时监控。'));
+  const payloadBody = `${opsText('payload', '载荷')} ${mode} · ${opsText('run', '日期')} ${run} · ${opsText('health', '健康')} ${opsStatusText(health.status || '--')}`;
+  const nextTitle = primary.title || opsText('No active incident', '没有活跃事故');
+  const nextBody = primary.detail || opsText('No immediate operator action is required.', '当前不需要立即处置。');
+  const command = primary.command || opsText('Keep monitoring; rerun dashboard health checks after changes.', '继续监控；改动后重新运行 dashboard health checks。');
+  const traderBody = red
+    ? opsText('Use Trader Console only for read-only performance review until OPS is clear.', 'OPS 清空前，交易看板只用于只读绩效复盘。')
+    : opsText('Trader Console remains separate: strategy performance and trade replay stay there.', '交易看板保持分离：策略表现和交易回放在那边看。');
+  window.goldbotOps.shiftBrief = {
+    red,
+    amber,
+    trust: trustTitle,
+    primary: nextTitle,
+    command,
+    payload: mode,
+    run,
+  };
+  el.innerHTML = `
+    <article class="ops-shift-card ${trustTone}">
+      <small>${escapeHtml(opsText('Can I trust automation?', '现在能信自动化吗？'))}</small>
+      <strong>${escapeHtml(trustTitle)}</strong>
+      <p>${escapeHtml(trustBody)}</p>
+      <p>${escapeHtml(payloadBody)}</p>
+    </article>
+    <article class="ops-shift-card ${primary.cls || trustTone}">
+      <small>${escapeHtml(opsText('Highest blocker', '最高优先级阻断'))}</small>
+      <strong>${escapeHtml(nextTitle)}</strong>
+      <p>${escapeHtml(nextBody)}</p>
+      <a href="#${escapeHtml(primary.target || 'doctor')}" data-scroll-target="${escapeHtml(primary.target || 'doctor')}">${escapeHtml(primary.button || opsText('Open diagnostics', '打开诊断'))}</a>
+    </article>
+    <article class="ops-shift-card ${primary.cls || trustTone}">
+      <small>${escapeHtml(opsText('Safe next command', '下一条安全命令'))}</small>
+      ${opsCommandBlock(command, 'shift-brief')}
+    </article>
+    <article class="ops-shift-card watch">
+      <small>${escapeHtml(opsText('Trader surface', '交易者界面'))}</small>
+      <strong>${escapeHtml(opsText('Keep surfaces separate', '保持界面分离'))}</strong>
+      <p>${escapeHtml(traderBody)}</p>
+      <a href="dashboard-v3.html">${escapeHtml(opsText('Open Trader Console', '打开交易看板'))}</a>
+    </article>`;
+}
+
+function renderOpsRunbookStrip(cards = [], ctx = {}, red = 0, amber = 0) {
+  const el = $('ops-runbook-strip');
+  if (!el) return;
+  const primary = cards.find(card => card.cls === 'sell') || cards.find(card => card.cls === 'watch') || cards[0] || {};
+  const cls = red ? 'sell' : (amber ? 'watch' : 'buy');
+  const health = ctx.api?.dashboard_health || {};
+  const opsPayload = ctx.api?.ops_payload || {};
+  const generatedAt = ctx.api?.run_date || '--';
+  const freshness = health.status ? `${opsText('dashboard', '面板')} ${health.status}` : `${opsText('dashboard', '面板')} --`;
+  const payload = opsPayload.mode ? `${opsText('payload', '载荷')} ${opsPayload.mode}` : `${opsText('payload', '载荷')} full`;
+  const headline = red
+    ? opsText('Fix critical OPS issue first', '先修关键运维问题')
+    : (amber ? opsText('Watch OPS warning before action', '行动前先看运维警告') : opsText('No critical OPS blocker', '无关键运维阻断'));
+  const detail = [primary.title, primary.detail].filter(Boolean).join(' · ') || opsText('All primary operation checks are available below.', '下方可以查看所有主要运维检查。');
+  const command = primary.command || opsText('Keep monitoring; rerun dashboard health checks after changes.', '继续监控；改动后重新运行 dashboard health checks。');
+  el.className = `ops-runbook-strip ${cls}`;
+  el.innerHTML = `
+    <div class="ops-runbook-primary">
+      <small>${escapeHtml(opsText('OPS runbook summary', '运维处置摘要'))}</small>
+      <strong>${escapeHtml(headline)}</strong>
+      <p>${escapeHtml(detail)}</p>
+      <div class="ops-runbook-meta">
+        <span class="pill ${cls}">${escapeHtml(red ? opsText(`${red} critical`, `${red} 个关键`) : (amber ? opsText(`${amber} watch`, `${amber} 个关注`) : opsText('clear', '正常')))}</span>
+        <span class="pill watch">${escapeHtml(freshness)}</span>
+        <span class="pill watch">${escapeHtml(payload)}</span>
+        <span class="pill watch">${escapeHtml(`${opsText('run', '日期')} ${generatedAt}`)}</span>
+      </div>
+    </div>
+    <div class="ops-runbook-command">
+      <small>${escapeHtml(opsText('Next operator action', '下一步操作'))}</small>
+      ${opsCommandBlock(command, 'runbook')}
+      <a href="#${escapeHtml(primary.target || 'doctor')}" data-scroll-target="${escapeHtml(primary.target || 'doctor')}">${escapeHtml(primary.button || opsText('Open diagnostics', '打开诊断'))}</a>
+    </div>`;
+}
+
+function opsSeverityRank(cls) {
+  if (cls === 'sell') return 0;
+  if (cls === 'watch') return 1;
+  return 2;
+}
+
+function opsSeverityLabel(cls) {
+  if (cls === 'sell') return opsText('critical', '关键');
+  if (cls === 'watch') return opsText('watch', '关注');
+  return opsText('clear', '正常');
+}
+
+function renderOpsIncidentQueue(cards = [], ctx = {}, red = 0, amber = 0) {
+  const el = $('ops-incident-queue');
+  if (!el) return;
+  const clear = Math.max(0, cards.length - red - amber);
+  const sorted = cards.slice().sort((a, b) => opsSeverityRank(a.cls) - opsSeverityRank(b.cls));
+  const visible = (red || amber ? sorted.filter(card => card.cls !== 'buy') : sorted).slice(0, red || amber ? 4 : 2);
+  const opsPayload = ctx.api?.ops_payload || {};
+  const run = ctx.api?.run_date || $('run-date')?.value || '--';
+  const mode = opsPayload.mode || 'ops';
+  const headline = red
+    ? opsText('Current blockers', '当前阻断')
+    : (amber ? opsText('Warnings before action', '行动前警告') : opsText('Operator queue clear', '运维队列正常'));
+  const detail = red
+    ? opsText('Resolve critical items before trusting automation or public monitoring.', '先处理关键项，再信任自动化或公网监控。')
+    : (amber
+      ? opsText('Review warnings before changing exposure, feeds, or evidence repair.', '调整敞口、行情源或证据修复前，先检查这些警告。')
+      : opsText('No critical OPS incident is open; keep scheduled monitoring running.', '当前没有关键运维事故；继续保持定时监控。'));
+  const summary = `${red} ${opsText('critical', '关键')} · ${amber} ${opsText('watch', '关注')} · ${clear} ${opsText('clear', '正常')}`;
+  window.goldbotOps.incidentQueue = {
+    red,
+    amber,
+    clear,
+    mode,
+    run,
+    items: visible.map(item => ({
+      label: item.label,
+      title: item.title,
+      severity: item.cls,
+      target: item.target,
+      command: item.command,
+    })),
+  };
+  el.innerHTML = `
+    <div class="ops-incident-head">
+      <div class="ops-incident-title">
+        <small>${escapeHtml(opsText('OPS Incident Queue', '运维事故队列'))}</small>
+        <strong>${escapeHtml(headline)}</strong>
+        <p>${escapeHtml(detail)}</p>
+      </div>
+      <div class="ops-runbook-meta">
+        <span class="pill ${red ? 'sell' : (amber ? 'watch' : 'buy')}">${escapeHtml(summary)}</span>
+        <span class="pill watch">${escapeHtml(`${opsText('payload', '载荷')} ${mode}`)}</span>
+        <span class="pill watch">${escapeHtml(`${opsText('run', '日期')} ${run}`)}</span>
+      </div>
+    </div>
+    <div class="ops-incident-list">
+      ${visible.map((item, index) => `
+        <article class="ops-incident-item ${item.cls}">
+          <div class="ops-incident-meta">
+            <span>${escapeHtml(`#${index + 1}`)}</span>
+            <span class="pill ${item.cls}">${escapeHtml(opsSeverityLabel(item.cls))}</span>
+          </div>
+          <small>${escapeHtml(item.label)}</small>
+          <strong>${escapeHtml(item.title)}</strong>
+          <p>${escapeHtml(item.detail)}</p>
+          <div class="ops-incident-step">
+            <small>${escapeHtml(opsText('Operator action', '运维动作'))}</small>
+            ${opsCommandBlock(item.command, `incident-${index + 1}`)}
+          </div>
+          <a href="#${escapeHtml(item.target)}" data-scroll-target="${escapeHtml(item.target)}">${escapeHtml(item.button)}</a>
+        </article>`).join('')}
+    </div>`;
+}
+
+document.addEventListener('click', event => {
+  const copy = event.target.closest('[data-copy-command]');
+  if (copy) {
+    event.preventDefault();
+    copyOpsCommand(copy.dataset.copyCommand || '', copy);
+    return;
+  }
+  const link = event.target.closest('[data-scroll-target]');
+  if (!link) return;
+  const target = $(link.dataset.scrollTarget);
+  if (!target) return;
+  event.preventDefault();
+  target.scrollIntoView({ block: 'start' });
+  history.replaceState(null, '', `#${link.dataset.scrollTarget}`);
+});
+
+function publicAccessOpsAction(health = {}) {
+  if (!health || health.status === 'checking') {
+    return {
+      label: opsText('Public access', '公网入口'),
+      title: opsText('Checking tunnel', '正在检查隧道'),
+      detail: opsText('Waiting for local gateway and public domain probe.', '正在等待本地网关和公网域名探测。'),
+      command: 'GET /api/public-access-health',
+      cls: 'watch',
+      target: 'public-access',
+      button: opsText('Open public access', '打开公网检查'),
+    };
+  }
+  const local = health.local_gateway || {};
+  const pub = health.public_domain || {};
+  const ok = health.status === 'ok' && local.ok && pub.ok;
+  const diagnosis = opsDiagnosisText(health.diagnosis || 'unknown');
+  return {
+    label: opsText('Public access', '公网入口'),
+    title: ok ? opsText('Public dashboard reachable', '公网可访问') : opsText('Fix public access', '修复公网入口'),
+    detail: `${opsText(`public ${pub.status_code || '--'} · local ${local.status_code || '--'}`, `公网 ${pub.status_code || '--'} · 本地 ${local.status_code || '--'}`)} · ${diagnosis}`,
+    command: opsActionText(health.operator_action || 'Check Cloudflare tunnel and local gateway.'),
+    cls: ok ? 'buy' : 'sell',
+    target: 'public-access',
+    button: opsText('Open public access', '打开公网检查'),
+  };
+}
+
+function opsHumanizeToken(value) {
+  return String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function opsProviderText(provider) {
+  const key = String(provider || '').trim();
+  const labels = {
+    binance_usdm: ['Binance USDM market data', 'Binance USDM 行情'],
+    oanda_rest: ['OANDA broker data', 'OANDA 券商行情'],
+    oanda_csv: ['OANDA broker CSV', 'OANDA 券商 CSV'],
+    broker_csv: ['Broker CSV feed', '券商 CSV 行情'],
+    yahoo_chart: ['Yahoo chart feed', 'Yahoo 图表行情'],
+    local_synthetic_seed: ['Synthetic fallback data', '合成兜底行情'],
+  };
+  const pair = labels[key];
+  return pair ? opsText(pair[0], pair[1]) : (key || '--');
+}
+
+function opsStatusText(value) {
+  const key = String(value || '').trim();
+  const labels = {
+    ok: ['OK', '正常'],
+    pass: ['Pass', '通过'],
+    warn: ['Warning', '警告'],
+    fail: ['Failing', '失败'],
+    error: ['Error', '错误'],
+    running: ['Running', '运行中'],
+    skipped: ['Skipped', '已跳过'],
+    ready: ['Ready', '就绪'],
+    blocked: ['Blocked', '阻断'],
+    unknown: ['Unknown', '未知'],
+  };
+  const pair = labels[key.toLowerCase()];
+  return pair ? opsText(pair[0], pair[1]) : (key || '--');
+}
+
+function opsSignalText(value) {
+  const key = String(value || '').trim().toLowerCase();
+  const labels = {
+    no_trade: ['No trade', '不交易'],
+    no_signal: ['No signal', '无信号'],
+    watch: ['Watch', '观察'],
+    buy: ['Buy', '买入'],
+    sell: ['Sell', '卖出'],
+    hold: ['Hold', '持有'],
+    flat: ['Flat', '空仓'],
+    blocked: ['Blocked', '阻断'],
+  };
+  const pair = labels[key];
+  return pair ? opsText(pair[0], pair[1]) : opsHumanizeToken(key) || '--';
+}
+
+function opsTruthText(value) {
+  const key = String(value || '').trim();
+  const labels = {
+    EXECUTION_VENUE: ['Execution venue feed', '执行场所行情'],
+    OFFICIAL_BROKER: ['Official broker feed', '官方券商行情'],
+    PUBLIC_PROXY: ['Public proxy feed', '公网代理行情'],
+    SYNTHETIC: ['Synthetic fallback', '合成兜底'],
+    TRADIFI_PERPETUAL: ['TradFi perpetual', '传统金融永续'],
+    replay_only: ['Replay only', '仅可回放'],
+    execution_venue: ['Execution venue feed', '执行场所行情'],
+    official_broker: ['Official broker feed', '官方券商行情'],
+  };
+  const pair = labels[key];
+  return pair ? opsText(pair[0], pair[1]) : opsHumanizeToken(key) || '--';
+}
+
+function opsCheckNameText(name) {
+  const key = String(name || '').trim();
+  const labels = {
+    overall: ['Overall', '总体'],
+    market_db: ['Market database', '市场数据库'],
+    data_source: ['Market data source', '行情源'],
+    data_quality: ['Data quality gate', '数据质量门'],
+    data_gaps: ['Data gap check', '数据缺口检查'],
+    pipeline_artifacts: ['Pipeline artifacts', '流水线产物'],
+    paper_account: ['Paper account', '纸面账户'],
+    paper_performance: ['Paper performance', '纸面表现'],
+    paper_reconciliation: ['Paper reconciliation', '纸面对账'],
+    paper_trade_attribution: ['Trade attribution', '交易归因'],
+    journal_review: ['Journal and review', '日志与复盘'],
+    strategy_guardrails: ['Strategy guardrails', '策略护栏'],
+    daily_review: ['Daily review runner', '每日复盘运行器'],
+    broker: ['Broker mode', '券商模式'],
+    oanda_feed: ['OANDA feed', 'OANDA 行情'],
+    broker_receipts: ['Broker receipts', '券商回执'],
+    active_demo_reconciliation: ['Demo reconciliation', '模拟账户对账'],
+    runner: ['Runner', '运行器'],
+    secrets_posture: ['Secrets posture', '密钥状态'],
+    data_pipeline: ['Data pipeline', '数据流水线'],
+    market_data_source: ['Official market data', '官方行情源'],
+    five_minute_gold_strategy: ['Gold 5m strategy evidence', '黄金5分钟策略证据'],
+    local_storage: ['Local storage', '本地存储'],
+    data_archive: ['Daily data archive', '每日数据归档'],
+    risk_system: ['Risk system', '风控系统'],
+    risk_monitor: ['Risk monitor', '风控监控'],
+    paper_trading: ['Paper trading loop', '纸面交易闭环'],
+    mock_runtime: ['Mock runtime', '模拟运行时'],
+    mock_uat: ['Mock UAT', '模拟验收'],
+    paper_equity_curve: ['Paper equity curve', '纸面净值曲线'],
+    journal_and_review: ['Journal and review', '日志与复盘'],
+    schedule_artifacts: ['Schedule artifacts', '调度产物'],
+    dashboard: ['Dashboard/API', '看板/API'],
+    broker_feed_smoke: ['Broker feed smoke test', '券商行情冒烟测试'],
+    broker_bridge_smoke: ['Broker bridge smoke test', '券商桥接冒烟测试'],
+    oanda_broker_boundary: ['OANDA broker boundary', 'OANDA 券商边界'],
+    live_submission_safety: ['Live submission safety', '实盘提交保护'],
+    live_broker_boundary: ['Live broker boundary', '实盘券商边界'],
+    live_activation_gate: ['Live activation gate', '实盘激活门'],
+    live_cutover_package: ['Live cutover package', '实盘切换包'],
+  };
+  const pair = labels[key];
+  return pair ? opsText(pair[0], pair[1]) : opsHumanizeToken(key) || '--';
+}
+
+function opsHealthMessageText(name, message) {
+  const key = String(name || '').trim();
+  const original = String(message || '').trim();
+  const messages = {
+    market_db: ['Local market database has GOLD 5m coverage', '本地行情数据库已有 GOLD 5m 覆盖'],
+    data_source: ['Execution venue market data is active for GOLD 5m', 'GOLD 5m 执行场所行情已启用'],
+    data_quality: ['Data quality gate allows trading', '数据质量门允许交易'],
+    data_gaps: ['GOLD 5m data is continuous', 'GOLD 5m 数据连续'],
+    pipeline_artifacts: ['Required pipeline artifacts exist', '必要流水线产物存在'],
+    paper_account: ['Paper account artifacts are readable', '纸面账户产物可读取'],
+    paper_performance: ['Paper performance metrics are readable', '纸面表现指标可读取'],
+    paper_reconciliation: ['Paper reconciliation has not run', '纸面对账尚未运行'],
+    paper_trade_attribution: ['Trade attribution is pending evening review', '交易归因等待晚盘复盘确认'],
+    journal_review: ['Journal, review, learning ledger, and strategy proposal artifacts are readable', '日志、复盘、学习账本和策略提案产物可读取'],
+    strategy_guardrails: ['Strategy guardrails are readable', '策略护栏可读取'],
+    daily_review: ['Daily review runner has not recorded a receipt', '每日复盘运行器尚未留下回执'],
+    broker: ['Paper mode is active; live broker is not used', '当前为纸面模式；未使用实盘券商'],
+    oanda_feed: ['OANDA feed is inactive; current feed is Binance USDM', 'OANDA 行情未启用；当前使用 Binance USDM 行情'],
+    broker_receipts: ['Broker receipt importer is readable', '券商回执导入器可读取'],
+    active_demo_reconciliation: ['Active demo strategy reconciles with exchange', '当前模拟活跃策略已和交易所对账'],
+    runner: ['Runner is OK', '运行器正常'],
+    secrets_posture: ['Secrets posture is OK', '密钥状态正常'],
+  };
+  const pair = messages[key];
+  if (pair) return opsText(pair[0], pair[1]);
+  if (opsLang === 'zh' && original && !/[\u3400-\u9fff]/.test(original)) return opsText(original, `${opsHumanizeToken(key)} 需要检查`);
+  return opsLocalizeMixed(original);
+}
+
+function opsDiagnosisText(value) {
+  const key = String(value || '').trim();
+  const labels = {
+    public_access_ok: ['public access ok', '公网访问正常'],
+    public_access_failed: ['public access failed', '公网访问失败'],
+    local_gateway_failed: ['local gateway failed', '本地网关失败'],
+    public_tunnel_failed: ['public tunnel failed', '公网隧道失败'],
+    cloudflare_edge_unreachable: ['Cloudflare edge unreachable', 'Cloudflare 边缘不可达'],
+    public_deployment_stale: ['public deployment stale', '公网部署不是最新版'],
+    unknown: ['unknown', '未知'],
+  };
+  const pair = labels[key];
+  return pair ? opsText(pair[0], pair[1]) : opsHumanizeToken(key);
+}
+
+function opsTunnelText(tunnel = {}) {
+  if (tunnel.running) return opsText('Cloudflare tunnel process detected', '已检测到 Cloudflare 隧道进程');
+  return opsText('Cloudflare tunnel process not detected', '未检测到 Cloudflare 隧道进程');
+}
+
+function opsTunnelLogText(log = {}, publicOk = false) {
+  const latest = (log.latest_errors || []).slice(-1)[0] || log.error || '';
+  if (publicOk) {
+    return latest
+      ? opsText('Public probe is OK; latest tunnel log entry is historical noise.', '公网探测正常；最新隧道日志属于历史噪声。')
+      : opsText('No recent tunnel error in log.', '日志中没有近期隧道错误。');
+  }
+  return latest
+    ? opsText('Tunnel log has recent errors; inspect the log tail.', '隧道日志存在近期错误；检查日志尾部。')
+    : opsText('No tunnel log detail available.', '暂无隧道日志细节。');
+}
+
+function opsDeploymentStatusText(deployment = {}) {
+  const status = String(deployment.status || '').toLowerCase();
+  if (status === 'ok') return opsText('Current', '已同步');
+  if (status === 'warn') return opsText('Stale or incomplete', '可能是旧版');
+  if (status === 'skip') return opsText('Not checked', '未检查');
+  return opsStatusText(status || 'unknown');
+}
+
+function opsDeploymentFeatureLabel(value) {
+  const key = String(value || '').trim();
+  const labels = {
+    'trader:trade_replay_lightweight_charts': ['Trader replay chart', '交易回放图'],
+    'trader:localized_strategy_short_names': ['Readable strategy names', '可读策略名'],
+    'trader:daily_loop_exception_replay': ['Daily loop replay links', '闭环回放入口'],
+    'trader:solid_gold_baseline': ['Solid Gold baseline', '黄金直线基准'],
+    'ops:ops_command_copy': ['OPS command copy panel', 'OPS 命令复制区'],
+    'ops:ops_copy_buttons': ['OPS copy buttons', 'OPS 复制按钮'],
+    'ops:ops_incident_queue': ['OPS incident queue', 'OPS 事故队列'],
+  };
+  const pair = labels[key];
+  return pair ? opsText(pair[0], pair[1]) : opsHumanizeToken(key);
+}
+
+function opsDeploymentFeatureText(deployment = {}) {
+  const status = String(deployment.status || '').toLowerCase();
+  const missing = Array.isArray(deployment.missing_features) ? deployment.missing_features : [];
+  const checks = Array.isArray(deployment.checks) ? deployment.checks : [];
+  if (status === 'ok') {
+    return opsText(`${checks.length} feature checks passed`, `${checks.length} 个功能指纹通过`);
+  }
+  if (status === 'skip') {
+    return deployment.reason
+      ? opsLocalizeMixed(deployment.reason)
+      : opsText('public dashboard is not reachable', '公网看板不可访问');
+  }
+  if (missing.length) {
+    const labels = missing.slice(0, 4).map(opsDeploymentFeatureLabel).join(' · ');
+    const suffix = missing.length > 4 ? opsText(` +${missing.length - 4} more`, ` 另有${missing.length - 4}项`) : '';
+    return `${opsText('missing', '缺少')} ${labels}${suffix}`;
+  }
+  return opsText('feature fingerprint unavailable', '功能指纹不可用');
+}
+
+function opsBlockerLabel(blocker) {
+  const key = String(blocker || '').trim();
+  const labels = {
+    no_official_broker_ohlc: ['Execution-grade OHLC missing', '缺少可执行行情K线'],
+    no_execution_grade_ohlc: ['Execution-grade OHLC missing', '缺少可执行行情K线'],
+    oanda_credentials_missing: ['Inactive OANDA credentials', 'OANDA 凭证未启用'],
+    broker_csv_missing: ['Inactive broker CSV feed', '券商 CSV 行情未启用'],
+    stale_quality_artifacts: ['Quality checks are stale', '质量检查已过期'],
+    public_access_failed: ['Public access probe failed', '公网访问探测失败'],
+    cloudflare_tunnel_down: ['Cloudflare tunnel is down', 'Cloudflare 隧道不可用'],
+    api_unreachable: ['Dashboard API unreachable', 'Dashboard API 不可访问'],
+    exchange_position_without_local_record: ['Exchange position has no local record', '交易所持仓缺少本地记录'],
+    reconciliation_drift: ['Execution reconciliation drift', '执行对账漂移'],
+    kill_switch_active: ['Kill switch active', '熔断开关已开启'],
+  };
+  const pair = labels[key];
+  if (pair) return opsText(pair[0], pair[1]);
+  return opsHumanizeToken(key) || opsText('Unknown blocker', '未知阻断');
+}
+
+function opsBlockerText(blockers = [], limit = 3) {
+  const allItems = Array.isArray(blockers) ? blockers.filter(Boolean) : [];
+  const items = allItems.slice(0, limit);
+  if (!items.length) return opsText('no blockers', '无阻断');
+  const suffix = allItems.length > limit ? opsText(` +${allItems.length - limit} more`, ` 另有${allItems.length - limit}项`) : '';
+  return `${items.map(opsBlockerLabel).join(' · ')}${suffix}`;
+}
+
+function opsActionText(action) {
+  const text = String(action || '').replace(/\s+/g, ' ').trim();
+  if (!text || text === 'none') return opsText('No operator action needed', '暂无需要执行的运维动作');
+  if (text.includes('configs/live.env.template') && text.includes('OANDA_API_TOKEN')) {
+    return opsText(
+      'Copy configs/live.env.template to configs/live.env, fill OANDA_API_TOKEN and OANDA_ACCOUNT_ID, then rerun the official feed import.',
+      '复制 configs/live.env.template 到 configs/live.env，填写 OANDA_API_TOKEN 和 OANDA_ACCOUNT_ID，然后重新导入官方行情。'
+    );
+  }
+  if (text === 'Run broker feed doctor and import official feed.') {
+    return opsText('Run broker feed doctor and import official feed.', '运行 broker feed doctor，并导入官方行情。');
+  }
+  if (text === 'Public domain is serving the trader dashboard.') {
+    return opsText('Public domain is serving the trader dashboard.', '公网域名正在提供交易看板。');
+  }
+  if (text === 'Check Cloudflare tunnel and local gateway.') {
+    return opsText('Check Cloudflare tunnel and local gateway.', '检查 Cloudflare tunnel 和本地网关。');
+  }
+  if (text.startsWith('Redeploy dashboard static files or restart the public gateway; public HTML is missing')) {
+    return opsText(
+      text,
+      '重新部署 dashboard 静态文件，或重启公网 gateway；当前公网 HTML 缺少最新功能指纹。'
+    );
+  }
+  if (text === 'Fix System Health error checks before running new paper decisions.') {
+    return opsText('Fix System Health error checks before running new paper decisions.', '先修复系统健康检查错误，再运行新的纸面交易决策。');
+  }
+  if (text.startsWith('python3 ')) return text;
+  return opsLocalizeMixed(text);
+}
+
+function opsAuditSummaryText(name, summary) {
+  const key = String(name || '').trim();
+  const original = String(summary || '').trim();
+  const summaries = {
+    data_pipeline: 'GOLD 5m data ingestion, cleaning, and storage are verifiable',
+    market_data_source: 'Official GOLD 5m broker feed is available for live readiness',
+    five_minute_gold_strategy: 'GOLD 5m strategy, signals, and local backtest evidence exist',
+    local_storage: 'Local SQLite has enough GOLD 5m bars saved',
+    data_archive: 'Daily local data archive exists but has missing items',
+    risk_system: 'Risk parameters, tickets, risk blocks, and health checks are traceable',
+    risk_monitor: 'Runtime risk monitor was generated and tracks kill switch and paper auto-approval',
+    paper_trading: 'Mock trading framework exists, but there is no same-day paper execution evidence',
+    mock_runtime: 'Mock trading local 5m loop ran and is verifiable',
+    mock_uat: 'Mock trading UAT failed; local simulation loop evidence is incomplete',
+    paper_performance: 'Paper trading performance metrics are quantified for daily review',
+    paper_equity_curve: 'Paper equity curve exists and tracks NAV and drawdown',
+    paper_reconciliation: 'Missing paper order, trade, position, and log reconciliation artifacts',
+    paper_trade_attribution: 'Missing paper trade strategy-attribution artifact',
+    journal_and_review: 'Daily trading journal, report, strategy review, and learning loop exist',
+    strategy_guardrails: 'Daily review has been converted into next paper-trading guardrails',
+    daily_review_run: 'Daily review runner has not left a run receipt yet',
+    schedule_artifacts: 'Local launchd schedule configs are generated and installed',
+    dashboard: 'Dashboard page and API entrypoint exist',
+    broker_feed_smoke: 'Broker/MT5 GOLD 5m CSV feed import and live-ready preflight were verified',
+    broker_bridge_smoke: 'MT5 bridge smoke has outbox activity but no matching imported receipt',
+    oanda_broker_boundary: 'OANDA dry-run order boundary is verifiable; official OANDA feed credentials or import evidence are missing',
+    live_submission_safety: 'Real broker submissions are blocked at adapter level until live activation is ready',
+    live_broker_boundary: 'Current execution is paper/mock; real broker is disabled and only the protected boundary is verified',
+    live_activation_gate: 'Live activation gate still blocks real-money execution',
+    live_cutover_package: 'Live cutover package was generated; real-money gaps and rollback boundary are auditable',
+  };
+  const english = summaries[key];
+  if (english) return opsLang === 'en' ? english : (opsLang === 'bi' && original ? `${english} / ${original}` : (original || english));
+  if (opsLang === 'en' && /[\u3400-\u9fff]/.test(original)) return `${opsHumanizeToken(key)} needs review`;
+  return opsLocalizeMixed(original);
+}
+
+function opsNextActionText(action) {
+  const text = String(action || '').replace(/\s+/g, ' ').trim();
+  const match = text.match(/^Resolve audit failure:\s*([^-]+?)\s*-\s*(.+)$/);
+  if (match) {
+    const name = match[1].trim();
+    return `${opsText('Resolve audit failure', '处理审计失败')}: ${name} - ${opsAuditSummaryText(name, match[2])}`;
+  }
+  return opsActionText(text);
+}
+
+function opsReviewItemText(item) {
+  const text = String(item || '').replace(/\s+/g, ' ').trim();
+  if (!text || text === 'none') return opsText('none', '无');
+  if (text.includes('今天没有执行成交') && text.includes('是否过度过滤')) {
+    return opsText(
+      'No trades executed today; review whether filters were too strict, signals were insufficient, or data/risk gates blocked execution.',
+      '今天没有执行成交，复盘重点放在是否过度过滤、信号不足或数据/风控阻塞。'
+    );
+  }
+  if (opsLang === 'en' && /[\u3400-\u9fff]/.test(text)) return 'Review note needs translation; switch to Chinese or Bilingual for the original.';
+  return opsLocalizeMixed(text);
+}
+
+function marketFeedOpsAction(gate = {}) {
+  const blockers = gate.blockers || [];
+  const officialRows = Number(gate.official_rows || 0);
+  const replayReady = gate.replay_ready === true;
+  const promotionReady = gate.promotion_ready === true;
+  const blockerText = opsBlockerText(blockers, 3);
+  const provider = opsProviderText(gate.provider || '--');
+  const action = opsActionText((gate.ops_actions || [])[0] || (gate.commands || [])[0] || 'Run broker feed doctor and import official feed.');
+  const feedSummary = `${opsText(`official rows ${officialRows}`, `官方行情 ${officialRows} 行`)} · ${provider} · ${blockerText}`;
+  return {
+    label: opsText('Market feed', '行情源'),
+    title: promotionReady ? opsText('Official feed ready', '官方行情就绪') : (replayReady ? opsText('Replay only feed', '仅可回放行情') : opsText('Feed blocks replay', '行情阻断回放')),
+    detail: feedSummary,
+    command: action,
+    cls: promotionReady ? 'buy' : (replayReady ? 'watch' : 'sell'),
+    target: 'ohlc-quality-gate',
+    button: opsText('Open OHLC gate', '打开K线质量门'),
+  };
+}
+
+function executionSafetyOpsAction(risk = {}, runbook = {}, checkpoint = {}) {
+  const kill = risk.kill_switch_active === true;
+  const paperAuto = risk.allow_paper_auto_approve === true;
+  const live = runbook.permissions?.live_trading === true;
+  const warnings = Number(risk.summary?.warnings || 0) + Number(risk.summary?.auto_approval_blocks || 0);
+  const resume = (checkpoint.resume_actions || [])[0] || {};
+  const next = resume.command || (runbook.next_actions || [])[0] || opsText('Review risk monitor before approving new exposure.', '批准新敞口前先检查风控监控。');
+  return {
+    label: opsText('Execution safety', '执行安全'),
+    title: kill ? opsText('Kill switch active', '熔断已开启') : (paperAuto ? opsText('Paper auto allowed', '纸面自动可用') : opsText('Manual paper only', '仅人工纸面')),
+    detail: opsText(
+      `paper auto ${paperAuto ? 'allowed' : 'blocked'} · live ${live ? 'enabled' : 'disabled'} · warnings ${warnings}`,
+      `纸面自动 ${paperAuto ? '允许' : '阻断'} · live ${live ? '开启' : '关闭'} · 警告 ${warnings}`
+    ),
+    command: opsNextActionText(next),
+    cls: kill ? 'sell' : (paperAuto && live ? 'buy' : 'watch'),
+    target: 'risk-monitor',
+    button: opsText('Open risk monitor', '打开风控监控'),
+  };
+}
+
+function evidenceOpsAction(dashboardHealth = {}, doctor = {}, integrity = {}, reconciliation = {}) {
+  const checks = dashboardHealth.checks || [];
+  const explain = checks.find(check => check.name === 'strategy_explainability') || {};
+  const loop = checks.find(check => check.name === 'closed_loop_coverage') || {};
+  const gapCount = Number(explain.gap_count || 0);
+  const loopCount = (dashboardHealth.closed_loop_issue_strategy_ids || []).length;
+  const doctorFail = doctor.status === 'fail';
+  const integrityOk = integrity.status === 'pass';
+  const reconciliationOk = reconciliation.status === 'pass';
+  const next = (doctor.next_actions || [])[0] || explain.gap_groups?.[0]?.next_action || loop.message || opsText('Repair evidence gaps and rerun dashboard health checks.', '修复证据缺口后重新运行 dashboard health checks。');
+  return {
+    label: opsText('Evidence repair', '证据修复'),
+    title: doctorFail ? opsText('Doctor failing', '系统诊断失败') : (gapCount || loopCount ? opsText('Evidence gaps open', '证据缺口未关') : opsText('Evidence chain clear', '证据链正常')),
+    detail: opsText(
+      `gaps ${gapCount} · loop ${loopCount} · integrity ${integrityOk ? 'pass' : (integrity.status || '--')} · paper reconcile ${reconciliationOk ? 'pass' : (reconciliation.status || '--')}`,
+      `缺口 ${gapCount} · 闭环 ${loopCount} · 完整性 ${integrityOk ? '通过' : (integrity.status || '--')} · 纸面对账 ${reconciliationOk ? '通过' : (reconciliation.status || '--')}`
+    ),
+    command: opsNextActionText(next),
+    cls: doctorFail ? 'sell' : ((gapCount || loopCount || !integrityOk || !reconciliationOk) ? 'watch' : 'buy'),
+    target: 'doctor',
+    button: opsText('Open doctor', '打开系统诊断'),
+  };
+}
+
+function ageMinutesFromIso(value) {
+  const ms = Date.parse(value || '');
+  if (!Number.isFinite(ms)) return null;
+  return Math.max(0, (Date.now() - ms) / 60000);
+}
+
+function collectorLatestRows(collectorRuns = {}) {
+  if (Array.isArray(collectorRuns)) return collectorRuns.slice(-12).reverse();
+  return Array.isArray(collectorRuns.latest) ? collectorRuns.latest : [];
+}
+
+function backendSignalsOpsAction(alerts = {}, dataHealth = {}, collectorRuns = {}, liveReconciliation = {}) {
+  const alertStatus = String(alerts.overall_status || alerts.status || 'unknown').toLowerCase();
+  const dataStatus = String(dataHealth.status || 'unknown').toLowerCase();
+  const driftCount = Number(liveReconciliation.drift_count || 0);
+  const reconciled = liveReconciliation.reconciled === true;
+  const reconAge = ageMinutesFromIso(liveReconciliation.checked_at);
+  const reconStale = reconAge != null && reconAge > 720;
+  const collectorStale = Number(collectorRuns.stale_count || 0);
+  const issueCount = Number(dataHealth.summary?.issue_count || (dataHealth.issues || []).length || 0);
+  const hasCritical = alertStatus === 'fail' || dataStatus === 'fail' || driftCount > 0 || liveReconciliation.error || liveReconciliation.reconciled === false;
+  const hasWatch = alertStatus === 'warn' || dataStatus === 'warn' || issueCount > 0 || collectorStale > 0 || reconStale;
+  const cls = hasCritical ? 'sell' : (hasWatch ? 'watch' : 'buy');
+  const command = hasCritical
+    ? opsText('Open Backend Signals and fix failed alert/data/reconciliation checks before trusting automation.', '打开后台信号，先修复告警、数据或对账失败项，再信任自动化。')
+    : (hasWatch
+      ? opsText('Review Backend Signals before changing execution or data feeds.', '调整执行或行情源前，先复核后台信号。')
+      : opsText('Keep monitoring Backend Signals after each runner cycle.', '每次 runner 周期后继续监控后台信号。'));
+  const reconText = reconAge == null
+    ? opsText('reconciliation unknown', '对账未知')
+    : opsText(`reconciliation ${formatAge(reconAge)}`, `对账 ${formatAge(reconAge)}`);
+  return {
+    label: opsText('Backend signals', '后台信号'),
+    title: hasCritical ? opsText('Backend signal failure', '后台信号失败') : (hasWatch ? opsText('Backend signals need review', '后台信号需复核') : opsText('Backend signals clear', '后台信号正常')),
+    detail: opsText(
+      `alerts ${alertStatus} · data ${dataStatus} · collector stale ${collectorStale} · ${reconText}`,
+      `告警 ${alertStatus} · 数据 ${dataStatus} · 采集过期 ${collectorStale} · ${reconText}`
+    ),
+    command,
+    cls,
+    target: 'backend-signals',
+    button: opsText('Open backend signals', '打开后台信号'),
+  };
+}
+
+function opsActionCard(item) {
+  return `
+    <article class="ops-action-card ${item.cls}">
+      <small>${escapeHtml(item.label)}</small>
+      <strong>${escapeHtml(item.title)}</strong>
+      <p>${escapeHtml(item.detail)}</p>
+      ${opsCommandBlock(item.command, item.label)}
+      <a href="#${escapeHtml(item.target)}" data-scroll-target="${escapeHtml(item.target)}">${escapeHtml(item.button)}</a>
+    </article>`;
+}
+
+function opsCommandBlock(command, scope = 'command') {
+  const value = String(command || '').trim() || opsText('No operator action needed', '暂无需要执行的运维动作');
+  return `
+    <div class="ops-command-block" data-command-scope="${escapeHtml(scope)}">
+      <code>${escapeHtml(value)}</code>
+      <div class="ops-command-actions">
+        <button class="ops-copy-command" type="button" data-copy-command="${escapeHtml(value)}">${escapeHtml(opsText('Copy command', '复制命令'))}</button>
+        <span class="ops-copy-status" aria-live="polite"></span>
+      </div>
+    </div>`;
+}
+
+async function copyOpsCommand(command, button) {
+  const value = String(command || '').trim();
+  const status = button?.parentElement?.querySelector('.ops-copy-status');
+  if (!value) {
+    if (status) status.textContent = opsText('nothing to copy', '没有可复制内容');
+    return false;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+    }
+    window.goldbotOps.lastCopiedCommand = value;
+    window.goldbotOps.lastCopyStatus = 'copied';
+    if (button) button.textContent = opsText('Copied', '已复制');
+    if (status) status.textContent = opsText('copied', '已复制');
+    return true;
+  } catch (err) {
+    window.goldbotOps.lastCopyStatus = 'failed';
+    if (button) button.textContent = opsText('Copy failed', '复制失败');
+    if (status) status.textContent = opsText('copy failed', '复制失败');
+    window.goldbotOps.copyError = err?.message || String(err);
+    return false;
+  }
+}
+
+function formatAge(minutes) {
+  if (minutes === undefined || minutes === null || Number.isNaN(Number(minutes))) return '--';
+  const value = Number(minutes);
+  if (value < 1) return '<1m';
+  if (value < 60) return `${Math.round(value)}m`;
+  return `${(value / 60).toFixed(1)}h`;
+}
+
+function formatClock(date) {
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function drawChart(bars) {
+  const svg = $('chart');
+  svg.innerHTML = '';
+  if (!bars.length) return;
+  const values = bars.map(b => Number(b.close));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const points = values.map((value, index) => {
+    const x = (index / Math.max(1, values.length - 1)) * 800;
+    const y = 170 - ((value - min) / span) * 150;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  svg.innerHTML = `<polyline points="${points}" fill="none" stroke="#b78322" stroke-width="4"/>`;
+}
+
+function renderQuality(manifest, bars) {
+  const gold = manifest.find(item => item.symbol === 'GOLD' && item.timeframe === '5m');
+  const providers = [...new Set(bars.map(item => item.provider).filter(Boolean))].join(', ') || 'n/a';
+  const syntheticRows = bars.filter(item => (item.quality_flags || []).includes('synthetic_seed')).length;
+  const latestFlags = (bars[bars.length - 1]?.quality_flags || []).join(', ') || 'none';
+  $('quality').textContent = gold
+    ? `clean rows ${gold.clean_rows} / missing ${gold.missing_bars} / spikes ${gold.spike_flags} / duplicates ${gold.duplicate_rows} / providers ${providers} / synthetic rows ${syntheticRows} / latest flags ${latestFlags}`
+    : 'No clean manifest loaded.';
+}
+
+function renderRisk(tickets, signal, riskState) {
+  const ticket = tickets.find(item => item.asset === 'GOLD');
+  if (!ticket) {
+    if (riskState?.block_reason) {
+      $('risk').innerHTML = [
+        row('candidate gate', 'blocked', riskState.block_reason, 'sell'),
+        row('blocked ticket', riskState.blocked_ticket_id || '--', riskState.blocked_signal_id || '--', 'watch'),
+        row('daily risk used', `${riskState.used_loss_pct ?? '--'}%`, `cap ${riskState.daily_loss_stop_pct ?? '--'}%`, 'sell'),
+        row('candidate risk', `${riskState.candidate_loss_pct ?? '--'}%`, `projected ${riskState.projected_loss_pct ?? '--'}%`, 'sell'),
+        row('open trades', riskState.open_trades ?? '--', 'manual review required', 'watch'),
+      ].join('');
+    } else {
+      $('risk').innerHTML = '<div class="empty">No approved gold ticket.</div>';
+    }
+    return;
+  }
+  $('risk').innerHTML = [
+    row('max risk per trade', `${ticket.max_loss_pct}%`, 'cap'),
+    row('daily risk used', `${riskState?.used_loss_pct ?? '--'}%`, riskState?.allows_next_paper_order === false ? 'blocked' : 'ok', riskState?.allows_next_paper_order === false ? 'sell' : 'buy'),
+    row('position size', `${ticket.position_size_pct}%`, ticket.paper_only ? 'paper' : 'live', 'buy'),
+    row('entry zone', ticket.entry_zone, ticket.order_type),
+    row('event score', signal.factor_scores?.event ?? '--', signal.factor_scores?.event < 50 ? 'size down' : 'ok', signal.factor_scores?.event < 50 ? 'sell' : 'buy'),
+  ].join('');
+}
+
+function renderDataQuality(dataQuality, dataGaps, dataGapRepair) {
+  const gold = dataQuality.GOLD || {};
+  if (!Object.keys(gold).length) {
+    $('data-quality').innerHTML = '<div class="empty">No data quality gate output.</div>';
+    return;
+  }
+  const cls = gold.allows_trading ? 'buy' : 'sell';
+  const gapCls = dataGaps.status === 'pass' ? 'buy' : (dataGaps.status === 'fail' ? 'sell' : 'watch');
+  $('data-quality').innerHTML = [
+    row('allows trading', gold.allows_trading ? 'yes' : 'no', gold.enabled === false ? 'disabled' : 'gate', cls),
+    row('latest bar provider', gold.latest_provider || '--', gold.latest_timestamp || '--', gold.latest_is_synthetic ? 'sell' : 'buy'),
+    row('latest synthetic', gold.latest_is_synthetic ? 'yes' : 'no', gold.allow_latest_synthetic ? 'explicitly allowed' : 'blocked by default', gold.latest_is_synthetic ? 'sell' : 'buy'),
+    row('missing ratio', gold.missing_ratio ?? '--', `max ${gold.thresholds?.max_missing_ratio ?? '--'}`, gold.missing_ratio > (gold.thresholds?.max_missing_ratio ?? 1) ? 'sell' : 'buy'),
+    row('gap doctor', dataGaps.status || '--', `${dataGaps.gap_count ?? 0} gaps`, gapCls),
+    row('latest gap', dataGaps.latest_gap?.from_timestamp || '--', dataGaps.latest_gap?.to_timestamp || '--', gapCls),
+    row('repair request', dataGapRepair.status || '--', dataGapRepair.csv_template ? 'template ready' : 'none', dataGapRepair.status === 'open' ? 'watch' : 'buy'),
+    row('synthetic ratio', gold.synthetic_ratio ?? '--', `max ${gold.thresholds?.max_synthetic_ratio ?? '--'}`, gold.synthetic_ratio > (gold.thresholds?.max_synthetic_ratio ?? 1) ? 'sell' : 'buy'),
+    row('reasons', (gold.reasons || []).join('; ') || 'n/a', 'quality', cls),
+  ].join('');
+}
+
+function renderBackendSignals(alerts = {}, dataHealth = {}, collectorRuns = {}, liveReconciliation = {}) {
+  const el = $('backend-signals');
+  if (!el) return;
+  const collectorLatest = collectorLatestRows(collectorRuns);
+  const dataSummary = dataHealth.summary || {};
+  const alertStatus = String(alerts.overall_status || alerts.status || 'unknown').toLowerCase();
+  const dataStatus = String(dataHealth.status || 'unknown').toLowerCase();
+  const reconDrift = Number(liveReconciliation.drift_count || 0);
+  const reconAge = ageMinutesFromIso(liveReconciliation.checked_at);
+  const reconStale = reconAge != null && reconAge > 720;
+  const alertCls = alertStatus === 'ok' || alertStatus === 'pass' ? 'buy' : (alertStatus === 'fail' || alertStatus === 'error' ? 'sell' : 'watch');
+  const dataCls = dataStatus === 'pass' || dataStatus === 'ok' ? 'buy' : (dataStatus === 'fail' || dataStatus === 'error' ? 'sell' : 'watch');
+  const reconCls = liveReconciliation.error || liveReconciliation.reconciled === false || reconDrift > 0 ? 'sell' : (reconStale ? 'watch' : 'buy');
+  const collectorCls = Number(collectorRuns.stale_count || 0) > 0 ? 'watch' : 'buy';
+  const latestCollector = collectorLatest[0] || {};
+  const rows = [
+    row(opsText('Alerts', '告警'), opsStatusText(alertStatus), `${alerts.alert_count ?? 0} ${opsText('events', '事件')} · ${alerts.delivered ?? 0} ${opsText('delivered', '已送达')} · ${alerts.channel || '--'}`, alertCls),
+    row(opsText('Data health', '数据健康'), opsStatusText(dataStatus), `${dataSummary.issue_count ?? 0} ${opsText('issues', '问题')} · ${dataSummary.degenerate_snapshot_count ?? 0} ${opsText('degenerate', '退化快照')} · ${dataSummary.latest_age_minutes ?? '--'}m`, dataCls),
+    row(opsText('Price jumps', '价格跳变'), (dataHealth.suspicious_price_jumps || []).length, `${dataSummary.latest_provider || '--'} · ${dataSummary.latest_close ?? '--'}`, (dataHealth.suspicious_price_jumps || []).length ? 'watch' : 'buy'),
+    row(opsText('Collector', '采集器'), `${collectorRuns.total_runs ?? collectorLatest.length} ${opsText('runs', '次运行')}`, `${collectorRuns.stale_count ?? 0} ${opsText('stale', '过期')} · ${latestCollector.symbol || '--'} ${latestCollector.timeframe || ''} ${latestCollector.fetch_status || ''}`, collectorCls),
+    row(opsText('Live reconciliation', '实盘/模拟对账'), liveReconciliation.reconciled === true ? opsText('Reconciled', '已对账') : opsText('Not reconciled', '未对账'), `${reconDrift} ${opsText('drifts', '漂移')} · ${liveReconciliation.provider || '--'} · ${reconAge == null ? '--' : formatAge(reconAge)}`, reconCls),
+  ];
+  (dataHealth.recommendations || []).slice(0, 2).forEach((item, index) => rows.push(
+    row(opsText(`Recommendation ${index + 1}`, `建议 ${index + 1}`), opsActionText(item), 'data health', 'watch')
+  ));
+  collectorLatest.slice(0, 4).forEach((item, index) => rows.push(
+    row(opsText(`Collector ${index + 1}`, `采集 ${index + 1}`), `${item.symbol || '--'} ${item.timeframe || ''}`, `${opsProviderText(item.provider || '--')} · ${item.fetch_status || '--'} · ${item.timestamp || '--'}`, item.fetch_status === 'stale' ? 'watch' : 'buy')
+  ));
+  window.goldbotOps.backendSignals = {
+    alerts: alertStatus,
+    dataHealth: dataStatus,
+    collectorStale: Number(collectorRuns.stale_count || 0),
+    liveReconciliation: {
+      reconciled: liveReconciliation.reconciled === true,
+      driftCount: reconDrift,
+      stale: reconStale,
+      checkedAt: liveReconciliation.checked_at || '',
+    },
+  };
+  el.innerHTML = rows.join('');
+}
+
+function renderDoctor(doctor) {
+  if (!doctor || !Object.keys(doctor).length) {
+    $('doctor').innerHTML = '<div class="empty">No doctor output. Run python3 -m pipelines.doctor --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const cls = doctor.status === 'pass' ? 'buy' : (doctor.status === 'warn' ? 'watch' : 'sell');
+  const summary = doctor.summary || {};
+  const rows = [
+    row('status', doctor.status || 'unknown', doctor.checked_at || 'n/a', cls),
+    row('health / audit', `${summary.health || '--'} / ${summary.audit || '--'}`, `runner ${summary.runner_state || '--'}`, cls),
+    row('paper / live', `${summary.paper_ready ? 'yes' : 'no'} / ${summary.live_ready ? 'yes' : 'no'}`, summary.latest_provider || '--', summary.live_ready ? 'buy' : 'watch'),
+  ];
+  (doctor.next_actions || []).slice(0, 3).forEach((item, index) => rows.push(row(`next ${index + 1}`, opsNextActionText(item), 'action', doctor.status === 'fail' ? 'sell' : 'watch')));
+  $('doctor').innerHTML = rows.join('');
+}
+
+function renderPublicAccess(health) {
+  if (!health || health.status === 'checking') {
+    $('public-access').innerHTML = `<div class="empty">${escapeHtml(opsText('Checking public domain and Cloudflare tunnel...', '正在检查公网域名和 Cloudflare 隧道...'))}</div>`;
+    return;
+  }
+  const cls = health.status === 'ok' ? 'buy' : 'sell';
+  const local = health.local_gateway || {};
+  const pub = health.public_domain || {};
+  const tunnel = health.cloudflared || {};
+  const log = health.cloudflared_log || {};
+  const deployment = health.deployment_features || {};
+  const deploymentStatus = String(deployment.status || '').toLowerCase();
+  const deploymentCls = deploymentStatus === 'ok' ? 'buy' : (deploymentStatus === 'skip' || deploymentStatus === 'warn' ? 'watch' : 'sell');
+  $('public-access').innerHTML = [
+    row(opsText('Overall', '总体'), opsStatusText(health.status || 'unknown'), opsDiagnosisText(health.diagnosis || '--'), cls),
+    row(opsText('Local gateway', '本地网关'), local.status_code || '--', health.local_url || '--', local.ok ? 'buy' : 'sell'),
+    row(opsText('Public domain', '公网域名'), pub.status_code || '--', health.public_url || '--', pub.ok ? 'buy' : 'sell'),
+    row(opsText('Deployment version', '部署版本'), opsDeploymentStatusText(deployment), opsDeploymentFeatureText(deployment), deploymentCls),
+    row('Cloudflare', tunnel.running ? opsStatusText('running') : opsStatusText('fail'), opsTunnelText(tunnel), tunnel.running ? 'watch' : 'sell'),
+    row(opsText('Tunnel log', '隧道日志'), opsTunnelLogText(log, health.status === 'ok' && pub.ok), log.exists ? opsText('log tail', '日志尾部') : opsText('no log', '无日志'), health.status === 'ok' ? 'buy' : 'sell'),
+    row(opsText('Operator action', '运维动作'), opsActionText(health.operator_action || '--'), health.checked_at || '--', cls),
+  ].join('');
+}
+
+function renderHealth(health) {
+  if (!health || !Object.keys(health).length) {
+    $('health').innerHTML = '<div class="empty">No health check output.</div>';
+    return;
+  }
+  const rows = [row(opsCheckNameText('overall'), opsStatusText(health.status || 'unknown'), health.checked_at || 'n/a', health.status === 'ok' ? 'buy' : (health.status === 'warn' ? 'watch' : 'sell'))];
+  (health.checks || []).forEach(check => rows.push(
+    row(opsCheckNameText(check.name), opsStatusText(check.status), opsHealthMessageText(check.name, check.message), check.status === 'ok' ? 'buy' : (check.status === 'warn' ? 'watch' : 'sell'))
+  ));
+  $('health').innerHTML = rows.join('');
+}
+
+function renderAudit(audit) {
+  if (!audit || !Object.keys(audit).length) {
+    $('audit').innerHTML = '<div class="empty">No completion audit output.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const rows = [row(opsCheckNameText('overall'), opsStatusText(audit.status || 'unknown'), audit.checked_at || 'n/a', clsFor(audit.status))];
+  (audit.requirements || []).forEach(item => rows.push(
+    row(opsCheckNameText(item.name), opsStatusText(item.status), opsAuditSummaryText(item.name, item.summary), clsFor(item.status))
+  ));
+  $('audit').innerHTML = rows.join('');
+}
+
+function renderBroker(preflight, requests) {
+  if (!preflight || !Object.keys(preflight).length) {
+    $('broker').innerHTML = '<div class="empty">No broker preflight loaded.</div>';
+    return;
+  }
+  const readyCls = preflight.ready ? 'buy' : 'sell';
+  const rows = [
+    row('mode / provider', `${preflight.mode || '--'} / ${preflight.provider || '--'}`, preflight.dry_run ? 'dry-run' : 'live', preflight.dry_run ? 'watch' : readyCls),
+    row('ready', preflight.ready ? 'yes' : 'no', preflight.block_reason || 'ok', readyCls),
+    row('allowed symbols', (preflight.allowed_symbols || []).join(', ') || '--', 'guard'),
+    row('live requests', requests.length || 0, 'artifacts', requests.length ? 'watch' : ''),
+  ];
+  if (preflight.outbox_dir || preflight.inbox_dir) {
+    rows.push(row('mt5 outbox', preflight.outbox_dir || '--', preflight.outbox_writable ? 'writable' : 'not writable', preflight.outbox_writable ? 'buy' : 'sell'));
+    rows.push(row('mt5 inbox', preflight.inbox_dir || '--', preflight.inbox_writable ? 'writable' : 'not writable', preflight.inbox_writable ? 'buy' : 'sell'));
+  }
+  if (preflight.request_template || preflight.receipt_template) {
+    rows.push(row('mt5 templates', preflight.request_template ? 'request ok' : '--', preflight.receipt_template ? 'receipt ok' : '--', 'watch'));
+  }
+  if (preflight.provider === 'oanda_rest' || preflight.base_url) {
+    rows.push(row('oanda endpoint', preflight.base_url || '--', preflight.instrument || 'XAU_USD', 'watch'));
+    rows.push(row('oanda env', (preflight.missing_env || []).join(', ') || 'present', preflight.account_id_env || 'OANDA_ACCOUNT_ID', (preflight.missing_env || []).length ? 'watch' : 'buy'));
+  }
+  $('broker').innerHTML = rows.join('');
+}
+
+function renderMockRuntime(runtime) {
+  if (!runtime || !Object.keys(runtime).length) {
+    $('mock-runtime').innerHTML = '<div class="empty">No mock runtime output. Run python3 -m pipelines.mock_runtime --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = runtime.summary || {};
+  const rows = [
+    row('overall', runtime.status || 'unknown', runtime.mock_ready ? 'ready' : 'blocked', clsFor(runtime.status)),
+    row('runner', runtime.mock_running ? 'fresh' : 'stale / inactive', `${summary.failed ?? 0} fail`, runtime.mock_running ? 'buy' : 'watch'),
+  ];
+  (runtime.checks || []).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status))
+  ));
+  (runtime.next_actions || []).slice(0, 2).forEach((item, index) => rows.push(row(`action ${index + 1}`, item, 'next', 'watch')));
+  $('mock-runtime').innerHTML = rows.join('');
+}
+
+function renderMockUat(uat) {
+  if (!uat || !Object.keys(uat).length) {
+    $('mock-uat').innerHTML = '<div class="empty">No mock UAT output. Run python3 -m pipelines.mock_uat --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = uat.summary || {};
+  const rows = [
+    row('overall', uat.status || 'unknown', uat.generated_at || '--', clsFor(uat.status)),
+    row('checks', `${summary.passed ?? 0} pass`, `${summary.failed ?? 0} fail`, (summary.failed || 0) ? 'sell' : 'buy'),
+  ];
+  (uat.checks || []).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status))
+  ));
+  (uat.next_actions || []).slice(0, 2).forEach((item, index) => rows.push(row(`action ${index + 1}`, item, 'next', 'watch')));
+  $('mock-uat').innerHTML = rows.join('');
+}
+
+function renderLiveReadiness(readiness, liveEnv) {
+  if (!readiness || !Object.keys(readiness).length) {
+    $('live-readiness').innerHTML = '<div class="empty">No live readiness output. Run python3 -m pipelines.live_readiness --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = readiness.summary || {};
+  const rows = [
+    row('overall', readiness.status || 'unknown', readiness.live_ready ? 'live ready' : 'blocked', clsFor(readiness.status)),
+    row('checks', `${summary.passed ?? 0} pass`, `${summary.failed ?? 0} fail`, (summary.failed || 0) ? 'sell' : 'buy'),
+  ];
+  if (liveEnv && Object.keys(liveEnv).length) {
+    rows.push(row('live env', liveEnv.status || 'unknown', liveEnv.env_file_exists ? liveEnv.env_path : 'missing configs/live.env', clsFor(liveEnv.status)));
+    rows.push(row('env keys', `${(liveEnv.present_keys || []).length} present`, `${(liveEnv.missing_keys || []).length} missing`, (liveEnv.missing_keys || []).length ? 'sell' : 'buy'));
+    rows.push(row('secret hygiene', liveEnv.secret_hygiene?.status || '--', (liveEnv.secret_hygiene?.issues || []).join('; ') || 'template/gitignore/permissions ok', clsFor(liveEnv.secret_hygiene?.status || 'warn')));
+  }
+  (readiness.checks || []).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status))
+  ));
+  (readiness.next_actions || []).slice(0, 3).forEach((item, index) => rows.push(row(`action ${index + 1}`, item, 'next', 'watch')));
+  $('live-readiness').innerHTML = rows.join('');
+}
+
+function renderLiveActivation(activation, approval) {
+  if (!activation || !Object.keys(activation).length) {
+    $('live-activation').innerHTML = '<div class="empty">No activation gate output. Run python3 -m pipelines.live_activation --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const statusCls = activation.real_money_ready ? 'buy' : (activation.dry_run_ready ? 'watch' : 'sell');
+  const rows = [
+    row('status', activation.status || 'unknown', activation.checked_at || 'n/a', statusCls),
+    row('dry-run / money', `${activation.dry_run_ready ? 'yes' : 'no'} / ${activation.real_money_ready ? 'yes' : 'no'}`, activation.approval_path || '--', statusCls),
+  ];
+  const approvalPayload = approval && Object.keys(approval).length ? approval : activation.approval || {};
+  if (approvalPayload && Object.keys(approvalPayload).length) {
+    rows.push(row('approval', approvalPayload.status || 'missing', approvalPayload.approved ? 'approved' : (approvalPayload.request_path || '--'), approvalPayload.approved ? 'buy' : 'watch'));
+  }
+  (activation.checks || []).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status))
+  ));
+  (activation.next_actions || []).slice(0, 3).forEach((item, index) => rows.push(row(`action ${index + 1}`, item, 'next', 'watch')));
+  $('live-activation').innerHTML = rows.join('');
+}
+
+function renderLiveSubmissionSafety(safety) {
+  if (!safety || !Object.keys(safety).length) {
+    $('live-submission-safety').innerHTML = '<div class="empty">No live submission safety output. Run python3 -m pipelines.live_submission_safety --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const passed = safety.status === 'pass' && safety.blocked_by_activation_gate && !safety.network_call_attempted;
+  const rows = [
+    row('status', safety.status || 'unknown', safety.checked_at || 'n/a', passed ? 'buy' : 'sell'),
+    row('activation gate', safety.blocked_by_activation_gate ? 'blocked' : 'not blocked', safety.error || '--', safety.blocked_by_activation_gate ? 'buy' : 'sell'),
+    row('network call', safety.network_call_attempted ? 'attempted' : 'not attempted', safety.provider || '--', safety.network_call_attempted ? 'sell' : 'buy'),
+    row('mode', safety.dry_run ? 'dry-run' : 'real-submit smoke', safety.live_trading_enabled ? 'live flag on' : 'live flag off', safety.dry_run ? 'watch' : 'buy'),
+  ];
+  $('live-submission-safety').innerHTML = rows.join('');
+}
+
+function renderLiveBrokerPreflight(preflight) {
+  if (!preflight || !Object.keys(preflight).length) {
+    $('live-broker-preflight').innerHTML = '<div class="empty">No live broker preflight. Run python3 -m pipelines.live_broker_preflight --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'ready' || status === 'pass' ? 'buy' : (status === 'dry_run_only' || status === 'warn' ? 'watch' : 'sell');
+  const summary = preflight.summary || {};
+  const rows = [
+    row('status', preflight.status || '--', preflight.provider || '--', clsFor(preflight.status)),
+    row('mode', preflight.execution_mode || '--', preflight.live_trading_enabled ? 'live enabled' : 'live disabled', preflight.live_trading_enabled ? 'watch' : 'sell'),
+    row('dry run', preflight.dry_run ? 'enabled' : 'disabled', preflight.real_submit_blocked ? 'real submit blocked' : 'real submit possible', preflight.real_submit_blocked ? 'buy' : 'sell'),
+    row('env', summary.env_file_exists ? 'file exists' : 'missing', `${(summary.missing_env || []).length} missing`, (summary.missing_env || []).length ? 'sell' : 'buy'),
+    row('secret hygiene', summary.secret_hygiene || '--', 'values hidden', summary.secret_hygiene === 'pass' ? 'buy' : 'watch'),
+    row('OANDA account', summary.oanda_account_ready ? 'ready' : 'not ready', summary.oanda_instrument_ready ? 'XAU_USD ready' : 'instrument not ready', summary.oanda_account_ready && summary.oanda_instrument_ready ? 'buy' : 'watch'),
+    row('activation', summary.activation_status || '--', summary.network_call_attempted ? 'network attempted' : 'no network submit', summary.network_call_attempted ? 'sell' : 'watch'),
+  ];
+  (preflight.checks || []).slice(0, 7).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status))
+  ));
+  $('live-broker-preflight').innerHTML = rows.join('');
+}
+
+function renderLiveDryRunDrill(drill) {
+  if (!drill || !Object.keys(drill).length) {
+    $('live-dry-run-drill').innerHTML = '<div class="empty">No live dry-run drill output. Run python3 -m pipelines.live_dry_run_drill --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const statusCls = drill.safe_to_submit_live_order ? 'buy' : (drill.dry_run_ready ? 'watch' : 'sell');
+  const rows = [
+    row('status', drill.status || 'unknown', drill.generated_at || 'n/a', statusCls),
+    row('safe submit', drill.safe_to_submit_live_order ? 'yes' : 'no', drill.real_money_ready ? 'real money ready' : 'blocked', drill.safe_to_submit_live_order ? 'buy' : 'sell'),
+    row('dry-run / money', `${drill.dry_run_ready ? 'yes' : 'no'} / ${drill.real_money_ready ? 'yes' : 'no'}`, `${(drill.blockers || []).length} blockers`, statusCls),
+    row('data truth', drill.data_truth_level || '--', `${drill.official_rows ?? 0} official rows`, drill.data_truth_level === 'official_broker' || drill.data_truth_level === 'official' ? 'buy' : 'watch'),
+    row('latest price', drill.latest_price ?? '--', drill.latest_provider || '--', drill.latest_price ? 'buy' : 'sell'),
+    row('network call', drill.network_call_attempted ? 'attempted' : 'not attempted', drill.submission_safety_status || '--', drill.network_call_attempted ? 'sell' : 'buy'),
+  ];
+  (drill.phases || []).forEach(item => rows.push(
+    row(item.name, item.status, item.summary || '', item.status === 'pass' ? 'buy' : 'sell')
+  ));
+  (drill.next_commands || []).slice(0, 2).forEach((command, index) => rows.push(row(`command ${index + 1}`, command, 'next', 'watch')));
+  $('live-dry-run-drill').innerHTML = rows.join('');
+}
+
+function renderLiveSwitchPlan(plan) {
+  if (!plan || !Object.keys(plan).length) {
+    $('live-switch-plan').innerHTML = '<div class="empty">No live switch plan yet. Run python3 -m pipelines.live_switch_plan --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const rows = [
+    row('status', plan.status || '--', plan.real_money_ready ? 'money ready' : (plan.dry_run_ready ? 'dry-run ready' : 'blocked'), plan.real_money_ready ? 'buy' : 'watch'),
+  ];
+  (plan.steps || []).forEach(step => rows.push(row(step.name, step.status, step.action || '', step.status === 'done' ? 'buy' : 'sell')));
+  (plan.commands || []).slice(0, 2).forEach((command, index) => rows.push(row(`command ${index + 1}`, command, 'next', 'watch')));
+  $('live-switch-plan').innerHTML = rows.join('');
+}
+
+function renderLiveCutover(cutover) {
+  if (!cutover || !Object.keys(cutover).length) {
+    $('live-cutover').innerHTML = '<div class="empty">No live cutover package. Run python3 -m pipelines.live_cutover --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'real_money_ready' ? 'buy' : (status === 'dry_run_ready' ? 'watch' : 'sell');
+  const rows = [
+    row('status', cutover.status || 'unknown', cutover.generated_at || '--', clsFor(cutover.status)),
+    row('ready state', cutover.real_money_ready ? 'real money' : (cutover.dry_run_ready ? 'dry run' : 'blocked'), `${(cutover.blockers || []).length} blockers`, cutover.real_money_ready ? 'buy' : 'sell'),
+    row('broker', cutover.broker_provider || 'not configured', cutover.execution_mode || 'paper', cutover.live_trading_enabled ? 'buy' : 'watch'),
+  ];
+  (cutover.blockers || []).slice(0, 4).forEach(item => rows.push(
+    row(`${item.source}/${item.name}`, item.status || 'blocked', item.summary || '', 'sell')
+  ));
+  (cutover.preflight_commands || []).slice(0, 2).forEach((command, index) => rows.push(row(`preflight ${index + 1}`, command, 'command', 'watch')));
+  $('live-cutover').innerHTML = rows.join('');
+}
+
+function renderOhlcQualityGate(gate, quality) {
+  if ((!gate || !Object.keys(gate).length) && (!quality || !Object.keys(quality).length)) {
+    $('ohlc-quality-gate').innerHTML = '<div class="empty">No OHLC quality gate loaded.</div>';
+    return;
+  }
+  const source = gate || {};
+  const q = quality || {};
+  const cls = source.promotion_ready || q.promotion_ready ? 'buy' : (source.replay_ready || q.replay_ready ? 'watch' : 'sell');
+  const oanda = source.oanda || {};
+  const broker = source.broker_csv || {};
+  const data = source.data_source || {};
+  const blockers = source.blockers || [];
+  const stale = source.stale_artifacts || q.stale_artifacts || [];
+  const actions = source.ops_actions || [];
+  const commands = source.commands || [];
+  const traderLabel = opsLocalizeMixed(source.trader_label || q.trust_label || '--');
+  const traderAction = opsLocalizeMixed(source.trader_action || q.action || '--');
+  $('ohlc-quality-gate').innerHTML = [
+    row('mode', source.mode || q.truth_level || '--', traderLabel, cls),
+    row('provider', opsProviderText(source.provider || q.provider || '--'), `${source.truth_level || q.truth_level || '--'} · ${source.bar_count ?? q.bar_count ?? 0} bars`, cls),
+    row('official rows', source.official_rows ?? q.official_rows ?? 0, opsProviderText(data.latest_provider || '--'), (source.official_rows || q.official_rows) ? 'buy' : 'sell'),
+    row('wide bars', source.wide_bar_count ?? q.wide_bar_count ?? 0, `threshold ${source.wide_bar_threshold_pct ?? q.wide_bar_threshold_pct ?? 1}%`, (source.wide_bar_count || q.wide_bar_count) ? 'watch' : 'buy'),
+    row('OANDA', oanda.ready ? 'ready' : (oanda.status || 'not ready'), (oanda.missing_env || []).join(', ') || `${oanda.imported_rows ?? 0} rows`, oanda.ready ? 'buy' : 'watch'),
+    row('broker CSV', broker.doctor_status || '--', `files ${broker.valid_file_count ?? 0}/${broker.file_count ?? 0} rows ${broker.imported_rows ?? 0}`, (broker.imported_rows || broker.valid_file_count) ? 'buy' : 'watch'),
+    row('blockers', blockers.length, opsBlockerText(blockers, 6), blockers.length ? 'sell' : 'buy'),
+    row('stale artifacts', stale.length, stale.map(item => `${item.name}:${item.run_date}`).join(', ') || 'none', stale.length ? 'watch' : 'buy'),
+    row('trader action', traderAction, 'dashboard copy', cls),
+    row('ops action', opsActionText(actions[0] || 'none'), 'next', actions.length ? 'watch' : 'buy'),
+    row('command', commands[1] || commands[0] || 'python3 -m pipelines.import_official_feed --date YYYY-MM-DD', 'verify', 'watch'),
+  ].join('');
+}
+
+function renderDataSourcePreflight(preflight, provenance) {
+  if (!preflight || !Object.keys(preflight).length) {
+    $('data-source-preflight').innerHTML = '<div class="empty">No market data source preflight loaded.</div>';
+    return;
+  }
+  const officialLive = provenance?.allows_live === true;
+  const venueConnected = provenance?.allows_execution_venue === true || preflight.live_data_mode === 'execution_venue';
+  const cls = officialLive ? 'buy' : (preflight.ready_for_paper || venueConnected ? 'watch' : 'sell');
+  const quote = preflight.latest_quote || {};
+  const priceSanity = preflight.price_sanity || {};
+  const sanityCls = priceSanity.passes === false ? 'sell' : 'buy';
+  const truthCls = provenance?.allows_live ? 'buy' : (provenance?.allows_paper ? 'watch' : 'sell');
+  $('data-source-preflight').innerHTML = [
+    row('data truth', provenance?.mode || '--', provenance?.label || '--', truthCls),
+    row('latest truth level', provenance?.latest_truth_level || '--', (provenance?.latest_quality_flags || []).join(', ') || '--', provenance?.latest_is_official ? 'buy' : (provenance?.latest_is_mock ? 'sell' : 'watch')),
+    row('paper / live allowed', `${provenance?.allows_paper ? 'yes' : 'no'} / ${provenance?.allows_live ? 'yes' : 'no'}`, provenance?.message || preflight.message || '--', truthCls),
+    row('local database', provenance?.market_db || preflight.market_db || '--', 'SQLite', 'watch'),
+    row('latest quote', quote.provider || '--', quote.close ?? '--', quote.provider ? 'watch' : ''),
+    row('price sanity', priceSanity.passes === false ? 'failed' : 'pass', (priceSanity.reasons || []).join('; ') || `${priceSanity.min_price ?? '--'}-${priceSanity.max_price ?? '--'}`, sanityCls),
+    row('latest bar provider', preflight.latest_provider || '--', preflight.latest_price ?? '--', cls),
+    row('latest age', preflight.latest_record_age_minutes ?? '--', `max ${preflight.max_public_quote_age_minutes ?? '--'}m`, preflight.latest_record_is_fresh === false ? 'sell' : 'buy'),
+    row('bar lag', preflight.live_bar_lag_minutes ?? '--', `max ${preflight.max_live_bar_lag_minutes ?? '--'}m`, preflight.live_bar_is_fresh === false ? 'sell' : 'buy'),
+    row('paper ready', preflight.ready_for_paper ? 'yes' : 'no', preflight.message || '', preflight.ready_for_paper ? 'buy' : 'sell'),
+    row('execution-grade data ready', officialLive ? 'yes' : 'no', officialLive ? 'execution-grade OHLC' : 'execution-grade OHLC missing', officialLive ? 'buy' : 'sell'),
+    row('execution venue', venueConnected ? 'connected' : 'not connected', preflight.live_data_mode || '--', venueConnected ? 'watch' : ''),
+    row('official rows', provenance?.official_rows ?? preflight.official_rows ?? 0, (preflight.official_broker_providers || []).join(', ') || '--', (provenance?.official_rows || preflight.official_rows) ? 'buy' : 'watch'),
+    row('venue rows', provenance?.execution_venue_rows ?? preflight.execution_venue_rows ?? 0, (preflight.execution_venue_providers || []).join(', ') || '--', (provenance?.execution_venue_rows || preflight.execution_venue_rows) ? 'watch' : ''),
+    row('public rows', provenance?.public_rows ?? preflight.public_rows ?? 0, (preflight.public_providers || []).join(', ') || '--', 'watch'),
+    row('synthetic rows', provenance?.synthetic_rows ?? '--', 'seed only', provenance?.synthetic_rows ? 'watch' : 'buy'),
+  ].join('');
+}
+
+function renderDataSourceLineage(lineage) {
+  if (!lineage || !Object.keys(lineage).length) {
+    $('data-source-lineage').innerHTML = '<div class="empty">No database lineage output. Run python3 -m pipelines.data_source_lineage --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const groups = lineage.provider_groups || {};
+  const official = groups.official || {};
+  const pub = groups.public || {};
+  const latestOfficial = lineage.latest_official_bar || {};
+  const latestPublic = lineage.latest_public_bar || {};
+  const venueReady = lineage.execution_venue_ready === true || lineage.truth_level === 'execution_venue';
+  const cls = lineage.ready_for_live ? 'buy' : (lineage.ready_for_paper || venueReady ? 'watch' : 'sell');
+  $('data-source-lineage').innerHTML = [
+    row('truth level', lineage.truth_level || '--', lineage.lineage_message || '--', cls),
+    row('db', lineage.market_db_exists ? 'exists' : 'missing', lineage.market_db || '--', lineage.market_db_exists ? 'buy' : 'sell'),
+    row('official rows', official.rows ?? 0, (official.providers || []).join(', ') || '--', (official.rows || 0) > 0 ? 'buy' : 'sell'),
+    row('venue rows', groups.execution_venue?.rows ?? 0, (groups.execution_venue?.providers || []).join(', ') || '--', (groups.execution_venue?.rows || 0) > 0 ? 'watch' : ''),
+    row('public rows', pub.rows ?? 0, (pub.providers || []).join(', ') || '--', (pub.rows || 0) > 0 ? 'watch' : ''),
+    row('latest official', latestOfficial.close ? Number(latestOfficial.close).toFixed(2) : '--', latestOfficial.timestamp || '--', latestOfficial.close ? 'buy' : 'sell'),
+    row('latest public', latestPublic.close ? Number(latestPublic.close).toFixed(2) : '--', latestPublic.timestamp || '--', latestPublic.close ? 'watch' : ''),
+    row('official live eligible', lineage.ready_for_live ? 'yes' : 'no', lineage.next_action || '--', lineage.ready_for_live ? 'buy' : 'sell'),
+    row('venue connected', venueReady ? 'yes' : 'no', venueReady ? 'execution venue OHLC accepted' : '--', venueReady ? 'watch' : ''),
+  ].join('');
+}
+
+function renderDataTrust(trust) {
+  if (!trust || !Object.keys(trust).length) {
+    $('data-trust').innerHTML = '<div class="empty">No data trust report. Run python3 -m pipelines.data_trust --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = trust.summary || {};
+  const latest = trust.latest_display || {};
+  const rows = [
+    row('status', trust.status || '--', trust.display_mode || '--', clsFor(trust.status)),
+    row('latest price', summary.latest_price ?? latest.close ?? '--', summary.latest_provider || latest.provider || '--', summary.latest_is_mock ? 'sell' : clsFor(trust.status)),
+    row('latest source', summary.latest_is_official ? 'official' : (summary.latest_is_public ? 'public' : (summary.latest_is_mock ? 'mock' : 'unknown')), `truth ${summary.truth_level || '--'}`, summary.latest_is_official ? 'buy' : (summary.latest_is_mock ? 'sell' : 'watch')),
+    row('official rows', summary.official_rows ?? 0, `public ${summary.public_rows ?? 0} / mock ${summary.mock_rows ?? 0}`, (summary.official_rows || 0) > 0 ? 'buy' : 'watch'),
+    row('price guard', `${summary.price_sanity_min ?? '--'}-${summary.price_sanity_max ?? '--'}`, summary.latest_is_mock ? 'mock blocked' : 'active', summary.latest_is_mock ? 'sell' : 'buy'),
+  ];
+  (trust.checks || []).slice(0, 5).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status))
+  ));
+  $('data-trust').innerHTML = rows.join('');
+}
+
+function renderOfficialFeedReceipt(receipt) {
+  if (!receipt || !Object.keys(receipt).length) {
+    $('official-feed-receipt').innerHTML = '<div class="empty">No official feed receipt. Run python3 -m pipelines.import_official_feed --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const cls = receipt.status === 'pass' ? 'buy' : (receipt.status === 'fail' ? 'sell' : 'watch');
+  const broker = receipt.broker_csv || {};
+  const oanda = receipt.oanda_feed || {};
+  const latestOfficial = receipt.latest_official_bar || {};
+  const next = receipt.next_actions || [];
+  $('official-feed-receipt').innerHTML = [
+    row('status', receipt.status || '--', receipt.generated_at || '--', cls),
+    row('live ready', receipt.ready_for_live ? 'yes' : 'no', receipt.truth_level || '--', receipt.ready_for_live ? 'buy' : 'sell'),
+    row('official rows', receipt.official_rows ?? 0, (receipt.official_providers || []).join(', ') || '--', (receipt.official_rows || 0) > 0 ? 'buy' : 'sell'),
+    row('latest official', latestOfficial.close ? Number(latestOfficial.close).toFixed(2) : '--', latestOfficial.timestamp || '--', latestOfficial.close ? 'buy' : 'sell'),
+    row('OANDA', oanda.status || '--', `rows ${oanda.imported_rows ?? 0}`, (oanda.imported_rows || 0) > 0 ? 'buy' : 'watch'),
+    row('broker CSV', broker.doctor_status || '--', `files ${broker.valid_file_count ?? 0}/${broker.file_count ?? 0} rows ${broker.imported_rows ?? 0}`, (broker.imported_rows || 0) > 0 ? 'buy' : 'watch'),
+    row('next action', next[0] || 'none', 'official feed', receipt.ready_for_live ? 'buy' : 'watch'),
+  ].join('');
+}
+
+function renderOfficialFeedOnboarding(onboarding) {
+  if (!onboarding || !Object.keys(onboarding).length) {
+    $('official-feed-onboarding').innerHTML = '<div class="empty">No official feed onboarding runbook. Run python3 -m pipelines.official_feed_onboarding --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const cls = onboarding.status === 'ready' ? 'buy' : 'watch';
+  const commands = onboarding.commands || [];
+  const handoff = onboarding.handoff || {};
+  const blockers = onboarding.current_blockers || handoff.current_blockers || [];
+  const sanity = onboarding.price_sanity_range || handoff.price_sanity_range || {};
+  $('official-feed-onboarding').innerHTML = [
+    row('status', onboarding.status || '--', onboarding.generated_at || '--', cls),
+    row('feed dir', onboarding.feed_dir || '--', 'local CSV inbox', 'watch'),
+    row('target', `${handoff.broker_symbol || 'XAUUSD'} ${handoff.target_timeframe || '5m'}`, `${onboarding.target_timeframe_seconds || handoff.target_timeframe_seconds || 300}s bars`, 'watch'),
+    row('required columns', (onboarding.required_columns || handoff.required_columns || []).join(', ') || '--', handoff.sample_filename || 'XAUUSD_5m_YYYY-MM-DD.csv', 'watch'),
+    row('price sanity', `${sanity.min_price ?? '--'}-${sanity.max_price ?? '--'}`, 'reject bad official feed', sanity.enabled === false ? 'sell' : 'buy'),
+    row('template', onboarding.template || '--', onboarding.gap_request ? 'gap template ready' : 'base template', 'watch'),
+    row('official rows', onboarding.current_official_rows ?? 0, onboarding.current_truth_level || '--', (onboarding.current_official_rows || 0) > 0 ? 'buy' : 'sell'),
+    row('blockers', blockers.length, blockers[0]?.detail || 'none', blockers.length ? 'sell' : 'buy'),
+    row('next action', onboarding.next_action || '--', 'setup', cls),
+    row('verify 1', commands[0] || '--', 'command', 'watch'),
+    row('verify 2', commands[2] || '--', 'command', 'watch'),
+  ].join('');
+}
+
+function renderBrokerFeed(doctor, feed, smoke) {
+  if ((!doctor || !Object.keys(doctor).length) && (!feed || !Object.keys(feed).length) && (!smoke || !Object.keys(smoke).length)) {
+    $('broker-feed').innerHTML = '<div class="empty">No broker feed bridge run yet.</div>';
+    return;
+  }
+  const hasErrors = (feed.errors || []).length > 0;
+  const smokePreflight = smoke.preflight || {};
+  const quality = doctor.quality_summary || {};
+  const sanity = doctor.price_sanity || {};
+  const doctorCls = doctor.status === 'pass' ? 'buy' : (doctor.status === 'fail' ? 'sell' : 'watch');
+  $('broker-feed').innerHTML = [
+    row('feed doctor', doctor.status || '--', `${doctor.valid_file_count ?? 0}/${doctor.file_count ?? 0} files`, doctorCls),
+    row('feed rows', doctor.row_count ?? 0, doctor.latest_timestamp || doctor.message || '--', doctor.status === 'pass' ? 'buy' : 'watch'),
+    row('quality', `${quality.pass ?? 0} pass / ${quality.warn ?? 0} warn / ${quality.fail ?? 0} fail`, `${quality.non_5m_intervals ?? 0} non-5m`, (quality.fail || 0) ? 'sell' : ((quality.warn || 0) ? 'watch' : 'buy')),
+    row('price range', quality.min_close ?? '--', quality.max_close ?? '--', quality.min_close ? 'buy' : 'watch'),
+    row('sanity gate', sanity.enabled === false ? 'off' : `${sanity.min_price ?? '--'}-${sanity.max_price ?? '--'}`, 'rejects bad official CSV', sanity.enabled === false ? 'sell' : 'buy'),
+    row('input dir', feed.input_dir || '--', feed.pattern || '*.csv', 'watch'),
+    row('provider', feed.provider || '--', `${feed.symbol || '--'} ${feed.timeframe || '--'}`, 'watch'),
+    row('new files', feed.new_files ?? 0, `rows ${feed.imported_rows ?? 0}`, (feed.imported_rows || 0) > 0 ? 'buy' : 'watch'),
+    row('import log', feed.total_import_log_entries ?? 0, `${feed.skipped_previously_imported ?? 0} already imported`, 'watch'),
+    row('errors', hasErrors ? feed.errors.length : 0, feed.checked_at || 'n/a', hasErrors ? 'sell' : 'buy'),
+    row('feed smoke', smoke.status || '--', smokePreflight.ready_for_live ? `${smokePreflight.latest_provider} live-ready` : 'sandbox check', smoke.status === 'pass' ? 'buy' : 'watch'),
+  ].join('');
+}
+
+function renderOandaFeed(feed) {
+  if (!feed || !Object.keys(feed).length) {
+    $('oanda-feed').innerHTML = '<div class="empty">No OANDA feed run yet.</div>';
+    return;
+  }
+  const status = feed.status || (feed.ready ? 'ready' : 'unknown');
+  const cls = status === 'pass' ? 'buy' : (status === 'skipped' || status === 'warn' ? 'watch' : 'sell');
+  $('oanda-feed').innerHTML = [
+    row('status', status, feed.checked_at || '--', cls),
+    row('ready', feed.ready ? 'yes' : 'no', (feed.missing_env || []).join(', ') || 'credentials ok', feed.ready ? 'buy' : 'watch'),
+    row('instrument', feed.instrument || 'XAU_USD', feed.granularity || 'M5', 'watch'),
+    row('imported rows', feed.imported_rows ?? 0, feed.latest_timestamp || feed.message || '--', (feed.imported_rows || 0) > 0 ? 'buy' : 'watch'),
+    row('base url', feed.base_url || '--', feed.provider || 'oanda', 'watch'),
+  ].join('');
+}
+
+function renderOandaAccount(account) {
+  if (!account || !Object.keys(account).length) {
+    $('oanda-account').innerHTML = '<div class="empty">No OANDA account preflight yet.</div>';
+    return;
+  }
+  const status = account.status || (account.ready ? 'ready' : 'unknown');
+  const cls = status === 'pass' ? 'buy' : (status === 'skipped' || status === 'warn' ? 'watch' : 'sell');
+  const details = account.account || {};
+  const instrument = account.instrument || {};
+  $('oanda-account').innerHTML = [
+    row('status', status, account.message || '--', cls),
+    row('credentials', account.ready ? 'present' : 'missing', (account.missing_env || []).join(', ') || account.account_id_env || '--', account.ready ? 'buy' : 'watch'),
+    row('account', details.currency || '--', details.NAV ?? details.balance ?? '--', account.account_ready ? 'buy' : 'watch'),
+    row('instrument', instrument.name || account.instrument_name || 'XAU_USD', instrument.display_name || instrument.type || '--', account.instrument_ready ? 'buy' : 'watch'),
+    row('base url', account.base_url || '--', account.provider || 'oanda', 'watch'),
+  ].join('');
+}
+
+function renderBinanceFeed(feed) {
+  if (!feed || !Object.keys(feed).length) {
+    $('binance-usdm-feed').innerHTML = '<div class="empty">No Binance USDM feed run yet.</div>';
+    return;
+  }
+  const cls = feed.status === 'pass' ? 'buy' : (feed.status === 'fail' ? 'sell' : 'watch');
+  const symbolStatus = feed.symbol_status || {};
+  $('binance-usdm-feed').innerHTML = [
+    row('status', feed.status || '--', feed.checked_at || '--', cls),
+    row('symbol', feed.symbol || 'XAUUSDT', `${symbolStatus.contract_type || '--'} ${symbolStatus.status || '--'}`, symbolStatus.status === 'TRADING' ? 'buy' : 'watch'),
+    row('imported rows', feed.imported_rows ?? 0, feed.latest_timestamp || feed.message || '--', (feed.imported_rows || 0) > 0 ? 'buy' : 'watch'),
+    row('latest price', feed.latest_price ? Number(feed.latest_price).toFixed(2) : '--', feed.base_url || '--', 'watch'),
+  ].join('');
+}
+
+function renderTradingPlan(plan) {
+  if (!plan || !Object.keys(plan).length) {
+    $('trading-plan').innerHTML = '<div class="empty">No morning plan yet. Run python3 -m pipelines.trading_plan --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const tradePlan = plan.trade_plan || {};
+  const broker = plan.broker_plan || {};
+  const data = plan.data_plan || {};
+  const risk = plan.risk_envelope || {};
+  const profile = plan.strategy_profile || {};
+  const blocks = tradePlan.blocks || [];
+  const officialLive = opsDataProvenance?.allows_live === true;
+  $('trading-plan').innerHTML = [
+    row('mode', plan.mode || '--', plan.status || '--', plan.mode === 'live_ready' ? 'buy' : 'watch'),
+    row('strategy', profile.profile_id || '--', profile.integration_status || '--', 'watch'),
+    row('data', data.latest_provider || '--', officialLive ? 'execution-grade data ready' : (data.ready_for_live ? 'venue connected; quality review pending' : data.message || '--'), officialLive ? 'buy' : 'watch'),
+    row('broker', broker.active_provider || '--', broker.dry_run ? 'dry-run' : 'real submit', broker.dry_run ? 'watch' : 'buy'),
+    row('risk', `${risk.max_loss_pct ?? '--'}% / trade`, `${risk.daily_loss_stop_pct ?? '--'}% day stop`, 'watch'),
+    row('blocks', blocks.length, blocks[0] || 'none', blocks.length ? 'watch' : 'buy'),
+  ].join('');
+}
+
+function renderEveningReview(review) {
+  if (!review || !Object.keys(review).length) {
+    $('evening-review').innerHTML = '<div class="empty">No evening review yet. Run python3 -m pipelines.evening_review --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const adherence = review.adherence || {};
+  const queue = review.improvement_queue || [];
+  const cls = review.status === 'review_ready' || review.status === 'pass' ? 'buy' : (review.status === 'warn' ? 'watch' : 'sell');
+  $('evening-review').innerHTML = [
+    row('status', review.status || '--', review.generated_at || '--', cls),
+    row('executed', adherence.executed_count ?? 0, `pending ${adherence.pending_count ?? 0}`, (adherence.pending_count || 0) ? 'watch' : 'buy'),
+    row('orders', `paper ${adherence.paper_order_count ?? 0}`, `live ${adherence.live_request_count ?? 0}`, 'watch'),
+    row('strict execution', adherence.strict_execution ? 'yes' : 'no', 'plan adherence', adherence.strict_execution ? 'buy' : 'watch'),
+    row('improvements', queue.length, opsReviewItemText(queue[0]?.item || 'none'), queue.length ? 'watch' : 'buy'),
+  ].join('');
+}
+
+function renderBrokerReceipts(receipts, summary, smoke) {
+  const rows = [];
+  if (summary && Object.keys(summary).length) {
+    rows.push(row('inbox', summary.inbox_dir || '--', summary.pattern || '*.json', 'watch'));
+    rows.push(row('new / total', `${summary.new_receipts ?? 0} / ${summary.total_receipts ?? receipts.length}`, summary.checked_at || 'n/a', (summary.errors || []).length ? 'sell' : 'buy'));
+  }
+  (receipts || []).slice(-3).forEach(receipt => rows.push(
+    row(receipt.order_id || '--', receipt.status || 'unknown', receipt.fill_price ?? receipt.message ?? 'n/a', receipt.status === 'filled' ? 'buy' : (receipt.status === 'rejected' ? 'sell' : 'watch'))
+  ));
+  if (smoke && Object.keys(smoke).length) {
+    rows.push(row('mt5 smoke', smoke.status || 'unknown', smoke.order?.status || 'n/a', smoke.status === 'pass' ? 'buy' : 'sell'));
+  }
+  $('broker-receipts').innerHTML = rows.join('') || '<div class="empty">No broker receipts imported.</div>';
+}
+
+function renderSignals(signals) {
+  if (!signals.length) {
+    $('signals').innerHTML = '<div class="empty">No signals loaded.</div>';
+    return;
+  }
+  $('signals').innerHTML = signals.map(signal => row(
+    `${signal.asset} ${signal.regime || ''}`,
+    `${signal.direction} / ${signal.confidence}`,
+    signal.backtest_verdict || 'not_checked',
+    signal.direction === 'long' ? 'buy' : 'watch'
+  )).join('');
+}
+
+function renderBacktests(backtests) {
+  if (!backtests.length) {
+    $('backtests').innerHTML = '<div class="empty">No local backtest evidence.</div>';
+    return;
+  }
+  $('backtests').innerHTML = backtests.map(test => {
+    const verdict = test.verdict || 'unknown';
+    const cls = verdict === 'supportive' ? 'buy' : (verdict === 'thin' ? 'sell' : 'watch');
+    return [
+      row(`${test.asset} ${test.backtest_id || ''}`, verdict, `${test.sample_size ?? 0} samples`, cls),
+      row('scan coverage', `${test.evaluated_bars ?? 0} bars`, `${test.setup_count ?? test.sample_size ?? 0} setups`, cls),
+      row('win / avg R', `${test.win_rate ?? 0} / ${test.avg_r ?? 0}`, `PF ${test.profit_factor ?? 0}`, cls),
+      row('max drawdown', `${test.max_drawdown_pct ?? 0}%`, 'local 5m', cls),
+    ].join('');
+  }).join('');
+}
+
+function renderStrategy(strategyConfig, riskRules, snapshot = {}) {
+  const strategy = strategyConfig.gold_5m_v1 || {};
+  const signal = strategy.signal || {};
+  const backtest = strategy.backtest || {};
+  const risk = (riskRules.default || {});
+  if (!strategy.signal && !strategy.backtest) {
+    $('strategy').innerHTML = '<div class="empty">No strategy config loaded.</div>';
+    return;
+  }
+  $('strategy').innerHTML = [
+    row('config hash', snapshot.config_hash || '--', snapshot.strategy_id || 'gold_5m_v1', snapshot.config_hash ? 'buy' : 'watch'),
+    row('MA windows', `${signal.ma_short_bars ?? '--'} / ${signal.ma_long_bars ?? '--'}`, 'bars'),
+    row('long threshold', `${signal.long_strength_min ?? '--'} / ${signal.long_confidence_min ?? '--'}`, 'strength/conf'),
+    row('event block', `< ${signal.event_block_below ?? '--'}`, 'score', 'watch'),
+    row('stop / target', `${backtest.stop_pct ?? '--'} / ${backtest.target_pct ?? '--'}`, 'R model'),
+    row('max hold', `${backtest.max_hold_bars ?? '--'} bars`, '5m'),
+    row('risk caps', `${risk.max_loss_pct ?? '--'}% / ${risk.daily_loss_stop_pct ?? '--'}%`, 'trade/day'),
+  ].join('');
+}
+
+function renderOrders(orders) {
+  if (!orders.length) {
+    $('orders').innerHTML = '<div class="empty">No paper orders yet.</div>';
+    return;
+  }
+  $('orders').innerHTML = orders.map(order => row(
+    order.ticket_id,
+    order.status,
+    `${order.fill_price || order.requested_price} / cost ${order.total_cost ?? 0}`,
+    order.status === 'filled' ? 'buy' : 'watch'
+  )).join('');
+}
+
+function renderPositions(positions) {
+  const rows = Object.values(positions || {});
+  if (!rows.length) {
+    $('positions').innerHTML = '<div class="empty">No paper positions.</div>';
+    return;
+  }
+  $('positions').innerHTML = rows.map(position => row(
+    `${position.symbol} ${position.side}`,
+    `${position.quantity} @ ${position.avg_price}`,
+    `PnL ${position.unrealized_pnl ?? 0}`,
+    Number(position.unrealized_pnl || 0) >= 0 ? 'buy' : 'sell'
+  )).join('');
+}
+
+function renderPaperReconciliation(reconciliation) {
+  if (!reconciliation || !Object.keys(reconciliation).length) {
+    $('paper-reconciliation').innerHTML = '<div class="empty">No paper reconciliation. Run python3 -m pipelines.paper_reconciliation --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = reconciliation.summary || {};
+  const rows = [
+    row('status', reconciliation.status || 'unknown', reconciliation.generated_at || '--', clsFor(reconciliation.status)),
+    row('orders / trades', `${summary.filled_orders ?? 0} filled`, `${summary.open_trades ?? 0} open`, clsFor(reconciliation.status)),
+    row('positions', summary.positions ?? 0, `${summary.failed ?? 0} failed checks`, (summary.failed || 0) ? 'sell' : 'buy'),
+  ];
+  (reconciliation.checks || []).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status))
+  ));
+  $('paper-reconciliation').innerHTML = rows.join('');
+}
+
+function renderPaperAttribution(attribution) {
+  if (!attribution || !Object.keys(attribution).length) {
+    $('paper-attribution').innerHTML = '<div class="empty">No trade attribution run. Run python3 -m pipelines.paper_trade_attribution --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const summary = attribution.summary || {};
+  const attributed = Number(summary.attributed_open_trades || 0) + Number(summary.attributed_closed_trades || 0);
+  const total = Number(summary.open_trades || 0) + Number(summary.closed_trades || 0);
+  const updated = Number(summary.updated_open_trades || 0) + Number(summary.updated_closed_trades || 0);
+  const cls = attribution.status === 'pass' ? 'buy' : 'sell';
+  const coverageCls = total === attributed ? 'buy' : (attributed > 0 ? 'watch' : 'sell');
+  const rows = [
+    row('status', attribution.status || 'unknown', attribution.generated_at || '--', cls),
+    row('coverage', `${attributed}/${total}`, 'attributed trades', coverageCls),
+    row('updated today', updated, `${summary.updated_open_trades ?? 0} open / ${summary.updated_closed_trades ?? 0} closed`, updated ? 'watch' : 'buy'),
+    row('legacy quality', `${summary.attributed_open_trades ?? 0} open`, `${summary.attributed_closed_trades ?? 0} closed`, coverageCls),
+  ];
+  $('paper-attribution').innerHTML = rows.join('');
+}
+
+function renderTrades(openTrades, closedTrades, performance, blocks, paperPerformance, mockRuntime) {
+  const rows = [];
+  rows.push(row('open trades', performance.open_trades ?? openTrades.length, `realized ${performance.realized_pnl ?? 0}`, Number(performance.realized_pnl || 0) >= 0 ? 'buy' : 'sell'));
+  const perf = paperPerformance?.summary || {};
+  if (Object.keys(perf).length) {
+    rows.push(row('net marked', perf.net_pnl_marked ?? 0, `open R ${perf.open_unrealized_r ?? 0}`, Number(perf.net_pnl_marked || 0) >= 0 ? 'buy' : 'sell'));
+    rows.push(row('execution costs', perf.total_execution_costs ?? 0, `open ${perf.open_costs ?? 0}`, Number(perf.total_execution_costs || 0) > 0 ? 'watch' : 'buy'));
+    rows.push(row('expectancy', `${perf.expectancy_r ?? 0}R`, `win ${perf.win_rate ?? 0}`, Number(perf.expectancy_r || 0) >= 0 ? 'buy' : 'sell'));
+    rows.push(row('open risk', perf.open_risk_amount ?? 0, `PF ${perf.profit_factor ?? 0}`, 'watch'));
+  }
+  const blockIsCurrent = !(mockRuntime && mockRuntime.status === 'pass');
+  (blocks || []).slice(-2).forEach(block => rows.push(row(
+    `${blockIsCurrent ? 'blocked' : 'history'} ${block.operation || 'paper'}`,
+    block.source || 'guard',
+    block.reason || 'paper lifecycle update blocked',
+    blockIsCurrent ? 'sell' : 'watch'
+  )));
+  openTrades.slice(-3).forEach(trade => rows.push(row(
+    `${trade.symbol} ${trade.side}`,
+    `${trade.entry_price}`,
+    `${trade.signal_regime || 'unknown'} / strength ${trade.signal_strength ?? 0}`,
+    'watch'
+  )));
+  closedTrades.slice(-3).forEach(trade => rows.push(row(
+    `${trade.symbol} ${trade.exit_reason}`,
+    `${trade.exit_price}`,
+    `PnL ${trade.realized_pnl} / ${trade.signal_regime || 'unknown'}`,
+    Number(trade.realized_pnl || 0) >= 0 ? 'buy' : 'sell'
+  )));
+  $('trades').innerHTML = rows.join('') || '<div class="empty">No paper trades.</div>';
+}
+
+function renderPaperExitMonitor(monitor) {
+  if (!monitor || !Object.keys(monitor).length) {
+    $('paper-exit-monitor').innerHTML = '<div class="empty">No exit monitor generated.</div>';
+    return;
+  }
+  const summary = monitor.summary || {};
+  const status = monitor.status || 'unknown';
+  const cls = status === 'alert' ? 'sell' : (status === 'pass' ? 'buy' : 'watch');
+  const rows = [
+    row('status', status, `generated ${monitor.generated_at || '--'}`, cls),
+    row('open trades', summary.open_trades ?? 0, `nearest stop ${summary.nearest_stop_distance_pct ?? 'n/a'}%`, Number(summary.nearest_stop_distance_pct || 0) < 0.5 ? 'watch' : cls),
+    row('stop touched', summary.stop_touched ?? 0, `target touched ${summary.target_touched ?? 0}`, Number(summary.stop_touched || 0) || Number(summary.target_touched || 0) ? 'sell' : 'buy'),
+  ];
+  (monitor.monitors || []).slice(0, 3).forEach(item => rows.push(row(
+    item.trade_id || item.ticket_id || item.symbol || 'trade',
+    `${item.side || '--'} @ ${item.latest_price ?? '--'}`,
+    `stop ${item.distance_to_stop_pct ?? 'n/a'}% / target ${item.distance_to_target_pct ?? 'n/a'}%`,
+    item.stop_touched || item.target_touched ? 'sell' : 'watch'
+  )));
+  $('paper-exit-monitor').innerHTML = rows.join('');
+}
+
+function renderPaperExitDecisions(decisions) {
+  if (!decisions || !Object.keys(decisions).length) {
+    $('paper-exit-decisions').innerHTML = '<div class="empty">No exit decision queue generated.</div>';
+    return;
+  }
+  const summary = decisions.summary || {};
+  const status = decisions.status || 'unknown';
+  const cls = status === 'alert' ? 'sell' : (status === 'review' ? 'watch' : 'buy');
+  const rows = [
+    row('status', status, `open ${summary.open_items ?? 0}`, cls),
+    row('high priority', summary.high_priority ?? 0, `medium ${summary.medium_priority ?? 0}`, Number(summary.high_priority || 0) ? 'sell' : 'buy'),
+    row('manual mode', decisions.auto_close ? 'auto close' : 'approve required', `decisions ${summary.recorded_decisions ?? 0}`, decisions.auto_close ? 'sell' : 'buy'),
+  ];
+  (decisions.queue || []).slice(0, 4).forEach(item => rows.push(row(
+    item.trade_id || item.symbol || 'trade',
+    `${item.priority || '--'} ${item.exit_type || '--'}`,
+    `${item.required_user_action || '--'} @ ${item.suggested_exit_price ?? item.latest_price ?? '--'}`,
+    item.priority === 'high' ? 'sell' : (item.priority === 'medium' ? 'watch' : 'buy')
+  )));
+  (decisions.decisions || []).slice(-2).forEach(item => rows.push(row(
+    `decision ${item.trade_id || '--'}`,
+    item.decision || '--',
+    item.notes || item.exit_reason || '--',
+    item.decision === 'approve_exit' ? 'buy' : 'watch'
+  )));
+  $('paper-exit-decisions').innerHTML = rows.join('');
+}
+
+function renderPaperRiskActions(plan) {
+  if (!plan || !Object.keys(plan).length) {
+    $('paper-risk-actions').innerHTML = '<div class="empty">No paper risk action plan generated.</div>';
+    return;
+  }
+  const summary = plan.summary || {};
+  const status = plan.status || 'unknown';
+  const cls = status === 'action_required' ? 'sell' : (status === 'review' ? 'watch' : 'buy');
+  const rows = [
+    row('status', status, `actions ${summary.action_count ?? 0}`, cls),
+    row('high priority', summary.high_priority ?? 0, `exit ${summary.exit_actions ?? 0}`, Number(summary.high_priority || 0) ? 'sell' : 'buy'),
+    row('mode', plan.auto_execute ? 'auto' : 'manual', plan.paper_only ? 'paper only' : 'unknown', plan.auto_execute ? 'sell' : 'buy'),
+  ];
+  (plan.actions || []).slice(0, 4).forEach((item, index) => rows.push(row(
+    `action ${index + 1}`,
+    item.summary || item.action_id || '--',
+    item.command || '--',
+    item.priority === 'high' ? 'sell' : 'watch'
+  )));
+  $('paper-risk-actions').innerHTML = rows.join('');
+}
+
+function renderEquityCurve(curve) {
+  if (!curve || !Object.keys(curve).length) {
+    $('equity-curve').innerHTML = '<div class="empty">No equity curve generated.</div>';
+    return;
+  }
+  const drawdown = Number(curve.current_drawdown_pct || 0);
+  const maxDrawdown = Number(curve.max_drawdown_pct || 0);
+  const cls = drawdown < 0 ? 'sell' : 'buy';
+  const last = (curve.points || []).slice(-3);
+  const rows = [
+    row('current equity', curve.current_equity ?? '--', `${curve.point_count ?? 0} point(s)`, cls),
+    row('current drawdown', `${curve.current_drawdown_pct ?? 0}%`, `max ${curve.max_drawdown_pct ?? 0}%`, maxDrawdown < -2 ? 'sell' : 'watch'),
+  ];
+  last.forEach(item => rows.push(row(item.run_date, `net ${item.net_pnl_marked}`, `dd ${item.drawdown_pct}%`, Number(item.drawdown_pct || 0) < 0 ? 'sell' : 'buy')));
+  $('equity-curve').innerHTML = rows.join('');
+}
+
+function renderLearning(strategyReview, ledger, proposal, snapshot = {}, actions = {}, experiments = {}, improvement = {}, promotion = {}) {
+  if ((!strategyReview || !Object.keys(strategyReview).length) && (!ledger || !Object.keys(ledger).length) && (!proposal || !Object.keys(proposal).length) && (!actions || !Object.keys(actions).length) && (!experiments || !Object.keys(experiments).length) && (!improvement || !Object.keys(improvement).length) && (!promotion || !Object.keys(promotion).length)) {
+    $('learning').innerHTML = '<div class="empty">No strategy learning ledger yet.</div>';
+    return;
+  }
+  const metrics = strategyReview.metrics || {};
+  const rows = [];
+  if (strategyReview && Object.keys(strategyReview).length) {
+    rows.push(row('summary', strategyReview.summary || 'n/a', 'daily'));
+    rows.push(row('signal/backtest', `${metrics.signal_regime || '--'} / ${metrics.backtest_verdict || '--'}`, `${metrics.backtest_sample_size ?? 0} samples`, metrics.backtest_verdict === 'supportive' ? 'buy' : 'watch'));
+    rows.push(row('backtest scan', `${metrics.backtest_evaluated_bars ?? 0} bars`, `${metrics.backtest_setup_count ?? 0} setups`, 'watch'));
+    rows.push(row('trade results', `${metrics.open_trade_count ?? 0} open / ${metrics.closed_trade_count ?? 0} closed`, `PnL ${metrics.closed_realized_pnl ?? 0}`, Number(metrics.closed_realized_pnl || 0) >= 0 ? 'buy' : 'sell'));
+  }
+  if (ledger && Object.keys(ledger).length) {
+    const pnlCls = Number(ledger.closed_realized_pnl || 0) >= 0 ? 'buy' : 'sell';
+    rows.push(row('cumulative days', ledger.review_days ?? 0, ledger.learning_state || 'n/a', 'watch'));
+    rows.push(row('paper orders', ledger.paper_order_count ?? 0, `${ledger.closed_trade_count ?? 0} closed`, 'watch'));
+    rows.push(row('cumulative PnL', ledger.closed_realized_pnl ?? 0, `${ledger.risk_block_count ?? 0} risk blocks`, pnlCls));
+    rows.push(row('strategy hash', ledger.strategy_config_hash || snapshot.config_hash || '--', ledger.strategy_id || snapshot.strategy_id || 'gold_5m_v1', (ledger.strategy_config_hash || snapshot.config_hash) ? 'buy' : 'watch'));
+  }
+  if (proposal && Object.keys(proposal).length) {
+    const proposalCls = proposal.status === 'eligible_for_small_experiment' ? 'buy' : (proposal.status === 'review_required' ? 'sell' : 'watch');
+    rows.push(row('proposal', proposal.status || 'n/a', proposal.reason || 'n/a', proposalCls));
+    (proposal.proposed_changes || []).slice(0, 2).forEach((item, index) => rows.push(
+      row(`change ${index + 1}`, item.field || 'n/a', item.change || 'n/a', 'watch')
+    ));
+  }
+  if (actions && Object.keys(actions).length) {
+    const actionSummary = actions.summary || {};
+    const actionCls = actions.status === 'review_required' ? 'sell' : (actions.status === 'experiment_ready' ? 'buy' : 'watch');
+    rows.push(row('learning actions', actions.status || 'n/a', `${actionSummary.action_count ?? 0} open / ${actionSummary.high_priority ?? 0} high`, actionCls));
+    (actions.actions || []).slice(0, 3).forEach((item, index) => {
+      rows.push(row(`action ${index + 1}`, item.summary || item.action_id || 'n/a', item.priority || 'n/a', item.priority === 'high' ? 'sell' : 'watch'));
+    });
+  }
+  if (experiments && Object.keys(experiments).length) {
+    const best = experiments.best_candidate || {};
+    const expCls = experiments.status === 'experiment_ready' ? 'buy' : (experiments.status === 'blocked' ? 'sell' : 'watch');
+    rows.push(row('shadow experiments', experiments.status || 'n/a', `${(experiments.experiments || []).length} candidate(s)`, expCls));
+    rows.push(row('best variant', best.variant_id || 'n/a', `score ${best.score ?? 'n/a'} / PF ${best.profit_factor ?? 'n/a'}`, expCls));
+    rows.push(row('experiment safety', experiments.auto_apply ? 'auto apply' : 'manual only', experiments.paper_only ? 'paper only' : 'unknown', experiments.auto_apply ? 'sell' : 'buy'));
+    (experiments.blockers || []).slice(0, 3).forEach((item, index) => {
+      rows.push(row(`exp blocker ${index + 1}`, item.name || 'blocker', item.summary || '', 'sell'));
+    });
+  }
+  if (improvement && Object.keys(improvement).length) {
+    const summary = improvement.summary || {};
+    const improveCls = improvement.status === 'action_required' ? 'sell' : (improvement.status === 'promotion_review' ? 'buy' : 'watch');
+    rows.push(row('improvement plan', improvement.status || 'n/a', `${summary.next_step_count ?? 0} step(s) / ${summary.high_priority ?? 0} high`, improveCls));
+    rows.push(row('improvement safety', improvement.auto_apply ? 'auto apply' : 'manual only', improvement.paper_only ? 'paper only' : 'unknown', improvement.auto_apply ? 'sell' : 'buy'));
+    (improvement.next_steps || []).slice(0, 4).forEach((item, index) => {
+      rows.push(row(`improve ${index + 1}`, item.summary || item.step_id || 'n/a', item.priority || 'n/a', item.priority === 'high' ? 'sell' : 'watch'));
+    });
+  }
+  if (promotion && Object.keys(promotion).length) {
+    const candidate = promotion.candidate || {};
+    const promotionCls = promotion.promotion_allowed ? 'buy' : 'sell';
+    rows.push(row('promotion gate', promotion.status || 'n/a', promotion.promotion_allowed ? 'requestable' : `${(promotion.blockers || []).length} blockers`, promotionCls));
+    rows.push(row('promotion candidate', candidate.variant_id || 'n/a', `delta ${promotion.score_delta ?? 'n/a'}`, promotionCls));
+    rows.push(row('promotion safety', promotion.auto_apply ? 'auto apply' : 'manual only', promotion.paper_only ? 'paper only' : 'unknown', promotion.auto_apply ? 'sell' : 'buy'));
+    (promotion.blockers || []).slice(0, 3).forEach((item, index) => {
+      rows.push(row(`promo blocker ${index + 1}`, item.name || 'blocker', item.summary || '', 'sell'));
+    });
+  }
+  (strategyReview.suggestions || []).slice(0, 3).forEach((item, index) => {
+    rows.push(row(`suggestion ${index + 1}`, item, 'review', 'watch'));
+  });
+  $('learning').innerHTML = rows.join('');
+}
+
+function renderStrategyGuardrails(guardrails) {
+  if (!guardrails || !Object.keys(guardrails).length) {
+    $('strategy-guardrails').innerHTML = '<div class="empty">No strategy guardrails. Run python3 -m pipelines.strategy_guardrails --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = guardrails.summary || {};
+  const rows = [
+    row('status', guardrails.status || 'unknown', guardrails.generated_at || '--', clsFor(guardrails.status)),
+    row('new paper order', guardrails.allow_new_paper_order ? 'allowed' : 'blocked', `${summary.hard_blocks ?? 0} blocks`, guardrails.allow_new_paper_order ? 'buy' : 'sell'),
+  ];
+  (guardrails.checks || []).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status === 'block' ? 'fail' : check.status))
+  ));
+  $('strategy-guardrails').innerHTML = rows.join('');
+}
+
+function renderRiskMonitor(monitor) {
+  if (!monitor || !Object.keys(monitor).length) {
+    $('risk-monitor').innerHTML = '<div class="empty">No risk monitor output. Run python3 -m pipelines.risk_monitor --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = monitor.summary || {};
+  const rows = [
+    row('status', monitor.status || 'unknown', monitor.generated_at || '--', clsFor(monitor.status)),
+    row('kill switch', monitor.kill_switch_active ? 'active' : 'inactive', `${summary.blocks ?? 0} blocks`, monitor.kill_switch_active ? 'sell' : 'buy'),
+    row('paper auto', monitor.allow_paper_auto_approve ? 'allowed' : 'blocked', `${summary.warnings ?? 0} warnings`, monitor.allow_paper_auto_approve ? 'buy' : 'sell'),
+  ];
+  (monitor.checks || []).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', check.status === 'block' ? 'sell' : clsFor(check.status))
+  ));
+  $('risk-monitor').innerHTML = rows.join('');
+}
+
+function renderPaperAutoGate(gate) {
+  if (!gate || !Object.keys(gate).length) {
+    $('paper-auto-gate').innerHTML = '<div class="empty">No auto approval gate receipt. Run python3 -m pipelines.paper_auto_approval_gate --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const cls = gate.status === 'allow' ? 'buy' : (gate.status === 'skipped' ? 'watch' : 'sell');
+  const risk = gate.risk_monitor || {};
+  const guardrails = gate.strategy_guardrails || {};
+  const rows = [
+    row('status', gate.status || 'unknown', gate.checked_at || '--', cls),
+    row('auto requested', gate.auto_requested ? 'yes' : 'no', `${gate.pending_count ?? 0} pending`, gate.auto_requested ? 'watch' : 'buy'),
+    row('selected ticket', gate.selected_ticket_id || 'none', gate.allow_auto_approve ? 'allowed' : 'not allowed', gate.allow_auto_approve ? 'buy' : 'sell'),
+    row('risk monitor', risk.status || '--', risk.allow_paper_auto_approve ? 'auto allowed' : 'auto blocked', risk.allow_paper_auto_approve ? 'buy' : 'sell'),
+    row('guardrails', guardrails.status || '--', guardrails.allow_new_paper_order ? 'new paper allowed' : 'new paper blocked', guardrails.allow_new_paper_order ? 'buy' : 'sell'),
+  ];
+  (gate.reasons || []).slice(0, 4).forEach((reason, index) => rows.push(row(`reason ${index + 1}`, reason, 'gate evidence', gate.status === 'block' ? 'sell' : 'watch')));
+  $('paper-auto-gate').innerHTML = rows.join('');
+}
+
+function renderDailyReview(receipt) {
+  if (!receipt || !Object.keys(receipt).length) {
+    $('daily-review').innerHTML = '<div class="empty">No daily review receipt. Run python3 -m pipelines.daily_review --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const cls = receipt.status === 'pass' ? 'buy' : (receipt.status === 'warn' ? 'watch' : 'sell');
+  const summary = receipt.summary || {};
+  const artifacts = receipt.artifacts || {};
+  const rows = [
+    row('status', receipt.status || 'unknown', receipt.finished_at || receipt.started_at || 'n/a', cls),
+    row('mock / UAT', `${summary.mock_runtime || '--'} / ${summary.mock_uat || '--'}`, `audit ${summary.audit || '--'}`, cls),
+    row('paper reconcile', summary.paper_reconciliation || '--', 'orders/trades', summary.paper_reconciliation === 'pass' ? 'buy' : 'sell'),
+    row(
+      'guardrails',
+      summary.strategy_guardrails || '--',
+      summary.risk_allow_paper_auto_approve ? 'paper auto allowed' : 'paper auto blocked',
+      summary.risk_allow_paper_auto_approve ? 'buy' : 'sell'
+    ),
+    row('live cutover', summary.live_cutover || '--', summary.live_readiness || '--', summary.live_cutover === 'real_money_ready' ? 'buy' : 'watch'),
+    row('doctor', summary.doctor || '--', 'system check', summary.doctor === 'pass' ? 'buy' : 'watch'),
+    row('net marked', summary.net_pnl_marked ?? '--', `open R ${summary.open_unrealized_r ?? '--'}`, Number(summary.net_pnl_marked || 0) >= 0 ? 'buy' : 'sell'),
+    row('journal', artifacts.journal ? 'available' : 'missing', artifacts.review_notes ? 'review ok' : 'review missing', artifacts.journal && artifacts.review_notes ? 'buy' : 'sell'),
+    row('performance', artifacts.performance ? 'available' : 'missing', `expectancy ${summary.expectancy_r ?? '--'}`, artifacts.performance ? 'buy' : 'sell'),
+  ];
+  $('daily-review').innerHTML = rows.join('');
+}
+
+function renderOperationRunbook(runbook) {
+  if (!runbook || !Object.keys(runbook).length) {
+    $('operation-runbook').innerHTML = '<div class="empty">No operation runbook. Run python3 -m pipelines.operation_runbook --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const perms = runbook.permissions || {};
+  const summary = runbook.summary || {};
+  const cls = runbook.status === 'live_ready' || runbook.status === 'paper_auto_ready' ? 'buy' : (runbook.status === 'data_blocked' ? 'sell' : 'watch');
+  const rows = [
+    row('status', runbook.status || '--', runbook.generated_at || '--', cls),
+    row('mode', runbook.mode || '--', `runner ${summary.runner_state || '--'}`, cls),
+    row('paper manual', perms.paper_manual_review ? 'allowed' : 'blocked', summary.data_source_status || '--', perms.paper_manual_review ? 'buy' : 'sell'),
+    row('paper auto', perms.paper_auto_approve ? 'allowed' : 'blocked', summary.risk_status || '--', perms.paper_auto_approve ? 'buy' : 'sell'),
+    row('live trading', perms.live_trading ? 'allowed' : 'blocked', summary.live_readiness || '--', perms.live_trading ? 'buy' : 'sell'),
+    row('price sanity', summary.price_sanity === false ? 'failed' : 'pass', `${summary.latest_price ?? '--'} ${summary.latest_provider || ''}`, summary.price_sanity === false ? 'sell' : 'buy'),
+    row('official rows', summary.official_rows ?? 0, summary.official_feed_status || '--', (summary.official_rows || 0) > 0 ? 'buy' : 'sell'),
+    row('journal/review', summary.journal_exists && summary.review_notes_exists ? 'ready' : 'missing', `${summary.decisions ?? 0} decisions`, summary.journal_exists && summary.review_notes_exists ? 'buy' : 'sell'),
+  ];
+  (runbook.blocks || []).slice(0, 4).forEach(block => rows.push(row(`${block.scope}/${block.name}`, 'blocked', block.summary || '--', block.scope === 'live' ? 'sell' : 'watch')));
+  (runbook.next_actions || []).slice(0, 3).forEach((item, index) => rows.push(row(`next ${index + 1}`, opsNextActionText(item), 'action', 'watch')));
+  $('operation-runbook').innerHTML = rows.join('');
+}
+
+function renderBotRunner(runner) {
+  if (!runner || !Object.keys(runner).length) {
+    $('bot-runner').innerHTML = '<div class="empty">No runner status. Run python3 -m pipelines.runner --date YYYY-MM-DD --iterations 1.</div>';
+    return;
+  }
+  const stateCls = runner.state === 'ok' ? 'buy' : (runner.state === 'running' ? 'watch' : 'sell');
+  const safetyOk = runner.live_submission_safety_status === 'pass' && runner.live_submission_blocked_by_gate && !runner.live_submission_network_call_attempted;
+  const lineageGroups = opsDataSourceLineage?.provider_groups || {};
+  const currentOfficialRows = lineageGroups.official?.rows ?? opsDataProvenance?.official_rows ?? runner.official_5m_rows ?? 0;
+  const currentPublicRows = lineageGroups.public?.rows ?? opsDataProvenance?.public_rows ?? runner.public_5m_rows ?? 0;
+  const currentVenueRows = lineageGroups.execution_venue?.rows ?? opsDataProvenance?.execution_venue_rows ?? 0;
+  const currentTruth = opsDataSourceLineage?.truth_level || opsDataProvenance?.latest_truth_level || runner.data_truth_level || '--';
+  const officialLive = opsDataSourceLineage?.ready_for_live === true || opsDataProvenance?.allows_live === true;
+  const venueReady = opsDataSourceLineage?.execution_venue_ready === true || opsDataProvenance?.allows_execution_venue === true;
+  const lineageStatus = opsDataSourceLineage?.status || runner.data_source_lineage_status || runner.data_source_status || '--';
+  const rows = [
+    row('state', runner.state || 'unknown', runner.finished_at || runner.started_at || runner.updated_at || '--', stateCls),
+    row('cadence', `${runner.interval_seconds ?? '--'}s`, runner.next_run_at || '--', runner.state === 'ok' || runner.state === 'running' ? 'buy' : 'watch'),
+    row('collector', `${runner.collector_count ?? 0} records`, `pending ${runner.pending_count ?? 0}`, (runner.collector_count || 0) > 0 ? 'buy' : 'watch'),
+    row('data truth', currentTruth, lineageStatus, officialLive ? 'buy' : (venueReady ? 'watch' : 'sell')),
+    row('db rows', `official ${currentOfficialRows}`, `venue ${currentVenueRows} / public ${currentPublicRows}`, currentOfficialRows > 0 ? 'buy' : 'sell'),
+    row('live safety', runner.live_submission_safety_status || '--', runner.live_submission_blocked_by_gate ? 'blocked by gate' : 'not blocked', safetyOk ? 'buy' : 'sell'),
+    row('network call', runner.live_submission_network_call_attempted ? 'attempted' : 'not attempted', 'submission smoke', runner.live_submission_network_call_attempted ? 'sell' : 'buy'),
+    row('mock runtime', runner.mock_runtime_status || '--', runner.mock_running ? 'fresh' : 'stale', runner.mock_ready ? 'buy' : 'sell'),
+  ];
+  if (runner.execution_error) rows.push(row('execution block', runner.execution_error, 'paper auto approve', 'sell'));
+  $('bot-runner').innerHTML = rows.join('');
+}
+
+function renderBotSupervisor(supervisor) {
+  if (!supervisor || !Object.keys(supervisor).length) {
+    $('bot-supervisor').innerHTML = '<div class="empty">No bot supervisor receipt. Run python3 -m pipelines.bot_supervisor --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = supervisor.summary || {};
+  const rows = [
+    row('status', supervisor.status || 'unknown', supervisor.checked_at || '--', clsFor(supervisor.status)),
+    row('mock bot', supervisor.mock_bot_running ? 'running' : 'not proven', `${summary.runner_state || '--'} runner`, supervisor.mock_bot_running ? 'buy' : 'sell'),
+    row('latest price', summary.latest_price ?? '--', summary.latest_provider || '--', summary.latest_price ? 'buy' : 'sell'),
+    row('data age', `${summary.data_age_minutes ?? 'n/a'}m`, summary.operation_status || '--', Number(summary.data_age_minutes || 0) <= 15 ? 'buy' : 'watch'),
+    row('live gate', supervisor.live_trading_allowed ? 'allowed' : 'blocked', 'operation permissions', supervisor.live_trading_allowed ? 'buy' : 'watch'),
+  ];
+  (supervisor.checks || []).forEach(check => rows.push(row(
+    check.name,
+    check.status,
+    check.summary || '',
+    clsFor(check.status)
+  )));
+  $('bot-supervisor').innerHTML = rows.join('');
+}
+
+function renderBotCheckpoint(checkpoint) {
+  if (!checkpoint || !Object.keys(checkpoint).length) {
+    $('bot-checkpoint').innerHTML = '<div class="empty">No bot checkpoint. Run python3 -m pipelines.bot_checkpoint --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const cls = checkpoint.status === 'ready' ? 'buy' : (checkpoint.status === 'attention_required' ? 'sell' : 'watch');
+  const summary = checkpoint.summary || {};
+  const rows = [
+    row('status', checkpoint.status || 'unknown', checkpoint.checkpointed_at || '--', cls),
+    row('recoverable', checkpoint.mock_recoverable ? 'mock yes' : 'mock no', checkpoint.live_recoverable ? 'live yes' : 'live no', checkpoint.mock_recoverable ? 'buy' : 'sell'),
+    row('runner', summary.runner_state || '--', summary.mock_bot_running ? 'mock running' : 'not proven', summary.mock_bot_running ? 'buy' : 'watch'),
+    row('data truth', summary.data_truth_level || '--', `official ${summary.official_rows ?? 0}`, (summary.official_rows || 0) > 0 ? 'buy' : 'watch'),
+    row('paper state', `${summary.open_trades ?? 0} open`, `${summary.pending_decisions ?? 0} pending`, (summary.pending_decisions || 0) ? 'watch' : 'buy'),
+    row('risk', summary.risk_status || '--', summary.kill_switch_active ? 'kill switch' : 'normal', summary.kill_switch_active ? 'sell' : 'buy'),
+    row('improvement', summary.improvement_status || '--', `${summary.improvement_steps ?? 0} step(s)`, summary.improvement_status === 'action_required' ? 'sell' : 'watch'),
+  ];
+  (checkpoint.resume_actions || []).slice(0, 5).forEach((item, index) => {
+    rows.push(row(`resume ${index + 1}`, item.summary || item.action_id || 'n/a', item.priority || 'n/a', item.priority === 'high' ? 'sell' : 'watch'));
+  });
+  $('bot-checkpoint').innerHTML = rows.join('');
+}
+
+function renderSchedule(schedule, scheduleStatus) {
+  if (!schedule || !Object.keys(schedule).length) {
+    $('schedule').innerHTML = '<div class="empty">No local schedule generated. Run python3 -m pipelines.schedule.</div>';
+    return;
+  }
+  const statusCls = scheduleStatus?.status === 'active' ? 'buy' : (scheduleStatus?.status === 'installed' ? 'watch' : 'sell');
+  const rows = [
+    row('status', schedule.status || 'unknown', schedule.generated_at || 'n/a', schedule.status === 'generated' ? 'buy' : 'watch'),
+    row('install status', scheduleStatus?.status || 'unknown', scheduleStatus?.message || 'run schedule_status', statusCls),
+    row('installed / loaded', `${scheduleStatus?.installed_count ?? 0}/${scheduleStatus?.required_count ?? 3}`, `${scheduleStatus?.loaded_count ?? 0}/${scheduleStatus?.required_count ?? 3}`, statusCls),
+    row('launch agents', (schedule.jobs || []).length, schedule.launch_agents_dir || '--', 'watch'),
+  ];
+  (schedule.jobs || []).forEach(job => rows.push(row(
+    job.label?.replace('com.wendy.trading-orchestrator.', '') || 'job',
+    job.start_interval ? `${job.start_interval}s` : (job.start_calendar_interval ? `${job.start_calendar_interval.Hour}:${String(job.start_calendar_interval.Minute).padStart(2, '0')}` : 'keepalive'),
+    job.keep_alive ? 'keepalive' : (job.run_at_load ? 'run-at-load' : 'scheduled'),
+    'watch'
+  )));
+  $('schedule').innerHTML = rows.join('');
+}
+
+function renderCoverage(marketDb) {
+  if (!marketDb.exists) {
+    $('coverage').innerHTML = '<div class="empty">No local market database.</div>';
+    return;
+  }
+  const rows = [
+    row('GOLD 5m total', marketDb.gold_5m_total_rows ?? 0, 'rows'),
+    row('GOLD 5m non-seed', marketDb.gold_5m_imported_rows ?? 0, 'rows', (marketDb.gold_5m_imported_rows || 0) >= 60 ? 'buy' : 'watch'),
+  ];
+  (marketDb.bars || []).filter(item => item.symbol === 'GOLD' && item.timeframe === '5m').forEach(item => rows.push(
+    row(item.provider, item.rows, item.last_timestamp || 'n/a', item.provider === 'local_synthetic_seed' ? 'watch' : 'buy')
+  ));
+  $('coverage').innerHTML = rows.join('');
+}
+
+function renderDataArchive(archive) {
+  if (!archive || !Object.keys(archive).length) {
+    $('data-archive').innerHTML = '<div class="empty">No data archive manifest yet. Run python3 -m pipelines.data_archive --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const cls = archive.status === 'pass' ? 'buy' : 'watch';
+  const rows = [
+    row('status', archive.status || '--', archive.generated_at || '--', cls),
+    row('files', `${archive.present_file_count ?? 0}/${archive.file_count ?? 0}`, `${(archive.missing_files || []).length} missing`, (archive.missing_files || []).length ? 'sell' : 'buy'),
+    row('GOLD 5m rows', archive.gold_5m_rows ?? 0, archive.gold_5m_latest_timestamp || '--', 'watch'),
+    row('market db', archive.market_db?.exists ? 'present' : 'missing', archive.market_db?.sha256 ? archive.market_db.sha256.slice(0, 12) : '--', archive.market_db?.exists ? 'buy' : 'sell'),
+  ];
+  if (archive.snapshot) {
+    rows.push(row('snapshot package', archive.snapshot.status || '--', archive.snapshot.snapshot_sha256 ? archive.snapshot.snapshot_sha256.slice(0, 12) : '--', archive.snapshot.status === 'pass' ? 'buy' : 'watch'));
+    rows.push(row('snapshot files', archive.snapshot.included_file_count ?? 0, `${archive.snapshot.snapshot_size_bytes ?? 0} bytes`, 'watch'));
+  }
+  (archive.files || []).slice(0, 3).forEach((item, index) => rows.push(
+    row(`file ${index + 1}`, item.exists ? 'ok' : 'missing', item.sha256 ? item.sha256.slice(0, 12) : item.path, item.exists ? 'buy' : 'sell')
+  ));
+  $('data-archive').innerHTML = rows.join('');
+}
+
+function renderDataIntegrity(integrity) {
+  if (!integrity || !Object.keys(integrity).length) {
+    $('data-integrity').innerHTML = '<div class="empty">No data integrity check yet. Run python3 -m pipelines.data_integrity --date YYYY-MM-DD.</div>';
+    return;
+  }
+  const clsFor = (status) => status === 'pass' ? 'buy' : (status === 'warn' ? 'watch' : 'sell');
+  const summary = integrity.summary || {};
+  const rows = [
+    row('status', integrity.status || '--', integrity.checked_at || '--', clsFor(integrity.status)),
+    row('checks', `${summary.passed ?? 0} pass`, `${summary.failed ?? 0} fail / ${summary.warned ?? 0} warn`, summary.failed ? 'sell' : clsFor(integrity.status)),
+  ];
+  (integrity.checks || []).forEach(check => rows.push(
+    row(check.name, check.status, check.summary || '', clsFor(check.status))
+  ));
+  $('data-integrity').innerHTML = rows.join('');
+}
+
+function renderJournal(decisions, pending, review, journal, riskBlocks = []) {
+  const decided = decisions.map(item => row(item.ticket_id, item.decision_status, item.notes || 'n/a', item.decision_status === 'rejected' ? 'sell' : 'buy'));
+  const open = pending.map(item => row(item.ticket_id, 'pending', item.required_user_action || 'review', 'watch'));
+  const blocked = riskBlocks.map(item => row(item.ticket_id || item.signal_id || item.asset || 'risk block', 'risk blocked', item.reason || 'portfolio risk gate', 'sell'));
+  const journalRow = journal ? [row('daily trading journal', 'available', 'Markdown', 'buy')] : [row('daily trading journal', 'missing', 'run report/journal', 'watch')];
+  const reviewRow = review ? [row('strategy review notes', 'available', 'daily', 'watch')] : [];
+  $('journal').innerHTML = journalRow.concat(decided, blocked, open, reviewRow).join('') || '<div class="empty">No journal entries loaded.</div>';
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+function initializeRunDate() {
+  const params = new URLSearchParams(window.location.search);
+  const date = params.get('date') || todayIso();
+  $('run-date').value = date;
+}
+
+$('load').addEventListener('click', () => loadDashboard(false));
+$('load-full').addEventListener('click', () => loadDashboard(true));
+document.querySelectorAll('[data-ops-lang]').forEach(btn => {
+  btn.addEventListener('click', () => setOpsLang(btn.dataset.opsLang));
+});
+renderOpsStaticLabels();
+initializeRunDate();
+loadDashboard(false);
+setInterval(() => loadDashboard(false), 30000);
+</script>
+</body>
+</html>

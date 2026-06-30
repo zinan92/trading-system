@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>黄金策略表现看板</title>
+<link rel="icon" href="data:,">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+:root {
+  --bg: #f4efe6;
+  --paper: #fffaf0;
+  --ink: #18140d;
+  --muted: #6d6457;
+  --line: rgba(38,31,18,.15);
+  --gold: #a66f16;
+  --green: #17724f;
+  --red: #b64032;
+  --blue: #285d94;
+  --shade: rgba(24,20,13,.06);
+  --mono: "SFMono-Regular", Consolas, Menlo, monospace;
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { max-width: 100%; overflow-x: hidden; }
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, rgba(166,111,22,.08) 0 1px, transparent 1px 100%),
+    linear-gradient(180deg, rgba(166,111,22,.06) 0 1px, transparent 1px 100%),
+    var(--bg);
+  background-size: 28px 28px;
+  font-family: var(--sans);
+  font-size: 14px;
+}
+a { color: inherit; }
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255,250,240,.92);
+  backdrop-filter: blur(10px);
+}
+h1 { margin: 0; font-size: 20px; letter-spacing: 0; }
+.subtitle { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+input, button, .navlink {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 7px 10px;
+  text-decoration: none;
+}
+button { cursor: pointer; background: var(--ink); color: var(--paper); }
+.shell { width: 100%; max-width: 1280px; margin: 0 auto; padding: 16px; }
+.performance-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr);
+  gap: 12px;
+  align-items: stretch;
+}
+.panel {
+  min-width: 0;
+  background: rgba(255,250,240,.94);
+  border: 1px solid var(--line);
+  padding: 14px;
+}
+.panel h2 {
+  margin: 0 0 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 15px;
+}
+.panel h2 span {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin-top: 12px; }
+.return-metrics { grid-template-columns: repeat(4, minmax(0,1fr)); margin-top: 0; }
+.key-metrics { grid-template-columns: repeat(8, minmax(0,1fr)); margin: 0 0 10px; }
+.metric { border: 1px solid var(--line); background: rgba(255,255,255,.35); padding: 11px; min-height: 78px; }
+.metric small { display: block; color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.metric strong { display: block; margin-top: 8px; font-size: 22px; overflow-wrap: anywhere; }
+.key-metrics .metric { min-height: 72px; }
+.key-metrics .metric strong { font-size: 18px; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-top: 12px; }
+.wide { grid-column: span 2; }
+.full { grid-column: 1 / -1; }
+.chart {
+  height: 230px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, transparent 24%, var(--shade) 25%, transparent 26%, transparent 49%, var(--shade) 50%, transparent 51%, transparent 74%, var(--shade) 75%, transparent 76%),
+    #fbf6ec;
+}
+.nav-chart { height: 300px; }
+.trade-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.trade-log-table th,
+.trade-log-table td {
+  border-top: 1px solid var(--line);
+  padding: 8px 7px;
+  text-align: left;
+  vertical-align: top;
+}
+.trade-log-table th {
+  color: var(--muted);
+  font-family: var(--sans);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.trade-log-table td { overflow-wrap: anywhere; }
+.table-wrap { overflow-x: auto; }
+.section-title {
+  margin: 14px 0 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.legend {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 22px; height: 3px; display: inline-block; background: var(--gold); }
+.legend-swatch.nav { background: var(--green); }
+svg { width: 100%; height: 100%; display: block; }
+.row {
+  display: grid;
+  grid-template-columns: minmax(76px, 104px) minmax(0,1fr) max-content;
+  gap: 8px 12px;
+  align-items: start;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.row:first-of-type { border-top: 0; }
+.row span:first-child {
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--sans);
+  white-space: nowrap;
+}
+.row b {
+  min-width: 0;
+  text-align: left;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.pill {
+  max-width: min(220px, 100%);
+  border: 1px solid var(--line);
+  padding: 2px 6px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  word-break: normal;
+  text-align: left;
+}
+.long-row {
+  grid-template-columns: minmax(76px, 104px) minmax(0, 1fr);
+}
+.long-row .pill {
+  grid-column: 2;
+}
+.buy { color: var(--green); border-color: rgba(23,114,79,.34); }
+.sell { color: var(--red); border-color: rgba(182,64,50,.34); }
+.watch { color: var(--blue); border-color: rgba(40,93,148,.34); }
+.gold { color: var(--gold); border-color: rgba(166,111,22,.35); }
+.empty, .error { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.error { color: var(--red); margin-top: 10px; }
+.notice {
+  margin: 8px 0 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(182,64,50,.28);
+  color: var(--red);
+  background: rgba(182,64,50,.05);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.feed { display: grid; gap: 8px; }
+.feed-item { border-top: 1px solid var(--line); padding-top: 8px; }
+.feed-item:first-child { border-top: 0; padding-top: 0; }
+.feed-item b { display: block; margin-bottom: 3px; }
+.feed-item p { margin: 0; color: var(--muted); line-height: 1.45; }
+@media (max-width: 980px) {
+  .hero, .grid, .metrics, .return-metrics, .key-metrics { grid-template-columns: 1fr; }
+  .wide { grid-column: auto; }
+}
+@media (max-width: 640px) {
+  .topbar { align-items: flex-start; flex-direction: column; }
+  .shell { padding: 10px; }
+  .panel h2 { align-items: flex-start; flex-direction: column; }
+  .row { grid-template-columns: minmax(72px, 96px) minmax(0, 1fr); }
+  .long-row { grid-template-columns: minmax(72px, 96px) minmax(0, 1fr); }
+  .row b { grid-column: 2; }
+  .row .pill { grid-column: 2; }
+  .pill { justify-self: start; }
+}
+</style>
+</head>
+<body>
+<script>
+if (window.location.protocol === 'file:') {
+  window.location.replace('http://127.0.0.1:8765/dashboard.html');
+}
+</script>
+<div class="topbar">
+  <div>
+    <h1>黄金策略表现看板</h1>
+    <div class="subtitle">策略、持仓、复盘和 paper trading 表现；后台监控已拆到独立面板。</div>
+  </div>
+  <div class="controls">
+    <a class="navlink" href="ops-dashboard.html">后台监控</a>
+    <label for="run-date">日期</label>
+    <input id="run-date" value="" inputmode="numeric">
+    <button id="load">刷新</button>
+  </div>
+</div>
+
+<main class="shell">
+  <section class="performance-hero">
+    <div class="panel">
+      <h2>黄金 vs NAV <span>normalized return</span></h2>
+      <div class="metrics key-metrics">
+        <div class="metric"><small>当前策略</small><strong id="key-strategy">--</strong></div>
+        <div class="metric"><small>交易许可</small><strong id="key-trade">--</strong></div>
+        <div class="metric"><small>未实现盈亏</small><strong id="key-pnl">--</strong></div>
+        <div class="metric"><small>当前持仓</small><strong id="key-position">--</strong></div>
+        <div class="metric"><small>杠杆使用</small><strong id="key-leverage">--</strong></div>
+        <div class="metric"><small>当前回撤</small><strong id="key-drawdown">--</strong></div>
+        <div class="metric"><small>当下黄金</small><strong id="key-price">--</strong></div>
+        <div class="metric"><small>数据年龄</small><strong id="key-age">--</strong></div>
+      </div>
+      <div id="trade-block-reason" class="notice" style="display:none;"></div>
+      <div class="metrics return-metrics">
+        <div class="metric"><small>黄金涨跌幅</small><strong id="gold-return">--</strong></div>
+        <div class="metric"><small>策略 NAV 涨跌幅</small><strong id="nav-return">--</strong></div>
+        <div class="metric"><small>最新价格</small><strong id="latest-close">--</strong></div>
+        <div class="metric"><small>数据源</small><strong id="data-source">--</strong></div>
+      </div>
+      <div class="legend">
+        <span class="legend-item"><i class="legend-swatch"></i>黄金价格走势</span>
+        <span class="legend-item"><i class="legend-swatch nav"></i>策略 NAV</span>
+        <span id="nav-period">--</span>
+      </div>
+      <div class="chart nav-chart" id="nav-chart"></div>
+    </div>
+  </section>
+
+  <section class="hero">
+    <div class="panel">
+      <h2>今日交易计划 <span>morning plan</span></h2>
+      <div id="trading-plan"></div>
+    </div>
+    <div class="panel">
+      <h2>策略状态 <span id="status">载入中</span></h2>
+      <div id="error" class="error"></div>
+      <div class="metrics">
+        <div class="metric"><small>当前信号</small><strong id="signal-direction">--</strong></div>
+        <div class="metric"><small>信号强度</small><strong id="signal-strength">--</strong></div>
+      </div>
+      <div id="strategy-status"></div>
+    </div>
+  </section>
+
+  <section class="panel full" style="margin-top: 12px;">
+    <h2>交易日志 <span>logs page</span></h2>
+    <div id="trade-logs"></div>
+  </section>
+
+  <section class="grid">
+    <div class="panel">
+      <h2>策略信号 <span>strategy</span></h2>
+      <div id="signals"></div>
+    </div>
+    <div class="panel">
+      <h2>回测证据 <span>backtest</span></h2>
+      <div id="backtests"></div>
+    </div>
+    <div class="panel">
+      <h2>风控边界 <span>risk</span></h2>
+      <div id="risk"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Paper 持仓 <span>positions</span></h2>
+      <div id="positions"></div>
+    </div>
+    <div class="panel">
+      <h2>Paper 订单 <span>orders</span></h2>
+      <div id="orders"></div>
+    </div>
+    <div class="panel">
+      <h2>交易表现 <span>performance</span></h2>
+      <div id="performance"></div>
+    </div>
+
+    <div class="panel wide">
+      <h2>晚盘复盘 <span>feedback loop</span></h2>
+      <div id="evening-review"></div>
+    </div>
+    <div class="panel">
+      <h2>策略学习 <span>learning</span></h2>
+      <div id="learning"></div>
+    </div>
+
+    <div class="panel full">
+      <h2>复盘流水 <span>journal</span></h2>
+      <div id="journal"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const API_BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:8765' : '';
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, char => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[char]));
+const clsFor = (status) => {
+  const value = String(status || '').toLowerCase();
+  if (['pass', 'ready', 'supportive', 'filled', 'executed_paper', 'live_ready', 'review_ready'].includes(value)) return 'buy';
+  if (['fail', 'blocked', 'sell', 'rejected', 'thin'].includes(value)) return 'sell';
+  return 'watch';
+};
+const row = (left, mid, right, cls='') => `<div class="row"><span>${escapeHtml(left)}</span><b>${escapeHtml(mid)}</b><span class="pill ${cls}">${escapeHtml(right)}</span></div>`;
+const longRow = (left, mid, right, cls='') => `<div class="row long-row"><span>${escapeHtml(left)}</span><b>${escapeHtml(mid)}</b><span class="pill ${cls}">${escapeHtml(right)}</span></div>`;
+const fmt = (value, digits=2) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toFixed(digits) : '--';
+};
+const fmtPct = (value, digits=2) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '--';
+  const sign = num > 0 ? '+' : '';
+  return `${sign}${num.toFixed(digits)}%`;
+};
+const formatAge = (minutes) => {
+  const num = Number(minutes);
+  if (!Number.isFinite(num)) return '--';
+  if (num < 60) return `${num.toFixed(1)} 分钟`;
+  return `${(num / 60).toFixed(1)} 小时`;
+};
+const toSeries = (items, key) => (items || [])
+  .map((item, index) => ({ index, value: Number(item?.[key]), timestamp: item?.timestamp || item?.run_date || '' }))
+  .filter(item => Number.isFinite(item.value));
+const returnPct = (first, last) => {
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return null;
+  return ((last / first) - 1) * 100;
+};
+const classifyReturn = (value) => Number(value) >= 0 ? 'buy' : 'sell';
+const money = (value, digits=2) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? `$${num.toFixed(digits)}` : '--';
+};
+const ticketNumber = (index) => `#${String(index + 1).padStart(3, '0')}`;
+const todayIso = () => {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+};
+
+async function loadApiSnapshot(date) {
+  const res = await fetch(`${API_BASE}/api/dashboard?date=${encodeURIComponent(date)}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return await res.json();
+}
+
+function drawNavChart(bars, equityCurve) {
+  const el = $('nav-chart');
+  el.innerHTML = '';
+  const gold = toSeries((bars || []).slice(-180), 'close');
+  const rawNavPoints = (equityCurve?.points || []).map((item, index) => ({
+    index,
+    value: Number(item.equity),
+    timestamp: item.timestamp || item.run_date || '',
+  })).filter(item => Number.isFinite(item.value));
+  const startingEquity = Number(equityCurve?.starting_equity);
+  const currentEquity = Number(equityCurve?.current_equity);
+  const nav = rawNavPoints.length >= 2
+    ? rawNavPoints
+    : [
+        { index: 0, value: Number.isFinite(startingEquity) ? startingEquity : currentEquity, timestamp: gold[0]?.timestamp || 'start' },
+        { index: 1, value: Number.isFinite(currentEquity) ? currentEquity : startingEquity, timestamp: equityCurve?.generated_at || gold[gold.length - 1]?.timestamp || 'now' },
+      ].filter(item => Number.isFinite(item.value));
+  if (gold.length < 2 || nav.length < 2) {
+    $('gold-return').textContent = '--';
+    $('nav-return').textContent = '--';
+    $('nav-period').textContent = '等待黄金价格和 NAV 数据';
+    return;
+  }
+
+  const goldRet = returnPct(gold[0].value, gold[gold.length - 1].value);
+  const navRet = returnPct(nav[0].value, nav[nav.length - 1].value);
+  $('gold-return').textContent = fmtPct(goldRet);
+  $('gold-return').className = classifyReturn(goldRet);
+  $('nav-return').textContent = fmtPct(navRet);
+  $('nav-return').className = classifyReturn(navRet);
+  $('nav-period').textContent = `${gold.length} 根 5m K 线 · NAV ${nav.length} 点`;
+
+  const normalize = (items) => items.map(item => ({ ...item, normalized: item.value / items[0].value * 100 }));
+  const normalizedGold = normalize(gold);
+  const normalizedNav = normalize(nav);
+  const alignedNav = normalizedGold.map((_, index) => {
+    const navIndex = Math.round(index / Math.max(1, normalizedGold.length - 1) * (normalizedNav.length - 1));
+    return { ...normalizedNav[navIndex], index };
+  });
+  if (window.echarts) {
+    renderEchartsPriceNav(el, gold, normalizedGold, alignedNav, window.__lastDashboardApi || {});
+    return;
+  }
+  renderSvgPriceNav(el, normalizedGold, alignedNav);
+}
+
+function renderEchartsPriceNav(el, gold, normalizedGold, alignedNav, api) {
+  const openTrades = api.paper_performance?.open_trades?.length ? api.paper_performance.open_trades : (api.open_trades || []);
+  const closedTrades = api.closed_trades || [];
+  const labels = gold.map(item => item.timestamp?.slice(5, 16).replace('T', ' ') || '');
+  const tradeMarks = [];
+  openTrades.forEach((trade, index) => {
+    const openedAt = String(trade.opened_at || '');
+    const entryIndex = Math.max(0, gold.findIndex(item => item.timestamp >= openedAt));
+    const entryPrice = Number(trade.entry_price);
+    const stopLoss = Number(trade.stop_loss);
+    const target = Number(trade.target);
+    const ticket = `#${String(index + 1).padStart(3, '0')}`;
+    if (Number.isFinite(entryPrice)) {
+      tradeMarks.push({
+        name: `${ticket} Entry`,
+        coord: [entryIndex >= 0 ? entryIndex : gold.length - 1, entryPrice],
+        value: `Entry ${fmt(entryPrice)}`,
+        symbol: 'triangle',
+        symbolRotate: trade.side === 'short' ? 180 : 0,
+        symbolSize: 14,
+        itemStyle: { color: '#285d94' },
+        label: { formatter: `${ticket}\nEntry ${fmt(entryPrice)}`, position: 'top', color: '#285d94', fontSize: 10, lineHeight: 12 },
+      });
+    }
+    if (Number.isFinite(stopLoss)) {
+      tradeMarks.push({
+        name: `${ticket} SL`,
+        coord: [entryIndex >= 0 ? entryIndex : gold.length - 1, stopLoss],
+        value: `SL ${fmt(stopLoss)}`,
+        symbol: 'triangle',
+        symbolRotate: 180,
+        symbolSize: 12,
+        itemStyle: { color: '#b64032' },
+        label: { formatter: `SL ${fmt(stopLoss)}`, position: 'bottom', color: '#b64032', fontSize: 10 },
+      });
+    }
+    if (Number.isFinite(target)) {
+      tradeMarks.push({
+        name: `${ticket} TP`,
+        coord: [entryIndex >= 0 ? entryIndex : gold.length - 1, target],
+        value: `TP ${fmt(target)}`,
+        symbol: 'triangle',
+        symbolSize: 12,
+        itemStyle: { color: '#17724f' },
+        label: { formatter: `TP ${fmt(target)}`, position: 'top', color: '#17724f', fontSize: 10 },
+      });
+    }
+  });
+  closedTrades.forEach((trade, index) => {
+    const exitAt = String(trade.closed_at || trade.exit_at || '');
+    const exitIndex = Math.max(0, gold.findIndex(item => item.timestamp >= exitAt));
+    const exitPrice = Number(trade.exit_price);
+    if (Number.isFinite(exitPrice)) {
+      tradeMarks.push({
+        name: `Exit #${index + 1}`,
+        coord: [exitIndex >= 0 ? exitIndex : gold.length - 1, exitPrice],
+        value: `Exit ${fmt(exitPrice)}`,
+        symbol: 'diamond',
+        symbolSize: 13,
+        itemStyle: { color: '#18140d' },
+        label: { formatter: `Exit ${fmt(exitPrice)}`, position: 'right', color: '#18140d', fontSize: 10 },
+      });
+    }
+  });
+  const priceValues = [
+    ...gold.map(item => item.value),
+    ...tradeMarks.map(item => Number(item.coord?.[1])).filter(Number.isFinite),
+  ];
+  const priceMin = Math.min(...priceValues);
+  const priceMax = Math.max(...priceValues);
+  const pricePad = Math.max(1, (priceMax - priceMin) * 0.08);
+  try {
+    const chart = echarts.getInstanceByDom(el) || echarts.init(el, null, { renderer: 'svg' });
+    chart.setOption({
+      animation: false,
+      backgroundColor: 'transparent',
+      color: ['#a66f16', '#17724f'],
+      tooltip: { trigger: 'axis' },
+      legend: { show: false },
+      grid: { left: 54, right: 54, top: 28, bottom: 34 },
+      xAxis: { type: 'category', boundaryGap: false, data: labels, axisLabel: { color: '#6d6457' }, axisLine: { lineStyle: { color: 'rgba(38,31,18,.22)' } } },
+      yAxis: [
+        { type: 'value', min: Math.floor(priceMin - pricePad), max: Math.ceil(priceMax + pricePad), name: '黄金', nameTextStyle: { color: '#6d6457' }, axisLabel: { color: '#6d6457' }, splitLine: { lineStyle: { color: 'rgba(38,31,18,.10)' } } },
+        { type: 'value', scale: true, name: 'NAV=100', nameTextStyle: { color: '#6d6457' }, axisLabel: { color: '#6d6457' }, splitLine: { show: false } },
+      ],
+      series: [
+        {
+          name: '黄金价格',
+          type: 'line',
+          showSymbol: false,
+          yAxisIndex: 0,
+          lineStyle: { width: 2.4 },
+          data: gold.map(item => Number(item.value.toFixed(4))),
+          markPoint: {
+            label: { show: true },
+            emphasis: { disabled: false },
+            data: tradeMarks,
+          },
+        },
+        {
+          name: '策略 NAV',
+          type: 'line',
+          showSymbol: false,
+          yAxisIndex: 1,
+          lineStyle: { width: 2.4, type: 'dashed' },
+          data: alignedNav.map(item => Number(item.normalized.toFixed(4))),
+        },
+      ],
+    }, true);
+    requestAnimationFrame(() => chart.resize());
+  } catch {
+    renderSvgPriceNav(el, normalizedGold, alignedNav);
+  }
+}
+
+function renderSvgPriceNav(el, normalizedGold, alignedNav) {
+  const allValues = [...normalizedGold, ...alignedNav].map(item => item.normalized);
+  const min = Math.min(...allValues);
+  const max = Math.max(...allValues);
+  const spread = max - min || 1;
+  const pad = { left: 48, right: 18, top: 24, bottom: 34 };
+  const width = 900;
+  const height = 300;
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const yFor = (value) => pad.top + plotH - ((value - min) / spread) * plotH;
+  const xFor = (index, count) => pad.left + (index / Math.max(1, count - 1)) * plotW;
+  const pathFor = (items) => items.map((item, index) => {
+    const x = xFor(index, items.length);
+    return `${x.toFixed(2)},${yFor(item.normalized).toFixed(2)}`;
+  }).join(' ');
+  const gridValues = [max, 100, min].filter((value, index, arr) => arr.findIndex(item => Math.abs(item - value) < 0.0001) === index);
+  const grid = gridValues.map(value => {
+    const y = yFor(value);
+    return `<line x1="${pad.left}" y1="${y.toFixed(2)}" x2="${width - pad.right}" y2="${y.toFixed(2)}" stroke="rgba(38,31,18,.12)" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+      <text x="12" y="${(y + 4).toFixed(2)}" fill="#6d6457" font-size="11" font-family="monospace">${value.toFixed(2)}</text>`;
+  }).join('');
+  el.innerHTML = `<svg viewBox="0 0 900 300" preserveAspectRatio="none">
+    ${grid}
+    <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="rgba(38,31,18,.18)" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+    <polyline points="${pathFor(normalizedGold)}" fill="none" stroke="#a66f16" stroke-width="3" vector-effect="non-scaling-stroke"></polyline>
+    <polyline points="${pathFor(alignedNav)}" fill="none" stroke="#17724f" stroke-width="3" stroke-dasharray="8 5" vector-effect="non-scaling-stroke"></polyline>
+    <circle cx="${xFor(normalizedGold.length - 1, normalizedGold.length).toFixed(2)}" cy="${yFor(normalizedGold[normalizedGold.length - 1].normalized).toFixed(2)}" r="4" fill="#a66f16"></circle>
+    <circle cx="${xFor(alignedNav.length - 1, alignedNav.length).toFixed(2)}" cy="${yFor(alignedNav[alignedNav.length - 1].normalized).toFixed(2)}" r="4" fill="#17724f"></circle>
+    <text x="16" y="18" fill="#6d6457" font-size="12" font-family="monospace">100 = 起点 · ${fmtPct(min - 100)} to ${fmtPct(max - 100)}</text>
+  </svg>`;
+}
+
+function renderKeyOverview(api, signal) {
+  const account = api.paper_account || {};
+  const positions = Object.values(api.positions || {});
+  const position = positions[0] || {};
+  const accountEquity = Number(account.starting_equity ?? 10000);
+  const notional = positions.reduce((sum, item) => sum + Math.abs(Number(item.quantity || 0) * Number(item.last_price || item.avg_price || 0)), 0);
+  const leverage = accountEquity ? notional / accountEquity : 0;
+  const unrealized = positions.reduce((sum, item) => sum + Number(item.unrealized_pnl || 0), 0);
+  const allowed = api.risk?.allows_next_paper_order;
+  const latest = api.latest_quote?.close ? api.latest_quote : (api.latest || {});
+  const age = formatAge(api.data_source_preflight?.latest_record_age_minutes);
+  const blockReasons = [
+    api.data_source_preflight?.status === 'fail' ? api.data_source_preflight?.message : '',
+    ...(api.risk_monitor?.summary?.block_reasons || []),
+    ...(api.risk_monitor?.summary?.warning_reasons || []),
+  ].filter(Boolean);
+  $('key-strategy').textContent = api.strategy_snapshot?.strategy_id || 'gold_5m_v1';
+  $('key-trade').textContent = allowed ? '允许加仓' : '暂停新单';
+  $('key-trade').className = allowed ? 'buy' : 'sell';
+  $('key-pnl').textContent = money(unrealized);
+  $('key-pnl').className = classifyReturn(unrealized);
+  $('key-position').textContent = position.quantity ? `${position.side || '--'} ${fmt(position.quantity, 2)}` : '无持仓';
+  $('key-leverage').textContent = `${fmt(leverage, 2)}x`;
+  $('key-leverage').className = leverage > Number(account.max_allowed_leverage ?? 5) ? 'sell' : 'buy';
+  $('key-drawdown').textContent = fmtPct(api.nav_curve_intraday?.current_drawdown_pct ?? api.equity_curve?.current_drawdown_pct);
+  $('key-drawdown').className = 'sell';
+  $('key-price').textContent = latest.close ? fmt(latest.close) : '--';
+  $('key-age').textContent = age;
+  $('key-age').className = api.data_source_preflight?.status === 'pass' ? 'buy' : 'sell';
+  const reasonEl = $('trade-block-reason');
+  if (!allowed && blockReasons.length) {
+    reasonEl.style.display = 'block';
+    reasonEl.textContent = `暂停原因：${[...new Set(blockReasons)].slice(0, 4).join('；')}`;
+  } else {
+    reasonEl.style.display = 'none';
+    reasonEl.textContent = '';
+  }
+}
+
+function renderTradingPlan(plan) {
+  if (!plan || !Object.keys(plan).length) {
+    $('trading-plan').innerHTML = '<div class="empty">还没有早盘计划。</div>';
+    return;
+  }
+  const tradePlan = plan.trade_plan || {};
+  const data = plan.data_plan || {};
+  const broker = plan.broker_plan || {};
+  const risk = plan.risk_envelope || {};
+  const profile = plan.strategy_profile || {};
+  const blocks = tradePlan.blocks || [];
+  $('trading-plan').innerHTML = [
+    row('模式', plan.mode || '--', plan.status || '--', clsFor(plan.status)),
+    row('策略档案', profile.profile_id || '--', profile.integration_status || '--', 'gold'),
+    row('数据', data.latest_provider || '--', data.ready_for_live ? 'live-ready' : data.message || '--', data.ready_for_live ? 'buy' : 'watch'),
+    row('Broker', broker.active_provider || '--', broker.dry_run ? 'dry-run' : 'real-submit', broker.dry_run ? 'watch' : 'buy'),
+    row('风险', `${risk.max_loss_pct ?? '--'}% / 单笔`, `${risk.daily_loss_stop_pct ?? '--'}% 日止损`, 'watch'),
+    row('阻塞项', blocks.length, blocks[0] || '无', blocks.length ? 'watch' : 'buy'),
+  ].join('');
+}
+
+function renderStrategyStatus(signal, risk, account) {
+  $('strategy-status').innerHTML = [
+    row('Ticker', account?.default_ticker || 'XAU', '黄金主线', 'gold'),
+    row('初始资产', money(account?.starting_equity ?? 10000), `${account?.base_currency || 'USD'} paper`, 'watch'),
+    row('最大杠杆', `${account?.max_allowed_leverage ?? 5}x`, risk?.allows_next_paper_order ? '允许下一单' : '等待确认', risk?.allows_next_paper_order ? 'buy' : 'watch'),
+    row('策略', signal?.regime || '--', signal?.backtest_verdict || '--', clsFor(signal?.backtest_verdict)),
+    longRow('暂停原因', risk?.block_reason || '无', 'risk gate', risk?.allows_next_paper_order ? 'buy' : 'sell'),
+  ].join('');
+}
+
+function renderSignals(signals) {
+  if (!signals || !signals.length) {
+    $('signals').innerHTML = '<div class="empty">暂无信号。</div>';
+    return;
+  }
+  const signal = signals.find(item => item.asset === 'GOLD') || signals[0];
+  const factors = signal.factor_scores || {};
+  $('signals').innerHTML = [
+    row('方向', signal.direction || '--', signal.status || '--', clsFor(signal.status)),
+    row('强度 / 信心', `${signal.strength ?? '--'} / ${signal.confidence ?? '--'}`, signal.regime || '--', clsFor(signal.direction)),
+    row('趋势分', factors.trend ?? '--', 'trend', 'gold'),
+    row('宏观分', factors.macro ?? '--', 'macro', 'watch'),
+    row('事件分', factors.event ?? '--', 'intel', Number(factors.event || 0) < 50 ? 'sell' : 'buy'),
+    longRow('失效条件', signal.invalid_if || '--', 'invalid if', 'watch'),
+  ].join('');
+}
+
+function renderTradeLogs(api) {
+  const account = api.paper_account || {};
+  const accountEquity = Number(account.starting_equity ?? 10000);
+  const maxLeverage = Number(account.max_allowed_leverage ?? 5);
+  const orders = api.orders || [];
+  const pendingOrders = orders.filter(item => String(item.status || '').toLowerCase() === 'pending');
+  const performanceOpenTrades = api.paper_performance?.open_trades || [];
+  const openTrades = performanceOpenTrades.length ? performanceOpenTrades : (api.open_trades || []);
+  const closedTrades = api.closed_trades || [];
+  const positions = Object.values(api.positions || {});
+  const signals = api.signals || [];
+  const signal = signals.find(item => item.asset === 'GOLD') || signals[0] || {};
+  const notional = positions.reduce((sum, item) => sum + Math.abs(Number(item.quantity || 0) * Number(item.last_price || item.avg_price || 0)), 0);
+  const usedLeverage = accountEquity ? notional / accountEquity : 0;
+  const unrealized = positions.reduce((sum, item) => sum + Number(item.unrealized_pnl || 0), 0);
+  const realized = closedTrades.reduce((sum, item) => sum + Number(item.realized_pnl || item.net_realized_pnl || 0), 0);
+  const costTotal = Number(api.paper_performance?.summary?.total_execution_costs || 0);
+  const planStrict = api.evening_review?.adherence?.strict_execution;
+  const entryReason = (item) => item.entry_reason || item.thesis || signal.thesis || item.signal_regime || '策略信号触发；等待补充更细的 entry reason。';
+  const exitReason = (item) => item.exit_reason || item.exit_trigger || item.status_reason || '未平仓';
+  const table = (headers, rows, empty) => rows.length ? `
+    <div class="table-wrap"><table class="trade-log-table">
+      <thead><tr>${headers.map(item => `<th>${escapeHtml(item)}</th>`).join('')}</tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table></div>` : `<div class="empty">${escapeHtml(empty)}</div>`;
+  const orderRows = pendingOrders.map((item, index) => `<tr>
+    <td>${ticketNumber(index)}</td>
+    <td>${escapeHtml(item.ticket_id || '--')}</td>
+    <td>${escapeHtml(item.status || '--')}</td>
+    <td>${escapeHtml(item.order_type || 'limit/market')}</td>
+    <td>${fmt(item.requested_price ?? item.fill_price)}</td>
+    <td>${fmt(item.quantity, 4)}</td>
+    <td>${escapeHtml(entryReason(item))}</td>
+  </tr>`);
+  const openRows = openTrades.map((item, index) => `<tr>
+    <td>${ticketNumber(index)}</td>
+    <td>${escapeHtml(item.ticket_id || item.trade_id || '--')}</td>
+    <td>${escapeHtml(item.symbol || 'XAU')}</td>
+    <td>${escapeHtml(item.side || '--')}</td>
+    <td>${fmt(item.entry_price)}</td>
+    <td>${fmt(item.latest_price ?? positions[0]?.last_price)}</td>
+    <td class="${classifyReturn(item.unrealized_pnl)}">${money(item.unrealized_pnl)}</td>
+    <td>${money(item.open_cost ?? item.total_cost ?? 0)}</td>
+    <td>${escapeHtml(entryReason(item))}</td>
+  </tr>`);
+  const closedRows = closedTrades.map((item, index) => `<tr>
+    <td>${ticketNumber(index)}</td>
+    <td>${escapeHtml(item.ticket_id || item.trade_id || '--')}</td>
+    <td>${escapeHtml(item.symbol || 'XAU')}</td>
+    <td>${escapeHtml(item.side || '--')}</td>
+    <td>${fmt(item.entry_price)}</td>
+    <td>${fmt(item.exit_price)}</td>
+    <td class="${classifyReturn(item.realized_pnl)}">${money(item.realized_pnl ?? item.net_realized_pnl)}</td>
+    <td>${money(item.total_cost ?? item.exit_cost ?? 0)}</td>
+    <td>${escapeHtml(exitReason(item))}</td>
+  </tr>`);
+  $('trade-logs').innerHTML = [
+    '<div class="metrics">',
+    `<div class="metric"><small>Ticker Name</small><strong>${escapeHtml(account.default_ticker || 'XAU')}</strong></div>`,
+    `<div class="metric"><small>Asset to begin with</small><strong>${money(accountEquity, 0)}</strong></div>`,
+    `<div class="metric"><small>Max Allowed Leverage</small><strong>${fmt(maxLeverage, 1)}x</strong></div>`,
+    `<div class="metric"><small>Used Leverage</small><strong class="${usedLeverage > maxLeverage ? 'sell' : 'buy'}">${fmt(usedLeverage, 2)}x</strong></div>`,
+    '</div>',
+    '<div class="metrics">',
+    `<div class="metric"><small>Open Orders</small><strong>${pendingOrders.length}</strong></div>`,
+    `<div class="metric"><small>Open Trades</small><strong>${openTrades.length}</strong></div>`,
+    `<div class="metric"><small>Closed Trades</small><strong>${closedTrades.length}</strong></div>`,
+    `<div class="metric"><small>Unrealized P&L</small><strong class="${classifyReturn(unrealized)}">${money(unrealized)}</strong></div>`,
+    '</div>',
+    '<div class="metrics">',
+    `<div class="metric"><small>Strategy Version</small><strong>${escapeHtml(api.strategy_snapshot?.strategy_id || 'gold_5m_v1')}</strong></div>`,
+    `<div class="metric"><small>Config Hash</small><strong>${escapeHtml(api.strategy_snapshot?.config_hash || '--')}</strong></div>`,
+    `<div class="metric"><small>Fees / Slippage</small><strong>${money(costTotal)}</strong></div>`,
+    `<div class="metric"><small>Plan Adherence</small><strong class="${planStrict ? 'buy' : 'watch'}">${planStrict === undefined ? '--' : (planStrict ? 'strict' : 'review')}</strong></div>`,
+    '</div>',
+    `<div class="section-title">Open Orders</div>${table(['Ticket Number', 'Ticket ID', 'Status', 'Type', 'Price', 'Qty', 'Entry Reason'], orderRows, '当前没有尚未成交的挂单。')}`,
+    `<div class="section-title">Open Trades / Unrealized P&L</div>${table(['Ticket Number', 'Ticket ID', 'Ticker', 'Side', 'Entry', 'Mark', 'Unrealized P&L', 'Fees', 'Entry Reason'], openRows, '当前没有未平仓交易。')}`,
+    `<div class="section-title">Closed Trades</div>${table(['Ticket Number', 'Ticket ID', 'Ticker', 'Side', 'Entry', 'Exit', 'P&L', 'Fees', 'Exit Reason'], closedRows, '当前没有已平仓交易。')}`,
+    row('Broker Receipt', api.broker_receipt_summary?.total_receipts ?? 0, `${api.broker_receipt_summary?.new_receipts ?? 0} new`, 'watch'),
+    row('已实现盈亏', money(realized), 'closed trades', classifyReturn(realized)),
+  ].join('');
+}
+
+function renderBacktests(backtests) {
+  if (!backtests || !backtests.length) {
+    $('backtests').innerHTML = '<div class="empty">暂无回测结果。</div>';
+    return;
+  }
+  const item = backtests[0] || {};
+  $('backtests').innerHTML = [
+    row('结论', item.verdict || '--', item.skipped_reason || 'verdict', clsFor(item.verdict)),
+    row('样本', item.sample_size ?? 0, `${item.setup_count ?? 0} setups`, 'watch'),
+    row('胜率', fmt((item.win_rate || 0) * 100, 1) + '%', `PF ${fmt(item.profit_factor)}`, 'gold'),
+    row('平均 R', fmt(item.avg_r, 3), `回撤 ${fmt(item.max_drawdown_pct)}%`, Number(item.max_drawdown_pct || 0) > 8 ? 'sell' : 'watch'),
+  ].join('');
+}
+
+function renderRisk(tickets, risk, riskMonitor) {
+  const ticket = (tickets || []).find(item => item.asset === 'GOLD') || {};
+  $('risk').innerHTML = [
+    row('是否允许下一单', risk?.allows_next_paper_order ? '允许' : '不允许', risk?.block_reason || 'paper gate', risk?.allows_next_paper_order ? 'buy' : 'watch'),
+    row('日风险', `${risk?.used_loss_pct ?? 0}% 已用`, `${risk?.daily_loss_stop_pct ?? '--'}% 上限`, 'watch'),
+    row('候选单风险', `${risk?.next_ticket_loss_pct ?? ticket.max_loss_pct ?? 0}%`, ticket.ticket_id || '无 ticket', ticket.ticket_id ? 'gold' : 'watch'),
+    row('Kill switch', riskMonitor?.kill_switch_active ? '开启' : '关闭', riskMonitor?.status || '--', riskMonitor?.kill_switch_active ? 'sell' : 'buy'),
+  ].join('');
+}
+
+function renderPositions(positions) {
+  const rows = Object.values(positions || {});
+  if (!rows.length) {
+    $('positions').innerHTML = '<div class="empty">暂无持仓。</div>';
+    return;
+  }
+  $('positions').innerHTML = rows.map(item => [
+    row(item.symbol || 'GOLD', item.side || '--', `${fmt(item.quantity, 4)} gross units`, clsFor(item.side === 'mixed' ? 'watch' : item.side)),
+    row('净仓', item.net_side || item.side || '--', `${fmt(item.net_quantity ?? item.quantity, 4)} net units`, clsFor(item.net_side || item.side)),
+    item.legs ? row('多空分腿', positionLegs(item.legs), 'open trades source', 'watch') : '',
+    row('均价 / 现价', fmt(item.avg_price), fmt(item.last_price), 'watch'),
+    row('浮动盈亏', fmt(item.unrealized_pnl), `${item.risk_used_pct ?? '--'}% risk`, Number(item.unrealized_pnl || 0) >= 0 ? 'buy' : 'sell'),
+  ].filter(Boolean).join('')).join('');
+}
+
+function positionLegs(legs) {
+  return ['long', 'short'].map(side => {
+    const item = legs?.[side];
+    if (!item || Number(item.quantity || 0) === 0) return '';
+    const label = side === 'long' ? 'L' : 'S';
+    return `${label} ${fmt(item.quantity, 4)} @ ${fmt(item.avg_price)}`;
+  }).filter(Boolean).join(' · ') || '--';
+}
+
+function renderOrders(orders, liveRequests) {
+  const all = [...(orders || []), ...(liveRequests || [])];
+  if (!all.length) {
+    $('orders').innerHTML = '<div class="empty">暂无订单。</div>';
+    return;
+  }
+  $('orders').innerHTML = all.slice(-5).reverse().map(item => {
+    const receipt = item.receipt || item;
+    return row(receipt.order_id || item.order_id || '--', receipt.status || item.status || '--', receipt.fill_price ?? receipt.requested_price ?? '--', clsFor(receipt.status || item.status));
+  }).join('');
+}
+
+function renderPerformance(performance, openTrades, closedTrades) {
+  const summary = performance?.summary || {};
+  $('performance').innerHTML = [
+    row('未平仓', summary.open_trade_count ?? openTrades.length ?? 0, `已平 ${summary.closed_today_count ?? closedTrades.length ?? 0}`, 'watch'),
+    row('净值标记', fmt(summary.net_pnl_marked), `未实现 ${fmt(summary.unrealized_pnl)}`, Number(summary.net_pnl_marked || 0) >= 0 ? 'buy' : 'sell'),
+    row('胜率', fmt((summary.win_rate || 0) * 100, 1) + '%', `Expectancy ${fmt(summary.expectancy_r, 3)}R`, 'gold'),
+    row('开放风险', fmt(summary.open_risk_amount), `${fmt(summary.open_unrealized_r, 3)}R`, Number(summary.open_unrealized_r || 0) >= 0 ? 'buy' : 'sell'),
+  ].join('');
+}
+
+function renderEveningReview(review) {
+  if (!review || !Object.keys(review).length) {
+    $('evening-review').innerHTML = '<div class="empty">还没有晚盘复盘。</div>';
+    return;
+  }
+  const adherence = review.adherence || {};
+  const queue = review.improvement_queue || [];
+  $('evening-review').innerHTML = [
+    row('状态', review.status || '--', review.generated_at || '--', clsFor(review.status)),
+    row('执行', `${adherence.executed_count ?? 0} 笔`, `pending ${adherence.pending_count ?? 0}`, (adherence.pending_count || 0) ? 'watch' : 'buy'),
+    row('订单', `paper ${adherence.paper_order_count ?? 0}`, `live ${adherence.live_request_count ?? 0}`, 'watch'),
+    row('严格执行', adherence.strict_execution ? '是' : '否', 'plan adherence', adherence.strict_execution ? 'buy' : 'watch'),
+    row('改进项', queue.length, queue[0]?.item || '无', queue.length ? 'watch' : 'buy'),
+  ].join('');
+}
+
+function renderLearning(strategyReview, proposal, improvement, promotion) {
+  $('learning').innerHTML = [
+    row('策略复盘', strategyReview?.summary ? '有记录' : '暂无', strategyReview?.metrics?.signal_regime || strategyReview?.metrics?.signal_direction || '--', strategyReview?.summary ? 'buy' : 'watch'),
+    longRow('变更建议', proposal?.status || '--', proposal?.reason || '--', clsFor(proposal?.status)),
+    row('改进计划', improvement?.status || '--', improvement?.paper_only ? 'paper only' : '--', clsFor(improvement?.status)),
+    row('晋级门禁', promotion?.promotion_allowed ? '允许' : '阻塞', promotion?.status || '--', promotion?.promotion_allowed ? 'buy' : 'watch'),
+  ].join('');
+}
+
+function renderJournal(decisions, pending) {
+  const items = [...(decisions || []), ...(pending || [])].slice(-8).reverse();
+  if (!items.length) {
+    $('journal').innerHTML = '<div class="empty">暂无复盘流水。</div>';
+    return;
+  }
+  $('journal').innerHTML = `<div class="feed">${items.map(item => `
+    <div class="feed-item">
+      <b>${escapeHtml(item.ticket_id || item.journal_id || '--')}</b>
+      <p>${escapeHtml(item.decision_status || item.required_user_action || 'pending')} · ${escapeHtml(item.notes || item.asset || '')}</p>
+    </div>
+  `).join('')}</div>`;
+}
+
+async function loadDashboard() {
+  const date = $('run-date').value.trim();
+  $('status').textContent = `载入 ${date}`;
+  $('error').textContent = '';
+  try {
+    const api = await loadApiSnapshot(date);
+    window.__lastDashboardApi = api;
+    const bars = api.bars || [];
+    const latestQuote = api.latest_quote || {};
+    const latestBar = bars[bars.length - 1] || {};
+    const latest = latestQuote.close ? latestQuote : latestBar;
+    const signals = api.signals || [];
+    const signal = signals.find(item => item.asset === 'GOLD') || signals[0] || {};
+    $('latest-close').textContent = latest.close ? fmt(latest.close) : '--';
+    $('signal-direction').textContent = signal.direction || '--';
+    $('signal-strength').textContent = signal.strength ?? '--';
+    $('data-source').textContent = api.data_provenance?.latest_provider || latest.provider || '--';
+    drawNavChart(bars, api.nav_curve_intraday || api.equity_curve || {});
+    renderKeyOverview(api, signal);
+    renderTradingPlan(api.trading_plan || {});
+    renderStrategyStatus(signal, api.risk || {}, api.paper_account || {});
+    renderTradeLogs(api);
+    renderSignals(signals);
+    renderBacktests(api.backtests || []);
+    renderRisk(api.tickets || [], api.risk || {}, api.risk_monitor || {});
+    renderPositions(api.positions || {});
+    renderOrders(api.orders || [], api.live_order_requests || []);
+    renderPerformance(api.paper_performance || api.performance || {}, api.open_trades || [], api.closed_trades || []);
+    renderEveningReview(api.evening_review || {});
+    renderLearning(api.strategy_review || {}, api.strategy_change_proposal || {}, api.strategy_improvement_plan || {}, api.strategy_promotion_gate || {});
+    renderJournal(api.decisions || [], api.pending || []);
+    const age = formatAge(api.data_source_preflight?.latest_record_age_minutes);
+    $('status').textContent = `${date} · ${api.data_source_preflight?.status || '--'} · ${age}`;
+  } catch (err) {
+    $('status').textContent = `错误 ${date}`;
+    $('error').textContent = `Dashboard load failed: ${err.message}`;
+  }
+}
+
+$('load').addEventListener('click', loadDashboard);
+if (!$('run-date').value.trim()) $('run-date').value = todayIso();
+loadDashboard();
+setInterval(loadDashboard, 30000);
+</script>
+</body>
+</html>

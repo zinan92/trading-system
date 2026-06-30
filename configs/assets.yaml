@@ -1,0 +1,50 @@
+{
+  "assets": [
+    {
+      "symbol": "GOLD",
+      "name": "Gold / XAUUSD",
+      "asset_class": "commodity",
+      "priority": "high",
+      "timezone": "America/New_York",
+      "role": "tradable",
+      "trade_symbol": "XAUUSD",
+      "enabled": true
+    },
+    {
+      "symbol": "DXY",
+      "name": "US Dollar Index",
+      "asset_class": "macro",
+      "priority": "high",
+      "timezone": "America/New_York",
+      "role": "factor",
+      "enabled": true
+    },
+    {
+      "symbol": "US10Y_REAL",
+      "name": "US 10Y Real Yield",
+      "asset_class": "macro",
+      "priority": "high",
+      "timezone": "America/New_York",
+      "role": "factor",
+      "enabled": true
+    },
+    {
+      "symbol": "GLD_FLOW",
+      "name": "GLD ETF Flow",
+      "asset_class": "flow",
+      "priority": "medium",
+      "timezone": "America/New_York",
+      "role": "factor",
+      "enabled": true
+    },
+    {
+      "symbol": "FED_CPI_EVENTS",
+      "name": "Fed / CPI Event Window",
+      "asset_class": "event",
+      "priority": "medium",
+      "timezone": "America/New_York",
+      "role": "factor",
+      "enabled": true
+    }
+  ]
+}

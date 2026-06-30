@@ -1,0 +1,585 @@
+{
+  "gold_5m_v1": {
+    "symbol": "GOLD",
+    "enabled": true,
+    "classification": {
+      "family": "trend_macro",
+      "family_label": "趋势/宏观",
+      "style": "trend_following",
+      "style_label": "趋势跟随",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "legacy_ungated_baseline",
+      "holding_period": "intraday_to_swing",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "trend_following_big_r",
+      "risk_profile": "medium"
+    },
+    "position_gate": {
+      "enabled": false,
+      "role": "legacy_ungated_baseline"
+    },
+    "signal": {
+      "ma_short_bars": 5,
+      "ma_long_bars": 20,
+      "long_strength_min": 60,
+      "long_confidence_min": 55,
+      "short_strength_max": 38,
+      "event_block_below": 45,
+      "weights": {
+        "trend": 0.42,
+        "macro": 0.28,
+        "event": 0.20,
+        "volatility": 0.10
+      },
+      "confidence": {
+        "strength_weight": 0.68,
+        "event_weight": 0.22,
+        "real_data_bonus": 10
+      }
+    },
+    "backtest": {
+      "stop_pct": 0.006,
+      "target_pct": 0.012,
+      "max_hold_bars": 24,
+      "min_sample_size": 20,
+      "supportive": {
+        "min_win_rate": 0.52,
+        "min_avg_r": 0.0,
+        "min_profit_factor": 1.15,
+        "max_drawdown_pct": 8.0
+      },
+      "mixed": {
+        "min_profit_factor": 1.0,
+        "min_avg_r": -0.05
+      }
+    }
+  },
+  "gold_1m_chan": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "chan",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "chan",
+      "family_label": "缠论",
+      "style": "structure_reversal",
+      "style_label": "结构反转/二买二卖",
+      "directionality": "long_short",
+      "frequency_bucket": "low",
+      "role": "active_position_gated_strategy",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 2,
+      "return_profile": "structure_reversal_high_r",
+      "risk_profile": "medium"
+    },
+    "position_gate": {
+      "enabled": true,
+      "role": "active_position_gated_strategy"
+    },
+    "experiment_role": "gated_candidate",
+    "signal": {
+      "fresh_bars": 3,
+      "min_bars": 300,
+      "fetch_bars": 7200,
+      "bsp_types": ["2", "2s"]
+    }
+  },
+  "gold_1m_chan_ungated": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "chan",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "chan",
+      "family_label": "缠论",
+      "style": "structure_reversal_control",
+      "style_label": "结构反转/无位置门控对照",
+      "directionality": "long_short",
+      "frequency_bucket": "low",
+      "role": "ungated_control",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "structure_reversal_high_r",
+      "risk_profile": "medium"
+    },
+    "position_gate": {
+      "enabled": false,
+      "role": "same_strategy_control"
+    },
+    "experiment_role": "ungated_control",
+    "signal": {
+      "fresh_bars": 3,
+      "min_bars": 300,
+      "fetch_bars": 7200,
+      "bsp_types": ["2", "2s"]
+    }
+  },
+  "gold_1m_chan_buy1": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "chan",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "chan",
+      "family_label": "缠论",
+      "style": "first_buy_reversal",
+      "style_label": "一买/一卖",
+      "directionality": "long_short",
+      "frequency_bucket": "low",
+      "role": "shadow_variant",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "early_reversal_high_r",
+      "risk_profile": "medium_high"
+    },
+    "signal": {
+      "fresh_bars": 3,
+      "min_bars": 300,
+      "fetch_bars": 7200,
+      "bsp_types": ["1", "1p"]
+    }
+  },
+  "gold_1m_macd": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "macd",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "momentum",
+      "family_label": "动量",
+      "style": "macd_cross",
+      "style_label": "MACD 金叉/死叉",
+      "directionality": "long_short",
+      "frequency_bucket": "medium",
+      "role": "momentum_baseline",
+      "holding_period": "scalp_to_intraday",
+      "expected_trades_per_day_min": 2,
+      "expected_trades_per_day_max": 8,
+      "return_profile": "momentum_medium_win_medium_r",
+      "risk_profile": "medium_high"
+    },
+    "signal": {
+      "fresh_bars": 3,
+      "macd_fast": 12,
+      "macd_slow": 26,
+      "macd_signal": 9
+    }
+  },
+  "gold_1m_macd_trend_vol_filter": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "macd_trend_volatility_filter",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "momentum",
+      "family_label": "动量",
+      "style": "macd_trend_volatility_filter",
+      "style_label": "MACD 趋势/波动过滤",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_momentum_quality_filter",
+      "holding_period": "scalp_to_intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 4,
+      "return_profile": "filtered_momentum_fewer_trades_higher_quality",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 90,
+      "fresh_bars": 3,
+      "macd_fast": 12,
+      "macd_slow": 26,
+      "macd_signal": 9,
+      "ema_period": 50,
+      "ema_slope_lookback_bars": 10,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.16,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  },
+  "gold_1m_chan_macdfilter": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "chan",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "chan",
+      "family_label": "缠论",
+      "style": "structure_reversal_momentum_filter",
+      "style_label": "缠论二买 + MACD 过滤",
+      "directionality": "long_short",
+      "frequency_bucket": "very_low",
+      "role": "filtered_variant",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 2,
+      "return_profile": "filtered_structure_reversal_high_r",
+      "risk_profile": "medium"
+    },
+    "signal": {
+      "fresh_bars": 3,
+      "min_bars": 300,
+      "fetch_bars": 7200,
+      "bsp_types": ["2", "2s"],
+      "filters": [{"type": "macd", "mode": "zero_line"}]
+    }
+  },
+  "gold_1m_grid": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "grid",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "grid",
+      "family_label": "网格",
+      "style": "mean_reversion_grid",
+      "style_label": "均值回归网格",
+      "directionality": "long_short",
+      "frequency_bucket": "high",
+      "role": "sample_volume_strategy",
+      "holding_period": "scalp",
+      "expected_trades_per_day_min": 3,
+      "expected_trades_per_day_max": 12,
+      "return_profile": "high_frequency_small_r_mean_reversion",
+      "risk_profile": "high"
+    },
+    "signal": {
+      "min_bars": 80,
+      "lookback_bars": 48,
+      "grid_step_pct": 0.10
+    }
+  },
+  "gold_1m_bollinger_reversion": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "bollinger_reversion",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "mean_reversion",
+      "family_label": "均值回归",
+      "style": "bollinger_band",
+      "style_label": "布林带回归",
+      "directionality": "long_short",
+      "frequency_bucket": "medium",
+      "role": "sample_volume_strategy",
+      "holding_period": "scalp_to_intraday",
+      "expected_trades_per_day_min": 2,
+      "expected_trades_per_day_max": 8,
+      "return_profile": "mean_reversion_medium_win_small_r",
+      "risk_profile": "medium"
+    },
+    "signal": {
+      "min_bars": 60,
+      "lookback_bars": 20,
+      "std_mult": 1.45
+    }
+  },
+  "gold_1m_bollinger_reclaim_filter": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "bollinger_reclaim_filter",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "mean_reversion",
+      "family_label": "均值回归",
+      "style": "bollinger_reclaim_filter",
+      "style_label": "布林带越轨收回过滤",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_mean_reversion_quality_filter",
+      "holding_period": "scalp_to_intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 4,
+      "return_profile": "filtered_mean_reversion_fewer_trades_higher_quality",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 60,
+      "lookback_bars": 20,
+      "std_mult": 1.8,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.18,
+      "min_bandwidth_pct": 0.08,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  },
+  "gold_1m_breakout": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "breakout",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "breakout",
+      "family_label": "突破",
+      "style": "range_breakout",
+      "style_label": "区间突破",
+      "directionality": "long_short",
+      "frequency_bucket": "medium",
+      "role": "sample_volume_strategy",
+      "holding_period": "scalp_to_intraday",
+      "expected_trades_per_day_min": 2,
+      "expected_trades_per_day_max": 6,
+      "return_profile": "breakout_lower_win_large_r",
+      "risk_profile": "medium_high"
+    },
+    "signal": {
+      "min_bars": 80,
+      "lookback_bars": 36,
+      "breakout_buffer_pct": 0.01
+    }
+  },
+  "gold_5m_fibonacci": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "fibonacci",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "fibonacci",
+      "family_label": "斐波那契",
+      "style": "pullback_rejection",
+      "style_label": "回撤/反弹关键位",
+      "directionality": "long_short",
+      "frequency_bucket": "medium",
+      "role": "position_level_strategy",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 4,
+      "return_profile": "position_rejection_medium_r",
+      "risk_profile": "medium"
+    },
+    "signal": {
+      "min_bars": 160,
+      "lookback_bars": 96,
+      "tolerance_pct": 0.10
+    }
+  },
+  "gold_5m_ema50_position": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "ema50_position",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "position",
+      "family_label": "位置",
+      "style": "ema50_bounce_reject",
+      "style_label": "EMA50 反弹/压制",
+      "directionality": "long_short",
+      "frequency_bucket": "medium",
+      "role": "position_level_strategy",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 5,
+      "return_profile": "position_trend_rejection_medium_r",
+      "risk_profile": "medium"
+    },
+    "signal": {
+      "min_bars": 90,
+      "ema_period": 50,
+      "tolerance_pct": 0.12
+    }
+  },
+  "gold_5m_adx_ema_pullback": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "adx_ema_pullback",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "trend_pullback",
+      "family_label": "趋势回踩",
+      "style": "adx_ema_pullback",
+      "style_label": "ADX 趋势强度 + EMA 回踩延续",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_trend_quality_candidate",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "trend_continuation_medium_win_medium_r",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 120,
+      "ema_fast_period": 20,
+      "ema_slow_period": 50,
+      "ema_slope_lookback_bars": 8,
+      "adx_lookback_bars": 14,
+      "min_adx": 22,
+      "max_pullback_pct": 0.14,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.22,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  },
+  "gold_5m_london_ny_breakout": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "london_ny_compression_breakout",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "session_breakout",
+      "family_label": "时段突破",
+      "style": "compression_breakout",
+      "style_label": "伦敦/纽约重叠压缩突破",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_session_volatility_candidate",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "session_breakout_lower_win_large_r",
+      "risk_profile": "medium_high"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 80,
+      "compression_lookback_bars": 24,
+      "breakout_lookback_bars": 18,
+      "atr_lookback_bars": 14,
+      "max_compression_range_pct": 0.18,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.18,
+      "breakout_buffer_pct": 0.015,
+      "session_start_utc": 13,
+      "session_end_utc": 17
+    }
+  },
+  "gold_5m_false_breakout_reversal": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "false_breakout_reversal",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "range_reversal",
+      "family_label": "区间反转",
+      "style": "false_breakout_reversal",
+      "style_label": "失败突破回收反转",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_range_failure_candidate",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "failed_breakout_reversal_medium_win_medium_r",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 96,
+      "lookback_bars": 36,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.24,
+      "adx_lookback_bars": 14,
+      "max_adx": 34,
+      "breakout_buffer_pct": 0.015,
+      "reclaim_buffer_pct": 0.005,
+      "min_range_pct": 0.08,
+      "max_range_pct": 0.32,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  },
+  "gold_5m_breakout_retest_continuation": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "breakout_retest_continuation",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "breakout_continuation",
+      "family_label": "突破延续",
+      "style": "breakout_retest_continuation",
+      "style_label": "突破回踩确认延续",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_breakout_quality_candidate",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "confirmed_breakout_medium_win_medium_r",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 120,
+      "lookback_bars": 48,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.28,
+      "adx_lookback_bars": 14,
+      "min_adx": 18,
+      "breakout_buffer_pct": 0.02,
+      "retest_tolerance_pct": 0.04,
+      "min_range_pct": 0.10,
+      "max_range_pct": 0.45,
+      "min_volume_ratio": 0.75,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  },
+  "gold_5m_vwap_extension_reversion": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "vwap_extension_reversion",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "microstructure_mean_reversion",
+      "family_label": "微结构均值回归",
+      "style": "vwap_extension_reversion",
+      "style_label": "VWAP 延伸回归",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_microstructure_reversion_candidate",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "event_extension_mean_reversion_medium_win_small_to_medium_r",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 96,
+      "vwap_lookback_bars": 48,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.24,
+      "adx_lookback_bars": 14,
+      "max_adx": 30,
+      "min_extension_pct": 0.16,
+      "min_remaining_to_vwap_pct": 0.04,
+      "min_volume_ratio": 0.8,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  }
+}
