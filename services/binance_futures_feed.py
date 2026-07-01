@@ -206,11 +206,11 @@ class BinanceFuturesFeedClient:
             provider="binance_usdm",
             quality_flags=[
                 # Binance USDM XAUUSDT is a crypto-exchange perpetual that
-                # tracks gold price; it is NOT an official broker XAU/USD
-                # feed. Keep it in the public/proxy tier so kline_client still
-                # fetches gold-api.com live snapshots and data_source_preflight
-                # does not mark the system "live ready" on this alone.
+                # tracks gold price. It is accepted as execution-venue truth
+                # only for Binance USDM XAUUSDT trading; it is still not an
+                # official broker XAU/USD feed.
                 "public_proxy_feed",
+                "execution_venue_feed",
                 "exchange_futures",
                 "crypto_perpetual",
                 self.symbol.lower(),

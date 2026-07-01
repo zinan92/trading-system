@@ -4,6 +4,7 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.binance_demo_broker_adapter import BinanceDemoBrokerAdapter
 from services.config_loader import ROOT, load_pipeline_config
@@ -24,7 +25,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Inspect or explicitly close the current XAUUSDT Binance Futures Demo position."
     )
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument(
         "--confirm-close-demo-position",
         action="store_true",

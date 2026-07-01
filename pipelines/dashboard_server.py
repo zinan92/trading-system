@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
+from services.run_date import utc_run_date
 
 from services.code_reload import CodeReloadGuard
 from services.config_loader import ROOT, load_pipeline_config
@@ -117,7 +118,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def _handle_replay_api(self, query: str) -> None:
         params = parse_qs(query)
-        run_date = params.get("date", [date.today().isoformat()])[0]
+        run_date = params.get("date", [utc_run_date()])[0]
         if not _DATE_PATTERN.match(run_date):
             self._write_error(400, "invalid_date", "expected YYYY-MM-DD")
             return
@@ -188,7 +189,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def _handle_dashboard_api(self, query: str) -> None:
         params = parse_qs(query)
-        run_date = params.get("date", [date.today().isoformat()])[0]
+        run_date = params.get("date", [utc_run_date()])[0]
         if not _DATE_PATTERN.match(run_date):
             self._write_error(400, "invalid_date", "expected YYYY-MM-DD")
             return
@@ -262,7 +263,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def _dashboard_contract_request(self, query: str) -> tuple[str, str] | None:
         params = parse_qs(query)
-        run_date = params.get("date", [date.today().isoformat()])[0]
+        run_date = params.get("date", [utc_run_date()])[0]
         if not _DATE_PATTERN.match(run_date):
             self._write_error(400, "invalid_date", "expected YYYY-MM-DD")
             return None
@@ -309,7 +310,7 @@ def dashboard_output_root() -> Path:
 
 
 def build_market_view_intake_response(payload: dict, *, output_root: Path | None = None) -> dict:
-    run_date = str(payload.get("date") or payload.get("run_date") or date.today().isoformat())
+    run_date = str(payload.get("date") or payload.get("run_date") or utc_run_date())
     if not _DATE_PATTERN.match(run_date):
         raise ValueError("expected date as YYYY-MM-DD")
     raw_text = str(payload.get("raw_text") or payload.get("text") or "").strip()
@@ -547,6 +548,7 @@ def _trade_permission(payload: dict, health: dict, *, strategy_id: str = "") -> 
     hard_down = list(health.get("hard_down_rows", []) or [])
     warn_rows = list(health.get("warn_rows", []) or [])
     demo_blocker = (payload.get("performance_board") or {}).get("active_demo_blocker", {}) if isinstance(payload.get("performance_board"), dict) else {}
+    money_guardrails = payload.get("live_money_guardrails", {}) if isinstance(payload.get("live_money_guardrails"), dict) else {}
     open_count = _int_or(strategy.get("open_trades"), 0)
     if open_count == 0:
         detail = payload.get("strategy_detail") if isinstance(payload.get("strategy_detail"), dict) else {}
@@ -563,7 +565,13 @@ def _trade_permission(payload: dict, health: dict, *, strategy_id: str = "") -> 
     headline = "System ready; wait for the next valid signal."
     headline_zh = "系统可交易；等待下一张合格信号。"
 
-    if hard_down:
+    if money_guardrails.get("status") == "BLOCKED_OPERATOR_HALT":
+        primary = _blocker_from_live_money_guardrail(money_guardrails)
+        blockers.append(primary)
+        status = primary["status"]
+        headline = "No new exposure: operator HALT is active."
+        headline_zh = "现在不开新仓：人工 HALT 已生效。"
+    elif hard_down:
         primary = _blocker_from_health_row(hard_down[0])
         blockers.extend(_blocker_from_health_row(row) for row in hard_down)
         status = primary["status"]
@@ -575,6 +583,12 @@ def _trade_permission(payload: dict, health: dict, *, strategy_id: str = "") -> 
         status = primary["status"]
         headline = "No new exposure: execution reconciliation blocker."
         headline_zh = "现在不开新仓：执行/对账阻塞。"
+    elif str(money_guardrails.get("status") or "").startswith("BLOCKED_"):
+        primary = _blocker_from_live_money_guardrail(money_guardrails)
+        blockers.append(primary)
+        status = primary["status"]
+        headline = "No new exposure: live money guardrail block."
+        headline_zh = "现在不开新仓：真钱资金护栏阻断。"
     elif open_count >= open_limit["limit"]:
         primary = {
             "status": "PAUSED_POSITION_LIMIT",
@@ -609,6 +623,11 @@ def _trade_permission(payload: dict, health: dict, *, strategy_id: str = "") -> 
         "open_trade_limit_source": open_limit["source"],
         "requires_flat_before_entry": open_limit["requires_flat_before_entry"],
         "today_executed_trade_count": today_count,
+        "live_money_guardrails": {
+            "status": money_guardrails.get("status", ""),
+            "allows_new_order": money_guardrails.get("allows_new_order"),
+            "limits": money_guardrails.get("limits", {}) if isinstance(money_guardrails.get("limits"), dict) else {},
+        },
     }
 
 
@@ -674,6 +693,16 @@ def _blocker_from_demo_blocker(blocker: dict) -> dict:
         "code": blocker.get("status") or "active_demo_blocker",
         "source": "performance_board.active_demo_blocker",
         "message": blocker.get("reason") or blocker.get("message") or "active demo strategy has an execution blocker",
+    }
+
+
+def _blocker_from_live_money_guardrail(guardrail: dict) -> dict:
+    blocker = guardrail.get("primary_blocker", {}) if isinstance(guardrail.get("primary_blocker"), dict) else {}
+    return {
+        "status": blocker.get("status") or guardrail.get("status") or "BLOCKED_MONEY_GUARDRAIL",
+        "code": blocker.get("code") or guardrail.get("reason_code") or "live_money_guardrail",
+        "source": blocker.get("source") or "live_money_guardrails.current",
+        "message": blocker.get("message") or guardrail.get("headline") or "live money guardrail blocks new orders",
     }
 
 
@@ -1976,7 +2005,7 @@ def main() -> None:
 
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
     print(f"Dashboard server: http://{args.host}:{args.port}/dashboard.html")
-    print(f"Dashboard API: http://{args.host}:{args.port}/api/dashboard?date={date.today().isoformat()}")
+    print(f"Dashboard API: http://{args.host}:{args.port}/api/dashboard?date={utc_run_date()}")
     _start_code_reload_watcher()
     server.serve_forever()
 

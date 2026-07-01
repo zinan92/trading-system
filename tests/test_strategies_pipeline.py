@@ -2,6 +2,8 @@
 chan engine signals on current structure — and a feed failure must never block
 the strategy run (best-effort)."""
 
+import sys
+
 import pipelines.strategies as strat
 
 
@@ -21,3 +23,22 @@ def test_refresh_1m_feed_is_best_effort_on_failure(monkeypatch):
     # Swallowed into an error record, NOT raised — the strategy run must proceed.
     assert result["status"] == "error"
     assert "binance unreachable" in result["message"]
+
+
+def test_strategies_cli_default_date_is_utc_trading_day(monkeypatch, capsys):
+    captured = {}
+
+    class _Runner:
+        def run(self, run_date, paper_auto_approve=False):
+            captured["run_date"] = run_date
+            captured["paper_auto_approve"] = paper_auto_approve
+            return {"run_date": run_date, "strategies": []}
+
+    monkeypatch.setattr(strat, "utc_run_date", lambda: "2026-06-09")
+    monkeypatch.setattr(strat, "MultiStrategyRunner", lambda: _Runner())
+    monkeypatch.setattr(sys, "argv", ["strategies", "--skip-feed-refresh", "--paper-auto-approve"])
+
+    strat.main()
+
+    assert captured == {"run_date": "2026-06-09", "paper_auto_approve": True}
+    assert '"run_date": "2026-06-09"' in capsys.readouterr().out

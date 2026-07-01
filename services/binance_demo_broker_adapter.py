@@ -44,6 +44,7 @@ class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
             "dry_run": False,
             "request_dir": str(self.demo_config.get("request_dir", broker_config.get("request_dir", "demo_order_requests"))),
             "protective_failure_action": str(self.demo_config.get("protective_failure_action", "reduce_only_close")),
+            "reconcile_account_history": bool(self.demo_config.get("reconcile_account_history", False)),
             "instrument_map": {"GOLD": DEMO_SYMBOL, "XAUUSD": DEMO_SYMBOL, **broker_config.get("instrument_map", {})},
         }
         super().__init__(output_root, live_trading_enabled=True, broker_config=merged, opener=opener)

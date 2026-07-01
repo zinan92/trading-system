@@ -5,6 +5,7 @@ import json
 import os
 from datetime import date
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.paper_reconciliation import PaperReconciliation
@@ -12,7 +13,7 @@ from services.paper_reconciliation import PaperReconciliation
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Reconcile paper orders, trades, positions, and journal decisions.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     args = parser.parse_args()
 

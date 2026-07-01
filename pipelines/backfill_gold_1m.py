@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date, datetime, timedelta, timezone
+from services.run_date import utc_run_date
 
 from services.binance_futures_feed import run_binance_usdm_1m_backfill, run_binance_usdm_1m_feed_import
 
@@ -29,7 +30,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.refresh_only:
-        result = run_binance_usdm_1m_feed_import(date.today().isoformat())
+        result = run_binance_usdm_1m_feed_import(utc_run_date())
     else:
         result = run_binance_usdm_1m_backfill(args.start, args.end)
     print(json.dumps(result, indent=2, ensure_ascii=False))

@@ -16,6 +16,7 @@ import json
 from datetime import date
 
 from services.data_health import DataHealthAuditor, run_data_health
+from services.run_date import utc_run_date
 
 
 def _format_human(result: dict) -> str:
@@ -55,7 +56,7 @@ def _format_human(result: dict) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Audit the local market_data.db bars table.")
-    parser.add_argument("--date", default=date.today().isoformat(), help="Run date for the audit artifact (YYYY-MM-DD).")
+    parser.add_argument("--date", default=utc_run_date(), help="Run date for the audit artifact (YYYY-MM-DD).")
     parser.add_argument("--symbol", default="GOLD")
     parser.add_argument("--timeframe", default="5m")
     parser.add_argument("--json", action="store_true", help="Emit the raw JSON payload instead of the human summary.")

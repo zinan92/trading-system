@@ -5,6 +5,7 @@ import json
 import os
 from datetime import date
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.live_env import apply_live_env
@@ -13,7 +14,7 @@ from services.market_view_obsidian import MarketViewObsidianSync
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate market_view runtime artifacts from the Obsidian daily trading note.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--obsidian-root", type=Path, default=None)
     parser.add_argument("--note-path", type=Path, default=None)
     parser.add_argument("--json", action="store_true")

@@ -62,7 +62,7 @@ def test_official_feed_receipt_warns_with_public_only_data(tmp_path: Path):
     assert any("OANDA_API_TOKEN" in item for item in result["next_actions"])
 
 
-def test_official_feed_receipt_does_not_mark_execution_venue_only_as_live_ready(tmp_path: Path):
+def test_official_feed_receipt_accepts_execution_venue_only_as_live_ready(tmp_path: Path):
     root = tmp_path / "outputs"
 
     result = OfficialFeedReceipt(root).build(
@@ -75,27 +75,33 @@ def test_official_feed_receipt_does_not_mark_execution_venue_only_as_live_ready(
             "ready_for_paper": True,
             "ready_for_live": True,
             "official_rows": 0,
+            "execution_venue_rows": 3500,
             "public_rows": 0,
             "latest_provider": "binance_usdm",
             "latest_price": 4191.5,
             "latest_timestamp": "2026-06-22T14:30:00+00:00",
+            "live_data_mode": "execution_venue",
         },
         lineage={
             "status": "pass",
             "truth_level": "execution_venue",
             "ready_for_live": True,
-            "provider_groups": {"official": {"rows": 0, "providers": []}, "execution": {"rows": 3500, "providers": ["binance_usdm"]}},
+            "provider_groups": {"official": {"rows": 0, "providers": []}, "execution_venue": {"rows": 3500, "providers": ["binance_usdm"]}},
             "latest_official_bar": {},
+            "latest_execution_venue_bar": {"provider": "binance_usdm", "close": 4191.5, "timestamp": "2026-06-22T14:30:00+00:00"},
         },
     )
 
-    assert result["status"] == "warn"
-    assert result["ready_for_live"] is False
+    assert result["status"] == "pass"
+    assert result["ready_for_live"] is True
     assert result["preflight_ready_for_live"] is True
     assert result["lineage_ready_for_live"] is True
     assert result["truth_level"] == "execution_venue"
     assert result["official_rows"] == 0
+    assert result["execution_venue_rows"] == 3500
     assert result["latest_official_bar"] == {}
+    assert result["latest_execution_venue_bar"]["provider"] == "binance_usdm"
+    assert "execution venue feed is live-ready" in result["next_actions"][0]
 
 
 def test_official_feed_receipt_refreshes_from_current_local_state(tmp_path: Path, monkeypatch):

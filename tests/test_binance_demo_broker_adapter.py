@@ -1,4 +1,5 @@
 import json
+import io
 import urllib.error
 import urllib.parse
 from pathlib import Path
@@ -8,7 +9,9 @@ import pytest
 from services.binance_demo_broker_adapter import BinanceDemoBrokerAdapter
 from services.broker_adapter import BrokerOrderRequest
 from services.journal_store import load_json
+from services.live_reconciliation import LiveBrokerReconciliation
 from services.order_lifecycle import OrderLifecycleStore
+from services.paper_executor import PaperExecutor
 
 
 class _FakeResponse:
@@ -115,6 +118,7 @@ def test_binance_demo_adapter_caps_quantity_posts_demo_orders_and_mirrors_fill(t
                     "origQty": body.get("quantity", [""])[0],
                     "executedQty": body.get("quantity", ["0"])[0],
                     "avgPrice": None,
+                    "status": "FILLED" if len(posted) == 1 else "NEW",
                 }
             )
         raise AssertionError(request.full_url)
@@ -206,14 +210,20 @@ def test_binance_demo_adapter_rejected_entry_creates_no_phantom_position(tmp_pat
         if "/fapi/v1/openOrders" in request.full_url:
             return _FakeResponse([])
         if request.full_url.endswith("/fapi/v1/order"):
-            raise OSError("venue rejected: insufficient margin")
+            raise urllib.error.HTTPError(
+                request.full_url,
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(b'{"code":-2019,"msg":"Margin is insufficient."}'),
+            )
         raise AssertionError(request.full_url)
 
     adapter = _adapter(tmp_path, monkeypatch, opener)
     order = adapter.submit_order(BrokerOrderRequest("2026-06-09", _ticket(), latest_price=4525.5, actual_size=0.002))
 
     assert order.status == "rejected"
-    assert "insufficient margin" in order.rejection_reason
+    assert "Margin is insufficient" in order.rejection_reason
     assert load_json(tmp_path / "outputs" / "paper_trades" / "current.json") == []
     assert not (tmp_path / "outputs" / "paper_positions" / "current.json").exists()
     request = load_json(tmp_path / "outputs" / "demo_order_requests" / "2026-06-09.json")[0]
@@ -221,6 +231,35 @@ def test_binance_demo_adapter_rejected_entry_creates_no_phantom_position(tmp_pat
     lifecycle = load_json(tmp_path / "outputs" / "order_lifecycle" / "2026-06-09.json")[0]
     assert lifecycle["state"] == "rejected"
     assert [item["to"] for item in lifecycle["transitions"]] == ["entry", "submitting", "rejected"]
+
+
+def test_binance_demo_adapter_ambiguous_initial_submit_stays_submitting(tmp_path: Path, monkeypatch):
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse(_flat_position())
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            raise TimeoutError("submit timed out after request left process")
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    order = adapter.submit_order(BrokerOrderRequest("2026-06-09", _ticket(), latest_price=4525.5, actual_size=0.002))
+
+    assert order.status == "submitted_to_binance"
+    assert "ambiguous" in order.rejection_reason
+    assert load_json(tmp_path / "outputs" / "paper_trades" / "current.json") == []
+    assert not (tmp_path / "outputs" / "paper_positions" / "current.json").exists()
+    request = load_json(tmp_path / "outputs" / "demo_order_requests" / "2026-06-09.json")[0]
+    assert request["broker_response"]["entry_error"]["error_type"] == "TimeoutError"
+    lifecycle = load_json(tmp_path / "outputs" / "order_lifecycle" / "2026-06-09.json")[0]
+    assert lifecycle["state"] == "submitting"
+    assert [item["to"] for item in lifecycle["transitions"]] == ["entry", "submitting"]
+    assert lifecycle["metadata"]["message"] == "submit timed out after request left process"
 
 
 def test_binance_demo_adapter_recovers_submitting_intent_without_duplicate_entry(tmp_path: Path, monkeypatch):
@@ -529,6 +568,414 @@ def test_binance_demo_adapter_keeps_blocker_when_protective_and_emergency_close_
     assert position["quantity"] == 0.002
 
 
+def test_binance_demo_recovery_attaches_protective_after_fill_before_mirror_crash(tmp_path: Path, monkeypatch):
+    open_orders: list[dict] = []
+    posted: list[dict] = []
+    ticket = _ticket()
+    root = tmp_path / "outputs"
+    store = OrderLifecycleStore(root)
+    order_id = "demo_order_crash_before_mirror"
+    store.write_intent(
+        "2026-06-09",
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=order_id[:36],
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="binance_usdm:demo",
+        metadata={"symbol": "XAUUSDT", "ticket": ticket},
+    )
+    store.transition("2026-06-09", order_id, "submitting", reason="submit_started")
+    store.transition("2026-06-09", order_id, "accepted", reason="entry_accepted")
+    store.transition("2026-06-09", order_id, "filled", reason="crash_after_fill_before_protective", filled_quantity=0.002)
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0.002", "entryPrice": "4525.75", "unRealizedProfit": "0.0"}])
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse(open_orders)
+        if "/fapi/v1/userTrades" in request.full_url:
+            return _FakeResponse([])
+        if "/fapi/v1/income" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            body = urllib.parse.parse_qs(request.data.decode("utf-8"))
+            posted.append(body)
+            assert body["type"][0] in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
+            open_orders.append(
+                {
+                    "symbol": "XAUUSDT",
+                    "orderId": 3000 + len(posted),
+                    "clientOrderId": body["newClientOrderId"][0],
+                    "type": body["type"][0],
+                    "side": body["side"][0],
+                    "origQty": body["quantity"][0],
+                    "reduceOnly": body["reduceOnly"][0],
+                    "status": "NEW",
+                }
+            )
+            return _FakeResponse({"orderId": 3000 + len(posted), "clientOrderId": body["newClientOrderId"][0], "status": "NEW"})
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    before = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+    action = adapter.recover_missing_protective_orders(
+        "2026-06-09",
+        OrderLifecycleStore(root).current("2026-06-09", order_id),
+        before["exchange_positions"][0],
+        source="test_missing_protective_recovery",
+    )
+    after = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+
+    assert before["suspected_naked_position"] is True
+    assert before["position_protection"][0]["covered"] is False
+    assert action["status"] == "recovered"
+    assert len(posted) == 2
+    assert action["local_mirror"]["mirrored"] is True
+    lifecycle = OrderLifecycleStore(root).current("2026-06-09", order_id)
+    assert lifecycle["state"] == "protective_attached"
+    assert lifecycle["protective_quantity"] == 0.002
+    assert json.loads((root / "paper_positions" / "current.json").read_text())["GOLD"]["quantity"] == 0.002
+    assert after["reconciled"] is True
+    assert after["position_protection"][0]["covered"] is True
+    request = load_json(root / "demo_order_requests" / "2026-06-09.json")[0]
+    assert request["recovery_action"] == "attach_missing_protective_orders"
+
+
+def test_binance_demo_recovery_catches_mirror_written_but_no_resting_stop(tmp_path: Path, monkeypatch):
+    open_orders: list[dict] = []
+    posted: list[dict] = []
+    ticket = _ticket()
+    root = tmp_path / "outputs"
+    order_id = "demo_order_crash_after_mirror"
+    store = OrderLifecycleStore(root)
+    store.write_intent(
+        "2026-06-09",
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=order_id[:36],
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="binance_usdm:demo",
+        metadata={"symbol": "XAUUSDT", "ticket": ticket},
+    )
+    store.transition("2026-06-09", order_id, "submitting", reason="submit_started")
+    store.transition("2026-06-09", order_id, "accepted", reason="entry_accepted")
+    store.transition("2026-06-09", order_id, "filled", reason="crash_after_fill_before_protective", filled_quantity=0.002)
+    PaperExecutor(root).record_external_fill(
+        "2026-06-09",
+        ticket,
+        fill_price=4525.75,
+        quantity=0.002,
+        order_id=order_id,
+        exchange_managed=True,
+        protection_verified=False,
+    )
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0.002", "entryPrice": "4525.75", "unRealizedProfit": "0.0"}])
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse(open_orders)
+        if "/fapi/v1/userTrades" in request.full_url:
+            return _FakeResponse([])
+        if "/fapi/v1/income" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            body = urllib.parse.parse_qs(request.data.decode("utf-8"))
+            posted.append(body)
+            open_orders.append(
+                {
+                    "symbol": "XAUUSDT",
+                    "orderId": 3100 + len(posted),
+                    "clientOrderId": body["newClientOrderId"][0],
+                    "type": body["type"][0],
+                    "side": body["side"][0],
+                    "origQty": body["quantity"][0],
+                    "reduceOnly": body["reduceOnly"][0],
+                    "status": "NEW",
+                }
+            )
+            return _FakeResponse({"orderId": 3100 + len(posted), "clientOrderId": body["newClientOrderId"][0], "status": "NEW"})
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    before = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+    action = adapter.recover_missing_protective_orders(
+        "2026-06-09",
+        OrderLifecycleStore(root).current("2026-06-09", order_id),
+        before["exchange_positions"][0],
+        source="test_missing_protective_recovery",
+    )
+    after = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+
+    assert before["suspected_naked_position"] is True
+    assert before["system_state"] == "BLOCKED_NAKED_POSITION_SUSPECTED"
+    assert OrderLifecycleStore(root).current("2026-06-09", order_id)["state"] == "protective_attached"
+    assert action["status"] == "recovered"
+    assert action["local_mirror"] == {}
+    assert len(posted) == 2
+    assert after["reconciled"] is True
+    assert after["position_protection"][0]["covered"] is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"orderId": 3201, "clientOrderId": "expired_sl", "status": "EXPIRED"},
+        {"code": -2022, "msg": "ReduceOnly Order is rejected."},
+    ],
+)
+def test_binance_demo_recovery_rejects_non_resting_200_body(tmp_path: Path, monkeypatch, body: dict):
+    posted: list[dict] = []
+    ticket = _ticket()
+    root = tmp_path / "outputs"
+    order_id = "demo_order_non_resting_protective"
+    store = OrderLifecycleStore(root)
+    store.write_intent(
+        "2026-06-09",
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=order_id[:36],
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="binance_usdm:demo",
+        metadata={"symbol": "XAUUSDT", "ticket": ticket},
+    )
+    store.transition("2026-06-09", order_id, "submitting", reason="submit_started")
+    store.transition("2026-06-09", order_id, "accepted", reason="entry_accepted")
+    store.transition("2026-06-09", order_id, "filled", reason="crash_after_fill_before_protective", filled_quantity=0.002)
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0.002", "entryPrice": "4525.75", "unRealizedProfit": "0.0"}])
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in request.full_url or "/fapi/v1/income" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            posted.append(urllib.parse.parse_qs(request.data.decode("utf-8")))
+            return _FakeResponse(body)
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    before = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+    action = adapter.recover_missing_protective_orders(
+        "2026-06-09",
+        OrderLifecycleStore(root).current("2026-06-09", order_id),
+        before["exchange_positions"][0],
+        source="test_missing_protective_recovery",
+    )
+    after = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+
+    assert len(posted) == 2
+    assert action["status"] == "blocked"
+    assert action["protective_status"] == "failed"
+    assert len(action["broker_response"]["protective_errors"]) == 2
+    assert action["local_mirror"] == {}
+    assert not (root / "paper_positions" / "current.json").exists()
+    lifecycle = OrderLifecycleStore(root).current("2026-06-09", order_id)
+    assert lifecycle["state"] == "protective_failed"
+    assert lifecycle["blocked"] is True
+    assert after["system_state"] == "BLOCKED_NAKED_POSITION_SUSPECTED"
+    assert after["position_protection"][0]["covered"] is False
+
+
+def test_binance_demo_recovery_unwinds_fake_protective_attached_on_failed_reverification(tmp_path: Path, monkeypatch):
+    posted: list[dict] = []
+    ticket = _ticket()
+    root = tmp_path / "outputs"
+    order_id = "demo_order_fake_attached"
+    store = OrderLifecycleStore(root)
+    store.write_intent(
+        "2026-06-09",
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=order_id[:36],
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="binance_usdm:demo",
+        metadata={"symbol": "XAUUSDT", "ticket": ticket},
+    )
+    store.transition("2026-06-09", order_id, "submitting", reason="submit_started")
+    store.transition("2026-06-09", order_id, "accepted", reason="entry_accepted")
+    store.transition("2026-06-09", order_id, "filled", reason="entry_filled", filled_quantity=0.002)
+    store.transition("2026-06-09", order_id, "protective_attached", reason="historical_false_positive", protective_quantity=0.002)
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0.002", "entryPrice": "4525.75", "unRealizedProfit": "0.0"}])
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in request.full_url or "/fapi/v1/income" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            posted.append(urllib.parse.parse_qs(request.data.decode("utf-8")))
+            return _FakeResponse({"status": "EXPIRED", "clientOrderId": posted[-1]["newClientOrderId"][0]})
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    before = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+    action = adapter.recover_missing_protective_orders(
+        "2026-06-09",
+        OrderLifecycleStore(root).current("2026-06-09", order_id),
+        before["exchange_positions"][0],
+        source="test_missing_protective_recovery",
+    )
+    after = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+
+    assert len(posted) == 2
+    assert action["status"] == "blocked"
+    assert action["protective_status"] == "failed"
+    lifecycle = OrderLifecycleStore(root).current("2026-06-09", order_id)
+    assert lifecycle["state"] == "protective_failed"
+    assert lifecycle["blocked"] is True
+    assert action["local_mirror"] == {}
+    assert after["system_state"] == "BLOCKED_NAKED_POSITION_SUSPECTED"
+
+
+def test_binance_demo_recovery_uses_exchange_position_side_for_short(tmp_path: Path, monkeypatch):
+    open_orders: list[dict] = []
+    posted: list[dict] = []
+    ticket = _ticket()  # buy ticket would normally imply SELL exits; venue truth below is short.
+    root = tmp_path / "outputs"
+    order_id = "demo_order_short_position_recovery"
+    store = OrderLifecycleStore(root)
+    store.write_intent(
+        "2026-06-09",
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=order_id[:36],
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="binance_usdm:demo",
+        metadata={"symbol": "XAUUSDT", "ticket": ticket},
+    )
+    store.transition("2026-06-09", order_id, "submitting", reason="submit_started")
+    store.transition("2026-06-09", order_id, "accepted", reason="entry_accepted")
+    store.transition("2026-06-09", order_id, "filled", reason="venue_short_fill_recovered", filled_quantity=0.002)
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "-0.002", "entryPrice": "4525.75", "unRealizedProfit": "0.0"}])
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse(open_orders)
+        if "/fapi/v1/userTrades" in request.full_url or "/fapi/v1/income" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            body = urllib.parse.parse_qs(request.data.decode("utf-8"))
+            posted.append(body)
+            open_orders.append(
+                {
+                    "symbol": "XAUUSDT",
+                    "orderId": 3300 + len(posted),
+                    "clientOrderId": body["newClientOrderId"][0],
+                    "type": body["type"][0],
+                    "side": body["side"][0],
+                    "origQty": body["quantity"][0],
+                    "reduceOnly": body["reduceOnly"][0],
+                    "status": "NEW",
+                }
+            )
+            return _FakeResponse({"orderId": 3300 + len(posted), "clientOrderId": body["newClientOrderId"][0], "status": "NEW"})
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    before = LiveBrokerReconciliation(root, adapter.broker_config, opener=opener).run("2026-06-09")
+    action = adapter.recover_missing_protective_orders(
+        "2026-06-09",
+        OrderLifecycleStore(root).current("2026-06-09", order_id),
+        before["exchange_positions"][0],
+        source="test_missing_protective_recovery",
+    )
+
+    assert action["status"] == "recovered"
+    assert {item["side"][0] for item in posted} == {"BUY"}
+    assert all(item["reduceOnly"] == ["true"] for item in posted)
+
+
+def test_binance_demo_recovery_does_not_duplicate_existing_resting_stop(tmp_path: Path, monkeypatch):
+    posted: list[dict] = []
+    ticket = _ticket()
+    root = tmp_path / "outputs"
+    order_id = "demo_order_existing_stop"
+    store = OrderLifecycleStore(root)
+    store.write_intent(
+        "2026-06-09",
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=order_id[:36],
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="binance_usdm:demo",
+        metadata={"symbol": "XAUUSDT", "ticket": ticket},
+    )
+    store.transition("2026-06-09", order_id, "submitting", reason="submit_started")
+    store.transition("2026-06-09", order_id, "accepted", reason="entry_accepted")
+    store.transition("2026-06-09", order_id, "filled", reason="venue_fill_recovered", filled_quantity=0.002)
+    open_orders = [
+        {
+            "symbol": "XAUUSDT",
+            "orderId": 3401,
+            "clientOrderId": f"{order_id[:28]}_sl",
+            "type": "STOP_MARKET",
+            "side": "SELL",
+            "origQty": "0.002",
+            "reduceOnly": "true",
+            "status": "NEW",
+        }
+    ]
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0.002", "entryPrice": "4525.75", "unRealizedProfit": "0.0"}])
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse(open_orders)
+        if "/fapi/v1/userTrades" in request.full_url or "/fapi/v1/income" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            posted.append(urllib.parse.parse_qs(request.data.decode("utf-8")))
+            raise AssertionError("existing resting stop should make recovery idempotent")
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    action = adapter.recover_missing_protective_orders(
+        "2026-06-09",
+        OrderLifecycleStore(root).current("2026-06-09", order_id),
+        {"symbol": "XAUUSDT", "position_amt": 0.002, "entry_price": 4525.75},
+        source="test_missing_protective_recovery",
+    )
+
+    assert action["status"] == "recovered"
+    assert action["protective_status"] == "already_resting"
+    assert posted == []
+    assert OrderLifecycleStore(root).current("2026-06-09", order_id)["state"] == "protective_attached"
+
+
 def test_binance_demo_adapter_blocks_on_reconciliation_drift(tmp_path: Path, monkeypatch):
     def opener(request, timeout):
         if "/fapi/v1/exchangeInfo" in request.full_url:
@@ -544,16 +991,17 @@ def test_binance_demo_adapter_blocks_on_reconciliation_drift(tmp_path: Path, mon
         raise AssertionError(request.full_url)
 
     adapter = _adapter(tmp_path, monkeypatch, opener)
-    with pytest.raises(RuntimeError, match="reconciliation drift"):
+    with pytest.raises(RuntimeError, match="suspected naked position"):
         adapter.submit_order(BrokerOrderRequest("2026-06-09", _ticket(), latest_price=4525.5, actual_size=0.002))
 
     report = load_json(tmp_path / "outputs" / "live_reconciliation" / "current.json")[0]
     assert report["reconciled"] is False
     assert report["drift_count"] == 1
-    assert report["drifts"][0]["reason"] == "exchange position has no local record"
+    assert report["suspected_naked_position"] is True
+    assert report["drifts"][0]["missing_protective_order"] is True
     block = load_json(tmp_path / "outputs" / "demo_order_requests" / "2026-06-09.json")[0]
     assert block["status"] == "blocked"
-    assert "reconciliation drift" in block["guard"]["block_reason"]
+    assert "suspected naked position" in block["guard"]["block_reason"]
 
 
 def test_binance_demo_close_position_defaults_to_dry_run(tmp_path: Path, monkeypatch):

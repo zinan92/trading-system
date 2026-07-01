@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.paper_equity_curve import PaperEquityCurve
@@ -10,7 +11,7 @@ from services.paper_equity_curve import PaperEquityCurve
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build paper trading equity curve.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     args = parser.parse_args()
 

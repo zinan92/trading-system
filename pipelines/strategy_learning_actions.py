@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.strategy_learning_actions import StrategyLearningActions
@@ -9,7 +10,7 @@ from services.strategy_learning_actions import StrategyLearningActions
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build actionable strategy learning tasks from the daily GOLD review.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     args = parser.parse_args()
     output_root = ROOT / load_pipeline_config().get("output_root", "outputs")
     result = StrategyLearningActions(output_root).build(args.date)

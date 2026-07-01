@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.data_integrity_check import DataIntegrityCheck
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify local GOLD 5m data integrity, archive manifest, and snapshot restore evidence.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     args = parser.parse_args()
     result = DataIntegrityCheck().run(args.date)
     print(f"data_integrity: {result['status']} date={args.date} passed={result['summary']['passed']} failed={result['summary']['failed']}")

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from services.paper_executor import PaperExecutor
 from services.journal_store import JournalStore, load_json, write_json
+from services.order_lifecycle import OrderLifecycleStore
 
 
 def _seed_paper_fixture(root: Path, run_date: str) -> str:
@@ -123,6 +124,54 @@ def test_paper_green_path_records_lifecycle_until_closed(tmp_path: Path):
     assert round(lifecycle["filled_quantity"], 6) == order.quantity
     assert round(lifecycle["protective_quantity"], 6) == order.quantity
     assert load_json(root / "paper_trades" / "current.json") == []
+
+
+def test_external_close_updates_local_mirror_even_when_lifecycle_transition_is_illegal(tmp_path: Path):
+    run_date = "2026-06-25"
+    root = tmp_path / "outputs"
+    order_id = "order_already_reconciled"
+    write_json(
+        root / "clean_bars" / run_date / "GOLD_5m.json",
+        [{"timestamp": "2026-06-25T10:00:00+00:00", "high": 101, "low": 99, "close": 100}],
+    )
+    write_json(
+        root / "paper_trades" / "current.json",
+        [
+            {
+                "trade_id": "trade_order_already_reconciled",
+                "order_id": order_id,
+                "ticket_id": "ticket_reconciled",
+                "symbol": "GOLD",
+                "side": "long",
+                "status": "open",
+                "quantity": 0.002,
+                "entry_price": 100.0,
+                "entry_total_cost": 0.0,
+                "quality_flags": ["exchange_managed"],
+            }
+        ],
+    )
+    store = OrderLifecycleStore(root)
+    store.write_intent(run_date, order_id=order_id, ticket_id="ticket_reconciled", idempotency_key=order_id, requested_quantity=0.002, requested_price=100.0, source="test")
+    for state in ["submitting", "accepted", "filled", "protective_attached", "closed", "reconciled"]:
+        store.transition(run_date, order_id, state, reason=f"test_{state}")
+
+    result = PaperExecutor(root).record_external_close(
+        run_date,
+        order_id=order_id,
+        exit_price=101.0,
+        quantity=0.002,
+        exit_reason="exchange_close_after_reconciled",
+        close_order_id="close_1",
+    )
+
+    assert result["closed"] is True
+    assert result["lifecycle_transition"]["status"] == "skipped"
+    assert load_json(root / "paper_trades" / "current.json") == []
+    closed = load_json(root / "paper_trades" / "closed" / f"{run_date}.json")[0]
+    assert closed["exchange_close_order_id"] == "close_1"
+    lifecycle = load_json(root / "order_lifecycle" / f"{run_date}.json")[0]
+    assert lifecycle["state"] == "reconciled"
 
 
 def test_skip_does_not_create_paper_order(tmp_path: Path):
@@ -351,6 +400,24 @@ def test_record_external_fill_mirrors_real_exchange_fill(tmp_path: Path):
     trade = load_json(root / "paper_trades" / "current.json")[0]
     assert trade["entry_price"] == 4475.5
     assert "exchange_managed" in trade["quality_flags"] and "live_fill" in trade["quality_flags"]
+    lifecycle = load_json(root / "order_lifecycle" / "2026-06-03.json")[0]
+    assert lifecycle["state"] == "filled"
+
+
+def test_record_external_fill_only_marks_protective_attached_when_verified(tmp_path: Path):
+    root = tmp_path / "outputs"
+    PaperExecutor(root).record_external_fill(
+        "2026-06-03",
+        _live_ticket(),
+        fill_price=4475.5,
+        quantity=0.05,
+        order_id="live_verified",
+        protection_verified=True,
+    )
+
+    lifecycle = load_json(root / "order_lifecycle" / "2026-06-03.json")[0]
+    assert lifecycle["state"] == "protective_attached"
+    assert lifecycle["protective_quantity"] == 0.05
 
 
 def test_rebuild_positions_preserves_mixed_long_short_legs(tmp_path: Path):

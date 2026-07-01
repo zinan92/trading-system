@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.binance_futures_feed import run_binance_usdm_backfill, run_binance_usdm_feed_import
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import Binance USDM XAUUSDT 5m futures candles into the local market database.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--backfill-start", help="ISO datetime (UTC) to start a historical backfill, e.g. 2026-05-19T00:00:00.")
     parser.add_argument("--backfill-end", help="ISO datetime (UTC) to end the backfill (default: now).")
     parser.add_argument(

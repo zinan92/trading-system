@@ -18,6 +18,7 @@ from schemas.market_data import PaperOrder
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
+from services.live_money_guardrails import LiveMoneyGuardrails
 from services.order_lifecycle import IllegalOrderTransition, OrderLifecycleStore
 from services.paper_executor import PaperExecutor
 
@@ -404,6 +405,30 @@ class LiveBrokerAdapter:
             )
             self._record_live_request(request, order_id, now, ticket, payloads, readiness, receipt, broker_response={})
             return receipt
+        guardrails = self._live_money_guardrails_for_order(request, readiness, symbol, str(payloads["entry"].get("side") or ""), requested_price, quantity)
+        if guardrails and guardrails.get("allows_new_order") is False:
+            enriched_readiness = {**readiness, "live_money_guardrails": guardrails}
+            receipt = PaperOrder(
+                order_id=order_id,
+                ticket_id=ticket["ticket_id"],
+                status="blocked",
+                requested_price=round(requested_price, 4),
+                fill_price=None,
+                quantity=quantity,
+                filled_at="",
+                rejection_reason=guardrails.get("primary_blocker", {}).get("message") or "live money guardrails block new order",
+            )
+            self._record_live_request(
+                request,
+                order_id,
+                now,
+                ticket,
+                {"blocked_entry": self._safe_order_payload(payloads["entry"])},
+                enriched_readiness,
+                receipt,
+                broker_response={"live_money_guardrails": guardrails},
+            )
+            raise RuntimeError(f"live money guardrails block order: {receipt.rejection_reason}")
         lifecycle_store = OrderLifecycleStore(self.output_root)
         lifecycle, intent_created = lifecycle_store.write_intent(
             request.run_date,
@@ -455,8 +480,30 @@ class LiveBrokerAdapter:
         try:
             responses["entry"] = recovered_entry or self._post_binance_order(payloads["entry"])
         except (OSError, TimeoutError, RuntimeError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as exc:
-            error = {"error_type": type(exc).__name__, "message": str(exc)}
+            classification = self._classify_binance_entry_submit_error(exc)
+            error = classification["error"]
             responses["entry_error"] = error
+            if classification["status"] == "ambiguous":
+                self._transition_lifecycle(
+                    lifecycle_store,
+                    request.run_date,
+                    order_id,
+                    "submitting",
+                    reason="binance_entry_submit_ambiguous",
+                    metadata=error,
+                )
+                receipt = PaperOrder(
+                    order_id=order_id,
+                    ticket_id=ticket["ticket_id"],
+                    status="submitted_to_binance",
+                    requested_price=round(requested_price, 4),
+                    fill_price=None,
+                    quantity=quantity,
+                    filled_at="",
+                    rejection_reason=f"Binance entry submit ambiguous; recover by idempotency key before retrying: {error['message']}",
+                )
+                self._record_live_request(request, order_id, now, ticket, payloads, readiness, receipt, broker_response=responses)
+                return receipt
             self._transition_lifecycle(
                 lifecycle_store,
                 request.run_date,
@@ -536,7 +583,11 @@ class LiveBrokerAdapter:
             payloads["protective_orders"] = self._binance_protective_payloads(ticket, order_id, symbol, filled_quantity, filters)
             for protective in payloads.get("protective_orders", []):
                 try:
-                    responses["protective_orders"].append(self._post_binance_order(protective))
+                    protective_response = self._post_and_classify_binance_protective_order(protective)
+                    if protective_response.get("error"):
+                        responses["protective_errors"].append(protective_response["error"])
+                    else:
+                        responses["protective_orders"].append(protective_response["response"])
                 except (OSError, TimeoutError, RuntimeError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as exc:
                     responses["protective_errors"].append(
                         {
@@ -572,7 +623,7 @@ class LiveBrokerAdapter:
                     request.run_date,
                     order_id,
                     reason=f"protective_status={responses['protective_status']}",
-                    source="binance_demo_protective_orders",
+                    source=self._protective_blocker_source(readiness),
                     action="reduce_only_close_or_halt_until_position_reconciled",
                     details={"filled_quantity": filled_quantity, "protective_errors": responses["protective_errors"]},
                 )
@@ -580,7 +631,14 @@ class LiveBrokerAdapter:
             # own live position (exchange-managed exits). Best-effort, but the
             # outcome is recorded in the artifact and reconciliation backstops any
             # miss (exchange-has / local-missing -> drift -> alert).
-            responses["local_mirror"] = self._mirror_live_fill(request.run_date, ticket, fill_price or requested_price, filled_quantity, order_id)
+            responses["local_mirror"] = self._mirror_live_fill(
+                request.run_date,
+                ticket,
+                fill_price or requested_price,
+                filled_quantity,
+                order_id,
+                protection_verified=responses["protective_status"] == "pass",
+            )
             if status == "protective_order_missing" and self._auto_close_on_protective_failure(readiness):
                 responses["emergency_close"] = self._reduce_only_close_after_protective_failure(
                     request.run_date,
@@ -616,6 +674,29 @@ class LiveBrokerAdapter:
         self._record_live_request(request, order_id, now, ticket, payloads, readiness, receipt, broker_response=responses)
         return receipt
 
+    def _live_money_guardrails_for_order(
+        self,
+        request: BrokerOrderRequest,
+        readiness: dict,
+        symbol: str,
+        side: str,
+        requested_price: float,
+        quantity: float,
+    ) -> dict:
+        mode = str(readiness.get("mode") or self.broker_config.get("environment") or "live").lower()
+        if self.provider != "binance_usdm" or mode not in {"live", "testnet"}:
+            return {}
+        return LiveMoneyGuardrails(self.output_root, broker_config=self.broker_config).evaluate_order(
+            request.run_date,
+            ticket=request.ticket,
+            symbol=symbol,
+            side=side,
+            requested_price=requested_price,
+            quantity=quantity,
+            source=f"{self.provider}:{mode}",
+            reconciliation=readiness.get("live_reconciliation", {}) if isinstance(readiness.get("live_reconciliation"), dict) else {},
+        )
+
     def _protective_status(self, payloads: dict, responses: dict) -> str:
         expected = len(payloads.get("protective_orders", []) or [])
         if expected == 0:
@@ -632,8 +713,15 @@ class LiveBrokerAdapter:
         return {
             key: value
             for key, value in payload.items()
-            if key not in {"signature", "timestamp", "recvWindow"}
+            if key not in {"signature", "timestamp", "recvWindow"} and not str(key).startswith("_")
         }
+
+    def _protective_blocker_source(self, readiness: dict) -> str:
+        if readiness.get("demo_trading") is True:
+            return "binance_demo_protective_orders"
+        if readiness.get("testnet_trading") is True:
+            return "binance_usdm_testnet_protective_orders"
+        return "binance_usdm_live_protective_orders"
 
     def _transition_lifecycle(
         self,
@@ -683,6 +771,41 @@ class LiveBrokerAdapter:
             return {"status": "found", "reason": "", "entry": body}
         return {"status": "ambiguous", "reason": "recovery payload did not contain a Binance order", "entry": {}}
 
+    def _classify_binance_entry_submit_error(self, exc: Exception) -> dict:
+        payload: dict = {}
+        http_status: int | None = None
+        if isinstance(exc, urllib.error.HTTPError):
+            http_status = exc.code
+            payload = self._http_error_payload(exc)
+        error = {
+            "error_type": type(exc).__name__,
+            "message": self._binance_error_message(payload) if payload else str(exc),
+            "http_status": http_status,
+            "binance_error": payload,
+        }
+        if isinstance(exc, urllib.error.HTTPError):
+            if self._is_binance_ambiguous_submit_error(exc.code, payload):
+                return {"status": "ambiguous", "error": error}
+            return {"status": "rejected", "error": error}
+        if isinstance(exc, RuntimeError) and "missing Binance environment variables" in str(exc):
+            return {"status": "rejected", "error": error}
+        return {"status": "ambiguous", "error": error}
+
+    def _is_binance_ambiguous_submit_error(self, status: int, payload: dict) -> bool:
+        if status >= 500:
+            return True
+        message = self._binance_error_message(payload).lower()
+        return any(
+            marker in message
+            for marker in (
+                "execution status unknown",
+                "unknown error",
+                "service unavailable",
+                "request timeout",
+                "internal error",
+            )
+        )
+
     def _http_error_payload(self, exc: urllib.error.HTTPError) -> dict:
         try:
             text = exc.read().decode("utf-8", errors="replace")
@@ -726,14 +849,406 @@ class LiveBrokerAdapter:
             return "expired"
         return ""
 
-    def _mirror_live_fill(self, run_date: str, ticket: dict, fill_price: float, quantity: float, order_id: str) -> dict:
+    def _mirror_live_fill(
+        self,
+        run_date: str,
+        ticket: dict,
+        fill_price: float,
+        quantity: float,
+        order_id: str,
+        *,
+        protection_verified: bool = False,
+    ) -> dict:
         try:
             PaperExecutor(self.output_root).record_external_fill(
-                run_date, ticket, fill_price=fill_price, quantity=quantity, order_id=order_id, exchange_managed=True,
+                run_date,
+                ticket,
+                fill_price=fill_price,
+                quantity=quantity,
+                order_id=order_id,
+                exchange_managed=True,
+                protection_verified=protection_verified,
             )
             return {"mirrored": True}
         except (OSError, KeyError, ValueError, TypeError) as exc:
             return {"mirrored": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def recover_missing_protective_orders(
+        self,
+        run_date: str,
+        lifecycle_record: dict,
+        exchange_position: dict | None = None,
+        *,
+        source: str = "order_recovery",
+    ) -> dict:
+        """Recovery-only path for a real exchange fill that exists without a
+        resting reduceOnly stop. It never submits a new entry order."""
+
+        order_id = str(lifecycle_record.get("order_id") or "")
+        ticket = self._ticket_from_lifecycle_record(lifecycle_record)
+        symbol = self._recovery_exchange_symbol(ticket, lifecycle_record, exchange_position)
+        quantity = self._recovery_position_quantity(lifecycle_record, exchange_position)
+        entry_price = self._recovery_entry_price(lifecycle_record, exchange_position)
+        result = {
+            "action": "attach_missing_protective_orders",
+            "run_date": run_date,
+            "order_id": order_id,
+            "ticket_id": str(lifecycle_record.get("ticket_id") or ticket.get("ticket_id") or ""),
+            "exchange_symbol": symbol,
+            "quantity": round(quantity, 12),
+            "status": "blocked",
+            "protective_status": "not_attempted",
+            "network_order_created": False,
+            "request": {"protective_orders": []},
+            "broker_response": {"protective_orders": [], "protective_errors": []},
+            "local_mirror": {},
+            "blocker": {},
+        }
+        store = OrderLifecycleStore(self.output_root)
+        if not order_id or not ticket or quantity <= 0:
+            reason = "cannot recover missing protective orders without durable order_id, ticket, and non-zero exchange quantity"
+            result["block_reason"] = reason
+            result["blocker"] = store.record_blocker(
+                run_date,
+                order_id,
+                reason=reason,
+                source=source,
+                action="halt_new_orders_until_naked_position_resolved",
+                details={"lifecycle_record": lifecycle_record, "exchange_position": exchange_position or {}},
+            )
+            return result
+
+        existing_check = self._existing_resting_protective_coverage(symbol, self._exchange_position_amount(exchange_position or {}))
+        result["existing_protective_orders"] = existing_check.get("matching_protective_orders", [])
+        if existing_check.get("covered"):
+            lifecycle = self._transition_lifecycle(
+                store,
+                run_date,
+                order_id,
+                "protective_attached",
+                reason="missing_protective_orders_already_resting_on_exchange",
+                protective_quantity=quantity,
+                metadata={"source": source, "existing_protective_orders": existing_check.get("matching_protective_orders", [])},
+            )
+            if not self._local_position_matches_exchange(ticket, exchange_position):
+                result["local_mirror"] = self._mirror_live_fill(
+                    run_date,
+                    ticket,
+                    entry_price,
+                    quantity,
+                    order_id,
+                    protection_verified=True,
+                )
+            result.update({"status": "recovered", "protective_status": "already_resting", "lifecycle_state": lifecycle.get("state", "")})
+            self._record_protective_recovery_request(run_date, ticket, result)
+            return result
+        if existing_check.get("error"):
+            reason = f"cannot verify existing protective orders before recovery: {existing_check['error']}"
+            result["block_reason"] = reason
+            result["blocker"] = store.record_blocker(
+                run_date,
+                order_id,
+                reason=reason,
+                source=source,
+                action="halt_new_orders_until_naked_position_resolved",
+                details={"exchange_position": exchange_position or {}, "existing_check": existing_check},
+            )
+            self._record_protective_recovery_request(run_date, ticket, result)
+            return result
+
+        filters = self._binance_symbol_status(symbol).get("filters", {})
+        protective_payloads = self._binance_protective_payloads(
+            ticket,
+            order_id,
+            symbol,
+            quantity,
+            filters,
+            exit_side=self._exit_side_for_exchange_position(exchange_position),
+        )
+        result["request"] = {"protective_orders": [self._safe_order_payload(item) for item in protective_payloads]}
+        if not protective_payloads:
+            reason = "cannot recover missing protective orders because ticket has no stop_loss or target"
+            result["block_reason"] = reason
+            result["blocker"] = store.record_blocker(
+                run_date,
+                order_id,
+                reason=reason,
+                source=source,
+                action="reduce_only_close_or_halt_until_position_reconciled",
+                details={"ticket_id": ticket.get("ticket_id", ""), "exchange_position": exchange_position or {}},
+            )
+            self._record_protective_recovery_request(run_date, ticket, result)
+            return result
+
+        responses = {"protective_orders": [], "protective_errors": []}
+        for protective in protective_payloads:
+            try:
+                protective_response = self._post_and_classify_binance_protective_order(protective)
+                if protective_response.get("error"):
+                    responses["protective_errors"].append(protective_response["error"])
+                else:
+                    responses["protective_orders"].append(protective_response["response"])
+            except (OSError, TimeoutError, RuntimeError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as exc:
+                responses["protective_errors"].append(
+                    {
+                        "payload": self._safe_order_payload(protective),
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+        protective_status = self._protective_status({"protective_orders": protective_payloads}, responses)
+        result["protective_status"] = protective_status
+        result["broker_response"] = {
+            "protective_orders": responses["protective_orders"],
+            "protective_errors": responses["protective_errors"],
+            "protective_status": protective_status,
+        }
+        result["network_order_created"] = bool(responses["protective_orders"])
+
+        if protective_status == "pass":
+            lifecycle = self._transition_lifecycle(
+                store,
+                run_date,
+                order_id,
+                "protective_attached",
+                reason="missing_protective_orders_recovered",
+                protective_quantity=quantity,
+                metadata={"source": source, "protective_status": protective_status},
+            )
+            if not self._local_position_matches_exchange(ticket, exchange_position):
+                result["local_mirror"] = self._mirror_live_fill(
+                    run_date,
+                    ticket,
+                    entry_price,
+                    quantity,
+                    order_id,
+                    protection_verified=True,
+                )
+            result.update({"status": "recovered", "lifecycle_state": lifecycle.get("state", "")})
+            self._record_protective_recovery_request(run_date, ticket, result)
+            return result
+
+        self._transition_lifecycle(
+            store,
+            run_date,
+            order_id,
+            "protective_failed",
+            reason="missing_protective_recovery_failed",
+            protective_quantity=float(len(responses.get("protective_orders", [])) > 0) * quantity,
+            metadata={"source": source, "protective_status": protective_status, "protective_errors": responses["protective_errors"]},
+        )
+        reason = f"protective_recovery_status={protective_status}"
+        result["block_reason"] = reason
+        result["blocker"] = store.record_blocker(
+            run_date,
+            order_id,
+            reason=reason,
+            source=source,
+            action="reduce_only_close_or_halt_until_position_reconciled",
+            details={"filled_quantity": quantity, "protective_errors": responses["protective_errors"]},
+        )
+        self._record_protective_recovery_request(run_date, ticket, result)
+        return result
+
+    def _ticket_from_lifecycle_record(self, lifecycle_record: dict) -> dict:
+        metadata = lifecycle_record.get("metadata") if isinstance(lifecycle_record.get("metadata"), dict) else {}
+        ticket = metadata.get("ticket") if isinstance(metadata.get("ticket"), dict) else {}
+        return ticket if isinstance(ticket, dict) else {}
+
+    def _recovery_exchange_symbol(self, ticket: dict, lifecycle_record: dict, exchange_position: dict | None) -> str:
+        metadata = lifecycle_record.get("metadata") if isinstance(lifecycle_record.get("metadata"), dict) else {}
+        symbol = (
+            (exchange_position or {}).get("symbol")
+            or (exchange_position or {}).get("exchange_symbol")
+            or metadata.get("symbol")
+            or self._binance_symbol(str(ticket.get("asset") or "GOLD"))
+        )
+        return str(symbol).upper()
+
+    def _recovery_position_quantity(self, lifecycle_record: dict, exchange_position: dict | None) -> float:
+        amount = self._exchange_position_amount(exchange_position or {})
+        if amount:
+            return abs(amount)
+        for key in ("filled_quantity", "requested_quantity"):
+            try:
+                value = abs(float(lifecycle_record.get(key, 0) or 0))
+            except (TypeError, ValueError):
+                value = 0.0
+            if value:
+                return value
+        return 0.0
+
+    def _recovery_entry_price(self, lifecycle_record: dict, exchange_position: dict | None) -> float:
+        for value in ((exchange_position or {}).get("entry_price"), (exchange_position or {}).get("entryPrice"), lifecycle_record.get("requested_price")):
+            try:
+                parsed = float(value or 0)
+            except (TypeError, ValueError):
+                parsed = 0.0
+            if parsed:
+                return parsed
+        return 0.0
+
+    def _exchange_position_amount(self, exchange_position: dict) -> float:
+        for key in ("position_amt", "positionAmt", "exchange_qty"):
+            try:
+                value = float(exchange_position.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                value = 0.0
+            if value:
+                return value
+        return 0.0
+
+    def _local_position_matches_exchange(self, ticket: dict, exchange_position: dict | None) -> bool:
+        if not exchange_position:
+            return False
+        asset = str(ticket.get("asset") or "GOLD")
+        positions = load_json(self.output_root / "paper_positions" / "current.json")
+        if not isinstance(positions, dict):
+            return False
+        local = positions.get(asset)
+        if not isinstance(local, dict):
+            return False
+        if local.get("net_quantity") is not None:
+            local_signed = float(local.get("net_quantity", 0) or 0)
+        else:
+            side = str(local.get("side", "long"))
+            local_signed = float(local.get("quantity", 0) or 0) * (1 if side == "long" else -1)
+        return abs(local_signed - self._exchange_position_amount(exchange_position)) <= 1e-8
+
+    def _record_protective_recovery_request(self, run_date: str, ticket: dict, result: dict) -> None:
+        request_dir = str(self.broker_config.get("request_dir", "live_order_requests"))
+        path = self.output_root / request_dir / f"{run_date}.json"
+        rows = load_json(path)
+        rows.append(
+            {
+                "order_id": result.get("order_id", ""),
+                "requested_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "provider": self.provider,
+                "run_date": run_date,
+                "ticket": ticket,
+                "recovery_action": result.get("action", ""),
+                "request": result.get("request", {}),
+                "broker_response": result.get("broker_response", {}),
+                "receipt": {
+                    "order_id": result.get("order_id", ""),
+                    "ticket_id": result.get("ticket_id", ""),
+                    "status": result.get("status", ""),
+                    "quantity": result.get("quantity"),
+                },
+            }
+        )
+        write_json(path, rows)
+
+    def _post_and_classify_binance_protective_order(self, payload: dict) -> dict:
+        response = self._post_binance_protective_order(payload)
+        error = self._binance_protective_response_error(response, payload)
+        if error:
+            return {"response": response, "error": error}
+        return {"response": response, "error": {}}
+
+    def _binance_protective_response_error(self, response: dict, payload: dict) -> dict:
+        safe_payload = self._safe_order_payload(payload)
+        if not isinstance(response, dict):
+            return {
+                "payload": safe_payload,
+                "error_type": "InvalidProtectiveResponse",
+                "message": "protective order response is not a JSON object",
+                "response": response,
+            }
+        if response.get("code") not in {None, "", 0, "0"}:
+            return {
+                "payload": safe_payload,
+                "error_type": "BinanceProtectiveBodyError",
+                "message": self._binance_error_message(response),
+                "binance_error": response,
+            }
+        status = str(response.get("status") or response.get("algoStatus") or "").upper()
+        if status != "NEW":
+            return {
+                "payload": safe_payload,
+                "error_type": "ProtectiveOrderNotResting",
+                "message": f"protective order response status is {status or 'missing'}, expected NEW",
+                "response": self._safe_order_payload(response),
+            }
+        return {}
+
+    def _existing_resting_protective_coverage(self, symbol: str, position_amt: float) -> dict:
+        if not position_amt:
+            return {"covered": False, "matching_protective_orders": []}
+        try:
+            open_orders = self._binance_open_orders_for_symbol(symbol)
+        except (OSError, TimeoutError, RuntimeError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, KeyError) as exc:
+            return {"covered": False, "matching_protective_orders": [], "error": f"{type(exc).__name__}: {exc}"}
+        exit_side = "SELL" if position_amt > 0 else "BUY"
+        matching = [
+            order
+            for order in open_orders
+            if self._open_order_covers_position(order, symbol=symbol, exit_side=exit_side)
+        ]
+        covered_qty = 0.0
+        covers_full_position = False
+        for order in matching:
+            if order.get("close_position"):
+                covers_full_position = True
+                covered_qty = max(covered_qty, abs(position_amt))
+            else:
+                covered_qty += float(order.get("orig_qty", 0) or 0)
+        return {
+            "covered": covers_full_position or covered_qty + 1e-8 >= abs(position_amt),
+            "covered_qty": round(covered_qty, 12),
+            "matching_protective_orders": matching,
+        }
+
+    def _binance_open_orders_for_symbol(self, symbol: str) -> list[dict]:
+        payload = self._binance_signed_get("/fapi/v1/openOrders", {"symbol": symbol})
+        orders = self._normalize_binance_open_order_payload(payload, source="open_orders")
+        if self._binance_uses_algo_protective_orders():
+            algo_payload = self._binance_signed_get("/fapi/v1/openAlgoOrders", {"symbol": symbol})
+            orders.extend(self._normalize_binance_open_order_payload(algo_payload, source="open_algo_orders"))
+        return orders
+
+    def _normalize_binance_open_order_payload(self, payload, *, source: str) -> list[dict]:
+        if isinstance(payload, dict) and payload.get("ok") is True:
+            payload = payload.get("body", [])
+        rows = payload if isinstance(payload, list) else [payload] if isinstance(payload, dict) and payload else []
+        normalized = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            normalized.append(
+                {
+                    "symbol": str(row.get("symbol", "")),
+                    "order_id": str(row.get("orderId", row.get("algoId", ""))),
+                    "client_order_id": str(row.get("clientOrderId", row.get("clientAlgoId", ""))),
+                    "type": str(row.get("type", row.get("orderType", ""))),
+                    "side": str(row.get("side", "")),
+                    "orig_qty": float(row.get("origQty", row.get("quantity", 0)) or 0),
+                    "reduce_only": str(row.get("reduceOnly", row.get("reduce_only", ""))).lower() == "true",
+                    "close_position": str(row.get("closePosition", row.get("close_position", ""))).lower() == "true",
+                    "status": str(row.get("status", row.get("algoStatus", ""))),
+                    "source": source,
+                }
+            )
+        return normalized
+
+    def _open_order_covers_position(self, order: dict, *, symbol: str, exit_side: str) -> bool:
+        if str(order.get("symbol", "")).upper() != str(symbol).upper():
+            return False
+        if str(order.get("side", "")).upper() != exit_side:
+            return False
+        if not (order.get("reduce_only") or order.get("close_position")):
+            return False
+        if str(order.get("status") or "").upper() not in {"", "NEW"}:
+            return False
+        return str(order.get("type") or "").upper() in {"STOP", "STOP_MARKET"}
+
+    def _exit_side_for_exchange_position(self, exchange_position: dict | None) -> str | None:
+        amount = self._exchange_position_amount(exchange_position or {})
+        if amount > 0:
+            return "SELL"
+        if amount < 0:
+            return "BUY"
+        return None
 
     def _record_live_request(
         self,
@@ -816,8 +1331,16 @@ class LiveBrokerAdapter:
     def _post_binance_order(self, payload: dict) -> dict:
         return self._binance_signed_request("POST", "/fapi/v1/order", payload)
 
+    def _post_binance_protective_order(self, payload: dict) -> dict:
+        endpoint = str(payload.get("_endpoint") or "/fapi/v1/order")
+        body = {key: value for key, value in payload.items() if not str(key).startswith("_")}
+        return self._binance_signed_request("POST", endpoint, body)
+
     def _delete_binance_open_orders(self, symbol: str) -> dict:
         return self._binance_signed_request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol})
+
+    def _delete_binance_algo_open_orders(self, symbol: str) -> dict:
+        return self._binance_signed_request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
 
     def _auto_close_on_protective_failure(self, readiness: dict) -> bool:
         if readiness.get("demo_trading") is not True:
@@ -993,6 +1516,8 @@ class LiveBrokerAdapter:
             "quantity": self._format_decimal(quantity),
             "newClientOrderId": order_id[:36],
         }
+        if order_type == "MARKET":
+            entry["newOrderRespType"] = "RESULT"
         if order_type == "LIMIT":
             entry["timeInForce"] = "GTC" if str(ticket.get("time_in_force", "")).lower() != "ioc" else "IOC"
             entry["price"] = self._format_binance_price(requested_price, filters)
@@ -1006,38 +1531,59 @@ class LiveBrokerAdapter:
         symbol: str,
         quantity: float,
         filters: dict,
+        *,
+        exit_side: str | None = None,
     ) -> list[dict]:
         is_buy = self._is_buy_action(str(ticket.get("action", "")))
-        exit_side = "SELL" if is_buy else "BUY"
+        resolved_exit_side = str(exit_side or ("SELL" if is_buy else "BUY")).upper()
         protective = []
         if quantity <= 0:
             return protective
+        use_algo_orders = self._binance_uses_algo_protective_orders()
         if ticket.get("stop_loss") is not None:
-            protective.append(
-                {
-                    "symbol": symbol,
-                    "side": exit_side,
-                    "type": "STOP_MARKET",
-                    "quantity": self._format_decimal(quantity),
-                    "reduceOnly": "true",
-                    "stopPrice": self._format_binance_price(float(ticket["stop_loss"]), filters),
-                    "newClientOrderId": f"{order_id[:28]}_sl",
-                }
-            )
+            protective.append(self._binance_protective_payload(order_id, symbol, resolved_exit_side, "STOP_MARKET", float(ticket["stop_loss"]), quantity, filters, "sl", use_algo_orders))
         targets = ticket.get("targets") or []
         if targets:
-            protective.append(
-                {
-                    "symbol": symbol,
-                    "side": exit_side,
-                    "type": "TAKE_PROFIT_MARKET",
-                    "quantity": self._format_decimal(quantity),
-                    "reduceOnly": "true",
-                    "stopPrice": self._format_binance_price(float(targets[0]), filters),
-                    "newClientOrderId": f"{order_id[:28]}_tp",
-                }
-            )
+            protective.append(self._binance_protective_payload(order_id, symbol, resolved_exit_side, "TAKE_PROFIT_MARKET", float(targets[0]), quantity, filters, "tp", use_algo_orders))
         return protective
+
+    def _binance_uses_algo_protective_orders(self) -> bool:
+        value = str(self.broker_config.get("protective_order_endpoint", "order")).lower()
+        return value in {"algo", "algo_order", "algoorder", "/fapi/v1/algoorder"}
+
+    def _binance_protective_payload(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+        order_type: str,
+        trigger_price: float,
+        quantity: float,
+        filters: dict,
+        suffix: str,
+        use_algo_orders: bool,
+    ) -> dict:
+        if use_algo_orders:
+            return {
+                "_endpoint": "/fapi/v1/algoOrder",
+                "symbol": symbol,
+                "side": side,
+                "algoType": "CONDITIONAL",
+                "type": order_type,
+                "quantity": self._format_decimal(quantity),
+                "reduceOnly": "true",
+                "triggerPrice": self._format_binance_price(trigger_price, filters),
+                "clientAlgoId": f"{order_id[:27]}_{suffix}",
+            }
+        return {
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "quantity": self._format_decimal(quantity),
+            "reduceOnly": "true",
+            "stopPrice": self._format_binance_price(trigger_price, filters),
+            "newClientOrderId": f"{order_id[:28]}_{suffix}",
+        }
 
     def _format_binance_price(self, value: float, filters: dict) -> str:
         return self._format_decimal(self._round_step(value, str(filters.get("tick_size", "0.01"))))

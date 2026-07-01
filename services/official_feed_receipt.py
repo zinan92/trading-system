@@ -46,17 +46,20 @@ class OfficialFeedReceipt:
     ) -> dict:
         provider_groups = lineage.get("provider_groups", {})
         official_group = provider_groups.get("official", {})
+        execution_venue_group = provider_groups.get("execution_venue", provider_groups.get("execution", {}))
         official_rows = int(official_group.get("rows") or preflight.get("official_rows") or 0)
+        execution_venue_rows = int(execution_venue_group.get("rows") or preflight.get("execution_venue_rows") or 0)
         latest_official_bar = lineage.get("latest_official_bar") or {}
+        latest_execution_venue_bar = lineage.get("latest_execution_venue_bar") or {}
         preflight_ready_for_live = bool(preflight.get("ready_for_live"))
         lineage_ready_for_live = bool(lineage.get("ready_for_live"))
         truth_level = lineage.get("truth_level", "unknown")
+        official_ready = bool(truth_level == "official_broker" and official_rows > 0 and latest_official_bar)
+        execution_venue_ready = bool(truth_level == "execution_venue" and execution_venue_rows > 0 and (latest_execution_venue_bar or preflight.get("latest_provider") == "binance_usdm"))
         ready_for_live = (
             preflight_ready_for_live
             and lineage_ready_for_live
-            and truth_level == "official_broker"
-            and official_rows > 0
-            and bool(latest_official_bar)
+            and (official_ready or execution_venue_ready)
         )
         status = "pass" if ready_for_live else "warn"
         next_actions = self._next_actions(status, oanda_feed, feed_doctor, feed_import, preflight)
@@ -69,8 +72,11 @@ class OfficialFeedReceipt:
             "lineage_ready_for_live": lineage_ready_for_live,
             "truth_level": truth_level,
             "official_rows": official_rows,
+            "execution_venue_rows": execution_venue_rows,
             "official_providers": official_group.get("providers", []),
+            "execution_venue_providers": execution_venue_group.get("providers", []),
             "latest_official_bar": latest_official_bar,
+            "latest_execution_venue_bar": latest_execution_venue_bar,
             "latest_provider": preflight.get("latest_provider", ""),
             "latest_price": preflight.get("latest_price"),
             "latest_timestamp": preflight.get("latest_timestamp", ""),
@@ -101,6 +107,7 @@ class OfficialFeedReceipt:
                 "ready_for_paper": preflight.get("ready_for_paper"),
                 "ready_for_live": preflight.get("ready_for_live"),
                 "official_rows": preflight.get("official_rows", 0),
+                "execution_venue_rows": preflight.get("execution_venue_rows", 0),
                 "public_rows": preflight.get("public_rows", 0),
             },
             "lineage": {
@@ -118,6 +125,8 @@ class OfficialFeedReceipt:
 
     def _next_actions(self, status: str, oanda_feed: dict, feed_doctor: dict, feed_import: dict, preflight: dict) -> list[str]:
         if status == "pass":
+            if preflight.get("live_data_mode") == "execution_venue" or preflight.get("latest_provider") == "binance_usdm":
+                return ["Binance USDM XAUUSDT execution venue feed is live-ready for this venue; keep paper/live gates controlled by live_readiness and live_activation."]
             return ["Official GOLD/XAUUSD 5m feed is live-ready; keep paper/live gates controlled by live_readiness and live_activation."]
         actions: list[str] = []
         missing_env = oanda_feed.get("missing_env") or []
@@ -128,7 +137,7 @@ class OfficialFeedReceipt:
         elif int(feed_import.get("imported_rows", 0) or 0) == 0 and int(preflight.get("official_rows", 0) or 0) == 0:
             actions.append("Add or update the XAUUSD 5m CSV so broker_feed_bridge imports at least one official row.")
         if not preflight.get("ready_for_live"):
-            actions.append("Confirm the latest clean GOLD_5m bar comes from an official provider and is fresh enough for live readiness.")
+            actions.append("Confirm the latest clean GOLD_5m bar comes from an official broker or accepted execution venue provider and is fresh enough for live readiness.")
         return actions
 
     def _write_markdown(self, payload: dict) -> None:
@@ -140,6 +149,7 @@ class OfficialFeedReceipt:
             f"- Ready for live: {payload['ready_for_live']}",
             f"- Truth level: {payload['truth_level']}",
             f"- Official rows: {payload['official_rows']}",
+            f"- Execution venue rows: {payload['execution_venue_rows']}",
             f"- Latest provider: {payload['latest_provider']}",
             f"- Latest price: {payload['latest_price']}",
             f"- Latest timestamp: {payload['latest_timestamp']}",

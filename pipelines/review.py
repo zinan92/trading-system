@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.reporting import ReportBuilder
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the daily trading journal report and strategy review notes.")
-    parser.add_argument("--date", default=date.today().isoformat(), help="Run date in YYYY-MM-DD format.")
+    parser.add_argument("--date", default=utc_run_date(), help="Run date in YYYY-MM-DD format.")
     args = parser.parse_args()
 
     report_path = ReportBuilder().build_daily_report(args.date)

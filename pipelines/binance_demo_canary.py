@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.binance_demo_canary import run_binance_demo_canary
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a locked Binance Futures Demo XAUUSDT canary.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--quantity", type=float, default=0.002, help="XAUUSDT canary quantity; default clears Binance's 5 USDT minimum notional.")
     parser.add_argument(
         "--execute-demo",

@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import urllib.parse
+from datetime import datetime, timezone
 
 import pytest
 
@@ -346,6 +348,34 @@ def test_binance_usdm_posts_real_market_order_when_all_gates_pass(tmp_path: Path
     monkeypatch.setenv("BINANCE_API_KEY", "key")
     monkeypatch.setenv("BINANCE_API_SECRET", "secret")
     write_json(root / "live_activation" / "2026-05-12.json", [{"status": "real_money_ready", "real_money_ready": True, "approval": {"approved": True}}])
+    write_json(
+        root / "live_reconciliation" / "2026-05-12.json",
+        [
+            {
+                "run_date": "2026-05-12",
+                "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "error": "",
+                "confirmation_status": "confirmed_flat",
+                "exchange_balance": {"asset": "USDT", "balance": 5000.0, "available": 4990.0, "balance_present": True},
+                "account_observation": {
+                    "account_observed": True,
+                    "balance_present": True,
+                    "history_requested": True,
+                    "fills_observed": True,
+                    "income_observed": True,
+                    "fills_count": 0,
+                    "income_count": 0,
+                    "symbol": "XAUUSDT",
+                    "reason": "test account observation",
+                },
+                "exchange_positions": [],
+                "exchange_accounting": {
+                    "net_realized_pnl_estimate": 0.0,
+                    "utc_trading_day": {"run_date": "2026-05-12", "start_time_ms": 1778544000000, "end_time_ms": 1778630399999},
+                },
+            }
+        ],
+    )
     seen = []
 
     def opener(request, timeout):
@@ -366,7 +396,16 @@ def test_binance_usdm_posts_real_market_order_when_all_gates_pass(tmp_path: Path
                     ]
                 }
             )
-        return _FakeResponse({"orderId": 42, "clientOrderId": "client", "avgPrice": "4570.25"})
+        body = urllib.parse.parse_qs(request.data.decode("utf-8")) if request.data else {}
+        is_protective = body.get("reduceOnly", ["false"])[0] == "true"
+        return _FakeResponse(
+            {
+                "orderId": 42,
+                "clientOrderId": body.get("newClientOrderId", ["client"])[0],
+                "avgPrice": "0" if is_protective else "4570.25",
+                "status": "NEW" if is_protective else "FILLED",
+            }
+        )
 
     adapter = LiveBrokerAdapter(
         root,
@@ -381,7 +420,7 @@ def test_binance_usdm_posts_real_market_order_when_all_gates_pass(tmp_path: Path
         opener=opener,
     )
 
-    order = adapter.submit_order(BrokerOrderRequest("2026-05-12", {**_ticket(), "order_type": "market"}, latest_price=4570.0, actual_size=0.25))
+    order = adapter.submit_order(BrokerOrderRequest("2026-05-12", {**_ticket(), "order_type": "market"}, latest_price=4570.0, actual_size=0.002))
 
     assert order.status == "filled"
     assert order.fill_price == 4570.25

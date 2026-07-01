@@ -4,6 +4,7 @@ import argparse
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from schemas.journal import JournalPending
 from schemas.market_data import Bar, CleanDatasetManifest
@@ -507,7 +508,7 @@ def _apply_position_gate(signal, position_map: dict, position_map_service: GoldP
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Trading OS daily pipeline.")
-    parser.add_argument("--date", default=date.today().isoformat(), help="Run date in YYYY-MM-DD format.")
+    parser.add_argument("--date", default=utc_run_date(), help="Run date in YYYY-MM-DD format.")
     args = parser.parse_args()
 
     paths = run_daily_pipeline(args.date)

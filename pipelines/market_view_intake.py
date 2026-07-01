@@ -4,6 +4,7 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.market_view_intake import MarketViewIntake
@@ -11,7 +12,7 @@ from services.market_view_intake import MarketViewIntake
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Parse Park's oral gold market view into a structured market-view artifact.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--raw-text", default="")
     parser.add_argument("--raw-file", type=Path, default=None)
     parser.add_argument("--obsidian-root", type=Path, default=None)

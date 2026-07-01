@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.daily_plan_review import DailyPlanReview
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate the evening trading review artifact.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--notes", default="")
     args = parser.parse_args()
 

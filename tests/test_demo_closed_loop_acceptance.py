@@ -31,6 +31,10 @@ def _flat_exchange_opener(request, timeout):
         return _FakeResponse([{"asset": "USDT", "balance": "100.0", "availableBalance": "95.0"}])
     if "/fapi/v1/openOrders" in url:
         return _FakeResponse([])
+    if "/fapi/v1/userTrades" in url:
+        return _FakeResponse([])
+    if "/fapi/v1/income" in url:
+        return _FakeResponse([])
     raise AssertionError(url)
 
 

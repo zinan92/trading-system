@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.binance_futures_feed import run_binance_usdm_feed_import
 from services.broker_adapter import broker_preflight
@@ -95,7 +96,7 @@ def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run one complete gold Trading Bot cycle.")
-    parser.add_argument("--date", default=date.today().isoformat(), help="Run date in YYYY-MM-DD format.")
+    parser.add_argument("--date", default=utc_run_date(), help="Run date in YYYY-MM-DD format.")
     parser.add_argument("--paper-auto-approve", action="store_true", help="Auto-execute the first pending ticket in the local paper account.")
     args = parser.parse_args()
 

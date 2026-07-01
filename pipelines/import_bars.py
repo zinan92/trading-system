@@ -5,6 +5,7 @@ import json
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.bar_importer import BarCsvImporter
 from services.config_loader import ROOT, load_pipeline_config
@@ -21,7 +22,7 @@ def _paths() -> tuple[Path, Path]:
 
 
 def import_bars(path: Path, symbol: str, timeframe: str, provider: str, run_date: str | None = None) -> dict:
-    run_date = run_date or date.today().isoformat()
+    run_date = run_date or utc_run_date()
     local_db, output_root = _paths()
     result = BarCsvImporter(MarketStore(local_db)).import_csv(path, symbol=symbol, timeframe=timeframe, provider=provider)
     result["imported_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -39,7 +40,7 @@ def main() -> None:
     parser.add_argument("--symbol", default="GOLD")
     parser.add_argument("--timeframe", default="5m")
     parser.add_argument("--provider", default="csv_import")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     args = parser.parse_args()
 
     result = import_bars(args.csv_path, args.symbol, args.timeframe, args.provider, args.date)

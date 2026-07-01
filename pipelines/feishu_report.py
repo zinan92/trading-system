@@ -4,6 +4,7 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.feishu_report_sender import FeishuReportSender
@@ -11,7 +12,7 @@ from services.feishu_report_sender import FeishuReportSender
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Send a trading report summary to Feishu and persist a receipt.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--kind", required=True, help="pm_morning, pm_evening, strategy_research, health_check, etc.")
     parser.add_argument("--title", required=True)
     parser.add_argument("--file", type=Path, default=None, help="Markdown/text artifact to send.")

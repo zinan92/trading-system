@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.paper_exit_decisions import PaperExitDecisionQueue
@@ -10,7 +11,7 @@ from services.paper_exit_decisions import PaperExitDecisionQueue
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Record a manual paper trade exit decision.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--trade-id", required=True)
     parser.add_argument("--decision", required=True, choices=["approve_exit", "reject_exit", "hold"])
     parser.add_argument("--notes", default="")

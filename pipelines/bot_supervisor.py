@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.bot_supervisor import BotSupervisor
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check the GOLD 5m mock trading bot heartbeat and daily review SLA.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     args = parser.parse_args()
     result = BotSupervisor().run(args.date)
     summary = result.get("summary", {})

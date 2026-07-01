@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.live_approval import LiveApprovalStore
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create, approve, revoke, or inspect dated live approval artifacts.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--action", choices=["request", "approve", "revoke", "status"], default="status")
     parser.add_argument("--approver", default="")
     parser.add_argument("--notes", default="")

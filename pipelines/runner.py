@@ -5,6 +5,7 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from pipelines.bot import run_bot_cycle
 from services.alert_notifier import AlertNotifier
@@ -138,7 +139,7 @@ def run_runner_once(run_date: str, paper_auto_approve: bool, interval_seconds: i
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the gold Trading Bot continuously on a local cadence.")
-    parser.add_argument("--date", default=date.today().isoformat(), help="Run date in YYYY-MM-DD format.")
+    parser.add_argument("--date", default=utc_run_date(), help="Run date in YYYY-MM-DD format.")
     parser.add_argument("--interval-seconds", type=int, default=300, help="Loop interval. Defaults to 5 minutes.")
     parser.add_argument("--iterations", type=int, default=1, help="Number of runner cycles. Use 0 to run forever.")
     parser.add_argument("--paper-auto-approve", action="store_true", help="Auto-approve the first pending ticket if risk allows it.")

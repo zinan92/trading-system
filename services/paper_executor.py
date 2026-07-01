@@ -135,12 +135,15 @@ class PaperExecutor:
         order_id: str,
         commission: float = 0.0,
         exchange_managed: bool = True,
+        protection_verified: bool = False,
     ) -> PaperOrder:
         """Mirror a REAL broker fill into local accounting at the actual fill
         price/qty (no re-modelling). Live (Binance) fills go through here so the
         system tracks its own live position — MTM, leaderboard, reconciliation.
         Tagged `exchange_managed` so local exit logic leaves the stop/target to
-        the exchange's own protective orders."""
+        the exchange's own protective orders. `protection_verified` is separate:
+        a mirrored exchange fill is not lifecycle-protected until reconciliation
+        or the broker adapter has actually observed resting protective orders."""
         now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         order = PaperOrder(
             order_id=order_id,
@@ -166,19 +169,19 @@ class PaperExecutor:
             requested_quantity=quantity,
             requested_price=fill_price,
             source="external_exchange_fill",
-            metadata={"exchange_managed": exchange_managed},
+            metadata={"exchange_managed": exchange_managed, "protection_verified": protection_verified},
         )
         for state, reason in [("submitting", "external_fill_imported"), ("accepted", "external_fill_accepted")]:
             if lifecycle.get("state") == state:
                 continue
             lifecycle = self._transition_lifecycle(run_date, order_id, state, reason=reason)
         lifecycle = self._transition_lifecycle(run_date, order_id, "filled", reason="external_fill_mirrored", filled_quantity=quantity)
-        if exchange_managed and lifecycle.get("state") == "filled":
+        if exchange_managed and protection_verified and lifecycle.get("state") == "filled":
             self._transition_lifecycle(
                 run_date,
                 order_id,
                 "protective_attached",
-                reason="exchange_managed_protection_expected",
+                reason="exchange_managed_protection_verified",
                 protective_quantity=quantity,
             )
         self._append_order(run_date, order)
@@ -476,13 +479,19 @@ class PaperExecutor:
         closed_trade["exchange_close_order_id"] = close_order_id
         flags = list(closed_trade.get("quality_flags", []))
         closed_trade["quality_flags"] = [*flags, "exchange_emergency_close"]
-        self._transition_lifecycle(
-            run_date,
-            order_id,
-            "closed",
-            reason=exit_reason,
-            metadata={"external_close": True, "exit_price": exit_price, "quantity": quantity, "close_order_id": close_order_id},
-        )
+        lifecycle_transition = {"status": "closed"}
+        try:
+            lifecycle = self._transition_lifecycle(
+                run_date,
+                order_id,
+                "closed",
+                reason=exit_reason,
+                metadata={"external_close": True, "exit_price": exit_price, "quantity": quantity, "close_order_id": close_order_id},
+            )
+            if lifecycle.get("state") != "closed":
+                lifecycle_transition = {"status": "skipped", "state": lifecycle.get("state", "")}
+        except IllegalOrderTransition as exc:
+            lifecycle_transition = {"status": "skipped", "error": str(exc)}
         remaining = [item for item in trades if item.get("order_id") != order_id]
         write_json(trades_path, remaining)
         closed_path = self.output_root / "paper_trades" / "closed" / f"{run_date}.json"
@@ -496,6 +505,7 @@ class PaperExecutor:
             "close_order_id": close_order_id,
             "exit_price": closed_trade.get("exit_price"),
             "realized_pnl": closed_trade.get("realized_pnl"),
+            "lifecycle_transition": lifecycle_transition,
         }
 
     def _append_order(self, run_date: str, order: PaperOrder) -> None:

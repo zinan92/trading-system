@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.feishu_report_sender import FeishuReportSender
 
@@ -39,7 +40,7 @@ def send_market_analysis_prompt(
     run_date: str | None = None,
     sender=None,
 ) -> dict:
-    effective_date = run_date or date.today().isoformat()
+    effective_date = run_date or utc_run_date()
     return FeishuReportSender(output_root, sender=sender).run(
         run_date=effective_date,
         kind="market_analysis_prompt",

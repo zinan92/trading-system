@@ -72,6 +72,7 @@ class Strategy:
             "london_ny_compression_breakout",
             "breakout_retest_continuation",
             "false_breakout_reversal",
+            "psych_level_rejection",
             "macd_trend_volatility_filter",
         }:
             from services.technical_rule_signal_engine import TechnicalRuleSignalEngine

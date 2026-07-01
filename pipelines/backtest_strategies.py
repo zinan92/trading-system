@@ -19,6 +19,7 @@ from pathlib import Path
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
 from services.market_store import MarketStore
+from services.run_date import utc_run_date
 from services.strategy_backtester import BacktestConfig, StrategyBacktester
 from services.strategy_registry import StrategyRegistry
 
@@ -87,7 +88,7 @@ def backtest_all(
     registry: StrategyRegistry | None = None,
     max_bars: int | None = None,
 ) -> dict:
-    run_date = run_date or date.today().isoformat()
+    run_date = run_date or utc_run_date()
     config = load_pipeline_config()
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
@@ -118,7 +119,7 @@ def backtest_all(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest every enabled strategy over local market history.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--max-bars", type=int, default=None, help="Cap bars per strategy (default: all available). Use to bound chan runtime.")
     args = parser.parse_args()
 

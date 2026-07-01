@@ -127,7 +127,33 @@
       },
       "request_dir": "live_order_requests",
       "timeout_seconds": 10
+    },
+    "binance_usdm_testnet": {
+      "provider": "binance_usdm",
+      "environment": "testnet",
+      "base_url": "https://demo-fapi.binance.com",
+      "dry_run": false,
+      "api_key_env": "BINANCE_API_KEY",
+      "api_secret_env": "BINANCE_API_SECRET",
+      "allowed_symbols": ["GOLD", "XAUUSD"],
+      "instrument_map": {
+        "GOLD": "XAUUSDT",
+        "XAUUSD": "XAUUSDT"
+      },
+      "request_dir": "testnet_order_requests",
+      "protective_order_endpoint": "algoOrder",
+      "reconcile_account_history": true,
+      "timeout_seconds": 10
     }
+  },
+  "testnet_trading": {
+    "enabled": false,
+    "broker_profile": "binance_usdm_testnet",
+    "request_dir": "testnet_order_requests",
+    "max_order_quantity": 0.002,
+    "require_flat_before_entry": true,
+    "protective_order_endpoint": "algoOrder",
+    "note": "Manual-only Binance USDM testnet drill profile for XAUUSDT. It is not used by the default runner and never targets mainnet."
   },
   "demo_trading": {
     "enabled": true,

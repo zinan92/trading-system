@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.schedule_status import ScheduleStatus
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check whether generated launchd jobs are installed and loaded.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     args = parser.parse_args()
 

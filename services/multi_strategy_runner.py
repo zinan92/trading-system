@@ -24,6 +24,7 @@ from services.config_loader import ROOT, load_pipeline_config, load_risk_rules
 from services.data_source_preflight import DataSourcePreflight
 from services.journal_store import JournalStore, load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
+from services.order_lifecycle import OrderLifecycleStore
 from services.paper_equity_curve import PaperEquityCurve
 from services.paper_performance import PaperPerformanceAnalyzer
 from services.paper_reconciliation import PaperReconciliation
@@ -260,8 +261,10 @@ class MultiStrategyRunner:
             # artifact; without it, an auto-approved ticket can never fill. The
             # global cycle still writes its own GOLD 5m preflight independently.
             DataSourcePreflight(output_root=scoped, symbol=strategy.symbol, timeframe=strategy.timeframe).run(run_date)
-            order_recovery = self._recover_demo_order_intents(strategy, scoped, run_date)
             demo_reconciliation = self._demo_reconciliation_for(strategy, scoped, run_date)
+            order_recovery = self._recover_demo_order_intents(strategy, scoped, run_date, reconciliation=demo_reconciliation)
+            if order_recovery.get("reconciliation_refresh_required"):
+                demo_reconciliation = self._demo_reconciliation_for(strategy, scoped, run_date)
             pending = load_json(scoped / "journal_pending" / f"{run_date}.json")
             recovered_ticket_ids = list(order_recovery.get("recovered_ticket_ids", []) or [])
             executed_ticket = recovered_ticket_ids[0] if recovered_ticket_ids else None
@@ -355,7 +358,7 @@ class MultiStrategyRunner:
         except Exception as exc:  # noqa: BLE001 - keep audit failures observable without altering trading behavior.
             return f"{type(exc).__name__}: {exc}"
 
-    def _recover_demo_order_intents(self, strategy, scoped: Path, run_date: str) -> dict:
+    def _recover_demo_order_intents(self, strategy, scoped: Path, run_date: str, reconciliation: dict | None = None) -> dict:
         if self._active_demo_broker_config(strategy) is None:
             return {"status": "not_applicable", "recovered_count": 0, "recovered_ticket_ids": []}
         from services.order_lifecycle import WATCHDOG_STATES, OrderLifecycleStore
@@ -374,6 +377,7 @@ class MultiStrategyRunner:
             item for item in rows
             if isinstance(item, dict) and item.get("state") == "submitting"
         ]
+        protective_recovery = self._recover_unprotected_demo_positions(strategy, scoped, run_date, rows, reconciliation or {})
         if blocked_unrecoverable:
             reason = str((blocked_unrecoverable[0].get("blocker") or {}).get("reason") or "blocked order lifecycle intent requires reconciliation")
             report = {
@@ -387,10 +391,30 @@ class MultiStrategyRunner:
                 "watchdog_blockers": watchdog_blockers,
                 "blocked_orders": blocked_unrecoverable,
                 "escalation_action": "halt_new_orders_until_order_state_reconciled",
+                "protective_recovery": protective_recovery,
+                "reconciliation_refresh_required": protective_recovery.get("refresh_required", False),
             }
             self._write_order_recovery(scoped, run_date, report)
             return report
         if not intents:
+            if protective_recovery.get("status") != "clear":
+                report = {
+                    "run_date": run_date,
+                    "strategy_id": strategy.strategy_id,
+                    "status": protective_recovery.get("status", "blocked"),
+                    "recovered_count": len(protective_recovery.get("recovered_ticket_ids", []) or []),
+                    "recovered_ticket_ids": protective_recovery.get("recovered_ticket_ids", []),
+                    "recovered_orders": protective_recovery.get("recovered_orders", []),
+                    "blocks_new_orders": protective_recovery.get("blocks_new_orders", True),
+                    "block_reason": protective_recovery.get("block_reason", ""),
+                    "errors": protective_recovery.get("errors", []),
+                    "watchdog_blockers": watchdog_blockers,
+                    "protective_recovery": protective_recovery,
+                    "reconciliation_refresh_required": protective_recovery.get("refresh_required", False),
+                    "escalation_action": "halt_new_orders_until_naked_position_resolved" if protective_recovery.get("blocks_new_orders") else "",
+                }
+                self._write_order_recovery(scoped, run_date, report)
+                return report
             report = {
                 "run_date": run_date,
                 "strategy_id": strategy.strategy_id,
@@ -400,6 +424,7 @@ class MultiStrategyRunner:
                 "blocks_new_orders": False,
                 "block_reason": "",
                 "watchdog_blockers": watchdog_blockers,
+                "protective_recovery": protective_recovery,
             }
             self._write_order_recovery(scoped, run_date, report)
             return report
@@ -423,8 +448,11 @@ class MultiStrategyRunner:
         recovered_ticket_ids: list[str] = []
         recovered_orders: list[dict] = []
         errors: list[dict] = []
-        blocks_new_orders = False
-        block_reason = ""
+        blocks_new_orders = bool(protective_recovery.get("blocks_new_orders"))
+        block_reason = str(protective_recovery.get("block_reason") or "")
+        recovered_ticket_ids.extend(protective_recovery.get("recovered_ticket_ids", []) or [])
+        recovered_orders.extend(protective_recovery.get("recovered_orders", []) or [])
+        errors.extend(protective_recovery.get("errors", []) or [])
         for intent in intents:
             ticket_id = str(intent.get("ticket_id") or "")
             ticket = self._ticket_for_recovery(scoped, run_date, ticket_id)
@@ -473,10 +501,124 @@ class MultiStrategyRunner:
             "block_reason": block_reason,
             "errors": errors,
             "watchdog_blockers": watchdog_blockers,
+            "protective_recovery": protective_recovery,
+            "reconciliation_refresh_required": protective_recovery.get("refresh_required", False),
             "escalation_action": "halt_new_orders_until_order_state_reconciled" if blocks_new_orders else "",
         }
         self._write_order_recovery(scoped, run_date, report)
         return report
+
+    def _recover_unprotected_demo_positions(self, strategy, scoped: Path, run_date: str, lifecycle_rows: list[dict], reconciliation: dict) -> dict:
+        if not reconciliation or not reconciliation.get("suspected_naked_position"):
+            return {"status": "clear", "blocks_new_orders": False, "recovered_ticket_ids": [], "recovered_orders": [], "errors": [], "actions": [], "refresh_required": False}
+        risks = [
+            item for item in reconciliation.get("naked_position_risks", [])
+            if isinstance(item, dict) and item.get("missing_protective_order")
+        ]
+        if not risks:
+            return {"status": "clear", "blocks_new_orders": False, "recovered_ticket_ids": [], "recovered_orders": [], "errors": [], "actions": [], "refresh_required": False}
+        adapter = self._broker_adapter_for(strategy, scoped)
+        if adapter is None or not hasattr(adapter, "recover_missing_protective_orders"):
+            reason = "demo naked position recovery has no broker adapter capable of attaching protective orders"
+            return {
+                "status": "blocked",
+                "blocks_new_orders": True,
+                "block_reason": reason,
+                "recovered_ticket_ids": [],
+                "recovered_orders": [],
+                "errors": [{"error": reason}],
+                "actions": [],
+                "refresh_required": False,
+            }
+        candidates = [
+            item for item in lifecycle_rows
+            if isinstance(item, dict) and str(item.get("state") or "") in {"filled", "protective_failed", "protective_attached"}
+        ]
+        actions: list[dict] = []
+        errors: list[dict] = []
+        recovered_ticket_ids: list[str] = []
+        recovered_orders: list[dict] = []
+        blocks_new_orders = False
+        block_reason = ""
+        for risk in risks:
+            exchange_symbol = str(risk.get("exchange_symbol") or "").upper()
+            lifecycle = self._lifecycle_for_exchange_symbol(candidates, exchange_symbol)
+            if not lifecycle:
+                blocks_new_orders = True
+                reason = f"cannot recover naked {exchange_symbol} position without filled/protective_failed lifecycle record"
+                block_reason = block_reason or reason
+                errors.append({"exchange_symbol": exchange_symbol, "error": reason})
+                continue
+            try:
+                action = adapter.recover_missing_protective_orders(
+                    run_date,
+                    lifecycle,
+                    self._exchange_position_for_risk(reconciliation, risk),
+                    source="order_recovery_missing_protective",
+                )
+            except (OSError, TimeoutError, RuntimeError, ValueError, KeyError) as exc:
+                blocks_new_orders = True
+                reason = f"{type(exc).__name__}: {exc}"
+                block_reason = block_reason or reason
+                errors.append({"order_id": lifecycle.get("order_id"), "exchange_symbol": exchange_symbol, "error": reason})
+                continue
+            actions.append(action)
+            recovered_orders.append(
+                {
+                    "order_id": lifecycle.get("order_id", ""),
+                    "ticket_id": lifecycle.get("ticket_id", ""),
+                    "status": action.get("status", ""),
+                    "state": OrderLifecycleStore(scoped).current(run_date, str(lifecycle.get("order_id") or "")).get("state", ""),
+                    "recovery_action": action.get("action", ""),
+                }
+            )
+            if action.get("status") == "recovered":
+                recovered_ticket_ids.append(str(lifecycle.get("ticket_id") or ""))
+            else:
+                blocks_new_orders = True
+                reason = action.get("block_reason") or action.get("protective_status") or "missing protective recovery did not complete"
+                block_reason = block_reason or str(reason)
+                errors.append({"order_id": lifecycle.get("order_id"), "exchange_symbol": exchange_symbol, "error": str(reason)})
+        status = "blocked" if blocks_new_orders else "recovered" if actions else "clear"
+        return {
+            "status": status,
+            "blocks_new_orders": blocks_new_orders,
+            "block_reason": block_reason,
+            "recovered_ticket_ids": recovered_ticket_ids,
+            "recovered_orders": recovered_orders,
+            "errors": errors,
+            "actions": actions,
+            "refresh_required": bool(actions),
+        }
+
+    def _lifecycle_for_exchange_symbol(self, rows: list[dict], exchange_symbol: str) -> dict:
+        if not exchange_symbol:
+            return rows[0] if rows else {}
+        for row in rows:
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            ticket = metadata.get("ticket") if isinstance(metadata.get("ticket"), dict) else {}
+            row_symbol = str(metadata.get("symbol") or "").upper()
+            if row_symbol == exchange_symbol:
+                return row
+            asset = str(ticket.get("asset") or "GOLD")
+            configured = str((load_pipeline_config().get("broker", {}) or {}).get("instrument_map", {}).get(asset, "")).upper()
+            if configured == exchange_symbol:
+                return row
+        return rows[0] if len(rows) == 1 else {}
+
+    def _exchange_position_for_risk(self, reconciliation: dict, risk: dict) -> dict:
+        exchange_symbol = str(risk.get("exchange_symbol") or "").upper()
+        for position in reconciliation.get("exchange_positions", []):
+            if isinstance(position, dict) and str(position.get("symbol") or "").upper() == exchange_symbol:
+                return position
+        protection = risk.get("position_protection") if isinstance(risk.get("position_protection"), dict) else {}
+        if protection:
+            return {
+                "symbol": exchange_symbol,
+                "position_amt": protection.get("position_amt", risk.get("exchange_qty", 0)),
+                "entry_price": risk.get("entry_price", 0),
+            }
+        return {"symbol": exchange_symbol, "position_amt": risk.get("exchange_qty", 0), "entry_price": risk.get("entry_price", 0)}
 
     def _ticket_for_recovery(self, scoped: Path, run_date: str, ticket_id: str) -> dict:
         ticket = next((item for item in load_json(scoped / "trade_tickets" / f"{run_date}.json") if item.get("ticket_id") == ticket_id), {})

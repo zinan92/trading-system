@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.live_dry_run_drill import LiveDryRunDrill
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a consolidated live dry-run drill for the GOLD 5m Trading Bot.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     parser.add_argument("--no-refresh", action="store_true", help="Use existing artifacts instead of refreshing dependent gates.")
     args = parser.parse_args()

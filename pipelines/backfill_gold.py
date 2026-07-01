@@ -5,6 +5,7 @@ import json
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
@@ -21,7 +22,7 @@ def _paths() -> tuple[Path, Path, dict]:
 
 
 def backfill_gold_5m(run_date: str | None = None, yahoo_symbol: str | None = None, range_value: str | None = None) -> dict:
-    run_date = run_date or date.today().isoformat()
+    run_date = run_date or utc_run_date()
     local_db, output_root, config = _paths()
     backfill_config = config.get("gold_5m_backfill", {})
     symbol = yahoo_symbol or backfill_config.get("yahoo_symbol", "GC=F")
@@ -52,7 +53,7 @@ def backfill_gold_5m(run_date: str | None = None, yahoo_symbol: str | None = Non
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill GOLD 5m history into the local market database.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--yahoo-symbol", default=None, help="Yahoo chart symbol. Defaults to config gold_5m_backfill.yahoo_symbol.")
     parser.add_argument("--range", dest="range_value", default=None, help="Yahoo range, for example 5d or 1mo.")
     args = parser.parse_args()

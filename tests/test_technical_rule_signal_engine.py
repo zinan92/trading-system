@@ -43,6 +43,7 @@ def test_registry_selects_technical_rule_engines():
         "london_ny_compression_breakout",
         "breakout_retest_continuation",
         "false_breakout_reversal",
+        "psych_level_rejection",
         "macd_trend_volatility_filter",
     ):
         strategy = StrategyRegistry({f"gold_1m_{engine}": {"engine": engine, "timeframe": "1m", "signal": {"min_bars": 5}}}).get(f"gold_1m_{engine}")
@@ -206,6 +207,41 @@ def test_breakout_retest_continuation_requires_breakout_retest_strength_and_sess
 
     off_session = list(bars)
     off_session[-1] = Bar("GOLD", "5m", "2026-05-26T22:00:00+00:00", bars[-1].open, bars[-1].high, bars[-1].low, bars[-1].close, 18, "test", [])
+    assert engine.generate(GOLD, off_session, run_date="2026-05-26").direction == "watch"
+
+
+def test_psych_level_rejection_requires_sweep_reclaim_volatility_and_session():
+    bars = [
+        Bar("GOLD", "5m", f"2026-05-26T14:{index % 60:02d}:00+00:00", 100.0, 100.08, 99.92, 100.00 + (0.02 if index % 2 else -0.02), 10, "test", [])
+        for index in range(95)
+    ]
+    bars.append(Bar("GOLD", "5m", "2026-05-26T14:55:00+00:00", 99.92, 100.08, 99.60, 100.04, 10, "test", []))
+    engine = TechnicalRuleSignalEngine(
+        {
+            "engine": "psych_level_rejection",
+            "signal": {
+                "min_bars": 96,
+                "level_step": 25,
+                "atr_lookback_bars": 14,
+                "min_atr_pct": 0.01,
+                "max_atr_pct": 1.0,
+                "adx_lookback_bars": 14,
+                "max_adx": 60,
+                "sweep_tolerance_pct": 0.0,
+                "reclaim_buffer_pct": 0.0,
+                "min_rejection_wick_pct": 0.02,
+                "max_close_distance_pct": 0.20,
+                "session_start_utc": 7,
+                "session_end_utc": 20,
+            },
+        }
+    )
+    signal = engine.generate(GOLD, bars, run_date="2026-05-26")
+    assert signal.direction == "long"
+    assert signal.regime == "psych_level_rejection"
+
+    off_session = list(bars)
+    off_session[-1] = Bar("GOLD", "5m", "2026-05-26T22:00:00+00:00", bars[-1].open, bars[-1].high, bars[-1].low, bars[-1].close, 10, "test", [])
     assert engine.generate(GOLD, off_session, run_date="2026-05-26").direction == "watch"
 
 

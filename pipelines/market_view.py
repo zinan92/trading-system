@@ -4,6 +4,7 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.market_store import MarketStore
@@ -12,7 +13,7 @@ from services.market_view import MarketViewStore
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Record Park's daily gold market view and direction bias.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--score", type=float, required=True)
     parser.add_argument("--summary", required=True)
     parser.add_argument("--raw-text", default="")

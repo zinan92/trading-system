@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.data_source_lineage import DataSourceLineage
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Audit local GOLD 5m database provider lineage.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     result = DataSourceLineage().run(args.date)

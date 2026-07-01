@@ -148,6 +148,7 @@ class ScheduleManager:
             "StandardErrorPath": str(log_dir / f"{label}.err.log"),
             "EnvironmentVariables": {
                 "PYTHONUNBUFFERED": "1",
+                "TZ": "UTC",
                 "TRADING_ORCHESTRATOR_OUTPUT_ROOT": str(self.output_root),
                 "TRADING_ORCHESTRATOR_MARKET_DB": str(self.repo_root / "data" / "market_data.db"),
                 "TRADING_ORCHESTRATOR_LIVE_ENV": str(self.repo_root / "configs" / "live.env"),

@@ -76,6 +76,8 @@ class TechnicalRuleSignalEngine:
             return self._breakout_retest_continuation(candles)
         if self.engine_type == "false_breakout_reversal":
             return self._false_breakout_reversal(candles)
+        if self.engine_type == "psych_level_rejection":
+            return self._psych_level_rejection(candles)
         if self.engine_type == "macd_trend_volatility_filter":
             return self._macd_trend_volatility_filter(candles)
         if self.engine_type == "fibonacci":
@@ -540,6 +542,89 @@ class TechnicalRuleSignalEngine:
             )
         return None
 
+    def _psych_level_rejection(self, candles: list) -> dict | None:
+        if not self._in_utc_session(str(candles[-1].timestamp)):
+            return None
+        atr_lookback = int(self.signal_cfg.get("atr_lookback_bars", 14))
+        adx_lookback = int(self.signal_cfg.get("adx_lookback_bars", 14))
+        level_step = float(self.signal_cfg.get("level_step", 25.0))
+        min_atr_pct = float(self.signal_cfg.get("min_atr_pct", 0.015))
+        max_atr_pct = float(self.signal_cfg.get("max_atr_pct", 0.28))
+        max_adx = float(self.signal_cfg.get("max_adx", 32))
+        sweep_tolerance_pct = float(self.signal_cfg.get("sweep_tolerance_pct", 0.015))
+        reclaim_buffer_pct = float(self.signal_cfg.get("reclaim_buffer_pct", 0.006))
+        min_wick_pct = float(self.signal_cfg.get("min_rejection_wick_pct", 0.025))
+        max_close_distance_pct = float(self.signal_cfg.get("max_close_distance_pct", 0.10))
+        min_required = max(atr_lookback + 1, adx_lookback * 2 + 1)
+        if len(candles) < min_required or level_step <= 0:
+            return None
+        atr_pct = self._atr_pct(candles, atr_lookback)
+        if atr_pct < min_atr_pct or atr_pct > max_atr_pct:
+            return None
+        adx_value, plus_di, minus_di = self._adx(candles, adx_lookback)
+        if adx_value > max_adx:
+            return None
+        last = candles[-1]
+        close = float(last.close)
+        open_price = float(last.open)
+        high = float(last.high)
+        low = float(last.low)
+        if close <= 0:
+            return None
+        level = round(close / level_step) * level_step
+        if level <= 0:
+            return None
+        close_distance_pct = abs(close - level) / level * 100
+        if close_distance_pct > max_close_distance_pct:
+            return None
+        lower_wick_pct = (min(open_price, close) - low) / level * 100
+        upper_wick_pct = (high - max(open_price, close)) / level * 100
+        swept_support = low <= level * (1 - sweep_tolerance_pct / 100)
+        reclaimed_support = close >= level * (1 + reclaim_buffer_pct / 100)
+        swept_resistance = high >= level * (1 + sweep_tolerance_pct / 100)
+        rejected_resistance = close <= level * (1 - reclaim_buffer_pct / 100)
+        if swept_support and reclaimed_support and close > open_price and lower_wick_pct >= min_wick_pct:
+            return self._setup(
+                "long",
+                "psych_level_rejection",
+                "GOLD swept below a nearby psychological level and closed back above it while trend strength stayed capped.",
+                [
+                    f"close={close:.2f}",
+                    f"level={level:.2f}",
+                    f"low={low:.2f}",
+                    f"lower_wick={lower_wick_pct:.3f}%",
+                    f"atr={atr_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 7)}-{self.signal_cfg.get('session_end_utc', 20)}",
+                ],
+                "价格重新跌破心理整数位，或 ADX 升破趋势阈值显示扫单失败转为趋势延续。",
+                strength=73,
+                confidence=63,
+            )
+        if swept_resistance and rejected_resistance and close < open_price and upper_wick_pct >= min_wick_pct:
+            return self._setup(
+                "short",
+                "psych_level_rejection",
+                "GOLD swept above a nearby psychological level and closed back below it while trend strength stayed capped.",
+                [
+                    f"close={close:.2f}",
+                    f"level={level:.2f}",
+                    f"high={high:.2f}",
+                    f"upper_wick={upper_wick_pct:.3f}%",
+                    f"atr={atr_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 7)}-{self.signal_cfg.get('session_end_utc', 20)}",
+                ],
+                "价格重新站上心理整数位，或 ADX 升破趋势阈值显示扫单失败转为趋势延续。",
+                strength=73,
+                confidence=63,
+            )
+        return None
+
     def _fibonacci(self, candles: list) -> dict | None:
         lookback = int(self.signal_cfg.get("lookback_bars", 96))
         tolerance_pct = float(self.signal_cfg.get("tolerance_pct", 0.08))
@@ -763,6 +848,7 @@ class TechnicalRuleSignalEngine:
             "london_ny_compression_breakout": 50,
             "breakout_retest_continuation": 80,
             "false_breakout_reversal": 60,
+            "psych_level_rejection": 60,
             "macd_trend_volatility_filter": 70,
             "fibonacci": 120,
             "ema50_position": 70,

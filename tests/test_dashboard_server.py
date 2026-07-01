@@ -385,6 +385,78 @@ def test_system_status_contract_uses_structured_reconciliation_unknown_blocker()
     assert "cannot confirm" in contract["trade_permission"]["primary_blocker"]["message"]
 
 
+def test_system_status_contract_prioritizes_live_money_guardrail_before_position_limit():
+    payload = _contract_payload()
+    payload["performance_board"]["strategies"][0]["open_trades"] = 3
+    payload["live_money_guardrails"] = {
+        "status": "BLOCKED_DAILY_LOSS_LIMIT",
+        "allows_new_order": False,
+        "primary_blocker": {
+            "status": "BLOCKED_DAILY_LOSS_LIMIT",
+            "code": "daily_loss_limit",
+            "source": "live_money_guardrails.daily_loss",
+            "message": "daily live/testnet loss reached limit",
+        },
+        "limits": {"daily_loss_limit_pct": 1.25},
+    }
+
+    contract = build_system_status_contract(payload)
+
+    permission = contract["trade_permission"]
+    assert contract["status"] == "BLOCKED_DAILY_LOSS_LIMIT"
+    assert permission["allows_new_order_if_signal"] is False
+    assert permission["primary_blocker"]["code"] == "daily_loss_limit"
+    assert permission["is_position_limit"] is False
+
+
+def test_system_status_contract_surfaces_each_live_money_guardrail_code():
+    cases = [
+        ("BLOCKED_SINGLE_ORDER_NOTIONAL_LIMIT", "single_order_notional_limit"),
+        ("BLOCKED_TOTAL_NOTIONAL_LIMIT", "total_notional_limit"),
+        ("BLOCKED_DAILY_TRADE_LIMIT", "daily_trade_limit"),
+    ]
+
+    for status, code in cases:
+        payload = _contract_payload()
+        payload["live_money_guardrails"] = {
+            "status": status,
+            "allows_new_order": False,
+            "primary_blocker": {
+                "status": status,
+                "code": code,
+                "source": f"live_money_guardrails.{code}",
+                "message": f"{code} blocked",
+            },
+        }
+
+        contract = build_system_status_contract(payload)
+
+        assert contract["status"] == status
+        assert contract["trade_permission"]["allows_new_order_if_signal"] is False
+        assert contract["trade_permission"]["primary_blocker"]["code"] == code
+
+
+def test_system_status_contract_prioritizes_operator_halt_before_system_health():
+    payload = _contract_payload()
+    payload["system_vitals"]["vitals"][0]["status"] = "down"
+    payload["system_vitals"]["vitals"][0]["message"] = "GOLD feed stale"
+    payload["live_money_guardrails"] = {
+        "status": "BLOCKED_OPERATOR_HALT",
+        "allows_new_order": False,
+        "primary_blocker": {
+            "status": "BLOCKED_OPERATOR_HALT",
+            "code": "operator_halt",
+            "source": "live_halt.current",
+            "message": "operator HALT is active",
+        },
+    }
+
+    contract = build_system_status_contract(payload)
+
+    assert contract["status"] == "BLOCKED_OPERATOR_HALT"
+    assert contract["trade_permission"]["primary_blocker"]["code"] == "operator_halt"
+
+
 def test_trader_overview_contract_is_reader_facing_and_drops_ops_only_sections():
     payload = _contract_payload()
 

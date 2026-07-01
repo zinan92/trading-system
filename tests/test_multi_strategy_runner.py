@@ -534,6 +534,73 @@ def test_runner_reprobes_blocked_submitting_intent_after_connectivity_recovers(m
     assert lifecycle["resolved_blockers"][0]["blocker"]["source"] == "order_lifecycle_watchdog"
 
 
+def test_runner_recovers_filled_intent_with_missing_protective_orders(monkeypatch, tmp_path: Path):
+    root = tmp_path / "outputs"
+    run_date = "2026-06-30"
+    runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
+    strategy = runner.registry.get("gold_1m_chan")
+    scoped = runner.strategy_root("gold_1m_chan")
+    ticket = _demo_ticket(run_date, "filled_naked")
+    order_id = "demo_order_filled_without_protective"
+    store = OrderLifecycleStore(scoped)
+    store.write_intent(
+        run_date,
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=order_id[:36],
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="binance_usdm:demo",
+        metadata={"symbol": "XAUUSDT", "ticket": ticket},
+    )
+    store.transition(run_date, order_id, "submitting", reason="submit_started")
+    store.transition(run_date, order_id, "accepted", reason="entry_accepted")
+    store.transition(run_date, order_id, "filled", reason="crash_after_fill_before_protective", filled_quantity=0.002)
+    reconciliation = {
+        "suspected_naked_position": True,
+        "naked_position_risks": [
+            {
+                "exchange_symbol": "XAUUSDT",
+                "exchange_qty": 0.002,
+                "reason_code": "naked_position_suspected",
+                "missing_protective_order": True,
+            }
+        ],
+        "exchange_positions": [{"symbol": "XAUUSDT", "position_amt": 0.002, "entry_price": 4525.5}],
+    }
+
+    class ProtectiveRecoveryAdapter:
+        name = "binance_demo"
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def recover_missing_protective_orders(self, date, lifecycle, exchange_position, *, source):
+            self.calls.append((date, lifecycle, exchange_position, source))
+            OrderLifecycleStore(scoped).transition(date, order_id, "protective_attached", reason="recovered_missing_protective", protective_quantity=0.002)
+            return {
+                "status": "recovered",
+                "action": "attach_missing_protective_orders",
+                "order_id": order_id,
+                "ticket_id": ticket["ticket_id"],
+                "protective_status": "pass",
+            }
+
+    adapter = ProtectiveRecoveryAdapter()
+    monkeypatch.setattr(runner, "_broker_adapter_for", lambda *_args, **_kwargs: adapter)
+
+    report = runner._recover_demo_order_intents(strategy, scoped, run_date, reconciliation=reconciliation)
+    lifecycle = OrderLifecycleStore(scoped).current(run_date, order_id)
+
+    assert report["status"] == "recovered"
+    assert report["reconciliation_refresh_required"] is True
+    assert report["blocks_new_orders"] is False
+    assert report["recovered_ticket_ids"] == [ticket["ticket_id"]]
+    assert adapter.calls[0][3] == "order_recovery_missing_protective"
+    assert lifecycle["state"] == "protective_attached"
+    assert lifecycle["protective_quantity"] == 0.002
+
+
 def test_runner_ambiguous_demo_recovery_blocks_new_orders_until_watchdog_blocks(monkeypatch, tmp_path: Path):
     root = tmp_path / "outputs"
     run_date = "2026-06-30"

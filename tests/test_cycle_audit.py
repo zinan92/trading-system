@@ -227,6 +227,84 @@ def test_cycle_audit_records_risk_block_reason_code(tmp_path: Path):
     assert record["no_ticket_reasons"][0]["reason_code"] == "portfolio_risk"
 
 
+def test_cycle_audit_records_live_money_guardrail_from_canonical_permission(tmp_path: Path):
+    base, namespace = _namespace(tmp_path)
+    _write_system_vitals(base)
+    _seed_common_artifacts(namespace, signal_direction="long", decision="go")
+    write_json(
+        namespace / "live_money_guardrails" / "current.json",
+        [
+            {
+                "run_date": RUN_DATE,
+                "status": "BLOCKED_DAILY_LOSS_LIMIT",
+                "allows_new_order": False,
+                "primary_blocker": {
+                    "status": "BLOCKED_DAILY_LOSS_LIMIT",
+                    "code": "daily_loss_limit",
+                    "source": "live_money_guardrails.daily_loss",
+                    "message": "daily live/testnet loss reached limit",
+                },
+                "limits": {"daily_loss_limit_pct": 1.25},
+            }
+        ],
+    )
+
+    record = _finalize(base, namespace)
+
+    permission = record["system_state"]["trade_permission"]
+    why_not = record["execution"]["why_not_executed"]
+    assert permission["status"] == "BLOCKED_DAILY_LOSS_LIMIT"
+    assert why_not == [
+        {
+            "reason_code": "daily_loss_limit",
+            "status": "BLOCKED_DAILY_LOSS_LIMIT",
+            "reason": "daily live/testnet loss reached limit",
+            "source": "trade_permission.primary_blocker",
+        }
+    ]
+
+
+def test_cycle_audit_records_each_live_money_guardrail_code_from_canonical_permission(tmp_path: Path):
+    cases = [
+        ("BLOCKED_SINGLE_ORDER_NOTIONAL_LIMIT", "single_order_notional_limit"),
+        ("BLOCKED_TOTAL_NOTIONAL_LIMIT", "total_notional_limit"),
+        ("BLOCKED_DAILY_TRADE_LIMIT", "daily_trade_limit"),
+    ]
+
+    for status, code in cases:
+        base, namespace = _namespace(tmp_path / code)
+        _write_system_vitals(base)
+        _seed_common_artifacts(namespace, signal_direction="long", decision="go")
+        write_json(
+            namespace / "live_money_guardrails" / "current.json",
+            [
+                {
+                    "run_date": RUN_DATE,
+                    "status": status,
+                    "allows_new_order": False,
+                    "primary_blocker": {
+                        "status": status,
+                        "code": code,
+                        "source": f"live_money_guardrails.{code}",
+                        "message": f"{code} blocked",
+                    },
+                }
+            ],
+        )
+
+        record = _finalize(base, namespace)
+
+        assert record["system_state"]["trade_permission"]["status"] == status
+        assert record["execution"]["why_not_executed"] == [
+            {
+                "reason_code": code,
+                "status": status,
+                "reason": f"{code} blocked",
+                "source": "trade_permission.primary_blocker",
+            }
+        ]
+
+
 def test_cycle_audit_consumes_trade_permission_for_position_limit(tmp_path: Path):
     base, namespace = _namespace(tmp_path)
     _write_system_vitals(base)
@@ -379,6 +457,71 @@ def test_cycle_audit_records_protective_failed_block(tmp_path: Path):
     assert record["protective"]["status"] == "failed"
     assert record["protective"]["reason_code"] == "protective_failed"
     assert record["system_state"]["trade_permission"]["status"] == "BLOCKED_PROTECTION_MISSING"
+
+
+def test_cycle_audit_does_not_mark_exchange_managed_trade_covered_without_resting_stop(tmp_path: Path):
+    base, namespace = _namespace(tmp_path)
+    _write_system_vitals(base)
+    _seed_common_artifacts(namespace, signal_direction="long", decision="go")
+    ticket = {
+        "ticket_id": "ticket_exchange_managed_unverified",
+        "signal_id": "sig_cycle",
+        "asset": "GOLD",
+        "action": "prepare_buy",
+        "entry_zone": "4520-4530",
+        "stop_loss": 4500,
+        "targets": [4560],
+        "position_size_pct": 8,
+        "max_loss_pct": 0.2,
+        "order_type": "market",
+        "time_in_force": "day",
+    }
+    write_json(namespace / "trade_tickets" / f"{RUN_DATE}.json", [ticket])
+    write_json(
+        namespace / "paper_trades" / "current.json",
+        [
+            {
+                **ticket,
+                "trade_id": "trade_exchange_managed_unverified",
+                "status": "open",
+                "order_id": "order_exchange_managed_unverified",
+                "stop_loss": None,
+                "target": None,
+                "exchange_managed": True,
+                "quality_flags": ["exchange_managed", "live_fill"],
+            }
+        ],
+    )
+    write_json(
+        namespace / "live_reconciliation" / "current.json",
+        [
+            {
+                "reconciled": False,
+                "confirmation_status": "confirmed_drift",
+                "system_state": "BLOCKED_NAKED_POSITION_SUSPECTED",
+                "reason_code": "naked_position_suspected",
+                "suspected_naked_position": True,
+                "drift_count": 1,
+                "position_protection": [
+                    {
+                        "exchange_symbol": "XAUUSDT",
+                        "position_amt": 0.002,
+                        "required_qty": 0.002,
+                        "covered": False,
+                        "covered_qty": 0.0,
+                        "reason_code": "position_without_resting_protective_stop",
+                    }
+                ],
+            }
+        ],
+    )
+
+    record = _finalize(base, namespace)
+
+    assert record["orders"]["tp_sl_covered"] is False
+    assert record["protective"]["status"] == "naked"
+    assert record["protective"]["reason_code"] == "position_without_resting_protective_stop"
+    assert record["system_state"]["trade_permission"]["status"] == "BLOCKED_NAKED_POSITION_SUSPECTED"
 
 
 def test_runner_writes_error_cycle_audit_when_cycle_raises(monkeypatch, tmp_path: Path):

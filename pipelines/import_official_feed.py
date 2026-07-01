@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from pipelines.daily import run_daily_pipeline
 from services.broker_feed_bridge import BrokerFeedBridge
@@ -93,7 +94,7 @@ def _write_official_quote_snapshot(output_root, run_date: str, preflight: dict) 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import official XAUUSD 5m feed, refresh the pipeline, and rerun readiness gates.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     args = parser.parse_args()
 

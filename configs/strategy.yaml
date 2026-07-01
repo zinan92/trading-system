@@ -546,6 +546,43 @@
       "session_end_utc": 20
     }
   },
+  "gold_5m_psych_level_rejection": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "psych_level_rejection",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "liquidity_reversal",
+      "family_label": "流动性反转",
+      "style": "psych_level_rejection",
+      "style_label": "心理整数位扫单回收",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_liquidity_rejection_candidate",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "key_level_reversal_medium_win_medium_r",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 96,
+      "level_step": 25.0,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.28,
+      "adx_lookback_bars": 14,
+      "max_adx": 32,
+      "sweep_tolerance_pct": 0.015,
+      "reclaim_buffer_pct": 0.006,
+      "min_rejection_wick_pct": 0.025,
+      "max_close_distance_pct": 0.10,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  },
   "gold_5m_vwap_extension_reversion": {
     "symbol": "GOLD",
     "timeframe": "5m",

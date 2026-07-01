@@ -6,6 +6,7 @@ import re
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_assets, load_pipeline_config
 from services.broker_feed_bridge import BrokerFeedBridge
@@ -49,7 +50,7 @@ def _paths(config: dict) -> tuple[Path | None, Path]:
 
 
 def collect_once(run_date: str | None = None) -> list[dict]:
-    run_date = run_date or date.today().isoformat()
+    run_date = run_date or utc_run_date()
     config = load_pipeline_config()
     local_db_path, output_root = _paths(config)
     BrokerFeedBridge(output_root=output_root, market_db=local_db_path).import_pending(run_date)
@@ -110,7 +111,7 @@ def _write_raw_quote_snapshots(output_root: Path, run_date: str, records: list[d
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect live market snapshots into the local market database.")
-    parser.add_argument("--date", default=date.today().isoformat(), help="Run date for collector log output.")
+    parser.add_argument("--date", default=utc_run_date(), help="Run date for collector log output.")
     parser.add_argument("--interval-seconds", type=int, default=300, help="Loop interval. Defaults to one 5m bar.")
     parser.add_argument("--iterations", type=int, default=1, help="Number of collection iterations. Use 1 for a single run.")
     args = parser.parse_args()

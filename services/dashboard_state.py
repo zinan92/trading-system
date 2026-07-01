@@ -104,6 +104,7 @@ class DashboardState:
         strategy_promotion_rows = load_json(self.output_root / "strategy_promotion_gate" / "current.json")
         strategy_guardrails_rows = load_json(self.output_root / "strategy_guardrails" / "current.json")
         risk_monitor_rows = load_json(self.output_root / "risk_monitor" / "current.json")
+        live_money_guardrails_rows = load_json(self.output_root / "live_money_guardrails" / "current.json")
         paper_risk_action_plan_rows = load_json(self.output_root / "paper_risk_action_plan" / "current.json")
         paper_auto_gate_rows = load_json(self.output_root / "paper_auto_approval_gate" / "current.json")
         health_rows = load_json(self.output_root / "health" / "current.json")
@@ -311,6 +312,7 @@ class DashboardState:
             "strategy_promotion_gate": strategy_promotion_rows[-1] if strategy_promotion_rows else {},
             "strategy_guardrails": strategy_guardrails_rows[-1] if strategy_guardrails_rows else {},
             "risk_monitor": risk_monitor_rows[-1] if risk_monitor_rows else {},
+            "live_money_guardrails": live_money_guardrails_rows[-1] if live_money_guardrails_rows else {},
             "paper_risk_action_plan": paper_risk_action_plan_rows[-1] if paper_risk_action_plan_rows else {},
             "paper_auto_approval_gate": paper_auto_gate_rows[-1] if paper_auto_gate_rows else {},
             "health": health,

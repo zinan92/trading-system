@@ -76,6 +76,7 @@ def test_binance_usdm_feed_imports_xauusdt_5m_bars(tmp_path: Path):
     assert bars[0].provider == "binance_usdm"
     assert bars[0].close == 4050.7
     assert "public_proxy_feed" in bars[0].quality_flags
+    assert "execution_venue_feed" in bars[0].quality_flags
     assert "crypto_perpetual" in bars[0].quality_flags
     # Binance USDM is a public proxy feed, not an official broker feed.
     assert "official_broker_feed" not in bars[0].quality_flags

@@ -23,3 +23,8 @@ data/broker_outbox/
 $CODEX_HOME/
 .claude/
 .playwright-mcp/
+
+# sqlite runtime sidecars
+*.db-shm
+*.db-wal
+*.db-journal

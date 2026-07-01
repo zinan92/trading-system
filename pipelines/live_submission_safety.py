@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.live_submission_safety import LiveSubmissionSafetySmoke
@@ -10,7 +11,7 @@ from services.live_submission_safety import LiveSubmissionSafetySmoke
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify real broker submission is blocked without live_activation.real_money_ready.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     output_root = ROOT / load_pipeline_config().get("output_root", "outputs")

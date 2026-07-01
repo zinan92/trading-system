@@ -101,6 +101,7 @@ class JsonCycleAuditSink(CycleAuditSink):
         lifecycle = self._rows("order_lifecycle", run_date)
         order_recovery = self._latest("order_recovery", "current.json")
         live_reconciliation = self._latest("live_reconciliation", "current.json")
+        live_money_guardrails = self._latest("live_money_guardrails", "current.json")
         paper_execution_blocks = self._rows("paper_execution_blocks", run_date)
         cycle_timestamp = self._cycle_timestamp(decision_snapshots, data, began_at)
         cycle_id = self._cycle_id(run_date, strategy_id, timeframe, cycle_timestamp)
@@ -111,6 +112,7 @@ class JsonCycleAuditSink(CycleAuditSink):
             paper_trades=paper_trades,
             decisions=decisions,
             live_reconciliation=live_reconciliation,
+            live_money_guardrails=live_money_guardrails,
             gaps=gaps,
         )
         execution = self._execution_snapshot(
@@ -129,6 +131,7 @@ class JsonCycleAuditSink(CycleAuditSink):
             demo_requests=demo_requests,
             lifecycle=lifecycle,
             paper_trades=paper_trades,
+            live_reconciliation=live_reconciliation,
         )
         status = "error" if error else "completed"
         record = {
@@ -154,7 +157,7 @@ class JsonCycleAuditSink(CycleAuditSink):
             "artifact_refs": artifact_refs,
             "paper_execution_blocks": self._paper_blocks_snapshot(paper_execution_blocks),
             "reconciliation": self._reconciliation_snapshot(live_reconciliation),
-            "protective": self._protective_snapshot(lifecycle, demo_requests, paper_trades),
+            "protective": self._protective_snapshot(lifecycle, demo_requests, paper_trades, live_reconciliation),
             "audit_gaps": gaps,
             "result_ref": {
                 "status": result.get("status", ""),
@@ -400,6 +403,7 @@ class JsonCycleAuditSink(CycleAuditSink):
         demo_requests: list[dict],
         lifecycle: list[dict],
         paper_trades: list[dict],
+        live_reconciliation: dict,
     ) -> dict:
         lifecycle_refs = [
             {
@@ -413,12 +417,15 @@ class JsonCycleAuditSink(CycleAuditSink):
             if isinstance(item, dict)
         ]
         tp_sl_generated = any(item.get("stop_loss") not in {None, "", 0} or item.get("targets") for item in tickets if isinstance(item, dict))
-        tp_sl_covered = any(
-            item.get("state") == "protective_attached" for item in lifecycle if isinstance(item, dict)
-        ) or any(
-            (item.get("stop_loss") not in {None, "", 0} or item.get("target") not in {None, "", 0} or item.get("exchange_managed"))
-            for item in paper_trades
-            if isinstance(item, dict)
+        reconciliation_naked = self._reconciliation_reports_unprotected_position(live_reconciliation)
+        tp_sl_covered = (not reconciliation_naked) and (
+            any(item.get("state") == "protective_attached" for item in lifecycle if isinstance(item, dict))
+            or any(
+                (item.get("stop_loss") not in {None, "", 0} or item.get("target") not in {None, "", 0})
+                for item in paper_trades
+                if isinstance(item, dict)
+            )
+            or self._reconciliation_reports_protective_coverage(live_reconciliation)
         )
         entry_generated = bool(tickets or paper_orders or demo_requests or lifecycle_refs or any(item.get("decision_status") in {"executed", "executed_paper"} for item in decisions))
         return {
@@ -440,6 +447,7 @@ class JsonCycleAuditSink(CycleAuditSink):
         paper_trades: list[dict],
         decisions: list[dict],
         live_reconciliation: dict,
+        live_money_guardrails: dict,
         gaps: list[dict],
     ) -> dict:
         system_vitals_path = self.base_output_root / "system_vitals" / "current.json"
@@ -465,6 +473,7 @@ class JsonCycleAuditSink(CycleAuditSink):
             "strategy_detail": {
                 "open_trades": [item for item in paper_trades if item.get("status", "open") == "open"],
             },
+            "live_money_guardrails": live_money_guardrails,
         }
         contract = build_system_status_contract(payload, strategy_id=strategy_id)
         return {
@@ -533,7 +542,7 @@ class JsonCycleAuditSink(CycleAuditSink):
             "artifact": str(self.output_root / "live_reconciliation" / "current.json"),
         }
 
-    def _protective_snapshot(self, lifecycle: list[dict], demo_requests: list[dict], paper_trades: list[dict]) -> dict:
+    def _protective_snapshot(self, lifecycle: list[dict], demo_requests: list[dict], paper_trades: list[dict], live_reconciliation: dict) -> dict:
         lifecycle_states = [str(item.get("state") or "") for item in lifecycle if isinstance(item, dict)]
         failed = any(state == "protective_failed" for state in lifecycle_states)
         failed = failed or any(
@@ -541,17 +550,51 @@ class JsonCycleAuditSink(CycleAuditSink):
             for item in demo_requests
             if isinstance(item, dict)
         )
-        covered = any(state == "protective_attached" for state in lifecycle_states) or any(
-            item.get("stop_loss") not in {None, "", 0} or item.get("target") not in {None, "", 0} or item.get("exchange_managed")
-            for item in paper_trades
-            if isinstance(item, dict)
+        reconciliation_naked = self._reconciliation_reports_unprotected_position(live_reconciliation)
+        covered = (not reconciliation_naked) and (
+            any(state == "protective_attached" for state in lifecycle_states)
+            or any(
+                item.get("stop_loss") not in {None, "", 0} or item.get("target") not in {None, "", 0}
+                for item in paper_trades
+                if isinstance(item, dict)
+            )
+            or self._reconciliation_reports_protective_coverage(live_reconciliation)
         )
+        if reconciliation_naked:
+            status = "naked"
+            reason_code = "position_without_resting_protective_stop"
+        elif failed:
+            status = "failed"
+            reason_code = "protective_failed"
+        elif covered:
+            status = "covered"
+            reason_code = ""
+        else:
+            status = "not_observed"
+            reason_code = ""
         return {
-            "status": "failed" if failed else "covered" if covered else "not_observed",
-            "reason_code": "protective_failed" if failed else "",
+            "status": status,
+            "reason_code": reason_code,
             "lifecycle_states": lifecycle_states,
+            "position_protection": live_reconciliation.get("position_protection", []) if isinstance(live_reconciliation, dict) else [],
             "artifact": str(self.output_root / "order_lifecycle"),
         }
+
+    def _reconciliation_reports_unprotected_position(self, live_reconciliation: dict) -> bool:
+        if not isinstance(live_reconciliation, dict):
+            return False
+        if live_reconciliation.get("suspected_naked_position") and live_reconciliation.get("reason_code") == "naked_position_suspected":
+            return True
+        return any(
+            isinstance(item, dict) and item.get("covered") is False
+            for item in live_reconciliation.get("position_protection", [])
+        )
+
+    def _reconciliation_reports_protective_coverage(self, live_reconciliation: dict) -> bool:
+        if not isinstance(live_reconciliation, dict):
+            return False
+        protections = [item for item in live_reconciliation.get("position_protection", []) if isinstance(item, dict)]
+        return bool(protections) and all(item.get("covered") is True for item in protections)
 
     def _cycle_timestamp(self, decision_snapshots: list[dict], data: dict, began_at: str) -> str:
         for item in reversed(decision_snapshots):

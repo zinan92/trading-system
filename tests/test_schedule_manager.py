@@ -49,6 +49,7 @@ def test_schedule_manager_generates_launch_agent_artifacts(tmp_path: Path):
     assert runner["StartInterval"] == 300
     assert runner["ProgramArguments"][:3] == ["python3", "-m", "pipelines.runner"]
     assert "--date" not in runner["ProgramArguments"]
+    assert runner["EnvironmentVariables"]["TZ"] == "UTC"
     assert trading_plan["StartCalendarInterval"] == {"Hour": 8, "Minute": 30}
     assert trading_plan["ProgramArguments"] == ["python3", "-m", "pipelines.trading_plan"]
     assert evening_review["StartCalendarInterval"] == {"Hour": 23, "Minute": 30}
@@ -64,6 +65,7 @@ def test_schedule_manager_generates_launch_agent_artifacts(tmp_path: Path):
     assert strategies["StartInterval"] == 300
     assert strategies["ProgramArguments"][:3] == ["python3", "-m", "pipelines.strategies"]
     assert "--paper-auto-approve" in strategies["ProgramArguments"]
+    assert strategies["EnvironmentVariables"]["TZ"] == "UTC"
 
 
 def test_strategies_job_uses_dedicated_python_others_unchanged(tmp_path: Path, monkeypatch):

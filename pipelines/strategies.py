@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.binance_futures_feed import run_binance_usdm_1m_feed_import
 from services.multi_strategy_runner import MultiStrategyRunner
@@ -22,7 +23,7 @@ def refresh_1m_feed(run_date: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run every enabled strategy in its own isolated paper namespace (outputs/strategies/<id>/).")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--paper-auto-approve", action="store_true", help="Auto-execute each strategy's first pending ticket in its own paper account.")
     parser.add_argument("--skip-feed-refresh", action="store_true", help="Skip the live 1m feed refresh (e.g. offline replay of historical dates).")
     args = parser.parse_args()

@@ -1,8 +1,10 @@
 import json
+import urllib.parse
 from pathlib import Path
 
 from services.live_reconciliation import LiveBrokerReconciliation
 from services.journal_store import load_json
+from services.live_money_guardrails import LiveMoneyGuardrails
 from services.order_lifecycle import OrderLifecycleStore
 
 
@@ -20,7 +22,37 @@ class _FakeResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
-def _opener(position_amt: float):
+def _protective_order(qty: float = 0.05, *, client_id: str = "known_sl", side: str = "SELL") -> dict:
+    return {
+        "symbol": "XAUUSDT",
+        "orderId": 9001,
+        "clientOrderId": client_id,
+        "type": "STOP_MARKET",
+        "side": side,
+        "origQty": str(qty),
+        "reduceOnly": "true",
+        "status": "NEW",
+    }
+
+
+def _seed_known_protective(root: Path, run_date: str = "2026-06-03", client_id: str = "known_sl") -> None:
+    path = root / "live_order_requests" / f"{run_date}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "order_id": "order_live",
+                    "request": {"protective_orders": [{"newClientOrderId": client_id}]},
+                    "broker_response": {"protective_orders": [{"clientOrderId": client_id}]},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _opener(position_amt: float, open_orders: list[dict] | None = None):
     def opener(request, timeout):
         url = request.full_url
         # signed GET must carry signature + the api key header
@@ -37,6 +69,10 @@ def _opener(position_amt: float):
                 {"asset": "BNB", "balance": "0", "availableBalance": "0"},
             ])
         if "/fapi/v1/openOrders" in url:
+            return _FakeResponse(open_orders or [])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/income" in url:
             return _FakeResponse([])
         raise AssertionError(f"unexpected url {url}")
 
@@ -52,6 +88,17 @@ _CFG = {
     "instrument_map": {"GOLD": "XAUUSDT"},
 }
 
+_RUN_DATE = "2026-06-09"
+_DAY_START_MS = 1780963200000
+_DAY_MID_MS = 1781006400000
+_DAY_END_MS = 1781049599999
+_PREVIOUS_DAY_MS = 1780963199000
+_NEXT_DAY_MS = 1781049600000
+
+
+def _query(url: str) -> dict[str, list[str]]:
+    return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+
 
 def _creds(monkeypatch):
     monkeypatch.setenv("BINANCE_API_KEY", "testkey123")
@@ -64,15 +111,362 @@ def _seed_local_position(root: Path, side: str, quantity: float) -> None:
     path.write_text(json.dumps({"GOLD": {"symbol": "GOLD", "side": side, "quantity": quantity, "avg_price": 4470.0}}), encoding="utf-8")
 
 
+def test_exchange_accounting_uses_utc_run_date_window_for_daily_loss(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+    seen_queries = {}
+
+    def opener(request, timeout):
+        url = request.full_url
+        assert "signature=" in url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0", "entryPrice": "0", "unRealizedProfit": "0"}])
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "USDT", "balance": "100.0", "availableBalance": "95.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in url:
+            seen_queries["fills"] = _query(url)
+            return _FakeResponse(
+                [
+                    {"symbol": "XAUUSDT", "id": 1, "orderId": 1001, "side": "SELL", "price": "4470", "qty": "0.01", "quoteQty": "44.7", "commission": "0.1", "commissionAsset": "USDT", "realizedPnl": "-100.0", "time": _PREVIOUS_DAY_MS},
+                    {"symbol": "XAUUSDT", "id": 2, "orderId": 1002, "side": "SELL", "price": "4470", "qty": "0.01", "quoteQty": "44.7", "commission": "0.5", "commissionAsset": "USDT", "realizedPnl": "-2.0", "time": _DAY_MID_MS},
+                    {"symbol": "XAUUSDT", "id": 3, "orderId": 1003, "side": "SELL", "price": "4470", "qty": "0.01", "quoteQty": "44.7", "commission": "0.1", "commissionAsset": "USDT", "realizedPnl": "-100.0", "time": _NEXT_DAY_MS},
+                ]
+            )
+        if "/fapi/v1/income" in url:
+            seen_queries["income"] = _query(url)
+            return _FakeResponse(
+                [
+                    {"symbol": "XAUUSDT", "incomeType": "FUNDING_FEE", "income": "-50.0", "asset": "USDT", "time": _PREVIOUS_DAY_MS},
+                    {"symbol": "XAUUSDT", "incomeType": "FUNDING_FEE", "income": "-1.0", "asset": "USDT", "time": _DAY_MID_MS},
+                    {"symbol": "XAUUSDT", "incomeType": "FUNDING_FEE", "income": "-50.0", "asset": "USDT", "time": _NEXT_DAY_MS},
+                ]
+            )
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run(_RUN_DATE)
+
+    assert seen_queries["fills"]["startTime"] == [str(_DAY_START_MS)]
+    assert seen_queries["fills"]["endTime"] == [str(_DAY_END_MS)]
+    assert seen_queries["income"]["startTime"] == [str(_DAY_START_MS)]
+    assert seen_queries["income"]["endTime"] == [str(_DAY_END_MS)]
+    assert report["exchange_accounting"]["utc_trading_day"]["run_date"] == _RUN_DATE
+    assert report["exchange_accounting"]["trade_count"] == 1
+    assert report["exchange_accounting"]["income_count"] == 1
+    assert report["exchange_accounting"]["net_realized_pnl_estimate"] == -3.5
+
+    guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=4500.0,
+        quantity=0.002,
+        source="binance_usdm:testnet",
+        reconciliation=report,
+    )
+    assert guardrail["status"] == "BLOCKED_DAILY_LOSS_LIMIT"
+    assert guardrail["daily_loss"]["net_realized_pnl_estimate"] == -3.5
+
+
+def test_account_history_non_list_response_is_not_observed_and_blocks_daily_loss(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+
+    def opener(request, timeout):
+        url = request.full_url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0", "entryPrice": "0", "unRealizedProfit": "0"}])
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "USDT", "balance": "100.0", "availableBalance": "95.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse({"code": -1021, "msg": "Timestamp outside recvWindow"})
+        if "/fapi/v1/income" in url:
+            return _FakeResponse([])
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run(_RUN_DATE)
+
+    assert report["confirmation_status"] == "cannot_confirm"
+    assert report["account_observation"]["account_observed"] is False
+    assert report["account_observation"]["balance_present"] is True
+    assert "response was not a list" in report["error"]
+    guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=4500.0,
+        quantity=0.002,
+        source="binance_usdm:testnet",
+        reconciliation=report,
+    )
+    assert guardrail["status"] == "BLOCKED_MONEY_GUARDRAIL_UNKNOWN"
+    assert guardrail["primary_blocker"]["code"] == "daily_loss_unknown"
+
+
+def test_income_non_list_response_is_not_observed_and_blocks_daily_loss(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+
+    def opener(request, timeout):
+        url = request.full_url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0", "entryPrice": "0", "unRealizedProfit": "0"}])
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "USDT", "balance": "100.0", "availableBalance": "95.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/income" in url:
+            return _FakeResponse({"code": -1022, "msg": "Signature invalid"})
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run(_RUN_DATE)
+
+    assert report["confirmation_status"] == "cannot_confirm"
+    assert report["account_observation"]["fills_observed"] is True
+    assert report["account_observation"]["income_observed"] is False
+    assert report["account_observation"]["account_observed"] is False
+    assert "response was not a list" in report["error"]
+    guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=4500.0,
+        quantity=0.002,
+        source="binance_usdm:testnet",
+        reconciliation=report,
+    )
+    assert guardrail["status"] == "BLOCKED_MONEY_GUARDRAIL_UNKNOWN"
+
+
+def test_account_level_income_empty_symbol_is_skipped_without_blocking_daily_loss(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+
+    def opener(request, timeout):
+        url = request.full_url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0", "entryPrice": "0", "unRealizedProfit": "0"}])
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "USDT", "balance": "1000.0", "availableBalance": "995.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse(
+                [
+                    {"symbol": "XAUUSDT", "id": 1, "orderId": 1001, "side": "SELL", "price": "4470", "qty": "0.01", "quoteQty": "44.7", "commission": "0.5", "commissionAsset": "USDT", "realizedPnl": "-2.0", "time": _DAY_MID_MS}
+                ]
+            )
+        if "/fapi/v1/income" in url:
+            return _FakeResponse(
+                [
+                    {"symbol": "", "incomeType": "TRANSFER", "income": "100.0", "asset": "USDT", "time": _DAY_MID_MS},
+                    {"symbol": "XAUUSDT", "incomeType": "FUNDING_FEE", "income": "-1.0", "asset": "USDT", "time": _DAY_MID_MS},
+                ]
+            )
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run(_RUN_DATE)
+
+    assert report["error"] == ""
+    assert report["account_observation"]["account_observed"] is True
+    assert report["exchange_accounting"]["income_count"] == 1
+    assert report["exchange_accounting"]["income_by_type"] == {"FUNDING_FEE": -1.0}
+    assert report["exchange_accounting"]["net_realized_pnl_estimate"] == -3.5
+    guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=4500.0,
+        quantity=0.002,
+        source="binance_usdm:testnet",
+        reconciliation=report,
+    )
+    assert guardrail["status"] == "READY"
+    assert guardrail["daily_loss"]["known"] is True
+    assert guardrail["daily_loss"]["loss_pct"] == 0.35
+
+
+def test_user_trades_list_with_non_dict_row_is_not_observed(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+
+    def opener(request, timeout):
+        url = request.full_url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0", "entryPrice": "0", "unRealizedProfit": "0"}])
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "USDT", "balance": "100.0", "availableBalance": "95.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse([1, "junk", None])
+        if "/fapi/v1/income" in url:
+            return _FakeResponse([])
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run(_RUN_DATE)
+
+    assert report["confirmation_status"] == "cannot_confirm"
+    assert report["account_observation"]["account_observed"] is False
+    assert "row was not an object" in report["error"]
+    guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=4500.0,
+        quantity=0.002,
+        source="binance_usdm:testnet",
+        reconciliation=report,
+    )
+    assert guardrail["status"] == "BLOCKED_MONEY_GUARDRAIL_UNKNOWN"
+
+
+def test_income_list_with_non_dict_row_is_not_observed(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+
+    def opener(request, timeout):
+        url = request.full_url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0", "entryPrice": "0", "unRealizedProfit": "0"}])
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "USDT", "balance": "100.0", "availableBalance": "95.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/income" in url:
+            return _FakeResponse([1, "junk", None])
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run(_RUN_DATE)
+
+    assert report["confirmation_status"] == "cannot_confirm"
+    assert report["account_observation"]["fills_observed"] is True
+    assert report["account_observation"]["income_observed"] is False
+    assert report["account_observation"]["account_observed"] is False
+    assert "row was not an object" in report["error"]
+    guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=4500.0,
+        quantity=0.002,
+        source="binance_usdm:testnet",
+        reconciliation=report,
+    )
+    assert guardrail["status"] == "BLOCKED_MONEY_GUARDRAIL_UNKNOWN"
+
+
+def test_reconcile_account_history_disabled_is_not_observed_and_blocks_daily_loss(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+    cfg = {**_CFG, "reconcile_account_history": False}
+
+    report = LiveBrokerReconciliation(root, cfg, opener=_opener(0.0)).run(_RUN_DATE)
+
+    assert report["error"] == ""
+    assert report["account_observation"]["history_requested"] is False
+    assert report["account_observation"]["account_observed"] is False
+    guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=4500.0,
+        quantity=0.002,
+        source="binance_usdm:testnet",
+        reconciliation=report,
+    )
+    assert guardrail["status"] == "BLOCKED_MONEY_GUARDRAIL_UNKNOWN"
+    assert "account history was not observed" in guardrail["daily_loss"]["reason"]
+
+
+def test_missing_balance_row_is_not_present_and_blocks_daily_loss(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+
+    def opener(request, timeout):
+        url = request.full_url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0", "entryPrice": "0", "unRealizedProfit": "0"}])
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "BNB", "balance": "100.0", "availableBalance": "95.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/income" in url:
+            return _FakeResponse([])
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run(_RUN_DATE)
+
+    assert report["error"] == ""
+    assert report["exchange_balance"]["balance_present"] is False
+    assert report["account_observation"]["account_observed"] is True
+    assert report["account_observation"]["balance_present"] is False
+    guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=4500.0,
+        quantity=0.002,
+        source="binance_usdm:testnet",
+        reconciliation=report,
+    )
+    assert guardrail["status"] == "BLOCKED_MONEY_GUARDRAIL_UNKNOWN"
+    assert "exchange balance was not observed" in guardrail["daily_loss"]["reason"]
+
+
+def test_account_history_symbol_mismatch_is_not_observed(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+
+    def opener(request, timeout):
+        url = request.full_url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse([{"symbol": "XAUUSDT", "positionAmt": "0", "entryPrice": "0", "unRealizedProfit": "0"}])
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "USDT", "balance": "100.0", "availableBalance": "95.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse([{"symbol": "BTCUSDT", "id": 1, "orderId": 1001, "side": "SELL", "price": "1", "qty": "1", "quoteQty": "1", "commission": "0", "commissionAsset": "USDT", "realizedPnl": "-50", "time": _DAY_MID_MS}])
+        if "/fapi/v1/income" in url:
+            return _FakeResponse([])
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run(_RUN_DATE)
+
+    assert report["confirmation_status"] == "cannot_confirm"
+    assert report["account_observation"]["account_observed"] is False
+    assert "symbol mismatch" in report["error"]
+
+
 def test_reconciled_when_exchange_matches_local(tmp_path, monkeypatch):
     _creds(monkeypatch)
     root = tmp_path / "outputs"
     _seed_local_position(root, "long", 0.05)
+    _seed_known_protective(root)
 
-    report = LiveBrokerReconciliation(root, _CFG, opener=_opener(0.05)).run("2026-06-03")
+    report = LiveBrokerReconciliation(root, _CFG, opener=_opener(0.05, [_protective_order()])).run("2026-06-03")
 
     assert report["reconciled"] is True
     assert report["drifts"] == []
+    assert report["position_protection"][0]["covered"] is True
     assert report["exchange_balance"]["available"] == 95.0
     assert any(p["symbol"] == "XAUUSDT" for p in report["exchange_positions"])
     saved = load_json(root / "live_reconciliation" / "2026-06-03.json")[0]
@@ -83,8 +477,9 @@ def test_drift_when_quantity_mismatch(tmp_path, monkeypatch):
     _creds(monkeypatch)
     root = tmp_path / "outputs"
     _seed_local_position(root, "long", 0.05)
+    _seed_known_protective(root)
 
-    report = LiveBrokerReconciliation(root, _CFG, opener=_opener(0.08)).run("2026-06-03")
+    report = LiveBrokerReconciliation(root, _CFG, opener=_opener(0.08, [_protective_order(0.08)])).run("2026-06-03")
 
     assert report["reconciled"] is False
     assert len(report["drifts"]) == 1
@@ -101,8 +496,9 @@ def test_reconciles_mixed_local_position_by_net_quantity(tmp_path, monkeypatch):
         json.dumps({"GOLD": {"symbol": "GOLD", "side": "mixed", "quantity": 0.15, "net_quantity": 0.05, "avg_price": 4470.0}}),
         encoding="utf-8",
     )
+    _seed_known_protective(root)
 
-    report = LiveBrokerReconciliation(root, _CFG, opener=_opener(0.05)).run("2026-06-03")
+    report = LiveBrokerReconciliation(root, _CFG, opener=_opener(0.05, [_protective_order()])).run("2026-06-03")
 
     assert report["reconciled"] is True
     assert report["drifts"] == []
@@ -115,7 +511,58 @@ def test_orphan_exchange_position_flagged(tmp_path, monkeypatch):
     report = LiveBrokerReconciliation(root, _CFG, opener=_opener(0.05)).run("2026-06-03")
 
     assert report["reconciled"] is False
-    assert any("no local record" in d["reason"] for d in report["drifts"])
+    assert report["suspected_naked_position"] is True
+    assert report["system_state"] == "BLOCKED_NAKED_POSITION_SUSPECTED"
+    assert any("no local record" in d["reason"] and d.get("missing_protective_order") for d in report["drifts"])
+
+
+def test_local_exchange_position_without_resting_stop_is_suspected_naked(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+    _seed_local_position(root, "long", 0.05)
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=_opener(0.05)).run("2026-06-03")
+
+    assert report["reconciled"] is False
+    assert report["confirmation_status"] == "confirmed_drift"
+    assert report["system_state"] == "BLOCKED_NAKED_POSITION_SUSPECTED"
+    assert report["reason_code"] == "naked_position_suspected"
+    assert report["suspected_naked_position"] is True
+    assert report["position_protection"][0]["covered"] is False
+    assert report["drifts"][0]["missing_protective_order"] is True
+
+
+def test_duplicate_nonzero_position_rows_are_blocked_as_unsupported_dual_side_shape(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+    _seed_local_position(root, "long", 0.05)
+    _seed_known_protective(root)
+
+    def opener(request, timeout):
+        url = request.full_url
+        assert "signature=" in url
+        if "/fapi/v2/positionRisk" in url:
+            return _FakeResponse(
+                [
+                    {"symbol": "XAUUSDT", "positionAmt": "0.05", "entryPrice": "4470.0", "unRealizedProfit": "1.5"},
+                    {"symbol": "XAUUSDT", "positionAmt": "-0.02", "entryPrice": "4475.0", "unRealizedProfit": "-0.4"},
+                ]
+            )
+        if "/fapi/v2/balance" in url:
+            return _FakeResponse([{"asset": "USDT", "balance": "100.0", "availableBalance": "95.0"}])
+        if "/fapi/v1/openOrders" in url:
+            return _FakeResponse([_protective_order(0.05), _protective_order(0.02, client_id="known_sl_short", side="BUY")])
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/income" in url:
+            return _FakeResponse([])
+        raise AssertionError(f"unexpected url {url}")
+
+    report = LiveBrokerReconciliation(root, _CFG, opener=opener).run("2026-06-03")
+
+    assert report["reconciled"] is False
+    assert report["confirmation_status"] == "confirmed_drift"
+    assert any(drift.get("reason_code") == "unsupported_dual_side_position_shape" for drift in report["drifts"])
 
 
 def test_orphan_protective_order_flagged_from_exchange_open_orders(tmp_path, monkeypatch):
@@ -142,8 +589,12 @@ def test_orphan_protective_order_flagged_from_exchange_open_orders(tmp_path, mon
                         "reduceOnly": "true",
                         "status": "NEW",
                     }
-                ]
-            )
+                    ]
+                )
+        if "/fapi/v1/userTrades" in url:
+            return _FakeResponse([])
+        if "/fapi/v1/income" in url:
+            return _FakeResponse([])
         raise AssertionError(f"unexpected url {url}")
 
     report = LiveBrokerReconciliation(root, _CFG, opener=opener).run("2026-06-03")

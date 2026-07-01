@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from services.run_date import utc_run_date
 
 from services.daily_review_runner import DailyReviewRunner
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the end-of-day Trading Journal, review, performance, and readiness loop.")
-    parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument("--date", default=utc_run_date())
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     args = parser.parse_args()
 
