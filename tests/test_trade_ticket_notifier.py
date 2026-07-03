@@ -392,3 +392,15 @@ def test_trade_ticket_notifier_translates_system_english_phrases(tmp_path: Path)
     assert "GOLD is best interpreted" not in text
     assert "Signal should be ignored" not in text
     assert "macd_trend_volatility_filter" not in text
+
+
+def test_card_translates_chan_regime_without_english_leak(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    ticket = {**_rich_ticket(), "signal_regime": "chan_second_buy"}
+    notifier = TradeTicketNotifier(output_root, sender=_FakeSender())
+
+    card = notifier._build_card("2026-07-03", "gold_1m_chan", ticket, _ctx(output_root), 1, 1)
+
+    text = _card_text(card)
+    assert "缠论二买" in text
+    assert "chan second buy" not in text and "chan_second_buy" not in text

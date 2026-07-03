@@ -14,6 +14,12 @@ from services.trade_ticket_card import build_ticket_card
 
 KIND = "trade_ticket_open"
 DEFAULT_MAX_CHARS = 2200
+FLOW_GATE_NAMES = (
+    "信号闸门",
+    "盈亏比 / 质量闸门",
+    "账户风险闸门",
+    "自动批准闸门",
+)
 
 
 class TradeTicketNotifier:
@@ -150,7 +156,9 @@ class TradeTicketNotifier:
         demo_request = context.get("demo_request", {}) if isinstance(context.get("demo_request"), dict) else {}
         execution_status = self._execution_status(pending, decision, paper_order, demo_request)
         approval = self._approval_conclusion(ticket, trade_quality, pending, paper_order, demo_request)
-        block_reason = self._execution_block_reason(demo_request)
+        decision_status = str(decision.get("decision_status") or "")
+        decision_blocked = decision_status in {"rejected", "skipped"}
+        block_reason = self._execution_block_reason(demo_request) or (self._reason_zh(decision.get("notes")) if decision_blocked else "")
         protective_status = self._protective_order_text(ticket, demo_request)
         entry_price = self._entry_midpoint(ticket.get("entry_zone", ""))
         requirements = trade_quality.get("requirements", {}) if isinstance(trade_quality.get("requirements"), dict) else {}
@@ -239,7 +247,9 @@ class TradeTicketNotifier:
         demo_request = context.get("demo_request", {}) if isinstance(context.get("demo_request"), dict) else {}
 
         approval = self._approval_conclusion(ticket, trade_quality, pending, paper_order, demo_request)
-        block_reason = self._execution_block_reason(demo_request)
+        decision_status = str(decision.get("decision_status") or "")
+        decision_blocked = decision_status in {"rejected", "skipped"}
+        block_reason = self._execution_block_reason(demo_request) or (self._reason_zh(decision.get("notes")) if decision_blocked else "")
         config = load_pipeline_config()
         rules = load_risk_rules().get("default", {}) if isinstance(load_risk_rules(), dict) else {}
         badge = self._account_badge(strategy_id, demo_request, config)
@@ -281,6 +291,7 @@ class TradeTicketNotifier:
         is_blocked = (
             risk_passed is False
             or approval.startswith("禁止")
+            or decision_blocked
             or self._has_protective_failure(demo_request)
             or demo_status in {"blocked", "rejected", "failed"}
         )
@@ -295,20 +306,20 @@ class TradeTicketNotifier:
         flow = [
             {
                 "step": 1,
-                "name": "信号闸门",
+                "name": FLOW_GATE_NAMES[0],
                 "passed": True,
                 "detail": f"强度 {strength if strength not in (None, '') else '—'} ≥ {self._fmt(min_strength)}　·　"
                 f"置信 {confidence if confidence not in (None, '') else '—'} ≥ {self._fmt(min_conf)}　·　方向 {self._direction(ticket)}",
             },
             {
                 "step": 2,
-                "name": "盈亏比 / 质量闸门",
+                "name": FLOW_GATE_NAMES[1],
                 "passed": True,
                 "detail": f"盈亏比 {self._fmt(rr)} ≥ {self._fmt(min_rr)}　·　目标涨幅 +{self._fmt(target_move)}%",
             },
             {
                 "step": 3,
-                "name": "账户风险闸门",
+                "name": FLOW_GATE_NAMES[2],
                 "passed": risk_passed,
                 "detail": f"账户止损 {self._usd(stop_usd)} {'≤' if risk_passed else '>' if risk_passed is False else '?'} 单笔上限 {self._usd(cap_usd)}",
             },
@@ -320,7 +331,7 @@ class TradeTicketNotifier:
                 node4 = {"passed": False, "detail": block_reason or "被安全闸门拦下"}
             else:
                 node4 = {"passed": None, "detail": "等待自动清算"}
-            flow.append({"step": 4, "name": "自动批准闸门", **node4})
+            flow.append({"step": 4, "name": FLOW_GATE_NAMES[3], **node4})
 
         if is_executed and risk_passed is not False:
             terminal = {"icon": "⚡", "text": "自动成交 · 已建仓"}
@@ -779,6 +790,13 @@ class TradeTicketNotifier:
             "vwap_extension_reversion": "VWAP 乖离回归",
             "range_breakout": "区间突破",
             "breakout": "突破",
+            "chan_first_buy": "缠论一买",
+            "chan_second_buy": "缠论二买",
+            "chan_third_buy": "缠论三买",
+            "chan_first_sell": "缠论一卖",
+            "chan_second_sell": "缠论二卖",
+            "chan_third_sell": "缠论三卖",
+            "chan_bsp": "缠论买卖点",
         }
         return mapping.get(text, text.replace("_", " "))
 

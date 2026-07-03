@@ -63,21 +63,34 @@ def resolve_pending_cycle(
                 result["executed"].append(ticket_id)
                 result["decisions"].append(record)
                 continue
-            except (ValueError, RuntimeError) as exc:
-                store.record_decision(
-                    run_date=run_date,
-                    ticket_id=ticket_id,
-                    decision="rejected",
-                    notes=f"auto-rejected (execution blocked): {exc}",
-                )
-                result["rejected"].append(ticket_id)
-                result["errors"].append({"ticket_id": ticket_id, "error": str(exc)})
+            except (ValueError, OSError, KeyError, RuntimeError) as exc:
+                # Broad catch (matches the pre-refactor msr behaviour): a broker/disk/
+                # malformed-row failure on the execute path must downgrade to an
+                # auto-reject, never escape and abort the whole cycle. RuntimeError
+                # also covers the live adapter's own gates.
+                _safe_reject(store, run_date, ticket_id, result, f"auto-rejected (execution blocked): {exc}", error=str(exc))
                 continue
         note = f"auto-rejected (safety): {safety_reason}" if index == 0 else _PER_CYCLE_NOTE
-        store.record_decision(run_date=run_date, ticket_id=ticket_id, decision="rejected", notes=note)
-        result["rejected"].append(ticket_id)
+        _safe_reject(store, run_date, ticket_id, result, note)
 
     return result
+
+
+def _safe_reject(store: JournalStore, run_date: str, ticket_id: str, result: dict, notes: str, *, error: str | None = None) -> None:
+    """Record an auto-reject without ever letting a failing reject-write escape.
+
+    "Removing a human DROPS the trade" only holds if the drop itself is fail-safe.
+    If even the reject write fails (missing/unwritable artifact), degrade to a
+    recorded error and leave the ticket in pending — the next cycle re-tries and
+    the stale sweep eventually closes it — rather than crashing the cycle.
+    """
+    try:
+        store.record_decision(run_date=run_date, ticket_id=ticket_id, decision="rejected", notes=notes)
+        result["rejected"].append(ticket_id)
+        if error is not None:
+            result["errors"].append({"ticket_id": ticket_id, "error": error})
+    except (ValueError, OSError, KeyError, RuntimeError) as exc:
+        result["errors"].append({"ticket_id": ticket_id, "error": f"reject write failed: {exc}", "unresolved": True})
 
 
 def sweep_stale_pending(today: str, *, store: JournalStore | None = None) -> dict:

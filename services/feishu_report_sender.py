@@ -148,6 +148,9 @@ class FeishuReportSender:
                 row.get("kind") == payload.get("kind")
                 and row.get("source_path", "") == payload.get("source_path", "")
                 and row.get("title") == payload.get("title")
+                # Distinct messages (e.g. many trade-ticket cards a day sharing one
+                # title + empty source_path) must not collapse each other's audit rows.
+                and row.get("source_sha256", "") == payload.get("source_sha256", "")
             )
         ]
         rows.append(payload)

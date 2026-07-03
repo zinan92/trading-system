@@ -117,3 +117,42 @@ def test_sweep_drops_orphan_when_ticket_artifact_missing(tmp_path):
 
     assert load_json(root / "journal_pending" / "2026-06-20.json") == []
     assert result["closed"] and result["closed"][0]["ticket_id"] == "t_gone"
+
+
+class _RaisingStore:
+    def __init__(self, execute_exc=None, reject_exc=None):
+        self.calls = []
+        self.execute_exc = execute_exc
+        self.reject_exc = reject_exc
+
+    def record_decision(self, run_date, ticket_id, decision, notes="", broker_adapter=None):
+        if decision == "executed_paper" and self.execute_exc is not None:
+            raise self.execute_exc
+        if decision == "rejected" and self.reject_exc is not None:
+            raise self.reject_exc
+        self.calls.append({"ticket_id": ticket_id, "decision": decision, "notes": notes})
+        return {"ticket_id": ticket_id, "decision_status": decision}
+
+
+def test_oserror_on_execute_downgrades_to_reject_not_escape():
+    store = _RaisingStore(execute_exc=OSError("disk full"))
+    result = resolve_pending_cycle("2026-07-03", _pending("t0"), auto_approve=True, gate_allows=True, store=store)
+    assert result["executed"] == []
+    assert result["rejected"] == ["t0"]
+    assert store.calls[0]["decision"] == "rejected"
+    assert any("disk full" in e["error"] for e in result["errors"])
+
+
+def test_keyerror_on_execute_downgrades_to_reject_not_escape():
+    store = _RaisingStore(execute_exc=KeyError("ticket_id"))
+    result = resolve_pending_cycle("2026-07-03", _pending("t0"), auto_approve=True, gate_allows=True, store=store)
+    assert result["rejected"] == ["t0"]
+    assert store.calls[0]["decision"] == "rejected"
+
+
+def test_failing_reject_write_is_recorded_not_raised():
+    # execute fails AND the fallback reject write also fails -> recorded unresolved, never escapes
+    store = _RaisingStore(execute_exc=ValueError("boom"), reject_exc=ValueError("ticket_id not found in trade tickets"))
+    result = resolve_pending_cycle("2026-07-03", _pending("t0"), auto_approve=True, gate_allows=True, store=store)
+    assert result["rejected"] == []
+    assert any(e.get("unresolved") for e in result["errors"])
