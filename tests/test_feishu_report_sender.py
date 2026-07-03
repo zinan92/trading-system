@@ -101,24 +101,20 @@ def test_truncates_unknown_long_report_but_keeps_artifact_path(tmp_path: Path):
 def test_long_pm_report_sends_digest_without_truncating(tmp_path: Path):
     artifact = tmp_path / "morning.md"
     artifact.write_text(
-        "# 黄金组合 PM 早盘报告\n\n"
-        "## 0. PM 结论\n\n"
-        "今天不加风险，不把任何策略升级为已证明盈利。系统可运行但不是可放量状态。\n\n"
-        "组合层面仍是研究优先，主动 demo 保守运行。\n\n"
-        "## 1. 系统与安全\n\n"
-        "- Backend maturity：warn，M0 fail。\n"
-        "- Health：warn，runner fresh。\n"
-        "- 执行安全：network_call_attempted=false。\n\n"
-        "## 2. 组合快照\n\n"
-        "- 今日执行：3 笔 paper filled，0 demo，0 live。\n"
-        "- 当前 open positions：35 笔 shadow paper。\n"
-        "- 样本量：今日 executed=3，低于 5-10 目标区间。\n\n"
-        "## 4. 盈利性判断\n\n"
-        "- 已证明 edge：无。\n"
-        "- 近 promising 但不能加配：Bollinger、Chan buy1。\n\n"
-        "## 6. PM 动作，未来 12 小时\n\n"
-        "1. 对 MACD 与 5m_v1 做亏损驱动归因，不改参数。\n"
-        "2. 跟踪今日新出票策略是否到 TP/SL。\n"
+        "# 黄金交易早盘复盘\n\n"
+        "## 一句话\n\n"
+        "过去 12 小时黄金 +1.20%；`gold_1m_macd` 开仓/请求 3 单，TP 2、SL 1，已实现 PnL +18.50。\n\n"
+        "## 行情\n\n"
+        "- 过去 12 小时：上涨 +1.20%，从 4000.00 到 4048.00。\n"
+        "- 区间：高点 4055.00，低点 3988.00；数据源 binance_usdm，周期 5m。\n\n"
+        "## 策略表现\n\n"
+        "- 当前只复盘 active 策略：`gold_1m_macd`。\n"
+        "- 过去 12 小时：paper filled 2，demo requests 1，demo blocked 0。\n"
+        "- 平仓结果：TP 2，SL 1，其他 0；窗口已实现 PnL +18.50。\n\n"
+        "## 为什么\n\n"
+        "- 策略在这段行情里赚钱，主要看它是否站在黄金上涨的同侧，以及 TP 是否真实落袋。\n\n"
+        "## 现在看什么\n\n"
+        "- 下一步只看这些 open 单最终是 TP 还是 SL；不要提前按浮盈浮亏评价策略。\n"
         + "\n".join(f"- 噪音行 {i}" for i in range(200)),
         encoding="utf-8",
     )
@@ -135,6 +131,9 @@ def test_long_pm_report_sends_digest_without_truncating(tmp_path: Path):
     assert result["truncated"] is False
     assert result["sent_chars"] < 1600
     assert "已截断" not in sender.sent[0]
+    assert "行情" in sender.sent[0]
+    assert "策略" in sender.sent[0]
+    assert "Backend maturity" not in sender.sent[0]
     assert "完整早报已保存：morning.md" in sender.sent[0]
 
 

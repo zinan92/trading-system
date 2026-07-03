@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,6 +59,7 @@ class FeishuReportSender:
             resolved_source = str(resolved)
         if message is not None:
             source_text = message
+        source_sha256 = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
 
         text, truncated, summarized = self._format_message(
             run_date=run_date,
@@ -84,6 +86,7 @@ class FeishuReportSender:
             "kind": kind,
             "title": title,
             "source_path": resolved_source,
+            "source_sha256": source_sha256,
             "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "status": "pass" if delivered else "fail",
             "delivered": delivered,
@@ -108,8 +111,8 @@ class FeishuReportSender:
     ) -> tuple[str, bool, bool]:
         header_lines = [
             f"{title}",
-            f"日期: {run_date}",
-            f"类型: {kind}",
+            f"日期：{run_date}",
+            f"类型：{_kind_label(kind)}",
         ]
         header = "\n".join(header_lines).strip()
         body = (body or "").strip()
@@ -166,31 +169,41 @@ def _first_env(keys: tuple[str, ...]) -> str | None:
     return None
 
 
+def _kind_label(kind: str) -> str:
+    return {
+        "pm_morning": "早盘复盘",
+        "pm_evening": "晚盘复盘",
+        "strategy_research": "策略研究",
+        "health_check": "系统检查",
+        "trade_ticket_open": "开单审查卡",
+        "market_analysis_prompt": "市场分析提醒",
+    }.get(kind, kind)
+
+
 def _pm_digest(kind: str, body: str, source_path: str) -> str:
-    conclusion = _first_paragraph(_section(body, "PM 结论", "结论")) or _first_paragraph(body)
-    second_conclusion = _paragraphs(_section(body, "PM 结论", "结论"), limit=2)
-    system = _pick_bullets(_section(body, "系统与安全"), ("maturity", "Health", "live readiness", "paper auto", "执行安全", "主动 demo"), 3)
-    portfolio = _pick_bullets(_section(body, "组合快照", "Portfolio"), ("今日执行", "今日 closed", "realized", "marked", "样本量", "open positions"), 3)
-    profitability = _pick_bullets(_section(body, "盈利性判断", "策略判断"), ("已证明", "近 promising", "likely losing", "不能称盈利", "Proven"), 3)
-    actions = _pick_numbered(_section(body, "PM 动作", "未来", "Actions"), limit=3)
+    headline = _first_paragraph(_section(body, "一句话")) or _first_paragraph(body)
+    market = _pick_bullets(_section(body, "行情"), tuple(), 2)
+    strategy = _pick_bullets(_section(body, "策略表现"), tuple(), 3)
+    why = _pick_bullets(_section(body, "为什么"), tuple(), 2)
+    focus = _pick_bullets(_section(body, "现在看什么"), tuple(), 3)
 
-    lines = [
-        "结论",
-        _shorten(_clean_text(conclusion), 150),
-    ]
-    if len(second_conclusion) > 1:
-        lines.append(_shorten(_clean_text(second_conclusion[1]), 150))
+    lines = ["结论", _shorten(_clean_text(headline), 180)]
 
-    lines.extend(["", "你要知道"])
-    lines.extend(_prefixed("安全", system[:1]))
-    lines.extend(_prefixed("组合", portfolio[:2]))
-    lines.extend(_prefixed("策略", profitability[:2]))
+    lines.extend(["", "行情"])
+    lines.extend(f"- {_shorten(_clean_text(item), 120)}" for item in market[:2])
+
+    lines.extend(["", "策略"])
+    lines.extend(f"- {_shorten(_clean_text(item), 120)}" for item in strategy[:3])
+
+    if why:
+        lines.extend(["", "为什么"])
+        lines.extend(f"- {_shorten(_clean_text(item), 120)}" for item in why[:2])
 
     lines.extend(["", "下一步"])
-    if actions:
-        lines.extend(f"- {_shorten(_clean_text(item), 120)}" for item in actions[:3])
+    if focus:
+        lines.extend(f"- {_shorten(_clean_text(item), 120)}" for item in focus[:3])
     else:
-        lines.append("- 继续只读观察；任何加风险、调参数、切 active/demo 都需要单独批准。")
+        lines.append("- 继续只看 active 策略的下一次 TP/SL 结果；系统故障另走系统告警。")
 
     noun = "早报" if kind == "pm_morning" else "晚报"
     lines.extend(["", f"完整{noun}已保存：{Path(source_path).name}"])
