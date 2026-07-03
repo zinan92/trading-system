@@ -75,6 +75,12 @@ class TradeTicketNotifier:
                 "demo_request": demo_requests_by_ticket.get(ticket_id, {}),
                 "strategy_root": str(strategy_root),
             }
+            # Owner rule: the 交易记录 channel is a ledger of what was actually taken.
+            # Only executed tickets are pushed; everything else (pending/rejected) is
+            # recorded system-side for replay, not sent to Feishu.
+            if not self._is_executed(context):
+                skipped += 1
+                continue
             title = f"黄金开单审查卡｜{self._strategy_title(strategy_id)}"
             message = self._format_message(run_date, strategy_id, ticket, context)
             card = self._build_card(run_date, strategy_id, ticket, context, sequence=index + 1, total=total)
@@ -212,6 +218,16 @@ class TradeTicketNotifier:
 
     def _build_card(self, run_date: str, strategy_id: str, ticket: dict, context: dict, sequence: int, total: int) -> dict:
         return build_ticket_card(self._build_view(run_date, strategy_id, ticket, context, sequence, total))
+
+    def _is_executed(self, context: dict) -> bool:
+        paper_order = context.get("paper_order") if isinstance(context.get("paper_order"), dict) else {}
+        decision = context.get("decision") if isinstance(context.get("decision"), dict) else {}
+        demo_request = context.get("demo_request") if isinstance(context.get("demo_request"), dict) else {}
+        return (
+            bool(paper_order)
+            or str(decision.get("decision_status") or "") in {"executed_paper", "executed"}
+            or self._demo_status(demo_request) in {"filled", "executed"}
+        )
 
     def _build_view(self, run_date: str, strategy_id: str, ticket: dict, context: dict, sequence: int, total: int) -> dict:
         trade_quality = ticket.get("trade_quality") if isinstance(ticket.get("trade_quality"), dict) else {}

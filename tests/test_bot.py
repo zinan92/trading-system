@@ -99,6 +99,7 @@ def test_bot_cycle_blocks_paper_auto_approve_when_risk_monitor_blocks(monkeypatc
     class RecordingJournalStore:
         def __init__(self) -> None:
             self.calls: list[dict] = []
+            self.output_root = tmp_path / "outputs"
 
         def record_decision(self, run_date, ticket_id, decision, notes="", **kwargs):
             self.calls.append({"ticket_id": ticket_id, "decision": decision, "notes": notes})
@@ -144,6 +145,8 @@ def test_bot_cycle_auto_approves_only_after_risk_monitor_allows(monkeypatch, tmp
             }
 
     class FakeJournalStore:
+        output_root = tmp_path / "outputs"
+
         def record_decision(self, run_date: str, ticket_id: str, decision: str, notes: str) -> dict:
             record = {"run_date": run_date, "ticket_id": ticket_id, "decision_status": decision, "notes": notes}
             decisions.append(record)

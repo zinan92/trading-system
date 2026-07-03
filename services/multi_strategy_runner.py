@@ -25,7 +25,7 @@ from services.data_source_preflight import DataSourcePreflight
 from services.journal_store import JournalStore, load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
 from services.order_lifecycle import OrderLifecycleStore
-from services.pending_auto_resolver import resolve_pending_cycle
+from services.pending_auto_resolver import resolve_pending_cycle, sweep_stale_pending
 from services.paper_equity_curve import PaperEquityCurve
 from services.paper_performance import PaperPerformanceAnalyzer
 from services.paper_reconciliation import PaperReconciliation
@@ -302,6 +302,7 @@ class MultiStrategyRunner:
                     execution_error = auto_resolution["errors"][0]["error"]
                 elif block_reason:
                     execution_error = block_reason
+            stale_sweep = sweep_stale_pending(run_date, store=JournalStore(scoped)) if paper_auto_approve else {"closed": []}
             performance = PaperPerformanceAnalyzer(scoped).build(run_date)
             equity = PaperEquityCurve(scoped, starting_equity=strategy.starting_equity).build(run_date, performance)
             StrategyGuardrails(scoped).run(run_date)
@@ -329,6 +330,7 @@ class MultiStrategyRunner:
                 "ticket_notifications_sent": ticket_notification.get("sent", 0),
                 "executed_ticket": executed_ticket,
                 "auto_resolution": auto_resolution,
+                "stale_pending_sweep": stale_sweep,
                 "execution_error": execution_error,
                 "order_recovery_status": order_recovery.get("status", ""),
                 "order_recovery_count": order_recovery.get("recovered_count", 0),

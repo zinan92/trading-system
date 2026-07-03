@@ -75,3 +75,45 @@ def test_no_pending_is_a_noop():
     result = resolve_pending_cycle("2026-07-03", [], auto_approve=True, gate_allows=True, store=store)
     assert result == {"executed": [], "rejected": [], "skipped": [], "errors": [], "decisions": []}
     assert store.calls == []
+
+
+def test_sweep_closes_prior_date_orphans_and_leaves_today(tmp_path):
+    from services.journal_store import JournalStore, load_json, write_json
+    from services.pending_auto_resolver import sweep_stale_pending
+
+    root = tmp_path / "outputs"
+    # a stale orphan from a prior date, with its trade_ticket artifact present
+    write_json(root / "trade_tickets" / "2026-06-29.json", [{"ticket_id": "t_old", "asset": "GOLD", "max_loss_pct": 0.5}])
+    write_json(root / "journal_pending" / "2026-06-29.json", [{"ticket_id": "t_old"}])
+    # a prior-date ticket that was already decided must NOT be re-closed
+    write_json(root / "trade_tickets" / "2026-06-30.json", [{"ticket_id": "t_done", "asset": "GOLD"}])
+    write_json(root / "journal_pending" / "2026-06-30.json", [{"ticket_id": "t_done"}])
+    write_json(root / "journal_decisions" / "2026-06-30.json", [{"ticket_id": "t_done", "decision_status": "executed_paper"}])
+    # today's pending must be left for the cycle resolver
+    write_json(root / "journal_pending" / "2026-07-03.json", [{"ticket_id": "t_today"}])
+
+    result = sweep_stale_pending("2026-07-03", store=JournalStore(root))
+
+    assert {"date": "2026-06-29", "ticket_id": "t_old"} in result["closed"]
+    assert all(c["ticket_id"] != "t_done" for c in result["closed"])
+    # orphan is now terminal (rejected) and out of pending
+    assert load_json(root / "journal_pending" / "2026-06-29.json") == []
+    old_dec = load_json(root / "journal_decisions" / "2026-06-29.json")
+    assert old_dec[0]["ticket_id"] == "t_old" and old_dec[0]["decision_status"] == "rejected"
+    assert "stale" in old_dec[0]["notes"]
+    # today untouched
+    assert [r["ticket_id"] for r in load_json(root / "journal_pending" / "2026-07-03.json")] == ["t_today"]
+
+
+def test_sweep_drops_orphan_when_ticket_artifact_missing(tmp_path):
+    from services.journal_store import JournalStore, load_json, write_json
+    from services.pending_auto_resolver import sweep_stale_pending
+
+    root = tmp_path / "outputs"
+    # pending orphan whose trade_tickets artifact no longer exists
+    write_json(root / "journal_pending" / "2026-06-20.json", [{"ticket_id": "t_gone"}])
+
+    result = sweep_stale_pending("2026-07-03", store=JournalStore(root))
+
+    assert load_json(root / "journal_pending" / "2026-06-20.json") == []
+    assert result["closed"] and result["closed"][0]["ticket_id"] == "t_gone"

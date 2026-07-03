@@ -20,7 +20,7 @@ from services.journal_store import JournalStore, load_json
 from services.live_readiness import LiveReadiness
 from services.mock_runtime import MockTradingRuntime
 from services.paper_auto_approval_gate import PaperAutoApprovalGate
-from services.pending_auto_resolver import resolve_pending_cycle
+from services.pending_auto_resolver import resolve_pending_cycle, sweep_stale_pending
 from services.reporting import ReportBuilder
 from services.risk_monitor import RiskMonitor
 from services.strategy_guardrails import StrategyGuardrails
@@ -62,6 +62,7 @@ def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:
             execution_error = resolution["errors"][0]["error"]
         elif not resolution["executed"] and not auto_gate.get("allow_auto_approve", False):
             execution_error = f"paper auto-approval gate blocks execution: {'; '.join(auto_gate.get('reasons', [])) or 'manual review required'}"
+    stale_sweep = sweep_stale_pending(run_date, store=JournalStore()) if paper_auto_approve else {"closed": []}
     report_path = ReportBuilder().build_daily_report(run_date)
     review_path = report_path.parents[1] / "review_notes" / f"{run_date}.md"
     journal_path = report_path.parents[1] / "journals" / f"{run_date}.md"
@@ -84,6 +85,7 @@ def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:
         "pending_count": len(load_json(paths["journal_pending"])),
         "decision": decision,
         "auto_resolution": resolution,
+        "stale_pending_sweep": stale_sweep,
         "execution_error": execution_error,
         "report": str(report_path),
         "review_notes": str(review_path),
