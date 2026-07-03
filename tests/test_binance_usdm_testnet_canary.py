@@ -392,7 +392,12 @@ def test_binance_usdm_testnet_not_found_recovery_posts_once_with_stable_key(tmp_
                 {
                     "algoId": 3000 + len(posted_algos),
                     "clientAlgoId": body["clientAlgoId"][0],
-                    "type": body["type"][0],
+                    "symbol": body["symbol"][0],
+                    "side": body["side"][0],
+                    "algoType": body["algoType"][0],
+                    "orderType": body["type"][0],
+                    "origQty": body["quantity"][0],
+                    "reduceOnly": body["reduceOnly"][0],
                     "status": "NEW",
                 }
             )

@@ -20,6 +20,7 @@ from services.journal_store import JournalStore, load_json
 from services.live_readiness import LiveReadiness
 from services.mock_runtime import MockTradingRuntime
 from services.paper_auto_approval_gate import PaperAutoApprovalGate
+from services.pending_auto_resolver import resolve_pending_cycle
 from services.reporting import ReportBuilder
 from services.risk_monitor import RiskMonitor
 from services.strategy_guardrails import StrategyGuardrails
@@ -42,19 +43,25 @@ def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:
     execution_error = ""
     auto_gate = PaperAutoApprovalGate().evaluate(run_date, auto_requested=paper_auto_approve)
     pre_execution_risk_monitor = auto_gate.get("risk_monitor", {})
+    resolution: dict = {"executed": [], "rejected": [], "skipped": [], "errors": [], "decisions": []}
     if paper_auto_approve and pending:
-        ticket_id = pending[0]["ticket_id"]
-        try:
-            if not auto_gate.get("allow_auto_approve", False):
-                raise ValueError(f"paper auto-approval gate blocks execution: {'; '.join(auto_gate.get('reasons', [])) or 'manual review required'}")
-            decision = JournalStore().record_decision(
-                run_date=run_date,
-                ticket_id=ticket_id,
-                decision="executed_paper",
-                notes="bot auto-approved paper execution",
-            )
-        except ValueError as exc:
-            execution_error = str(exc)
+        # Autonomous: terminate EVERY pending ticket this cycle (execute the gate-approved
+        # primary; auto-reject the rest with a reason). No ticket is left in the manual
+        # middle-state or silently dropped by the next journal overwrite.
+        resolution = resolve_pending_cycle(
+            run_date,
+            pending,
+            auto_approve=paper_auto_approve,
+            gate_allows=auto_gate.get("allow_auto_approve", False),
+            gate_reasons=auto_gate.get("reasons", []),
+            store=JournalStore(),
+        )
+        if resolution["decisions"]:
+            decision = resolution["decisions"][0]
+        if resolution["errors"]:
+            execution_error = resolution["errors"][0]["error"]
+        elif not resolution["executed"] and not auto_gate.get("allow_auto_approve", False):
+            execution_error = f"paper auto-approval gate blocks execution: {'; '.join(auto_gate.get('reasons', [])) or 'manual review required'}"
     report_path = ReportBuilder().build_daily_report(run_date)
     review_path = report_path.parents[1] / "review_notes" / f"{run_date}.md"
     journal_path = report_path.parents[1] / "journals" / f"{run_date}.md"
@@ -76,6 +83,7 @@ def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:
         "paths": {name: str(path) for name, path in paths.items()},
         "pending_count": len(load_json(paths["journal_pending"])),
         "decision": decision,
+        "auto_resolution": resolution,
         "execution_error": execution_error,
         "report": str(report_path),
         "review_notes": str(review_path),

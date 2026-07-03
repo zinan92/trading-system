@@ -264,6 +264,42 @@
       "grid_step_pct": 0.10
     }
   },
+  "gold_1m_adr_exhaustion_reversion": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "adr_exhaustion_reversion",
+    "enabled": true,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "volatility_exhaustion_reversion",
+      "family_label": "波动耗尽回归",
+      "style": "adr_exhaustion_reversion",
+      "style_label": "日内波动天花板回归",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_grid_risk_filter_candidate",
+      "holding_period": "scalp_to_intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "range_exhaustion_mean_reversion_fewer_trades_higher_quality",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 240,
+      "session_lookback_bars": 360,
+      "vwap_lookback_bars": 80,
+      "atr_lookback_bars": 14,
+      "adx_lookback_bars": 14,
+      "min_range_atr_multiple": 6.0,
+      "max_adx": 38,
+      "extreme_zone_pct": 18.0,
+      "min_vwap_gap_pct": 0.12,
+      "min_close_reclaim_pct": 0.015,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  },
   "gold_1m_bollinger_reversion": {
     "symbol": "GOLD",
     "timeframe": "1m",
@@ -617,6 +653,45 @@
       "min_volume_ratio": 0.8,
       "session_start_utc": 7,
       "session_end_utc": 20
+    }
+  },
+  "gold_5m_ny_opening_range_breakout": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "ny_opening_range_breakout",
+    "enabled": true,
+    "live": false,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "session_breakout",
+      "family_label": "时段突破",
+      "style": "ny_opening_range_breakout",
+      "style_label": "纽约开盘区间突破",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_session_liquidity_candidate",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 2,
+      "return_profile": "opening_range_breakout_lower_frequency_medium_r",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 90,
+      "opening_range_start_utc": 13,
+      "opening_range_end_utc": 14,
+      "session_start_utc": 14,
+      "session_end_utc": 17,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.30,
+      "adx_lookback_bars": 14,
+      "min_adx": 14,
+      "min_opening_range_pct": 0.06,
+      "max_opening_range_pct": 0.40,
+      "breakout_buffer_pct": 0.015,
+      "min_volume_ratio": 0.75
     }
   }
 }

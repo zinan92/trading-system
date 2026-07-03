@@ -23,6 +23,32 @@ class _FakeSender:
         return {"ok": self.ok, "channel": self.channel, "code": 0 if self.ok else 999}
 
 
+def test_resolve_trade_sender_uses_trade_channel_then_falls_back(monkeypatch):
+    import services.alert_notifier as an
+    import services.feishu_report_sender as frs
+
+    monkeypatch.setattr(frs, "apply_live_env", lambda *a, **k: {})
+    monkeypatch.setattr(an, "apply_live_env", lambda *a, **k: {})
+    for key in (
+        "TRADING_ORCHESTRATOR_TRADE_FEISHU_WEBHOOK_URL",
+        "TRADING_ORCHESTRATOR_TRADE_FEISHU_SECRET",
+        "TRADING_ORCHESTRATOR_REPORT_FEISHU_WEBHOOK_URL",
+        "TRADING_ORCHESTRATOR_FEISHU_REPORT_WEBHOOK_URL",
+        "TRADING_ORCHESTRATOR_FEISHU_WEBHOOK_URL",
+        "TRADING_ORCHESTRATOR_LARK_WEBHOOK_URL",
+        "FEISHU_WEBHOOK_URL",
+        "LARK_WEBHOOK_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_TRADE_FEISHU_WEBHOOK_URL", "https://trade.example/hook")
+    assert frs.resolve_trade_sender().webhook_url == "https://trade.example/hook"
+
+    monkeypatch.delenv("TRADING_ORCHESTRATOR_TRADE_FEISHU_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_REPORT_FEISHU_WEBHOOK_URL", "https://report.example/hook")
+    assert frs.resolve_trade_sender().webhook_url == "https://report.example/hook"
+
+
 def test_sends_file_report_and_records_receipt(tmp_path: Path):
     output_root = tmp_path / "outputs"
     artifact = tmp_path / "report.md"

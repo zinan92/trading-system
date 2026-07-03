@@ -10,10 +10,25 @@ class _FakeSender:
 
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.cards: list[dict | None] = []
 
-    def send(self, text: str) -> dict:
+    def send(self, text: str, card: dict | None = None) -> dict:
         self.sent.append(text)
+        self.cards.append(card)
         return {"ok": True, "channel": self.channel, "code": 0}
+
+
+def _card_text(card: dict) -> str:
+    chunks = [card["header"]["title"]["content"]]
+    for element in card.get("elements", []):
+        text = element.get("text")
+        if isinstance(text, dict):
+            chunks.append(str(text.get("content", "")))
+        for field in element.get("fields", []) or []:
+            chunks.append(str(field.get("text", {}).get("content", "")))
+        for note in element.get("elements", []) or []:
+            chunks.append(str(note.get("content", "")))
+    return "\n".join(chunks)
 
 
 def _ticket() -> dict:
@@ -59,15 +74,19 @@ def test_trade_ticket_notifier_sends_review_card_and_records_receipt(tmp_path: P
     assert result["sent"] == 1
     assert "黄金开单审查卡" in sender.sent[0]
     assert "类型：开单审查卡" in sender.sent[0]
-    assert "1. 发现信号" in sender.sent[0]
+    assert "审批结论：等待人工确认：先完成过滤与风险核对" in sender.sent[0]
+    assert "1. 信号与开单逻辑" in sender.sent[0]
     assert "2. 策略类别" in sender.sent[0]
     assert "类型：动量 / MACD 金叉/死叉 / 多空都可" in sender.sent[0]
     assert "3. 过滤检查" in sender.sent[0]
-    assert "4. 盈亏比检查" in sender.sent[0]
+    assert "4. 盈亏比与价格计划" in sender.sent[0]
     assert "入场区间：4175-4180" in sender.sent[0]
     assert "估算开单价：4177.5000" in sender.sent[0]
     assert "止盈：4198.0，4212.0" in sender.sent[0]
     assert "止损：4162.5" in sender.sent[0]
+    assert "5. 仓位计算" in sender.sent[0]
+    assert "6. 执行与出场闭环" in sender.sent[0]
+    assert "保护单状态：计划止盈 4198.0，4212.0，计划止损 4162.5；尚未提交交易所保护单。" in sender.sent[0]
     assert "8. 人工核对项" in sender.sent[0]
     assert "Entry zone" not in sender.sent[0]
     assert "Rationale:" not in sender.sent[0]
@@ -78,6 +97,222 @@ def test_trade_ticket_notifier_sends_review_card_and_records_receipt(tmp_path: P
     assert rows[0]["ticket_id"] == ticket["ticket_id"]
     receipt = load_json(output_root / "feishu_reports" / f"{run_date}.json")[0]
     assert receipt["kind"] == "trade_ticket_open"
+
+
+def _rich_ticket() -> dict:
+    return {
+        **_ticket(),
+        "position_size_pct": 8,
+        "max_loss_pct": 0.5,
+        "signal_regime": "macd_golden_cross",
+        "signal_strength": 7,
+        "signal_confidence": 8,
+        "latest_price": 4185.7,
+        "generated_at": "2026-07-03T08:15:00+00:00",
+        "trade_quality": {
+            "passes": True,
+            "reward_to_risk": 2.0,
+            "target_price_move_pct": 4.0,
+            "stop_price_move_pct": 2.0,
+            "target_equity_return_pct": 20.0,
+            "stop_equity_risk_pct": 10.0,
+            "estimated_account_stop_risk_pct": 0.8,
+            "requirements": {"effective_leverage": 5.0},
+            "reasons": [],
+        },
+        "backtest": {"verdict": "supportive", "win_rate": 0.621, "avg_r": 0.39, "sample_size": 58},
+    }
+
+
+def test_trade_ticket_notifier_delivers_interactive_card(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    strategy_root = output_root / "strategies" / "gold_1m_macd"
+    run_date = "2026-07-03"
+    write_json(strategy_root / "trade_tickets" / f"{run_date}.json", [_rich_ticket()])
+    sender = _FakeSender()
+
+    result = TradeTicketNotifier(output_root, sender=sender).notify_namespace(run_date, "gold_1m_macd", strategy_root)
+
+    assert result["sent"] == 1
+    card = sender.cards[0]
+    assert card is not None
+    assert card["header"]["template"] in {"blue", "wathet", "turquoise", "green", "yellow", "orange", "red", "carmine", "violet", "purple", "indigo", "grey"}
+    text = _card_text(card)
+    # account badge is present (label derived from routing), not the retired paper_only line
+    assert any(label in text for label in ("纸面 PAPER", "模拟盘 DEMO", "实盘 REAL"))
+    assert "只允许纸面交易" not in text
+    assert "paper_only" not in text
+    # flow-structured decision path + nominal dollars + no local path leak
+    assert "决策路径" in text
+    assert "✅ 1 · 信号闸门" in text
+    assert "名义价值" in text and "$" in text
+    assert "权益 8%" not in text
+    assert "/Users/" not in text
+    # translated regime, not raw english / raw enum
+    assert "MACD 金叉" in text
+    assert "macd_golden_cross" not in text
+
+
+def test_executed_ticket_renders_green_auto_filled_card(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    strategy_root = output_root / "strategies" / "gold_x"
+    run_date = "2026-07-03"
+    ticket = _rich_ticket()
+    write_json(strategy_root / "trade_tickets" / f"{run_date}.json", [ticket])
+    write_json(
+        strategy_root / "paper_orders" / f"{run_date}.json",
+        [{"ticket_id": ticket["ticket_id"], "status": "filled", "fill_price": 4183.27, "quantity": 0.19}],
+    )
+    sender = _FakeSender()
+
+    TradeTicketNotifier(output_root, sender=sender).notify_namespace(run_date, "gold_x", strategy_root)
+
+    card = sender.cards[0]
+    assert card["header"]["template"] == "green"
+    text = _card_text(card)
+    assert "自动成交 · 已建仓" in text
+    assert "✅ 4 · 自动批准闸门" in text
+
+
+def test_trade_ticket_card_flags_risk_breach_when_stop_move_exceeds_cap(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    strategy_root = output_root / "strategies" / "gold_1m_macd"
+    run_date = "2026-07-03"
+    ticket = _rich_ticket()
+    # executor口径 stop = pos 8% * stop_move 8% / 100 = 0.64% > cap 0.5% -> breach
+    ticket["trade_quality"]["stop_price_move_pct"] = 8.0
+    write_json(strategy_root / "trade_tickets" / f"{run_date}.json", [ticket])
+    sender = _FakeSender()
+
+    TradeTicketNotifier(output_root, sender=sender).notify_namespace(run_date, "gold_1m_macd", strategy_root)
+
+    card = sender.cards[0]
+    assert card["header"]["template"] == "red"
+    text = _card_text(card)
+    assert "❌ 3 · 账户风险闸门" in text
+    assert "自动拒绝" in text
+
+
+def test_card_translates_non_macd_regimes_without_english_leak(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    strategy_root = output_root / "strategies" / "gold_pullback"
+    run_date = "2026-07-03"
+    ticket = {**_rich_ticket(), "signal_regime": "pullback_long"}
+    write_json(strategy_root / "trade_tickets" / f"{run_date}.json", [ticket])
+    sender = _FakeSender()
+
+    TradeTicketNotifier(output_root, sender=sender).notify_namespace(run_date, "gold_pullback", strategy_root)
+
+    text = _card_text(sender.cards[0])
+    assert "回调做多" in text
+    assert "pullback_long" not in text
+    assert "pullback long" not in text
+
+
+def test_card_translates_breakout_invalid_if(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    strategy_root = output_root / "strategies" / "gold_break"
+    run_date = "2026-07-03"
+    ticket = {**_rich_ticket(), "invalid_if": "Price closes back below the latest breakout/reference level."}
+    write_json(strategy_root / "trade_tickets" / f"{run_date}.json", [ticket])
+    sender = _FakeSender()
+
+    TradeTicketNotifier(output_root, sender=sender).notify_namespace(run_date, "gold_break", strategy_root)
+
+    # invalid_if lives in the text fallback (_format_message), not on the lean flow card
+    text = sender.sent[0]
+    assert "价格重新收回到最近的突破/参考位下方。" in text
+    assert "Price closes back below" not in text
+
+
+def test_missing_risk_data_renders_pending_not_false_breach(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    strategy_root = output_root / "strategies" / "gold_x"
+    run_date = "2026-07-03"
+    ticket = _rich_ticket()
+    ticket["trade_quality"].pop("stop_price_move_pct")  # cannot recompute executor stop
+    write_json(strategy_root / "trade_tickets" / f"{run_date}.json", [ticket])
+    sender = _FakeSender()
+
+    TradeTicketNotifier(output_root, sender=sender).notify_namespace(run_date, "gold_x", strategy_root)
+
+    card = sender.cards[0]
+    text = _card_text(card)
+    # missing risk data -> node 3 is neither ✅ nor ❌ (⬜), not a false red breach
+    assert "⬜ 3 · 账户风险闸门" in text
+    assert "❌" not in text
+    assert card["header"]["template"] != "red"
+
+
+def test_account_badge_reflects_routing(tmp_path: Path):
+    notifier = TradeTicketNotifier(tmp_path / "outputs", sender=_FakeSender())
+
+    demo_cfg = {"demo_trading": {"enabled": True, "active_strategy_id": "gold_1m_macd"}}
+    demo = notifier._account_badge("gold_1m_macd", {}, demo_cfg)
+    assert demo["label"] == "模拟盘 DEMO" and demo["mode"] == "binance_futures_demo"
+
+    paper = notifier._account_badge("gold_1m_macd", {}, {"execution_mode": "paper"})
+    assert paper["label"] == "纸面 PAPER" and paper["mode"] == "paper_sim"
+
+    live_cfg = {"execution_mode": "live", "live_trading_enabled": True, "broker": {"dry_run": False}}
+    live = notifier._account_badge("top_level", {}, live_cfg)
+    assert live["label"] == "实盘 REAL" and live["mode"] == "live_adapter_gated" and live["armed"] is True
+
+    # a per-ticket demo request marks the account demo even without global demo config
+    via_request = notifier._account_badge("gold_x", {"status": "requested"}, {"execution_mode": "paper"})
+    assert via_request["label"] == "模拟盘 DEMO"
+
+
+def test_trade_ticket_notifier_sends_top_level_ticket(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    run_date = "2026-07-03"
+    ticket = _ticket()
+    write_json(output_root / "trade_tickets" / f"{run_date}.json", [ticket])
+    write_json(
+        output_root / "journal_pending" / f"{run_date}.json",
+        [{**ticket, "journal_id": "j1", "decision_status": "pending_manual_decision"}],
+    )
+    sender = _FakeSender()
+
+    result = TradeTicketNotifier(output_root, sender=sender).notify_namespace(run_date, "top_level", output_root)
+
+    assert result["status"] == "pass"
+    assert result["sent"] == 1
+    assert "黄金开单审查卡｜主流程" in sender.sent[0]
+    assert "策略：主流程" in sender.sent[0]
+    rows = load_json(output_root / "trade_ticket_notifications" / f"{run_date}.json")
+    assert rows[0]["strategy_id"] == "top_level"
+    assert rows[0]["ticket_id"] == ticket["ticket_id"]
+    assert rows[0]["delivered"] is True
+
+
+def test_trade_ticket_notifier_shows_demo_block_reason(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    strategy_root = output_root / "strategies" / "gold_1m_macd"
+    run_date = "2026-07-03"
+    ticket = _ticket()
+    write_json(strategy_root / "trade_tickets" / f"{run_date}.json", [ticket])
+    write_json(
+        strategy_root / "demo_order_requests" / f"{run_date}.json",
+        [
+            {
+                "ticket_id": ticket["ticket_id"],
+                "status": "blocked",
+                "guard": {
+                    "block_reason": "Binance demo reconciliation cannot confirm venue state: timeout: The read operation timed out"
+                },
+            }
+        ],
+    )
+    sender = _FakeSender()
+
+    result = TradeTicketNotifier(output_root, sender=sender).notify_namespace(run_date, "gold_1m_macd", strategy_root)
+
+    assert result["sent"] == 1
+    text = sender.sent[0]
+    assert "审批结论：禁止开单：demo 请求已阻断" in text
+    assert "阻断/风险原因：Binance demo 对账无法确认交易所状态：读取交易所状态超时" in text
+    assert "原因：Binance demo 对账无法确认交易所状态：读取交易所状态超时" in text
 
 
 def test_trade_ticket_notifier_does_not_resend_delivered_ticket(tmp_path: Path):

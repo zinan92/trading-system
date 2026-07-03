@@ -18,7 +18,7 @@ echo "  Trading Orchestrator — 一键启动"
 echo "================================================================"
 echo "项目目录:  $(pwd)"
 echo "运行日期:  $RUN_DATE"
-echo "Dashboard: http://127.0.0.1:${DASH_PORT}/dashboard-v3.html"
+echo "Dashboard: http://127.0.0.1:${DASH_PORT}/dashboard-v4.html"
 echo "Dashboard 日志: ${DASH_LOG}"
 echo "================================================================"
 echo
@@ -54,7 +54,7 @@ echo "       OK (PID ${DASH_PID})"
 
 # 打开浏览器
 echo "[2/3] 打开浏览器..."
-open "http://127.0.0.1:${DASH_PORT}/dashboard-v3.html"
+open "http://127.0.0.1:${DASH_PORT}/dashboard-v4.html"
 
 # 注册 cleanup:Ctrl+C 时一起杀掉 dashboard
 cleanup() {

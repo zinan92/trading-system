@@ -79,7 +79,7 @@ def test_compact_trader_payload_keeps_reader_fields_and_drops_ops_bulk():
         "bars": [{"close": 4200.0}],
         "orders": [{"order_id": "order_1"}],
         "strategy_config": {"raw": True},
-        "performance_board": {"strategies": [{"strategy_id": "gold_1m_chan"}]},
+        "performance_board": {"strategies": [{"strategy_id": "gold_1m_macd"}]},
         "review_loop": {"morning_plan": {}},
         "dashboard_health": {"checks": []},
         "market_data_gate": {"mode": "replay_only"},
@@ -149,7 +149,7 @@ def test_compact_trader_payload_keeps_reader_fields_and_drops_ops_bulk():
         "daily_trade_samples": {
             "run_date": "2026-06-22",
             "status": "below_minimum_executed_trades",
-            "active_strategy_id": "gold_1m_chan",
+            "active_strategy_id": "gold_1m_macd",
             "summary": {
                 "observation_count": 132,
                 "candidate_count": 17,
@@ -183,7 +183,7 @@ def test_compact_trader_payload_keeps_reader_fields_and_drops_ops_bulk():
         "operation_runbook": {"status": "paper_manual_only", "mode": "paper"},
         "live_reconciliation": {
             "truth_scope": "active_demo_strategy",
-            "strategy_id": "gold_1m_chan",
+            "strategy_id": "gold_1m_macd",
             "reconciled": True,
             "drift_count": 0,
         },
@@ -196,7 +196,7 @@ def test_compact_trader_payload_keeps_reader_fields_and_drops_ops_bulk():
 
     compact = compact_trader_payload(payload)
 
-    assert compact["performance_board"]["strategies"][0]["strategy_id"] == "gold_1m_chan"
+    assert compact["performance_board"]["strategies"][0]["strategy_id"] == "gold_1m_macd"
     assert compact["market_data_gate"]["mode"] == "replay_only"
     assert compact["market_view_status"]["filter_effect"] == "expired_direction_filter_disabled"
     assert compact["ohlc_quality"]["provider"] == "binance_usdm"
@@ -233,7 +233,7 @@ def test_compact_trader_payload_keeps_reader_fields_and_drops_ops_bulk():
     assert compact["alerts"]["channel"] == "feishu"
     assert compact["operation_runbook"]["mode"] == "paper"
     assert compact["live_reconciliation"]["truth_scope"] == "active_demo_strategy"
-    assert compact["live_reconciliation"]["strategy_id"] == "gold_1m_chan"
+    assert compact["live_reconciliation"]["strategy_id"] == "gold_1m_macd"
     assert compact["legacy_live_reconciliation"]["truth_scope"] == "legacy_global"
     assert "bars" not in compact
     assert "orders" not in compact
@@ -258,12 +258,12 @@ def _contract_payload() -> dict:
             ],
         },
         "performance_board": {
-            "active_strategy_id": "gold_1m_macd",
+            "active_strategy_id": "gold_1m_chan",
             "active_demo_blocker": {},
             "gold_nav": {"points": [{"timestamp": "2026-06-30T00:00:00+00:00", "close": 4200}]},
             "strategies": [
                 {
-                    "strategy_id": "gold_1m_macd",
+                    "strategy_id": "gold_1m_chan",
                     "timeframe": "1m",
                     "status": "ok",
                     "today_trade_count": 0,
@@ -317,7 +317,7 @@ def test_system_status_contract_exposes_canonical_trade_permission():
     assert contract["contract"]["schema_version"] == "system-status-v1"
     assert contract["status"] == "READY_TO_TRADE"
     assert contract["trade_permission"]["allows_new_order_if_signal"] is True
-    assert contract["trade_permission"]["strategy_id"] == "gold_1m_macd"
+    assert contract["trade_permission"]["strategy_id"] == "gold_1m_chan"
     assert contract["health"]["overall"] == "up"
 
     payload["system_vitals"]["vitals"][0]["status"] = "down"
@@ -338,6 +338,55 @@ def test_system_status_contract_prioritizes_position_limit_after_system_health()
     assert contract["status"] == "PAUSED_POSITION_LIMIT"
     assert contract["trade_permission"]["is_position_limit"] is True
     assert contract["trade_permission"]["primary_blocker"]["code"] == "position_limit"
+
+
+def test_system_status_contract_blocks_on_always_on_critical_stale():
+    payload = _contract_payload()
+    payload["system_vitals"]["always_on"] = {
+        "status": "BLOCKED_ALWAYS_ON_STALE",
+        "blocks_new_orders": True,
+        "critical_blockers": [
+            {"name": "runner", "message": "runner heartbeat stale: 20.0m old", "freshness": {"age_seconds": 1200}}
+        ],
+    }
+
+    contract = build_system_status_contract(payload)
+
+    permission = contract["trade_permission"]
+    assert contract["status"] == "BLOCKED_ALWAYS_ON_STALE"
+    assert permission["allows_new_order_if_signal"] is False
+    assert permission["primary_blocker"]["code"] == "runner"
+    assert permission["primary_blocker"]["source"] == "system_vitals.always_on"
+
+
+def test_system_status_contract_does_not_suppress_stale_strategy_heartbeat():
+    payload = _contract_payload()
+    payload["system_vitals"]["vitals"][1]["status"] = "down"
+    payload["system_vitals"]["vitals"][1]["message"] = "strategies summary stale: 16.0m old"
+
+    contract = build_system_status_contract(payload)
+
+    assert contract["status"] == "BLOCKED_ALWAYS_ON_STALE"
+    assert contract["trade_permission"]["allows_new_order_if_signal"] is False
+    assert contract["trade_permission"]["primary_blocker"]["source"] == "system_vitals.strategy_evaluation"
+
+
+def test_system_status_contract_allows_new_orders_when_only_noncritical_liveness_degrades():
+    payload = _contract_payload()
+    payload["system_vitals"]["always_on"] = {
+        "status": "DEGRADED",
+        "blocks_new_orders": False,
+        "degraded_jobs": [
+            {"name": "cycle_audit", "message": "cycle_audit heartbeat stale: 60.0m old"}
+        ],
+    }
+
+    contract = build_system_status_contract(payload)
+
+    permission = contract["trade_permission"]
+    assert contract["status"] == "DEGRADED"
+    assert permission["allows_new_order_if_signal"] is True
+    assert permission["primary_blocker"]["status"] == "DEGRADED"
 
 
 def test_system_status_contract_uses_flat_only_limit_for_active_demo_strategy(monkeypatch):
@@ -463,7 +512,7 @@ def test_trader_overview_contract_is_reader_facing_and_drops_ops_only_sections()
     overview = build_trader_overview_contract(payload)
 
     assert overview["contract"]["schema_version"] == "trader-overview-v1"
-    assert overview["strategy_id"] == "gold_1m_macd"
+    assert overview["strategy_id"] == "gold_1m_chan"
     assert overview["trade_permission"]["status"] == "READY_TO_TRADE"
     assert overview["current_strategy"]["current_equity"] == 10012
     assert overview["nav"]["strategy_points"][0]["equity"] == 10012

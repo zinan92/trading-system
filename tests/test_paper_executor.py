@@ -371,6 +371,34 @@ def test_ensure_trade_records_backfills_filled_orders(tmp_path: Path):
     assert load_json(root / "paper_trades" / "current.json")[0]["target"] == 4752.8
 
 
+def test_ensure_trade_records_does_not_resurrect_closed_order(tmp_path: Path):
+    run_date = "2026-06-30"
+    root = tmp_path / "outputs"
+    write_json(
+        root / "paper_orders" / f"{run_date}.json",
+        [
+            {
+                "order_id": "live_demo_closed",
+                "ticket_id": "ticket_closed",
+                "status": "filled",
+                "requested_price": 4181.28,
+                "fill_price": 4181.28,
+                "quantity": 0.002,
+                "filled_at": "2026-06-30T00:00:00+00:00",
+            }
+        ],
+    )
+    write_json(
+        root / "paper_trades" / "closed" / f"{run_date}.json",
+        [{"trade_id": "trade_live_demo_closed", "order_id": "live_demo_closed", "status": "closed"}],
+    )
+
+    added = PaperExecutor(root).ensure_trade_records(run_date)
+
+    assert added == []
+    assert load_json(root / "paper_trades" / "current.json") == []
+
+
 def _live_ticket() -> dict:
     return {
         "ticket_id": "ticket_live_x",

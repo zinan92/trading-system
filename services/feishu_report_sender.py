@@ -21,6 +21,8 @@ REPORT_SECRET_KEYS = (
     "TRADING_ORCHESTRATOR_REPORT_FEISHU_SECRET",
     "TRADING_ORCHESTRATOR_FEISHU_REPORT_SECRET",
 )
+TRADE_WEBHOOK_KEYS = ("TRADING_ORCHESTRATOR_TRADE_FEISHU_WEBHOOK_URL",)
+TRADE_SECRET_KEYS = ("TRADING_ORCHESTRATOR_TRADE_FEISHU_SECRET",)
 
 
 class FeishuReportSender:
@@ -43,6 +45,7 @@ class FeishuReportSender:
         source_path: Path | None = None,
         message: str | None = None,
         max_chars: int = DEFAULT_MAX_CHARS,
+        card: dict | None = None,
     ) -> dict:
         if not title.strip():
             raise ValueError("title is required")
@@ -72,7 +75,7 @@ class FeishuReportSender:
 
         configured = bool(getattr(self.sender, "configured", False))
         if configured:
-            delivery = self.sender.send(text)
+            delivery = self.sender.send(text, card=card) if card is not None else self.sender.send(text)
             delivered = bool(delivery.get("ok"))
             channel = str(delivery.get("channel", getattr(self.sender, "channel", "unknown")))
         else:
@@ -159,6 +162,17 @@ def resolve_report_sender():
     if webhook_url:
         return FeishuSender(webhook_url=webhook_url, secret=secret)
     return FeishuSender()
+
+
+def resolve_trade_sender():
+    """Sender for executed trade-record cards: dedicated trade channel if set,
+    otherwise fall back to the report channel (then the alert webhook)."""
+    apply_live_env()
+    webhook_url = _first_env(TRADE_WEBHOOK_KEYS)
+    secret = _first_env(TRADE_SECRET_KEYS)
+    if webhook_url:
+        return FeishuSender(webhook_url=webhook_url, secret=secret)
+    return resolve_report_sender()
 
 
 def _first_env(keys: tuple[str, ...]) -> str | None:

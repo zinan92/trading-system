@@ -1,7 +1,15 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from services.journal_store import load_json, write_json
 from services.strategy_frequency_governance import StrategyFrequencyGovernance
+
+
+def _fresh_reconciliation(run_date: str) -> dict:
+    return {
+        "run_date": run_date,
+        "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
 
 
 def test_strategy_frequency_governance_writes_actions_and_status(tmp_path: Path):
@@ -116,7 +124,12 @@ def test_strategy_frequency_governance_uses_reconciliation_drift_as_execution_bl
     run_date = "2026-06-21"
     write_json(
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
-        [{"reconciled": False, "drift_count": 1, "drifts": [{"reason": "exchange position has no local record"}]}],
+        [{
+            **_fresh_reconciliation(run_date),
+            "reconciled": False,
+            "drift_count": 1,
+            "drifts": [{"reason": "exchange position has no local record"}],
+        }],
     )
     leaderboard = {
         "strategies": [
@@ -142,7 +155,12 @@ def test_strategy_frequency_governance_uses_reconciliation_error_as_execution_bl
     run_date = "2026-06-21"
     write_json(
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
-        [{"reconciled": False, "drift_count": 0, "error": "TimeoutError: The read operation timed out"}],
+        [{
+            **_fresh_reconciliation(run_date),
+            "reconciled": False,
+            "drift_count": 0,
+            "error": "TimeoutError: The read operation timed out",
+        }],
     )
     leaderboard = {
         "strategies": [
@@ -169,6 +187,7 @@ def test_strategy_frequency_governance_uses_cannot_confirm_as_execution_blocker(
     write_json(
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
         [{
+            **_fresh_reconciliation(run_date),
             "reconciled": False,
             "confirmation_status": "cannot_confirm",
             "system_state": "BLOCKED_RECONCILIATION_UNKNOWN",
@@ -193,6 +212,68 @@ def test_strategy_frequency_governance_uses_cannot_confirm_as_execution_blocker(
     assert row["stage"] == "execution_blocked"
     assert row["execution_blocker"]["status"] == "reconciliation_unknown"
     assert "cannot confirm" in row["execution_blocker"]["reason"]
+
+
+def test_strategy_frequency_governance_blocks_stale_reconciliation_current(tmp_path: Path):
+    root = tmp_path / "outputs"
+    run_date = "2026-06-21"
+    write_json(
+        root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
+        [{
+            "run_date": run_date,
+            "checked_at": (datetime.now(timezone.utc) - timedelta(seconds=601)).replace(microsecond=0).isoformat(),
+            "reconciled": True,
+            "confirmation_status": "confirmed_flat",
+            "drift_count": 0,
+        }],
+    )
+    leaderboard = {
+        "strategies": [
+            {
+                "strategy_id": "gold_1m_chan",
+                "classification": {"family": "chan", "role": "active_position_gated_strategy", "frequency_bucket": "low"},
+                "daily_execution": {"executed_trade_count": 0, "signal_count": 1, "ticket_count": 0},
+            }
+        ]
+    }
+    rules = {"default": {"live_money_guardrails": {"max_reconciliation_age_seconds": 600}}}
+
+    result = StrategyFrequencyGovernance(root, rules).build(run_date, daily_samples={"samples": []}, leaderboard=leaderboard)
+    row = result["strategies"][0]
+
+    assert row["stage"] == "execution_blocked"
+    assert row["execution_blocker"]["status"] == "reconciliation_stale"
+    assert row["execution_blocker"]["details"]["reason"] == "reconciliation artifact is stale"
+
+
+def test_strategy_frequency_governance_blocks_wrong_date_reconciliation_current(tmp_path: Path):
+    root = tmp_path / "outputs"
+    run_date = "2026-06-21"
+    write_json(
+        root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
+        [{
+            **_fresh_reconciliation("2026-06-20"),
+            "reconciled": True,
+            "confirmation_status": "confirmed_flat",
+            "drift_count": 0,
+        }],
+    )
+    leaderboard = {
+        "strategies": [
+            {
+                "strategy_id": "gold_1m_chan",
+                "classification": {"family": "chan", "role": "active_position_gated_strategy", "frequency_bucket": "low"},
+                "daily_execution": {"executed_trade_count": 0, "signal_count": 1, "ticket_count": 0},
+            }
+        ]
+    }
+
+    result = StrategyFrequencyGovernance(root).build(run_date, daily_samples={"samples": []}, leaderboard=leaderboard)
+    row = result["strategies"][0]
+
+    assert row["stage"] == "execution_blocked"
+    assert row["execution_blocker"]["status"] == "reconciliation_stale"
+    assert row["execution_blocker"]["details"]["reason"] == "run_date mismatch"
 
 
 def test_strategy_frequency_governance_attributes_risk_budget_not_no_signal(tmp_path: Path):

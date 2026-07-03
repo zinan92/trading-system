@@ -43,6 +43,7 @@ class ScheduleManager:
             self._daily_review_job(log_dir, review_hour, review_minute),
             self._dashboard_job(log_dir, dashboard_port),
             self._strategies_job(log_dir),
+            self._deadman_ping_job(log_dir),
         ]
         for job in jobs:
             path = launch_dir / f"{job['Label']}.plist"
@@ -139,20 +140,34 @@ class ScheduleManager:
             extra={"RunAtLoad": True, "KeepAlive": True},
         )
 
+    def _deadman_ping_job(self, log_dir: Path) -> dict:
+        label = "com.wendy.trading-orchestrator.deadman-ping"
+        return self._base_job(
+            label,
+            [self.python, "-m", "pipelines.deadman_ping"],
+            log_dir,
+            extra={"StartInterval": 300, "RunAtLoad": True},
+        )
+
     def _base_job(self, label: str, args: list[str], log_dir: Path, extra: dict) -> dict:
+        env = {
+            "PYTHONUNBUFFERED": "1",
+            "TZ": "UTC",
+            "TRADING_ORCHESTRATOR_OUTPUT_ROOT": str(self.output_root),
+            "TRADING_ORCHESTRATOR_MARKET_DB": str(self.repo_root / "data" / "market_data.db"),
+            "TRADING_ORCHESTRATOR_LIVE_ENV": str(self.repo_root / "configs" / "live.env"),
+        }
+        for key in ("TRADING_ORCHESTRATOR_DEADMAN_URL", "TRADING_ORCHESTRATOR_DEADMAN_POSITION_URL"):
+            value = os.getenv(key)
+            if value:
+                env[key] = value
         return {
             "Label": label,
             "ProgramArguments": args,
             "WorkingDirectory": str(self.repo_root),
             "StandardOutPath": str(log_dir / f"{label}.out.log"),
             "StandardErrorPath": str(log_dir / f"{label}.err.log"),
-            "EnvironmentVariables": {
-                "PYTHONUNBUFFERED": "1",
-                "TZ": "UTC",
-                "TRADING_ORCHESTRATOR_OUTPUT_ROOT": str(self.output_root),
-                "TRADING_ORCHESTRATOR_MARKET_DB": str(self.repo_root / "data" / "market_data.db"),
-                "TRADING_ORCHESTRATOR_LIVE_ENV": str(self.repo_root / "configs" / "live.env"),
-            },
+            "EnvironmentVariables": env,
             **extra,
         }
 

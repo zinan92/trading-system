@@ -133,6 +133,23 @@ class RiskMonitor:
         if guardrails.get("status") == "block" or guardrails.get("allow_new_paper_order") is False:
             return self._check("strategy_guardrails", "block", "Strategy guardrails block new paper exposure.", guardrails)
         if guardrails.get("status") == "warn":
+            # A guardrail warn should only freeze auto-approval if a warn/block check
+            # actually cautions against new exposure. A pure learning/sampling warn
+            # self-declares blocks_paper_sampling=False (e.g. <20 closed trades): freezing
+            # it is self-defeating (the samples it waits for can never accumulate), so let
+            # such a ticket keep auto-executing. Bare warns with no per-check detail stay
+            # conservative (blocking).
+            checks = guardrails.get("checks")
+            if isinstance(checks, list) and checks:
+                active = [c for c in checks if isinstance(c, dict) and c.get("status") in {"warn", "block"}]
+                sampling_only = active and all((c.get("evidence") or {}).get("blocks_paper_sampling") is False for c in active)
+                if sampling_only:
+                    return self._check(
+                        "strategy_guardrails",
+                        "pass",
+                        "Strategy guardrails only flag learning-state sampling (keep collecting paper samples).",
+                        guardrails.get("summary", {}),
+                    )
             return self._check("strategy_guardrails", "warn", "Strategy guardrails require caution before new paper exposure.", guardrails.get("summary", {}))
         return self._check("strategy_guardrails", "pass", "Strategy guardrails pass.", guardrails.get("summary", {}))
 

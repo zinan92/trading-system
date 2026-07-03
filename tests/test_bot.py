@@ -96,12 +96,17 @@ def test_bot_cycle_blocks_paper_auto_approve_when_risk_monitor_blocks(monkeypatc
                 "summary": {"block_reasons": ["daily loss stop breached"]},
             }
 
-    class JournalStoreShouldNotRun:
-        def record_decision(self, *args, **kwargs):
-            raise AssertionError("JournalStore.record_decision should not run when risk monitor blocks")
+    class RecordingJournalStore:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
 
+        def record_decision(self, run_date, ticket_id, decision, notes="", **kwargs):
+            self.calls.append({"ticket_id": ticket_id, "decision": decision, "notes": notes})
+            return {"ticket_id": ticket_id, "decision_status": decision}
+
+    store = RecordingJournalStore()
     monkeypatch.setattr(bot, "RiskMonitor", FakeRiskMonitor)
-    monkeypatch.setattr(bot, "JournalStore", JournalStoreShouldNotRun)
+    monkeypatch.setattr(bot, "JournalStore", lambda *a, **k: store)
     class FakeAutoGate:
         def evaluate(self, run_date: str, auto_requested: bool) -> dict:
             risk = FakeRiskMonitor().run(run_date)
@@ -116,9 +121,12 @@ def test_bot_cycle_blocks_paper_auto_approve_when_risk_monitor_blocks(monkeypatc
 
     result = bot.run_bot_cycle("2026-05-26", paper_auto_approve=True)
 
+    # Autonomous: a gate-blocked ticket is auto-REJECTED (not left in the manual middle state).
     assert result["decision"] is None
-    assert "paper auto-approval gate blocks execution" in result["execution_error"]
     assert "daily loss stop breached" in result["execution_error"]
+    assert store.calls and store.calls[0]["decision"] == "rejected"
+    assert "auto-rejected (safety)" in store.calls[0]["notes"]
+    assert result["auto_resolution"]["rejected"] == ["ticket_gold_blocked"]
 
 
 def test_bot_cycle_auto_approves_only_after_risk_monitor_allows(monkeypatch, tmp_path: Path):

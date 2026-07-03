@@ -32,6 +32,8 @@ class TradeTicket:
     manual_execution_required: bool = True
     verdict: str = "approved"
     trade_quality: dict = field(default_factory=dict)
+    generated_at: str = ""
+    latest_price: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -62,4 +64,6 @@ class TradeTicket:
             "manual_execution_required": self.manual_execution_required,
             "verdict": self.verdict,
             "trade_quality": self.trade_quality,
+            "generated_at": self.generated_at,
+            "latest_price": self.latest_price,
         }

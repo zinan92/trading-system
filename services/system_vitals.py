@@ -37,6 +37,9 @@ def _safe_float(value: Any, default: float) -> float:
 # A timestamp more than this far in the future is treated as clock skew / a bad
 # writer rather than "fresh" — otherwise a far-future stamp masks a dead source.
 _FUTURE_SKEW_SECONDS = 120.0
+_DEFAULT_HEARTBEAT_CADENCE_SECONDS = 300.0
+_MISSED_BEATS_BEFORE_STALE = 3.0
+_MIN_STALE_AFTER_SECONDS = 900.0
 
 
 def _load_any(path: Path) -> Any:
@@ -53,6 +56,10 @@ def _latest_record(path: Path) -> dict:
     if isinstance(data, list):
         return data[-1] if data and isinstance(data[-1], dict) else {}
     return data if isinstance(data, dict) else {}
+
+
+def _stale_after_seconds(interval_seconds: float) -> float:
+    return max(interval_seconds * _MISSED_BEATS_BEFORE_STALE, _MIN_STALE_AFTER_SECONDS)
 
 
 class SystemVitals:
@@ -94,6 +101,7 @@ class SystemVitals:
             execution=execution,
         )
         vitals = [data_feed, runner, strategy, tp_sl, execution, no_trade]
+        always_on = self._always_on_contract(vitals)
         overall = "down" if any(v["status"] == "down" for v in vitals) else "alive"
         payload = {
             "run_date": run_date,
@@ -101,6 +109,7 @@ class SystemVitals:
             "overall": overall,
             "alive": overall == "alive",
             "vitals": vitals,
+            "always_on": always_on,
         }
         if persist:
             write_json(self.output_root / "system_vitals" / "current.json", [payload])
@@ -124,7 +133,7 @@ class SystemVitals:
         if self.run_date and self.run_date != self.now.date().isoformat():
             return self._vital("data_feed", "up", "GOLD feed exists for historical run_date", detail)
         if age_min * 60 < -_FUTURE_SKEW_SECONDS:
-            return self._vital("data_feed", "warn", f"GOLD feed timestamp is {-age_min:.1f}m in the FUTURE — clock skew / bad import", detail)
+            return self._vital("data_feed", "down", f"GOLD feed timestamp is {-age_min:.1f}m in the FUTURE — clock skew / bad import", detail)
         if age_min > 30:
             return self._vital("data_feed", "down", f"GOLD feed stale: {age_min:.1f}m old", detail)
         return self._vital("data_feed", "up", "GOLD feed is fresh", detail)
@@ -161,8 +170,8 @@ class SystemVitals:
             age = (self.now - updated).total_seconds()
             detail.update({"updated_at": updated.isoformat(), "age_seconds": round(age, 2)})
             if age < -_FUTURE_SKEW_SECONDS:
-                return self._vital("runner_liveness", "warn", f"runner heartbeat is {-age / 60:.1f}m in the FUTURE — clock skew", detail)
-            if age > max(interval * 3, 900):
+                return self._vital("runner_liveness", "down", f"runner heartbeat is {-age / 60:.1f}m in the FUTURE — clock skew", detail)
+            if age > _stale_after_seconds(interval):
                 return self._vital("runner_liveness", "down", f"runner heartbeat stale: {age / 60:.1f}m old", detail)
         if state in {"error", "failed", "stopped", "dead"}:
             return self._vital("runner_liveness", "down", f"runner state is {state}", detail)
@@ -194,8 +203,8 @@ class SystemVitals:
             stale_seconds = (self.now - generated).total_seconds()
             detail["age_seconds"] = round(stale_seconds, 2)
             if stale_seconds < -_FUTURE_SKEW_SECONDS:
-                return self._vital("strategy_evaluation", "warn", f"strategies summary generated_at is {-stale_seconds / 60:.1f}m in the FUTURE — clock skew", detail)
-            if stale_seconds > 1800:
+                return self._vital("strategy_evaluation", "down", f"strategies summary generated_at is {-stale_seconds / 60:.1f}m in the FUTURE — clock skew", detail)
+            if stale_seconds > _stale_after_seconds(_DEFAULT_HEARTBEAT_CADENCE_SECONDS):
                 return self._vital("strategy_evaluation", "down", f"strategies summary stale: {stale_seconds / 60:.1f}m old — strategies job likely stopped", detail)
         if expected and evaluated < expected:
             return self._vital("strategy_evaluation", "down", f"only {evaluated}/{expected} enabled strategies evaluated", detail)
@@ -257,6 +266,233 @@ class SystemVitals:
             if reconciliation.get("reconciled") is False:
                 return self._vital("execution_blocker", "down", "active demo reconciliation is not reconciled", reconciliation)
         return self._vital("execution_blocker", "up", "no hard execution blocker detected", {})
+
+    def _always_on_contract(self, vitals: list[dict]) -> dict:
+        vital_by_name = {str(item.get("name") or ""): item for item in vitals if isinstance(item, dict)}
+        jobs = [
+            self._job_from_vital(
+                job_name="runner",
+                vital=vital_by_name.get("runner_liveness", {}),
+                criticality="critical",
+                cadence_seconds=self._runner_interval_seconds(),
+                source_path=self.output_root / "runner_status" / "current.json",
+            ),
+            self._job_from_vital(
+                job_name="strategies",
+                vital=vital_by_name.get("strategy_evaluation", {}),
+                criticality="critical",
+                cadence_seconds=_DEFAULT_HEARTBEAT_CADENCE_SECONDS,
+                source_path=self.output_root / "strategies" / "summary_current.json",
+            ),
+            self._artifact_heartbeat_job(
+                job_name="cycle_audit",
+                criticality="non_critical",
+                source_path=self.output_root / "cycle_audit" / "current.json",
+                cadence_seconds=_DEFAULT_HEARTBEAT_CADENCE_SECONDS,
+                timestamp_fields=("finalized_at", "recorded_at", "cycle_timestamp"),
+                missing_state="degraded",
+            ),
+            {
+                "name": "dashboard",
+                "criticality": "non_critical",
+                "state": "read_time_observer",
+                "status": "up",
+                "blocks_new_orders": False,
+                "message": "dashboard liveness is computed by the reader on each request; external deadman detects whole-box loss",
+                "source": "dashboard_request",
+                "freshness": {
+                    "checked_at": self.now.isoformat(),
+                    "uses_read_time_utc": True,
+                },
+            },
+            {
+                "name": "reconciliation",
+                "criticality": "critical",
+                "state": "delegated",
+                "status": "up",
+                "blocks_new_orders": False,
+                "message": "reconciliation freshness is enforced by the existing live reconciliation and money guardrail gates",
+                "source": "live_reconciliation.current",
+                "freshness": {
+                    "delegated_to": [
+                        "system_vitals.execution_blocker",
+                        "live_money_guardrails.reconciliation_daily_loss_invariant",
+                    ],
+                },
+            },
+        ]
+        blocking = [job for job in jobs if job.get("blocks_new_orders")]
+        degraded = [
+            job
+            for job in jobs
+            if job.get("criticality") == "non_critical" and job.get("status") in {"warn", "down"}
+        ]
+        if blocking:
+            status = "BLOCKED_ALWAYS_ON_STALE"
+        elif degraded:
+            status = "DEGRADED"
+        else:
+            status = "READY"
+        return {
+            "schema_version": "always-on-liveness-v1",
+            "checked_at": self.now.isoformat(),
+            "run_date": self.run_date,
+            "status": status,
+            "blocks_new_orders": bool(blocking),
+            "degraded": bool(degraded),
+            "blocking_jobs": blocking,
+            "critical_blockers": blocking,
+            "degraded_jobs": degraded,
+            "jobs": jobs,
+            "freshness_policy": {
+                "cadence_seconds": _DEFAULT_HEARTBEAT_CADENCE_SECONDS,
+                "missed_beats_before_stale": _MISSED_BEATS_BEFORE_STALE,
+                "minimum_stale_after_seconds": _MIN_STALE_AFTER_SECONDS,
+                "timestamp_timezone": "UTC",
+                "computed_at_read_time": True,
+            },
+        }
+
+    def _runner_interval_seconds(self) -> float:
+        heartbeat = _latest_record(self.output_root / "runner_status" / "current.json")
+        return _safe_float(heartbeat.get("interval_seconds") or _DEFAULT_HEARTBEAT_CADENCE_SECONDS, _DEFAULT_HEARTBEAT_CADENCE_SECONDS)
+
+    def _job_from_vital(
+        self,
+        *,
+        job_name: str,
+        vital: dict,
+        criticality: str,
+        cadence_seconds: float,
+        source_path: Path,
+    ) -> dict:
+        detail = vital.get("detail", {}) if isinstance(vital.get("detail"), dict) else {}
+        status = str(vital.get("status") or "warn")
+        message = str(vital.get("message") or "vital missing")
+        age = detail.get("age_seconds")
+        stale_after = _stale_after_seconds(cadence_seconds)
+        state = "fresh"
+        if status == "down":
+            state = "stale" if self._message_names_staleness(message) else "down"
+        elif status == "warn":
+            state = "degraded"
+        blocks = criticality == "critical" and status == "down"
+        return {
+            "name": job_name,
+            "criticality": criticality,
+            "state": state,
+            "status": status,
+            "blocks_new_orders": blocks,
+            "message": message,
+            "source": str(source_path),
+            "freshness": {
+                "age_seconds": age,
+                "cadence_seconds": cadence_seconds,
+                "stale_after_seconds": stale_after,
+                "missed_beats": self._missed_beats(age, cadence_seconds),
+                "checked_at": self.now.isoformat(),
+                "uses_read_time_utc": True,
+            },
+            "detail": detail,
+        }
+
+    def _artifact_heartbeat_job(
+        self,
+        *,
+        job_name: str,
+        criticality: str,
+        source_path: Path,
+        cadence_seconds: float,
+        timestamp_fields: tuple[str, ...],
+        missing_state: str,
+    ) -> dict:
+        record = _latest_record(source_path)
+        stale_after = _stale_after_seconds(cadence_seconds)
+        if not record:
+            status = "warn" if missing_state == "degraded" else "down"
+            return {
+                "name": job_name,
+                "criticality": criticality,
+                "state": missing_state,
+                "status": status,
+                "blocks_new_orders": criticality == "critical",
+                "message": f"{job_name} heartbeat missing",
+                "source": str(source_path),
+                "freshness": {
+                    "age_seconds": None,
+                    "cadence_seconds": cadence_seconds,
+                    "stale_after_seconds": stale_after,
+                    "checked_at": self.now.isoformat(),
+                    "uses_read_time_utc": True,
+                },
+            }
+        raw_ts = next((record.get(field) for field in timestamp_fields if record.get(field)), None)
+        observed = _parse_ts(raw_ts)
+        if raw_ts and observed is None:
+            status = "warn" if criticality == "non_critical" else "down"
+            return {
+                "name": job_name,
+                "criticality": criticality,
+                "state": "invalid_timestamp",
+                "status": status,
+                "blocks_new_orders": criticality == "critical",
+                "message": f"{job_name} heartbeat timestamp is unparseable",
+                "source": str(source_path),
+                "freshness": {
+                    "raw_timestamp": str(raw_ts),
+                    "cadence_seconds": cadence_seconds,
+                    "stale_after_seconds": stale_after,
+                    "checked_at": self.now.isoformat(),
+                    "uses_read_time_utc": True,
+                },
+            }
+        age = (self.now - observed).total_seconds() if observed else None
+        if age is not None and age < -_FUTURE_SKEW_SECONDS:
+            status = "down"
+            state = "future_timestamp"
+            message = f"{job_name} heartbeat is {-age / 60:.1f}m in the FUTURE - clock skew"
+        elif age is None:
+            status = "warn" if criticality == "non_critical" else "down"
+            state = "missing_timestamp"
+            message = f"{job_name} heartbeat timestamp missing"
+        elif age > stale_after:
+            status = "warn" if criticality == "non_critical" else "down"
+            state = "stale"
+            message = f"{job_name} heartbeat stale: {age / 60:.1f}m old"
+        else:
+            status = "up"
+            state = "fresh"
+            message = f"{job_name} heartbeat is fresh"
+        return {
+            "name": job_name,
+            "criticality": criticality,
+            "state": state,
+            "status": status,
+            "blocks_new_orders": status == "down" and (criticality == "critical" or state == "future_timestamp"),
+            "message": message,
+            "source": str(source_path),
+            "freshness": {
+                "timestamp": observed.isoformat() if observed else None,
+                "age_seconds": round(age, 2) if age is not None else None,
+                "cadence_seconds": cadence_seconds,
+                "stale_after_seconds": stale_after,
+                "missed_beats": self._missed_beats(age, cadence_seconds),
+                "checked_at": self.now.isoformat(),
+                "uses_read_time_utc": True,
+            },
+        }
+
+    def _missed_beats(self, age_seconds: Any, cadence_seconds: float) -> float | None:
+        try:
+            if age_seconds is None or cadence_seconds <= 0:
+                return None
+            return round(float(age_seconds) / cadence_seconds, 2)
+        except (TypeError, ValueError):
+            return None
+
+    def _message_names_staleness(self, message: str) -> bool:
+        lowered = message.lower()
+        return any(token in lowered for token in ("stale", "missing", "stopped", "heartbeat", "timestamp"))
 
     def _no_trade_attribution_vital(self, **vitals: dict) -> dict:
         down = [name for name, vital in vitals.items() if vital.get("status") == "down"]

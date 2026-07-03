@@ -537,18 +537,11 @@ class LiveBrokerReconciliation:
                 for row in rows:
                     if not isinstance(row, dict):
                         continue
-                    request = row.get("request", {}) if isinstance(row.get("request"), dict) else {}
-                    for payload in request.get("protective_orders", []) or []:
-                        if not isinstance(payload, dict):
-                            continue
-                        for key in ("newClientOrderId", "clientAlgoId"):
-                            if payload.get(key):
-                                ids.add(str(payload[key]))
                     response = row.get("broker_response", {}) if isinstance(row.get("broker_response"), dict) else {}
                     for item in response.get("protective_orders", []) or []:
                         if not isinstance(item, dict):
                             continue
-                        for key in ("clientOrderId", "clientAlgoId"):
+                        for key in ("clientOrderId", "clientAlgoId", "client_order_id"):
                             if item.get(key):
                                 ids.add(str(item[key]))
         return ids

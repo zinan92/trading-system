@@ -40,7 +40,7 @@ def test_strategy_experiment_queue_builds_paper_only_candidates(tmp_path: Path):
     result = StrategyExperimentQueue(root).build(run_date)
 
     assert result["status"] == "experiment_ready"
-    assert result["strategy_id"] == "gold_1m_chan"
+    assert result["strategy_id"] == "gold_1m_macd"
     assert result["paper_only"] is True
     assert result["auto_apply"] is False
     assert result["sample_bars"] == 260

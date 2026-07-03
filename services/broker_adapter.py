@@ -79,10 +79,50 @@ class LiveBrokerAdapter:
         if self.provider == "oanda_rest":
             return self._submit_oanda_order(request, readiness)
         if self.provider == "binance_usdm":
+            if not self.dry_run:
+                reconciliation = self._live_reconciliation_check(request.run_date)
+                readiness = {**readiness, "live_reconciliation": reconciliation.get("report", {})}
+                if not reconciliation["ready"]:
+                    raise RuntimeError(reconciliation["block_reason"])
             return self._submit_binance_order(request, readiness)
         if not self.dry_run:
             raise NotImplementedError(f"live broker provider {self.provider} is not wired for real order submission yet")
         return self._record_dry_run_request(request, readiness)
+
+    def _live_reconciliation_check(self, run_date: str) -> dict:
+        """Refresh exchange reconciliation inline before any real order POST.
+
+        Money guardrails demand a fresh same-UTC-day snapshot; without this
+        refresh the first mainnet order would always fail
+        BLOCKED_MONEY_GUARDRAIL_UNKNOWN on a stale artifact — and worse, a
+        seeded-but-wrong snapshot could let an order POST into an unseen venue
+        position. Mirrors the demo/testnet adapters' inline checks.
+        """
+        from services.live_reconciliation import LiveBrokerReconciliation
+
+        report = LiveBrokerReconciliation(self.output_root, self.broker_config, opener=self.opener).run(run_date)
+        if report.get("suspected_naked_position"):
+            return {
+                "ready": False,
+                "block_reason": f"live reconciliation suspected naked position: {report.get('escalation_action') or report.get('reason_code')}",
+                "report": report,
+            }
+        if report.get("confirmation_status") == "cannot_confirm":
+            return {
+                "ready": False,
+                "block_reason": f"live reconciliation cannot confirm venue state: {report.get('error')}",
+                "report": report,
+            }
+        if report.get("error"):
+            return {"ready": False, "block_reason": f"live reconciliation failed: {report['error']}", "report": report}
+        if report.get("drift_count", 0):
+            reasons = sorted({str(item.get("reason", "reconciliation drift")) for item in report.get("drifts", [])})
+            return {
+                "ready": False,
+                "block_reason": "live reconciliation drift: " + "; ".join(reasons),
+                "report": report,
+            }
+        return {"ready": True, "block_reason": "", "report": report}
 
     def preflight(self) -> dict:
         env = apply_live_env()
@@ -1170,7 +1210,88 @@ class LiveBrokerAdapter:
                 "message": f"protective order response status is {status or 'missing'}, expected NEW",
                 "response": self._safe_order_payload(response),
             }
+        expected_client_id = str(payload.get("newClientOrderId") or payload.get("clientAlgoId") or "")
+        response_client_id = str(response.get("clientOrderId") or response.get("clientAlgoId") or "")
+        response_order_id = str(response.get("orderId") or response.get("algoId") or "")
+        if not response_client_id or not response_order_id:
+            return {
+                "payload": safe_payload,
+                "error_type": "ProtectiveOrderNotExchangeVerified",
+                "message": "protective order response lacks exchange order id or client order id",
+                "response": self._safe_order_payload(response),
+            }
+        if expected_client_id and response_client_id != expected_client_id:
+            return {
+                "payload": safe_payload,
+                "error_type": "ProtectiveOrderMismatch",
+                "message": f"protective order client id is {response_client_id}, expected {expected_client_id}",
+                "response": self._safe_order_payload(response),
+            }
+        mismatch = self._binance_protective_response_mismatch(response, payload)
+        if mismatch:
+            return mismatch
         return {}
+
+    def _binance_protective_response_mismatch(self, response: dict, payload: dict) -> dict:
+        safe_payload = self._safe_order_payload(payload)
+        safe_response = self._safe_order_payload(response)
+        expected_symbol = str(payload.get("symbol") or "").upper()
+        response_symbol = str(response.get("symbol") or "").upper()
+        if response_symbol != expected_symbol:
+            return {
+                "payload": safe_payload,
+                "error_type": "ProtectiveOrderMismatch",
+                "message": f"protective order symbol is {response_symbol or 'missing'}, expected {expected_symbol}",
+                "response": safe_response,
+            }
+        expected_side = str(payload.get("side") or "").upper()
+        response_side = str(response.get("side") or "").upper()
+        if response_side != expected_side:
+            return {
+                "payload": safe_payload,
+                "error_type": "ProtectiveOrderMismatch",
+                "message": f"protective order side is {response_side or 'missing'}, expected {expected_side}",
+                "response": safe_response,
+            }
+        expected_type = str(payload.get("type") or "").upper()
+        response_type = str(response.get("type") or response.get("orderType") or "").upper()
+        if response_type != expected_type:
+            return {
+                "payload": safe_payload,
+                "error_type": "ProtectiveOrderMismatch",
+                "message": f"protective order type is {response_type or 'missing'}, expected {expected_type}",
+                "response": safe_response,
+            }
+        expected_qty = self._float_or_none(payload.get("quantity"))
+        response_qty = self._float_or_none(response.get("origQty", response.get("quantity")))
+        if expected_qty is None or response_qty is None or response_qty + 1e-12 < expected_qty:
+            return {
+                "payload": safe_payload,
+                "error_type": "ProtectiveOrderQuantityMismatch",
+                "message": f"protective order quantity is {response_qty if response_qty is not None else 'missing'}, expected at least {expected_qty}",
+                "response": safe_response,
+            }
+        if not self._truthy(response.get("reduceOnly")) and not self._truthy(response.get("closePosition")):
+            return {
+                "payload": safe_payload,
+                "error_type": "ProtectiveOrderNotReduceOnly",
+                "message": "protective order response is not reduce-only or close-position",
+                "response": safe_response,
+            }
+        return {}
+
+    def _float_or_none(self, value) -> float | None:
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _truthy(self, value) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
     def _existing_resting_protective_coverage(self, symbol: str, position_amt: float) -> dict:
         if not position_amt:

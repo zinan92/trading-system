@@ -62,6 +62,7 @@ class Strategy:
             return MacdSignalEngine(self.params)
         if engine_type in {
             "grid",
+            "adr_exhaustion_reversion",
             "bollinger_reversion",
             "bollinger_reclaim_filter",
             "breakout",
@@ -70,6 +71,7 @@ class Strategy:
             "adx_ema_pullback",
             "vwap_extension_reversion",
             "london_ny_compression_breakout",
+            "ny_opening_range_breakout",
             "breakout_retest_continuation",
             "false_breakout_reversal",
             "psych_level_rejection",

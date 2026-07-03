@@ -64,6 +64,8 @@ class TechnicalRuleSignalEngine:
     def _latest_setup(self, candles: list) -> dict | None:
         if self.engine_type == "grid":
             return self._grid(candles)
+        if self.engine_type == "adr_exhaustion_reversion":
+            return self._adr_exhaustion_reversion(candles)
         if self.engine_type == "bollinger_reversion":
             return self._bollinger_reversion(candles)
         if self.engine_type == "bollinger_reclaim_filter":
@@ -72,6 +74,8 @@ class TechnicalRuleSignalEngine:
             return self._breakout(candles)
         if self.engine_type == "london_ny_compression_breakout":
             return self._london_ny_compression_breakout(candles)
+        if self.engine_type == "ny_opening_range_breakout":
+            return self._ny_opening_range_breakout(candles)
         if self.engine_type == "breakout_retest_continuation":
             return self._breakout_retest_continuation(candles)
         if self.engine_type == "false_breakout_reversal":
@@ -186,6 +190,93 @@ class TechnicalRuleSignalEngine:
                 "价格继续突破下一格且未回到网格均值。",
                 strength=min(88, 68 + int(abs(deviation) * 20)),
                 confidence=62,
+            )
+        return None
+
+    def _adr_exhaustion_reversion(self, candles: list) -> dict | None:
+        if not self._in_utc_session(str(candles[-1].timestamp)):
+            return None
+        session_lookback = int(self.signal_cfg.get("session_lookback_bars", 360))
+        vwap_lookback = int(self.signal_cfg.get("vwap_lookback_bars", 80))
+        atr_lookback = int(self.signal_cfg.get("atr_lookback_bars", 14))
+        adx_lookback = int(self.signal_cfg.get("adx_lookback_bars", 14))
+        min_range_atr_multiple = float(self.signal_cfg.get("min_range_atr_multiple", 6.0))
+        max_adx = float(self.signal_cfg.get("max_adx", 38))
+        extreme_zone_pct = float(self.signal_cfg.get("extreme_zone_pct", 18.0))
+        min_vwap_gap_pct = float(self.signal_cfg.get("min_vwap_gap_pct", 0.12))
+        min_close_reclaim_pct = float(self.signal_cfg.get("min_close_reclaim_pct", 0.015))
+        min_required = max(vwap_lookback, atr_lookback + 1, adx_lookback * 2 + 1, 3)
+        if len(candles) < min_required:
+            return None
+        rows = candles[-min(session_lookback, len(candles)) :]
+        session_high = max(float(bar.high) for bar in rows)
+        session_low = min(float(bar.low) for bar in rows)
+        session_range = session_high - session_low
+        close = float(candles[-1].close)
+        prev = float(candles[-2].close)
+        if session_range <= 0 or close <= 0:
+            return None
+        atr_pct = self._atr_pct(candles, atr_lookback)
+        atr_abs = atr_pct / 100 * close
+        if atr_abs <= 0 or session_range < atr_abs * min_range_atr_multiple:
+            return None
+        adx_value, plus_di, minus_di = self._adx(candles, adx_lookback)
+        if adx_value > max_adx:
+            return None
+        vwap = self._rolling_vwap(candles[-vwap_lookback:])
+        if vwap <= 0:
+            return None
+        range_position_pct = (close - session_low) / session_range * 100
+        vwap_gap_pct = abs(close - vwap) / vwap * 100
+        close_reclaim_pct = abs(close - prev) / prev * 100 if prev else 0.0
+        if vwap_gap_pct < min_vwap_gap_pct or close_reclaim_pct < min_close_reclaim_pct:
+            return None
+        range_atr_multiple = session_range / atr_abs
+        if range_position_pct <= extreme_zone_pct and close > prev and close < vwap:
+            return self._setup(
+                "long",
+                "adr_exhaustion_reversion",
+                "GOLD is near the lower end of an expanded intraday range and has started reclaiming toward VWAP.",
+                [
+                    f"close={close:.2f}",
+                    f"prev_close={prev:.2f}",
+                    f"session_low={session_low:.2f}",
+                    f"session_high={session_high:.2f}",
+                    f"range_position={range_position_pct:.2f}%",
+                    f"range_atr={range_atr_multiple:.2f}x",
+                    f"vwap={vwap:.2f}",
+                    f"vwap_gap={vwap_gap_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 7)}-{self.signal_cfg.get('session_end_utc', 20)}",
+                ],
+                "价格刷新日内低点并远离 VWAP，或 ADX 升破趋势阈值显示极端波动继续单边扩张。",
+                strength=72,
+                confidence=63,
+            )
+        if range_position_pct >= 100 - extreme_zone_pct and close < prev and close > vwap:
+            return self._setup(
+                "short",
+                "adr_exhaustion_reversion",
+                "GOLD is near the upper end of an expanded intraday range and has started rejecting back toward VWAP.",
+                [
+                    f"close={close:.2f}",
+                    f"prev_close={prev:.2f}",
+                    f"session_low={session_low:.2f}",
+                    f"session_high={session_high:.2f}",
+                    f"range_position={range_position_pct:.2f}%",
+                    f"range_atr={range_atr_multiple:.2f}x",
+                    f"vwap={vwap:.2f}",
+                    f"vwap_gap={vwap_gap_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 7)}-{self.signal_cfg.get('session_end_utc', 20)}",
+                ],
+                "价格刷新日内高点并远离 VWAP，或 ADX 升破趋势阈值显示极端波动继续单边扩张。",
+                strength=72,
+                confidence=63,
             )
         return None
 
@@ -348,6 +439,110 @@ class TechnicalRuleSignalEngine:
                 ],
                 "价格收回压缩区间或突破后 3 根 5m K 线无延续。",
                 strength=76,
+                confidence=64,
+            )
+        return None
+
+    def _ny_opening_range_breakout(self, candles: list) -> dict | None:
+        if not self._in_utc_session(str(candles[-1].timestamp)):
+            return None
+        opening_start = int(self.signal_cfg.get("opening_range_start_utc", 13))
+        opening_end = int(self.signal_cfg.get("opening_range_end_utc", 14))
+        atr_lookback = int(self.signal_cfg.get("atr_lookback_bars", 14))
+        adx_lookback = int(self.signal_cfg.get("adx_lookback_bars", 14))
+        min_atr_pct = float(self.signal_cfg.get("min_atr_pct", 0.015))
+        max_atr_pct = float(self.signal_cfg.get("max_atr_pct", 0.30))
+        min_range_pct = float(self.signal_cfg.get("min_opening_range_pct", 0.06))
+        max_range_pct = float(self.signal_cfg.get("max_opening_range_pct", 0.40))
+        breakout_buffer_pct = float(self.signal_cfg.get("breakout_buffer_pct", 0.015))
+        min_adx = float(self.signal_cfg.get("min_adx", 14))
+        min_volume_ratio = float(self.signal_cfg.get("min_volume_ratio", 0.75))
+        min_required = max(atr_lookback + 1, adx_lookback * 2 + 1, 20)
+        if len(candles) < min_required:
+            return None
+        try:
+            last_time = datetime.fromisoformat(str(candles[-1].timestamp).replace("Z", "+00:00")).astimezone(timezone.utc)
+        except ValueError:
+            return None
+        if last_time.hour < opening_end:
+            return None
+        opening_rows = []
+        same_day_rows = []
+        for bar in candles:
+            try:
+                bar_time = datetime.fromisoformat(str(bar.timestamp).replace("Z", "+00:00")).astimezone(timezone.utc)
+            except ValueError:
+                continue
+            if bar_time.date() != last_time.date():
+                continue
+            same_day_rows.append(bar)
+            if opening_start <= bar_time.hour < opening_end:
+                opening_rows.append(bar)
+        if len(opening_rows) < 6 or len(same_day_rows) < len(opening_rows) + 1:
+            return None
+        range_high = max(float(bar.high) for bar in opening_rows)
+        range_low = min(float(bar.low) for bar in opening_rows)
+        midpoint = (range_high + range_low) / 2
+        if midpoint <= 0:
+            return None
+        range_pct = (range_high - range_low) / midpoint * 100
+        if range_pct < min_range_pct or range_pct > max_range_pct:
+            return None
+        atr_pct = self._atr_pct(candles, atr_lookback)
+        if atr_pct < min_atr_pct or atr_pct > max_atr_pct:
+            return None
+        adx_value, plus_di, minus_di = self._adx(candles, adx_lookback)
+        if adx_value < min_adx:
+            return None
+        recent_volume = sum(max(float(bar.volume), 0.0) for bar in candles[-3:]) / 3
+        average_volume = sum(max(float(bar.volume), 0.0) for bar in same_day_rows) / len(same_day_rows)
+        volume_ratio = recent_volume / average_volume if average_volume else 0.0
+        if volume_ratio < min_volume_ratio:
+            return None
+        previous_close = float(candles[-2].close)
+        close = float(candles[-1].close)
+        if previous_close <= range_high and close >= range_high * (1 + breakout_buffer_pct / 100) and plus_di > minus_di:
+            return self._setup(
+                "long",
+                "ny_opening_range_breakout",
+                "GOLD broke above the New York opening range with volatility, ADX, and volume confirmation.",
+                [
+                    f"close={close:.2f}",
+                    f"opening_high={range_high:.2f}",
+                    f"opening_low={range_low:.2f}",
+                    f"opening_range={range_pct:.3f}%",
+                    f"atr={atr_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"volume_ratio={volume_ratio:.2f}",
+                    f"opening_range_utc={opening_start}-{opening_end}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 14)}-{self.signal_cfg.get('session_end_utc', 17)}",
+                ],
+                "价格收回纽约开盘区间内、DI 方向反转，或突破后两根 5m K 线无延续。",
+                strength=75,
+                confidence=64,
+            )
+        if previous_close >= range_low and close <= range_low * (1 - breakout_buffer_pct / 100) and minus_di > plus_di:
+            return self._setup(
+                "short",
+                "ny_opening_range_breakout",
+                "GOLD broke below the New York opening range with volatility, ADX, and volume confirmation.",
+                [
+                    f"close={close:.2f}",
+                    f"opening_high={range_high:.2f}",
+                    f"opening_low={range_low:.2f}",
+                    f"opening_range={range_pct:.3f}%",
+                    f"atr={atr_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"volume_ratio={volume_ratio:.2f}",
+                    f"opening_range_utc={opening_start}-{opening_end}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 14)}-{self.signal_cfg.get('session_end_utc', 17)}",
+                ],
+                "价格收回纽约开盘区间内、DI 方向反转，或突破后两根 5m K 线无延续。",
+                strength=75,
                 confidence=64,
             )
         return None
@@ -842,10 +1037,12 @@ class TechnicalRuleSignalEngine:
     def _default_min_bars(self) -> int:
         defaults = {
             "grid": 50,
+            "adr_exhaustion_reversion": 120,
             "bollinger_reversion": 30,
             "bollinger_reclaim_filter": 50,
             "breakout": 50,
             "london_ny_compression_breakout": 50,
+            "ny_opening_range_breakout": 80,
             "breakout_retest_continuation": 80,
             "false_breakout_reversal": 60,
             "psych_level_rejection": 60,

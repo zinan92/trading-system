@@ -14,13 +14,16 @@ from pathlib import Path
 
 from schemas.market_data import PaperOrder
 from services.broker_adapter import BrokerOrderRequest, LiveBrokerAdapter
+from services.config_loader import load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_reconciliation import LiveBrokerReconciliation
 from services.live_env import apply_live_env, live_env_value_present
+from services.paper_executor import PaperExecutor
 
 
 DEMO_BASE_URL = "https://demo-fapi.binance.com"
 DEMO_SYMBOL = "XAUUSDT"
+_DEMO_FETCH_ERRORS = (OSError, urllib.error.URLError, TimeoutError, RuntimeError, json.JSONDecodeError, ValueError, KeyError)
 
 
 class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
@@ -154,6 +157,8 @@ class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
             if report["protective_cancel"].get("status") == "failed":
                 report["status"] = "protective_cancel_failed"
                 report["block_reason"] = "demo position closed but protective order cancel failed"
+            report["close_fill"] = self._resolve_demo_close_fill(run_date, close_payload, report["close_response"])
+            report["local_mirror"] = self._sync_demo_close_local_mirror(run_date, close_payload, report["close_fill"])
         except (OSError, TimeoutError, RuntimeError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as exc:
             report["status"] = "failed"
             report["block_reason"] = f"{type(exc).__name__}: {exc}"
@@ -303,6 +308,162 @@ class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
         rows = load_json(path)
         rows.append(report)
         write_json(path, rows)
+
+    def _resolve_demo_close_fill(self, run_date: str, close_payload: dict, close_response: dict) -> dict:
+        direct = self._close_fill_from_order_payload(close_response, source="close_response")
+        if direct.get("filled"):
+            return direct
+        status_payload = self._binance_signed_get(
+            "/fapi/v1/order",
+            {"symbol": DEMO_SYMBOL, "origClientOrderId": str(close_payload.get("newClientOrderId") or "")},
+        )
+        if status_payload.get("ok") and isinstance(status_payload.get("body"), dict):
+            status_fill = self._close_fill_from_order_payload(status_payload["body"], source="order_status")
+            if status_fill.get("filled"):
+                return status_fill
+        history_fill = self._close_fill_from_trade_history(run_date, close_payload, close_response)
+        if history_fill.get("filled"):
+            return history_fill
+        return {
+            "filled": False,
+            "status": "not_confirmed",
+            "order_id": str(close_response.get("orderId") or ""),
+            "client_order_id": str(close_payload.get("newClientOrderId") or ""),
+            "quantity": 0.0,
+            "price": 0.0,
+            "sources_checked": ["close_response", "order_status", "userTrades"],
+        }
+
+    def _close_fill_from_order_payload(self, payload: dict, *, source: str) -> dict:
+        if not isinstance(payload, dict):
+            return {"filled": False, "source": source}
+        quantity = self._binance_executed_quantity(payload) or 0.0
+        price = self._binance_fill_price(payload) or 0.0
+        return {
+            "filled": quantity > 0 and price > 0,
+            "status": str(payload.get("status") or ""),
+            "source": source,
+            "order_id": str(payload.get("orderId") or ""),
+            "client_order_id": str(payload.get("clientOrderId") or ""),
+            "side": str(payload.get("side") or ""),
+            "quantity": quantity,
+            "price": price,
+        }
+
+    def _close_fill_from_trade_history(self, run_date: str, close_payload: dict, close_response: dict) -> dict:
+        order_id = str(close_response.get("orderId") or "")
+        try:
+            fills = LiveBrokerReconciliation(self.output_root, self.broker_config, opener=self.opener).exchange_fills(DEMO_SYMBOL, run_date)
+        except _DEMO_FETCH_ERRORS as exc:
+            return {"filled": False, "source": "userTrades", "error": f"{type(exc).__name__}: {exc}"}
+        matching = [
+            item
+            for item in fills
+            if str(item.get("order_id") or "") == order_id and str(item.get("side") or "").upper() == str(close_payload.get("side") or "").upper()
+        ]
+        if not matching:
+            return {"filled": False, "source": "userTrades", "order_id": order_id}
+        quantity = sum(float(item.get("qty", 0) or 0) for item in matching)
+        quote_qty = sum(float(item.get("quote_qty", 0) or 0) for item in matching)
+        price = quote_qty / quantity if quantity > 0 else 0.0
+        return {
+            "filled": quantity > 0 and price > 0,
+            "status": "FILLED",
+            "source": "userTrades",
+            "order_id": order_id,
+            "client_order_id": str(close_payload.get("newClientOrderId") or ""),
+            "side": str(close_payload.get("side") or ""),
+            "quantity": quantity,
+            "price": price,
+            "commission": round(sum(float(item.get("commission", 0) or 0) for item in matching), 8),
+            "realized_pnl": round(sum(float(item.get("realized_pnl", 0) or 0) for item in matching), 8),
+        }
+
+    def _sync_demo_close_local_mirror(self, run_date: str, close_payload: dict, close_fill: dict) -> dict:
+        if not close_fill.get("filled"):
+            return {"status": "skipped", "reason": "close fill was not confirmed", "close_fill": close_fill}
+        roots = self._demo_local_mirror_roots()
+        results = []
+        for root in roots:
+            results.append(self._sync_demo_close_root(root, run_date, close_payload, close_fill))
+        closed = [item for item in results if item.get("closed")]
+        return {"status": "closed" if closed else "no_open_trade", "roots": results}
+
+    def _demo_local_mirror_roots(self) -> list[Path]:
+        roots = [self.output_root]
+        try:
+            demo = load_pipeline_config().get("demo_trading", {}) or {}
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            demo = {}
+        active_strategy_id = str(demo.get("active_strategy_id") or "")
+        if active_strategy_id:
+            roots.append(self.output_root / "strategies" / active_strategy_id)
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for root in roots:
+            resolved = str(Path(root))
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            unique.append(Path(root))
+        return unique
+
+    def _sync_demo_close_root(self, root: Path, run_date: str, close_payload: dict, close_fill: dict) -> dict:
+        trades_path = root / "paper_trades" / "current.json"
+        trades = load_json(trades_path)
+        if not trades:
+            return {"root": str(root), "closed": False, "status": "no_open_trade"}
+        closing_side = str(close_payload.get("side") or "").upper()
+        closing_short = closing_side == "BUY"
+        expected_side = "short" if closing_short else "long"
+        candidates = [
+            item
+            for item in trades
+            if item.get("status", "open") == "open"
+            and str(item.get("symbol") or "GOLD") == "GOLD"
+            and str(item.get("side") or "") == expected_side
+            and "exchange_managed" in (item.get("quality_flags") or [])
+        ]
+        if not candidates:
+            return {"root": str(root), "closed": False, "status": "no_matching_open_trade", "expected_side": expected_side}
+        quantity = float(close_fill.get("quantity", 0) or 0)
+        quantity_matches = [
+            item for item in candidates if abs(float(item.get("quantity", 0) or 0) - quantity) <= 1e-8
+        ]
+        candidates = quantity_matches or candidates
+        if len(candidates) != 1:
+            return {
+                "root": str(root),
+                "closed": False,
+                "status": "ambiguous_open_trade",
+                "candidate_order_ids": [str(item.get("order_id") or "") for item in candidates],
+            }
+        trade = candidates[0]
+        local = PaperExecutor(root).record_external_close(
+            run_date,
+            order_id=str(trade.get("order_id") or ""),
+            exit_price=float(close_fill.get("price") or 0),
+            quantity=quantity,
+            exit_reason="demo_reduce_only_close",
+            close_order_id=str(close_fill.get("order_id") or close_fill.get("client_order_id") or ""),
+        )
+        reconciliation = {}
+        if local.get("closed"):
+            try:
+                reconciliation = LiveBrokerReconciliation(root, self.broker_config, opener=self.opener).run(run_date)
+            except _DEMO_FETCH_ERRORS as exc:
+                reconciliation = {"error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "root": str(root),
+            "closed": bool(local.get("closed")),
+            "status": "closed" if local.get("closed") else "failed",
+            "local": local,
+            "reconciliation": {
+                key: reconciliation.get(key)
+                for key in ("reconciled", "confirmation_status", "system_state", "error", "drift_count")
+                if key in reconciliation
+            },
+        }
 
     def _cancel_demo_protective_orders(self) -> dict:
         try:

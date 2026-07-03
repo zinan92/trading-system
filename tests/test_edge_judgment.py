@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 from services.edge_judgment import EDGE_JUDGMENT_VERSION, EdgeJudgment

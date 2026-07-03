@@ -33,6 +33,7 @@ def _bars(closes: list[float], timeframe: str = "1m") -> list[Bar]:
 def test_registry_selects_technical_rule_engines():
     for engine in (
         "grid",
+        "adr_exhaustion_reversion",
         "bollinger_reversion",
         "bollinger_reclaim_filter",
         "breakout",
@@ -41,6 +42,7 @@ def test_registry_selects_technical_rule_engines():
         "adx_ema_pullback",
         "vwap_extension_reversion",
         "london_ny_compression_breakout",
+        "ny_opening_range_breakout",
         "breakout_retest_continuation",
         "false_breakout_reversal",
         "psych_level_rejection",
@@ -56,6 +58,41 @@ def test_grid_engine_generates_reversion_signal():
     assert signal.direction == "long"
     assert signal.regime == "grid_mean_reversion"
     assert signal.approved_candidate(60, 55)
+
+
+def test_adr_exhaustion_reversion_requires_range_exhaustion_reclaim_and_session():
+    bars = [
+        Bar("GOLD", "1m", f"2026-05-26T14:{index % 60:02d}:00+00:00", 100.0, 100.08, 99.92, 100.00 + (0.02 if index % 2 else -0.02), 10, "test", [])
+        for index in range(118)
+    ]
+    bars.append(Bar("GOLD", "1m", "2026-05-26T14:58:00+00:00", 99.40, 99.45, 98.95, 99.00, 10, "test", []))
+    bars.append(Bar("GOLD", "1m", "2026-05-26T14:59:00+00:00", 99.00, 99.20, 98.98, 99.15, 10, "test", []))
+    engine = TechnicalRuleSignalEngine(
+        {
+            "engine": "adr_exhaustion_reversion",
+            "signal": {
+                "min_bars": 120,
+                "session_lookback_bars": 120,
+                "vwap_lookback_bars": 60,
+                "atr_lookback_bars": 14,
+                "adx_lookback_bars": 14,
+                "min_range_atr_multiple": 1.2,
+                "max_adx": 100,
+                "extreme_zone_pct": 25,
+                "min_vwap_gap_pct": 0.10,
+                "min_close_reclaim_pct": 0.01,
+                "session_start_utc": 7,
+                "session_end_utc": 20,
+            },
+        }
+    )
+    signal = engine.generate(GOLD, bars, run_date="2026-05-26")
+    assert signal.direction == "long"
+    assert signal.regime == "adr_exhaustion_reversion"
+
+    off_session = list(bars)
+    off_session[-1] = Bar("GOLD", "1m", "2026-05-26T22:00:00+00:00", bars[-1].open, bars[-1].high, bars[-1].low, bars[-1].close, 10, "test", [])
+    assert engine.generate(GOLD, off_session, run_date="2026-05-26").direction == "watch"
 
 
 def test_bollinger_engine_generates_short_at_upper_band():
@@ -135,6 +172,51 @@ def test_london_ny_compression_breakout_requires_session_and_compression():
     off_session = list(bars)
     off_session[-1] = Bar("GOLD", "5m", "2026-05-26T22:00:00+00:00", 100.0, 100.5, 99.95, 100.45, 10, "test", [])
     assert engine.generate(GOLD, off_session, run_date="2026-05-26").direction == "watch"
+
+
+def test_ny_opening_range_breakout_requires_opening_range_and_confirmation():
+    bars = [
+        Bar("GOLD", "5m", f"2026-05-26T13:{index * 5:02d}:00+00:00", 100.0, 100.08, 99.92, 100.00 + (0.01 if index % 2 else -0.01), 10, "test", [])
+        for index in range(12)
+    ]
+    bars.extend(
+        [
+            Bar("GOLD", "5m", "2026-05-26T14:00:00+00:00", 100.02, 100.10, 99.96, 100.04, 12, "test", []),
+            Bar("GOLD", "5m", "2026-05-26T14:05:00+00:00", 100.04, 100.38, 100.02, 100.34, 24, "test", []),
+        ]
+    )
+    bars = [
+        Bar("GOLD", "5m", f"2026-05-26T12:{index * 5:02d}:00+00:00", 99.6 + index * 0.01, 99.68 + index * 0.01, 99.50 + index * 0.01, 99.62 + index * 0.01, 9, "test", [])
+        for index in range(12)
+    ] + bars
+    engine = TechnicalRuleSignalEngine(
+        {
+            "engine": "ny_opening_range_breakout",
+            "signal": {
+                "min_bars": 26,
+                "opening_range_start_utc": 13,
+                "opening_range_end_utc": 14,
+                "session_start_utc": 14,
+                "session_end_utc": 17,
+                "atr_lookback_bars": 14,
+                "min_atr_pct": 0.01,
+                "max_atr_pct": 1.0,
+                "adx_lookback_bars": 6,
+                "min_adx": 5,
+                "min_opening_range_pct": 0.05,
+                "max_opening_range_pct": 0.6,
+                "breakout_buffer_pct": 0.0,
+                "min_volume_ratio": 0.8,
+            },
+        }
+    )
+    signal = engine.generate(GOLD, bars, run_date="2026-05-26")
+    assert signal.direction == "long"
+    assert signal.regime == "ny_opening_range_breakout"
+
+    before_range_end = list(bars)
+    before_range_end[-1] = Bar("GOLD", "5m", "2026-05-26T13:55:00+00:00", 100.04, 100.38, 100.02, 100.34, 24, "test", [])
+    assert engine.generate(GOLD, before_range_end, run_date="2026-05-26").direction == "watch"
 
 
 def test_false_breakout_reversal_requires_probe_reclaim_volatility_and_session():

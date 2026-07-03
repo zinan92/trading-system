@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 from services.cycle_audit import JsonCycleAuditSink
@@ -7,7 +9,7 @@ from services.strategy_registry import StrategyRegistry
 
 
 RUN_DATE = "2026-06-30"
-STRATEGY_ID = "gold_1m_chan"
+STRATEGY_ID = "gold_1m_macd"
 TIMEFRAME = "1m"
 
 

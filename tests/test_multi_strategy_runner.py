@@ -64,7 +64,7 @@ _LIVE_FLAGGED = {
 }
 
 _ACTIVE_DEMO_LONG = {
-    "gold_1m_chan": {
+    "gold_1m_macd": {
         "symbol": "GOLD",
         "classification": _classification("chan", "active_position_gated_strategy"),
         "position_gate": {"enabled": False},
@@ -156,8 +156,8 @@ def test_only_configured_chan2_strategy_routes_to_binance_demo_adapter(tmp_path:
     runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
     scoped = tmp_path / "out" / "strategies" / "x"
 
-    active = runner._broker_adapter_for(Strategy("gold_1m_chan", "GOLD", {"signal": {}}, live=False), scoped)
-    inactive = runner._broker_adapter_for(Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False), scoped)
+    active = runner._broker_adapter_for(Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False), scoped)
+    inactive = runner._broker_adapter_for(Strategy("gold_1m_chan", "GOLD", {"signal": {}}, live=False), scoped)
 
     assert active is not None and active.name == "binance_demo"
     assert inactive is None
@@ -170,8 +170,8 @@ def test_demo_execution_profile_surfaces_armed_state_without_secrets(tmp_path: P
     monkeypatch.setenv("BINANCE_API_SECRET", "demo-secret")
     runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
 
-    active = runner._execution_profile_for(Strategy("gold_1m_chan", "GOLD", {"signal": {}}, live=False))
-    inactive = runner._execution_profile_for(Strategy("gold_1m_chan_ungated", "GOLD", {"signal": {}}, live=False))
+    active = runner._execution_profile_for(Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False))
+    inactive = runner._execution_profile_for(Strategy("gold_1m_macd_ungated", "GOLD", {"signal": {}}, live=False))
 
     assert active["adapter"] == "binance_demo"
     assert active["mode"] == "binance_futures_demo"
@@ -304,7 +304,7 @@ def test_active_demo_reconciliation_drift_blocks_auto_execution_before_broker(mo
     summary = runner.run(run_date, paper_auto_approve=True)
     result = summary["strategies"][0]
 
-    assert result["strategy_id"] == "gold_1m_chan"
+    assert result["strategy_id"] == "gold_1m_macd"
     assert result["status"] == "ok"
     assert result["pending_tickets"] >= 1
     assert result["executed_ticket"] is None
@@ -317,8 +317,8 @@ def test_runner_recovers_submitting_demo_intent_before_auto_approve(monkeypatch,
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
-    strategy = runner.registry.get("gold_1m_chan")
-    scoped = runner.strategy_root("gold_1m_chan")
+    strategy = runner.registry.get("gold_1m_macd")
+    scoped = runner.strategy_root("gold_1m_macd")
     ticket = _demo_ticket(run_date, "restart")
     next_ticket = _demo_ticket(run_date, "next")
     order_id = "demo_order_recovery_restart"
@@ -429,10 +429,16 @@ def test_runner_recovers_submitting_demo_intent_before_auto_approve(monkeypatch,
     assert result["order_recovery_status"] == "recovered"
     assert result["order_recovery_count"] == 1
     assert len(adapter.calls) == 1
-    assert [item["ticket_id"] for item in load_json(scoped / "journal_pending" / f"{run_date}.json")] == [next_ticket["ticket_id"]]
-    decision = load_json(scoped / "journal_decisions" / f"{run_date}.json")[0]
-    assert decision["ticket_id"] == ticket["ticket_id"]
-    assert decision["notes"] == "recovered from durable order intent after runner restart"
+    # Autonomous: the new ticket is not left pending — it is auto-rejected this cycle
+    # (a recovery already added exposure); the signal re-fires next cycle if still valid.
+    assert load_json(scoped / "journal_pending" / f"{run_date}.json") == []
+    assert result["auto_resolution"]["rejected"] == [next_ticket["ticket_id"]]
+    decisions = load_json(scoped / "journal_decisions" / f"{run_date}.json")
+    assert any(d["ticket_id"] == ticket["ticket_id"] for d in decisions)
+    next_decision = next(d for d in decisions if d["ticket_id"] == next_ticket["ticket_id"])
+    assert next_decision["decision_status"] == "rejected"
+    recovered_decision = next(d for d in decisions if d["ticket_id"] == ticket["ticket_id"])
+    assert recovered_decision["notes"] == "recovered from durable order intent after runner restart"
     assert OrderLifecycleStore(scoped).current(run_date, order_id)["state"] == "protective_attached"
 
 
@@ -440,8 +446,8 @@ def test_runner_recovers_from_durable_ticket_snapshot_when_ticket_file_is_missin
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
-    strategy = runner.registry.get("gold_1m_chan")
-    scoped = runner.strategy_root("gold_1m_chan")
+    strategy = runner.registry.get("gold_1m_macd")
+    scoped = runner.strategy_root("gold_1m_macd")
     ticket = _demo_ticket(run_date, "snapshot")
     order_id = "demo_order_recovery_snapshot"
     _seed_submitting_intent(scoped, run_date, ticket, order_id=order_id)
@@ -487,8 +493,8 @@ def test_runner_reprobes_blocked_submitting_intent_after_connectivity_recovers(m
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
-    strategy = runner.registry.get("gold_1m_chan")
-    scoped = runner.strategy_root("gold_1m_chan")
+    strategy = runner.registry.get("gold_1m_macd")
+    scoped = runner.strategy_root("gold_1m_macd")
     ticket = _demo_ticket(run_date, "blocked_recovered")
     order_id = "demo_order_recovery_blocked"
     _seed_demo_pending(scoped, run_date, ticket)
@@ -538,8 +544,8 @@ def test_runner_recovers_filled_intent_with_missing_protective_orders(monkeypatc
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
-    strategy = runner.registry.get("gold_1m_chan")
-    scoped = runner.strategy_root("gold_1m_chan")
+    strategy = runner.registry.get("gold_1m_macd")
+    scoped = runner.strategy_root("gold_1m_macd")
     ticket = _demo_ticket(run_date, "filled_naked")
     order_id = "demo_order_filled_without_protective"
     store = OrderLifecycleStore(scoped)
@@ -605,8 +611,8 @@ def test_runner_ambiguous_demo_recovery_blocks_new_orders_until_watchdog_blocks(
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
-    strategy = runner.registry.get("gold_1m_chan")
-    scoped = runner.strategy_root("gold_1m_chan")
+    strategy = runner.registry.get("gold_1m_macd")
+    scoped = runner.strategy_root("gold_1m_macd")
     ticket = _demo_ticket(run_date, "ambiguous")
     order_id = "demo_order_recovery_ambiguous"
     _seed_demo_pending(scoped, run_date, ticket)

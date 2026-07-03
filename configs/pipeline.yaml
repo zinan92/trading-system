@@ -157,12 +157,12 @@
   },
   "demo_trading": {
     "enabled": true,
-    "active_strategy_id": "gold_1m_chan",
+    "active_strategy_id": "gold_1m_macd",
     "broker_profile": "binance_usdm",
     "request_dir": "demo_order_requests",
     "max_order_quantity": 0.002,
     "require_flat_before_entry": true,
     "protective_failure_action": "reduce_only_close",
-    "note": "Only gold_1m_chan (1m Chan theory 2/2s buy-sell) may submit real Binance Futures Demo XAUUSDT orders. Other strategies remain paper."
+    "note": "Only gold_1m_macd (1m MACD golden/death cross) may submit real Binance Futures Demo XAUUSDT orders. Other strategies remain paper."
   }
 }

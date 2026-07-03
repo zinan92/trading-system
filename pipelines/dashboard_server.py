@@ -27,8 +27,8 @@ _SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9:_=-]+$")
 _TIMEFRAME_PATTERN = re.compile(r"^\d+[mhdMHD]$")
 _DASHBOARD_VIEWS = {"full", "trader", "ops"}
 _MAX_OPEN_TRADES_PER_STRATEGY = 3
-_PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v3.html"
-_LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v3.html"
+_PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v4.html"
+_LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v4.html"
 _CLOUDFLARED_LOG = Path("/Users/wendy/work/选题工作台/launchd-tunnel.log")
 
 
@@ -508,6 +508,7 @@ def _contract_header(schema_version: str, payload: dict) -> dict:
 
 def _system_health_model(payload: dict) -> dict:
     system_vitals = payload.get("system_vitals", {}) if isinstance(payload.get("system_vitals"), dict) else {}
+    always_on = system_vitals.get("always_on", {}) if isinstance(system_vitals.get("always_on"), dict) else {}
     vitals = {
         str(row.get("name")): row
         for row in system_vitals.get("vitals", [])
@@ -517,17 +518,33 @@ def _system_health_model(payload: dict) -> dict:
     for key in ("data_feed", "strategy_evaluation", "runner_liveness", "execution_blocker", "tp_sl_coverage"):
         vital = vitals.get(key, {})
         status = str(vital.get("status") or "warn")
-        suppressed = False
-        if key == "strategy_evaluation" and status == "down" and "stale" in str(vital.get("message") or "").lower():
-            status = "up"
-            suppressed = True
         rows.append(
             {
                 "key": key,
                 "status": status if status in {"up", "warn", "down"} else "warn",
                 "message": vital.get("message", "vital missing"),
                 "detail": vital.get("detail", {}) if isinstance(vital.get("detail"), dict) else {},
-                "suppressed_down": suppressed,
+                "suppressed_down": False,
+            }
+        )
+    if always_on.get("blocks_new_orders"):
+        rows.append(
+            {
+                "key": "always_on",
+                "status": "down",
+                "message": "always-on critical heartbeat stale or missing",
+                "detail": always_on,
+                "suppressed_down": False,
+            }
+        )
+    elif always_on.get("status") == "DEGRADED":
+        rows.append(
+            {
+                "key": "always_on",
+                "status": "warn",
+                "message": "always-on non-critical heartbeat degraded",
+                "detail": always_on,
+                "suppressed_down": False,
             }
         )
     hard_down_rows = [row for row in rows if row["status"] == "down"]
@@ -536,6 +553,7 @@ def _system_health_model(payload: dict) -> dict:
         "overall": "down" if hard_down_rows else "warn" if warn_rows else "up",
         "source_overall": system_vitals.get("overall", ""),
         "checked_at": system_vitals.get("checked_at", ""),
+        "always_on": always_on,
         "rows": rows,
         "hard_down_rows": hard_down_rows,
         "warn_rows": warn_rows,
@@ -604,8 +622,8 @@ def _trade_permission(payload: dict, health: dict, *, strategy_id: str = "") -> 
         primary = _blocker_from_health_row(warn_rows[0], degraded=True)
         blockers.extend(_blocker_from_health_row(row, degraded=True) for row in warn_rows)
         status = "DEGRADED"
-        headline = "System degraded; trade only after review."
-        headline_zh = "系统降级；先复核再开新仓。"
+        headline = "System degraded: non-critical observability needs review."
+        headline_zh = "系统降级：非关键观测面需复核，但不阻断新信号。"
 
     return {
         "status": status,
@@ -617,7 +635,7 @@ def _trade_permission(payload: dict, health: dict, *, strategy_id: str = "") -> 
         "is_system_blocker": status.startswith("BLOCKED_") and status != "BLOCKED_STRATEGY",
         "is_strategy_blocker": status == "BLOCKED_STRATEGY",
         "is_position_limit": status == "PAUSED_POSITION_LIMIT",
-        "allows_new_order_if_signal": status == "READY_TO_TRADE",
+        "allows_new_order_if_signal": status in {"READY_TO_TRADE", "DEGRADED"},
         "open_trade_count": open_count,
         "open_trade_limit": open_limit["limit"],
         "open_trade_limit_source": open_limit["source"],
@@ -628,6 +646,7 @@ def _trade_permission(payload: dict, health: dict, *, strategy_id: str = "") -> 
             "allows_new_order": money_guardrails.get("allows_new_order"),
             "limits": money_guardrails.get("limits", {}) if isinstance(money_guardrails.get("limits"), dict) else {},
         },
+        "always_on": health.get("always_on", {}) if isinstance(health.get("always_on"), dict) else {},
     }
 
 
@@ -667,6 +686,12 @@ def _blocker_from_health_row(row: dict, *, degraded: bool = False) -> dict:
         code = str(detail.get("reason_code") or key or "execution_blocker")
     elif key == "tp_sl_coverage":
         status = "BLOCKED_PROTECTION_MISSING"
+    elif key in {"runner_liveness", "strategy_evaluation", "always_on"}:
+        status = "BLOCKED_ALWAYS_ON_STALE"
+        detail = row.get("detail", {}) if isinstance(row.get("detail"), dict) else {}
+        critical = detail.get("critical_blockers") if isinstance(detail.get("critical_blockers"), list) else []
+        first = critical[0] if critical and isinstance(critical[0], dict) else {}
+        code = str(first.get("name") or key or "always_on")
     else:
         status = "BLOCKED_SYSTEM_DOWN"
     return {
@@ -1440,27 +1465,48 @@ def build_public_access_health(
 
 
 def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
-    trader_checks = {
-        "trade_replay_lightweight_charts": "TradingView Lightweight Charts",
-        "localized_strategy_short_names": 'shortZh:"突破"',
-        "daily_loop_exception_replay": "loopExceptionActions",
-        "solid_gold_baseline": 'navGoldBaselineMode = "solid_series"',
-        "today_traded_strategy_edge": "Default view prioritizes strategies that really traded today",
-        "nav_detail_preload": "navDetailPreloadIds",
-        "display_strategy_comparison": "function strategyDisplayComparison",
-        "gold_cadence_nav_sampling": "gold_ohlc_cadence_mtm_excess",
-        "nav_end_labels": "function navEndLabel",
-        "chart_first_overview": 'data-layout="chart-first-overview"',
-        "nav_chart_before_controls": 'data-priority="chart-before-controls"',
-        "nav_edge_tape": 'id="navEdgeTape"',
-        "nav_method_details": 'id="navMethodDetails"',
-        "nav_series_click_replay": "strategy_series_to_gold_ohlc_replay",
-        "trader_evidence_summary": "Evidence summary",
-        "replay_source_timeframe_scope": "Current replay scope keeps the source timeframe by default",
-        "replay_display_scope_contract": "displayScope",
-        "replay_marker_contract": 'markerSurface:"Gold OHLC"',
-        "promotion_dossier": "Promotion Dossier",
-    }
+    is_v4 = urlparse(public_url).path.endswith("/dashboard-v4.html")
+    if is_v4:
+        trader_checks = {
+            "dashboard_v4_title": "GoldBot Trader Console V4",
+            "replay_v4_route": 'new URL("dashboard-replay-v4.html", window.location.href)',
+            "trade_record_cards": "Trade record cards",
+            "signal_to_ticket_funnel": "信号漏斗 · 为什么不开仓",
+            "tp_sl_protection": "TP/SL protection",
+            "trade_replay_lightweight_charts": "TradingView Lightweight Charts",
+            "nav_detail_preload": "navDetailPreloadIds",
+            "display_strategy_comparison": "function strategyDisplayComparison",
+            "gold_cadence_nav_sampling": "gold_ohlc_cadence_mtm_excess",
+            "nav_chart_before_controls": 'data-priority="chart-before-controls"',
+            "nav_edge_tape": 'id="navEdgeTape"',
+            "nav_method_details": 'id="navMethodDetails"',
+            "nav_series_click_replay": "strategy_series_to_gold_ohlc_replay",
+            "replay_source_timeframe_scope": "Current replay scope keeps the source timeframe by default",
+            "replay_display_scope_contract": "displayScope",
+            "replay_marker_contract": 'markerSurface:"Gold OHLC"',
+        }
+    else:
+        trader_checks = {
+            "trade_replay_lightweight_charts": "TradingView Lightweight Charts",
+            "localized_strategy_short_names": 'shortZh:"突破"',
+            "daily_loop_exception_replay": "loopExceptionActions",
+            "solid_gold_baseline": 'navGoldBaselineMode = "solid_series"',
+            "today_traded_strategy_edge": "Default view prioritizes strategies that really traded today",
+            "nav_detail_preload": "navDetailPreloadIds",
+            "display_strategy_comparison": "function strategyDisplayComparison",
+            "gold_cadence_nav_sampling": "gold_ohlc_cadence_mtm_excess",
+            "nav_end_labels": "function navEndLabel",
+            "chart_first_overview": 'data-layout="chart-first-overview"',
+            "nav_chart_before_controls": 'data-priority="chart-before-controls"',
+            "nav_edge_tape": 'id="navEdgeTape"',
+            "nav_method_details": 'id="navMethodDetails"',
+            "nav_series_click_replay": "strategy_series_to_gold_ohlc_replay",
+            "trader_evidence_summary": "Evidence summary",
+            "replay_source_timeframe_scope": "Current replay scope keeps the source timeframe by default",
+            "replay_display_scope_contract": "displayScope",
+            "replay_marker_contract": 'markerSurface:"Gold OHLC"',
+            "promotion_dossier": "Promotion Dossier",
+        }
     ops_checks = {
         "ops_command_copy": "opsCommandBlock",
         "ops_copy_buttons": "data-copy-command",
@@ -1469,16 +1515,28 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         "ops_console_title": "GoldBot OPS Console",
         "ops_backend_signals": 'id="backend-signals"',
     }
-    replay_checks = {
-        "replay_page_title": "GoldBot Replay",
-        "replay_lightweight_charts": "lightweight-charts.standalone.production.js",
-        "replay_api_client": "/api/replay",
-        "replay_trader_focus": "Trader Focus",
-    }
+    if is_v4:
+        replay_checks = {
+            "replay_v4_body": '<body class="replay-v4">',
+            "replay_v4_backlink": 'new URL("dashboard-v4.html", window.location.href)',
+            "replay_lightweight_charts": "lightweight-charts.standalone.production.js",
+            "replay_api_client": "/api/replay",
+            "replay_trade_record": "这笔交易 · 病历",
+            "replay_lifecycle": "这笔的生命周期",
+            "replay_gate_funnel": "信号 → 出票 · 五道关口",
+        }
+    else:
+        replay_checks = {
+            "replay_page_title": "GoldBot Replay",
+            "replay_lightweight_charts": "lightweight-charts.standalone.production.js",
+            "replay_api_client": "/api/replay",
+            "replay_trader_focus": "Trader Focus",
+        }
     trader = _probe_html_features(public_url, timeout, trader_checks)
     trader_vendor_url = _sibling_dashboard_url(public_url, "data/vendor/echarts.min.js") + "?v=20260627-gateway"
     trader_vendor = _probe_http(trader_vendor_url, timeout)
-    replay_url = _sibling_dashboard_url(public_url, "dashboard-replay.html")
+    replay_filename = "dashboard-replay-v4.html" if is_v4 else "dashboard-replay.html"
+    replay_url = _sibling_dashboard_url(public_url, replay_filename)
     replay = _probe_html_features(replay_url, timeout, replay_checks)
     replay_vendor_url = _sibling_dashboard_url(public_url, "data/vendor/lightweight-charts.standalone.production.js")
     replay_vendor = _probe_http(replay_vendor_url, timeout)

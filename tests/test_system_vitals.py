@@ -139,6 +139,109 @@ def test_dead_runner_detected_by_age_not_just_state(tmp_path):
     payload = _vitals(tmp_path, root)
     assert _vital(payload, "runner_liveness")["status"] == "down"
     assert payload["overall"] == "down"
+    assert payload["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
+    assert payload["always_on"]["blocks_new_orders"] is True
+
+
+def test_one_missed_heartbeat_does_not_false_page_before_stale_threshold(tmp_path):
+    # Cadence is 300s; Row 7 requires the stale threshold to be beyond a single
+    # missed beat. A 12m-old runner heartbeat is stale-looking but under the
+    # 900s floor and must still read fresh.
+    root = _healthy_root(tmp_path, runner_age_min=12)
+    payload = _vitals(tmp_path, root)
+    runner = _vital(payload, "runner_liveness")
+    assert runner["status"] == "up"
+    job = next(item for item in payload["always_on"]["jobs"] if item["name"] == "runner")
+    assert job["freshness"]["stale_after_seconds"] == 900.0
+    assert payload["always_on"]["status"] != "BLOCKED_ALWAYS_ON_STALE"
+
+
+def test_future_dated_runner_heartbeat_blocks_instead_of_degrading(tmp_path):
+    root = _healthy_root(tmp_path)
+    _write(root / "runner_status" / "current.json", {
+        "updated_at": _iso(NOW + timedelta(minutes=5)),
+        "run_date": RUN_DATE,
+        "state": "ok",
+        "interval_seconds": 300,
+    })
+
+    payload = _vitals(tmp_path, root)
+
+    runner = _vital(payload, "runner_liveness")
+    assert runner["status"] == "down"
+    assert "FUTURE" in runner["message"]
+    assert payload["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
+    assert payload["always_on"]["blocks_new_orders"] is True
+
+
+def test_stale_strategy_heartbeat_is_a_canonical_always_on_block(tmp_path):
+    root = _healthy_root(tmp_path)
+    _write(root / "strategies" / "summary_current.json", [{
+        "run_date": RUN_DATE,
+        "generated_at": _iso(NOW - timedelta(minutes=16)),
+        "strategy_count": 2,
+        "strategies": [{"strategy_id": f"s{i}", "status": "ok"} for i in range(2)],
+    }])
+
+    payload = _vitals(tmp_path, root, registry_n=2)
+
+    assert _vital(payload, "strategy_evaluation")["status"] == "down"
+    assert payload["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
+    blockers = {item["name"] for item in payload["always_on"]["critical_blockers"]}
+    assert "strategies" in blockers
+
+
+def test_future_dated_strategy_heartbeat_blocks_instead_of_degrading(tmp_path):
+    root = _healthy_root(tmp_path)
+    _write(root / "strategies" / "summary_current.json", [{
+        "run_date": RUN_DATE,
+        "generated_at": _iso(NOW + timedelta(minutes=5)),
+        "strategy_count": 2,
+        "strategies": [{"strategy_id": f"s{i}", "status": "ok"} for i in range(2)],
+    }])
+
+    payload = _vitals(tmp_path, root, registry_n=2)
+
+    strategy = _vital(payload, "strategy_evaluation")
+    assert strategy["status"] == "down"
+    assert "FUTURE" in strategy["message"]
+    assert payload["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
+    assert payload["always_on"]["blocks_new_orders"] is True
+
+
+def test_stale_cycle_audit_degrades_but_does_not_block_new_orders(tmp_path):
+    root = _healthy_root(tmp_path)
+    _write(root / "cycle_audit" / "current.json", {
+        "run_date": RUN_DATE,
+        "cycle_id": "old",
+        "finalized_at": _iso(NOW - timedelta(minutes=60)),
+        "status": "completed",
+    })
+
+    payload = _vitals(tmp_path, root)
+
+    assert payload["overall"] == "alive"
+    assert payload["always_on"]["status"] == "DEGRADED"
+    assert payload["always_on"]["blocks_new_orders"] is False
+    degraded = {item["name"] for item in payload["always_on"]["degraded_jobs"]}
+    assert "cycle_audit" in degraded
+
+
+def test_future_dated_cycle_audit_heartbeat_blocks_because_clock_is_untrusted(tmp_path):
+    root = _healthy_root(tmp_path)
+    _write(root / "cycle_audit" / "current.json", {
+        "run_date": RUN_DATE,
+        "cycle_id": "future",
+        "finalized_at": _iso(NOW + timedelta(minutes=5)),
+        "status": "completed",
+    })
+
+    payload = _vitals(tmp_path, root)
+
+    assert payload["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
+    assert payload["always_on"]["blocks_new_orders"] is True
+    blocker = next(item for item in payload["always_on"]["critical_blockers"] if item["name"] == "cycle_audit")
+    assert blocker["state"] == "future_timestamp"
 
 
 def test_unprotected_open_position_flips_tp_sl_vital(tmp_path):

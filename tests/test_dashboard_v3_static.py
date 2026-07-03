@@ -1837,12 +1837,12 @@ def test_ops_dashboard_links_back_to_trader_console():
     assert "Risk Monitor / 风险监控" in html
 
 
-def test_dashboard_v2_forwards_to_trader_console_v3():
+def test_dashboard_v2_forwards_to_trader_console_v4():
     html = (ROOT / "dashboard-v2.html").read_text(encoding="utf-8")
 
-    assert "dashboard-v3.html" in html
+    assert "dashboard-v4.html" in html
     assert "window.location.replace(next)" in html
-    assert "Dashboard v2 now forwards to the trader-facing v3 console" in html
+    assert "Dashboard v2 now forwards to the trader-facing v4 console" in html
     assert "Explainability Gaps" not in html
 
 

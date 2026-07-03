@@ -6,11 +6,11 @@
     "position_size_pct": 8,
     "min_signal_strength": 60,
     "min_confidence": 55,
-    "risk_reward_min": 1.8,
+    "risk_reward_min": 1.5,
     "trade_quality": {
-      "effective_leverage": 5,
+      "effective_leverage": 10,
       "min_target_equity_return_pct": 1.0,
-      "min_reward_to_risk": 1.8,
+      "min_reward_to_risk": 1.5,
       "cost_buffer_price_move_pct": 0.02,
       "daily_min_trade_samples": 3,
       "daily_target_trade_samples_low": 5,
@@ -25,10 +25,11 @@
       "min_commission": 0.0
     },
     "live_money_guardrails": {
-      "single_order_max_notional": 25.0,
-      "total_account_max_notional": 25.0,
-      "max_daily_entry_orders": 2,
-      "reference_equity": 5000.0,
+      "daily_loss_limit_pct": 1.0,
+      "single_order_max_notional": 10.0,
+      "total_account_max_notional": 10.0,
+      "max_daily_entry_orders": 1,
+      "reference_equity": 100.0,
       "max_reconciliation_age_seconds": 600
     }
   },

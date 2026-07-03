@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.config_loader import load_risk_rules
 from services.alert_notifier import resolve_alert_sender
 from services.data_gap_doctor import DataGapDoctor
 from services.data_source_preflight import DataSourcePreflight
@@ -37,7 +38,7 @@ class HealthCheck:
             self._broker_check(),
             self._oanda_feed_check(),
             self._broker_receipts_check(),
-            self._active_demo_reconciliation_check(),
+            self._active_demo_reconciliation_check(run_date),
             self._alert_delivery_check(),
             self._runner_check(),
             self._secrets_check(run_date),
@@ -294,7 +295,7 @@ class HealthCheck:
             {"receipt_summary": summary, "mt5_bridge_smoke": {"status": smoke.get("status", ""), "order_id": (smoke.get("order") or {}).get("order_id", "")}},
         )
 
-    def _active_demo_reconciliation_check(self) -> dict:
+    def _active_demo_reconciliation_check(self, run_date: str | None = None) -> dict:
         demo = self.config.get("demo_trading", {}) or {}
         if demo.get("enabled") is not True:
             return self._check("active_demo_reconciliation", "ok", "Binance demo trading inactive", {"enabled": False})
@@ -310,6 +311,14 @@ class HealthCheck:
                 "warn",
                 f"active demo reconciliation missing for {strategy_id}",
                 {"strategy_id": strategy_id, "artifact": str(path)},
+            )
+        freshness_error = self._reconciliation_freshness_error(reconciliation, run_date)
+        if freshness_error:
+            return self._check(
+                "active_demo_reconciliation",
+                "error",
+                f"active demo reconciliation is not fresh for {strategy_id}: {freshness_error['reason']}",
+                {"strategy_id": strategy_id, "artifact": str(path), "freshness": freshness_error, "reconciliation": reconciliation},
             )
         if reconciliation.get("confirmation_status") == "cannot_confirm":
             naked = bool(reconciliation.get("suspected_naked_position"))
@@ -342,7 +351,7 @@ class HealthCheck:
                 f"active demo reconciliation drift for {strategy_id}: {'; '.join(reasons) or 'unknown drift'}",
                 {"strategy_id": strategy_id, "artifact": str(path), "reconciliation": reconciliation},
             )
-        protective_block = self._active_demo_protective_block(strategy_id)
+        protective_block = self._active_demo_protective_block(strategy_id, reconciliation)
         if protective_block:
             return self._check(
                 "active_demo_reconciliation",
@@ -362,7 +371,57 @@ class HealthCheck:
             {"strategy_id": strategy_id, "artifact": str(path), "reconciliation": reconciliation},
         )
 
-    def _active_demo_protective_block(self, strategy_id: str) -> dict:
+    def _reconciliation_freshness_error(self, reconciliation: dict, expected_run_date: str | None) -> dict:
+        expected = str(expected_run_date or "").strip()
+        artifact_run_date = str(reconciliation.get("run_date") or "").strip()
+        if expected and artifact_run_date != expected:
+            return {
+                "reason": "run_date mismatch",
+                "artifact_run_date": artifact_run_date,
+                "expected_run_date": expected,
+            }
+        if not artifact_run_date:
+            return {"reason": "run_date missing", "expected_run_date": expected}
+        checked_at = self._parse_iso(str(reconciliation.get("checked_at") or ""))
+        if checked_at is None:
+            return {"reason": "checked_at missing or invalid", "checked_at": str(reconciliation.get("checked_at") or "")}
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - checked_at).total_seconds()
+        max_age_seconds = self._max_reconciliation_age_seconds()
+        if age_seconds < -60:
+            return {
+                "reason": "checked_at is in the future",
+                "checked_at": checked_at.isoformat(),
+                "now": now.replace(microsecond=0).isoformat(),
+            }
+        if age_seconds > max_age_seconds:
+            return {
+                "reason": "artifact is stale",
+                "checked_at": checked_at.isoformat(),
+                "age_seconds": round(age_seconds, 3),
+                "max_age_seconds": max_age_seconds,
+            }
+        return {}
+
+    def _max_reconciliation_age_seconds(self) -> int:
+        rules = load_risk_rules().get("default", {})
+        live_rules = rules.get("live_money_guardrails", {}) if isinstance(rules.get("live_money_guardrails"), dict) else {}
+        return int(live_rules.get("max_reconciliation_age_seconds", 600))
+
+    def _parse_iso(self, value: str) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _active_demo_protective_block(self, strategy_id: str, reconciliation: dict) -> dict:
+        if self._reconciliation_confirms_flat(reconciliation):
+            return {}
         request_dir = self.output_root / "strategies" / strategy_id / "demo_order_requests"
         candidates = []
         if request_dir.exists():
@@ -374,6 +433,15 @@ class HealthCheck:
                 if block:
                     return {"artifact": str(path), "request": request, **block}
         return {}
+
+    def _reconciliation_confirms_flat(self, reconciliation: dict) -> bool:
+        return (
+            reconciliation.get("confirmation_status") == "confirmed_flat"
+            and reconciliation.get("flat_confirmed") is True
+            and not reconciliation.get("suspected_naked_position")
+            and not reconciliation.get("exchange_positions")
+            and not reconciliation.get("local_positions")
+        )
 
     def _protective_block_from_request(self, request: dict) -> dict:
         receipt = request.get("receipt", {}) if isinstance(request.get("receipt"), dict) else {}

@@ -14,6 +14,7 @@ from services.health_check import HealthCheck
 from services.mock_runtime import MockTradingRuntime
 from services.run_history import RunHistory
 from services.runner_status import RunnerStatusStore
+from services.trade_ticket_notifier import TradeTicketNotifier
 
 
 def _output_root() -> Path:
@@ -34,6 +35,7 @@ def run_runner_once(run_date: str, paper_auto_approve: bool, interval_seconds: i
     store.record(run_date, status)
     try:
         result = run_bot_cycle(run_date, paper_auto_approve=paper_auto_approve)
+        ticket_notification = TradeTicketNotifier(output_root).notify_namespace(run_date, "top_level", output_root)
         finished_at = datetime.now(timezone.utc).replace(microsecond=0)
         status.update(
             {
@@ -86,6 +88,8 @@ def run_runner_once(run_date: str, paper_auto_approve: bool, interval_seconds: i
                 "data_health_latest_age_minutes": result.get("data_health", {}).get("summary", {}).get("latest_age_minutes"),
                 "pending_count": result.get("pending_count", 0),
                 "execution_error": result.get("execution_error", ""),
+                "ticket_notification_status": ticket_notification.get("status", ""),
+                "ticket_notifications_sent": ticket_notification.get("sent", 0),
                 "report": result.get("report", ""),
                 "review_notes": result.get("review_notes", ""),
             }

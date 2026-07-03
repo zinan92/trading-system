@@ -6,7 +6,7 @@ from services.journal_store import load_json, write_json
 from services.trade_quality import DailyTradeSampler
 
 
-ACTIVE_STRATEGY = "gold_1m_chan"
+ACTIVE_STRATEGY = "gold_1m_macd"
 
 
 def _strategy_root(root: Path) -> Path:
@@ -72,7 +72,7 @@ def test_morning_plan_uses_active_chan_strategy_and_position_map(tmp_path: Path)
     assert result["active_strategy_id"] == ACTIVE_STRATEGY
     assert result["strategy_runtime"]["active_strategy_id"] == ACTIVE_STRATEGY
     assert result["strategy_runtime"]["timeframe"] == "1m"
-    assert result["strategy_profile"]["source_repo"] == "zinan92/chancode"
+    assert result["strategy_profile"]["source_repo"] == "local_strategy"
     assert result["decision"] == "TRADE_REVIEW"
     assert result["trade_plan"]["allowed_to_trade"] is True
     assert "broker dry_run is enabled" not in result["trade_plan"]["blocks"]

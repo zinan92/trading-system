@@ -25,6 +25,7 @@ from services.data_source_preflight import DataSourcePreflight
 from services.journal_store import JournalStore, load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
 from services.order_lifecycle import OrderLifecycleStore
+from services.pending_auto_resolver import resolve_pending_cycle
 from services.paper_equity_curve import PaperEquityCurve
 from services.paper_performance import PaperPerformanceAnalyzer
 from services.paper_reconciliation import PaperReconciliation
@@ -36,8 +37,10 @@ from services.strategy_registry import StrategyRegistry
 from services.strategy_guardrails import StrategyGuardrails
 from services.strategy_daily_review import StrategyDailyReview
 from services.trade_quality import DailyTradeSampler
+from services.trade_ticket_notifier import TradeTicketNotifier
 from services.strategy_book import StrategyBook
 from services.edge_judgment import EdgeJudgment
+from services.strategy_objective import StrategyObjective
 from services.cycle_audit import JsonCycleAuditSink
 
 
@@ -261,6 +264,7 @@ class MultiStrategyRunner:
             # artifact; without it, an auto-approved ticket can never fill. The
             # global cycle still writes its own GOLD 5m preflight independently.
             DataSourcePreflight(output_root=scoped, symbol=strategy.symbol, timeframe=strategy.timeframe).run(run_date)
+            ticket_notification = TradeTicketNotifier(self.base_output_root).notify_namespace(run_date, strategy.strategy_id, scoped)
             demo_reconciliation = self._demo_reconciliation_for(strategy, scoped, run_date)
             order_recovery = self._recover_demo_order_intents(strategy, scoped, run_date, reconciliation=demo_reconciliation)
             if order_recovery.get("reconciliation_refresh_required"):
@@ -269,33 +273,35 @@ class MultiStrategyRunner:
             recovered_ticket_ids = list(order_recovery.get("recovered_ticket_ids", []) or [])
             executed_ticket = recovered_ticket_ids[0] if recovered_ticket_ids else None
             execution_error = ""
+            auto_resolution: dict = {"executed": [], "rejected": [], "skipped": [], "errors": [], "decisions": []}
             if paper_auto_approve and pending:
-                ticket_id = pending[0].get("ticket_id")
+                # Decide whether a NEW auto-execution is allowed this cycle; the shared
+                # resolver then terminates EVERY pending ticket (execute the primary or
+                # auto-reject with the reason) so none is stranded or silently dropped.
+                block_reason = ""
                 if recovered_ticket_ids:
-                    execution_error = "recovered order intent this cycle; skipped new auto approval to avoid stacking exposure"
+                    block_reason = "recovered order intent this cycle; skipped new auto approval to avoid stacking exposure"
                 elif order_recovery.get("blocks_new_orders"):
-                    execution_error = str(order_recovery.get("block_reason") or "demo order recovery blocks new execution")
-                elif ticket_id in set(recovered_ticket_ids):
-                    executed_ticket = ticket_id
+                    block_reason = str(order_recovery.get("block_reason") or "demo order recovery blocks new execution")
                 elif demo_reconciliation and not demo_reconciliation.get("reconciled", False):
-                    execution_error = self._demo_reconciliation_block_reason(demo_reconciliation)
-                else:
-                    try:
-                        broker_adapter = self._broker_adapter_for(strategy, scoped)
-                        JournalStore(scoped).record_decision(
-                            run_date=run_date,
-                            ticket_id=ticket_id,
-                            decision="executed_paper",
-                            notes=f"multi-strategy auto execution ({strategy.strategy_id})",
-                            broker_adapter=broker_adapter,
-                        )
-                        executed_ticket = ticket_id
-                    except (ValueError, OSError, KeyError, RuntimeError) as exc:
-                        # RuntimeError covers the live adapter's own gates (e.g.
-                        # live_trading_enabled is false): a live-flagged strategy
-                        # records the block and keeps running paper-side, never a
-                        # hard fleet error.
-                        execution_error = str(exc)
+                    block_reason = self._demo_reconciliation_block_reason(demo_reconciliation)
+                gate_allows = not block_reason
+                broker_adapter = self._broker_adapter_for(strategy, scoped) if gate_allows else None
+                auto_resolution = resolve_pending_cycle(
+                    run_date,
+                    pending,
+                    auto_approve=paper_auto_approve,
+                    gate_allows=gate_allows,
+                    gate_reasons=[block_reason] if block_reason else [],
+                    store=JournalStore(scoped),
+                    broker_adapter=broker_adapter,
+                )
+                if auto_resolution["executed"]:
+                    executed_ticket = auto_resolution["executed"][0]
+                if auto_resolution["errors"]:
+                    execution_error = auto_resolution["errors"][0]["error"]
+                elif block_reason:
+                    execution_error = block_reason
             performance = PaperPerformanceAnalyzer(scoped).build(run_date)
             equity = PaperEquityCurve(scoped, starting_equity=strategy.starting_equity).build(run_date, performance)
             StrategyGuardrails(scoped).run(run_date)
@@ -308,6 +314,9 @@ class MultiStrategyRunner:
                 starting_equity=strategy.starting_equity,
             ).build(run_date)
             edge_judgment = EdgeJudgment(scoped, strategy_id=strategy.strategy_id).build(run_date)
+            strategy_objective = StrategyObjective(scoped, strategy_id=strategy.strategy_id).build(
+                run_date, edge_judgment=edge_judgment
+            )
             result = {
                 "strategy_id": strategy.strategy_id,
                 "symbol": strategy.symbol,
@@ -316,7 +325,10 @@ class MultiStrategyRunner:
                 "starting_equity": strategy.starting_equity,
                 "execution_profile": execution_profile,
                 "pending_tickets": len(pending),
+                "ticket_notification_status": ticket_notification.get("status", ""),
+                "ticket_notifications_sent": ticket_notification.get("sent", 0),
                 "executed_ticket": executed_ticket,
+                "auto_resolution": auto_resolution,
                 "execution_error": execution_error,
                 "order_recovery_status": order_recovery.get("status", ""),
                 "order_recovery_count": order_recovery.get("recovered_count", 0),
@@ -332,6 +344,8 @@ class MultiStrategyRunner:
                 "reconciliation_status": reconciliation.get("status"),
                 "strategy_book_status": strategy_book.get("audit", {}).get("status"),
                 "edge_judgment_label": edge_judgment.get("label"),
+                "strategy_objective_score": strategy_objective.get("objective_score"),
+                "winner_gate_passed": strategy_objective.get("winner_gate", {}).get("passed"),
             }
             cycle_audit_error = cycle_audit_error or self._finalize_cycle_audit(audit_sink, audit_context, result=result)
             if cycle_audit_error:

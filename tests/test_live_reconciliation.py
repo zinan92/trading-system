@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import urllib.parse
 from pathlib import Path
@@ -50,6 +52,42 @@ def _seed_known_protective(root: Path, run_date: str = "2026-06-03", client_id: 
         ),
         encoding="utf-8",
     )
+
+
+def test_known_protective_ids_ignore_request_only_payloads(tmp_path):
+    root = tmp_path / "outputs"
+    path = root / "live_order_requests" / "2026-06-03.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "order_id": "request_only",
+                    "request": {"protective_orders": [{"newClientOrderId": "request_only_sl"}, {"clientAlgoId": "request_only_tp"}]},
+                    "broker_response": {"protective_orders": []},
+                },
+                {
+                    "order_id": "response_confirmed",
+                    "request": {"protective_orders": [{"newClientOrderId": "confirmed_request_sl"}]},
+                    "broker_response": {
+                        "protective_orders": [
+                            {"clientOrderId": "confirmed_response_sl"},
+                            {"clientAlgoId": "confirmed_algo_tp"},
+                            {"client_order_id": "confirmed_normalized_id"},
+                        ]
+                    },
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ids = LiveBrokerReconciliation(root, _CFG)._known_protective_order_ids()
+
+    assert "request_only_sl" not in ids
+    assert "request_only_tp" not in ids
+    assert "confirmed_request_sl" not in ids
+    assert {"confirmed_response_sl", "confirmed_algo_tp", "confirmed_normalized_id"}.issubset(ids)
 
 
 def _opener(position_amt: float, open_orders: list[dict] | None = None):

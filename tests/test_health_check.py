@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from services.alert_delivery_drill import AlertDeliveryDrill
 from services.alert_notifier import AlertNotifier
@@ -6,6 +7,10 @@ from services.health_check import HealthCheck
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
 from schemas.market_data import Bar
+
+
+def _checked_at(seconds_ago: int = 0) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).replace(microsecond=0).isoformat()
 
 
 def test_health_check_ok_with_required_artifacts(tmp_path: Path):
@@ -89,6 +94,7 @@ def test_active_demo_reconciliation_check_errors_on_drift(tmp_path: Path):
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
         [{
             "run_date": run_date,
+            "checked_at": _checked_at(),
             "reconciled": False,
             "error": "",
             "drift_count": 1,
@@ -96,7 +102,9 @@ def test_active_demo_reconciliation_check_errors_on_drift(tmp_path: Path):
         }],
     )
 
-    check = HealthCheck(root, tmp_path / "missing.db")._active_demo_reconciliation_check()
+    health = HealthCheck(root, tmp_path / "missing.db")
+    health.config["demo_trading"] = {"enabled": True, "active_strategy_id": "gold_1m_chan"}
+    check = health._active_demo_reconciliation_check()
 
     assert check["status"] == "error"
     assert check["name"] == "active_demo_reconciliation"
@@ -108,13 +116,69 @@ def test_active_demo_reconciliation_check_ok_when_flat(tmp_path: Path):
     run_date = "2026-06-21"
     write_json(
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
-        [{"run_date": run_date, "reconciled": True, "error": "", "drift_count": 0, "drifts": []}],
+        [{"run_date": run_date, "checked_at": _checked_at(), "reconciled": True, "error": "", "drift_count": 0, "drifts": []}],
     )
 
-    check = HealthCheck(root, tmp_path / "missing.db")._active_demo_reconciliation_check()
+    health = HealthCheck(root, tmp_path / "missing.db")
+    health.config["demo_trading"] = {"enabled": True, "active_strategy_id": "gold_1m_chan"}
+    check = health._active_demo_reconciliation_check()
 
     assert check["status"] == "ok"
     assert "reconciles" in check["message"]
+
+
+def test_active_demo_reconciliation_errors_on_stale_ready_current(tmp_path: Path):
+    root = tmp_path / "outputs"
+    run_date = "2026-06-21"
+    write_json(
+        root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
+        [
+            {
+                "run_date": run_date,
+                "checked_at": _checked_at(seconds_ago=2 * 24 * 60 * 60),
+                "reconciled": True,
+                "confirmation_status": "confirmed_flat",
+                "system_state": "READY",
+                "error": "",
+                "drift_count": 0,
+                "drifts": [],
+            }
+        ],
+    )
+    health = HealthCheck(root, tmp_path / "missing.db")
+    health.config["demo_trading"] = {"enabled": True, "active_strategy_id": "gold_1m_chan"}
+
+    check = health._active_demo_reconciliation_check(run_date)
+
+    assert check["status"] == "error"
+    assert "not fresh" in check["message"]
+    assert check["details"]["freshness"]["reason"] == "artifact is stale"
+
+
+def test_active_demo_reconciliation_errors_on_wrong_run_date_current(tmp_path: Path):
+    root = tmp_path / "outputs"
+    write_json(
+        root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
+        [
+            {
+                "run_date": "2026-06-20",
+                "checked_at": _checked_at(),
+                "reconciled": True,
+                "confirmation_status": "confirmed_flat",
+                "system_state": "READY",
+                "error": "",
+                "drift_count": 0,
+                "drifts": [],
+            }
+        ],
+    )
+    health = HealthCheck(root, tmp_path / "missing.db")
+    health.config["demo_trading"] = {"enabled": True, "active_strategy_id": "gold_1m_chan"}
+
+    check = health._active_demo_reconciliation_check("2026-06-21")
+
+    assert check["status"] == "error"
+    assert check["details"]["freshness"]["reason"] == "run_date mismatch"
 
 
 def test_active_demo_reconciliation_check_errors_on_cannot_confirm_unknown(tmp_path: Path):
@@ -124,6 +188,7 @@ def test_active_demo_reconciliation_check_errors_on_cannot_confirm_unknown(tmp_p
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
         [{
             "run_date": run_date,
+            "checked_at": _checked_at(),
             "reconciled": False,
             "confirmation_status": "cannot_confirm",
             "system_state": "BLOCKED_RECONCILIATION_UNKNOWN",
@@ -150,6 +215,7 @@ def test_active_demo_reconciliation_check_names_suspected_naked_position(tmp_pat
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
         [{
             "run_date": run_date,
+            "checked_at": _checked_at(),
             "reconciled": False,
             "confirmation_status": "confirmed_drift",
             "system_state": "BLOCKED_NAKED_POSITION_SUSPECTED",
@@ -176,7 +242,7 @@ def test_active_demo_reconciliation_errors_on_unresolved_protective_missing(tmp_
     run_date = "2026-06-21"
     write_json(
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
-        [{"run_date": run_date, "reconciled": True, "error": "", "drift_count": 0, "drifts": []}],
+        [{"run_date": run_date, "checked_at": _checked_at(), "reconciled": True, "error": "", "drift_count": 0, "drifts": []}],
     )
     write_json(
         root / "strategies" / "gold_1m_chan" / "demo_order_requests" / f"{run_date}.json",
@@ -199,12 +265,51 @@ def test_active_demo_reconciliation_errors_on_unresolved_protective_missing(tmp_
     assert check["details"]["request"]["receipt"]["status"] == "protective_order_missing"
 
 
+def test_active_demo_reconciliation_ignores_old_protective_failure_when_flat_confirmed(tmp_path: Path):
+    root = tmp_path / "outputs"
+    run_date = "2026-06-21"
+    write_json(
+        root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
+        [{
+            "run_date": run_date,
+            "checked_at": _checked_at(),
+            "reconciled": True,
+            "confirmation_status": "confirmed_flat",
+            "flat_confirmed": True,
+            "suspected_naked_position": False,
+            "exchange_positions": [],
+            "local_positions": {},
+            "error": "",
+            "drift_count": 0,
+            "drifts": [],
+        }],
+    )
+    write_json(
+        root / "strategies" / "gold_1m_chan" / "demo_order_requests" / f"{run_date}.json",
+        [{
+            "order_id": "demo_order_1",
+            "receipt": {"status": "protective_order_missing"},
+            "broker_response": {
+                "protective_status": "failed",
+                "emergency_close": {"status": "failed", "local_mirror": {"closed": False}},
+            },
+        }],
+    )
+    health = HealthCheck(root, tmp_path / "missing.db")
+    health.config["demo_trading"] = {"enabled": True, "active_strategy_id": "gold_1m_chan"}
+
+    check = health._active_demo_reconciliation_check(run_date)
+
+    assert check["status"] == "ok"
+    assert "reconciles" in check["message"]
+
+
 def test_active_demo_protective_missing_fires_alert(tmp_path: Path):
     root = tmp_path / "outputs"
     run_date = "2026-06-21"
     write_json(
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
-        [{"run_date": run_date, "reconciled": True, "error": "", "drift_count": 0, "drifts": []}],
+        [{"run_date": run_date, "checked_at": _checked_at(), "reconciled": True, "error": "", "drift_count": 0, "drifts": []}],
     )
     write_json(
         root / "strategies" / "gold_1m_chan" / "demo_order_requests" / f"{run_date}.json",
@@ -237,7 +342,7 @@ def test_active_demo_reconciliation_ok_after_protective_failure_emergency_close(
     run_date = "2026-06-21"
     write_json(
         root / "strategies" / "gold_1m_chan" / "live_reconciliation" / "current.json",
-        [{"run_date": run_date, "reconciled": True, "error": "", "drift_count": 0, "drifts": []}],
+        [{"run_date": run_date, "checked_at": _checked_at(), "reconciled": True, "error": "", "drift_count": 0, "drifts": []}],
     )
     write_json(
         root / "strategies" / "gold_1m_chan" / "demo_order_requests" / f"{run_date}.json",

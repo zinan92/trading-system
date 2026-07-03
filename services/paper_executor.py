@@ -330,6 +330,7 @@ class PaperExecutor:
         trades_path = self.output_root / "paper_trades" / "current.json"
         trades = load_json(trades_path)
         existing_order_ids = {item.get("order_id") for item in trades}
+        existing_order_ids.update(self._closed_trade_order_ids())
         orders = [item for item in load_json(self.output_root / "paper_orders" / f"{run_date}.json") if item.get("status") == "filled"]
         tickets = {item["ticket_id"]: item for item in load_json(self.output_root / "trade_tickets" / f"{run_date}.json") if item.get("ticket_id")}
         added = []
@@ -343,6 +344,17 @@ class PaperExecutor:
         if added:
             write_json(trades_path, trades)
         return added
+
+    def _closed_trade_order_ids(self) -> set[str]:
+        closed_dir = self.output_root / "paper_trades" / "closed"
+        if not closed_dir.exists():
+            return set()
+        ids: set[str] = set()
+        for path in closed_dir.glob("*.json"):
+            for item in load_json(path):
+                if isinstance(item, dict) and item.get("order_id"):
+                    ids.add(str(item["order_id"]))
+        return ids
 
     def evaluate_exits(self, run_date: str) -> list[dict]:
         self.lifecycle.watchdog_tick(run_date)

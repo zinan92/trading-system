@@ -90,13 +90,16 @@ class FeishuSender:
     def configured(self) -> bool:
         return bool(self.webhook_url)
 
-    def send(self, text: str) -> dict:
+    def send(self, text: str, card: dict | None = None) -> dict:
         if not self.configured:
             return {"ok": False, "channel": "feishu", "reason": "not_configured"}
-        payload = {
-            "msg_type": "text",
-            "content": {"text": text},
-        }
+        if card is not None:
+            payload: dict = {"msg_type": "interactive", "card": card}
+        else:
+            payload = {
+                "msg_type": "text",
+                "content": {"text": text},
+            }
         if self.secret:
             timestamp = str(int(time.time()))
             payload["timestamp"] = timestamp

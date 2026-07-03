@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
+from datetime import datetime, timezone
 
 from schemas.analysis import Analysis
 from schemas.backtest import BacktestEvidence
@@ -57,24 +59,51 @@ class RiskEngine:
 
         latest = candles[-1].close
         overrides = self.rules.get("asset_class_overrides", {}).get(signal.asset_class, {})
-        stop_pct = float(overrides.get("stop_loss_pct", 4.0))
-        target_pct = float(overrides.get("target_pct", stop_pct * 2))
+        stop_equity_pct = float(overrides.get("stop_loss_pct", 4.0))
+        target_equity_pct = float(overrides.get("target_pct", stop_equity_pct * 2))
+        leverage = max(float(self.quality_gate.config.effective_leverage), 1.0)
+        stop_price_pct = stop_equity_pct / leverage
+        target_price_pct = target_equity_pct / leverage
         position_size_pct = float(overrides.get("position_size_pct", default["position_size_pct"]))
         if adjusted_signal.regime == "event_risk_reduction" or adjusted_signal.factor_scores.get("event", 100) < 50:
             position_size_pct *= float(default.get("event_window_size_multiplier", 0.4))
         max_loss_pct = float(default["max_loss_pct"])
 
+        macd_plan = self._macd_cross_risk_plan(adjusted_signal, candles, latest)
+        if macd_plan.get("status") == "invalid":
+            self.last_rejection = {
+                "asset": adjusted_signal.asset,
+                "ticket_id": f"ticket_{adjusted_signal.signal_id.removeprefix('sig_')}",
+                "signal_id": adjusted_signal.signal_id,
+                "reason": macd_plan.get("reason", "MACD stop anchor invalid for ticket generation"),
+                "signal_gate": self._signal_gate_payload(adjusted_signal, default),
+                "market_data_gate": macd_plan,
+            }
+            return None
+
         if adjusted_signal.direction == "long":
             entry_low = latest * 0.995
             entry_high = latest * 1.005
-            stop_loss = latest * (1 - stop_pct / 100)
-            target = latest * (1 + target_pct / 100)
+            if macd_plan.get("status") == "ok":
+                entry_low = latest
+                entry_high = latest
+                stop_loss = float(macd_plan["stop_loss"])
+                target = float(macd_plan["target"])
+            else:
+                stop_loss = latest * (1 - stop_price_pct / 100)
+                target = latest * (1 + target_price_pct / 100)
             action = "prepare_buy"
         else:
             entry_low = latest * 0.995
             entry_high = latest * 1.005
-            stop_loss = latest * (1 + stop_pct / 100)
-            target = latest * (1 - target_pct / 100)
+            if macd_plan.get("status") == "ok":
+                entry_low = latest
+                entry_high = latest
+                stop_loss = float(macd_plan["stop_loss"])
+                target = float(macd_plan["target"])
+            else:
+                stop_loss = latest * (1 + stop_price_pct / 100)
+                target = latest * (1 - target_price_pct / 100)
             action = "prepare_sell"
 
         ticket = TradeTicket(
@@ -105,8 +134,16 @@ class RiskEngine:
             manual_execution_required=True,
             verdict="approved",
             trade_quality={},
+            generated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            latest_price=round(float(latest), 2),
         )
-        quality = self.quality_gate.evaluate_ticket(ticket.to_dict(), latest_price=latest)
+        quality = self._with_position_risk(
+            self.quality_gate.evaluate_ticket(ticket.to_dict(), latest_price=latest),
+            position_size_pct=position_size_pct,
+            max_loss_pct=max_loss_pct,
+            planned_target_equity_pct=target_equity_pct,
+            planned_stop_equity_pct=stop_equity_pct,
+        )
         if not quality["passes"]:
             self.last_rejection = {
                 "asset": adjusted_signal.asset,
@@ -118,6 +155,104 @@ class RiskEngine:
             }
             return None
         return TradeTicket(**{**ticket.to_dict(), "trade_quality": quality})
+
+    def _with_position_risk(
+        self,
+        quality: dict,
+        *,
+        position_size_pct: float,
+        max_loss_pct: float,
+        planned_target_equity_pct: float,
+        planned_stop_equity_pct: float,
+    ) -> dict:
+        result = dict(quality)
+        position_fraction = max(float(position_size_pct), 0.0) / 100
+        target_equity_return_pct = result.get("target_equity_return_pct")
+        stop_equity_risk_pct = result.get("stop_equity_risk_pct")
+        account_target_return_pct = (
+            round(float(target_equity_return_pct) * position_fraction, 4)
+            if target_equity_return_pct is not None
+            else None
+        )
+        account_stop_risk_pct = (
+            round(float(stop_equity_risk_pct) * position_fraction, 4)
+            if stop_equity_risk_pct is not None
+            else None
+        )
+        result.update(
+            {
+                "position_size_pct": round(float(position_size_pct), 4),
+                "max_loss_pct": round(float(max_loss_pct), 4),
+                "planned_target_equity_return_pct": round(float(planned_target_equity_pct), 4),
+                "planned_stop_equity_risk_pct": round(float(planned_stop_equity_pct), 4),
+                "estimated_account_target_return_pct": account_target_return_pct,
+                "estimated_account_stop_risk_pct": account_stop_risk_pct,
+            }
+        )
+        if account_stop_risk_pct is not None and account_stop_risk_pct > float(max_loss_pct):
+            reasons = list(result.get("reasons", []))
+            reasons.append(
+                f"estimated account stop risk {account_stop_risk_pct:.2f}% exceeds max loss {float(max_loss_pct):.2f}%"
+            )
+            result["reasons"] = reasons
+            result["passes"] = False
+        return result
+
+    def _macd_cross_risk_plan(self, signal: Signal, candles: list[Candle], latest: float) -> dict:
+        if signal.regime not in {"macd_golden_cross", "macd_death_cross"}:
+            return {"status": "not_applicable"}
+        index = self._macd_cross_index(signal)
+        if index is None or index < 0 or index >= len(candles):
+            return {
+                "status": "invalid",
+                "reason": "MACD cross index is missing or outside candle history",
+                "cross_index": index,
+                "bar_count": len(candles),
+            }
+        anchor = candles[index]
+        reward_to_risk = 1.5
+        if signal.direction == "long":
+            stop_loss = float(anchor.low)
+            risk = float(latest) - stop_loss
+            if risk <= 0:
+                return {
+                    "status": "invalid",
+                    "reason": "MACD golden-cross stop low is not below the planned entry",
+                    "cross_index": index,
+                    "entry_price": latest,
+                    "stop_loss": stop_loss,
+                }
+            target = float(latest) + reward_to_risk * risk
+        elif signal.direction == "short":
+            stop_loss = float(anchor.high)
+            risk = stop_loss - float(latest)
+            if risk <= 0:
+                return {
+                    "status": "invalid",
+                    "reason": "MACD death-cross stop high is not above the planned entry",
+                    "cross_index": index,
+                    "entry_price": latest,
+                    "stop_loss": stop_loss,
+                }
+            target = float(latest) - reward_to_risk * risk
+        else:
+            return {"status": "not_applicable"}
+        return {
+            "status": "ok",
+            "source": "macd_cross_extreme",
+            "cross_index": index,
+            "entry_price": latest,
+            "stop_loss": stop_loss,
+            "target": target,
+            "reward_to_risk": reward_to_risk,
+        }
+
+    def _macd_cross_index(self, signal: Signal) -> int | None:
+        for item in signal.evidence:
+            match = re.search(r"cross bar index=(\d+)/(\d+)", str(item))
+            if match:
+                return int(match.group(1))
+        return None
 
     def _signal_gate_payload(self, signal: Signal, default: dict) -> dict:
         min_strength = int(default.get("min_signal_strength", 0) or 0)

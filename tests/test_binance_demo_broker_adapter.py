@@ -75,6 +75,26 @@ def _ticket() -> dict:
     }
 
 
+def _posted_order_response(body: dict, order_id: int, status: str, *, executed_qty: str | None = None, avg_price: str | None = None) -> dict:
+    quantity = body.get("quantity", ["0"])[0]
+    response = {
+        "orderId": order_id,
+        "symbol": body["symbol"][0],
+        "clientOrderId": body["newClientOrderId"][0],
+        "side": body["side"][0],
+        "type": body["type"][0],
+        "origQty": quantity,
+        "executedQty": quantity if executed_qty is None else executed_qty,
+        "avgPrice": avg_price,
+        "status": status,
+    }
+    if "reduceOnly" in body:
+        response["reduceOnly"] = body["reduceOnly"][0]
+    if "closePosition" in body:
+        response["closePosition"] = body["closePosition"][0]
+    return response
+
+
 def _adapter(tmp_path: Path, monkeypatch, opener) -> BinanceDemoBrokerAdapter:
     monkeypatch.setenv("BINANCE_API_KEY", "key")
     monkeypatch.setenv("BINANCE_API_SECRET", "secret")
@@ -108,19 +128,7 @@ def test_binance_demo_adapter_caps_quantity_posts_demo_orders_and_mirrors_fill(t
         if request.full_url.endswith("/fapi/v1/order"):
             body = urllib.parse.parse_qs(request.data.decode("utf-8"))
             posted.append(body)
-            return _FakeResponse(
-                {
-                    "orderId": 1000 + len(posted),
-                    "symbol": "XAUUSDT",
-                    "clientOrderId": body["newClientOrderId"][0],
-                    "side": body["side"][0],
-                    "type": body["type"][0],
-                    "origQty": body.get("quantity", [""])[0],
-                    "executedQty": body.get("quantity", ["0"])[0],
-                    "avgPrice": None,
-                    "status": "FILLED" if len(posted) == 1 else "NEW",
-                }
-            )
+            return _FakeResponse(_posted_order_response(body, 1000 + len(posted), "FILLED" if len(posted) == 1 else "NEW"))
         raise AssertionError(request.full_url)
 
     adapter = _adapter(tmp_path, monkeypatch, opener)
@@ -169,17 +177,13 @@ def test_binance_demo_adapter_partial_fill_protects_actual_fill_quantity(tmp_pat
             posted.append(body)
             executed = "0.001" if len(posted) == 1 else body.get("quantity", ["0"])[0]
             return _FakeResponse(
-                {
-                    "orderId": 1100 + len(posted),
-                    "symbol": "XAUUSDT",
-                    "clientOrderId": body["newClientOrderId"][0],
-                    "side": body["side"][0],
-                    "type": body["type"][0],
-                    "origQty": body.get("quantity", [""])[0],
-                    "executedQty": executed,
-                    "avgPrice": "4525.5" if len(posted) == 1 else None,
-                    "status": "PARTIALLY_FILLED" if len(posted) == 1 else "NEW",
-                }
+                _posted_order_response(
+                    body,
+                    1100 + len(posted),
+                    "PARTIALLY_FILLED" if len(posted) == 1 else "NEW",
+                    executed_qty=executed,
+                    avg_price="4525.5" if len(posted) == 1 else None,
+                )
             )
         raise AssertionError(request.full_url)
 
@@ -307,19 +311,7 @@ def test_binance_demo_adapter_recovers_submitting_intent_without_duplicate_entry
             if body["newClientOrderId"][0] == order_id[:36]:
                 raise AssertionError("duplicate entry order should not be posted after recovery")
             posted.append(body)
-            return _FakeResponse(
-                {
-                    "orderId": 1300 + len(posted),
-                    "symbol": "XAUUSDT",
-                    "clientOrderId": body["newClientOrderId"][0],
-                    "side": body["side"][0],
-                    "type": body["type"][0],
-                    "origQty": body.get("quantity", ["0"])[0],
-                    "executedQty": body.get("quantity", ["0"])[0],
-                    "avgPrice": None,
-                    "status": "NEW",
-                }
-            )
+            return _FakeResponse(_posted_order_response(body, 1300 + len(posted), "NEW"))
         raise AssertionError(request.full_url)
 
     adapter = _adapter(tmp_path, monkeypatch, opener)
@@ -367,17 +359,12 @@ def test_binance_demo_adapter_not_found_recovery_posts_once(tmp_path: Path, monk
             body = urllib.parse.parse_qs(request.data.decode("utf-8"))
             posted.append(body)
             return _FakeResponse(
-                {
-                    "orderId": 1400 + len(posted),
-                    "symbol": "XAUUSDT",
-                    "clientOrderId": body["newClientOrderId"][0],
-                    "side": body["side"][0],
-                    "type": body["type"][0],
-                    "origQty": body.get("quantity", ["0"])[0],
-                    "executedQty": body.get("quantity", ["0"])[0],
-                    "avgPrice": "4525.5" if len(posted) == 1 else None,
-                    "status": "FILLED" if len(posted) == 1 else "NEW",
-                }
+                _posted_order_response(
+                    body,
+                    1400 + len(posted),
+                    "FILLED" if len(posted) == 1 else "NEW",
+                    avg_price="4525.5" if len(posted) == 1 else None,
+                )
             )
         raise AssertionError(request.full_url)
 
@@ -522,6 +509,46 @@ def test_binance_demo_adapter_emergency_closes_when_protective_orders_fail(tmp_p
     assert "exchange_emergency_close" in closed[0]["quality_flags"]
 
 
+def test_binance_demo_adapter_rejects_unverified_protective_response_and_emergency_closes(tmp_path: Path, monkeypatch):
+    posted = []
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse(_flat_position())
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            body = urllib.parse.parse_qs(request.data.decode("utf-8"))
+            posted.append(body)
+            if len(posted) == 1:
+                return _FakeResponse(_posted_order_response(body, 2201, "FILLED", avg_price="4525.75"))
+            if body["type"][0] != "MARKET":
+                return _FakeResponse({"clientOrderId": body["newClientOrderId"][0], "status": "NEW"})
+            return _FakeResponse(_posted_order_response(body, 2204, "FILLED", avg_price="4525.75"))
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    order = adapter.submit_order(BrokerOrderRequest("2026-06-09", _ticket(), latest_price=4525.5, actual_size=0.002))
+
+    assert order.status == "protective_order_missing_closed"
+    assert len(posted) == 4
+    assert posted[-1]["type"] == ["MARKET"]
+    assert posted[-1]["side"] == ["SELL"]
+    assert posted[-1]["reduceOnly"] == ["true"]
+    requests = load_json(tmp_path / "outputs" / "demo_order_requests" / "2026-06-09.json")
+    errors = requests[0]["broker_response"]["protective_errors"]
+    assert requests[0]["broker_response"]["protective_status"] == "failed"
+    assert {item["error_type"] for item in errors} == {"ProtectiveOrderNotExchangeVerified"}
+    assert requests[0]["broker_response"]["protective_orders"] == []
+    lifecycle = load_json(tmp_path / "outputs" / "order_lifecycle" / "2026-06-09.json")[0]
+    assert lifecycle["state"] == "closed"
+    assert lifecycle["blocked"] is False
+
+
 def test_binance_demo_adapter_keeps_blocker_when_protective_and_emergency_close_fail(tmp_path: Path, monkeypatch):
     posted = []
 
@@ -618,7 +645,7 @@ def test_binance_demo_recovery_attaches_protective_after_fill_before_mirror_cras
                     "status": "NEW",
                 }
             )
-            return _FakeResponse({"orderId": 3000 + len(posted), "clientOrderId": body["newClientOrderId"][0], "status": "NEW"})
+            return _FakeResponse(_posted_order_response(body, 3000 + len(posted), "NEW"))
         raise AssertionError(request.full_url)
 
     adapter = _adapter(tmp_path, monkeypatch, opener)
@@ -704,7 +731,7 @@ def test_binance_demo_recovery_catches_mirror_written_but_no_resting_stop(tmp_pa
                     "status": "NEW",
                 }
             )
-            return _FakeResponse({"orderId": 3100 + len(posted), "clientOrderId": body["newClientOrderId"][0], "status": "NEW"})
+            return _FakeResponse(_posted_order_response(body, 3100 + len(posted), "NEW"))
         raise AssertionError(request.full_url)
 
     adapter = _adapter(tmp_path, monkeypatch, opener)
@@ -897,7 +924,7 @@ def test_binance_demo_recovery_uses_exchange_position_side_for_short(tmp_path: P
                     "status": "NEW",
                 }
             )
-            return _FakeResponse({"orderId": 3300 + len(posted), "clientOrderId": body["newClientOrderId"][0], "status": "NEW"})
+            return _FakeResponse(_posted_order_response(body, 3300 + len(posted), "NEW"))
         raise AssertionError(request.full_url)
 
     adapter = _adapter(tmp_path, monkeypatch, opener)
@@ -1033,6 +1060,15 @@ def test_binance_demo_close_position_defaults_to_dry_run(tmp_path: Path, monkeyp
 def test_binance_demo_close_position_confirm_submits_reduce_only_and_reconciles(tmp_path: Path, monkeypatch):
     posted = []
     position_reads = {"count": 0}
+    short_ticket = {**_ticket(), "action": "prepare_sell", "stop_loss": 4235, "targets": [4210]}
+    PaperExecutor(tmp_path / "outputs").record_external_fill(
+        "2026-06-09",
+        short_ticket,
+        fill_price=4232.82,
+        quantity=0.002,
+        order_id="live_demo_short",
+        exchange_managed=True,
+    )
 
     def opener(request, timeout):
         if "/fapi/v1/exchangeInfo" in request.full_url:
@@ -1046,6 +1082,20 @@ def test_binance_demo_close_position_confirm_submits_reduce_only_and_reconciles(
             return _FakeResponse([])
         if request.full_url.endswith("/fapi/v1/allOpenOrders"):
             return _FakeResponse({"code": 200, "msg": "success"})
+        if "/fapi/v1/order?" in request.full_url:
+            return _FakeResponse(
+                {
+                    "orderId": 3001,
+                    "symbol": "XAUUSDT",
+                    "clientOrderId": "demo_close_4169e051fc362d7d0199",
+                    "side": "BUY",
+                    "type": "MARKET",
+                    "origQty": "0.002",
+                    "executedQty": "0.002",
+                    "avgPrice": "4230.0",
+                    "status": "FILLED",
+                }
+            )
         if request.full_url.endswith("/fapi/v1/order"):
             body = urllib.parse.parse_qs(request.data.decode("utf-8"))
             posted.append(body)
@@ -1057,8 +1107,9 @@ def test_binance_demo_close_position_confirm_submits_reduce_only_and_reconciles(
                     "side": body["side"][0],
                     "type": body["type"][0],
                     "origQty": body.get("quantity", ["0"])[0],
-                    "executedQty": body.get("quantity", ["0"])[0],
-                    "avgPrice": "4230.0",
+                    "executedQty": "0.000",
+                    "avgPrice": "0",
+                    "status": "NEW",
                 }
             )
         raise AssertionError(request.full_url)
@@ -1073,4 +1124,12 @@ def test_binance_demo_close_position_confirm_submits_reduce_only_and_reconciles(
     assert posted[0]["type"] == ["MARKET"]
     assert posted[0]["reduceOnly"] == ["true"]
     assert report["protective_cancel"]["status"] == "cancelled"
+    assert report["close_fill"]["source"] == "order_status"
+    assert report["local_mirror"]["status"] == "closed"
+    assert report["local_mirror"]["roots"][0]["closed"] is True
     assert report["reconciliation_after"]["reconciled"] is True
+    assert load_json(tmp_path / "outputs" / "paper_positions" / "current.json") == {}
+    assert load_json(tmp_path / "outputs" / "paper_trades" / "current.json") == []
+    closed = load_json(tmp_path / "outputs" / "paper_trades" / "closed" / "2026-06-09.json")
+    assert closed[0]["exit_reason"] == "demo_reduce_only_close"
+    assert closed[0]["exchange_close_order_id"] == "3001"

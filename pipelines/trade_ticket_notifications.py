@@ -24,12 +24,14 @@ def main() -> None:
 
     strategy_root = output_root / "strategies"
     if args.strategy_id:
-        namespaces = [strategy_root / args.strategy_id]
+        namespaces = [output_root] if args.strategy_id == "top_level" else [strategy_root / args.strategy_id]
     else:
-        namespaces = sorted(path for path in strategy_root.iterdir() if path.is_dir()) if strategy_root.exists() else []
+        strategy_namespaces = sorted(path for path in strategy_root.iterdir() if path.is_dir()) if strategy_root.exists() else []
+        namespaces = [output_root] + strategy_namespaces
 
     for namespace in namespaces:
-        results.append(notifier.notify_namespace(args.date, namespace.name, namespace, force=args.force))
+        strategy_id = "top_level" if namespace == output_root else namespace.name
+        results.append(notifier.notify_namespace(args.date, strategy_id, namespace, force=args.force))
 
     payload = {
         "run_date": args.date,

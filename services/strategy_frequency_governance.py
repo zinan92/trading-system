@@ -37,7 +37,11 @@ class StrategyFrequencyGovernance:
             if sid and sid != "global":
                 samples_by_strategy.setdefault(sid, []).append(sample)
         strategy_rows = leaderboard.get("strategies", []) if isinstance(leaderboard, dict) else []
-        strategies = [self._strategy_payload(row, samples_by_strategy.get(str(row.get("strategy_id")), [])) for row in strategy_rows if isinstance(row, dict)]
+        strategies = [
+            self._strategy_payload(run_date, row, samples_by_strategy.get(str(row.get("strategy_id")), []))
+            for row in strategy_rows
+            if isinstance(row, dict)
+        ]
         counts: dict[str, int] = {}
         for row in strategies:
             counts[row["stage"]] = counts.get(row["stage"], 0) + 1
@@ -72,7 +76,7 @@ class StrategyFrequencyGovernance:
         write_json(self.output_root / "strategy_frequency" / f"{run_date}.json", [payload])
         return payload
 
-    def _strategy_payload(self, row: dict, samples: list[dict]) -> dict:
+    def _strategy_payload(self, run_date: str, row: dict, samples: list[dict]) -> dict:
         sid = str(row.get("strategy_id", ""))
         daily = row.get("daily_execution", {}) if isinstance(row.get("daily_execution"), dict) else {}
         classification = row.get("classification", {}) if isinstance(row.get("classification"), dict) else {}
@@ -81,7 +85,7 @@ class StrategyFrequencyGovernance:
         candidates = sum(1 for sample in samples if sample.get("candidate"))
         tickets = int(daily.get("ticket_count") or sum(1 for sample in samples if sample.get("ticket_created")) or 0)
         statuses = [str(sample.get("execution_status", "")) for sample in samples]
-        execution_blocker = self._execution_blocker(sid)
+        execution_blocker = self._execution_blocker(sid, run_date)
         stage = self._stage(executed, signals, candidates, tickets, statuses, execution_blocker)
         attribution = self._attribution(
             stage=stage,
@@ -135,9 +139,20 @@ class StrategyFrequencyGovernance:
             return "no_signal"
         return "missing_artifacts"
 
-    def _execution_blocker(self, strategy_id: str) -> dict:
+    def _execution_blocker(self, strategy_id: str, run_date: str) -> dict:
         namespace = self.output_root / "strategies" / strategy_id
         reconciliation = self._latest(namespace / "live_reconciliation" / "current.json")
+        if not reconciliation:
+            return {"blocked": False, "status": "clear", "reason": ""}
+        freshness_error = self._reconciliation_freshness_error(reconciliation, run_date)
+        if freshness_error:
+            return {
+                "blocked": True,
+                "status": "reconciliation_stale",
+                "reason": f"Binance demo reconciliation snapshot is not current: {freshness_error.get('reason')}",
+                "artifact": str(namespace / "live_reconciliation" / "current.json"),
+                "details": freshness_error,
+            }
         if reconciliation.get("suspected_naked_position"):
             return {
                 "blocked": True,
@@ -168,6 +183,53 @@ class StrategyFrequencyGovernance:
                 "artifact": str(namespace / "live_reconciliation" / "current.json"),
             }
         return {"blocked": False, "status": "clear", "reason": ""}
+
+    def _reconciliation_freshness_error(self, reconciliation: dict, expected_run_date: str) -> dict:
+        expected = str(expected_run_date or "").strip()
+        artifact_run_date = str(reconciliation.get("run_date") or "").strip()
+        if expected and artifact_run_date != expected:
+            return {
+                "reason": "run_date mismatch",
+                "artifact_run_date": artifact_run_date,
+                "expected_run_date": expected,
+            }
+        if not artifact_run_date:
+            return {"reason": "run_date missing", "expected_run_date": expected}
+        checked_at = self._parse_iso(str(reconciliation.get("checked_at") or ""))
+        if checked_at is None:
+            return {"reason": "checked_at missing or invalid", "checked_at": str(reconciliation.get("checked_at") or "")}
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - checked_at).total_seconds()
+        if age_seconds < -60:
+            return {
+                "reason": "checked_at is in the future",
+                "checked_at": checked_at.isoformat(),
+                "age_seconds": round(age_seconds, 3),
+            }
+        max_age = self._max_reconciliation_age_seconds()
+        if age_seconds > max_age:
+            return {
+                "reason": "reconciliation artifact is stale",
+                "checked_at": checked_at.isoformat(),
+                "age_seconds": round(age_seconds, 3),
+                "max_age_seconds": max_age,
+            }
+        return {}
+
+    def _max_reconciliation_age_seconds(self) -> int:
+        guardrails = (self.rules.get("default", {}) or {}).get("live_money_guardrails", {}) or {}
+        return int(guardrails.get("max_reconciliation_age_seconds") or 600)
+
+    def _parse_iso(self, value: str) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _attribution(
         self,

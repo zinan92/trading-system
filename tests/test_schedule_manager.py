@@ -23,6 +23,7 @@ def test_schedule_manager_generates_launch_agent_artifacts(tmp_path: Path):
         "com.wendy.trading-orchestrator.daily-review",
         "com.wendy.trading-orchestrator.dashboard",
         "com.wendy.trading-orchestrator.strategies",
+        "com.wendy.trading-orchestrator.deadman-ping",
     }
     assert result["status"] == "generated"
     assert "launchctl bootstrap" in "\n".join(result["install_commands"])
@@ -35,6 +36,7 @@ def test_schedule_manager_generates_launch_agent_artifacts(tmp_path: Path):
     evening_review_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.evening-review.plist"
     daily_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.daily-review.plist"
     dashboard_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.dashboard.plist"
+    deadman_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.deadman-ping.plist"
     with runner_plist.open("rb") as handle:
         runner = plistlib.load(handle)
     with trading_plan_plist.open("rb") as handle:
@@ -45,6 +47,8 @@ def test_schedule_manager_generates_launch_agent_artifacts(tmp_path: Path):
         daily = plistlib.load(handle)
     with dashboard_plist.open("rb") as handle:
         dashboard = plistlib.load(handle)
+    with deadman_plist.open("rb") as handle:
+        deadman = plistlib.load(handle)
 
     assert runner["StartInterval"] == 300
     assert runner["ProgramArguments"][:3] == ["python3", "-m", "pipelines.runner"]
@@ -58,6 +62,10 @@ def test_schedule_manager_generates_launch_agent_artifacts(tmp_path: Path):
     assert daily["ProgramArguments"] == ["python3", "-m", "pipelines.daily_review"]
     assert dashboard["KeepAlive"] is True
     assert "9876" in dashboard["ProgramArguments"]
+    assert deadman["StartInterval"] == 300
+    assert deadman["RunAtLoad"] is True
+    assert deadman["ProgramArguments"] == ["python3", "-m", "pipelines.deadman_ping"]
+    assert deadman["EnvironmentVariables"]["TZ"] == "UTC"
 
     strategies_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.strategies.plist"
     with strategies_plist.open("rb") as handle:
@@ -90,6 +98,7 @@ def test_strategies_job_uses_dedicated_python_others_unchanged(tmp_path: Path, m
         "com.wendy.trading-orchestrator.evening-review",
         "com.wendy.trading-orchestrator.daily-review",
         "com.wendy.trading-orchestrator.dashboard",
+        "com.wendy.trading-orchestrator.deadman-ping",
     ):
         assert plists[label]["ProgramArguments"][0] == "python3"
 
@@ -131,8 +140,8 @@ def test_schedule_status_detects_installed_and_loaded_jobs(tmp_path: Path):
     ).run("2026-05-26")
 
     assert result["status"] == "active"
-    assert result["installed_count"] == 6
-    assert result["loaded_count"] == 6
+    assert result["installed_count"] == 7
+    assert result["loaded_count"] == 7
     assert all(job["matches_generated"] for job in result["jobs"])
 
 
@@ -151,8 +160,8 @@ def test_schedule_installer_copies_plists_and_records_receipt(tmp_path: Path):
     result = ScheduleInstaller(root, launch_agents, fake_runner).install("2026-05-26")
 
     assert result["status"] == "active"
-    assert result["schedule_status"]["loaded_count"] == 6
-    assert len(list(launch_agents.glob("com.wendy.trading-orchestrator.*.plist"))) == 6
+    assert result["schedule_status"]["loaded_count"] == 7
+    assert len(list(launch_agents.glob("com.wendy.trading-orchestrator.*.plist"))) == 7
     assert load_json(root / "schedules" / "install_current.json")[0]["status"] == "active"
     assert all(job["status"] == "installed" for job in result["jobs"])
 
