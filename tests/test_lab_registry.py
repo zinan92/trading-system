@@ -42,6 +42,17 @@ def test_registry_finalizes_and_records_holdout_consumption(tmp_path: Path):
     assert index["experiments"][0]["holdout_consumed"] is True
 
 
+def test_registry_preserves_report_key_outputs(tmp_path: Path):
+    registry = LabRegistry(tmp_path / "outputs")
+    registry.start(_spec(), exp_id="e1")
+
+    registry.finalize("e1", status="valid", results={"break_even_bp": 0.25, "data_coverage": {"acceptance_blocker": True}})
+
+    entry = registry.load("e1")
+    assert entry["break_even_bp"] == 0.25
+    assert entry["data_coverage"]["acceptance_blocker"] is True
+
+
 def test_registry_atomic_write_failure_does_not_corrupt_existing_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     registry = LabRegistry(tmp_path / "outputs")
     registry.start(_spec(), exp_id="e1")
