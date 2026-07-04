@@ -5,7 +5,19 @@ from datetime import datetime, timedelta, timezone
 
 from schemas.market_data import Bar
 from services.lab_registry import LabRegistry
-from pipelines.lab_run import _apply_direction_filter, _break_even_bp, _report_markdown, _run_e1, _run_e2, _run_e3, _run_e4, main
+from pipelines.lab_run import (
+    XAUUSDT_ONBOARD_DATE,
+    _apply_direction_filter,
+    _break_even_bp,
+    _data_coverage,
+    _report_markdown,
+    _run_e1,
+    _run_e2,
+    _run_e3,
+    _run_e4,
+    _status_with_coverage,
+    main,
+)
 
 
 def test_break_even_interpolates_cost_curve():
@@ -59,6 +71,18 @@ def test_run_experiments_register_short_data_paths(tmp_path):
     assert (root / "lab" / "reports" / "E3_gold_regime_share.md").exists()
 
 
+def test_full_available_history_satisfies_data_requirement():
+    bars = _bars(180, start=XAUUSDT_ONBOARD_DATE)
+
+    coverage = _data_coverage(bars)
+
+    assert coverage["meets_12_month_requirement"] is False
+    assert coverage["meets_full_available_history_requirement"] is True
+    assert coverage["meets_data_requirement"] is True
+    assert coverage["acceptance_blocker"] is False
+    assert _status_with_coverage("valid", bars) == "valid"
+
+
 def test_main_list_show_compare(tmp_path, monkeypatch, capsys):
     root = tmp_path / "outputs"
     registry = LabRegistry(root)
@@ -81,9 +105,9 @@ def test_main_list_show_compare(tmp_path, monkeypatch, capsys):
     assert '"right"' in out
 
 
-def _bars(count: int) -> list[Bar]:
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+def _bars(count: int, start: str | None = None) -> list[Bar]:
+    parsed_start = datetime.fromisoformat(start) if start else datetime(2026, 1, 1, tzinfo=timezone.utc)
     return [
-        Bar("GOLD", "1m", (start + timedelta(minutes=index)).isoformat(), 100, 101, 99, 100, 1, "test", [])
+        Bar("GOLD", "1m", (parsed_start + timedelta(minutes=index)).isoformat(), 100, 101, 99, 100, 1, "test", [])
         for index in range(count)
     ]

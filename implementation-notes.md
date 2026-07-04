@@ -41,13 +41,14 @@ trials, and fail-closed invalidation when evidence is thin or corrupted.
 
 ## Deviations And Reality Checks
 
-- Current local `data/market_data.db` contains `GOLD` `1m` bars from
-  `2025-12-11T08:05:00+00:00` through `2026-07-04T14:54:00+00:00`, which is
-  less than the spec acceptance requirement of at least 12 months.
+- Current local `data/market_data.db` contains `GOLD` `1m` bars starting at
+  `2025-12-11T08:05:00+00:00`, which is less than 12 calendar months as of
+  this task.
+- User decision on 2026-07-05: using the full available XAUUSDT history is an
+  acceptable substitute for the original 12-month requirement because Binance
+  official metadata shows the contract did not exist earlier.
 - `pipelines/backfill_gold_1m.py` defaults to `2025-12-11T00:00:00+00:00` and
-  describes that as the XAUUSDT listing-date area. If Binance cannot provide
-  earlier XAUUSDT 1m bars, acceptance criterion 6.4 remains blocked unless a
-  longer approved data source is added.
+  describes that as the XAUUSDT listing-date area.
 - Binance public USDⓈ-M `exchangeInfo` confirms `XAUUSDT` has
   `onboardDate=2025-12-11T08:05:00+00:00`, `contractType=TRADIFI_PERPETUAL`,
   and `status=TRADING`.

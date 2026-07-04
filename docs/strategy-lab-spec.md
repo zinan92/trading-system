@@ -106,7 +106,10 @@ them silently is a spec violation even if tests pass.
 ### M1 — Data foundation
 
 - Backfill 12–24 months of 1m XAUUSDT bars via the existing backfill
-  pipelines; produce a **coverage report** artifact (gaps by day/hour).
+  pipelines where exchange history exists. If the XAUUSDT contract has less
+  than 12 months of history, use **all available history from the official
+  Binance onboardDate** and prove that the first local 1m bar matches that
+  onboardDate; produce a **coverage report** artifact (gaps by day/hour).
 - Regime labeler: tag each day (and each 4h block) with volatility bucket
   (realized vol terciles) and trend bucket (e.g. ADX or |close-open|/ATR
   based) → `outputs/lab/regimes/{range}.json`. Used by all evals (principle
@@ -210,8 +213,10 @@ Keep each file <400 lines where feasible; split rather than grow.
 2. **Sanity battery passes** (M2a–d) in pytest.
 3. **Holdout isolation is enforced**: a test proves experiment code cannot
    read holdout data through the public API; holdout consumption is recorded.
-4. **E1–E4 run end to end** on ≥12 months of backfilled bars, each producing
-   a registry entry + a human-readable markdown report under
+4. **E1–E4 run end to end** on ≥12 months of backfilled bars, or on all
+   available XAUUSDT history from the official Binance onboardDate when the
+   contract history is shorter than 12 months. Each experiment produces a
+   registry entry + a human-readable markdown report under
    `outputs/lab/reports/`, and E1's report states the break-even cost in bp.
 5. **Every run is registered** including failed/invalid ones; registry writes
    are atomic (kill-test: interrupting a run never corrupts

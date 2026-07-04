@@ -24,6 +24,7 @@ from services.lab_walkforward import HoldoutQuarantine, WalkForwardConfig, build
 from services.market_view import direction_bias_from_score
 
 COST_GRID = [0.0, 0.5, 1.0, 2.0, 5.0]
+XAUUSDT_ONBOARD_DATE = "2025-12-11T08:05:00+00:00"
 BINANCE_REALITY = {
     "maker_bp": 2.0,
     "taker_bp": 5.0,
@@ -275,17 +276,33 @@ def _market_views(output_root: Path) -> dict[str, dict]:
 
 def _data_coverage(bars: list) -> dict:
     if not bars:
-        return {"observed_days": 0.0, "required_days": 365, "meets_12_month_requirement": False}
+        return {
+            "observed_days": 0.0,
+            "required_days": 365,
+            "required_history_start": XAUUSDT_ONBOARD_DATE,
+            "meets_12_month_requirement": False,
+            "meets_full_available_history_requirement": False,
+            "meets_data_requirement": False,
+            "acceptance_blocker": True,
+        }
     start = datetime.fromisoformat(bars[0].timestamp.replace("Z", "+00:00"))
     end = datetime.fromisoformat(bars[-1].timestamp.replace("Z", "+00:00"))
+    required_start = datetime.fromisoformat(XAUUSDT_ONBOARD_DATE)
     observed_days = (end - start).total_seconds() / 86_400
+    meets_12_months = observed_days >= 365
+    meets_full_available = start <= required_start
+    meets_requirement = meets_12_months or meets_full_available
     return {
         "start": bars[0].timestamp,
         "end": bars[-1].timestamp,
         "observed_days": round(observed_days, 6),
         "required_days": 365,
-        "meets_12_month_requirement": observed_days >= 365,
-        "acceptance_blocker": observed_days < 365,
+        "required_history_start": XAUUSDT_ONBOARD_DATE,
+        "meets_12_month_requirement": meets_12_months,
+        "meets_full_available_history_requirement": meets_full_available,
+        "coverage_basis": "12_months" if meets_12_months else ("full_available_history" if meets_full_available else "insufficient"),
+        "meets_data_requirement": meets_requirement,
+        "acceptance_blocker": not meets_requirement,
     }
 
 
