@@ -53,7 +53,7 @@ def test_run_experiments_register_short_data_paths(tmp_path):
     entries = {item["exp_id"]: item for item in registry.entries()}
     assert entries["E1_macd_baseline_cost_curve"]["status"] == "invalid"
     assert entries["E2_direction_filter_ab"]["status"] == "invalid"
-    assert entries["E3_gold_regime_share"]["status"] == "valid"
+    assert entries["E3_gold_regime_share"]["status"] == "invalid"
     assert entries["E4_maker_vs_taker"]["status"] == "invalid"
     assert (root / "lab" / "reports" / "E1_macd_baseline_cost_curve.md").exists()
     assert (root / "lab" / "reports" / "E3_gold_regime_share.md").exists()

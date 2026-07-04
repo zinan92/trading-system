@@ -89,7 +89,7 @@ def _run_e1(output_root: Path, registry: LabRegistry, bars: list) -> dict:
         "walkforward": _objective_from_cost_result(taker_full, stress, _regime_slices_from_trades(taker_full.get("trades", []), bars)),
         "holdout": _objective_from_cost_result(holdout, holdout, _regime_slices_from_trades(holdout.get("trades", []), bars)),
     }
-    status = "valid" if any(item.get("status") == "valid" for item in cost_results.values()) else "invalid"
+    status = _status_with_coverage("valid" if any(item.get("status") == "valid" for item in cost_results.values()) else "invalid", bars)
     registry.finalize(exp_id, status=status, results={"objective": objective, "cost_grid_results": cost_results})
     eligibility = record_paper_eligibility(output_root, "gold_1m_macd")
     payload = {
@@ -133,7 +133,7 @@ def _run_e2(output_root: Path, registry: LabRegistry, bars: list) -> dict:
     report = _write_markdown_report(output_root, exp_id, _report_markdown("E2 direction_filter_ab", registry, family, payload))
     return registry.finalize(
         exp_id,
-        status="valid" if baseline.get("status") == "valid" or filtered.get("status") == "valid" else "invalid",
+        status=_status_with_coverage("valid" if baseline.get("status") == "valid" or filtered.get("status") == "valid" else "invalid", bars),
         results={"reports": {"markdown": str(report)}, "objective": payload, "data_coverage": payload["data_coverage"]},
         notes=["direction history is thin"] if len(views) < 60 else [],
     )
@@ -148,7 +148,7 @@ def _run_e3(output_root: Path, registry: LabRegistry, bars: list) -> dict:
     write_json(output_root / "lab" / "regimes" / f"{_range_name(bars)}.json", [{"coverage": coverage, "regimes": regimes}])
     payload = {"exp_id": exp_id, "data_coverage": _data_coverage(bars), "coverage": coverage, "regimes": regimes}
     report = _write_markdown_report(output_root, exp_id, _report_markdown("E3 gold_regime_share", registry, family, payload))
-    return registry.finalize(exp_id, status=regimes.get("status", "invalid"), results={"reports": {"markdown": str(report)}, "objective": payload, "data_coverage": payload["data_coverage"]})
+    return registry.finalize(exp_id, status=_status_with_coverage(regimes.get("status", "invalid"), bars), results={"reports": {"markdown": str(report)}, "objective": payload, "data_coverage": payload["data_coverage"]})
 
 
 def _run_e4(output_root: Path, registry: LabRegistry, bars: list) -> dict:
@@ -169,7 +169,7 @@ def _run_e4(output_root: Path, registry: LabRegistry, bars: list) -> dict:
     report = _write_markdown_report(output_root, exp_id, _report_markdown("E4 maker_vs_taker", registry, family, payload))
     return registry.finalize(
         exp_id,
-        status="valid" if maker.get("status") == "valid" or taker.get("status") == "valid" else "invalid",
+        status=_status_with_coverage("valid" if maker.get("status") == "valid" or taker.get("status") == "valid" else "invalid", bars),
         results={"reports": {"markdown": str(report)}, "objective": payload, "data_coverage": payload["data_coverage"]},
     )
 
@@ -287,6 +287,12 @@ def _data_coverage(bars: list) -> dict:
         "meets_12_month_requirement": observed_days >= 365,
         "acceptance_blocker": observed_days < 365,
     }
+
+
+def _status_with_coverage(status: str, bars: list) -> str:
+    if _data_coverage(bars).get("acceptance_blocker"):
+        return "invalid"
+    return status
 
 
 def _four_hour_bucket(timestamp: str) -> str:
