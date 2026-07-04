@@ -57,6 +57,24 @@ trials, and fail-closed invalidation when evidence is thin or corrupted.
 - Historical `DirectionBiasGate` evidence is thin: market views exist only for
   a few dates, and direction-bias decisions begin around 2026-06-25. E2 must
   report both the retrospective sample size and prospective-logging status.
+- R1 prompt described 21 strategies, but current `configs/strategy.yaml`
+  contains 22 registered strategies. R1 scanned all 22 current strategies so no
+  current registry entry was silently omitted.
+- R1 5m replay resamples 1m SQLite bars with UTC epoch-floor 5-minute buckets,
+  matching `MarketStore.load_aggregated_bars_between`: first open, max high,
+  min low, last close, summed volume, bucket-start timestamp.
+- Chan strategies expose `historical_signals`, but the engine docstring states
+  that its fast historical path has mild lookahead versus the causal live
+  detector. Because Strategy Lab §3 forbids lookahead, R1 marks chan variants
+  `not_replayable` with `historical_signals_noncausal_lookahead_risk` instead
+  of using those metrics.
+- `gold_5m_v1` uses the legacy MA/macro `SignalEngine`, which has no
+  deterministic `historical_signals` interface and depends on live event/macro
+  context. R1 marks it `not_replayable` with `missing_historical_signals`.
+- R1 technical-rule replay uses each engine's configured `min_bars` plus a
+  conservative bounded causal rolling window for indicator warmup. This avoids
+  full-history recomputation while keeping replay deterministic and aligned
+  with live engines seeing finite candle buffers.
 
 ## Backfill Safety
 

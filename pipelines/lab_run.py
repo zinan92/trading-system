@@ -18,12 +18,24 @@ from services.lab_evaluator import (
 )
 from services.lab_objective import ObjectiveConfig, evaluate_objective
 from services.lab_promotion import record_paper_eligibility
+from services.lab_r1_scan import R1ScanConfig, run_r1_scan
 from services.lab_regimes import build_coverage_report, label_regimes, write_regime_artifact
 from services.lab_registry import LabRegistry
 from services.lab_walkforward import HoldoutQuarantine, WalkForwardConfig, build_windows, load_gold_1m_bars
 from services.market_view import direction_bias_from_score
 
 COST_GRID = [0.0, 0.5, 1.0, 2.0, 5.0]
+R1_ANCHOR_EXPECTED = {
+    "break_even_bp": 0.216744,
+    "trade_count": 4576,
+    "expectancy_per_trade": {
+        "0bp": 0.043348,
+        "0.5bp": -0.05665,
+        "1bp": -0.156649,
+        "2bp": -0.356646,
+        "5bp": -0.956637,
+    },
+}
 XAUUSDT_ONBOARD_DATE = "2025-12-11T08:05:00+00:00"
 BINANCE_REALITY = {
     "maker_bp": 2.0,
@@ -47,7 +59,7 @@ def main() -> None:
     compare.add_argument("left")
     compare.add_argument("right")
     run = sub.add_parser("run")
-    run.add_argument("experiment", choices=["coverage", "e1", "e2", "e3", "e4", "all"])
+    run.add_argument("experiment", choices=["coverage", "e1", "e2", "e3", "e4", "r1", "all"])
     run.add_argument("--start", default="")
     run.add_argument("--end", default="")
     args = parser.parse_args()
@@ -76,6 +88,14 @@ def main() -> None:
         _run_e3(output_root, registry, bars)
     if args.experiment in {"e4", "all"}:
         _run_e4(output_root, registry, bars)
+    if args.experiment == "r1":
+        run_r1_scan(
+            output_root,
+            registry,
+            bars,
+            config=R1ScanConfig(cost_grid=tuple(COST_GRID), maker_bp=BINANCE_REALITY["maker_bp"], taker_bp=BINANCE_REALITY["taker_bp"]),
+            anchor_expected=R1_ANCHOR_EXPECTED,
+        )
 
 
 def _run_e1(output_root: Path, registry: LabRegistry, bars: list) -> dict:

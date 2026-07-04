@@ -64,7 +64,7 @@ class LabRegistry:
             "reports": results.get("reports", entry.get("reports", {})),
             "notes": [*list(entry.get("notes", [])), *list(notes or [])],
         }
-        for key in ("break_even_bp", "binance_reality", "data_coverage", "holdout", "paper_eligibility"):
+        for key in ("break_even_bp", "binance_reality", "data_coverage", "holdout", "paper_eligibility", "r1_summary", "replay"):
             if key in results:
                 updated[key] = results[key]
         self._write_entry(updated)

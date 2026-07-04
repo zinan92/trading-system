@@ -13,6 +13,8 @@ Simulation semantics are intentionally conservative:
 - Missing/duplicate/non-finite bars and zero-trade results are invalid.
 - Cost overrides are per-side basis points and are charged on both entry and
   exit notional.
+- 5m research bars are derived from 1m bars with the same UTC epoch-floor
+  bucket convention used by ``MarketStore.load_aggregated_bars_between``.
 """
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import mean, pstdev
+from typing import Any
 
 from schemas.market_data import Bar
 from services.macd_signal_engine import MacdSignalEngine
@@ -53,6 +56,96 @@ def regenerate_macd_signals(bars: list[Bar], params: dict | None = None) -> list
     return signals
 
 
+def regenerate_strategy_signals(strategy: Any, bars: list[Bar]) -> dict:
+    """Replay a registered strategy through ``Strategy.signal_engine()``.
+
+    The strategy's configured signal filters are included because they are
+    inside ``signal_engine()``. Runner-level gates are intentionally absent.
+    Engines without a deterministic, causal historical interface fail closed as
+    ``not_replayable`` instead of producing an empty result.
+    """
+    timeframe = str(getattr(strategy, "timeframe", "1m") or "1m")
+    replay_bars = resample_bars(bars, timeframe)
+    try:
+        engine = strategy.signal_engine()
+    except Exception as exc:
+        return _not_replayable(strategy, timeframe, replay_bars, f"engine_build_error:{type(exc).__name__}:{exc}")
+    engine_chain = _engine_chain(engine)
+    if any(item == "ChanSignalEngine" for item in engine_chain):
+        return _not_replayable(strategy, timeframe, replay_bars, "historical_signals_noncausal_lookahead_risk")
+    base = getattr(engine, "base", None)
+    if base is not None and not callable(getattr(base, "historical_signals", None)):
+        return _not_replayable(strategy, timeframe, replay_bars, "base_missing_historical_signals")
+    historical = getattr(engine, "historical_signals", None)
+    if not callable(historical):
+        return _not_replayable(strategy, timeframe, replay_bars, "missing_historical_signals")
+    try:
+        raw_signals = historical(replay_bars)
+        signals = _normalize_historical_signals(raw_signals, replay_bars)
+    except Exception as exc:
+        return _not_replayable(strategy, timeframe, replay_bars, f"historical_replay_error:{type(exc).__name__}:{exc}")
+    return {
+        "status": "valid",
+        "reason": "pass",
+        "strategy_id": str(getattr(strategy, "strategy_id", "")),
+        "timeframe": timeframe,
+        "engine_chain": engine_chain,
+        "warmup": _warmup_info(engine),
+        "bars": replay_bars,
+        "signals": signals,
+        "signal_count": len(signals),
+    }
+
+
+def resample_bars(bars: list[Bar], target_timeframe: str) -> list[Bar]:
+    if not bars:
+        return []
+    target_seconds = timeframe_seconds(target_timeframe)
+    ordered = sorted(bars, key=lambda item: item.timestamp)
+    source_timeframe = str(getattr(ordered[0], "timeframe", "1m") or "1m")
+    source_seconds = timeframe_seconds(source_timeframe)
+    if target_seconds == source_seconds:
+        return list(ordered)
+    if target_seconds < source_seconds or target_seconds % source_seconds != 0:
+        raise ValueError(f"cannot resample {source_timeframe} bars to {target_timeframe}")
+    buckets: dict[int, list[Bar]] = {}
+    for bar in ordered:
+        epoch = int(_parse_ts(bar.timestamp).timestamp())
+        bucket = (epoch // target_seconds) * target_seconds
+        buckets.setdefault(bucket, []).append(bar)
+    out: list[Bar] = []
+    for bucket, rows in sorted(buckets.items()):
+        first = rows[0]
+        last = rows[-1]
+        flags = sorted({flag for row in rows for flag in row.quality_flags} | {"derived_timeframe", f"source_{source_timeframe}"})
+        out.append(
+            Bar(
+                symbol=first.symbol,
+                timeframe=target_timeframe,
+                timestamp=datetime.fromtimestamp(bucket, tz=timezone.utc).replace(microsecond=0).isoformat(),
+                open=float(first.open),
+                high=max(float(row.high) for row in rows),
+                low=min(float(row.low) for row in rows),
+                close=float(last.close),
+                volume=sum(float(row.volume) for row in rows),
+                provider=f"derived:{last.provider}",
+                quality_flags=flags,
+            )
+        )
+    return out
+
+
+def timeframe_seconds(timeframe: str) -> int:
+    text = str(timeframe or "1m").strip().lower()
+    if len(text) < 2:
+        raise ValueError(f"invalid timeframe: {timeframe!r}")
+    units = {"m": 60, "h": 3600, "d": 86_400}
+    unit = text[-1]
+    if unit not in units:
+        raise ValueError(f"invalid timeframe unit: {timeframe!r}")
+    return int(text[:-1]) * units[unit]
+
+
 def random_direction_signals(bars: list[Bar], every_n: int = 12, seed: int = 1) -> list[dict]:
     rng = random.Random(seed)
     out: list[dict] = []
@@ -67,9 +160,14 @@ def random_direction_signals(bars: list[Bar], every_n: int = 12, seed: int = 1) 
 
 
 def validate_1m_bars(bars: list[Bar]) -> dict:
+    return validate_bars(bars, expected_seconds=60)
+
+
+def validate_bars(bars: list[Bar], expected_seconds: int | None = None) -> dict:
     if not bars:
         return {"valid": False, "reason": "no_bars", "gaps": [], "duplicates": 0}
     ordered = sorted(bars, key=lambda item: item.timestamp)
+    expected = expected_seconds or timeframe_seconds(getattr(ordered[0], "timeframe", "1m"))
     seen: set[str] = set()
     duplicates = 0
     gaps: list[dict] = []
@@ -86,12 +184,14 @@ def validate_1m_bars(bars: list[Bar]) -> dict:
         current_ts = _parse_ts(bar.timestamp)
         if previous_ts is not None:
             delta = int((current_ts - previous_ts).total_seconds())
-            if delta > 90:
+            if delta > expected:
                 gaps.append({
                     "start": previous_ts.isoformat(),
                     "end": current_ts.isoformat(),
-                    "missing_minutes": max(0, delta // 60 - 1),
+                    "missing_bars": max(0, delta // expected - 1),
                 })
+            elif delta != expected:
+                return {"valid": False, "reason": "irregular_bars", "gaps": gaps, "duplicates": duplicates}
         previous_ts = current_ts
     if duplicates:
         return {"valid": False, "reason": "duplicate_bars", "gaps": gaps, "duplicates": duplicates}
@@ -102,7 +202,7 @@ def validate_1m_bars(bars: list[Bar]) -> dict:
 
 def evaluate_signals(bars: list[Bar], signals: list[dict], config: LabSimulationConfig | None = None) -> dict:
     cfg = config or LabSimulationConfig()
-    quality = validate_1m_bars(bars)
+    quality = validate_bars(bars)
     if not quality["valid"]:
         return _invalid_result(quality["reason"], bars, signals, quality)
     trades = simulate_trades(bars, signals, cfg)
@@ -257,8 +357,62 @@ def _invalid_result(reason: str, bars: list[Bar], signals: list[dict], quality: 
     return {"status": "invalid", "reason": reason, "bars": len(bars), "signals": len(signals), "trades": [], "equity": [], "metrics": {}, "quality": quality}
 
 
+def _normalize_historical_signals(raw_signals: Any, bars: list[Bar]) -> list[dict]:
+    signals: list[dict] = []
+    for item in list(raw_signals or []):
+        index = int(item["index"])
+        if index < 0 or index >= len(bars):
+            raise ValueError(f"historical signal index out of range: {index}")
+        direction = str(item.get("direction", ""))
+        if direction not in {"long", "short"}:
+            continue
+        signals.append({
+            "index": index,
+            "direction": direction,
+            "timestamp": bars[index].timestamp,
+            "close": float(bars[index].close),
+        })
+    return signals
+
+
+def _not_replayable(strategy: Any, timeframe: str, bars: list[Bar], reason: str) -> dict:
+    return {
+        "status": "not_replayable",
+        "reason": reason,
+        "strategy_id": str(getattr(strategy, "strategy_id", "")),
+        "timeframe": timeframe,
+        "engine_chain": [],
+        "warmup": {},
+        "bars": bars,
+        "signals": [],
+        "signal_count": 0,
+    }
+
+
+def _engine_chain(engine: Any) -> list[str]:
+    out = [engine.__class__.__name__]
+    base = getattr(engine, "base", None)
+    if base is not None:
+        out.append(base.__class__.__name__)
+    return out
+
+
+def _warmup_info(engine: Any) -> dict:
+    base = getattr(engine, "base", None)
+    target = base if base is not None else engine
+    filters = list(getattr(engine, "filters", []) or [])
+    return {
+        "engine_min_bars": getattr(target, "min_bars", None),
+        "filter_count": len(filters),
+        "filters": [item.__class__.__name__ for item in filters],
+    }
+
+
 def _parse_ts(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).replace(microsecond=0)
 
 
 def _bad_number(value: float) -> bool:

@@ -8,8 +8,11 @@ from services.lab_evaluator import (
     evaluate_signals,
     random_direction_signals,
     regenerate_macd_signals,
+    regenerate_strategy_signals,
+    resample_bars,
     validate_1m_bars,
 )
+from services.strategy_registry import Strategy
 
 
 def _bars(closes: list[float]) -> list[Bar]:
@@ -81,3 +84,48 @@ def test_zero_trade_window_is_invalid():
 
     assert result["status"] == "invalid"
     assert result["reason"] == "zero_trades"
+
+
+def test_resample_bars_uses_utc_epoch_floor_bucket_convention():
+    bars = _bars([100, 101, 99, 102, 103, 98, 104])
+    shifted = [
+        Bar(bar.symbol, bar.timeframe, (datetime.fromisoformat(bar.timestamp) + timedelta(minutes=1)).isoformat(), bar.open, bar.high, bar.low, bar.close, bar.volume, bar.provider, bar.quality_flags)
+        for bar in bars
+    ]
+
+    five_min = resample_bars(shifted, "5m")
+
+    assert [bar.timestamp for bar in five_min] == ["2026-01-01T00:00:00+00:00", "2026-01-01T00:05:00+00:00"]
+    assert five_min[0].open == 100
+    assert five_min[0].close == 102
+    assert five_min[0].high == 102.05
+    assert five_min[0].low == 98.95
+    assert five_min[0].timeframe == "5m"
+    assert "derived_timeframe" in five_min[0].quality_flags
+
+
+def test_non_macd_strategy_replay_is_deterministic():
+    bars = _bars([100 + ((index % 12) - 6) * 0.08 for index in range(160)])
+    strategy = Strategy(
+        strategy_id="test_grid",
+        symbol="GOLD",
+        timeframe="1m",
+        params={"engine": "grid", "signal": {"min_bars": 20, "lookback_bars": 12, "grid_step_pct": 0.02}},
+    )
+
+    first = regenerate_strategy_signals(strategy, bars)
+    second = regenerate_strategy_signals(strategy, bars)
+
+    assert first == second
+    assert first["status"] == "valid"
+    assert first["engine_chain"] == ["TechnicalRuleSignalEngine"]
+    assert first["signals"]
+
+
+def test_missing_historical_replay_interface_is_not_replayable():
+    strategy = Strategy(strategy_id="legacy_ma", symbol="GOLD", timeframe="5m", params={"signal": {}})
+
+    replay = regenerate_strategy_signals(strategy, _flat_bars(40))
+
+    assert replay["status"] == "not_replayable"
+    assert replay["reason"] == "missing_historical_signals"

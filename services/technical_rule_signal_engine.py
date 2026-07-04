@@ -55,8 +55,10 @@ class TechnicalRuleSignalEngine:
         if len(candles) < self.min_bars:
             return []
         out = []
+        window_bars = self._historical_window_bars()
         for index in range(self.min_bars - 1, len(candles)):
-            setup = self._latest_setup(candles[: index + 1])
+            start = max(0, index + 1 - window_bars)
+            setup = self._latest_setup(candles[start : index + 1])
             if setup:
                 out.append({"index": index, "direction": setup["direction"]})
         return out
@@ -1164,6 +1166,26 @@ class TechnicalRuleSignalEngine:
             "vwap_trend_pullback": 100,
         }
         return defaults.get(self.engine_type, 50)
+
+    def _historical_window_bars(self) -> int:
+        """Bound historical replay to a causal rolling window.
+
+        Live technical-rule engines only see a finite candle buffer. Replaying
+        every bar with the full history is both slower and less representative
+        of that live contract, while all current rules use bounded lookbacks or
+        same-day/session windows. Keep this conservative so indicator warmup is
+        still comfortably larger than each configured rule lookback.
+        """
+        explicit = self.signal_cfg.get("historical_window_bars")
+        if explicit:
+            return max(self.min_bars, int(explicit))
+        numeric_lookbacks = [
+            int(value)
+            for key, value in self.signal_cfg.items()
+            if key.endswith("_bars") or key.endswith("_lookback") or key.endswith("_period") or key in {"lookback_bars", "ema_period"}
+            if isinstance(value, (int, float))
+        ]
+        return max([self.min_bars, 720, *numeric_lookbacks])
 
     def _in_utc_session(self, timestamp: str) -> bool:
         start = int(self.signal_cfg.get("session_start_utc", 13))
