@@ -18,6 +18,7 @@ from pathlib import Path
 from services.config_loader import ROOT, load_pipeline_config, load_risk_rules, load_strategy_config
 from services.execution_accounting import executed_record_ids
 from services.journal_store import load_json, write_json
+from services.lab_promotion import lab_expectation_for_strategy
 
 
 class StrategyLeaderboard:
@@ -90,6 +91,7 @@ class StrategyLeaderboard:
             "closed_trades": summary.get("closed_all_count", 0),
             "open_trades": summary.get("open_trade_count", 0),
             "position": position,
+            "lab_expectation": lab_expectation_for_strategy(self.output_root, namespace.name),
             "equity_points": self._compact_equity_points(equity.get("points", [])),
             "sharpe": self._sharpe(equity.get("points", [])),
         }

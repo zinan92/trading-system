@@ -40,6 +40,8 @@ def test_leaderboard_ranks_by_return_and_computes_vs_gold(tmp_path: Path):
     assert round(alpha["vs_gold_pct"], 2) == 4.0   # 5% - 1%
     assert alpha["win_rate"] == 0.6
     assert alpha["position"]["summary"] == "flat"
+    assert alpha["lab_expectation"]["paper_eligible"] is False
+    assert alpha["lab_expectation"]["status"] == "missing"
     assert lb["strategies"][1]["rank"] == 2
     assert round(lb["strategies"][1]["return_pct"], 2) == -2.0
     # persisted artifact
@@ -139,6 +141,23 @@ def test_leaderboard_includes_classification_and_daily_execution_status(tmp_path
     assert beta["daily_execution"]["executed_trade_count"] == 1
     assert beta["daily_execution"]["status"] == "low_volume"
     assert beta["effective_today"] is False
+
+
+def test_leaderboard_includes_lab_expectation_when_present(tmp_path: Path):
+    from services.lab_registry import LabRegistry
+
+    root = tmp_path / "outputs"
+    rd = "2026-05-29"
+    _namespace(root, "alpha", rd, starting=10000, current=10500, max_dd=-1.0, win_rate=0.6, gold_first=4500, gold_last=4545)
+    registry = LabRegistry(root)
+    registry.start({"hypothesis": "h", "family": "macd", "strategy_ref": {"strategy_id": "alpha"}}, exp_id="e1")
+    registry.finalize("e1", status="valid", results={"objective": {"walkforward": {"passed": True}, "holdout": {"passed": True}}})
+    registry.record_holdout_consumption("e1", {"start": "2026-01-01", "end": "2026-02-01"})
+
+    alpha = StrategyLeaderboard(root).build(rd)["strategies"][0]
+
+    assert alpha["lab_expectation"]["paper_eligible"] is True
+    assert alpha["lab_expectation"]["source_exp_id"] == "e1"
 
 
 def test_leaderboard_does_not_count_blocked_demo_request_as_execution(tmp_path: Path):

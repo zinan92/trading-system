@@ -62,3 +62,13 @@ trials, and fail-closed invalidation when evidence is thin or corrupted.
 The identified 1m backfill path writes market data to the local SQLite market
 database and receipts under `outputs/binance_usdm_1m_backfill/`. It does not
 submit, approve, close, cancel, or route orders.
+
+## Promotion Gate
+
+- Lab promotion can only mark a strategy as paper-eligible after both
+  walk-forward and holdout objective results pass, and after holdout consumption
+  is recorded.
+- The promotion flag is lab-scoped. It does not mutate `configs/strategy.yaml`
+  and does not enable paper, demo, or live execution.
+- `strategy_leaderboard` may display a read-only `lab_expectation` block so
+  forward-paper rows can be compared against lab evidence.
