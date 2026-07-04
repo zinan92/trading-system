@@ -69,6 +69,32 @@ def test_write_outputs_preserves_same_day_signal_and_ticket_evidence(tmp_path: P
     assert {item["signal_id"] for item in backtests} == {signal.signal_id, watch.signal_id}
 
 
+def test_limit_ticket_pending_journal_waits_for_entry_order():
+    ticket = TradeTicket(
+        ticket_id="ticket_limit_wait",
+        signal_id="sig_limit_wait",
+        asset="GOLD",
+        asset_class="commodity",
+        action="buy",
+        entry_zone="100.50-100.50",
+        stop_loss=100.0,
+        targets=[101.5],
+        rationale="limit entry",
+        order_type="limit",
+        entry_order_limit_price=100.5,
+        entry_order_ttl_bars=10,
+        entry_order_timeframe="1m",
+        entry_order_created_bar_timestamp="2026-07-04T00:00:00+00:00",
+    )
+
+    pending = JournalPending.from_ticket(ticket, "2026-07-04T00:00:00+00:00").to_dict()
+
+    assert pending["decision_status"] == "pending_entry_order"
+    assert pending["required_user_action"] == "None; waiting for limit entry or expiry."
+    assert pending["entry_order_limit_price"] == 100.5
+    assert pending["entry_order_ttl_bars"] == 10
+
+
 def test_write_outputs_recovers_from_corrupt_same_day_artifact(tmp_path: Path):
     """A truncated/corrupt artifact (e.g. SIGKILL mid-write — write_text is not
     atomic) must not permanently brick the strategy. The merge reads before it

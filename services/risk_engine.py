@@ -34,7 +34,7 @@ class RiskEngine:
                 confidence=min(100, max(0, signal.confidence + analysis.confidence_adjustment)),
                 methods=analysis.methods,
             )
-        if not adjusted_signal.approved_candidate(default["min_signal_strength"], default["min_confidence"]):
+        if not self._approved_candidate(adjusted_signal, default):
             if adjusted_signal.direction in {"long", "short"}:
                 self.last_rejection = self._signal_gate_rejection(adjusted_signal, default)
             return None
@@ -82,29 +82,26 @@ class RiskEngine:
             return None
 
         if adjusted_signal.direction == "long":
-            entry_low = latest * 0.995
-            entry_high = latest * 1.005
             if macd_plan.get("status") == "ok":
-                entry_low = latest
-                entry_high = latest
                 stop_loss = float(macd_plan["stop_loss"])
                 target = float(macd_plan["target"])
             else:
                 stop_loss = latest * (1 - stop_price_pct / 100)
                 target = latest * (1 + target_price_pct / 100)
+            entry_low = entry_high = self._limit_entry_price(latest, stop_loss)
             action = "prepare_buy"
         else:
-            entry_low = latest * 0.995
-            entry_high = latest * 1.005
             if macd_plan.get("status") == "ok":
-                entry_low = latest
-                entry_high = latest
                 stop_loss = float(macd_plan["stop_loss"])
                 target = float(macd_plan["target"])
             else:
                 stop_loss = latest * (1 + stop_price_pct / 100)
                 target = latest * (1 - target_price_pct / 100)
+            entry_low = entry_high = self._limit_entry_price(latest, stop_loss)
             action = "prepare_sell"
+        entry_limit_price = round(float(entry_low), 2)
+        ttl_bars = int(default.get("limit_order_ttl_bars", default.get("entry_order_ttl_bars", 10)) or 10)
+        latest_bar = candles[-1]
 
         ticket = TradeTicket(
             ticket_id=f"ticket_{adjusted_signal.signal_id.removeprefix('sig_')}",
@@ -112,15 +109,15 @@ class RiskEngine:
             asset=adjusted_signal.asset,
             asset_class=adjusted_signal.asset_class,
             action=action,
-            entry_zone=f"{entry_low:.2f}-{entry_high:.2f}",
+            entry_zone=f"{entry_limit_price:.2f}-{entry_limit_price:.2f}",
             stop_loss=round(stop_loss, 2),
             targets=[round(target, 2)],
             position_size_pct=position_size_pct,
             max_loss_pct=max_loss_pct,
             order_type="limit",
-            time_in_force="day",
+            time_in_force="gtc",
             paper_only=True,
-            trigger=f"Review {adjusted_signal.asset} if signal remains above strength/confidence thresholds.",
+            trigger=f"Place a limit entry for {adjusted_signal.asset}; expire it if not touched within {ttl_bars} bars.",
             invalid_if=adjusted_signal.invalid_if,
             methods=analysis.methods if analysis else [],
             backtest=backtest.to_dict() if backtest else {},
@@ -136,6 +133,10 @@ class RiskEngine:
             trade_quality={},
             generated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             latest_price=round(float(latest), 2),
+            entry_order_limit_price=entry_limit_price,
+            entry_order_ttl_bars=ttl_bars,
+            entry_order_timeframe=str(getattr(latest_bar, "timeframe", "")),
+            entry_order_created_bar_timestamp=str(getattr(latest_bar, "timestamp", "")),
         )
         quality = self._with_position_risk(
             self.quality_gate.evaluate_ticket(ticket.to_dict(), latest_price=latest),
@@ -254,13 +255,25 @@ class RiskEngine:
                 return int(match.group(1))
         return None
 
+    def _approved_candidate(self, signal: Signal, default: dict) -> bool:
+        if self._is_binary_macd_signal(signal):
+            return signal.direction in {"long", "short"} and signal.status == "new"
+        return signal.approved_candidate(default["min_signal_strength"], default["min_confidence"])
+
+    def _is_binary_macd_signal(self, signal: Signal) -> bool:
+        return signal.regime in {"macd_golden_cross", "macd_death_cross"} or signal.horizon == "macd"
+
+    def _limit_entry_price(self, close_price: float, stop_loss: float) -> float:
+        return (float(close_price) + float(stop_loss)) / 2
+
     def _signal_gate_payload(self, signal: Signal, default: dict) -> dict:
         min_strength = int(default.get("min_signal_strength", 0) or 0)
         min_confidence = int(default.get("min_confidence", 0) or 0)
         reasons = []
         direction_passes = signal.direction in {"long", "short"}
-        strength_passes = int(signal.strength) >= min_strength
-        confidence_passes = int(signal.confidence) >= min_confidence
+        binary_macd = self._is_binary_macd_signal(signal)
+        strength_passes = True if binary_macd else int(signal.strength) >= min_strength
+        confidence_passes = True if binary_macd else int(signal.confidence) >= min_confidence
         if not direction_passes:
             reasons.append("signal is not directional")
         if not strength_passes:
@@ -269,6 +282,7 @@ class RiskEngine:
             reasons.append(f"signal confidence {signal.confidence} below minimum {min_confidence}")
         return {
             "passes": bool(direction_passes and strength_passes and confidence_passes),
+            "binary_strategy": "macd" if binary_macd else "",
             "direction": signal.direction,
             "strength": signal.strength,
             "confidence": signal.confidence,

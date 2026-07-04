@@ -139,12 +139,13 @@ def test_generated_ticket_interprets_target_stop_as_leveraged_equity_pct():
     row = ticket.to_dict()
     assert row["targets"] == [4016.0]
     assert row["stop_loss"] == 3992.0
-    assert row["trade_quality"]["target_price_move_pct"] == 0.4
-    assert row["trade_quality"]["stop_price_move_pct"] == 0.2
-    assert row["trade_quality"]["target_equity_return_pct"] == 4.0
-    assert row["trade_quality"]["stop_equity_risk_pct"] == 2.0
-    assert row["trade_quality"]["estimated_account_target_return_pct"] == 0.32
-    assert row["trade_quality"]["estimated_account_stop_risk_pct"] == 0.16
+    assert row["entry_zone"] == "3996.00-3996.00"
+    assert row["trade_quality"]["target_price_move_pct"] == 0.5005
+    assert row["trade_quality"]["stop_price_move_pct"] == 0.1001
+    assert row["trade_quality"]["target_equity_return_pct"] == 5.005
+    assert row["trade_quality"]["stop_equity_risk_pct"] == 1.001
+    assert row["trade_quality"]["estimated_account_target_return_pct"] == 0.4004
+    assert row["trade_quality"]["estimated_account_stop_risk_pct"] == 0.0801
 
 
 def test_macd_ticket_uses_cross_bar_low_and_one_point_five_r_target_for_long():
@@ -190,7 +191,113 @@ def test_macd_ticket_uses_cross_bar_low_and_one_point_five_r_target_for_long():
     row = ticket.to_dict()
     assert row["stop_loss"] == 98.0
     assert row["targets"] == [115.5]
-    assert row["trade_quality"]["reward_to_risk"] == 1.5
+    assert row["entry_zone"] == "101.50-101.50"
+    assert row["trade_quality"]["reward_to_risk"] == 4.0
+
+
+def test_macd_limit_entry_is_midpoint_with_binary_signal_gate_and_ten_bar_ttl():
+    candles = [
+        Bar("GOLD", "1m", "2026-07-04T00:00:00+00:00", 99.8, 100.1, 99.5, 99.7, 1000, "mock"),
+        Bar("GOLD", "1m", "2026-07-04T00:01:00+00:00", 99.7, 100.1, 99.6, 99.8, 1000, "mock"),
+        Bar("GOLD", "1m", "2026-07-04T00:02:00+00:00", 99.8, 100.2, 99.7, 100.0, 1000, "mock"),
+    ]
+    signal = Signal(
+        "sig_macd_long_binary",
+        "GOLD",
+        "commodity",
+        "long",
+        1,
+        1,
+        "macd",
+        "MACD golden cross",
+        evidence=["macd cross=金叉", "cross bar index=1/3"],
+        regime="macd_golden_cross",
+        factor_scores={"macd": 100},
+    )
+    engine = RiskEngine(
+        {
+            "default": {
+                "max_loss_pct": 2.0,
+                "position_size_pct": 50,
+                "min_signal_strength": 90,
+                "min_confidence": 90,
+                "limit_order_ttl_bars": 10,
+                "trade_quality": {
+                    "effective_leverage": 5,
+                    "min_target_equity_return_pct": 1.0,
+                    "min_reward_to_risk": 1.5,
+                    "cost_buffer_price_move_pct": 0.02,
+                },
+            },
+            "asset_class_overrides": {"commodity": {"stop_loss_pct": 2, "target_pct": 4, "position_size_pct": 50}},
+        }
+    )
+
+    ticket = engine.generate_ticket(signal, candles)
+
+    assert ticket is not None
+    row = ticket.to_dict()
+    assert row["entry_zone"] == "99.80-99.80"
+    assert row["entry_order_limit_price"] == 99.8
+    assert row["stop_loss"] == 99.6
+    assert row["targets"] == [100.6]
+    assert row["position_size_pct"] == 50
+    assert row["max_loss_pct"] == 2.0
+    assert row["entry_order_ttl_bars"] == 10
+    assert row["entry_order_timeframe"] == "1m"
+    assert row["entry_order_created_bar_timestamp"] == "2026-07-04T00:02:00+00:00"
+    assert row["signal_strength"] == 1
+    assert row["signal_confidence"] == 1
+    assert row["trade_quality"]["estimated_account_stop_risk_pct"] <= 2.0
+
+
+def test_macd_short_limit_entry_is_symmetric_midpoint_between_close_and_stop():
+    candles = [
+        Bar("GOLD", "1m", "2026-07-04T00:00:00+00:00", 100.2, 100.5, 99.9, 100.3, 1000, "mock"),
+        Bar("GOLD", "1m", "2026-07-04T00:01:00+00:00", 100.3, 100.4, 99.9, 100.2, 1000, "mock"),
+        Bar("GOLD", "1m", "2026-07-04T00:02:00+00:00", 100.2, 100.3, 99.8, 100.0, 1000, "mock"),
+    ]
+    signal = Signal(
+        "sig_macd_short_binary",
+        "GOLD",
+        "commodity",
+        "short",
+        1,
+        1,
+        "macd",
+        "MACD death cross",
+        evidence=["macd cross=死叉", "cross bar index=1/3"],
+        regime="macd_death_cross",
+        factor_scores={"macd": 100},
+    )
+    engine = RiskEngine(
+        {
+            "default": {
+                "max_loss_pct": 2.0,
+                "position_size_pct": 50,
+                "min_signal_strength": 90,
+                "min_confidence": 90,
+                "limit_order_ttl_bars": 10,
+                "trade_quality": {
+                    "effective_leverage": 5,
+                    "min_target_equity_return_pct": 1.0,
+                    "min_reward_to_risk": 1.5,
+                    "cost_buffer_price_move_pct": 0.02,
+                },
+            },
+            "asset_class_overrides": {"commodity": {"stop_loss_pct": 2, "target_pct": 4, "position_size_pct": 50}},
+        }
+    )
+
+    ticket = engine.generate_ticket(signal, candles)
+
+    assert ticket is not None
+    row = ticket.to_dict()
+    assert row["entry_zone"] == "100.20-100.20"
+    assert row["entry_order_limit_price"] == 100.2
+    assert row["stop_loss"] == 100.4
+    assert row["targets"] == [99.4]
+    assert row["action"] == "prepare_sell"
 
 
 def test_trade_quality_blocks_ticket_below_one_percent_equity_target():

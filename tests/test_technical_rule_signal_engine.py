@@ -47,6 +47,7 @@ def test_registry_selects_technical_rule_engines():
         "false_breakout_reversal",
         "psych_level_rejection",
         "macd_trend_volatility_filter",
+        "vwap_trend_pullback",
     ):
         strategy = StrategyRegistry({f"gold_1m_{engine}": {"engine": engine, "timeframe": "1m", "signal": {"min_bars": 5}}}).get(f"gold_1m_{engine}")
         assert isinstance(strategy.signal_engine(), TechnicalRuleSignalEngine)
@@ -439,4 +440,41 @@ def test_vwap_extension_reversion_requires_extension_volume_and_session():
 
     off_session = list(bars)
     off_session[-1] = Bar("GOLD", "5m", "2026-05-26T22:00:00+00:00", bars[-1].open, bars[-1].high, bars[-1].low, bars[-1].close, 12, "test", [])
+    assert engine.generate(GOLD, off_session, run_date="2026-05-26").direction == "watch"
+
+
+def test_vwap_trend_pullback_requires_reclaim_trend_volume_and_session():
+    closes = [100 + index * 0.05 for index in range(116)] + [105.70, 105.55, 105.35, 105.62]
+    bars = [
+        Bar("GOLD", "5m", f"2026-05-26T14:{index % 60:02d}:00+00:00", bar.open, bar.high, bar.low, bar.close, 12, bar.provider, bar.quality_flags)
+        for index, bar in enumerate(_bars(closes, timeframe="5m"))
+    ]
+    bars[-1] = Bar("GOLD", "5m", "2026-05-26T14:59:00+00:00", 105.45, 105.68, 105.40, 105.62, 18, "test", [])
+    engine = TechnicalRuleSignalEngine(
+        {
+            "engine": "vwap_trend_pullback",
+            "signal": {
+                "min_bars": 120,
+                "vwap_lookback_bars": 72,
+                "ema_period": 50,
+                "ema_slope_lookback_bars": 8,
+                "atr_lookback_bars": 14,
+                "min_atr_pct": 0.01,
+                "max_atr_pct": 1.2,
+                "adx_lookback_bars": 14,
+                "min_adx": 5,
+                "max_pullback_to_vwap_pct": 1.5,
+                "min_reclaim_pct": 0.01,
+                "min_volume_ratio": 0.8,
+                "session_start_utc": 7,
+                "session_end_utc": 20,
+            },
+        }
+    )
+    signal = engine.generate(GOLD, bars, run_date="2026-05-26")
+    assert signal.direction == "long"
+    assert signal.regime == "vwap_trend_pullback"
+
+    off_session = list(bars)
+    off_session[-1] = Bar("GOLD", "5m", "2026-05-26T22:00:00+00:00", bars[-1].open, bars[-1].high, bars[-1].low, bars[-1].close, 18, "test", [])
     assert engine.generate(GOLD, off_session, run_date="2026-05-26").direction == "watch"

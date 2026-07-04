@@ -203,7 +203,7 @@ def test_dashboard_state_aggregates_outputs_and_risk(tmp_path: Path):
     assert state["performance_board"]["market_data_gate"]["mode"] == "replay_only"
     assert state["strategy_detail"]["ohlc_quality"]["official_rows"] == 0
     assert state["strategy_config"]["gold_5m_v1"]["signal"]["ma_short_bars"] == 5
-    assert state["risk_rules"]["default"]["max_loss_pct"] == 0.5
+    assert state["risk_rules"]["default"]["max_loss_pct"] == 2.0
     assert state["broker_preflight"]["ready"] is True
     assert state["data_source_preflight"]["ready_for_paper"] is True
     assert state["data_source_lineage"]["truth_level"] == "public_snapshot"

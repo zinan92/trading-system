@@ -1,9 +1,12 @@
-"""Per-cycle pending resolver: make every pending ticket terminal.
+"""Per-cycle pending resolver for auto-approved paper/demo strategy tickets.
 
 The owner's system is fully autonomous — there is no human-approval middle state.
-Each cycle, for a namespace's pending journal, this resolves EVERY ticket:
+Each cycle, for a namespace's pending journal, this resolves tickets that are
+ready to decide:
 
-  * the gate-approved primary (pending[0]) auto-executes (executed_paper);
+  * the gate-approved primary (pending[0]) auto-executes only when a market or
+    touched-limit entry is executable;
+  * an untouched limit entry stays pending until its configured bar TTL expires;
   * if the auto-approval gate blocks, or execution hits a safety limit, that
     ticket is auto-REJECTED with the reason (not left pending);
   * any additional same-cycle tickets (pending[1+]) are auto-rejected — the signal
@@ -20,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.journal_store import JournalStore, load_json, write_json
+from services.pending_entry_guard import evaluate_limit_entry_status, load_entry_candles
 
 _PER_CYCLE_NOTE = "auto-rejected: one auto-decision per cycle; signal re-fires next cycle if still valid"
 _STALE_NOTE = "auto-rejected (stale): undecided pending carried past its run_date; signal re-fires fresh if still valid"
@@ -35,10 +39,15 @@ def resolve_pending_cycle(
     store: JournalStore | None = None,
     broker_adapter=None,
 ) -> dict:
-    """Terminate every pending ticket this cycle. Returns executed/rejected ids."""
+    """Resolve pending tickets that are executable or expired this cycle.
+
+    Limit entries remain pending until the bar trades through the limit price or
+    their configured bar TTL expires.
+    """
     store = store or JournalStore()
     result: dict = {"executed": [], "rejected": [], "skipped": [], "errors": [], "decisions": []}
     ids = [str(item.get("ticket_id")) for item in pending if isinstance(item, dict) and item.get("ticket_id")]
+    pending_by_id = {str(item.get("ticket_id")): item for item in pending if isinstance(item, dict) and item.get("ticket_id")}
 
     if not auto_approve:
         # Manual mode (not the owner's config): leave pending untouched.
@@ -49,10 +58,21 @@ def resolve_pending_cycle(
 
     for index, ticket_id in enumerate(ids):
         if index == 0 and gate_allows:
+            limit_status = _limit_entry_status(store, run_date, ticket_id, pending_by_id.get(ticket_id, {}))
+            if limit_status.get("status") == "waiting" and broker_adapter is None:
+                result["skipped"].append(ticket_id)
+                continue
+            if limit_status.get("status") == "expired":
+                _safe_reject(store, run_date, ticket_id, result, str(limit_status.get("reason") or "auto-rejected: limit entry expired"))
+                continue
             try:
                 # Only forward broker_adapter when a live adapter is actually injected
                 # (multi-strategy live routing); the paper path leaves it to the store.
                 extra = {"broker_adapter": broker_adapter} if broker_adapter is not None else {}
+                if limit_status.get("actual_entry") is not None:
+                    extra["actual_entry"] = float(limit_status["actual_entry"])
+                elif broker_adapter is not None and limit_status.get("limit_price") is not None:
+                    extra["actual_entry"] = float(limit_status["limit_price"])
                 record = store.record_decision(
                     run_date=run_date,
                     ticket_id=ticket_id,
@@ -74,6 +94,29 @@ def resolve_pending_cycle(
         _safe_reject(store, run_date, ticket_id, result, note)
 
     return result
+
+
+def _limit_entry_status(store: JournalStore, run_date: str, ticket_id: str, pending_item: dict) -> dict:
+    output_root = getattr(store, "output_root", None)
+    if output_root is None:
+        return {"status": "not_applicable"}
+    ticket = _load_ticket(Path(output_root), run_date, ticket_id)
+    if not ticket:
+        ticket = dict(pending_item)
+    if str(ticket.get("order_type", "")).lower() != "limit":
+        return {"status": "not_applicable"}
+    candles = load_entry_candles(Path(output_root), run_date, ticket)
+    return evaluate_limit_entry_status({**ticket, **pending_item}, candles)
+
+
+def _load_ticket(output_root: Path, run_date: str, ticket_id: str) -> dict:
+    return next(
+        (
+            item for item in load_json(output_root / "trade_tickets" / f"{run_date}.json")
+            if isinstance(item, dict) and item.get("ticket_id") == ticket_id
+        ),
+        {},
+    )
 
 
 def _safe_reject(store: JournalStore, run_date: str, ticket_id: str, result: dict, notes: str, *, error: str | None = None) -> None:

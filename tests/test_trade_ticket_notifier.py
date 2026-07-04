@@ -198,6 +198,35 @@ def test_executed_ticket_renders_green_auto_filled_card(tmp_path: Path):
     assert "✅ 4 · 自动批准闸门" in text
 
 
+def test_pending_limit_ticket_renders_waiting_for_entry_not_manual_review(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    ticket = {
+        **_rich_ticket(),
+        "order_type": "limit",
+        "entry_order_limit_price": 4170.0,
+        "entry_order_ttl_bars": 10,
+    }
+    context = {
+        **_ctx(output_root),
+        "pending": {
+            "ticket_id": ticket["ticket_id"],
+            "decision_status": "pending_entry_order",
+            "entry_order_limit_price": 4170.0,
+            "entry_order_ttl_bars": 10,
+        },
+    }
+    notifier = TradeTicketNotifier(output_root, sender=_FakeSender())
+
+    message = notifier._format_message("2026-07-03", "gold_1m_macd", ticket, context)
+    card = notifier._build_card("2026-07-03", "gold_1m_macd", ticket, context, 1, 1)
+    text = _card_text(card)
+
+    assert "审批结论：限价单等待触价" in message
+    assert "执行状态：限价单等待触价" in message
+    assert "等待人工确认" not in message
+    assert "限价单等待触价" in text
+
+
 def _ctx(output_root):
     return {"pending": {}, "decision": {}, "paper_order": {}, "demo_request": {}, "strategy_root": str(output_root)}
 

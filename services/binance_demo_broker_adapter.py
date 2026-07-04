@@ -39,12 +39,19 @@ class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
 
     def __init__(self, output_root: Path, broker_config: dict, demo_config: dict | None = None, opener=None) -> None:
         self.demo_config = demo_config or {}
+        account_equity = float(
+            self.demo_config.get(
+                "account_equity",
+                (load_pipeline_config().get("paper_account", {}) or {}).get("starting_equity", 10_000.0),
+            )
+        )
         merged = {
             **broker_config,
             "provider": "binance_usdm",
             "environment": "demo",
             "base_url": DEMO_BASE_URL,
             "dry_run": False,
+            "dry_run_account_equity": account_equity,
             "request_dir": str(self.demo_config.get("request_dir", broker_config.get("request_dir", "demo_order_requests"))),
             "protective_failure_action": str(self.demo_config.get("protective_failure_action", "reduce_only_close")),
             "reconcile_account_history": bool(self.demo_config.get("reconcile_account_history", False)),

@@ -76,6 +76,7 @@ class Strategy:
             "false_breakout_reversal",
             "psych_level_rejection",
             "macd_trend_volatility_filter",
+            "vwap_trend_pullback",
         }:
             from services.technical_rule_signal_engine import TechnicalRuleSignalEngine
             return TechnicalRuleSignalEngine(self.params)

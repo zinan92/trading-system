@@ -20,6 +20,7 @@ from services.intel_client import IntelClient
 from services.kline_client import KlineClient
 from services.live_env import apply_live_env
 from services.market_view_obsidian import MarketViewObsidianSync
+from services.pending_entry_guard import build_pending_entry_block, evaluate_pending_entry_state, reject_expired_pending_entries
 from services.portfolio_risk import PortfolioRiskState
 from services.position_map import GoldPositionMap
 from services.reporting import ReportBuilder
@@ -114,6 +115,7 @@ def run_daily_pipeline(run_date: str, strategy=None, output_root=None) -> dict[s
     clean_bars = {}
     manifests = []
     data_quality = {}
+    preserved_pending_ticket_ids: set[str] = set()
 
     for asset in assets:
         raw_snapshots[asset.symbol] = {}
@@ -170,6 +172,25 @@ def run_daily_pipeline(run_date: str, strategy=None, output_root=None) -> dict[s
             continue
         signal_timeframe = strategy_timeframe or ("5m" if "5m" in clean_bars[asset.symbol] else timeframes[0])
         candles = clean_bars[asset.symbol][signal_timeframe]
+        pending_entry_state = evaluate_pending_entry_state(output_root, run_date, candles, asset.symbol)
+        expired_pending_resolution = reject_expired_pending_entries(output_root, run_date, pending_entry_state)
+        if expired_pending_resolution.get("closed") or expired_pending_resolution.get("errors"):
+            risk_blocks.append(
+                {
+                    "asset": asset.symbol,
+                    "ticket_id": "",
+                    "signal_id": "",
+                    "reason": "pending_entry_expired",
+                    "pending_entry_expiration": expired_pending_resolution,
+                }
+            )
+        for pending_item in pending_entry_state.get("active_pending", []):
+            ticket_id = str(pending_item.get("ticket_id") or "")
+            if not ticket_id or ticket_id in preserved_pending_ticket_ids:
+                continue
+            journal_row = {key: value for key, value in pending_item.items() if key not in {"source", "expiry"}}
+            journals.append(JournalPending.from_dict(journal_row))
+            preserved_pending_ticket_ids.add(ticket_id)
         events = market_events[asset.symbol]
         signal = signal_engine.generate(asset, candles, events, run_date, factor_context=factor_context)
         quality = data_quality.get(asset.symbol, {})
@@ -235,6 +256,22 @@ def run_daily_pipeline(run_date: str, strategy=None, output_root=None) -> dict[s
         signals.append(signal)
         analyses.append(analysis)
         backtests.append(backtest)
+        if pending_entry_state.get("has_active") and signal.direction in {"long", "short"}:
+            block = build_pending_entry_block(asset.symbol, signal.signal_id, pending_entry_state)
+            risk_blocks.append(block)
+            decision_snapshot_builder.record(
+                run_date,
+                _strategy_id(active_strategy),
+                signal_timeframe,
+                candles,
+                signal,
+                direction_bias=direction_bias_decision,
+                position_gate=position_gate,
+                final_decision="no_go",
+                no_go_reason="pending_entry_exists",
+                risk_block=block,
+            )
+            continue
         if quality and not quality.get("allows_trading", True):
             block = {
                 "asset": asset.symbol,

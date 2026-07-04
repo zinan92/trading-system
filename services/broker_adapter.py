@@ -1463,6 +1463,16 @@ class LiveBrokerAdapter:
     def _delete_binance_algo_open_orders(self, symbol: str) -> dict:
         return self._binance_signed_request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
 
+    def cancel_binance_order(self, symbol: str, *, orig_client_order_id: str = "", order_id: str = "") -> dict:
+        params = {"symbol": symbol}
+        if orig_client_order_id:
+            params["origClientOrderId"] = orig_client_order_id
+        elif order_id:
+            params["orderId"] = order_id
+        else:
+            raise ValueError("orig_client_order_id or order_id is required to cancel a Binance order")
+        return self._binance_signed_request("DELETE", "/fapi/v1/order", params)
+
     def _auto_close_on_protective_failure(self, readiness: dict) -> bool:
         if readiness.get("demo_trading") is not True:
             return False

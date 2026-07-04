@@ -92,6 +92,24 @@ def _demo_ticket(run_date: str, suffix: str = "recover") -> dict:
     }
 
 
+def _demo_limit_ticket(run_date: str, suffix: str = "limit_expire") -> dict:
+    ticket = _demo_ticket(run_date, suffix)
+    ticket.update(
+        {
+            "order_type": "limit",
+            "time_in_force": "gtc",
+            "entry_zone": "99.80-99.80",
+            "entry_order_limit_price": 99.8,
+            "entry_order_ttl_bars": 10,
+            "entry_order_timeframe": "1m",
+            "entry_order_created_bar_timestamp": f"{run_date}T00:00:00+00:00",
+            "stop_loss": 99.6,
+            "targets": [100.6],
+        }
+    )
+    return ticket
+
+
 def _seed_demo_pending(scoped: Path, run_date: str, ticket: dict) -> None:
     write_json(scoped / "trade_tickets" / f"{run_date}.json", [ticket])
     write_json(
@@ -487,6 +505,78 @@ def test_runner_recovers_from_durable_ticket_snapshot_when_ticket_file_is_missin
     decision = load_json(scoped / "journal_decisions" / f"{run_date}.json")[0]
     assert decision["ticket_id"] == ticket["ticket_id"]
     assert decision["paper_order"]["order_id"] == order_id
+
+
+def test_runner_expires_accepted_demo_limit_after_ttl_and_cancels_broker_order(monkeypatch, tmp_path: Path):
+    root = tmp_path / "outputs"
+    run_date = "2026-06-30"
+    runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
+    strategy = runner.registry.get("gold_1m_macd")
+    scoped = runner.strategy_root("gold_1m_macd")
+    ticket = _demo_limit_ticket(run_date, "accepted_expired")
+    order_id = "demo_order_accepted_expired"
+    client_order_id = "client_accepted_expired"
+    write_json(scoped / "trade_tickets" / f"{run_date}.json", [ticket])
+    write_json(
+        scoped / "clean_bars" / run_date / "GOLD_1m.json",
+        [
+            {
+                "symbol": "GOLD",
+                "timeframe": "1m",
+                "timestamp": f"{run_date}T00:{minute:02d}:00+00:00",
+                "open": 100.0,
+                "high": 100.2,
+                "low": 99.9,
+                "close": 100.0,
+                "volume": 1000,
+                "provider": "mock",
+            }
+            for minute in range(11)
+        ],
+    )
+    store = OrderLifecycleStore(scoped)
+    store.write_intent(
+        run_date,
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=client_order_id,
+        requested_quantity=1.0,
+        requested_price=99.8,
+        source="binance_usdm:demo",
+        metadata={"symbol": "XAUUSDT", "ticket": ticket},
+    )
+    store.transition(run_date, order_id, "submitting", reason="submit_started")
+    store.transition(run_date, order_id, "accepted", reason="entry_accepted", metadata={"client_order_id": client_order_id})
+
+    class CancelingAdapter:
+        name = "binance_demo"
+
+        def __init__(self) -> None:
+            self.cancel_calls = []
+
+        def _binance_symbol(self, asset: str) -> str:
+            assert asset == "GOLD"
+            return "XAUUSDT"
+
+        def cancel_binance_order(self, symbol: str, *, orig_client_order_id: str = "", order_id: str = "") -> dict:
+            self.cancel_calls.append({"symbol": symbol, "orig_client_order_id": orig_client_order_id, "order_id": order_id})
+            return {"status": "CANCELED", "clientOrderId": orig_client_order_id}
+
+    adapter = CancelingAdapter()
+    monkeypatch.setattr(runner, "_broker_adapter_for", lambda *_args, **_kwargs: adapter)
+
+    report = runner._recover_demo_order_intents(strategy, scoped, run_date, reconciliation={"reconciled": True})
+    lifecycle = OrderLifecycleStore(scoped).current(run_date, order_id)
+    decisions = load_json(scoped / "journal_decisions" / f"{run_date}.json")
+
+    assert report["status"] == "recovered"
+    assert report["expired_entry_orders"]["expired_ticket_ids"] == [ticket["ticket_id"]]
+    assert adapter.cancel_calls == [{"symbol": "XAUUSDT", "orig_client_order_id": client_order_id, "order_id": ""}]
+    assert lifecycle["state"] == "expired"
+    assert lifecycle["metadata"]["cancel_response"]["status"] == "CANCELED"
+    assert decisions[0]["ticket_id"] == ticket["ticket_id"]
+    assert decisions[0]["decision_status"] == "rejected"
+    assert decisions[0]["paper_order"]["status"] == "expired"
 
 
 def test_runner_reprobes_blocked_submitting_intent_after_connectivity_recovers(monkeypatch, tmp_path: Path):

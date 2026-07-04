@@ -122,7 +122,7 @@ def test_risk_monitor_blocks_on_daily_loss_limit(tmp_path: Path):
     run_date = "2026-05-26"
     write_json(root / "data_source_preflight" / "current.json", [{"ready_for_paper": True, "ready_for_live": True, "latest_provider": "mt5_csv"}])
     write_json(root / "performance" / f"{run_date}.json", [{"summary": {"open_trade_count": 0, "open_unrealized_r": 0}}])
-    write_json(root / "equity_curve" / "current.json", [{"daily_pnl_pct": -1.3, "daily_pnl": -130, "current_drawdown_pct": -1.3}])
+    write_json(root / "equity_curve" / "current.json", [{"daily_pnl_pct": -4.1, "daily_pnl": -410, "current_drawdown_pct": -4.1}])
     write_json(root / "strategy_guardrails" / "current.json", [{"status": "pass", "allow_new_paper_order": True}])
 
     result = RiskMonitor(root).run(run_date)

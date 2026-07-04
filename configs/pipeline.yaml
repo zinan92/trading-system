@@ -118,6 +118,7 @@
       "environment": "demo",
       "base_url": "https://demo-fapi.binance.com",
       "dry_run": true,
+      "dry_run_account_equity": 10000,
       "api_key_env": "BINANCE_API_KEY",
       "api_secret_env": "BINANCE_API_SECRET",
       "allowed_symbols": ["GOLD", "XAUUSD"],
@@ -160,7 +161,8 @@
     "active_strategy_id": "gold_1m_macd",
     "broker_profile": "binance_usdm",
     "request_dir": "demo_order_requests",
-    "max_order_quantity": 0.002,
+    "account_equity": 10000,
+    "max_order_quantity": 2.0,
     "require_flat_before_entry": true,
     "protective_failure_action": "reduce_only_close",
     "note": "Only gold_1m_macd (1m MACD golden/death cross) may submit real Binance Futures Demo XAUUSDT orders. Other strategies remain paper."

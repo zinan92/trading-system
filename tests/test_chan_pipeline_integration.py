@@ -132,17 +132,23 @@ def test_chan_second_buy_drives_long_ticket_through_paper_pipeline(monkeypatch, 
     tickets = json.loads((ns / "trade_tickets" / f"{run_date}.json").read_text())
     assert len(tickets) >= 1
     assert tickets[0]["action"] == "prepare_buy"  # long entry
-    assert strat["executed_ticket"]  # auto-approved into the isolated paper account
+    assert tickets[0]["order_type"] == "limit"
+    assert tickets[0]["entry_order_ttl_bars"] == 10
+    assert strat["executed_ticket"] is None
+    assert strat["auto_resolution"]["skipped"] == [tickets[0]["ticket_id"]]
 
-    # A REAL paper fill — not just a journaled decision: a filled order, an open
-    # position, and modelled execution costs (spread/slippage/commission).
-    orders = json.loads((ns / "paper_orders" / f"{run_date}.json").read_text())
-    assert any(o["status"] == "filled" for o in orders)
-    position = json.loads((ns / "paper_positions" / "current.json").read_text())["GOLD"]
-    assert position["side"] == "long" and position["quantity"] > 0
-    assert position["total_costs"] > 0  # entry costs actually charged
+    # New order logic places a resting limit halfway between close and stop; the
+    # isolated paper account stays flat until a later bar touches that limit.
+    pending = json.loads((ns / "journal_pending" / f"{run_date}.json").read_text())
+    assert pending[0]["ticket_id"] == tickets[0]["ticket_id"]
+    orders_path = ns / "paper_orders" / f"{run_date}.json"
+    orders = json.loads(orders_path.read_text()) if orders_path.exists() else []
+    assert orders == []
+    positions_path = ns / "paper_positions" / "current.json"
+    positions = json.loads(positions_path.read_text()) if positions_path.exists() else {}
+    assert positions == {}
     leader = next(s for s in summary["leaderboard"] if s["strategy_id"] == strategy_id)
-    assert leader["open_trades"] >= 1  # position is on the leaderboard, not flat-zero
+    assert leader["open_trades"] == 0
 
     recon = json.loads((ns / "paper_reconciliation" / f"{run_date}.json").read_text())[0]
     invariant = next(c for c in recon["checks"] if c["name"] == "accounting_invariant")
@@ -153,7 +159,7 @@ def test_chan_second_buy_drives_long_ticket_through_paper_pipeline(monkeypatch, 
     from services.paper_executor import PaperExecutor
 
     marked = PaperExecutor(ns).mark_to_market(run_date)
-    assert marked["GOLD"]["last_price"] > 0  # priced off the 1m clean bars, not skipped
+    assert marked == {}
 
 
 def test_chan_second_buy_position_gate_allows_directional_paper_loop(monkeypatch, tmp_path: Path):
@@ -174,20 +180,24 @@ def test_chan_second_buy_position_gate_allows_directional_paper_loop(monkeypatch
 
     strat = next(s for s in summary["strategies"] if s["strategy_id"] == strategy_id)
     assert strat["status"] == "ok"
-    assert strat["executed_ticket"]
+    assert strat["executed_ticket"] is None
 
     ns = root / "strategies" / strategy_id
     position_map = json.loads((ns / "position_maps" / f"{run_date}.json").read_text())[0]
     signal = json.loads((ns / "signals" / f"{run_date}.json").read_text())[0]
     tickets = json.loads((ns / "trade_tickets" / f"{run_date}.json").read_text())
-    orders = json.loads((ns / "paper_orders" / f"{run_date}.json").read_text())
+    orders_path = ns / "paper_orders" / f"{run_date}.json"
+    orders = json.loads(orders_path.read_text()) if orders_path.exists() else []
 
     assert position_map["primary_timeframe"] == "4h"
     assert position_map["trade_zone"]["near_key_level"] is True
     assert signal["direction"] == "long"
     assert signal["regime"] == "chan_second_buy"
     assert len(tickets) == 1
-    assert any(o["status"] == "filled" for o in orders)
+    assert tickets[0]["order_type"] == "limit"
+    assert orders == []
+    pending = json.loads((ns / "journal_pending" / f"{run_date}.json").read_text())
+    assert pending[0]["ticket_id"] == tickets[0]["ticket_id"]
 
 
 def test_chan_second_buy_position_gate_blocks_directional_paper_loop(monkeypatch, tmp_path: Path):

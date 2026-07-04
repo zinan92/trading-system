@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>指挥台 · 方向A 机构终端 — Trading Orchestrator</title>
+<!--
+  DESIGN DIRECTION A — 机构终端 Institutional Terminal
+  ====================================================
+  System-wide token proposal (for Codex):
+  - Canvas: near-black #0a0b0c, flat. NO gradients, NO shadows, NO card boxes.
+  - Structure: hairline rules rgba(255,255,255,.08) separate regions. Space does the grouping.
+  - Brand gold #d8aa3f appears ONLY on: brand mark, active nav, primary action outline.
+  - ALL other color is semantic state, exactly four:
+      --run #35d07f / --warn #e8a33d / --block #ef5f5f / --unknown #7d8590
+  - Type: micro-labels 10px uppercase tracked .14em; numerals + ids in IBM Plex Mono
+    (production: self-host woff2, fallback SFMono/Menlo); Chinese in PingFang SC.
+  - Density: 12-13px body, 32px row heights, information per pixel is the aesthetic.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0b0c;
+  --ink:#e8eaed;
+  --muted:#9aa3ad;
+  --faint:#5d666f;
+  --rule:rgba(255,255,255,.08);
+  --rule-strong:rgba(255,255,255,.16);
+  --gold:#d8aa3f;
+  --run:#35d07f;
+  --warn:#e8a33d;
+  --block:#ef5f5f;
+  --unknown:#7d8590;
+  --mono:"IBM Plex Mono","SFMono-Regular",Menlo,Consolas,monospace;
+  --sans:"IBM Plex Sans",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--bg)}
+body{
+  font:13px/1.5 var(--sans);
+  color:var(--ink);
+  background:var(--bg);
+  -webkit-font-smoothing:antialiased;
+}
+.shell{max-width:1520px;margin:0 auto;padding:0 28px 48px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.microlabel{
+  font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);
+}
+
+/* ---------- topbar ---------- */
+.topbar{
+  display:flex;align-items:center;gap:24px;
+  height:52px;border-bottom:1px solid var(--rule-strong);
+}
+.mark{
+  width:22px;height:22px;border:1px solid var(--gold);color:var(--gold);
+  display:grid;place-items:center;font-family:var(--mono);font-size:11px;font-weight:600;
+}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:13px;letter-spacing:.02em}
+.brand .scope{color:var(--faint);font-weight:400;font-family:var(--mono);font-size:11px}
+.paper-badge{
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--warn);
+  border:1px solid rgba(232,163,61,.4);padding:2px 7px;
+}
+nav{display:flex;gap:2px;margin-left:12px}
+nav a{
+  color:var(--muted);text-decoration:none;font-size:12px;padding:6px 12px;
+  border-bottom:2px solid transparent;transition:color .15s;
+}
+nav a:hover{color:var(--ink)}
+nav a.active{color:var(--gold);border-bottom-color:var(--gold)}
+.top-meta{margin-left:auto;display:flex;align-items:center;gap:18px}
+.top-meta .num{font-size:11px;color:var(--muted)}
+
+/* ---------- verdict band ---------- */
+.verdict{
+  display:flex;align-items:baseline;gap:28px;
+  padding:34px 0 30px;border-bottom:1px solid var(--rule);
+  animation:rise .45s ease both;
+}
+.verdict-word{
+  font-family:var(--mono);font-size:58px;font-weight:600;line-height:1;
+  color:var(--run);letter-spacing:-.02em;
+}
+.verdict-word .zh{
+  font-family:var(--sans);font-size:22px;font-weight:600;color:var(--ink);
+  margin-left:14px;letter-spacing:.06em;
+}
+.verdict-sub{max-width:360px}
+.verdict-sub p{font-size:13px;color:var(--muted);margin-top:6px}
+.verdict-fresh{margin-left:auto;text-align:right}
+.verdict-fresh .num{font-size:12px;color:var(--muted);display:block;margin-top:6px}
+.btn-review{
+  margin-left:28px;align-self:center;
+  background:none;border:1px solid var(--gold);color:var(--gold);
+  font:600 12px var(--sans);letter-spacing:.06em;padding:10px 20px;cursor:pointer;
+  transition:background .15s;
+}
+.btn-review:hover{background:rgba(216,170,63,.1)}
+.state-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--run);margin-right:9px;vertical-align:2px}
+
+/* ---------- main grid ---------- */
+.grid{display:grid;grid-template-columns:380px 1fr;gap:0}
+.col-left{border-right:1px solid var(--rule);padding:24px 28px 24px 0}
+.col-right{padding:24px 0 24px 28px}
+section{animation:rise .45s ease both}
+.col-left section{animation-delay:.08s}
+.sec-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px}
+.sec-head .count{font-family:var(--mono);font-size:11px;color:var(--faint)}
+
+/* ---------- blockers ---------- */
+.blocker{
+  border-left:2px solid var(--warn);
+  padding:12px 0 12px 16px;margin-bottom:4px;
+}
+.blocker + .blocker{border-top:1px solid var(--rule)}
+.blocker.resolved{border-left-color:var(--unknown);opacity:.62}
+.blocker-tag{
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  color:var(--warn);margin-bottom:5px;
+}
+.blocker.resolved .blocker-tag{color:var(--unknown)}
+.blocker h3{font-size:13px;font-weight:600;margin-bottom:4px}
+.blocker .src{font-family:var(--mono);font-size:10.5px;color:var(--faint);word-break:break-all}
+.blocker-act{
+  margin-top:10px;display:inline-block;
+  font:600 11px var(--sans);color:var(--ink);text-decoration:none;
+  border:1px solid var(--rule-strong);padding:5px 12px;
+  transition:border-color .15s;
+}
+.blocker-act:hover{border-color:var(--warn);color:var(--warn)}
+.blocker-note{font-size:11px;color:var(--faint);margin-top:8px}
+
+/* ---------- funnel ---------- */
+.funnel-bar{display:flex;height:44px;gap:2px;margin-bottom:10px}
+.fseg{position:relative;display:flex;align-items:center;justify-content:center;min-width:56px}
+.fseg .num{font-size:15px;font-weight:600}
+.fseg-signal{flex:59;background:rgba(255,255,255,.07)}
+.fseg-filtered{flex:44;background:rgba(255,255,255,.045);color:var(--muted)}
+.fseg-rejected{flex:14;background:rgba(239,95,95,.14);color:var(--block)}
+.fseg-executed{flex:12;background:rgba(53,208,127,.16);color:var(--run)}
+.funnel-legend{display:flex;gap:2px;margin-bottom:18px}
+.funnel-legend span{font-size:10.5px;color:var(--faint);text-align:center}
+.fl-signal{flex:59}.fl-filtered{flex:44}.fl-rejected{flex:14;color:var(--block)}.fl-executed{flex:12;color:var(--run)}
+.hotspots{display:flex;gap:8px;flex-wrap:wrap}
+.chip{
+  font-family:var(--mono);font-size:11px;color:var(--muted);
+  border:1px solid var(--rule);padding:4px 10px;
+}
+.chip b{color:var(--ink);font-weight:600}
+
+/* ---------- strategy table ---------- */
+.stable{width:100%;border-collapse:collapse;margin-top:6px}
+.stable th{
+  font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule-strong);
+}
+.stable th.r,.stable td.r{text-align:right}
+.stable td{
+  padding:8px 10px;border-bottom:1px solid var(--rule);
+  font-size:12.5px;height:32px;
+}
+.stable tr{transition:background .12s}
+.stable tbody tr:hover{background:rgba(255,255,255,.03)}
+.sid{font-family:var(--mono);font-size:12px}
+.tf{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.pnl-pos{color:var(--run)}.pnl-neg{color:var(--block)}.pnl-flat{color:var(--faint)}
+.trace-ok{color:var(--run);font-family:var(--mono);font-size:11px}
+.trace-err{color:var(--block);font-family:var(--mono);font-size:11px}
+.attn{
+  font-size:10px;font-weight:600;letter-spacing:.08em;
+  color:var(--warn);border:1px solid rgba(232,163,61,.4);padding:2px 8px;
+}
+.attn.none{color:var(--faint);border-color:transparent}
+
+/* ---------- bottom strip ---------- */
+.bottom{
+  display:grid;grid-template-columns:1fr 380px;gap:28px;
+  border-top:1px solid var(--rule-strong);margin-top:8px;padding-top:20px;
+  animation:rise .45s .16s ease both;
+}
+.since{display:flex;align-items:baseline;gap:34px}
+.since .item .num{font-size:26px;font-weight:600;display:block}
+.since .item .lbl{font-size:11px;color:var(--faint);margin-top:2px}
+.since .item .num.warn{color:var(--warn)}
+.since .item .num.ok{color:var(--run)}
+.next-act{border-left:2px solid var(--gold);padding-left:18px}
+.next-act h3{font-size:13px;font-weight:600;margin:4px 0 3px}
+.next-act p{font-size:11.5px;color:var(--muted)}
+.next-act a{
+  display:inline-block;margin-top:10px;color:var(--gold);text-decoration:none;
+  font:600 11.5px var(--sans);letter-spacing:.04em;
+}
+.next-act a:hover{text-decoration:underline}
+
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">TO</span>
+      Trading Orchestrator
+      <span class="scope">GOLD / XAUUSDT</span>
+      <span class="paper-badge">PAPER</span>
+    </div>
+    <nav>
+      <a class="active" href="#">指挥台</a>
+      <a href="#">交易</a>
+      <a href="#">回放</a>
+      <a href="#">运维</a>
+    </nav>
+    <div class="top-meta">
+      <span class="num">2026-07-04 09:42 UTC</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <div>
+      <div class="microlabel" style="margin-bottom:12px"><span class="state-dot"></span>系统裁决 · SYSTEM VERDICT</div>
+      <div class="verdict-word">RUN<span class="zh">可交易</span></div>
+    </div>
+    <div class="verdict-sub">
+      <div class="microlabel">HEADLINE</div>
+      <p>系统可交易，等待下一张合格信号。四道闸门全部在线，护栏状态新鲜。</p>
+    </div>
+    <div class="verdict-fresh">
+      <div class="microlabel">数据新鲜度</div>
+      <span class="num">最近周期 12 秒前</span>
+      <span class="num" style="color:var(--faint)">run_date 2026-07-04 · UTC 对齐</span>
+    </div>
+    <button class="btn-review">标记本次复盘</button>
+  </div>
+
+  <div class="grid">
+    <div class="col-left">
+      <section>
+        <div class="sec-head">
+          <div class="microlabel">阻塞 · BLOCKERS</div>
+          <span class="count">1 活跃 / 1 已解除</span>
+        </div>
+        <div class="blocker">
+          <div class="blocker-tag">管道 PLUMBING · 活跃</div>
+          <h3>数据心跳延迟 3 分钟</h3>
+          <div class="src">outputs/binance_usdm_1m_feed/heartbeat.json</div>
+          <a class="blocker-act" href="#">修复 → 运维·数据区</a>
+        </div>
+        <div class="blocker resolved">
+          <div class="blocker-tag">安全 SAFETY · 已自动处理</div>
+          <h3>日损护栏触发，已自动拦截开仓</h3>
+          <div class="src">journal_decisions · auto-rejected (safety)</div>
+          <div class="blocker-note">无需人工动作 —— 安全闸门按策略自动执行</div>
+        </div>
+      </section>
+    </div>
+
+    <div class="col-right">
+      <section>
+        <div class="sec-head">
+          <div class="microlabel">今日决策漏斗 · DECISION FUNNEL</div>
+          <span class="count">2026-07-04 · 59 条决策记录</span>
+        </div>
+        <div class="funnel-bar">
+          <div class="fseg fseg-signal"><span class="num">59</span></div>
+          <div class="fseg fseg-filtered"><span class="num">44</span></div>
+          <div class="fseg fseg-rejected"><span class="num">9</span></div>
+          <div class="fseg fseg-executed"><span class="num">6</span></div>
+        </div>
+        <div class="funnel-legend">
+          <span class="fl-signal">信号</span>
+          <span class="fl-filtered">过滤 filtered</span>
+          <span class="fl-rejected">拒绝</span>
+          <span class="fl-executed">执行</span>
+        </div>
+        <div class="hotspots">
+          <span class="chip">信号闸门 <b>×21</b></span>
+          <span class="chip">盈亏比 · 质量闸门 <b>×14</b></span>
+          <span class="chip">账户风险闸门 <b>×6</b></span>
+          <span class="chip">自动批准闸门 <b>×3</b></span>
+        </div>
+      </section>
+
+      <section style="margin-top:30px;animation-delay:.12s">
+        <div class="sec-head">
+          <div class="microlabel">策略 · STRATEGIES</div>
+          <span class="count">21 个注册 · 显示活跃 8</span>
+        </div>
+        <table class="stable">
+          <thead>
+            <tr>
+              <th>策略</th><th>周期</th><th class="r">信 → 执</th>
+              <th class="r">当日盈亏</th><th>Trace</th><th>注意</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="sid">gold_1m_chan</td><td class="tf">1m</td>
+              <td class="r num">28 → 3</td><td class="r num pnl-pos">+412.50</td>
+              <td class="trace-ok">pass · 28</td><td><span class="attn">复盘</span></td>
+            </tr>
+            <tr>
+              <td class="sid">gold_1m_macd</td><td class="tf">1m</td>
+              <td class="r num">28 → 2</td><td class="r num pnl-neg">−96.20</td>
+              <td class="trace-ok">pass · 28</td><td><span class="attn none">—</span></td>
+            </tr>
+            <tr>
+              <td class="sid">gold_1m_breakout</td><td class="tf">1m</td>
+              <td class="r num">17 → 1</td><td class="r num pnl-pos">+58.00</td>
+              <td class="trace-ok">pass · 17</td><td><span class="attn none">—</span></td>
+            </tr>
+            <tr>
+              <td class="sid">gold_1m_grid</td><td class="tf">1m</td>
+              <td class="r num">12 → 0</td><td class="r num pnl-flat">0.00</td>
+              <td class="trace-err">error</td><td><span class="attn">修复</span></td>
+            </tr>
+            <tr>
+              <td class="sid">gold_5m_vwap_extension_reversion</td><td class="tf">5m</td>
+              <td class="r num">9 → 0</td><td class="r num pnl-flat">0.00</td>
+              <td class="trace-ok">pass · 9</td><td><span class="attn none">—</span></td>
+            </tr>
+            <tr>
+              <td class="sid">gold_5m_london_ny_breakout</td><td class="tf">5m</td>
+              <td class="r num">6 → 0</td><td class="r num pnl-flat">0.00</td>
+              <td class="trace-ok">pass · 6</td><td><span class="attn none">—</span></td>
+            </tr>
+            <tr>
+              <td class="sid">gold_1m_bollinger_reversion</td><td class="tf">1m</td>
+              <td class="r num">14 → 0</td><td class="r num pnl-flat">0.00</td>
+              <td class="trace-ok">pass · 14</td><td><span class="attn none">—</span></td>
+            </tr>
+            <tr>
+              <td class="sid">gold_5m_adx_ema_pullback</td><td class="tf">5m</td>
+              <td class="r num">4 → 0</td><td class="r num pnl-flat">0.00</td>
+              <td class="trace-ok">pass · 4</td><td><span class="attn none">—</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div>
+      <div class="microlabel" style="margin-bottom:14px">自上次复盘 · SINCE LAST REVIEW（昨日 18:30）</div>
+      <div class="since">
+        <div class="item"><span class="num">31</span><span class="lbl">新决策记录</span></div>
+        <div class="item"><span class="num warn">1</span><span class="lbl">新增阻塞</span></div>
+        <div class="item"><span class="num ok">2</span><span class="lbl">已解除阻塞</span></div>
+        <div class="item"><span class="num">6</span><span class="lbl">新执行交易</span></div>
+      </div>
+    </div>
+    <div class="next-act">
+      <div class="microlabel">下一个安全动作 · NEXT SAFE ACTION</div>
+      <h3>修复数据心跳（管道类）</h3>
+      <p>安全类阻塞已自动拦截，无需人工介入；当前唯一待办为数据管道修复。</p>
+      <a href="#">前往运维 · 数据区 →</a>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -162,8 +162,8 @@
       "frequency_bucket": "medium",
       "role": "momentum_baseline",
       "holding_period": "scalp_to_intraday",
-      "expected_trades_per_day_min": 2,
-      "expected_trades_per_day_max": 8,
+      "expected_trades_per_day_min": 5,
+      "expected_trades_per_day_max": 10,
       "return_profile": "momentum_medium_win_medium_r",
       "risk_profile": "medium_high"
     },
@@ -692,6 +692,45 @@
       "max_opening_range_pct": 0.40,
       "breakout_buffer_pct": 0.015,
       "min_volume_ratio": 0.75
+    }
+  },
+  "gold_5m_vwap_trend_pullback": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "vwap_trend_pullback",
+    "enabled": true,
+    "live": false,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "microstructure_trend_pullback",
+      "family_label": "微结构趋势回踩",
+      "style": "vwap_trend_pullback",
+      "style_label": "VWAP 趋势回踩",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_position_quality_candidate",
+      "holding_period": "intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "trend_day_pullback_medium_win_medium_r",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 120,
+      "vwap_lookback_bars": 72,
+      "ema_period": 50,
+      "ema_slope_lookback_bars": 8,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.28,
+      "adx_lookback_bars": 14,
+      "min_adx": 18,
+      "max_pullback_to_vwap_pct": 0.08,
+      "min_reclaim_pct": 0.015,
+      "min_volume_ratio": 0.75,
+      "session_start_utc": 7,
+      "session_end_utc": 20
     }
   }
 }

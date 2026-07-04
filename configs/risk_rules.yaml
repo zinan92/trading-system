@@ -1,9 +1,10 @@
 {
   "default": {
-    "max_loss_pct": 0.5,
-    "daily_loss_stop_pct": 1.25,
+    "max_loss_pct": 2.0,
+    "daily_loss_stop_pct": 4.0,
     "event_window_size_multiplier": 0.4,
-    "position_size_pct": 8,
+    "position_size_pct": 50,
+    "limit_order_ttl_bars": 10,
     "min_signal_strength": 60,
     "min_confidence": 55,
     "risk_reward_min": 1.5,
@@ -12,10 +13,10 @@
       "min_target_equity_return_pct": 1.0,
       "min_reward_to_risk": 1.5,
       "cost_buffer_price_move_pct": 0.02,
-      "daily_min_trade_samples": 3,
+      "daily_min_trade_samples": 5,
       "daily_target_trade_samples_low": 5,
       "daily_target_trade_samples_high": 10,
-      "min_daily_executed_trades_per_strategy": 2
+      "min_daily_executed_trades_per_strategy": 5
     },
     "paper_execution_costs": {
       "spread_pct": 0.01,
@@ -40,7 +41,7 @@
       "target_pct": 7.0
     },
     "commodity": {
-      "position_size_pct": 8,
+      "position_size_pct": 50,
       "stop_loss_pct": 2.0,
       "target_pct": 4.0
     },

@@ -92,6 +92,8 @@ class TechnicalRuleSignalEngine:
             return self._adx_ema_pullback(candles)
         if self.engine_type == "vwap_extension_reversion":
             return self._vwap_extension_reversion(candles)
+        if self.engine_type == "vwap_trend_pullback":
+            return self._vwap_trend_pullback(candles)
         return None
 
     def _macd_trend_volatility_filter(self, candles: list) -> dict | None:
@@ -1022,6 +1024,114 @@ class TechnicalRuleSignalEngine:
             )
         return None
 
+    def _vwap_trend_pullback(self, candles: list) -> dict | None:
+        if not self._in_utc_session(str(candles[-1].timestamp)):
+            return None
+        vwap_lookback = int(self.signal_cfg.get("vwap_lookback_bars", 72))
+        ema_period = int(self.signal_cfg.get("ema_period", 50))
+        ema_slope_lookback = int(self.signal_cfg.get("ema_slope_lookback_bars", 8))
+        atr_lookback = int(self.signal_cfg.get("atr_lookback_bars", 14))
+        adx_lookback = int(self.signal_cfg.get("adx_lookback_bars", 14))
+        min_atr_pct = float(self.signal_cfg.get("min_atr_pct", 0.015))
+        max_atr_pct = float(self.signal_cfg.get("max_atr_pct", 0.28))
+        min_adx = float(self.signal_cfg.get("min_adx", 18))
+        max_pullback_to_vwap_pct = float(self.signal_cfg.get("max_pullback_to_vwap_pct", 0.08))
+        min_reclaim_pct = float(self.signal_cfg.get("min_reclaim_pct", 0.015))
+        min_volume_ratio = float(self.signal_cfg.get("min_volume_ratio", 0.75))
+        min_required = max(vwap_lookback + 1, ema_period + ema_slope_lookback + 1, atr_lookback + 1, adx_lookback * 2 + 1)
+        if len(candles) < min_required:
+            return None
+        rows = candles[-vwap_lookback:]
+        vwap = self._rolling_vwap(rows)
+        prior_vwap = self._rolling_vwap(candles[-vwap_lookback - 1 : -1])
+        if vwap <= 0 or prior_vwap <= 0:
+            return None
+        atr_pct = self._atr_pct(candles, atr_lookback)
+        if atr_pct < min_atr_pct or atr_pct > max_atr_pct:
+            return None
+        adx_value, plus_di, minus_di = self._adx(candles, adx_lookback)
+        if adx_value < min_adx:
+            return None
+        closes = [float(bar.close) for bar in candles]
+        ema_values = ema(closes, ema_period)
+        ema_last = ema_values[-1]
+        ema_prior = ema_values[-ema_slope_lookback - 1]
+        last = candles[-1]
+        prev = candles[-2]
+        close = float(last.close)
+        prev_close = float(prev.close)
+        open_price = float(last.open)
+        low = float(last.low)
+        high = float(last.high)
+        recent_volume = sum(max(float(bar.volume), 0.0) for bar in rows[-3:]) / min(3, len(rows))
+        average_volume = sum(max(float(bar.volume), 0.0) for bar in rows) / len(rows)
+        volume_ratio = recent_volume / average_volume if average_volume else 0.0
+        if volume_ratio < min_volume_ratio:
+            return None
+        pullback_to_vwap_pct = abs(close - vwap) / vwap * 100
+        reclaim_pct = abs(close - prev_close) / prev_close * 100 if prev_close else 0.0
+        if pullback_to_vwap_pct > max_pullback_to_vwap_pct or reclaim_pct < min_reclaim_pct:
+            return None
+        if (
+            close > vwap > prior_vwap
+            and close > ema_last > ema_prior
+            and low <= vwap * (1 + max_pullback_to_vwap_pct / 100)
+            and close > open_price
+            and plus_di > minus_di
+        ):
+            return self._setup(
+                "long",
+                "vwap_trend_pullback",
+                "GOLD reclaimed a rising VWAP/EMA trend after a controlled pullback with ADX and volume confirmation.",
+                [
+                    f"close={close:.2f}",
+                    f"vwap={vwap:.2f}",
+                    f"prior_vwap={prior_vwap:.2f}",
+                    f"ema{ema_period}={ema_last:.2f}",
+                    f"pullback_to_vwap={pullback_to_vwap_pct:.3f}%",
+                    f"reclaim={reclaim_pct:.3f}%",
+                    f"atr={atr_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"volume_ratio={volume_ratio:.2f}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 7)}-{self.signal_cfg.get('session_end_utc', 20)}",
+                ],
+                "价格重新跌破 VWAP/EMA、ADX 跌破阈值，或回踩扩展成单边失速。",
+                strength=75,
+                confidence=65,
+            )
+        if (
+            close < vwap < prior_vwap
+            and close < ema_last < ema_prior
+            and high >= vwap * (1 - max_pullback_to_vwap_pct / 100)
+            and close < open_price
+            and minus_di > plus_di
+        ):
+            return self._setup(
+                "short",
+                "vwap_trend_pullback",
+                "GOLD rejected a falling VWAP/EMA trend after a controlled pullback with ADX and volume confirmation.",
+                [
+                    f"close={close:.2f}",
+                    f"vwap={vwap:.2f}",
+                    f"prior_vwap={prior_vwap:.2f}",
+                    f"ema{ema_period}={ema_last:.2f}",
+                    f"pullback_to_vwap={pullback_to_vwap_pct:.3f}%",
+                    f"reclaim={reclaim_pct:.3f}%",
+                    f"atr={atr_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"volume_ratio={volume_ratio:.2f}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 7)}-{self.signal_cfg.get('session_end_utc', 20)}",
+                ],
+                "价格重新站上 VWAP/EMA、ADX 跌破阈值，或回踩扩展成空头失速。",
+                strength=75,
+                confidence=65,
+            )
+        return None
+
     def _setup(self, direction: str, regime: str, thesis: str, evidence: list[str], invalid_if: str, *, strength: int, confidence: int) -> dict:
         return {
             "direction": direction,
@@ -1051,6 +1161,7 @@ class TechnicalRuleSignalEngine:
             "ema50_position": 70,
             "adx_ema_pullback": 90,
             "vwap_extension_reversion": 80,
+            "vwap_trend_pullback": 100,
         }
         return defaults.get(self.engine_type, 50)
 

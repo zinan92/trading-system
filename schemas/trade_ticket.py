@@ -34,6 +34,10 @@ class TradeTicket:
     trade_quality: dict = field(default_factory=dict)
     generated_at: str = ""
     latest_price: float | None = None
+    entry_order_limit_price: float | None = None
+    entry_order_ttl_bars: int = 0
+    entry_order_timeframe: str = ""
+    entry_order_created_bar_timestamp: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -66,4 +70,8 @@ class TradeTicket:
             "trade_quality": self.trade_quality,
             "generated_at": self.generated_at,
             "latest_price": self.latest_price,
+            "entry_order_limit_price": self.entry_order_limit_price,
+            "entry_order_ttl_bars": self.entry_order_ttl_bars,
+            "entry_order_timeframe": self.entry_order_timeframe,
+            "entry_order_created_bar_timestamp": self.entry_order_created_bar_timestamp,
         }

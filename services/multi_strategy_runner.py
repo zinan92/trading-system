@@ -22,10 +22,12 @@ from pathlib import Path
 from pipelines.daily import run_daily_pipeline
 from services.config_loader import ROOT, load_pipeline_config, load_risk_rules
 from services.data_source_preflight import DataSourcePreflight
+from services.decision_trace import DecisionTrace
 from services.journal_store import JournalStore, load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
 from services.order_lifecycle import OrderLifecycleStore
 from services.pending_auto_resolver import resolve_pending_cycle, sweep_stale_pending
+from services.pending_entry_guard import evaluate_limit_entry_status, load_entry_candles
 from services.paper_equity_curve import PaperEquityCurve
 from services.paper_performance import PaperPerformanceAnalyzer
 from services.paper_reconciliation import PaperReconciliation
@@ -303,6 +305,7 @@ class MultiStrategyRunner:
                 elif block_reason:
                     execution_error = block_reason
             stale_sweep = sweep_stale_pending(run_date, store=JournalStore(scoped)) if paper_auto_approve else {"closed": []}
+            decision_trace = self._build_decision_trace(scoped, run_date, strategy.strategy_id)
             performance = PaperPerformanceAnalyzer(scoped).build(run_date)
             equity = PaperEquityCurve(scoped, starting_equity=strategy.starting_equity).build(run_date, performance)
             StrategyGuardrails(scoped).run(run_date)
@@ -331,6 +334,9 @@ class MultiStrategyRunner:
                 "executed_ticket": executed_ticket,
                 "auto_resolution": auto_resolution,
                 "stale_pending_sweep": stale_sweep,
+                "decision_trace_status": decision_trace.get("status", ""),
+                "decision_trace_count": decision_trace.get("record_count", 0),
+                "decision_trace_artifact": decision_trace.get("artifact", ""),
                 "execution_error": execution_error,
                 "order_recovery_status": order_recovery.get("status", ""),
                 "order_recovery_count": order_recovery.get("recovered_count", 0),
@@ -349,6 +355,8 @@ class MultiStrategyRunner:
                 "strategy_objective_score": strategy_objective.get("objective_score"),
                 "winner_gate_passed": strategy_objective.get("winner_gate", {}).get("passed"),
             }
+            if decision_trace.get("error"):
+                result["decision_trace_error"] = decision_trace["error"]
             cycle_audit_error = cycle_audit_error or self._finalize_cycle_audit(audit_sink, audit_context, result=result)
             if cycle_audit_error:
                 result["cycle_audit_error"] = cycle_audit_error
@@ -364,6 +372,22 @@ class MultiStrategyRunner:
             if cycle_audit_error:
                 result["cycle_audit_error"] = cycle_audit_error
             return result
+
+    def _build_decision_trace(self, output_root: Path, run_date: str, strategy_id: str) -> dict:
+        try:
+            rows = DecisionTrace(output_root).build(run_date, strategy_id)
+            return {
+                "status": "pass",
+                "record_count": len(rows),
+                "artifact": str(output_root / "decision_traces" / f"{run_date}.json"),
+            }
+        except Exception as exc:  # noqa: BLE001 - trace is observability and must not alter execution.
+            return {
+                "status": "error",
+                "record_count": 0,
+                "artifact": str(output_root / "decision_traces" / f"{run_date}.json"),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
     def _finalize_cycle_audit(self, audit_sink: JsonCycleAuditSink, audit_context: dict, *, result: dict, error: str = "") -> str:
         if not audit_context:
@@ -382,6 +406,26 @@ class MultiStrategyRunner:
         store = OrderLifecycleStore(scoped)
         watchdog_blockers = store.watchdog_tick(run_date)
         rows = load_json(scoped / "order_lifecycle" / f"{run_date}.json")
+        expired_entry_orders = self._expire_demo_entry_orders(strategy, scoped, run_date, rows)
+        if expired_entry_orders.get("expired_ticket_ids") or expired_entry_orders.get("errors"):
+            rows = load_json(scoped / "order_lifecycle" / f"{run_date}.json")
+        if expired_entry_orders.get("blocks_new_orders"):
+            report = {
+                "run_date": run_date,
+                "strategy_id": strategy.strategy_id,
+                "status": "blocked",
+                "recovered_count": len(expired_entry_orders.get("expired_ticket_ids", []) or []),
+                "recovered_ticket_ids": expired_entry_orders.get("expired_ticket_ids", []),
+                "recovered_orders": expired_entry_orders.get("orders", []),
+                "blocks_new_orders": True,
+                "block_reason": expired_entry_orders.get("block_reason", ""),
+                "errors": expired_entry_orders.get("errors", []),
+                "watchdog_blockers": watchdog_blockers,
+                "expired_entry_orders": expired_entry_orders,
+                "escalation_action": "halt_new_orders_until_expired_entry_order_is_cancelled_or_reconciled",
+            }
+            self._write_order_recovery(scoped, run_date, report)
+            return report
         blocked_unrecoverable = [
             item for item in rows
             if isinstance(item, dict)
@@ -408,6 +452,7 @@ class MultiStrategyRunner:
                 "blocked_orders": blocked_unrecoverable,
                 "escalation_action": "halt_new_orders_until_order_state_reconciled",
                 "protective_recovery": protective_recovery,
+                "expired_entry_orders": expired_entry_orders,
                 "reconciliation_refresh_required": protective_recovery.get("refresh_required", False),
             }
             self._write_order_recovery(scoped, run_date, report)
@@ -426,21 +471,26 @@ class MultiStrategyRunner:
                     "errors": protective_recovery.get("errors", []),
                     "watchdog_blockers": watchdog_blockers,
                     "protective_recovery": protective_recovery,
+                    "expired_entry_orders": expired_entry_orders,
                     "reconciliation_refresh_required": protective_recovery.get("refresh_required", False),
                     "escalation_action": "halt_new_orders_until_naked_position_resolved" if protective_recovery.get("blocks_new_orders") else "",
                 }
                 self._write_order_recovery(scoped, run_date, report)
                 return report
+            recovered_ticket_ids = list(expired_entry_orders.get("expired_ticket_ids", []) or [])
+            recovered_orders = list(expired_entry_orders.get("orders", []) or [])
             report = {
                 "run_date": run_date,
                 "strategy_id": strategy.strategy_id,
-                "status": "clear",
-                "recovered_count": 0,
-                "recovered_ticket_ids": [],
+                "status": "recovered" if recovered_orders else "clear",
+                "recovered_count": len(recovered_ticket_ids),
+                "recovered_ticket_ids": recovered_ticket_ids,
+                "recovered_orders": recovered_orders,
                 "blocks_new_orders": False,
                 "block_reason": "",
                 "watchdog_blockers": watchdog_blockers,
                 "protective_recovery": protective_recovery,
+                "expired_entry_orders": expired_entry_orders,
             }
             self._write_order_recovery(scoped, run_date, report)
             return report
@@ -458,6 +508,7 @@ class MultiStrategyRunner:
                 "blocks_new_orders": True,
                 "block_reason": "demo order recovery has no broker adapter",
                 "watchdog_blockers": watchdog_blockers,
+                "expired_entry_orders": expired_entry_orders,
             }
             self._write_order_recovery(scoped, run_date, report)
             return report
@@ -469,6 +520,9 @@ class MultiStrategyRunner:
         recovered_ticket_ids.extend(protective_recovery.get("recovered_ticket_ids", []) or [])
         recovered_orders.extend(protective_recovery.get("recovered_orders", []) or [])
         errors.extend(protective_recovery.get("errors", []) or [])
+        recovered_ticket_ids.extend(expired_entry_orders.get("expired_ticket_ids", []) or [])
+        recovered_orders.extend(expired_entry_orders.get("orders", []) or [])
+        errors.extend(expired_entry_orders.get("errors", []) or [])
         for intent in intents:
             ticket_id = str(intent.get("ticket_id") or "")
             ticket = self._ticket_for_recovery(scoped, run_date, ticket_id)
@@ -518,11 +572,87 @@ class MultiStrategyRunner:
             "errors": errors,
             "watchdog_blockers": watchdog_blockers,
             "protective_recovery": protective_recovery,
+            "expired_entry_orders": expired_entry_orders,
             "reconciliation_refresh_required": protective_recovery.get("refresh_required", False),
             "escalation_action": "halt_new_orders_until_order_state_reconciled" if blocks_new_orders else "",
         }
         self._write_order_recovery(scoped, run_date, report)
         return report
+
+    def _expire_demo_entry_orders(self, strategy, scoped: Path, run_date: str, lifecycle_rows: list[dict]) -> dict:
+        store = OrderLifecycleStore(scoped)
+        expired_ticket_ids: list[str] = []
+        orders: list[dict] = []
+        errors: list[dict] = []
+        adapter = None
+        block_reason = ""
+        for lifecycle in lifecycle_rows:
+            if not isinstance(lifecycle, dict) or str(lifecycle.get("state") or "") != "accepted":
+                continue
+            ticket_id = str(lifecycle.get("ticket_id") or "")
+            ticket = self._ticket_for_recovery(scoped, run_date, ticket_id)
+            if str(ticket.get("order_type", "")).lower() != "limit":
+                continue
+            status = evaluate_limit_entry_status(ticket, load_entry_candles(scoped, run_date, ticket))
+            if status.get("status") != "expired":
+                continue
+            if adapter is None:
+                adapter = self._broker_adapter_for(strategy, scoped)
+            if adapter is None or not hasattr(adapter, "cancel_binance_order"):
+                reason = "expired demo limit order requires a broker adapter with cancel_binance_order"
+                block_reason = block_reason or reason
+                errors.append({"order_id": lifecycle.get("order_id"), "ticket_id": ticket_id, "error": reason, "expiry": status})
+                continue
+            try:
+                symbol = self._binance_symbol_for_adapter(adapter, ticket)
+                metadata = lifecycle.get("metadata") if isinstance(lifecycle.get("metadata"), dict) else {}
+                client_order_id = str(metadata.get("client_order_id") or lifecycle.get("idempotency_key") or "")
+                broker_order_id = str(metadata.get("broker_order_id") or "")
+                cancel_response = adapter.cancel_binance_order(
+                    symbol,
+                    orig_client_order_id=client_order_id,
+                    order_id=broker_order_id,
+                )
+                store.transition(
+                    run_date,
+                    str(lifecycle.get("order_id") or ""),
+                    "expired",
+                    reason="limit_entry_ttl_expired_cancelled",
+                    metadata={"expiry": status, "cancel_response": cancel_response},
+                )
+                paper_order = {
+                    "order_id": str(lifecycle.get("order_id") or ""),
+                    "ticket_id": ticket_id,
+                    "status": "expired",
+                    "requested_price": lifecycle.get("requested_price"),
+                    "fill_price": None,
+                    "quantity": lifecycle.get("requested_quantity"),
+                    "filled_at": "",
+                    "rejection_reason": status.get("reason") or "limit entry expired",
+                    "cancel_response": cancel_response,
+                }
+                self._record_recovered_journal_decision(scoped, run_date, ticket, paper_order)
+                expired_ticket_ids.append(ticket_id)
+                orders.append({"order_id": paper_order["order_id"], "ticket_id": ticket_id, "status": "expired", "state": "expired"})
+            except (OSError, TimeoutError, RuntimeError, ValueError, KeyError) as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                block_reason = block_reason or reason
+                errors.append({"order_id": lifecycle.get("order_id"), "ticket_id": ticket_id, "error": reason, "expiry": status})
+        return {
+            "status": "blocked" if errors else "expired" if expired_ticket_ids else "clear",
+            "expired_count": len(expired_ticket_ids),
+            "expired_ticket_ids": expired_ticket_ids,
+            "orders": orders,
+            "errors": errors,
+            "blocks_new_orders": bool(errors),
+            "block_reason": block_reason,
+        }
+
+    def _binance_symbol_for_adapter(self, adapter, ticket: dict) -> str:
+        symbol = str(ticket.get("asset") or "GOLD")
+        if hasattr(adapter, "_binance_symbol"):
+            return adapter._binance_symbol(symbol)
+        return symbol
 
     def _recover_unprotected_demo_positions(self, strategy, scoped: Path, run_date: str, lifecycle_rows: list[dict], reconciliation: dict) -> dict:
         if not reconciliation or not reconciliation.get("suspected_naked_position"):

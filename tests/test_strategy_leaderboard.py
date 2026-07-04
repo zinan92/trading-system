@@ -118,8 +118,9 @@ def test_leaderboard_includes_classification_and_daily_execution_status(tmp_path
     _namespace(root, "alpha", rd, starting=10000, current=10500, max_dd=-1.0, win_rate=0.6, gold_first=4500, gold_last=4545)
     _namespace(root, "beta", rd, starting=10000, current=9900, max_dd=-1.0, win_rate=0.6, gold_first=4500, gold_last=4545)
     write_json(root / "strategies" / "alpha" / "signals" / f"{rd}.json", [{"signal_id": "s1", "direction": "long"}])
-    write_json(root / "strategies" / "alpha" / "trade_tickets" / f"{rd}.json", [{"ticket_id": "t1"}, {"ticket_id": "t2"}])
-    write_json(root / "strategies" / "alpha" / "paper_orders" / f"{rd}.json", [{"ticket_id": "t1"}, {"ticket_id": "t2"}])
+    alpha_rows = [{"ticket_id": f"t{index}"} for index in range(1, 6)]
+    write_json(root / "strategies" / "alpha" / "trade_tickets" / f"{rd}.json", alpha_rows)
+    write_json(root / "strategies" / "alpha" / "paper_orders" / f"{rd}.json", alpha_rows)
     write_json(root / "strategies" / "beta" / "signals" / f"{rd}.json", [{"signal_id": "s1", "direction": "watch"}])
     write_json(root / "strategies" / "beta" / "paper_orders" / f"{rd}.json", [{"ticket_id": "only_one"}])
 
@@ -131,7 +132,7 @@ def test_leaderboard_includes_classification_and_daily_execution_status(tmp_path
     assert alpha["classification"]["family_label"] == "缠论"
     assert alpha["engine"] == "chan"
     assert alpha["timeframe"] == "1m"
-    assert alpha["daily_execution"]["executed_trade_count"] == 2
+    assert alpha["daily_execution"]["executed_trade_count"] == 5
     assert alpha["daily_execution"]["status"] == "effective"
     assert alpha["effective_today"] is True
     assert beta["classification"]["family"] == "momentum"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+from pathlib import Path
 from services.run_date import utc_run_date
 
 from services.binance_futures_feed import run_binance_usdm_feed_import
@@ -10,6 +11,7 @@ from services.broker_feed_bridge import BrokerFeedBridge
 from services.broker_receipts import BrokerReceiptImporter
 from services.completion_audit import CompletionAudit
 from services.data_health import run_data_health
+from services.decision_trace import DecisionTrace
 from services.data_source_lineage import DataSourceLineage
 from services.data_source_preflight import DataSourcePreflight
 from services.live_submission_safety import LiveSubmissionSafetySmoke
@@ -63,6 +65,7 @@ def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:
         elif not resolution["executed"] and not auto_gate.get("allow_auto_approve", False):
             execution_error = f"paper auto-approval gate blocks execution: {'; '.join(auto_gate.get('reasons', [])) or 'manual review required'}"
     stale_sweep = sweep_stale_pending(run_date, store=JournalStore()) if paper_auto_approve else {"closed": []}
+    decision_trace = _build_decision_trace(run_date, _output_root_from_paths(paths), "top_level")
     report_path = ReportBuilder().build_daily_report(run_date)
     review_path = report_path.parents[1] / "review_notes" / f"{run_date}.md"
     journal_path = report_path.parents[1] / "journals" / f"{run_date}.md"
@@ -86,6 +89,7 @@ def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:
         "decision": decision,
         "auto_resolution": resolution,
         "stale_pending_sweep": stale_sweep,
+        "decision_trace": decision_trace,
         "execution_error": execution_error,
         "report": str(report_path),
         "review_notes": str(review_path),
@@ -102,6 +106,30 @@ def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:
         "live_readiness": live_readiness,
         "data_health": data_health,
     }
+
+
+def _output_root_from_paths(paths: dict) -> Path:
+    pending_path = Path(paths.get("journal_pending", ""))
+    if pending_path.parent.name == "journal_pending":
+        return pending_path.parent.parent
+    return Path(JournalStore().output_root)
+
+
+def _build_decision_trace(run_date: str, output_root: Path, strategy_id: str) -> dict:
+    try:
+        rows = DecisionTrace(output_root).build(run_date, strategy_id)
+        return {
+            "status": "pass",
+            "record_count": len(rows),
+            "artifact": str(output_root / "decision_traces" / f"{run_date}.json"),
+        }
+    except Exception as exc:  # noqa: BLE001 - trace is observability and must not alter execution.
+        return {
+            "status": "error",
+            "record_count": 0,
+            "artifact": str(output_root / "decision_traces" / f"{run_date}.json"),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def main() -> None:

@@ -47,8 +47,8 @@ def test_executed_paper_blocks_daily_risk_cap(tmp_path: Path):
         "entry_zone": "4550-4590",
         "stop_loss": 4480,
         "targets": [4750],
-        "position_size_pct": 8,
-        "max_loss_pct": 0.5,
+        "position_size_pct": 50,
+        "max_loss_pct": 2.0,
         "order_type": "limit",
         "time_in_force": "day",
         "paper_only": True,
@@ -56,8 +56,9 @@ def test_executed_paper_blocks_daily_risk_cap(tmp_path: Path):
     write_json(root / "trade_tickets" / f"{run_date}.json", [ticket])
     write_json(root / "journal_pending" / f"{run_date}.json", [{**ticket, "journal_id": "j1", "decision_status": "pending_manual_decision"}])
     write_json(root / "journal_decisions" / f"{run_date}.json", [
-        {"ticket_id": "old1", "decision_status": "executed_paper", "paper_order": {"order_id": "p1"}, "risk_snapshot": {"max_loss_pct": 1.0}}
+        {"ticket_id": "old1", "decision_status": "executed_paper", "paper_order": {"order_id": "p1"}, "risk_snapshot": {"max_loss_pct": 3.0}}
     ])
+    write_json(root / "data_source_preflight" / f"{run_date}.json", [{"ready_for_paper": True, "ready_for_live": False}])
 
     with pytest.raises(ValueError, match="daily paper risk cap exceeded"):
         JournalStore(output_root=root).record_decision(run_date, ticket["ticket_id"], "executed_paper")

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>指挥台视觉方向对比 — Trading Orchestrator</title>
+<style>
+:root{--bg:#16181d;--ink:#e8eaed;--muted:#9aa3ad;--line:rgba(255,255,255,.12);--gold:#d8aa3f}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:28px}
+h1{font-size:19px;font-weight:700;margin-bottom:4px}
+.sub{color:var(--muted);font-size:12.5px;margin-bottom:24px}
+.variant{margin-bottom:40px}
+.vhead{display:flex;align-items:baseline;gap:14px;margin-bottom:10px}
+.vhead .tag{font-size:12px;font-weight:700;color:var(--gold);border:1px solid var(--gold);padding:2px 10px;border-radius:3px}
+.vhead h2{font-size:16px;font-weight:600}
+.vhead .desc{color:var(--muted);font-size:12.5px}
+.vhead .rec{margin-left:auto;font-size:11px;color:#35d07f;border:1px solid rgba(53,208,127,.45);padding:2px 10px;border-radius:20px}
+iframe{width:100%;height:960px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.note{border-top:1px solid var(--line);margin-top:8px;padding-top:20px;color:var(--muted);font-size:13px;max-width:900px}
+.note b{color:var(--ink)}
+</style>
+</head>
+<body>
+  <h1>指挥台 · 三个视觉方向对比</h1>
+  <p class="sub">同一内容骨架（裁决带 / 阻塞栈 / 决策漏斗 / 策略表 / 复盘条 + 真实策略名与闸门名），只有视觉语言不同。滚动对比，选定一个方向后全系统统一应用。</p>
+
+  <div class="variant">
+    <div class="vhead">
+      <span class="tag">A</span><h2>机构终端 Institutional Terminal</h2>
+      <span class="desc">近黑 · 发丝线分区 · 单一金色只给品牌 · 四态语义色 · Bloomberg 密度</span>
+      <span class="rec">总设计师推荐</span>
+    </div>
+    <iframe src="command-center-A-terminal.html"></iframe>
+  </div>
+
+  <div class="variant">
+    <div class="vhead">
+      <span class="tag">B</span><h2>金融纸面 Financial Paper</h2>
+      <span class="desc">暖纸底 · 墨色 · 衬线大数字 · 报刊双线 · FT 日报气质（ops 页基因的升级版）</span>
+    </div>
+    <iframe src="command-center-B-paper.html"></iframe>
+  </div>
+
+  <div class="variant">
+    <div class="vhead">
+      <span class="tag">C</span><h2>玻璃驾驶舱 Glass Cockpit</h2>
+      <span class="desc">冷灰蓝分层卡片 · 单一冷蓝强调 · 状态发光药丸 · Linear/Vercel 气质</span>
+    </div>
+    <iframe src="command-center-C-cockpit.html"></iframe>
+  </div>
+
+  <div class="note">
+    <p><b>为什么推荐 A：</b>与现有 dashboard-v4 的暗色基因延续性最强（迁移成本最低）；把 v4 的六种强调色收敛为「一金 + 四态」，信息密度不降反升；无阴影无渐变的纯平面在 8 小时盯盘下最不疲劳。<b>B</b> 适合每天只看一次的「日报型」使用习惯；<b>C</b> 最现代但玻璃质感在高密度表格下会产生视觉噪音。三个方向的 token 都写在各自文件头部注释里，选定后由 Codex 全系统铺开。</p>
+  </div>
+</body>
+</html>

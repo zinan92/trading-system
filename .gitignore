@@ -30,3 +30,4 @@ $CODEX_HOME/
 *.db-shm
 *.db-wal
 *.db-journal
+.gstack/

@@ -358,7 +358,7 @@ class TradeTicketNotifier:
             "title": f"黄金开单 · {title_suffix}",
             "header_template": header_template,
             "subtitle": f"{ticket.get('asset', '')} {self._action_label(ticket)}　·　{regime_label}　·　今日第 {sequence}/{total} 张",
-            "approval": "",
+            "approval": approval,
             "account": badge,
             "flow": flow,
             "flow_terminal": terminal,
@@ -446,6 +446,8 @@ class TradeTicketNotifier:
             return "已进入 demo 流程：必须确认保护单已覆盖整笔仓位"
         if paper_order:
             return "纸面已成交：未进入 demo/live"
+        if pending and pending.get("decision_status") == "pending_entry_order":
+            return "限价单等待触价：未触价或过期前不执行"
         if pending or ticket.get("manual_execution_required", True):
             return "等待人工确认：先完成过滤与风险核对"
         return "等待审查：尚未进入订单执行"
@@ -753,6 +755,7 @@ class TradeTicketNotifier:
             "partial": "部分完成",
             "decided": "已决策",
             "pending_manual_decision": "等待人工确认",
+            "pending_entry_order": "限价单等待触价",
             "executed_paper": "已执行纸面订单",
             "executed": "已执行",
             "skipped": "已跳过",
@@ -788,6 +791,7 @@ class TradeTicketNotifier:
             "london_ny_compression_breakout": "伦敦/纽约收敛突破",
             "ny_opening_range_breakout": "纽约开盘区间突破",
             "vwap_extension_reversion": "VWAP 乖离回归",
+            "vwap_trend_pullback": "VWAP 趋势回踩",
             "range_breakout": "区间突破",
             "breakout": "突破",
             "chan_first_buy": "缠论一买",
