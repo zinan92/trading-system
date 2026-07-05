@@ -75,6 +75,30 @@ trials, and fail-closed invalidation when evidence is thin or corrupted.
   conservative bounded causal rolling window for indicator warmup. This avoids
   full-history recomputation while keeping replay deterministic and aligned
   with live engines seeing finite candle buffers.
+- R3 ran on a moving local SQLite backfill during the session; unfrozen reruns
+  can change only `data_range` as fresh 1m bars arrive. Determinism was verified
+  by freezing `--end 2026-07-05T02:22:00+00:00`; two fixed-input R3 runs
+  produced the same scrubbed artifact hash
+  `9f75b0c0053e926a06ee6a8a02a168702506c137ff587fd53773d7dcb037b4c9`.
+- R3 recommended the R2 primary-label horizon from the selected gross/risk cell:
+  `gold_5m_psych_level_rejection`, hold `8x`, stop/target scale `1.0x`, horizon
+  `960` minutes.
+- R2 features use causal rolling regime proxies (`causal_regime_vol`,
+  `causal_regime_trend`) instead of precomputed E3 regime labels. Full-sample E3
+  buckets would introduce avoidable lookahead risk into model features.
+- R2 `gbt_depth3` is fixed to a light triage configuration
+  (`n_estimators=24`, `max_depth=3`, `max_features="sqrt"`, `subsample=0.8`,
+  seeded) because full calibrated GBT sweeps were the wall-clock bottleneck. The
+  spec pins depth and determinism, not tree count.
+- Historical chan live signal records reference
+  `outputs/clean_bars/YYYY-MM-DD/GOLD_1m.json` source artifacts that are no
+  longer present locally. R2 therefore reports chan parity as
+  `source_artifacts_missing` instead of claiming a match from reconstructed
+  SQLite bars.
+- The chan engine's fast `historical_signals` path remains noncausal per its own
+  docstring, and the true causal detector is too slow for the 296k-bar lab range.
+  R2 registers all four chan-family addendum trials as `not_replayable` with an
+  explicit bounded-replay reason rather than using the noncausal fast path.
 
 ## Backfill Safety
 

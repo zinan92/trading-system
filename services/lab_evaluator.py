@@ -241,9 +241,12 @@ def simulate_trades(bars: list[Bar], signals: list[dict], config: LabSimulationC
             continue
         side = 1 if direction == "long" else -1
         quantity = config.fixed_notional / entry_price
-        stop = entry_price * (1 - config.stop_pct) if side == 1 else entry_price * (1 + config.stop_pct)
-        target = entry_price * (1 + config.target_pct) if side == 1 else entry_price * (1 - config.target_pct)
-        exit_index, exit_price, reason = _exit(bars, entry_index, entry_price, stop, target, side, config.max_hold_bars)
+        stop_pct = float(raw.get("stop_pct", config.stop_pct))
+        target_pct = float(raw.get("target_pct", config.target_pct))
+        max_hold_bars = int(raw.get("max_hold_bars", config.max_hold_bars))
+        stop = entry_price * (1 - stop_pct) if side == 1 else entry_price * (1 + stop_pct)
+        target = entry_price * (1 + target_pct) if side == 1 else entry_price * (1 - target_pct)
+        exit_index, exit_price, reason = _exit(bars, entry_index, entry_price, stop, target, side, max_hold_bars)
         gross = (exit_price - entry_price) * quantity * side
         entry_cost = config.fixed_notional * config.cost_bp_per_side / 10_000
         exit_cost = abs(exit_price * quantity) * config.cost_bp_per_side / 10_000
@@ -261,6 +264,9 @@ def simulate_trades(bars: list[Bar], signals: list[dict], config: LabSimulationC
             "entry_price": round(entry_price, 6),
             "exit_price": round(exit_price, 6),
             "exit_reason": reason,
+            "stop_pct": round(stop_pct, 8),
+            "target_pct": round(target_pct, 8),
+            "max_hold_bars": max_hold_bars,
             "quantity": round(quantity, 8),
             "fixed_notional": round(config.fixed_notional, 4),
             "gross_pnl": round(gross, 6),

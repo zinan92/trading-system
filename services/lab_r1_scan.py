@@ -215,11 +215,21 @@ def _replay_strategy_windows(strategy: Strategy, bars: list[Bar], walkforward: W
     return {"status": "valid", "reason": "pass", "windows": replayed, "replay": first_summary}
 
 
-def _evaluate_replayed_windows(windows: list[dict], bp: float) -> dict:
+def _evaluate_replayed_windows(windows: list[dict], bp: float, simulation: LabSimulationConfig | None = None) -> dict:
+    base_cfg = simulation or LabSimulationConfig()
+    cfg = LabSimulationConfig(
+        stop_pct=base_cfg.stop_pct,
+        target_pct=base_cfg.target_pct,
+        max_hold_bars=base_cfg.max_hold_bars,
+        starting_equity=base_cfg.starting_equity,
+        fixed_notional=base_cfg.fixed_notional,
+        cost_bp_per_side=bp,
+        maker_limit_entry=base_cfg.maker_limit_entry,
+    )
     all_trades: list[dict] = []
     invalid_reasons: list[str] = []
     for replay in windows:
-        result = evaluate_signals(replay["bars"], replay["signals"], LabSimulationConfig(cost_bp_per_side=bp))
+        result = evaluate_signals(replay["bars"], replay["signals"], cfg)
         if result.get("status") == "valid":
             all_trades.extend(result["trades"])
         else:
@@ -227,7 +237,7 @@ def _evaluate_replayed_windows(windows: list[dict], bp: float) -> dict:
     if not all_trades:
         return {"status": "invalid", "reason": ",".join(sorted(set(invalid_reasons))) or "zero_trades", "window_count": len(windows)}
     equity = equity_curve(all_trades, 10_000)
-    metrics = metrics_from_trades(all_trades, equity, LabSimulationConfig(cost_bp_per_side=bp))
+    metrics = metrics_from_trades(all_trades, equity, cfg)
     return {
         "status": "valid" if not invalid_reasons else "invalid",
         "reason": "pass" if not invalid_reasons else ",".join(sorted(set(invalid_reasons))),

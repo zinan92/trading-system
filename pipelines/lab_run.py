@@ -18,7 +18,9 @@ from services.lab_evaluator import (
 )
 from services.lab_objective import ObjectiveConfig, evaluate_objective
 from services.lab_promotion import record_paper_eligibility
+from services.lab_r2_experiment import run_r2_experiment
 from services.lab_r1_scan import R1ScanConfig, run_r1_scan
+from services.lab_r3_sweep import R3SweepConfig, run_r3_sweep
 from services.lab_regimes import build_coverage_report, label_regimes, write_regime_artifact
 from services.lab_registry import LabRegistry
 from services.lab_walkforward import HoldoutQuarantine, WalkForwardConfig, build_windows, load_gold_1m_bars
@@ -59,7 +61,7 @@ def main() -> None:
     compare.add_argument("left")
     compare.add_argument("right")
     run = sub.add_parser("run")
-    run.add_argument("experiment", choices=["coverage", "e1", "e2", "e3", "e4", "r1", "all"])
+    run.add_argument("experiment", choices=["coverage", "e1", "e2", "e3", "e4", "r1", "r2", "r3", "all"])
     run.add_argument("--start", default="")
     run.add_argument("--end", default="")
     args = parser.parse_args()
@@ -96,6 +98,16 @@ def main() -> None:
             config=R1ScanConfig(cost_grid=tuple(COST_GRID), maker_bp=BINANCE_REALITY["maker_bp"], taker_bp=BINANCE_REALITY["taker_bp"]),
             anchor_expected=R1_ANCHOR_EXPECTED,
         )
+    if args.experiment == "r3":
+        run_r3_sweep(
+            output_root,
+            registry,
+            bars,
+            config=R3SweepConfig(cost_grid=tuple(COST_GRID), maker_bp=BINANCE_REALITY["maker_bp"]),
+            anchor_expected=R1_ANCHOR_EXPECTED,
+        )
+    if args.experiment == "r2":
+        run_r2_experiment(output_root, registry, bars, horizon_minutes=_r3_horizon_minutes(output_root))
 
 
 def _run_e1(output_root: Path, registry: LabRegistry, bars: list) -> dict:
@@ -432,6 +444,13 @@ def _paths() -> tuple[Path, Path]:
     output_root = Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
     return output_root, market_db
+
+
+def _r3_horizon_minutes(output_root: Path) -> int:
+    rows = load_json(output_root / "lab" / "reports" / "R3_hold_sweep.json")
+    if not rows:
+        return 240
+    return int(rows[0].get("recommendation", {}).get("horizon_minutes") or 240)
 
 
 def _now() -> str:
