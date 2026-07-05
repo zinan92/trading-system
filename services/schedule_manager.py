@@ -43,6 +43,7 @@ class ScheduleManager:
             self._daily_review_job(log_dir, review_hour, review_minute),
             self._dashboard_job(log_dir, dashboard_port),
             self._strategies_job(log_dir),
+            self._dualtrack_cycle_job(log_dir),
             self._deadman_ping_job(log_dir),
         ]
         for job in jobs:
@@ -129,6 +130,15 @@ class ScheduleManager:
             [self.strategies_python, "-m", "pipelines.strategies", "--paper-auto-approve"],
             log_dir,
             extra={"StartInterval": 300, "RunAtLoad": True},
+        )
+
+    def _dualtrack_cycle_job(self, log_dir: Path) -> dict:
+        label = "com.wendy.trading-orchestrator.dualtrack-cycle"
+        return self._base_job(
+            label,
+            [self.python, "-m", "pipelines.dualtrack_cycle_runner", "--event", "auto"],
+            log_dir,
+            extra={"StartInterval": 60, "RunAtLoad": True},
         )
 
     def _dashboard_job(self, log_dir: Path, port: int) -> dict:

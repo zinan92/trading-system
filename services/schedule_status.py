@@ -34,6 +34,7 @@ class ScheduleStatus:
             "com.wendy.trading-orchestrator.daily-review",
             "com.wendy.trading-orchestrator.dashboard",
             "com.wendy.trading-orchestrator.strategies",
+            "com.wendy.trading-orchestrator.dualtrack-cycle",
             "com.wendy.trading-orchestrator.deadman-ping",
         }
         present = {job.get("label") for job in jobs}

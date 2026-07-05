@@ -10,10 +10,19 @@ from services.journal_store import load_json, write_json
 
 
 def _plan(cycle_id: str = "2026-07-05_DAY", direction: str = "long") -> dict:
+    if direction == "short":
+        return {
+            "cycle_id": cycle_id,
+            "direction": direction,
+            "range": {"low": 4148.0, "high": 4210.0},
+            "key_levels": [4168.0, 4180.0, 4200.0],
+            "invalidation": [{"side": "above", "price": 4210.0, "confirm": "close_1m"}],
+            "confidence": 7,
+        }
     return {
         "cycle_id": cycle_id,
         "direction": direction,
-        "range": {"low": 4150.0, "high": 4210.0},
+        "range": {"low": 4148.0, "high": 4210.0},
         "key_levels": [4168.0, 4180.0, 4200.0],
         "invalidation": [{"side": "below", "price": 4148.0, "confirm": "close_1m"}],
         "confidence": 7,

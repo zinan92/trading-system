@@ -30,7 +30,7 @@ def _plan(cycle_id: str = "2026-07-05_DAY") -> dict:
     return {
         "cycle_id": cycle_id,
         "direction": "long",
-        "range": {"low": 3950.0, "high": 4050.0},
+        "range": {"low": 3940.0, "high": 4050.0},
         "key_levels": [3992.0],
         "invalidation": [{"side": "below", "price": 3940.0, "confirm": "touch"}],
         "confidence": 7,

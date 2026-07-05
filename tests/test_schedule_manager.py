@@ -23,6 +23,7 @@ def test_schedule_manager_generates_launch_agent_artifacts(tmp_path: Path):
         "com.wendy.trading-orchestrator.daily-review",
         "com.wendy.trading-orchestrator.dashboard",
         "com.wendy.trading-orchestrator.strategies",
+        "com.wendy.trading-orchestrator.dualtrack-cycle",
         "com.wendy.trading-orchestrator.deadman-ping",
     }
     assert result["status"] == "generated"
@@ -75,6 +76,14 @@ def test_schedule_manager_generates_launch_agent_artifacts(tmp_path: Path):
     assert "--paper-auto-approve" in strategies["ProgramArguments"]
     assert strategies["EnvironmentVariables"]["TZ"] == "UTC"
 
+    dualtrack_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.dualtrack-cycle.plist"
+    with dualtrack_plist.open("rb") as handle:
+        dualtrack = plistlib.load(handle)
+    assert dualtrack["StartInterval"] == 60
+    assert dualtrack["RunAtLoad"] is True
+    assert dualtrack["ProgramArguments"] == ["python3", "-m", "pipelines.dualtrack_cycle_runner", "--event", "auto"]
+    assert dualtrack["EnvironmentVariables"]["TRADING_ORCHESTRATOR_MARKET_DB"].endswith("data/market_data.db")
+
 
 def test_strategies_job_uses_dedicated_python_others_unchanged(tmp_path: Path, monkeypatch):
     """The chan strategy needs Python >= 3.11 + pandas, so the strategies job
@@ -98,6 +107,7 @@ def test_strategies_job_uses_dedicated_python_others_unchanged(tmp_path: Path, m
         "com.wendy.trading-orchestrator.evening-review",
         "com.wendy.trading-orchestrator.daily-review",
         "com.wendy.trading-orchestrator.dashboard",
+        "com.wendy.trading-orchestrator.dualtrack-cycle",
         "com.wendy.trading-orchestrator.deadman-ping",
     ):
         assert plists[label]["ProgramArguments"][0] == "python3"
@@ -140,8 +150,8 @@ def test_schedule_status_detects_installed_and_loaded_jobs(tmp_path: Path):
     ).run("2026-05-26")
 
     assert result["status"] == "active"
-    assert result["installed_count"] == 7
-    assert result["loaded_count"] == 7
+    assert result["installed_count"] == 8
+    assert result["loaded_count"] == 8
     assert all(job["matches_generated"] for job in result["jobs"])
 
 
@@ -160,8 +170,8 @@ def test_schedule_installer_copies_plists_and_records_receipt(tmp_path: Path):
     result = ScheduleInstaller(root, launch_agents, fake_runner).install("2026-05-26")
 
     assert result["status"] == "active"
-    assert result["schedule_status"]["loaded_count"] == 7
-    assert len(list(launch_agents.glob("com.wendy.trading-orchestrator.*.plist"))) == 7
+    assert result["schedule_status"]["loaded_count"] == 8
+    assert len(list(launch_agents.glob("com.wendy.trading-orchestrator.*.plist"))) == 8
     assert load_json(root / "schedules" / "install_current.json")[0]["status"] == "active"
     assert all(job["status"] == "installed" for job in result["jobs"])
 

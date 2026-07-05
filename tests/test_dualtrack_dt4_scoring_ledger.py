@@ -26,12 +26,19 @@ def _bars(start: datetime, closes: list[float]) -> list[Bar]:
 
 
 def _plan(cycle_id: str, direction: str) -> dict:
+    plan_range = {"low": 3950.0, "high": 4050.0}
+    invalidation_price = 3940.0
+    if direction == "long":
+        plan_range = {"low": 3940.0, "high": 4050.0}
+    elif direction == "short":
+        plan_range = {"low": 3950.0, "high": 4060.0}
+        invalidation_price = 4060.0
     return {
         "cycle_id": cycle_id,
         "direction": direction,
-        "range": {"low": 3950.0, "high": 4050.0},
+        "range": plan_range,
         "key_levels": [3992.0],
-        "invalidation": [{"side": "below" if direction != "short" else "above", "price": 3940.0 if direction != "short" else 4060.0, "confirm": "touch"}],
+        "invalidation": [{"side": "below" if direction != "short" else "above", "price": invalidation_price, "confirm": "touch"}],
         "confidence": 7,
     }
 

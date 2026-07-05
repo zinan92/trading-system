@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from schemas.market_data import Bar
+from services.dualtrack_config import base_rung_notional
+from services.dualtrack_grid_core import simulate_conditional_grid
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_store import DualTrackPlanStore
 from services.lab_r5_grid import Cycle
@@ -27,6 +29,8 @@ TEST_CONFIG = {
     "census": {"reversal_bp": 10, "min_run_pct": 0.3},
     "weekly_target_usd": [1000, 1500],
 }
+
+
 def _bar(ts: datetime, o: float, h: float, low: float, c: float) -> Bar:
     return Bar(symbol="GOLD", timeframe="1m", timestamp=ts.isoformat(), open=o, high=h, low=low, close=c, volume=1, provider="test")
 
@@ -41,13 +45,13 @@ def _cycle(cycle_id: str, closes: list[float], prev_range: float = 40.0) -> Cycl
     return Cycle(cycle_id=cycle_id, kind="DAY", bars=tuple(bars), prev_range=prev_range)
 
 
-def _plan(cycle_id: str, direction: str = "long") -> dict:
+def _plan(cycle_id: str, direction: str = "long", *, floor: float = 3960.0) -> dict:
     return {
         "cycle_id": cycle_id,
         "direction": direction,
-        "range": {"low": 3950.0, "high": 4050.0},
+        "range": {"low": floor, "high": 4050.0},
         "key_levels": [3992.0],
-        "invalidation": [{"side": "below", "price": 3960.0, "confirm": "touch"}],
+        "invalidation": [{"side": "below", "price": floor, "confirm": "touch"}],
         "confidence": 7,
     }
 
@@ -55,18 +59,19 @@ def _plan(cycle_id: str, direction: str = "long") -> dict:
 def test_acceptance_7_5_runner_matches_frozen_golden_on_three_cycles(tmp_path: Path) -> None:
     runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
     cycles = [
-        _cycle("golden_oscillation_DAY", [4000.0] + [3990.0, 4001.0] * 4),
-        _cycle("golden_stop_DAY", [4000.0, 3995.0, 3985.0, 3970.0, 3950.0, 3940.0]),
-        _cycle("golden_rearm_DAY", [4000.0, 3985.0, 3955.0, 3946.0, 3956.0, 3946.0, 3956.0, 3946.0, 3956.0]),
+        (_cycle("golden_oscillation_DAY", [4000.0] + [3990.0, 4001.0] * 4), _plan("golden_oscillation_DAY")),
+        (_cycle("golden_stop_DAY", [4000.0, 3995.0, 3985.0, 3970.0, 3950.0, 3940.0]), _plan("golden_stop_DAY")),
+        (_cycle("golden_rearm_DAY", [4000.0, 3985.0, 3955.0, 3946.0, 3956.0, 3946.0, 3956.0, 3946.0, 3956.0]), _plan("golden_rearm_DAY")),
+        (_cycle("golden_tight_floor_DAY", [4000.0, 3990.0, 3970.0], prev_range=100.0), _plan("golden_tight_floor_DAY", floor=3976.0)),
     ]
     fixture = json.loads((Path(__file__).parent / "fixtures" / "dualtrack_machine_golden.json").read_text(encoding="utf-8"))
 
     saw_stop = False
     saw_rearm = False
-    for cycle in cycles:
+    for cycle, plan in cycles:
         state = runner.run_plan(
             cycle.cycle_id,
-            _plan(cycle.cycle_id),
+            plan,
             cycle.bars,
             prev_range=cycle.prev_range,
             trend_gate_armed=False,
@@ -92,6 +97,114 @@ def test_acceptance_7_5_runner_matches_frozen_golden_on_three_cycles(tmp_path: P
         saw_rearm = saw_rearm or state["rearms"] == 1
     assert saw_stop is True
     assert saw_rearm is True
+
+
+def test_dt8_grid_floor_uses_plan_stop_as_bottom_and_stop_pnl_is_non_positive(tmp_path: Path) -> None:
+    runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
+    cycle = _cycle("2026-07-05_DAY", [4000.0, 3990.0, 3970.0], prev_range=100.0)
+    floor = 3976.0
+
+    state = runner.run_plan(
+        cycle.cycle_id,
+        _plan(cycle.cycle_id, floor=floor),
+        cycle.bars,
+        prev_range=cycle.prev_range,
+        trend_gate_armed=False,
+    )
+    fills_path = tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle.cycle_id}_machine.json"
+    fills = json.loads(fills_path.read_text(encoding="utf-8"))
+    entries = [fill for fill in fills if fill["event"] == "entry"]
+    stops = [fill for fill in fills if fill["event"] == "stop"]
+
+    assert state["stop_hit"] is True
+    assert entries
+    assert stops
+    assert min(float(fill["price"]) for fill in entries) >= floor
+    assert any(float(fill["price"]) == floor for fill in entries)
+    assert all(float(fill["realized_pnl"]) <= 0 for fill in stops)
+
+
+def test_dt8_machine_fixed_per_rung_sizing_tight_floor_deploys_less(tmp_path: Path) -> None:
+    runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
+    base = base_rung_notional(TEST_CONFIG)
+    tight = _cycle("2026-07-05_DAY", [4000.0, 3970.0], prev_range=100.0)
+    wide = _cycle("2026-07-05_NIGHT", [4000.0, 3910.0], prev_range=100.0)
+
+    runner.run_plan(
+        tight.cycle_id,
+        _plan(tight.cycle_id, floor=3980.0),
+        tight.bars,
+        prev_range=tight.prev_range,
+        trend_gate_armed=False,
+    )
+    tight_fills_path = tmp_path / "outputs" / "dualtrack" / "fills" / f"{tight.cycle_id}_machine.json"
+    tight_fills = json.loads(tight_fills_path.read_text(encoding="utf-8"))
+    tight_entries = [fill for fill in tight_fills if fill["event"] == "entry"]
+
+    runner.run_plan(
+        wide.cycle_id,
+        _plan(wide.cycle_id, floor=3920.0),
+        wide.bars,
+        prev_range=wide.prev_range,
+        trend_gate_armed=False,
+    )
+    wide_fills_path = tmp_path / "outputs" / "dualtrack" / "fills" / f"{wide.cycle_id}_machine.json"
+    wide_fills = json.loads(wide_fills_path.read_text(encoding="utf-8"))
+    wide_entries = [fill for fill in wide_fills if fill["event"] == "entry"]
+
+    assert len(tight_entries) < len(wide_entries)
+    assert {float(fill["notional"]) for fill in tight_entries} == {base}
+    assert {float(fill["notional"]) for fill in wide_entries} == {base}
+    assert sum(float(fill["notional"]) for fill in tight_entries) < sum(float(fill["notional"]) for fill in wide_entries)
+
+    runner.run_plan(
+        tight.cycle_id,
+        _plan(tight.cycle_id, floor=3980.0),
+        tight.bars,
+        prev_range=tight.prev_range,
+        trend_gate_armed=True,
+    )
+    armed_fills = json.loads(tight_fills_path.read_text(encoding="utf-8"))
+    grid_entries = [fill for fill in armed_fills if fill["event"] == "entry" and fill["layer"] == "grid"]
+    trend_entries = [fill for fill in armed_fills if fill["event"] == "entry" and fill["layer"] == "trend"]
+
+    assert {float(fill["notional"]) for fill in grid_entries} == {base}
+    assert {float(fill["notional"]) for fill in trend_entries} == {
+        base * float(TEST_CONFIG["grid"]["trend_leg_budget_pct"]) / 100.0
+    }
+
+
+def test_lab_stop_none_path_still_uses_range_k_prev_range_geometry() -> None:
+    cycle = _cycle("lab_stop_none_DAY", [4000.0, 3920.0], prev_range=80.0)
+
+    result = simulate_conditional_grid(
+        cycle_id=cycle.cycle_id,
+        bars=cycle.bars,
+        direction=1,
+        prev_range=cycle.prev_range,
+        spacing_bp=20.0,
+        range_k=1.0,
+        rung_notional=1000.0,
+        max_rungs=10,
+        cost_per_side_bp=0.5,
+        re_arm_max=0,
+        budget_sizing=False,
+        stop=None,
+    )
+    entry_prices = [fill["price"] for fill in result.fills if fill["event"] == "entry"]
+
+    assert entry_prices == [
+        3992.0,
+        3984.0,
+        3976.0,
+        3968.0,
+        3960.0,
+        3952.0,
+        3944.0,
+        3936.0,
+        3928.0,
+        3920.0,
+    ]
 
 
 def test_invariant_3_no_effective_plan_fail_closed_machine_stands_down(tmp_path: Path) -> None:

@@ -20,6 +20,9 @@ class DualTrackScorer:
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
 
     def close_cycle(self, cycle_id: str, bars: Iterable[Bar]) -> dict[str, Any]:
+        existing_attribution = load_json(self.root / "attribution" / f"{cycle_id}.json")
+        if existing_attribution:
+            return existing_attribution[-1]
         rows = tuple(bars)
         if not rows:
             raise ValueError("bars are required")

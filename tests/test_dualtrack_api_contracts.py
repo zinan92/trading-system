@@ -13,10 +13,19 @@ from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
 def _plan(cycle_id: str = "2026-07-05_DAY", direction: str = "long") -> dict:
+    if direction == "short":
+        return {
+            "cycle_id": cycle_id,
+            "direction": direction,
+            "range": {"low": 3950.0, "high": 4060.0},
+            "key_levels": [3992.0],
+            "invalidation": [{"side": "above", "price": 4060.0, "confirm": "touch"}],
+            "confidence": 7,
+        }
     return {
         "cycle_id": cycle_id,
         "direction": direction,
-        "range": {"low": 3950.0, "high": 4050.0},
+        "range": {"low": 3940.0, "high": 4050.0},
         "key_levels": [3992.0],
         "invalidation": [{"side": "below", "price": 3940.0, "confirm": "touch"}],
         "confidence": 7,

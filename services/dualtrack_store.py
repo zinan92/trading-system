@@ -138,11 +138,17 @@ class DualTrackPlanStore:
         invalidation = _invalidation_from_market_view(view, low=low, high=high, direction=direction)
         score = view.get("direction_score")
         confidence = None if score is None else max(1, min(10, round(float(score) / 10)))
+        if direction == "long":
+            plan_range = {"low": _matching_invalidation_price(invalidation, "below") or low, "high": None}
+        elif direction == "short":
+            plan_range = {"low": None, "high": _matching_invalidation_price(invalidation, "above") or high}
+        else:
+            plan_range = {"low": None, "high": None}
         return {
             "cycle_id": cycle_id,
             "author": "ai",
             "direction": direction,
-            "range": {"low": low, "high": high},
+            "range": plan_range,
             "key_levels": key_levels,
             "invalidation": invalidation,
             "confidence": confidence,
@@ -176,17 +182,12 @@ def validate_plan(
     direction = str(payload.get("direction") or "").lower()
     if direction not in PLAN_DIRECTIONS:
         raise ValueError("direction must be long, short, or flat")
-    range_payload = payload.get("range") or {}
-    low = _required_float(range_payload.get("low"), "range.low")
-    high = _required_float(range_payload.get("high"), "range.high")
-    if low >= high:
-        raise ValueError("range.low must be below range.high")
-    key_levels = _float_list(payload.get("key_levels"))
-    if not key_levels:
-        raise ValueError("key_levels must contain at least one price")
     invalidation = [_normalize_invalidation(row) for row in (payload.get("invalidation") or [])]
-    if not invalidation:
-        raise ValueError("invalidation must contain at least one structured condition")
+    range_payload = payload.get("range") if isinstance(payload.get("range"), dict) else {}
+    key_levels = _float_list(payload.get("key_levels"))
+    low, high = _normalize_range(direction, range_payload, invalidation)
+    if direction in {"long", "short"} and not key_levels:
+        raise ValueError("key_levels must contain at least one price")
     confidence = payload.get("confidence")
     if confidence is not None:
         confidence = int(confidence)
@@ -205,6 +206,41 @@ def validate_plan(
         "source": str(payload.get("source") or ("console" if author == "human" else "obsidian")),
         "status": status,
     }
+
+
+def _normalize_range(direction: str, range_payload: dict[str, Any], invalidation: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    if direction == "flat":
+        return None, None
+    if not invalidation:
+        raise ValueError("directional plans require at least one structured invalidation condition")
+    low = _optional_float(range_payload.get("low"), "range.low")
+    high = _optional_float(range_payload.get("high"), "range.high")
+    if low is not None and high is not None and low >= high:
+        raise ValueError("range.low must be below range.high")
+    if direction == "long":
+        floor = _matching_invalidation_price(invalidation, "below")
+        if floor is None:
+            raise ValueError("long plans require a below invalidation floor")
+        if low is not None and not _same_price(low, floor):
+            raise ValueError("range.low must match the below invalidation floor")
+        return floor, high
+    ceiling = _matching_invalidation_price(invalidation, "above")
+    if ceiling is None:
+        raise ValueError("short plans require an above invalidation ceiling")
+    if high is not None and not _same_price(high, ceiling):
+        raise ValueError("range.high must match the above invalidation ceiling")
+    return low, ceiling
+
+
+def _matching_invalidation_price(invalidation: list[dict[str, Any]], side: str) -> float | None:
+    for row in invalidation:
+        if row.get("side") == side:
+            return float(row["price"])
+    return None
+
+
+def _same_price(left: float, right: float) -> bool:
+    return abs(float(left) - float(right)) < 1e-8
 
 
 def _normalize_invalidation(row: Any) -> dict[str, Any]:
@@ -271,6 +307,12 @@ def _required_float(value: Any, field: str) -> float:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be a number") from exc
+
+
+def _optional_float(value: Any, field: str) -> float | None:
+    if value is None or value == "":
+        return None
+    return _required_float(value, field)
 
 
 def _now() -> datetime:

@@ -50,15 +50,20 @@ def simulate_conditional_grid(
         return _idle()
     anchor = float(rows[0].open)
     spacing = anchor * float(spacing_bp) / 10_000.0
-    half_width = float(range_k) * float(prev_range)
+    sign = 1 if direction > 0 else -1
+    plan_stop = _normalize_plan_stop(stop, sign)
+    half_width = abs(anchor - plan_stop.price) if plan_stop else float(range_k) * float(prev_range)
     n_rungs = min(int(max_rungs), int(half_width / spacing)) if spacing > 0 else 0
     if n_rungs < 1:
         return _idle()
     effective_notional = (float(max_rungs) * float(rung_notional) / n_rungs) if budget_sizing else float(rung_notional)
 
-    sign = 1 if direction > 0 else -1
-    levels = _levels(anchor, sign, spacing, n_rungs)
-    active_stop = stop or GridStop(side="below" if sign > 0 else "above", price=anchor - sign * half_width)
+    active_stop = plan_stop or GridStop(side="below" if sign > 0 else "above", price=anchor - sign * half_width)
+    levels = (
+        _levels_to_stop(anchor, sign, spacing, n_rungs, active_stop.price)
+        if plan_stop
+        else _levels(anchor, sign, spacing, n_rungs)
+    )
     holding: dict[int, int] = {}
     fills: list[dict[str, Any]] = []
     gross_pnl = 0.0
@@ -105,8 +110,12 @@ def simulate_conditional_grid(
             if rearms < int(re_arm_max):
                 rearms += 1
                 re_anchor = float(bar.close)
-                levels = _levels(re_anchor, sign, spacing, n_rungs)
                 active_stop = GridStop(side="below" if sign > 0 else "above", price=re_anchor - sign * half_width)
+                levels = (
+                    _levels_to_stop(re_anchor, sign, spacing, n_rungs, active_stop.price)
+                    if plan_stop
+                    else _levels(re_anchor, sign, spacing, n_rungs)
+                )
                 continue
             break
         for rung in list(holding):
@@ -193,6 +202,23 @@ def _fill(
 
 def _levels(anchor: float, sign: int, spacing: float, n_rungs: int) -> list[float]:
     return [anchor - sign * spacing * (i + 1) for i in range(n_rungs)]
+
+
+def _levels_to_stop(anchor: float, sign: int, spacing: float, n_rungs: int, stop_price: float) -> list[float]:
+    levels = [anchor - sign * spacing * (i + 1) for i in range(max(0, n_rungs - 1))]
+    levels.append(float(stop_price))
+    if sign > 0:
+        return [level for level in levels if level >= float(stop_price)]
+    return [level for level in levels if level <= float(stop_price)]
+
+
+def _normalize_plan_stop(stop: GridStop | None, sign: int) -> GridStop | None:
+    if stop is None:
+        return None
+    expected_side = "below" if sign > 0 else "above"
+    if stop.side != expected_side:
+        return None
+    return stop
 
 
 def _breached(bar: Bar, stop: GridStop) -> bool:

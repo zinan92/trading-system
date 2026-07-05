@@ -65,7 +65,7 @@ class DualTrackMachineRunner:
             cost_per_side_bp=float(self.config["cost_per_side_bp"]),
             tp_mult=float(grid["tp_mult_base"]),
             re_arm_max=int(grid["re_arm_max"]),
-            budget_sizing=True,
+            budget_sizing=False,
             layer="grid",
             stop=stop,
         )
@@ -85,7 +85,7 @@ class DualTrackMachineRunner:
                 cost_per_side_bp=float(self.config["cost_per_side_bp"]),
                 tp_mult=float(grid["tp_mult_trend"]),
                 re_arm_max=int(grid["re_arm_max"]),
-                budget_sizing=True,
+                budget_sizing=False,
                 layer="trend",
                 stop=stop,
             )
