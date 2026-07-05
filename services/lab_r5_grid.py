@@ -38,6 +38,7 @@ from statistics import mean, median
 from typing import Any
 
 from schemas.market_data import Bar
+from services.dualtrack_grid_core import simulate_conditional_grid
 from services.journal_store import write_json
 from services.lab_registry import LabRegistry
 
@@ -119,84 +120,37 @@ def simulate_cycle(
     geometry deploys the same capital at full inventory.
     """
 
-    if direction == 0:
+    result = simulate_conditional_grid(
+        cycle_id=cycle.cycle_id,
+        bars=cycle.bars,
+        direction=direction,
+        prev_range=cycle.prev_range,
+        spacing_bp=spacing_bp,
+        range_k=range_k,
+        rung_notional=config.rung_notional,
+        max_rungs=config.max_rungs,
+        cost_per_side_bp=0.0,
+        tp_mult=tp_mult,
+        re_arm_max=1 if re_arm else 0,
+        budget_sizing=budget_sizing,
+        layer="grid",
+    )
+    if not result.armed:
         return _idle_result()
-    anchor = cycle.anchor
-    spacing = anchor * spacing_bp / 10_000.0
-    half_width = range_k * cycle.prev_range
-    n_rungs = min(config.max_rungs, int(half_width / spacing)) if spacing > 0 else 0
-    if n_rungs < 1:
-        return _idle_result()
-    rung_notional = (config.max_rungs * config.rung_notional / n_rungs) if budget_sizing else config.rung_notional
-
-    sign = 1 if direction > 0 else -1
-    levels = [anchor - sign * spacing * (i + 1) for i in range(n_rungs)]
-    stop = anchor - sign * half_width
-    holding: dict[int, int] = {}  # rung index -> fill bar index
-    filled_gross = 0.0
-    sides = 0
-    round_trips = 0
-    stop_hit = False
-    rearms = 0
-    max_inventory = 0
-
-    for i, bar in enumerate(cycle.bars):
-        low, high = float(bar.low), float(bar.high)
-        breached = low <= stop if sign > 0 else high >= stop
-        for rung, level in enumerate(levels):
-            if rung in holding:
-                continue
-            hits = low <= level if sign > 0 else high >= level
-            if hits:
-                holding[rung] = i
-                sides += 1
-                max_inventory = max(max_inventory, len(holding))
-        if breached:
-            # conservative: rungs fill at their levels, then everything stops out
-            exit_price = min(float(bar.open), stop) if sign > 0 else max(float(bar.open), stop)
-            for rung in list(holding):
-                filled_gross += sign * (exit_price - levels[rung]) * _units(levels[rung], rung_notional)
-                sides += 1
-            holding.clear()
-            stop_hit = True
-            if re_arm and rearms < 1:
-                rearms += 1
-                re_anchor = float(bar.close)
-                levels = [re_anchor - sign * spacing * (j + 1) for j in range(n_rungs)]
-                stop = re_anchor - sign * half_width
-                continue
-            break
-        for rung in list(holding):
-            if holding[rung] >= i:
-                continue  # no same-bar round trip
-            target = levels[rung] + sign * spacing * tp_mult
-            done = high >= target if sign > 0 else low <= target
-            if done:
-                filled_gross += sign * (target - levels[rung]) * _units(levels[rung], rung_notional)
-                sides += 1
-                round_trips += 1
-                del holding[rung]
-
-    if holding:
-        last_close = float(cycle.bars[-1].close)
-        for rung in list(holding):
-            filled_gross += sign * (last_close - levels[rung]) * _units(levels[rung], rung_notional)
-            sides += 1
-        holding.clear()
-
     net_by_cost = {
-        _cost_key(bp): filled_gross - sides * rung_notional * bp / 10_000.0
+        _cost_key(bp): result.gross_pnl - result.side_notional * bp / 10_000.0
         for bp in config.cost_grid_bp
     }
     return {
         "traded": True,
-        "gross_pnl": filled_gross,
+        "gross_pnl": result.gross_pnl,
         "net_by_cost": net_by_cost,
-        "sides": sides,
-        "round_trips": round_trips,
-        "stop_hit": stop_hit,
-        "rearms": rearms,
-        "max_inventory": max_inventory,
+        "sides": result.sides,
+        "round_trips": result.round_trips,
+        "stop_hit": result.stop_hit,
+        "rearms": result.rearms,
+        "max_inventory": result.max_inventory,
+        "fill_events": result.fills,
     }
 
 
@@ -515,7 +469,17 @@ def _arm_direction(arm: str, cycle: Cycle, random_dirs: dict[str, int]) -> int:
 
 
 def _idle_result() -> dict:
-    return {"traded": False, "gross_pnl": 0.0, "net_by_cost": {}, "sides": 0, "round_trips": 0, "stop_hit": False, "max_inventory": 0}
+    return {
+        "traded": False,
+        "gross_pnl": 0.0,
+        "net_by_cost": {},
+        "sides": 0,
+        "round_trips": 0,
+        "stop_hit": False,
+        "rearms": 0,
+        "max_inventory": 0,
+        "fill_events": [],
+    }
 
 
 def _units(level: float, notional: float) -> float:

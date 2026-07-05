@@ -18,10 +18,17 @@ from services.run_date import utc_run_date
 from services.code_reload import CodeReloadGuard
 from services.config_loader import ROOT, load_pipeline_config
 from services.dashboard_state import DashboardState
+from services.dualtrack_clock import cycle_window, seconds_until_end
+from services.dualtrack_config import dualtrack_config
+from services.dualtrack_human import DualTrackHumanEngine
+from services.dualtrack_machine import DualTrackMachineRunner
+from services.dualtrack_scoring import DualTrackScorer
+from services.dualtrack_store import DualTrackPlanStore
 from services.market_view_intake import MarketViewIntake
 from services.replay_state import ReplayState
 
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CYCLE_ID_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_(DAY|NIGHT)$")
 _STRATEGY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9:_=-]+$")
 _TIMEFRAME_PATTERN = re.compile(r"^\d+[mhdMHD]$")
@@ -30,6 +37,7 @@ _MAX_OPEN_TRADES_PER_STRATEGY = 3
 _PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v4.html"
 _LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v4.html"
 _CLOUDFLARED_LOG = Path("/Users/wendy/work/选题工作台/launchd-tunnel.log")
+_DUALTRACK_POST_ENDPOINTS = {"/api/dualtrack/plan", "/api/dualtrack/orders", "/api/dualtrack/verdict"}
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -78,6 +86,24 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/public-access-health":
             self._handle_public_access_health()
             return
+        if parsed.path == "/api/dualtrack/cycle/current":
+            self._handle_dualtrack_current(parsed.query)
+            return
+        if parsed.path.startswith("/api/dualtrack/plan/"):
+            self._handle_dualtrack_plan_get(parsed.path, parsed.query)
+            return
+        if parsed.path.startswith("/api/dualtrack/machine/"):
+            self._handle_dualtrack_machine_get(parsed.path, parsed.query)
+            return
+        if parsed.path.startswith("/api/dualtrack/human/"):
+            self._handle_dualtrack_human_get(parsed.path)
+            return
+        if parsed.path.startswith("/api/dualtrack/attribution/"):
+            self._handle_dualtrack_attribution_get(parsed.path)
+            return
+        if parsed.path == "/api/dualtrack/ledger":
+            self._handle_dualtrack_ledger_get(parsed.query)
+            return
         super().do_GET()
 
     def do_POST(self) -> None:
@@ -85,7 +111,64 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/market-view/intake":
             self._handle_market_view_intake_api()
             return
+        if parsed.path in _DUALTRACK_POST_ENDPOINTS:
+            self._handle_dualtrack_post(parsed.path)
+            return
         self._write_error(404, "not_found", "unknown POST endpoint")
+
+    def _handle_dualtrack_current(self, query: str) -> None:
+        try:
+            self._write_json(200, build_dualtrack_cycle_current_response())
+        except ValueError as exc:
+            self._write_error(400, "invalid_dualtrack_cycle", str(exc))
+
+    def _handle_dualtrack_plan_get(self, path: str, query: str) -> None:
+        cycle_id = path.rsplit("/", 1)[-1]
+        if not _CYCLE_ID_PATTERN.match(cycle_id):
+            self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+            return
+        self._write_json(200, build_dualtrack_plan_response(cycle_id))
+
+    def _handle_dualtrack_machine_get(self, path: str, query: str) -> None:
+        cycle_id = path.rsplit("/", 1)[-1]
+        if not _CYCLE_ID_PATTERN.match(cycle_id):
+            self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+            return
+        self._write_json(200, build_dualtrack_machine_response(cycle_id))
+
+    def _handle_dualtrack_human_get(self, path: str) -> None:
+        cycle_id = path.rsplit("/", 1)[-1]
+        if not _CYCLE_ID_PATTERN.match(cycle_id):
+            self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+            return
+        self._write_json(200, build_dualtrack_human_response(cycle_id))
+
+    def _handle_dualtrack_attribution_get(self, path: str) -> None:
+        cycle_id = path.rsplit("/", 1)[-1]
+        if not _CYCLE_ID_PATTERN.match(cycle_id):
+            self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+            return
+        try:
+            self._write_json(200, build_dualtrack_attribution_response(cycle_id))
+        except ValueError as exc:
+            self._write_error(404, "dualtrack_attribution_unavailable", str(exc))
+
+    def _handle_dualtrack_ledger_get(self, query: str) -> None:
+        params = parse_qs(query)
+        self._write_json(200, build_dualtrack_ledger_response(week=params.get("week", [None])[0]))
+
+    def _handle_dualtrack_post(self, path: str) -> None:
+        try:
+            payload = self._read_json_body(max_bytes=64_000)
+            if path == "/api/dualtrack/plan":
+                result = build_dualtrack_plan_post_response(payload)
+            elif path == "/api/dualtrack/orders":
+                result = build_dualtrack_order_post_response(payload)
+            else:
+                result = build_dualtrack_verdict_post_response(payload)
+            self._write_json(200, result)
+        except ValueError as exc:
+            self._write_error(400, "invalid_dualtrack_request", str(exc))
 
     def _handle_market_view_intake_api(self) -> None:
         try:
@@ -358,6 +441,74 @@ def build_market_view_intake_response(payload: dict, *, output_root: Path | None
             "markdown": str(output / "market_views" / f"{run_date}.md"),
         },
     }
+
+
+def build_dualtrack_cycle_current_response(*, output_root: Path | None = None, as_of: str | None = None) -> dict:
+    cfg = dualtrack_config()
+    deadline = int(cfg.get("plan_lock_deadline_min_before_cycle", 0))
+    window = cycle_window(as_of, lock_deadline_min_before_cycle=deadline)
+    store = DualTrackPlanStore(output_root, config=cfg)
+    reveal_allowed = store.reveal_allowed(window.cycle_id, as_of=as_of)
+    effective = store.effective_plan(window.cycle_id, as_of=as_of) if reveal_allowed else None
+    effective_status = {
+        "has_effective_plan": effective is not None,
+        "machine_stands_down": effective is None,
+    }
+    if reveal_allowed and effective is not None:
+        effective_status["author"] = effective.get("effective_author", "")
+    return {
+        **window.to_dict(),
+        "countdown_seconds": seconds_until_end(as_of, lock_deadline_min_before_cycle=deadline),
+        "effective_plan_status": effective_status,
+    }
+
+
+def build_dualtrack_plan_response(cycle_id: str, *, output_root: Path | None = None, as_of: str | None = None) -> dict:
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    return DualTrackPlanStore(output_root).plan_response(cycle_id, as_of=as_of)
+
+
+def build_dualtrack_plan_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
+    lock = _truthy(payload.get("lock", True))
+    now = payload.get("as_of") or payload.get("now")
+    plan = DualTrackPlanStore(output_root).save_human_plan(payload, now=now, lock=lock)
+    return {"status": "locked" if lock else "draft", "plan": plan}
+
+
+def build_dualtrack_machine_response(cycle_id: str, *, output_root: Path | None = None, as_of: str | None = None) -> dict:
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    return DualTrackMachineRunner(output_root).machine_payload(cycle_id, as_of=as_of)
+
+
+def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
+    fill = DualTrackHumanEngine(output_root).submit_order(payload)
+    return {"status": "filled", "fill": fill}
+
+
+def build_dualtrack_human_response(cycle_id: str, *, output_root: Path | None = None) -> dict:
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    return DualTrackHumanEngine(output_root).human_payload(cycle_id)
+
+
+def build_dualtrack_attribution_response(cycle_id: str, *, output_root: Path | None = None) -> dict:
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    return DualTrackScorer(output_root).attribution_payload(cycle_id)
+
+
+def build_dualtrack_ledger_response(*, output_root: Path | None = None, week: str | None = None) -> dict:
+    return DualTrackScorer(output_root).ledger_payload(week=week)
+
+
+def build_dualtrack_verdict_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
+    cycle_id = str(payload.get("cycle_id") or "")
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    verdict = DualTrackScorer(output_root).record_verdict(cycle_id, str(payload.get("note") or ""))
+    return {"status": "recorded", "verdict": verdict}
 
 
 def _truthy(value: object) -> bool:

@@ -1,0 +1,27 @@
+{
+  "capital_per_track_usd": 10000,
+  "max_leverage": 10,
+  "cycle_hours_utc": {
+    "day_start": 1,
+    "night_start": 13
+  },
+  "plan_lock_deadline_min_before_cycle": 0,
+  "grid": {
+    "spacing_bp": 20,
+    "range_k": 1.0,
+    "tp_mult_base": 1,
+    "tp_mult_trend": 2,
+    "re_arm_max": 1,
+    "trend_leg_budget_pct": 20
+  },
+  "cost_per_side_bp": 0.5,
+  "scoreboard": {
+    "gate_threshold": 0.60,
+    "window_cycles": 30
+  },
+  "census": {
+    "reversal_bp": 10,
+    "min_run_pct": 0.3
+  },
+  "weekly_target_usd": [1000, 1500]
+}

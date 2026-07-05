@@ -80,7 +80,8 @@ Do NOT modify those files. Build on a fresh branch `feat/dualtrack-console`.
    ledger. Never block a manual order for plan reasons.
 8. **Structured invalidation only.** Plan invalidation is
    `[{side: below|above, price: float, confirm: close_1m|touch}]` — no free
-   text. The same object drives (a) machine hard stop, (b) plan grading.
+   text. The same object drives the machine hard stop; direction-only plan
+   grading is handled separately by the cycle scorer.
 9. **UTC internally.** Cycles are UTC 01:00–13:00 (DAY) and 13:00–01:00
    (NIGHT) — 09:00/21:00 Beijing. All timestamps ISO-8601 UTC; CST only in
    display strings.

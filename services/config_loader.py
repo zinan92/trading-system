@@ -33,3 +33,8 @@ def load_pipeline_config(config_path: Path | None = None) -> dict:
 def load_strategy_config(config_path: Path | None = None) -> dict:
     config_path = config_path or ROOT / "configs" / "strategy.yaml"
     return load_json_yaml(config_path)
+
+
+def load_dualtrack_config(config_path: Path | None = None) -> dict:
+    config_path = config_path or ROOT / "configs" / "dualtrack.yaml"
+    return load_json_yaml(config_path)
