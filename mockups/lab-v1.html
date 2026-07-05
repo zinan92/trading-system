@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Strategy Lab · 研究 — Trading Orchestrator (mockup v1)</title>
+<style>
+:root{
+  --bg:#08090b;
+  --surface:#111318;
+  --surface2:#171b22;
+  --surface3:#202631;
+  --line:rgba(255,255,255,.1);
+  --line2:rgba(255,255,255,.16);
+  --text:#f2f4f7;
+  --muted:#a4acb8;
+  --faint:#788391;
+  --gold:#d8aa3f;
+  --teal:#2dd4bf;
+  --blue:#7aa2ff;
+  --red:#ff6b6b;
+  --amber:#f5b84b;
+  --violet:#b894ff;
+  --shadow:0 14px 44px rgba(0,0,0,.32);
+  --mono:"SFMono-Regular","Roboto Mono","Menlo","Consolas",monospace;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%;overflow-x:hidden}
+body{
+  margin:0;
+  background:
+    linear-gradient(180deg,rgba(184,148,255,.06),rgba(8,9,11,0) 220px),
+    var(--bg);
+  color:var(--text);
+  font:14px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+}
+a{color:inherit;text-decoration:none}
+.mono{font-family:var(--mono)}
+.shell{width:min(1600px,100%);margin:0 auto;padding:18px 22px 40px}
+
+/* ---------- topbar ---------- */
+.topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+.mark{width:34px;height:34px;border-radius:8px;border:1px solid rgba(216,170,63,.45);display:grid;place-items:center;color:var(--gold);font-weight:900;background:rgba(216,170,63,.08)}
+.brand{display:flex;align-items:center;gap:11px}
+.brand-title{font-size:16px;font-weight:760;line-height:1.1}
+.brand-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.badge-paper{font-size:10px;letter-spacing:.08em;border:1px solid rgba(216,170,63,.5);color:var(--gold);border-radius:4px;padding:2px 6px}
+.tabs{display:flex;gap:2px;margin-left:18px}
+.tab{background:none;border:none;color:var(--muted);font-size:13px;padding:8px 13px;border-bottom:2px solid transparent;cursor:pointer}
+.tab.active{color:var(--text);border-bottom-color:var(--violet);font-weight:640}
+.spacer{flex:1}
+.research-chip{display:inline-flex;align-items:center;gap:7px;font-size:11px;letter-spacing:.06em;color:var(--violet);border:1px solid rgba(184,148,255,.45);background:rgba(184,148,255,.08);border-radius:5px;padding:4px 9px;font-weight:640}
+.research-chip .dot{width:7px;height:7px;border-radius:50%;background:var(--violet)}
+.clock{font-size:12px;color:var(--faint)}
+
+/* ---------- generic ---------- */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.panel-h{display:flex;align-items:baseline;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.panel-h .t{font-size:12px;letter-spacing:.1em;color:var(--muted);font-weight:640}
+.panel-h .s{font-size:11px;color:var(--faint)}
+.panel-h .right{margin-left:auto;font-size:11px;color:var(--faint)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.pos{color:var(--teal)}
+.neg{color:var(--red)}
+.warn{color:var(--amber)}
+.dim{color:var(--faint)}
+.section-gap{margin-top:14px}
+
+/* ---------- vitals ---------- */
+.vitals{display:flex;flex-wrap:wrap;gap:0;margin-top:12px;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.vital{flex:1 1 0;min-width:180px;padding:11px 16px;border-right:1px solid var(--line)}
+.vital:last-child{border-right:none}
+.vital .k{font-size:10px;letter-spacing:.1em;color:var(--faint);margin-bottom:4px}
+.vital .v{font-size:13px;font-weight:640}
+.vital .v .num{font-size:13px}
+.vital .n{font-size:11px;color:var(--muted);margin-top:2px}
+
+/* ---------- funnel ---------- */
+.funnel{display:flex;gap:6px;padding:14px 16px;align-items:stretch}
+.fstep{flex:1;background:var(--surface2);border:1px solid var(--line);border-radius:7px;padding:10px 12px;position:relative;cursor:pointer}
+.fstep:hover{border-color:var(--line2)}
+.fstep .c{font-size:22px;font-weight:720;font-family:var(--mono)}
+.fstep .l{font-size:11px;color:var(--muted);margin-top:2px}
+.fstep .l small{display:block;color:var(--faint);font-size:10px;letter-spacing:.06em}
+.fstep.dead .c{color:var(--faint)}
+.fstep.alive .c{color:var(--teal)}
+.fstep.spent .c{color:var(--amber)}
+.fstep.zero .c{color:var(--red)}
+.farrow{align-self:center;color:var(--faint);font-size:14px}
+
+/* ---------- hero chart ---------- */
+.hero-note{font-size:11px;color:var(--faint);padding:0 16px 10px}
+.hero-legend{display:flex;gap:18px;font-size:11px;color:var(--muted);padding:10px 16px 0}
+.hero-legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:10px;height:10px;border-radius:50%}
+.sw.hollow{border:2px solid var(--faint);background:none}
+.sw.filled-pos{background:var(--teal)}
+.sw.filled-neg{background:var(--red)}
+.sw.line-maker{width:14px;height:0;border-top:2px dashed var(--teal);border-radius:0}
+.sw.line-taker{width:14px;height:0;border-top:2px dashed var(--red);border-radius:0}
+
+/* ---------- table ---------- */
+table{width:100%;border-collapse:collapse}
+th{font-size:10px;letter-spacing:.09em;color:var(--faint);text-align:left;font-weight:600;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{font-size:13px;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr.row:hover{background:var(--surface2);cursor:pointer}
+tr.selected{background:rgba(184,148,255,.06)}
+tr.selected td:first-child{box-shadow:inset 3px 0 0 var(--violet)}
+th.r,td.r{text-align:right}
+.strat{font-weight:640}
+.tf{font-size:10px;color:var(--faint);border:1px solid var(--line);border-radius:4px;padding:1px 5px;margin-left:7px;font-family:var(--mono)}
+.chip{font-size:10px;border-radius:4px;padding:2px 7px;font-weight:640;letter-spacing:.04em;display:inline-block}
+.chip.active{color:var(--violet);border:1px solid rgba(184,148,255,.4);background:rgba(184,148,255,.07)}
+.chip.parked{color:var(--muted);border:1px solid var(--line2);background:var(--surface2)}
+.chip.falsified{color:var(--red);border:1px solid rgba(255,107,107,.35);background:rgba(255,107,107,.06)}
+.chip.eligible{color:var(--teal);border:1px solid rgba(45,212,191,.4);background:rgba(45,212,191,.07)}
+.chip.noreplay{color:var(--faint);border:1px dashed var(--line2);background:none}
+.nbadge{font-size:10px;font-family:var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:9px;padding:1px 7px}
+.nbadge.hot{color:var(--amber);border-color:rgba(245,184,75,.45);background:rgba(245,184,75,.06)}
+.delta{font-size:11px;color:var(--faint)}
+
+/* filter bar */
+.filterbar{display:flex;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.fbtn{font-size:11px;color:var(--muted);border:1px solid var(--line);background:var(--surface2);border-radius:5px;padding:4px 10px;cursor:pointer}
+.fbtn.on{color:var(--text);border-color:rgba(184,148,255,.5);background:rgba(184,148,255,.08)}
+.fsep{width:1px;height:16px;background:var(--line2);margin:0 4px}
+.fnote{margin-left:auto;font-size:11px;color:var(--faint)}
+
+/* ---------- layout grids ---------- */
+.grid-main{display:grid;grid-template-columns:minmax(0,2.05fr) minmax(0,1fr);gap:14px;margin-top:14px;align-items:start}
+@media(max-width:1180px){.grid-main{grid-template-columns:1fr}}
+
+/* ---------- right rail ---------- */
+.rail-item{padding:11px 16px;border-bottom:1px solid var(--line);font-size:12.5px}
+.rail-item:last-child{border-bottom:none}
+.rail-item .h{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.rail-item .why{color:var(--muted);margin-top:3px;font-size:12px}
+.rail-item .meta{color:var(--faint);font-size:11px;margin-top:3px}
+
+/* ---------- detail ---------- */
+.detail{margin-top:14px;border:1px solid rgba(184,148,255,.28);border-radius:10px;background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
+.detail-head{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap;background:linear-gradient(180deg,rgba(184,148,255,.05),rgba(0,0,0,0))}
+.detail-head .name{font-size:17px;font-weight:740}
+.verdict-line{font-size:12.5px;color:var(--muted)}
+.verdict-line b{color:var(--amber);font-weight:640}
+.actions{margin-left:auto;display:flex;gap:8px}
+.abtn{font-size:12px;border-radius:6px;padding:7px 13px;cursor:pointer;border:1px solid var(--line2);background:var(--surface2);color:var(--text)}
+.abtn.primary{border-color:rgba(184,148,255,.55);background:rgba(184,148,255,.1);color:var(--violet);font-weight:640}
+.abtn.danger-outline{color:var(--muted)}
+.abtn[disabled]{opacity:.45;cursor:not-allowed}
+.detail-grid{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:0}
+.detail-grid>div{padding:14px 18px;border-right:1px solid var(--line);min-width:0}
+.detail-grid>div:last-child{border-right:none}
+@media(max-width:1180px){.detail-grid{grid-template-columns:1fr}.detail-grid>div{border-right:none;border-bottom:1px solid var(--line)}}
+.blk-t{font-size:11px;letter-spacing:.1em;color:var(--faint);margin-bottom:10px;font-weight:640}
+.blk-t .en{font-weight:400}
+
+/* heatmap */
+.hm{display:grid;grid-template-columns:52px repeat(3,1fr);gap:4px;font-family:var(--mono);font-size:11.5px}
+.hm .hd{color:var(--faint);font-size:10px;display:grid;place-items:center;padding:4px 0}
+.hm .cell{border-radius:5px;padding:8px 6px;text-align:center;border:1px solid transparent}
+.hm .cell small{display:block;font-size:9px;opacity:.75;margin-top:2px}
+.hm .best{border-color:var(--teal);box-shadow:0 0 0 1px rgba(45,212,191,.35)}
+
+/* checklist */
+.gate{display:flex;gap:10px;padding:8px 0;border-bottom:1px dashed var(--line);font-size:12.5px;align-items:flex-start}
+.gate:last-child{border-bottom:none}
+.gate .ic{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:11px;flex:none;margin-top:1px}
+.gate .ic.ok{background:rgba(45,212,191,.14);color:var(--teal)}
+.gate .ic.fail{background:rgba(255,107,107,.14);color:var(--red)}
+.gate .ic.todo{background:var(--surface3);color:var(--faint)}
+.gate .ic.ammo{background:rgba(245,184,75,.14);color:var(--amber)}
+.gate .g-sub{color:var(--faint);font-size:11.5px;margin-top:1px}
+
+/* history + cli */
+.hist-cli{display:grid;grid-template-columns:1.6fr 1fr;gap:0;border-top:1px solid var(--line)}
+.hist-cli>div{padding:14px 18px;min-width:0}
+.hist-cli>div:first-child{border-right:1px solid var(--line)}
+@media(max-width:1180px){.hist-cli{grid-template-columns:1fr}.hist-cli>div:first-child{border-right:none;border-bottom:1px solid var(--line)}}
+.st{font-size:10px;border-radius:4px;padding:1px 6px;font-family:var(--mono)}
+.st.valid{color:var(--teal);background:rgba(45,212,191,.08)}
+.st.invalid{color:var(--red);background:rgba(255,107,107,.08)}
+.st.pending{color:var(--violet);background:rgba(184,148,255,.1)}
+.cli{background:#0b0d11;border:1px solid var(--line);border-radius:7px;padding:12px 14px;font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.7;overflow-x:auto}
+.cli .cmd{color:var(--text)}
+.cli .flag{color:var(--blue)}
+.copy{float:right;font-size:10px;color:var(--faint);border:1px solid var(--line);border-radius:4px;padding:2px 7px;cursor:pointer}
+.tmpl{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.tmpl .t-opt{font-size:11px;border:1px solid var(--line);border-radius:5px;padding:4px 10px;color:var(--muted);cursor:pointer}
+.tmpl .t-opt.on{color:var(--violet);border-color:rgba(184,148,255,.5);background:rgba(184,148,255,.08)}
+.ammo-note{font-size:11px;color:var(--amber);margin-top:8px}
+
+/* footer */
+.foot{margin-top:16px;font-size:11px;color:var(--faint);display:flex;gap:18px;flex-wrap:wrap;padding:0 4px}
+.foot b{color:var(--muted);font-weight:600}
+
+details.fold{border-top:1px solid var(--line)}
+details.fold summary{list-style:none;cursor:pointer;padding:11px 16px;font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center}
+details.fold summary::before{content:"▸";color:var(--faint);font-size:10px}
+details.fold[open] summary::before{content:"▾"}
+details.fold summary .cnt{color:var(--faint);font-size:11px}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ============ TOPBAR ============ -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="mark">TO</div>
+      <div>
+        <div class="brand-title">Trading Orchestrator <span class="dim" style="font-weight:400;font-size:12px">GOLD / XAUUSDT</span> <span class="badge-paper">PAPER</span></div>
+        <div class="brand-sub">机构终端 Institutional Terminal</div>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="tab">指挥台</button>
+      <button class="tab">交易</button>
+      <button class="tab active">研究 LAB</button>
+      <button class="tab">回放</button>
+      <button class="tab">运维</button>
+    </nav>
+    <div class="spacer"></div>
+    <span class="research-chip"><span class="dot"></span>RESEARCH · 非实盘 · 全部为回测口径</span>
+    <span class="clock num">2026-07-05 03:10 UTC</span>
+  </div>
+
+  <!-- ============ 仪器状态条 INSTRUMENT VITALS ============ -->
+  <div class="vitals">
+    <div class="vital">
+      <div class="k">数据覆盖 · COVERAGE</div>
+      <div class="v"><span class="num">296,298</span> 根 1m K 线 · 缺口 <span class="num pos">0</span></div>
+      <div class="n num">2025-12-11 → 2026-07-05</div>
+    </div>
+    <div class="vital">
+      <div class="k">历史长度 · HISTORY</div>
+      <div class="v"><span class="num">205</span> 天 <span class="warn">&lt; 12 个月</span></div>
+      <div class="n">口径 = 全量可用历史（合约 2025-12-11 上线）</div>
+    </div>
+    <div class="vital">
+      <div class="k">HOLDOUT 预算 · ONE-SHOT</div>
+      <div class="v"><span class="num">28</span> 天隔离 · 已消耗 <span class="num warn">1</span><span class="dim">/39 家族</span></div>
+      <div class="n">macd_baseline 已射击，结果=未过</div>
+    </div>
+    <div class="vital">
+      <div class="k">注册表 · REGISTRY</div>
+      <div class="v"><span class="num">102</span> 试验 · <span class="num">39</span> 家族 · <span class="num warn">15</span> invalid</div>
+      <div class="n">每次试验先登记后看结果</div>
+    </div>
+    <div class="vital">
+      <div class="k">成本现实 · FEE REALITY</div>
+      <div class="v num">maker 2bp · taker 5bp <span class="dim" style="font-family:inherit">/边</span></div>
+      <div class="n">Binance USDⓈ-M · VIP0 · 无 BNB 折扣</div>
+    </div>
+  </div>
+
+  <!-- ============ 研究漏斗 RESEARCH FUNNEL ============ -->
+  <div class="panel section-gap">
+    <div class="panel-h">
+      <span class="t">研究漏斗 · RESEARCH FUNNEL</span>
+      <span class="s">点击任一级 = 预置排行榜过滤器</span>
+      <span class="right">回路目标：把 1 个候选推过全部闸门</span>
+    </div>
+    <div class="funnel">
+      <div class="fstep"><div class="c">22</div><div class="l">想法已扫描<small>IDEAS SCANNED (R1)</small></div></div>
+      <div class="farrow">→</div>
+      <div class="fstep"><div class="c">12</div><div class="l">可回放且有效<small>R1 VALID</small></div></div>
+      <div class="farrow">→</div>
+      <div class="fstep alive"><div class="c">3</div><div class="l">过粗筛 ≥2bp/趟 · n≥100<small>TRIAGE SURVIVORS</small></div></div>
+      <div class="farrow">→</div>
+      <div class="fstep alive"><div class="c">2</div><div class="l">几何优化后 maker 净值 &gt; 0<small>R3 POSITIVE CELLS</small></div></div>
+      <div class="farrow">→</div>
+      <div class="fstep spent"><div class="c">1</div><div class="l">holdout 已射击（未过）<small>HOLDOUT SPENT</small></div></div>
+      <div class="farrow">→</div>
+      <div class="fstep zero"><div class="c">0</div><div class="l">纸面候选<small>PAPER-ELIGIBLE</small></div></div>
+    </div>
+  </div>
+
+  <!-- ============ 英雄图：保本费率 vs 真实费率 ============ -->
+  <div class="panel section-gap">
+    <div class="panel-h">
+      <span class="t">保本费率 vs 真实费率 · BREAK-EVEN vs FEE REALITY</span>
+      <span class="s">每边保本费率 bp = 毛利/2 · 记号右过 maker 线 = 扣费后仍有边际</span>
+      <span class="right">空心 = R1 原始形态 · 实心 = R3 最优持仓几何</span>
+    </div>
+    <div class="hero-legend">
+      <span><span class="sw hollow"></span>R1 基线</span>
+      <span><span class="sw filled-pos"></span>R3 最优（maker 净值 &gt; 0）</span>
+      <span><span class="sw filled-neg"></span>R3 最优（仍为负）</span>
+      <span><span class="sw line-maker"></span>maker 2bp</span>
+      <span><span class="sw line-taker"></span>taker 5bp</span>
+    </div>
+    <svg viewBox="0 0 1000 268" style="width:100%;display:block" font-family="SFMono-Regular,Menlo,monospace">
+      <!-- grid -->
+      <g stroke="rgba(255,255,255,.06)">
+        <line x1="180" y1="28" x2="180" y2="232"/><line x1="310" y1="28" x2="310" y2="232"/>
+        <line x1="570" y1="28" x2="570" y2="232"/><line x1="700" y1="28" x2="700" y2="232"/><line x1="960" y1="28" x2="960" y2="232"/>
+      </g>
+      <!-- fee lines -->
+      <line x1="440" y1="22" x2="440" y2="238" stroke="#2dd4bf" stroke-dasharray="5 4" stroke-width="1.4" opacity=".8"/>
+      <line x1="830" y1="22" x2="830" y2="238" stroke="#ff6b6b" stroke-dasharray="5 4" stroke-width="1.4" opacity=".8"/>
+      <text x="446" y="20" fill="#2dd4bf" font-size="10">maker 2bp</text>
+      <text x="836" y="20" fill="#ff6b6b" font-size="10">taker 5bp</text>
+      <!-- axis labels -->
+      <g fill="#788391" font-size="10">
+        <text x="176" y="252">0</text><text x="306" y="252">1</text><text x="436" y="252">2</text>
+        <text x="566" y="252">3</text><text x="696" y="252">4</text><text x="826" y="252">5</text><text x="948" y="252">6 bp/边</text>
+      </g>
+      <!-- rows: name, R1 hollow -> R3 filled -->
+      <!-- ema50_position: 1.44 -> 5.16, net +0.631 -->
+      <g>
+        <text x="12" y="48" fill="#f2f4f7" font-size="12" font-family="-apple-system,PingFang SC,sans-serif">gold_5m_ema50_position</text>
+        <line x1="367" y1="44" x2="851" y2="44" stroke="rgba(45,212,191,.5)" stroke-width="1.6"/>
+        <circle cx="367" cy="44" r="5" fill="none" stroke="#788391" stroke-width="2"/>
+        <circle cx="851" cy="44" r="6" fill="#2dd4bf"/>
+        <text x="864" y="48" fill="#2dd4bf" font-size="11">+0.63/笔 ·171t</text>
+        <text x="12" y="62" fill="#788391" font-size="9.5">N=13 · 8x hold · 2.0x scale</text>
+      </g>
+      <!-- psych_level_rejection: 1.83 -> 3.32, net +0.263 -->
+      <g>
+        <text x="12" y="92" fill="#f2f4f7" font-size="12" font-family="-apple-system,PingFang SC,sans-serif">gold_5m_psych_level_rejection</text>
+        <line x1="418" y1="88" x2="612" y2="88" stroke="rgba(45,212,191,.5)" stroke-width="1.6"/>
+        <circle cx="418" cy="88" r="5" fill="none" stroke="#788391" stroke-width="2"/>
+        <circle cx="612" cy="88" r="6" fill="#2dd4bf"/>
+        <text x="626" y="92" fill="#2dd4bf" font-size="11">+0.26/笔 ·128t</text>
+        <text x="12" y="106" fill="#788391" font-size="9.5">N=13 · 8x hold · 1.0x scale</text>
+      </g>
+      <!-- vwap_extension_reversion: 1.59 -> 1.59, net -0.081 -->
+      <g>
+        <text x="12" y="136" fill="#f2f4f7" font-size="12" font-family="-apple-system,PingFang SC,sans-serif">gold_5m_vwap_extension_reversion</text>
+        <circle cx="387" cy="132" r="5" fill="none" stroke="#788391" stroke-width="2"/>
+        <circle cx="387" cy="132" r="3.4" fill="#ff6b6b"/>
+        <text x="400" y="136" fill="#ff6b6b" font-size="11">−0.08/笔 ·212t</text>
+        <text x="12" y="150" fill="#788391" font-size="9.5">N=13 · 几何优化无改善（最优=原形态）</text>
+      </g>
+      <!-- gold_1m_breakout: 0.99 -> 1.52, net -0.096 -->
+      <g>
+        <text x="12" y="180" fill="#f2f4f7" font-size="12" font-family="-apple-system,PingFang SC,sans-serif">gold_1m_breakout</text>
+        <line x1="308" y1="176" x2="378" y2="176" stroke="rgba(255,107,107,.4)" stroke-width="1.6"/>
+        <circle cx="308" cy="176" r="5" fill="none" stroke="#788391" stroke-width="2"/>
+        <circle cx="378" cy="176" r="6" fill="#ff6b6b"/>
+        <text x="392" y="180" fill="#ff6b6b" font-size="11">−0.10/笔 ·1934t</text>
+        <text x="12" y="194" fill="#788391" font-size="9.5">N=13 · 2x hold · 2.0x scale</text>
+      </g>
+      <!-- gold_1m_macd: 0.22 -> 1.25, net -0.150 -->
+      <g>
+        <text x="12" y="224" fill="#f2f4f7" font-size="12" font-family="-apple-system,PingFang SC,sans-serif">gold_1m_macd</text>
+        <line x1="208" y1="220" x2="343" y2="220" stroke="rgba(255,107,107,.4)" stroke-width="1.6"/>
+        <circle cx="208" cy="220" r="5" fill="none" stroke="#788391" stroke-width="2"/>
+        <circle cx="343" cy="220" r="6" fill="#ff6b6b"/>
+        <text x="357" y="224" fill="#ff6b6b" font-size="11">−0.15/笔 ·839t · holdout 已耗</text>
+        <text x="12" y="238" fill="#788391" font-size="9.5">N=14 · 8x hold · 1.5x scale</text>
+      </g>
+    </svg>
+    <div class="hero-note">⚠ 实心记号为 12 单元几何扫描中的最好值，含 best-of-N 抬升；晋级判断只认走查 + holdout 闸门，不认本图。另有 3 个家族毛利为负（保本=0bp），不绘出。</div>
+  </div>
+
+  <!-- ============ 主区：排行榜 + 右栏 ============ -->
+  <div class="grid-main">
+
+    <!-- 候选排行榜 -->
+    <div class="panel">
+      <div class="panel-h">
+        <span class="t">候选排行榜 · CANDIDATES</span>
+        <span class="right">按 R3 最优 maker 净值排序</span>
+      </div>
+      <div class="filterbar">
+        <button class="fbtn on">全部周期</button>
+        <button class="fbtn">1m</button>
+        <button class="fbtn">5m</button>
+        <span class="fsep"></span>
+        <button class="fbtn on">仅 valid</button>
+        <button class="fbtn">含 invalid ×15</button>
+        <button class="fbtn">不可回放 ×5</button>
+        <span class="fsep"></span>
+        <button class="fbtn on">在研</button>
+        <button class="fbtn">已归档</button>
+        <span class="fnote">12 / 22 个家族显示中</span>
+      </div>
+      <table>
+        <thead><tr>
+          <th>策略 · 周期</th><th>生命周期</th><th class="r">OOS 笔数</th><th class="r">毛利 bp/趟</th>
+          <th class="r">保本 bp/边 → R3 优</th><th class="r">maker 净/笔</th><th class="r">回撤</th><th class="r">试验 N</th>
+        </tr></thead>
+        <tbody>
+          <tr class="row">
+            <td class="strat">ema50_position<span class="tf">5m</span></td>
+            <td><span class="chip active">在研</span></td>
+            <td class="r num">917</td>
+            <td class="r num pos">2.88</td>
+            <td class="r num">1.44 → <b class="pos">5.16</b></td>
+            <td class="r num pos">+0.631</td>
+            <td class="r num">1.4%</td>
+            <td class="r"><span class="nbadge hot">N 13</span></td>
+          </tr>
+          <tr class="row selected">
+            <td class="strat">psych_level_rejection<span class="tf">5m</span></td>
+            <td><span class="chip active">在研</span></td>
+            <td class="r num">192</td>
+            <td class="r num pos">3.67</td>
+            <td class="r num">1.83 → <b class="pos">3.32</b></td>
+            <td class="r num pos">+0.263</td>
+            <td class="r num">0.7%</td>
+            <td class="r"><span class="nbadge hot">N 13</span></td>
+          </tr>
+          <tr class="row">
+            <td class="strat">vwap_extension_reversion<span class="tf">5m</span></td>
+            <td><span class="chip active">在研</span></td>
+            <td class="r num">212</td>
+            <td class="r num pos">3.19</td>
+            <td class="r num">1.59 → 1.59</td>
+            <td class="r num neg">−0.081</td>
+            <td class="r num">0.6%</td>
+            <td class="r"><span class="nbadge hot">N 13</span></td>
+          </tr>
+          <tr class="row">
+            <td class="strat">gold_1m_breakout<span class="tf">1m</span></td>
+            <td><span class="chip active">在研</span></td>
+            <td class="r num">2,872</td>
+            <td class="r num pos">1.98</td>
+            <td class="r num">0.99 → 1.52</td>
+            <td class="r num neg">−0.096</td>
+            <td class="r num">5.8%</td>
+            <td class="r"><span class="nbadge hot">N 13</span></td>
+          </tr>
+          <tr class="row">
+            <td class="strat">adx_ema_pullback<span class="tf">5m</span></td>
+            <td><span class="chip active">在研</span></td>
+            <td class="r num">324</td>
+            <td class="r num pos">1.91</td>
+            <td class="r num">0.95 <span class="delta">未扫几何</span></td>
+            <td class="r num neg">−0.209</td>
+            <td class="r num">0.9%</td>
+            <td class="r"><span class="nbadge">N 1</span></td>
+          </tr>
+          <tr class="row">
+            <td class="strat">gold_1m_macd<span class="tf">1m</span></td>
+            <td><span class="chip parked">holdout 已耗</span></td>
+            <td class="r num">4,576</td>
+            <td class="r num pos">0.43</td>
+            <td class="r num">0.22 → 1.25</td>
+            <td class="r num neg">−0.150</td>
+            <td class="r num warn">16.4%</td>
+            <td class="r"><span class="nbadge hot">N 14</span></td>
+          </tr>
+          <tr class="row">
+            <td class="strat">bollinger_reclaim_filter<span class="tf">1m</span></td>
+            <td><span class="chip active">在研</span></td>
+            <td class="r num">1,680</td>
+            <td class="r num pos">1.01</td>
+            <td class="r num">0.51 <span class="delta">未扫几何</span></td>
+            <td class="r num neg">−0.299</td>
+            <td class="r num">5.0%</td>
+            <td class="r"><span class="nbadge">N 1</span></td>
+          </tr>
+          <tr class="row">
+            <td class="strat">macd_trend_vol_filter<span class="tf">1m</span></td>
+            <td><span class="chip active">在研</span></td>
+            <td class="r num">1,204</td>
+            <td class="r num pos">0.77</td>
+            <td class="r num">0.38 <span class="delta">未扫几何</span></td>
+            <td class="r num neg">−0.323</td>
+            <td class="r num">4.1%</td>
+            <td class="r"><span class="nbadge">N 1</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <details class="fold">
+        <summary>样本不足 / 无效试验 <span class="cnt">insufficient_sample ×1 · invalid ×4 —— 纪律证据，不隐藏</span></summary>
+        <table>
+          <tbody>
+            <tr><td class="strat dim">vwap_trend_pullback<span class="tf">5m</span></td><td><span class="st invalid">insufficient</span></td><td class="r num dim">60 笔</td><td colspan="5" class="dim">毛利 6.70bp/趟 诱人，但 n&lt;100 —— 需更长历史或放宽触发再测</td></tr>
+            <tr><td class="strat dim">false_breakout_reversal<span class="tf">5m</span></td><td><span class="st invalid">invalid</span></td><td class="r num dim">7 笔</td><td colspan="5" class="dim">触发过稀，无法评估</td></tr>
+            <tr><td class="strat dim">london_ny_breakout<span class="tf">5m</span></td><td><span class="st invalid">invalid</span></td><td class="r num dim">13 笔</td><td colspan="5" class="dim">触发过稀，无法评估</td></tr>
+          </tbody>
+        </table>
+      </details>
+    </div>
+
+    <!-- 右栏：墓地 + 既定结论 -->
+    <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+      <div class="panel">
+        <div class="panel-h"><span class="t">已归档 · GRAVEYARD</span><span class="right">死因可检索，防止重测死想法</span></div>
+        <div class="rail-item">
+          <div class="h"><b>chan 系 ×4</b><span class="chip noreplay">不可回放</span></div>
+          <div class="why">历史信号非因果（前视风险），Lab 拒绝回放</div>
+          <div class="meta">出路：因果化重写后以新家族重新登记</div>
+        </div>
+        <div class="rail-item">
+          <div class="h"><b>gold_1m_grid</b><span class="chip falsified">已否证</span></div>
+          <div class="why">毛利 <span class="num neg">−1.00</span> bp/趟（n=3,238）——扣费前已亏</div>
+          <div class="meta">R1 · 2026-07-05</div>
+        </div>
+        <div class="rail-item">
+          <div class="h"><b>bollinger_reversion 1m</b><span class="chip falsified">已否证</span></div>
+          <div class="why">毛利 <span class="num neg">−0.88</span> bp/趟 · 回撤 26.5%</div>
+          <div class="meta">R1 · 2026-07-05</div>
+        </div>
+        <div class="rail-item">
+          <div class="h"><b>fibonacci / adr_exhaustion</b><span class="chip parked">搁置</span></div>
+          <div class="why">毛利 ≈ 0，当前费率下无边际；费率或波动结构变化再回访</div>
+          <div class="meta">R1 · 2026-07-05</div>
+        </div>
+        <div class="rail-item">
+          <div class="h"><b>R2 反推元模型 ×12</b><span class="chip falsified">已否证</span></div>
+          <div class="why">最优 −0.48/笔，输给手写 top-3（−0.03）——反推不如手写</div>
+          <div class="meta">R2 · 12 试验全登记</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-h"><span class="t">既定结论 · STANDING ANSWERS</span><span class="right">新实验的设计前提</span></div>
+        <div class="rail-item"><div class="h"><b>E1</b><span class="num neg">保本 0.22bp/边</span></div><div class="why">1m MACD 基线在真实费率下死亡（taker 净 −0.96/笔）</div></div>
+        <div class="rail-item"><div class="h"><b>E2</b><span class="warn">结论悬置</span></div><div class="why">方向过滤在回溯样本上减 alpha（−0.33/笔），但仅 3 天市场观点历史 —— 样本太薄，转前瞻记录</div></div>
+        <div class="rail-item"><div class="h"><b>E3</b><span class="num">方向性 regime ≈ 46%</span></div><div class="why">约一半时间金价处于可交易方向性状态</div></div>
+        <div class="rail-item"><div class="h"><b>E4</b><span class="num pos">maker 改善 +0.56/笔</span></div><div class="why">限价 maker 假设显著优于 taker，但基线仍为负；成交率 4,436/4,576</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 候选详情（选定层） ============ -->
+  <div class="detail">
+    <div class="detail-head">
+      <div>
+        <div class="name">gold_5m_psych_level_rejection <span class="tf" style="font-size:11px">5m</span> <span class="chip active" style="vertical-align:2px">在研 ACTIVE</span></div>
+        <div class="verdict-line">晋级状态：<b>未达纸面候选</b> —— 走查客观闸门未过（成本+50% 检验未过）· regime 切片未测 · holdout 未消耗（弹药 1 发完好）</div>
+      </div>
+      <div class="actions">
+        <button class="abtn primary">⚗ 排队下一实验</button>
+        <button class="abtn">🏷 记录裁决</button>
+        <button class="abtn danger-outline" disabled title="需先通过走查全部闸门">🎯 holdout 射击（锁定）</button>
+      </div>
+    </div>
+
+    <div class="detail-grid">
+      <!-- 成本曲线 -->
+      <div>
+        <div class="blk-t">成本曲线 · <span class="en">EXPECTANCY vs COST</span>（R1 原始几何 · $1,000 名义/笔）</div>
+        <svg viewBox="0 0 460 240" style="width:100%;display:block" font-family="SFMono-Regular,Menlo,monospace">
+          <line x1="50" y1="95" x2="430" y2="95" stroke="rgba(255,255,255,.14)" stroke-width="1"/>
+          <text x="434" y="98" fill="#788391" font-size="9">0</text>
+          <line x1="202" y1="24" x2="202" y2="216" stroke="#2dd4bf" stroke-dasharray="4 4" opacity=".7"/>
+          <line x1="430" y1="24" x2="430" y2="216" stroke="#ff6b6b" stroke-dasharray="4 4" opacity=".7"/>
+          <text x="206" y="22" fill="#2dd4bf" font-size="9">maker 2bp</text>
+          <text x="386" y="22" fill="#ff6b6b" font-size="9">taker 5bp</text>
+          <polyline points="50,36 88,52 126,68 202,101 430,199" fill="none" stroke="#b894ff" stroke-width="2"/>
+          <g fill="#b894ff">
+            <circle cx="50" cy="36" r="3.5"/><circle cx="88" cy="52" r="3.5"/><circle cx="126" cy="68" r="3.5"/>
+            <circle cx="202" cy="101" r="3.5"/><circle cx="430" cy="199" r="3.5"/>
+          </g>
+          <circle cx="189" cy="95" r="5" fill="none" stroke="#f5b84b" stroke-width="2"/>
+          <text x="120" y="118" fill="#f5b84b" font-size="10">保本 1.83bp/边</text>
+          <g fill="#a4acb8" font-size="9.5">
+            <text x="42" y="30">+0.37</text><text x="196" y="115">−0.03</text><text x="392" y="212">−0.63 /笔</text>
+          </g>
+          <g fill="#788391" font-size="9.5">
+            <text x="46" y="232">0</text><text x="84" y="232">0.5</text><text x="122" y="232">1</text><text x="198" y="232">2</text><text x="424" y="232">5 bp/边</text>
+          </g>
+        </svg>
+        <div style="font-size:11px;color:var(--faint);margin-top:6px">每 0.5bp/边 成本 ≈ −0.10/笔。R3 最优几何（8x hold）的成本网格待重跑确认。</div>
+      </div>
+
+      <!-- R3 热力图 -->
+      <div>
+        <div class="blk-t">持仓几何 · <span class="en">R3 HOLD × SCALE</span>（maker 2bp 净值/笔 · N=12 单元）</div>
+        <div class="hm">
+          <div class="hd"></div><div class="hd">1.0x 止损止盈</div><div class="hd">1.5x</div><div class="hd">2.0x</div>
+          <div class="hd">1x 持仓</div>
+          <div class="cell" style="background:rgba(255,107,107,.10);color:#ffb3b3">−0.033<small>192t</small></div>
+          <div class="cell" style="background:rgba(45,212,191,.13);color:#8fe8dc">+0.093<small>171t</small></div>
+          <div class="cell" style="background:rgba(45,212,191,.07);color:#8fe8dc">+0.020<small>168t</small></div>
+          <div class="hd">2x</div>
+          <div class="cell" style="background:rgba(255,107,107,.07);color:#ffb3b3">−0.011<small>166t</small></div>
+          <div class="cell" style="background:rgba(255,107,107,.22);color:#ffb3b3">−0.198<small>151t</small></div>
+          <div class="cell" style="background:rgba(255,107,107,.30);color:#ffb3b3">−0.282<small>149t</small></div>
+          <div class="hd">4x</div>
+          <div class="cell" style="background:rgba(45,212,191,.22);color:#8fe8dc">+0.183<small>139t</small></div>
+          <div class="cell" style="background:rgba(45,212,191,.09);color:#8fe8dc">+0.036<small>140t</small></div>
+          <div class="cell" style="background:rgba(255,107,107,.20);color:#ffb3b3">−0.185<small>141t</small></div>
+          <div class="hd">8x</div>
+          <div class="cell best" style="background:rgba(45,212,191,.30);color:#c8f5ee">+0.263<small>128t ★</small></div>
+          <div class="cell" style="background:rgba(255,107,107,.28);color:#ffb3b3">−0.271<small>124t</small></div>
+          <div class="cell" style="background:rgba(255,107,107,.5);color:#ffd2d2">−0.665<small>119t</small></div>
+        </div>
+        <div style="font-size:11px;color:var(--amber);margin-top:8px">⚠ ★ 为 12 单元中最好值（best-of-N）。信号衰减慢：长持仓 + 紧止损方向更优。</div>
+      </div>
+
+      <!-- 晋级清单 -->
+      <div>
+        <div class="blk-t">晋级清单 · <span class="en">PROMOTION GATES</span>（配置驱动 · 先闸门后排序）</div>
+        <div class="gate"><span class="ic ok">✓</span><div>OOS 样本 ≥ 100 笔<div class="g-sub">R1 几何 192 笔 · 最优几何 128 笔</div></div></div>
+        <div class="gate"><span class="ic ok">✓</span><div>最大回撤 ≤ 上限<div class="g-sub">0.73%，远低于配置上限</div></div></div>
+        <div class="gate"><span class="ic fail">✗</span><div>成本 +50%（maker 3bp）仍为正<div class="g-sub">R1 几何为负；最优几何需重跑成本网格验证</div></div></div>
+        <div class="gate"><span class="ic todo">◌</span><div>≥ 2/3 regime 切片非负<div class="g-sub">尚未运行 regime 切片 —— 下一实验建议</div></div></div>
+        <div class="gate"><span class="ic ammo">●</span><div>holdout 一次性评估（28 天隔离）<div class="g-sub">未消耗。此家族仅此一发 —— 走查全过后再射击</div></div></div>
+      </div>
+    </div>
+
+    <!-- 实验历史 + 实验台 -->
+    <div class="hist-cli">
+      <div>
+        <div class="blk-t">实验历史 · <span class="en">FAMILY TRIALS</span>（含 invalid · 永不删除）</div>
+        <table>
+          <tbody>
+            <tr><td class="num dim">07-05 02:31</td><td class="strat">R3_h8x_s1p0x</td><td><span class="st valid">valid</span></td><td class="r num pos">+0.263/笔</td><td class="dim">128t · ★ 最优单元</td></tr>
+            <tr><td class="num dim">07-05 02:31</td><td class="strat">R3_h4x_s1p0x</td><td><span class="st valid">valid</span></td><td class="r num pos">+0.183/笔</td><td class="dim">139t</td></tr>
+            <tr><td class="num dim">07-05 02:30</td><td class="strat">R3_h1x_s1p5x</td><td><span class="st valid">valid</span></td><td class="r num pos">+0.093/笔</td><td class="dim">171t</td></tr>
+            <tr><td class="num dim">07-05 02:30</td><td class="strat">R3_h8x_s2p0x</td><td><span class="st valid">valid</span></td><td class="r num neg">−0.665/笔</td><td class="dim">119t</td></tr>
+            <tr><td class="num dim">07-05 02:26</td><td class="strat">R1_triage</td><td><span class="st valid">valid</span></td><td class="r num neg">−0.033/笔</td><td class="dim">192t · 粗筛入围</td></tr>
+            <tr><td class="dim" colspan="5">… 家族全部 13 条试验（best-of-N 计数基数）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div class="blk-t">实验台 · <span class="en">NEXT EXPERIMENT</span>（模板化 · 强制登记）</div>
+        <div class="tmpl">
+          <span class="t-opt on">成本网格重跑（最优几何）</span>
+          <span class="t-opt">regime 切片</span>
+          <span class="t-opt">几何细扫 hold 6–12x</span>
+          <span class="t-opt">holdout 射击 🔒</span>
+        </div>
+        <div class="cli">
+          <span class="copy">复制</span>
+          <span class="dim"># 登记后运行 · 结果回显为 pending → valid/invalid</span><br>
+          <span class="cmd">python -m pipelines.lab_run run r4 \</span><br>
+          <span class="cmd">&nbsp;&nbsp;<span class="flag">--start</span> 2025-12-11 <span class="flag">--end</span> 2026-07-05</span>
+        </div>
+        <div class="ammo-note">⚠ 本次为该家族第 14 次试验 —— 每多一次扫描，「最好值」的可信度就再降一分。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ FOOT ============ -->
+  <div class="foot">
+    <span><b>研究口径</b> 固定名义 $1,000/笔 · 无杠杆语义 · OOS-only · t+1 open 执行 · 止损优先于止盈</span>
+    <span><b>数据</b> outputs/lab/registry.json · 102 试验全登记（含失败）</span>
+    <span><b>纪律</b> holdout 每家族一发 · 金额一律以 bp 表达 · 本页任何数字均非实盘业绩</span>
+    <span class="mono dim">mockup lab-v1 · 2026-07-05</span>
+  </div>
+</div>
+</body>
+</html>
