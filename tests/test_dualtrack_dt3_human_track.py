@@ -110,3 +110,32 @@ def test_in_plan_human_order_is_not_flagged(tmp_path: Path) -> None:
     })
 
     assert fill["out_of_plan"] is False
+
+
+def test_open_ended_long_plan_skips_missing_high_but_enforces_floor(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    plan = _plan(cycle_id)
+    plan["range"] = {"low": 3940.0, "high": None}
+    store = DualTrackPlanStore(tmp_path / "outputs", config=TEST_CONFIG)
+    store.save_human_plan(plan, now="2026-07-05T00:59:00+00:00")
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+
+    high_fill = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "market",
+        "price": 4100.0,
+        "notional": 1000.0,
+    })
+    floor_break_fill = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:03:00+00:00",
+        "side": "buy",
+        "order_type": "market",
+        "price": 3939.0,
+        "notional": 1000.0,
+    })
+
+    assert high_fill["out_of_plan"] is False
+    assert floor_break_fill["out_of_plan"] is True

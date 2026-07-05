@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pipelines.dualtrack_cycle_runner as cycle_runner_module
 from pipelines.dualtrack_cycle_runner import DualTrackCycleRunner
 from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
@@ -83,6 +84,10 @@ def _seed_previous_and_day(db: Path) -> MarketStore:
     return store
 
 
+def _realized_pnl(fills: list[dict]) -> float:
+    return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
+
+
 def test_d8_1_prefix_replay_matches_batch_runner_on_same_prefix(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
@@ -137,7 +142,84 @@ def test_d8_3_intraday_tick_is_idempotent_for_same_bar_set(tmp_path: Path) -> No
     runner.intraday_tick(cycle_id, as_of="2026-07-05T01:04:00+00:00")
     second = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
 
+    assert len(second) == len(first)
+    assert _realized_pnl(second) == _realized_pnl(first)
     assert second == first
+
+
+def test_d8_3_auto_event_replaces_machine_fills_for_same_bar_set(tmp_path: Path, monkeypatch) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    monkeypatch.setattr(cycle_runner_module, "dualtrack_config", lambda: TEST_CONFIG)
+    argv = [
+        "--event", "auto",
+        "--as-of", "2026-07-05T01:04:00+00:00",
+        "--market-db", str(db),
+        "--output-root", str(output),
+    ]
+
+    assert cycle_runner_module.main(argv) == 0
+    first = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+    assert cycle_runner_module.main(argv) == 0
+    second = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+
+    assert first
+    assert len(second) == len(first)
+    assert _realized_pnl(second) == _realized_pnl(first)
+    assert second == first
+
+
+def test_d8_3_run_close_run_keeps_frozen_trend_gate_and_fills(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+
+    pre = runner.pre_cycle(cycle_id, as_of="2026-07-05T01:00:00+00:00")
+    assert pre["trend_gate_armed"] is False
+    runner.intraday_tick(cycle_id, as_of="2026-07-05T13:00:00+00:00")
+    first = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+    assert first
+    assert {fill["layer"] for fill in first} == {"grid"}
+
+    close = runner.close_cycle(cycle_id, as_of="2026-07-05T13:00:00+00:00")
+    assert close["status"] == "closed"
+    assert load_json(output / "dualtrack" / "scoreboard.json")[-1]["trend_leg_gate"]["armed"] is True
+    assert load_json(output / "dualtrack" / "cycles" / f"{cycle_id}.json")[-1]["trend_gate_armed"] is False
+
+    runner.intraday_tick(cycle_id, as_of="2026-07-05T13:00:00+00:00")
+    second = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+
+    assert len(second) == len(first)
+    assert _realized_pnl(second) == _realized_pnl(first)
+    assert second == first
+    assert {fill["layer"] for fill in second} == {"grid"}
+
+
+def test_d8_3_frozen_armed_gate_runs_trend_leg_on_first_pass(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    write_json(output / "dualtrack" / "scoreboard.json", [{
+        "history": {"human": [], "ai": []},
+        "trend_leg_gate": {"threshold": 0.60, "armed": True, "basis": {"hit_rate": 1.0}},
+    }])
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+
+    pre = runner.pre_cycle(cycle_id, as_of="2026-07-05T01:00:00+00:00")
+    state = runner.intraday_tick(cycle_id, as_of="2026-07-05T13:00:00+00:00")["state"]
+    fills = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+
+    assert pre["trend_gate_armed"] is True
+    assert state["trend_gate_armed"] is True
+    assert any(fill["layer"] == "trend" for fill in fills)
 
 
 def test_d8_4_close_cycle_is_single_shot(tmp_path: Path) -> None:

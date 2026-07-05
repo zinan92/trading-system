@@ -90,9 +90,12 @@ class DualTrackHumanEngine:
 def _out_of_plan(plan: dict[str, Any] | None, *, side: str, price: float) -> bool:
     if not plan:
         return True
-    low = float((plan.get("range") or {}).get("low"))
-    high = float((plan.get("range") or {}).get("high"))
-    if price < low or price > high:
+    bounds = plan.get("range") or {}
+    low = bounds.get("low")
+    high = bounds.get("high")
+    if low is not None and price < float(low):
+        return True
+    if high is not None and price > float(high):
         return True
     direction = str(plan.get("direction") or "").lower()
     if direction == "long":

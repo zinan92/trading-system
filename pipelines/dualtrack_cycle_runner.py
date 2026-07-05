@@ -57,6 +57,7 @@ class DualTrackCycleRunner:
             prev_cycle_range=prev_range,
             now=as_of or cycle_window_from_id(cycle_id).start,
         )
+        trend_gate_armed = self._freeze_trend_gate(cycle_id, as_of=as_of or cycle_window_from_id(cycle_id).start)
         return {
             "event": "pre_cycle",
             "cycle_id": cycle_id,
@@ -64,6 +65,7 @@ class DualTrackCycleRunner:
             "ai_plan_present": plan is not None,
             "prev_range": prev_range,
             "bar_count": len(bars),
+            "trend_gate_armed": trend_gate_armed,
         }
 
     def intraday_tick(self, cycle_id: str | None = None, *, as_of: str | datetime | None = None) -> dict[str, Any]:
@@ -73,7 +75,14 @@ class DualTrackCycleRunner:
             self.store.audit(window.cycle_id, "cycle_runner_intraday_skipped", {"reason": "cycle_bars_missing"})
             return {"event": "intraday", "cycle_id": window.cycle_id, "status": "skipped", "reason": "cycle_bars_missing"}
         prev_range = self.previous_cycle_range(window.cycle_id)
-        state = self.machine.run_effective_plan(window.cycle_id, bars, prev_range=prev_range, as_of=as_of)
+        trend_gate_armed = self._frozen_or_freeze_trend_gate(window.cycle_id, as_of=window.start)
+        state = self.machine.run_effective_plan(
+            window.cycle_id,
+            bars,
+            prev_range=prev_range,
+            as_of=as_of,
+            trend_gate_armed=trend_gate_armed,
+        )
         self._write_runner_state(window.cycle_id, "intraday", {"bar_count": len(bars), "prev_range": prev_range})
         return {"event": "intraday", "cycle_id": window.cycle_id, "status": "ran", "bar_count": len(bars), "state": state}
 
@@ -86,7 +95,14 @@ class DualTrackCycleRunner:
             self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": "cycle_bars_missing"})
             return {"event": "close", "cycle_id": cycle_id, "status": "skipped", "reason": "cycle_bars_missing"}
         prev_range = self.previous_cycle_range(cycle_id)
-        self.machine.run_effective_plan(cycle_id, bars, prev_range=prev_range, as_of=as_of or cycle_window_from_id(cycle_id).end)
+        trend_gate_armed = self._frozen_or_freeze_trend_gate(cycle_id, as_of=cycle_window_from_id(cycle_id).start)
+        self.machine.run_effective_plan(
+            cycle_id,
+            bars,
+            prev_range=prev_range,
+            as_of=as_of or cycle_window_from_id(cycle_id).end,
+            trend_gate_armed=trend_gate_armed,
+        )
         attribution = self.scorer.close_cycle(cycle_id, bars)
         self._write_runner_state(cycle_id, "close", {"bar_count": len(bars), "prev_range": prev_range})
         return {"event": "close", "cycle_id": cycle_id, "status": "closed", "attribution": attribution}
@@ -133,6 +149,39 @@ class DualTrackCycleRunner:
         rows = load_json(path)
         rows.append({"ts": parse_utc(None).isoformat(), "cycle_id": cycle_id, "event": event, "detail": detail})
         write_json(path, rows)
+
+    def _frozen_or_freeze_trend_gate(self, cycle_id: str, *, as_of: str | datetime | None = None) -> bool:
+        frozen = self.machine.frozen_trend_gate_armed(cycle_id)
+        if frozen is not None:
+            return frozen
+        return self._freeze_trend_gate(cycle_id, as_of=as_of or cycle_window_from_id(cycle_id).start)
+
+    def _freeze_trend_gate(self, cycle_id: str, *, as_of: str | datetime | None = None) -> bool:
+        frozen = self.machine.frozen_trend_gate_armed(cycle_id)
+        if frozen is not None:
+            return frozen
+        armed = self._scoreboard_trend_gate_armed()
+        window = cycle_window_from_id(cycle_id)
+        path = self.output_root / "dualtrack" / "cycles" / f"{cycle_id}.json"
+        rows = load_json(path)
+        state = rows[-1] if rows else {
+            "cycle_id": cycle_id,
+            "kind": cycle_id.rsplit("_", 1)[-1],
+            "start": window.start.isoformat(),
+            "end": window.end.isoformat(),
+        }
+        state["trend_gate_armed"] = armed
+        state["trend_gate_frozen_at"] = parse_utc(as_of or window.start).isoformat()
+        state["trend_gate_source"] = "scoreboard_at_cycle_start"
+        state.setdefault("layers", ["grid:pending", f"trend:{'armed' if armed else 'standby'}"])
+        write_json(path, [state])
+        return armed
+
+    def _scoreboard_trend_gate_armed(self) -> bool:
+        rows = load_json(self.output_root / "dualtrack" / "scoreboard.json")
+        board = rows[-1] if rows else {}
+        gate = board.get("trend_leg_gate") if isinstance(board.get("trend_leg_gate"), dict) else {}
+        return bool(gate.get("armed", False))
 
 
 def build_parser() -> argparse.ArgumentParser:  # pragma: no cover - thin CLI wrapper

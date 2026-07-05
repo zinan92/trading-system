@@ -39,6 +39,7 @@ class DualTrackScorer:
         machine_captured = captured_count(opportunities, machine_fills)
         human_captured = captured_count(opportunities, human_fills)
         plan_grades = self._grade_plans(cycle_id, realized_direction)
+        existing_cycle = _existing_cycle(cycle_id, self.root)
         scoreboard = self._update_scoreboard(cycle_id, plan_grades)
         cycle = {
             "cycle_id": cycle_id,
@@ -48,8 +49,8 @@ class DualTrackScorer:
             "open_price": open_price,
             "close_price": close_price,
             "realized_direction": realized_direction,
-            "effective_plan_author": _existing_cycle(cycle_id, self.root).get("effective_plan_author", ""),
-            "machine_stood_down": bool(_existing_cycle(cycle_id, self.root).get("machine_stood_down", False)),
+            "effective_plan_author": existing_cycle.get("effective_plan_author", ""),
+            "machine_stood_down": bool(existing_cycle.get("machine_stood_down", False)),
             "opportunity_count": len(opportunities),
             "machine_captured": machine_captured,
             "human_captured": human_captured,
@@ -57,6 +58,7 @@ class DualTrackScorer:
             "human_realized_pnl": _pnl(human_fills),
             "plan_grades": plan_grades,
         }
+        _preserve_machine_state(cycle, existing_cycle)
         write_json(self.root / "cycles" / f"{cycle_id}.json", [cycle])
         daily = self._write_daily_ledger(cycle_id, machine_fills, human_fills)
         weekly = self._write_weekly_ledger(daily["date"])
@@ -280,6 +282,12 @@ def _score_rows(rows: list[dict[str, Any]], window: int) -> dict[str, Any]:
 def _existing_cycle(cycle_id: str, root: Path) -> dict[str, Any]:
     rows = load_json(root / "cycles" / f"{cycle_id}.json")
     return rows[-1] if rows else {}
+
+
+def _preserve_machine_state(cycle: dict[str, Any], existing: dict[str, Any]) -> None:
+    for key in ("layers", "trend_gate_armed", "trend_gate_frozen_at", "trend_gate_source", "stop_hit", "rearms"):
+        if key in existing:
+            cycle[key] = existing[key]
 
 
 def _direction(open_price: float, close_price: float) -> str:
