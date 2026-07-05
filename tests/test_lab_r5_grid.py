@@ -127,3 +127,35 @@ def test_breakeven_hit_rate_math() -> None:
     assert breakeven_hit_rate(30.0, -10.0) == 0.25
     assert breakeven_hit_rate(-1.0, -10.0) is None
     assert breakeven_hit_rate(10.0, 5.0) is None
+
+
+def test_budget_sizing_scales_rung_notional() -> None:
+    # spacing 100bp on a 2%-wide range -> 2 rungs of $5k instead of $1k each
+    closes = [4000.0, 3958.0, 4000.0, 3958.0, 4001.0]
+    cycle = _make_cycle(closes, prev_range=80.0)
+    small = simulate_cycle(cycle, 1, spacing_bp=100.0, range_k=1.0, config=CFG)
+    big = simulate_cycle(cycle, 1, spacing_bp=100.0, range_k=1.0, config=CFG, budget_sizing=True)
+    assert big["round_trips"] == small["round_trips"] >= 1
+    assert big["net_by_cost"]["0bp"] > small["net_by_cost"]["0bp"] * 4  # 5x notional per rung
+
+
+def test_tp_mult_requires_bigger_move() -> None:
+    # dip fills the rung; +1 spacing recovery satisfies tp1 but not tp2
+    closes = [4000.0, 3991.0, 4000.5, 4000.5, 4000.5]
+    cycle = _make_cycle(closes)
+    tp1 = simulate_cycle(cycle, 1, spacing_bp=20.0, range_k=1.0, config=CFG, tp_mult=1.0)
+    tp2 = simulate_cycle(cycle, 1, spacing_bp=20.0, range_k=1.0, config=CFG, tp_mult=2.0)
+    assert tp1["round_trips"] == 1
+    assert tp2["round_trips"] == 0
+
+
+def test_re_arm_trades_after_stop() -> None:
+    # crash through the range, then oscillate around the new anchor
+    closes = [4000.0, 3985.0, 3955.0]  # breach (stop at 3960); re-anchor 3955, first rung 3947
+    closes += [3946.0, 3956.0, 3946.0, 3956.0, 3946.0, 3956.0]
+    cycle = _make_cycle(closes, prev_range=40.0)
+    plain = simulate_cycle(cycle, 1, spacing_bp=20.0, range_k=1.0, config=CFG)
+    rearmed = simulate_cycle(cycle, 1, spacing_bp=20.0, range_k=1.0, config=CFG, re_arm=True)
+    assert plain["stop_hit"] and plain["round_trips"] == 0
+    assert rearmed["rearms"] == 1
+    assert rearmed["round_trips"] >= 1

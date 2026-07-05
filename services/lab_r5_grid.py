@@ -100,8 +100,24 @@ def segment_cycles(bars: list[Bar]) -> list[Cycle]:
     return cycles
 
 
-def simulate_cycle(cycle: Cycle, direction: int, *, spacing_bp: float, range_k: float, config: R5GridConfig) -> dict:
-    """Run one conditional grid over one cycle. Returns fills/PnL breakdown."""
+def simulate_cycle(
+    cycle: Cycle,
+    direction: int,
+    *,
+    spacing_bp: float,
+    range_k: float,
+    config: R5GridConfig,
+    tp_mult: float = 1.0,
+    re_arm: bool = False,
+    budget_sizing: bool = False,
+) -> dict:
+    """Run one conditional grid over one cycle. Returns fills/PnL breakdown.
+
+    ``tp_mult`` stretches the take-profit to N spacings. ``re_arm`` rebuilds
+    the grid once after a stop-out, re-anchored at the breach bar close.
+    ``budget_sizing`` splits a fixed total notional across the rungs so every
+    geometry deploys the same capital at full inventory.
+    """
 
     if direction == 0:
         return _idle_result()
@@ -111,6 +127,7 @@ def simulate_cycle(cycle: Cycle, direction: int, *, spacing_bp: float, range_k: 
     n_rungs = min(config.max_rungs, int(half_width / spacing)) if spacing > 0 else 0
     if n_rungs < 1:
         return _idle_result()
+    rung_notional = (config.max_rungs * config.rung_notional / n_rungs) if budget_sizing else config.rung_notional
 
     sign = 1 if direction > 0 else -1
     levels = [anchor - sign * spacing * (i + 1) for i in range(n_rungs)]
@@ -120,6 +137,7 @@ def simulate_cycle(cycle: Cycle, direction: int, *, spacing_bp: float, range_k: 
     sides = 0
     round_trips = 0
     stop_hit = False
+    rearms = 0
     max_inventory = 0
 
     for i, bar in enumerate(cycle.bars):
@@ -137,18 +155,24 @@ def simulate_cycle(cycle: Cycle, direction: int, *, spacing_bp: float, range_k: 
             # conservative: rungs fill at their levels, then everything stops out
             exit_price = min(float(bar.open), stop) if sign > 0 else max(float(bar.open), stop)
             for rung in list(holding):
-                filled_gross += sign * (exit_price - levels[rung]) * _units(levels[rung], config)
+                filled_gross += sign * (exit_price - levels[rung]) * _units(levels[rung], rung_notional)
                 sides += 1
             holding.clear()
             stop_hit = True
+            if re_arm and rearms < 1:
+                rearms += 1
+                re_anchor = float(bar.close)
+                levels = [re_anchor - sign * spacing * (j + 1) for j in range(n_rungs)]
+                stop = re_anchor - sign * half_width
+                continue
             break
         for rung in list(holding):
             if holding[rung] >= i:
                 continue  # no same-bar round trip
-            target = levels[rung] + sign * spacing
+            target = levels[rung] + sign * spacing * tp_mult
             done = high >= target if sign > 0 else low <= target
             if done:
-                filled_gross += sign * (target - levels[rung]) * _units(levels[rung], config)
+                filled_gross += sign * (target - levels[rung]) * _units(levels[rung], rung_notional)
                 sides += 1
                 round_trips += 1
                 del holding[rung]
@@ -156,12 +180,12 @@ def simulate_cycle(cycle: Cycle, direction: int, *, spacing_bp: float, range_k: 
     if holding:
         last_close = float(cycle.bars[-1].close)
         for rung in list(holding):
-            filled_gross += sign * (last_close - levels[rung]) * _units(levels[rung], config)
+            filled_gross += sign * (last_close - levels[rung]) * _units(levels[rung], rung_notional)
             sides += 1
         holding.clear()
 
     net_by_cost = {
-        _cost_key(bp): filled_gross - sides * config.rung_notional * bp / 10_000.0
+        _cost_key(bp): filled_gross - sides * rung_notional * bp / 10_000.0
         for bp in config.cost_grid_bp
     }
     return {
@@ -171,6 +195,7 @@ def simulate_cycle(cycle: Cycle, direction: int, *, spacing_bp: float, range_k: 
         "sides": sides,
         "round_trips": round_trips,
         "stop_hit": stop_hit,
+        "rearms": rearms,
         "max_inventory": max_inventory,
     }
 
@@ -220,6 +245,134 @@ def run_r5_grid(output_root: Path, registry: LabRegistry, bars: list[Bar], *, co
     return report
 
 
+R5C_ARMS = ("oracle", "anti", "random")
+R5C_SPACING_BP = (20.0, 50.0, 80.0)
+R5C_RANGE_K = (1.0, 1.5)
+R5C_TP_MULT = (1.0, 2.0)
+R5C_RE_ARM = (False, True)
+
+
+def run_r5c_density(output_root: Path, registry: LabRegistry, bars: list[Bar], *, config: R5GridConfig | None = None) -> dict:
+    """R5-C: cash-flow density sweep — wider swing-eating rungs, stretched
+    take-profits, one re-arm after stop, budget-normalized sizing so every
+    geometry deploys the same $10k at full inventory."""
+
+    cfg = config or R5GridConfig()
+    cycles = segment_cycles(bars)
+    data_range = _data_range(bars)
+    rng = random.Random(cfg.random_seed)
+    random_dirs = {cycle.cycle_id: rng.choice((1, -1)) for cycle in cycles}
+
+    cells: list[dict] = []
+    for arm in R5C_ARMS:
+        for k in R5C_RANGE_K:
+            for s_bp in R5C_SPACING_BP:
+                for tp in R5C_TP_MULT:
+                    for ra in R5C_RE_ARM:
+                        exp_id = f"R5C_grid_{arm}_k{_fmt_tag(k)}_s{_fmt_tag(s_bp)}bp_tp{_fmt_tag(tp)}_ra{int(ra)}"
+                        entry = registry.start(
+                            {
+                                "hypothesis": "R5-C: raise conditional-grid cash-flow density per dollar of capital",
+                                "family": "r5c_grid_density_gold_1m",
+                                "strategy_ref": {"strategy_id": "conditional_grid", "engine": "r5_grid", "symbol": "GOLD", "timeframe": "1m"},
+                                "params_diff": {"arm": arm, "range_k": k, "spacing_bp": s_bp, "tp_mult": tp, "re_arm": ra, "budget_sizing": True},
+                                "data_range": data_range,
+                                "notes": ["oracle/anti arms use deliberate hindsight; diagnostic only, never promotion evidence"],
+                            },
+                            exp_id=exp_id,
+                        )
+                        summary = _run_cell(
+                            cycles, arm, random_dirs, spacing_bp=s_bp, range_k=k, config=cfg,
+                            tp_mult=tp, re_arm=ra, budget_sizing=True,
+                        )
+                        cost_rows = summary.pop("cost_grid_results")
+                        status = "valid" if summary["cycles_traded"] >= cfg.min_cycles else "invalid"
+                        registry.finalize(
+                            entry["exp_id"],
+                            status=status,
+                            results={
+                                "cost_grid_results": cost_rows,
+                                "objective": {"r5_grid": {**summary, "status": status}},
+                            },
+                        )
+                        cells.append({
+                            "exp_id": exp_id, "arm": arm, "range_k": k, "spacing_bp": s_bp,
+                            "tp_mult": tp, "re_arm": ra, "status": status,
+                            "cost_grid_results": cost_rows, **summary,
+                        })
+
+    report = _build_r5c_report(cells, cfg, data_range, len(cycles))
+    write_json(output_root / "lab" / "reports" / "R5C_grid_density.json", [report])
+    _write_r5c_markdown(output_root / "lab" / "reports" / "R5C_grid_density.md", report)
+    return report
+
+
+def _build_r5c_report(cells: list[dict], cfg: R5GridConfig, data_range: dict, n_cycles: int) -> dict:
+    geometries: dict[str, dict] = {}
+    for cell in cells:
+        geo = f"k{_fmt_tag(cell['range_k'])}_s{_fmt_tag(cell['spacing_bp'])}bp_tp{_fmt_tag(cell['tp_mult'])}_ra{int(cell['re_arm'])}"
+        geometries.setdefault(geo, {})[cell["arm"]] = cell
+    rows = []
+    for geo, arms in geometries.items():
+        oracle = arms.get("oracle", {}).get("cost_grid_results", {})
+        anti = arms.get("anti", {}).get("cost_grid_results", {})
+        rnd = arms.get("random", {}).get("cost_grid_results", {})
+        row = {"geometry": geo}
+        for key in ("0.3bp", "0.5bp", "2bp"):
+            o_mean = oracle.get(key, {}).get("mean_net_per_cycle")
+            a_mean = anti.get(key, {}).get("mean_net_per_cycle")
+            row[key] = {
+                "oracle": o_mean,
+                "random": rnd.get(key, {}).get("mean_net_per_cycle"),
+                "anti": a_mean,
+                "breakeven_hit_rate": (
+                    round(breakeven_hit_rate(o_mean, a_mean), 4)
+                    if o_mean is not None and a_mean is not None and breakeven_hit_rate(o_mean, a_mean) is not None
+                    else None
+                ),
+                "oracle_worst_cycle": oracle.get(key, {}).get("worst_cycle"),
+            }
+        row["oracle_stop_rate"] = arms.get("oracle", {}).get("stop_rate")
+        rows.append(row)
+    rows.sort(key=lambda item: -(item["0.5bp"]["oracle"] or -1e9))
+    return {
+        "generated_at": _now(),
+        "family": "r5c_grid_density_gold_1m",
+        "trial_count": len(cells),
+        "data_range": data_range,
+        "coverage_note": f"{n_cycles} research cycles (holdout excluded upstream)",
+        "sizing_note": "budget-normalized: $10k total notional split across rungs (1x on the $10k track); multiply by leverage for account-level $",
+        "geometries": rows,
+        "cells": cells,
+    }
+
+
+def _write_r5c_markdown(path: Path, report: dict) -> None:
+    lines = [
+        "# R5-C Conditional Grid Density Sweep",
+        "",
+        f"- Generated: {report['generated_at']}",
+        f"- Trials registered: {report['trial_count']} (family `{report['family']}`)",
+        f"- Coverage: {report['coverage_note']}; range {report['data_range'].get('start')} -> {report['data_range'].get('end')}",
+        f"- Sizing: {report['sizing_note']}",
+        "- Oracle/anti arms are deliberate hindsight: diagnostic bounds only, never promotion evidence.",
+        "",
+        "## Mean net $/cycle on $10k deployed (sorted by oracle @0.5bp)",
+        "",
+        "|geometry|oracle@0.3|oracle@0.5|random@0.5|anti@0.5|BE hit@0.5|oracle worst cycle@0.5|oracle stop rate|",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for row in report["geometries"]:
+        c3, c5 = row["0.3bp"], row["0.5bp"]
+        be = c5["breakeven_hit_rate"]
+        lines.append(
+            f"|{row['geometry']}|{c3['oracle']}|{c5['oracle']}|{c5['random']}|{c5['anti']}|"
+            f"{'n/a' if be is None else f'{be:.1%}'}|{c5['oracle_worst_cycle']}|{row['oracle_stop_rate']}|"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def breakeven_hit_rate(oracle_mean: float, anti_mean: float) -> float | None:
     """Hit rate where hr*oracle + (1-hr)*anti = 0; None when not bracketed."""
 
@@ -228,7 +381,18 @@ def breakeven_hit_rate(oracle_mean: float, anti_mean: float) -> float | None:
     return -anti_mean / (oracle_mean - anti_mean)
 
 
-def _run_cell(cycles: list[Cycle], arm: str, random_dirs: dict[str, int], *, spacing_bp: float, range_k: float, config: R5GridConfig) -> dict:
+def _run_cell(
+    cycles: list[Cycle],
+    arm: str,
+    random_dirs: dict[str, int],
+    *,
+    spacing_bp: float,
+    range_k: float,
+    config: R5GridConfig,
+    tp_mult: float = 1.0,
+    re_arm: bool = False,
+    budget_sizing: bool = False,
+) -> dict:
     per_cost: dict[str, list[float]] = {_cost_key(bp): [] for bp in config.cost_grid_bp}
     traded = 0
     sides = 0
@@ -236,7 +400,10 @@ def _run_cell(cycles: list[Cycle], arm: str, random_dirs: dict[str, int], *, spa
     stops = 0
     for cycle in cycles:
         direction = _arm_direction(arm, cycle, random_dirs)
-        result = simulate_cycle(cycle, direction, spacing_bp=spacing_bp, range_k=range_k, config=config)
+        result = simulate_cycle(
+            cycle, direction, spacing_bp=spacing_bp, range_k=range_k, config=config,
+            tp_mult=tp_mult, re_arm=re_arm, budget_sizing=budget_sizing,
+        )
         if not result["traded"]:
             continue
         traded += 1
@@ -351,8 +518,8 @@ def _idle_result() -> dict:
     return {"traded": False, "gross_pnl": 0.0, "net_by_cost": {}, "sides": 0, "round_trips": 0, "stop_hit": False, "max_inventory": 0}
 
 
-def _units(level: float, config: R5GridConfig) -> float:
-    return config.rung_notional / level if level > 0 else 0.0
+def _units(level: float, notional: float) -> float:
+    return notional / level if level > 0 else 0.0
 
 
 def _cycle_key(ts: datetime) -> tuple[str, str]:
