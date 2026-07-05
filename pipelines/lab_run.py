@@ -21,6 +21,7 @@ from services.lab_promotion import record_paper_eligibility
 from services.lab_r2_experiment import run_r2_experiment
 from services.lab_r1_scan import R1ScanConfig, run_r1_scan
 from services.lab_r3_sweep import R3SweepConfig, run_r3_sweep
+from services.lab_r4_promotion import run_r4_promotion
 from services.lab_regimes import build_coverage_report, label_regimes, write_regime_artifact
 from services.lab_registry import LabRegistry
 from services.lab_walkforward import HoldoutQuarantine, WalkForwardConfig, build_windows, load_gold_1m_bars
@@ -61,7 +62,7 @@ def main() -> None:
     compare.add_argument("left")
     compare.add_argument("right")
     run = sub.add_parser("run")
-    run.add_argument("experiment", choices=["coverage", "e1", "e2", "e3", "e4", "r1", "r2", "r3", "all"])
+    run.add_argument("experiment", choices=["coverage", "e1", "e2", "e3", "e4", "r1", "r2", "r3", "r4", "all"])
     run.add_argument("--start", default="")
     run.add_argument("--end", default="")
     args = parser.parse_args()
@@ -108,6 +109,8 @@ def main() -> None:
         )
     if args.experiment == "r2":
         run_r2_experiment(output_root, registry, bars, horizon_minutes=_r3_horizon_minutes(output_root))
+    if args.experiment == "r4":
+        run_r4_promotion(output_root, registry, bars)
 
 
 def _run_e1(output_root: Path, registry: LabRegistry, bars: list) -> dict:

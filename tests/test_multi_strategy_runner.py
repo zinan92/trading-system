@@ -272,6 +272,26 @@ def test_enabled_strategy_without_complete_classification_is_skipped(monkeypatch
     assert not (root / "strategies" / "missing_classification" / "signals" / "2026-05-10.json").exists()
 
 
+def test_runner_ignores_disabled_strategy_entries(monkeypatch, tmp_path: Path):
+    root = tmp_path / "outputs"
+    _offline_env(monkeypatch, root, tmp_path / "market_data.db")
+    config = {
+        **_DIVERGENT,
+        "disabled_swing": {
+            "symbol": "GOLD",
+            "enabled": False,
+            "classification": _classification("disabled"),
+            "signal": {"long_strength_min": 0, "long_confidence_min": 0, "short_strength_max": -1, "event_block_below": 0},
+        },
+    }
+
+    summary = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(config)).run("2026-05-10", paper_auto_approve=True)
+
+    assert summary["strategy_count"] == 2
+    assert "disabled_swing" not in {row["strategy_id"] for row in summary["strategies"]}
+    assert not (root / "strategies" / "disabled_swing").exists()
+
+
 def test_runs_each_strategy_in_isolated_namespace(monkeypatch, tmp_path: Path):
     root = tmp_path / "outputs"
     _offline_env(monkeypatch, root, tmp_path / "market_data.db")

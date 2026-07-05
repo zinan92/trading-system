@@ -99,6 +99,30 @@ trials, and fail-closed invalidation when evidence is thin or corrupted.
   docstring, and the true causal detector is too slow for the 296k-bar lab range.
   R2 registers all four chan-family addendum trials as `not_replayable` with an
   explicit bounded-replay reason rather than using the noncausal fast path.
+- Owner decision on 2026-07-05 for R4: funding costs are excluded because the
+  target venue will not be a perpetual and simplicity is preferred. R4 reports
+  carry the required footnote: "Funding excluded (owner decision); revisit before
+  real-money on any perpetual venue."
+- Owner decision on 2026-07-05 for R4: pass/fail verdicts use a lab-scoped
+  primary cost basis of `0.5` bp/side, while the Binance-maker reference basis of
+  `2` bp/side is reported as secondary information only. Production
+  `paper_execution_costs` remain untouched.
+- R4 pins its evaluation input to the R3 candidate artifacts' shared
+  `data_range.end` (`2026-07-05T02:22:00+00:00`) before reproducing anchors.
+  This keeps the pre-registered R3 cells stable even as local SQLite backfill
+  continues to receive newer 1m bars.
+- R4 regime-slice gates reuse E3's deterministic 4h `volatility_bucket` labels
+  as the fixed three-slice battery (`low`, `mid`, `high`), with a primary pass
+  requiring non-negative expectancy in at least two of the three slices.
+- R4 promoted `gold_5m_psych_level_rejection_swing` to lab-scoped
+  `paper_eligible`; `gold_5m_ema50_position_swing` failed the pre-registered
+  holdout expectancy criterion and is not paper-eligible.
+- R4 adds disabled strategy config entries for the two swing variants. The
+  current production runner ignores disabled entries, but the live/paper
+  execution path does not yet express R4's 8x hold and scaled stop/target
+  geometry as runtime exit semantics. Before any manual enablement, the minimal
+  production change would be to add strategy-scoped exit-geometry support to the
+  paper/live execution path and prove parity with the lab replay.
 
 ## Backfill Safety
 

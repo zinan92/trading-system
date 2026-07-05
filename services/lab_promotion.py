@@ -37,6 +37,7 @@ def promotion_gate(entry: dict) -> dict:
         "strategy_ref": entry.get("strategy_ref", {}),
         "metrics": walkforward.get("metrics", {}),
         "holdout_metrics": holdout.get("metrics", {}),
+        **_lab_expectation_fields(entry),
     }
 
 
@@ -72,3 +73,8 @@ def _entries(output_root: Path) -> list[dict]:
         if entry_rows:
             entries.append(entry_rows[0])
     return entries
+
+
+def _lab_expectation_fields(entry: dict) -> dict:
+    expectation = entry.get("lab_expectation")
+    return expectation if isinstance(expectation, dict) else {}

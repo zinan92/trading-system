@@ -73,9 +73,11 @@ class LabRegistry:
             "r1_summary",
             "r2_summary",
             "r3_summary",
+            "r4_summary",
             "chan_summary",
             "replay",
             "model_report",
+            "lab_expectation",
         ):
             if key in results:
                 updated[key] = results[key]

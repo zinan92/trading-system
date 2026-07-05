@@ -732,5 +732,97 @@
       "session_start_utc": 7,
       "session_end_utc": 20
     }
+  },
+  "gold_5m_ema50_position_swing": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "ema50_position",
+    "enabled": false,
+    "live": false,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "position",
+      "family_label": "位置",
+      "style": "ema50_bounce_reject_swing",
+      "style_label": "EMA50 反弹/压制 swing",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "r4_paper_eligible_candidate",
+      "holding_period": "swing_intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 2,
+      "return_profile": "position_trend_rejection_wider_geometry",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "r4_promotion_candidate",
+    "lab_research": {
+      "source_experiment": "R4_gold_5m_ema50_position_swing",
+      "base_strategy_id": "gold_5m_ema50_position",
+      "hold_multiplier": 8,
+      "max_hold_bars": 192,
+      "stop_target_scale": 2.0,
+      "funding_excluded": true
+    },
+    "backtest": {
+      "stop_pct": 0.012,
+      "target_pct": 0.024,
+      "max_hold_bars": 192
+    },
+    "signal": {
+      "min_bars": 90,
+      "ema_period": 50,
+      "tolerance_pct": 0.12
+    }
+  },
+  "gold_5m_psych_level_rejection_swing": {
+    "symbol": "GOLD",
+    "timeframe": "5m",
+    "engine": "psych_level_rejection",
+    "enabled": false,
+    "live": false,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "liquidity_reversal",
+      "family_label": "流动性反转",
+      "style": "psych_level_rejection_swing",
+      "style_label": "心理整数位扫单回收 swing",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "r4_paper_eligible_candidate",
+      "holding_period": "swing_intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 2,
+      "return_profile": "key_level_reversal_wider_hold",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "r4_promotion_candidate",
+    "lab_research": {
+      "source_experiment": "R4_gold_5m_psych_level_rejection_swing",
+      "base_strategy_id": "gold_5m_psych_level_rejection",
+      "hold_multiplier": 8,
+      "max_hold_bars": 192,
+      "stop_target_scale": 1.0,
+      "funding_excluded": true
+    },
+    "backtest": {
+      "stop_pct": 0.006,
+      "target_pct": 0.012,
+      "max_hold_bars": 192
+    },
+    "signal": {
+      "min_bars": 96,
+      "level_step": 25.0,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.28,
+      "adx_lookback_bars": 14,
+      "max_adx": 32,
+      "sweep_tolerance_pct": 0.015,
+      "reclaim_buffer_pct": 0.006,
+      "min_rejection_wick_pct": 0.025,
+      "max_close_distance_pct": 0.10,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
   }
 }
