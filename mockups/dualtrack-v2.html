@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>人机双轨作战台 — Trading Orchestrator (mockup v2)</title>
+<style>
+:root{
+  --bg:#08090b; --surface:#111318; --surface2:#171b22; --surface3:#202631;
+  --line:rgba(255,255,255,.1); --line2:rgba(255,255,255,.16);
+  --text:#f2f4f7; --muted:#a4acb8; --faint:#788391;
+  --gold:#d8aa3f; --teal:#2dd4bf; --blue:#7aa2ff; --red:#ff6b6b; --amber:#f5b84b; --violet:#b894ff;
+  --shadow:0 14px 44px rgba(0,0,0,.32);
+  --mono:"SFMono-Regular","Roboto Mono","Menlo","Consolas",monospace;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%;overflow-x:hidden}
+body{margin:0;background:linear-gradient(180deg,rgba(122,162,255,.05),rgba(8,9,11,0) 220px),var(--bg);
+  color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif}
+a{color:inherit;text-decoration:none}
+.mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.shell{width:min(1600px,100%);margin:0 auto;padding:18px 22px 40px}
+.pos{color:var(--teal)}.neg{color:var(--red)}.warn{color:var(--amber)}.dim{color:var(--faint)}
+
+/* topbar */
+.topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.mark{width:34px;height:34px;border-radius:8px;border:1px solid rgba(216,170,63,.45);display:grid;place-items:center;color:var(--gold);font-weight:900;background:rgba(216,170,63,.08)}
+.brand{display:flex;align-items:center;gap:11px}
+.brand-title{font-size:16px;font-weight:760;line-height:1.1}
+.brand-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.badge-paper{font-size:10px;letter-spacing:.08em;border:1px solid rgba(216,170,63,.5);color:var(--gold);border-radius:4px;padding:2px 6px}
+.tabs{display:flex;gap:2px;margin-left:18px}
+.tab{background:none;border:none;color:var(--muted);font-size:13px;padding:8px 13px;border-bottom:2px solid transparent;cursor:pointer}
+.tab.active{color:var(--text);border-bottom-color:var(--gold);font-weight:640}
+.spacer{flex:1}
+.cycle-chip{display:inline-flex;align-items:center;gap:8px;font-size:12px;border:1px solid var(--line2);background:var(--surface2);border-radius:6px;padding:5px 11px}
+.cycle-chip b{color:var(--text)}
+.clock{font-size:12px;color:var(--faint)}
+
+/* section dividers */
+.moment{display:flex;align-items:center;gap:12px;margin:22px 0 10px}
+.moment .no{width:22px;height:22px;border-radius:50%;border:1px solid var(--line2);display:grid;place-items:center;font-size:11px;color:var(--muted);font-family:var(--mono)}
+.moment .t{font-size:12px;letter-spacing:.1em;color:var(--muted);font-weight:640}
+.moment .s{font-size:11px;color:var(--faint)}
+.moment .rule{flex:1;height:1px;background:var(--line)}
+
+/* generic panel */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.panel-h{display:flex;align-items:baseline;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line)}
+.panel-h .t{font-size:12px;letter-spacing:.08em;color:var(--muted);font-weight:640}
+.panel-h .right{margin-left:auto;font-size:11px;color:var(--faint)}
+
+/* blind answer section */
+.blind-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:14px}
+@media(max-width:1100px){.blind-grid{grid-template-columns:1fr}}
+.track-h{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid var(--line);font-size:12px;font-weight:640}
+.tdot{width:8px;height:8px;border-radius:50%}
+.tdot.human{background:var(--blue)}.tdot.ai{background:var(--violet)}.tdot.live{background:var(--teal);animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.q-body{padding:14px 16px;display:grid;gap:12px}
+.q-row{display:grid;grid-template-columns:88px 1fr;gap:10px;align-items:center;font-size:12.5px}
+.q-row .k{color:var(--faint);font-size:11px;letter-spacing:.06em}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden}
+.seg span{padding:6px 16px;font-size:12px;color:var(--muted);border-right:1px solid var(--line)}
+.seg span:last-child{border-right:none}
+.seg .on{background:rgba(122,162,255,.14);color:var(--blue);font-weight:640}
+.inp{display:inline-flex;align-items:center;gap:6px}
+.inp .box{background:var(--surface2);border:1px solid var(--line2);border-radius:5px;padding:6px 10px;font-family:var(--mono);font-size:12.5px;min-width:86px}
+.conf{display:flex;align-items:center;gap:8px}
+.conf .bar{flex:1;height:5px;border-radius:3px;background:var(--surface3);position:relative;max-width:220px}
+.conf .bar i{position:absolute;left:0;top:0;bottom:0;width:70%;border-radius:3px;background:var(--blue)}
+.lock-row{display:flex;align-items:center;gap:12px;border-top:1px dashed var(--line);padding-top:12px}
+.btn{font-size:12.5px;border-radius:6px;padding:8px 16px;cursor:pointer;border:1px solid var(--line2);background:var(--surface2);color:var(--text)}
+.btn.primary{border-color:rgba(122,162,255,.55);background:rgba(122,162,255,.12);color:var(--blue);font-weight:660}
+.btn.buy{border-color:rgba(45,212,191,.5);background:rgba(45,212,191,.1);color:var(--teal);font-weight:660}
+.btn[disabled]{opacity:.4;cursor:not-allowed}
+.blind-note{font-size:11px;color:var(--faint)}
+.blind-note b{color:var(--amber);font-weight:600}
+.ai-blur{position:relative;min-height:230px;overflow:hidden}
+.ai-blur .fake{padding:16px;filter:blur(7px);opacity:.55;user-select:none}
+.fake .ln{height:11px;border-radius:3px;background:var(--surface3);margin:12px 0}
+.ai-blur .veil{position:absolute;inset:0;display:grid;place-items:center}
+.veil .msg{text-align:center;color:var(--muted);font-size:12.5px}
+.veil .msg .ic{font-size:22px;display:block;margin-bottom:8px}
+
+/* plan strip (intraday, revealed) */
+.plan-strip{display:grid;grid-template-columns:1.2fr 1.2fr 1fr;gap:14px;margin-bottom:14px}
+@media(max-width:1100px){.plan-strip{grid-template-columns:1fr}}
+.plan-card{border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:12px 16px;position:relative}
+.plan-card.human{box-shadow:inset 3px 0 0 var(--blue)}
+.plan-card.ai{box-shadow:inset 3px 0 0 var(--violet)}
+.plan-card .hd{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:8px}
+.plan-card .live-badge{margin-left:auto;font-size:10px;color:var(--teal);border:1px solid rgba(45,212,191,.4);border-radius:4px;padding:1px 7px;background:rgba(45,212,191,.07)}
+.plan-card .row{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px}
+.plan-card .kv b{font-family:var(--mono);font-weight:600}
+.plan-card .kv{color:var(--muted)}
+.plan-card .kv .lab{color:var(--faint);font-size:10.5px;display:block;letter-spacing:.06em}
+.diff{color:var(--amber);font-size:11px;margin-top:7px}
+.scoreboard{border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:12px 16px}
+.scoreboard .big{font-size:24px;font-weight:720;font-family:var(--mono)}
+.scoreboard .sub{font-size:11px;color:var(--faint);margin-top:3px}
+.gate-ok{display:inline-block;font-size:10.5px;color:var(--teal);border:1px solid rgba(45,212,191,.4);border-radius:4px;padding:1px 7px;background:rgba(45,212,191,.07);margin-left:8px;vertical-align:3px}
+
+/* intraday grid */
+.mid-grid{display:grid;grid-template-columns:minmax(0,2.1fr) minmax(0,1fr);gap:14px;align-items:start}
+@media(max-width:1100px){.mid-grid{grid-template-columns:1fr}}
+.chart-foot{display:flex;gap:14px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+.chart-foot b{font-family:var(--mono);color:var(--text);font-weight:600}
+.tf-seg{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;font-size:11px}
+.tf-seg span{padding:3px 10px;color:var(--faint)}
+.tf-seg .on{background:var(--surface3);color:var(--text)}
+
+/* right rail cards */
+.rail{display:flex;flex-direction:column;gap:14px;min-width:0}
+.machine-card{border:1px solid rgba(184,148,255,.3)}
+.machine-card .track-h{color:var(--violet)}
+.blind-badge{margin-left:auto;font-size:10px;color:var(--violet);border:1px solid rgba(184,148,255,.4);border-radius:4px;padding:1px 7px;background:rgba(184,148,255,.07)}
+.pnl-wrap{padding:14px 16px;display:flex;align-items:baseline;gap:16px}
+.pnl-wrap .total{font-size:30px;font-weight:740;font-family:var(--mono)}
+.pnl-split{font-size:11.5px;color:var(--muted);line-height:1.7}
+.layer{display:flex;align-items:center;gap:8px;padding:8px 16px;border-top:1px dashed var(--line);font-size:12px}
+.layer .st{margin-left:auto;font-size:10.5px;font-family:var(--mono)}
+.machine-note{padding:9px 16px;border-top:1px solid var(--line);font-size:10.5px;color:var(--faint)}
+.human-card{border:1px solid rgba(122,162,255,.3)}
+.human-card .track-h{color:var(--blue)}
+.ticket{padding:12px 16px;display:grid;gap:10px}
+.ticket .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.amt{display:inline-flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden;font-size:11.5px;font-family:var(--mono)}
+.amt span{padding:5px 12px;color:var(--muted);border-right:1px solid var(--line)}
+.amt span:last-child{border-right:none}
+.amt .on{background:rgba(122,162,255,.14);color:var(--blue)}
+.pos-line{padding:10px 16px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted)}
+.pos-line b{font-family:var(--mono);font-weight:600}
+.disc{padding:8px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--faint);display:flex;gap:14px}
+.disc .ok{color:var(--teal)}
+.risk-card .kv{display:flex;justify-content:space-between;padding:8px 16px;border-bottom:1px dashed var(--line);font-size:12px;color:var(--muted)}
+.risk-card .kv:last-child{border-bottom:none}
+.risk-card .kv b{font-family:var(--mono);font-weight:620;color:var(--text)}
+
+/* attribution */
+.attr-grid{display:grid;grid-template-columns:1.1fr 1.6fr 1fr;gap:14px;align-items:stretch}
+@media(max-width:1100px){.attr-grid{grid-template-columns:1fr}}
+.cash-big{font-size:34px;font-weight:760;font-family:var(--mono)}
+.cash-sub{font-size:11px;color:var(--faint);margin-top:2px}
+.target-bar{height:7px;border-radius:4px;background:var(--surface3);margin:12px 0 6px;position:relative;overflow:hidden}
+.target-bar i{position:absolute;left:0;top:0;bottom:0;width:24%;background:linear-gradient(90deg,var(--teal),rgba(45,212,191,.5));border-radius:4px}
+.calib{font-size:11px;color:var(--faint);line-height:1.8}
+.calib b{color:var(--muted);font-weight:600;font-family:var(--mono)}
+table{width:100%;border-collapse:collapse}
+th{font-size:10px;letter-spacing:.09em;color:var(--faint);text-align:right;font-weight:600;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child{text-align:left}
+td{font-size:12.5px;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:right;font-family:var(--mono)}
+td:first-child{text-align:left;font-family:inherit}
+tr:last-child td{border-bottom:none}
+.viol{color:var(--red);font-weight:640}
+.judge{padding:12px 16px;display:grid;gap:10px;font-size:12.5px}
+.judge .row{display:flex;gap:10px;align-items:center}
+.judge .who{width:34px;font-size:11px;color:var(--faint)}
+.j-ok{color:var(--teal);font-family:var(--mono)}
+.j-bad{color:var(--red);font-family:var(--mono)}
+.verdict-in{margin:0 16px 14px;border:1px dashed var(--line2);border-radius:7px;padding:9px 12px;font-size:12px;color:var(--faint);display:flex;gap:10px;align-items:center}
+.foot{margin-top:18px;font-size:11px;color:var(--faint);display:flex;gap:18px;flex-wrap:wrap;padding:0 4px}
+.foot b{color:var(--muted);font-weight:600}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ============ TOPBAR ============ -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="mark">TO</div>
+      <div>
+        <div class="brand-title">Trading Orchestrator <span class="dim" style="font-weight:400;font-size:12px">GOLD / XAU-USD CFD</span> <span class="badge-paper">PAPER</span></div>
+        <div class="brand-sub">机构终端 Institutional Terminal</div>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="tab">指挥台</button>
+      <button class="tab active">双轨作战台</button>
+      <button class="tab">回放</button>
+      <button class="tab">运维</button>
+    </nav>
+    <div class="spacer"></div>
+    <span class="cycle-chip">🕘 <b>DAY 周期</b> 09:00–21:00 · 已进行 7h48m · <b class="num">剩 4h12m</b></span>
+    <span class="clock num">2026-07-05 16:48 CST</span>
+  </div>
+
+  <!-- ============ ① 盲答 ============ -->
+  <div class="moment"><span class="no">①</span><span class="t">周期开始前 · 盲答协议</span><span class="s">BLIND PLAN — 你先答，AI 后揭示；截止未答 = AI 作战单自动生效；两者皆无 = 机器轨站下</span><div class="rule"></div></div>
+  <div class="blind-grid">
+    <div class="panel">
+      <div class="track-h"><span class="tdot human"></span>你的作战单 · 盲答中 <span class="dim num" style="margin-left:auto;font-weight:400">距 DAY 周期开始 00:13:22</span></div>
+      <div class="q-body">
+        <div class="q-row"><span class="k">方向</span>
+          <span class="seg"><span class="on">做多</span><span>做空</span><span>观望</span></span></div>
+        <div class="q-row"><span class="k">RANGE</span>
+          <span class="inp"><span class="box">4,150.0</span><span class="dim">—</span><span class="box">4,220.0</span></span></div>
+        <div class="q-row"><span class="k">关键位 · 可多个</span>
+          <span class="inp"><span class="box">4,168</span><span class="box">4,180</span><span class="box">4,200</span><span class="box">4,212</span><span class="box" style="min-width:0;color:var(--faint);border-style:dashed">＋ 添加</span></span></div>
+        <div class="q-row"><span class="k">失效条件 · 结构化</span>
+          <span class="inp"><span class="seg" style="font-size:11.5px"><span class="on">跌破</span><span>升破</span></span><span class="box">4,150.0</span><span class="seg" style="font-size:11.5px"><span class="on">1m 收盘确认</span><span>触及即失效</span></span><span class="box" style="min-width:0;color:var(--faint);border-style:dashed">＋ 第二条件</span></span></div>
+        <div class="q-row"><span class="k">信心</span>
+          <span class="conf"><span class="bar"><i></i></span><span class="num" style="font-size:12px">7/10</span></span></div>
+        <div class="lock-row">
+          <button class="btn primary">🔒 锁定作战单</button>
+          <span class="blind-note">锁定后<b>不可修改</b>；锁定前本页<b>不显示任何 AI 观点</b> —— 这是你命中率数据成立的前提。</span>
+        </div>
+      </div>
+    </div>
+    <div class="panel ai-blur">
+      <div class="track-h"><span class="tdot ai"></span>AI 作战单 · Obsidian 每日观点</div>
+      <div class="fake">
+        <div class="ln" style="width:62%"></div><div class="ln" style="width:84%"></div>
+        <div class="ln" style="width:47%"></div><div class="ln" style="width:75%"></div>
+        <div class="ln" style="width:56%"></div>
+      </div>
+      <div class="veil"><div class="msg"><span class="ic">🔒</span>锁定你的作战单后揭示<br><span class="dim" style="font-size:11px">防锚定 · 双份 track record 独立计分</span></div></div>
+    </div>
+  </div>
+
+  <!-- ============ ② 盘中 ============ -->
+  <div class="moment"><span class="no">②</span><span class="t">盘中 · 双轨执行</span><span class="s">DUAL-TRACK — 机器轨按作战单执行（对你保盲），人轨手动交易；互不干扰</span><div class="rule"></div></div>
+
+  <div class="plan-strip">
+    <div class="plan-card human">
+      <div class="hd"><span class="tdot human"></span>你的作战单 · 08:47 已锁定 <span class="live-badge">生效中 · 驱动机器轨</span></div>
+      <div class="row">
+        <span class="kv"><span class="lab">方向</span><b>做多</b></span>
+        <span class="kv"><span class="lab">RANGE</span><b>4,150 – 4,220</b></span>
+        <span class="kv"><span class="lab">关键位</span><b>4,168 / 4,180 / 4,200 / 4,212</b></span>
+        <span class="kv"><span class="lab">失效</span><b class="neg">1m收盘 &lt; 4,150</b></span>
+        <span class="kv"><span class="lab">信心</span><b>7/10</b></span>
+      </div>
+    </div>
+    <div class="plan-card ai">
+      <div class="hd"><span class="tdot ai"></span>AI 作战单 · 已揭示（对照，不生效）</div>
+      <div class="row">
+        <span class="kv"><span class="lab">方向</span><b>做多</b></span>
+        <span class="kv"><span class="lab">RANGE</span><b>4,155 – 4,215</b></span>
+        <span class="kv"><span class="lab">关键位</span><b>4,178 / 4,204</b></span>
+        <span class="kv"><span class="lab">失效</span><b class="neg">1m收盘 &lt; 4,155</b></span>
+      </div>
+      <div class="diff">分歧：方向一致 · 你的 Range 上下各宽 5 美元</div>
+    </div>
+    <div class="scoreboard">
+      <div style="font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:6px">方向记分板 · 近 30 日</div>
+      <div class="big pos">65.4%<span style="font-size:13px;color:var(--muted);font-weight:400"> 17/26</span><span class="gate-ok">≥60% 趋势腿资格 ✓</span></div>
+      <div class="sub">判断层记分：只判作战单方向，与执行轨无关 · 及格线 60%（R5-C）· AI 同期 53.8%（14/26）</div>
+    </div>
+  </div>
+
+  <div class="mid-grid">
+    <!-- chart -->
+    <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+    <div class="panel">
+      <div class="panel-h">
+        <span class="t">GOLD · XAU/USD</span>
+        <span class="tf-seg"><span class="on">1m</span><span>5m</span></span>
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--teal)"><span class="tdot live"></span>LIVE · WebSocket K 线</span>
+        <span class="right">只显示你的标记 —— 机器轨点位收盘后揭示</span>
+      </div>
+      <svg viewBox="0 0 980 380" style="width:100%;display:block" font-family="SFMono-Regular,Menlo,monospace">
+        <!-- range band (your plan) -->
+        <rect x="0" y="41" width="980" height="298" fill="rgba(122,162,255,.05)"/>
+        <line x1="0" y1="41" x2="980" y2="41" stroke="rgba(122,162,255,.4)" stroke-dasharray="6 5" stroke-width="1"/>
+        <line x1="0" y1="339" x2="980" y2="339" stroke="rgba(255,107,107,.55)" stroke-dasharray="6 5" stroke-width="1.2"/>
+        <text x="8" y="37" fill="#7aa2ff" font-size="10">RANGE 上沿 4,220</text>
+        <text x="8" y="353" fill="#ff6b6b" font-size="10">失效 / 止损 4,150 · 破位机器轨全平 · 人轨止损同位</text>
+        <!-- key levels -->
+        <line x1="0" y1="211" x2="980" y2="211" stroke="rgba(255,255,255,.14)" stroke-dasharray="2 5"/>
+        <text x="945" y="207" fill="#788391" font-size="10">4,180</text>
+        <line x1="0" y1="126" x2="980" y2="126" stroke="rgba(255,255,255,.14)" stroke-dasharray="2 5"/>
+        <text x="945" y="122" fill="#788391" font-size="10">4,200</text>
+        <!-- cycle open -->
+        <line x1="0" y1="245" x2="980" y2="245" stroke="rgba(255,255,255,.08)"/>
+        <text x="8" y="241" fill="#788391" font-size="9.5">周期开盘 4,172.0</text>
+        <!-- candles -->
+<g id="c1m">
+        <line x1="34.5" y1="242.3" x2="34.5" y2="255.4" stroke="#ff6b6b" stroke-width="1"/><rect x="30.0" y="245.2" width="9" height="5.6" fill="#ff6b6b" opacity="0.85"/>
+<line x1="49.9" y1="247.8" x2="49.9" y2="258.8" stroke="#ff6b6b" stroke-width="1"/><rect x="45.4" y="250.8" width="9" height="5.1" fill="#ff6b6b" opacity="0.85"/>
+<line x1="65.3" y1="252.9" x2="65.3" y2="268.2" stroke="#ff6b6b" stroke-width="1"/><rect x="60.8" y="255.9" width="9" height="8.9" fill="#ff6b6b" opacity="0.85"/>
+<line x1="80.7" y1="263.9" x2="80.7" y2="267.3" stroke="#ff6b6b" stroke-width="1"/><rect x="76.2" y="264.8" width="9" height="1.5" fill="#ff6b6b" opacity="0.85"/>
+<line x1="96.1" y1="261.0" x2="96.1" y2="279.2" stroke="#ff6b6b" stroke-width="1"/><rect x="91.6" y="265.2" width="9" height="10.2" fill="#ff6b6b" opacity="0.85"/>
+<line x1="111.5" y1="270.8" x2="111.5" y2="291.6" stroke="#ff6b6b" stroke-width="1"/><rect x="107.0" y="275.4" width="9" height="11.1" fill="#ff6b6b" opacity="0.85"/>
+<line x1="126.9" y1="283.1" x2="126.9" y2="290.3" stroke="#ff6b6b" stroke-width="1"/><rect x="122.4" y="286.5" width="9" height="2.5" fill="#ff6b6b" opacity="0.85"/>
+<line x1="142.3" y1="286.1" x2="142.3" y2="300.9" stroke="#ff6b6b" stroke-width="1"/><rect x="137.8" y="289.0" width="9" height="11.5" fill="#ff6b6b" opacity="0.85"/>
+<line x1="157.7" y1="298.8" x2="157.7" y2="309.8" stroke="#ff6b6b" stroke-width="1"/><rect x="153.2" y="300.5" width="9" height="8.9" fill="#ff6b6b" opacity="0.85"/>
+<line x1="173.1" y1="306.9" x2="173.1" y2="318.8" stroke="#ff6b6b" stroke-width="1"/><rect x="168.6" y="309.4" width="9" height="5.1" fill="#ff6b6b" opacity="0.85"/>
+<line x1="188.5" y1="311.1" x2="188.5" y2="321.8" stroke="#ff6b6b" stroke-width="1"/><rect x="184.0" y="314.5" width="9" height="4.3" fill="#ff6b6b" opacity="0.85"/>
+<line x1="203.9" y1="316.2" x2="203.9" y2="323.0" stroke="#ff6b6b" stroke-width="1"/><rect x="199.4" y="318.8" width="9" height="2.5" fill="#ff6b6b" opacity="0.85"/>
+<line x1="219.3" y1="307.7" x2="219.3" y2="325.6" stroke="#2dd4bf" stroke-width="1"/><rect x="214.8" y="312.8" width="9" height="8.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="234.70000000000002" y1="306.4" x2="234.70000000000002" y2="314.5" stroke="#2dd4bf" stroke-width="1"/><rect x="230.20000000000002" y="308.2" width="9" height="4.6" fill="#2dd4bf" opacity="0.9"/>
+<line x1="250.1" y1="307.7" x2="250.1" y2="313.7" stroke="#ff6b6b" stroke-width="1"/><rect x="245.6" y="308.2" width="9" height="1.5" fill="#ff6b6b" opacity="0.85"/>
+<line x1="265.5" y1="304.8" x2="265.5" y2="311.6" stroke="#2dd4bf" stroke-width="1"/><rect x="261.0" y="309.0" width="9" height="1.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="280.9" y1="296.7" x2="280.9" y2="309.4" stroke="#2dd4bf" stroke-width="1"/><rect x="276.4" y="301.3" width="9" height="7.7" fill="#2dd4bf" opacity="0.9"/>
+<line x1="296.3" y1="296.7" x2="296.3" y2="306.0" stroke="#ff6b6b" stroke-width="1"/><rect x="291.8" y="301.3" width="9" height="2.2" fill="#ff6b6b" opacity="0.85"/>
+<line x1="311.7" y1="292.8" x2="311.7" y2="304.3" stroke="#2dd4bf" stroke-width="1"/><rect x="307.2" y="295.4" width="9" height="8.1" fill="#2dd4bf" opacity="0.9"/>
+<line x1="327.1" y1="287.8" x2="327.1" y2="297.1" stroke="#2dd4bf" stroke-width="1"/><rect x="322.6" y="291.6" width="9" height="3.8" fill="#2dd4bf" opacity="0.9"/>
+<line x1="342.5" y1="289.9" x2="342.5" y2="297.9" stroke="#ff6b6b" stroke-width="1"/><rect x="338.0" y="291.6" width="9" height="1.7" fill="#ff6b6b" opacity="0.85"/>
+<line x1="357.90000000000003" y1="284.3" x2="357.90000000000003" y2="294.6" stroke="#2dd4bf" stroke-width="1"/><rect x="353.40000000000003" y="285.2" width="9" height="8.1" fill="#2dd4bf" opacity="0.9"/>
+<line x1="373.3" y1="284.8" x2="373.3" y2="290.7" stroke="#ff6b6b" stroke-width="1"/><rect x="368.8" y="285.2" width="9" height="1.5" fill="#ff6b6b" opacity="0.85"/>
+<line x1="388.7" y1="283.5" x2="388.7" y2="289.0" stroke="#2dd4bf" stroke-width="1"/><rect x="384.2" y="286.5" width="9" height="1.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="404.1" y1="282.7" x2="404.1" y2="287.8" stroke="#2dd4bf" stroke-width="1"/><rect x="399.6" y="286.5" width="9" height="1.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="419.5" y1="279.2" x2="419.5" y2="289.0" stroke="#2dd4bf" stroke-width="1"/><rect x="415.0" y="280.5" width="9" height="6.0" fill="#2dd4bf" opacity="0.9"/>
+<line x1="434.90000000000003" y1="278.4" x2="434.90000000000003" y2="285.2" stroke="#2dd4bf" stroke-width="1"/><rect x="430.40000000000003" y="280.1" width="9" height="1.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="450.3" y1="269.9" x2="450.3" y2="284.8" stroke="#2dd4bf" stroke-width="1"/><rect x="445.8" y="271.6" width="9" height="8.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="465.7" y1="269.1" x2="465.7" y2="276.3" stroke="#2dd4bf" stroke-width="1"/><rect x="461.2" y="271.2" width="9" height="1.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="481.1" y1="264.4" x2="481.1" y2="276.3" stroke="#2dd4bf" stroke-width="1"/><rect x="476.6" y="265.2" width="9" height="6.0" fill="#2dd4bf" opacity="0.9"/>
+<line x1="496.5" y1="263.1" x2="496.5" y2="269.1" stroke="#2dd4bf" stroke-width="1"/><rect x="492.0" y="264.8" width="9" height="1.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="511.90000000000003" y1="261.0" x2="511.90000000000003" y2="265.7" stroke="#2dd4bf" stroke-width="1"/><rect x="507.40000000000003" y="263.1" width="9" height="1.7" fill="#2dd4bf" opacity="0.9"/>
+<line x1="527.3" y1="259.7" x2="527.3" y2="265.7" stroke="#ff6b6b" stroke-width="1"/><rect x="522.8" y="263.1" width="9" height="1.5" fill="#ff6b6b" opacity="0.85"/>
+<line x1="542.7" y1="256.3" x2="542.7" y2="266.9" stroke="#2dd4bf" stroke-width="1"/><rect x="538.2" y="258.4" width="9" height="6.0" fill="#2dd4bf" opacity="0.9"/>
+<line x1="558.1" y1="245.2" x2="558.1" y2="261.8" stroke="#2dd4bf" stroke-width="1"/><rect x="553.6" y="248.2" width="9" height="10.2" fill="#2dd4bf" opacity="0.9"/>
+<line x1="573.5" y1="237.6" x2="573.5" y2="249.1" stroke="#2dd4bf" stroke-width="1"/><rect x="569.0" y="238.9" width="9" height="9.3" fill="#2dd4bf" opacity="0.9"/>
+<line x1="588.9" y1="224.8" x2="588.9" y2="240.6" stroke="#2dd4bf" stroke-width="1"/><rect x="584.4" y="229.1" width="9" height="9.8" fill="#2dd4bf" opacity="0.9"/>
+<line x1="604.3000000000001" y1="225.3" x2="604.3000000000001" y2="233.8" stroke="#2dd4bf" stroke-width="1"/><rect x="599.8000000000001" y="229.1" width="9" height="1.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="619.7" y1="224.0" x2="619.7" y2="233.8" stroke="#2dd4bf" stroke-width="1"/><rect x="615.2" y="229.1" width="9" height="1.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="635.1" y1="221.0" x2="635.1" y2="229.9" stroke="#2dd4bf" stroke-width="1"/><rect x="630.6" y="223.2" width="9" height="5.9" fill="#2dd4bf" opacity="0.9"/>
+<line x1="650.5" y1="218.5" x2="650.5" y2="229.9" stroke="#ff6b6b" stroke-width="1"/><rect x="646.0" y="223.2" width="9" height="5.5" fill="#ff6b6b" opacity="0.85"/>
+<line x1="665.9" y1="223.2" x2="665.9" y2="232.9" stroke="#2dd4bf" stroke-width="1"/><rect x="661.4" y="224.8" width="9" height="3.9" fill="#2dd4bf" opacity="0.9"/>
+<line x1="681.3000000000001" y1="220.6" x2="681.3000000000001" y2="225.7" stroke="#2dd4bf" stroke-width="1"/><rect x="676.8000000000001" y="222.3" width="9" height="2.5" fill="#2dd4bf" opacity="0.9"/>
+<line x1="696.7" y1="217.6" x2="696.7" y2="223.6" stroke="#2dd4bf" stroke-width="1"/><rect x="692.2" y="218.1" width="9" height="4.2" fill="#2dd4bf" opacity="0.9"/>
+<line x1="712.1" y1="212.1" x2="712.1" y2="221.4" stroke="#2dd4bf" stroke-width="1"/><rect x="707.6" y="216.3" width="9" height="1.8" fill="#2dd4bf" opacity="0.9"/>
+<line x1="727.5" y1="211.7" x2="727.5" y2="219.8" stroke="#ff6b6b" stroke-width="1"/><rect x="723.0" y="216.3" width="9" height="2.2" fill="#ff6b6b" opacity="0.85"/>
+<line x1="742.9" y1="216.8" x2="742.9" y2="226.1" stroke="#ff6b6b" stroke-width="1"/><rect x="738.4" y="218.5" width="9" height="5.1" fill="#ff6b6b" opacity="0.85"/>
+<line x1="758.3000000000001" y1="222.7" x2="758.3000000000001" y2="230.8" stroke="#ff6b6b" stroke-width="1"/><rect x="753.8000000000001" y="223.6" width="9" height="5.1" fill="#ff6b6b" opacity="0.85"/>
+<line x1="773.7" y1="225.7" x2="773.7" y2="230.8" stroke="#2dd4bf" stroke-width="1"/><rect x="769.2" y="226.6" width="9" height="2.1" fill="#2dd4bf" opacity="0.9"/>
+<line x1="789.1" y1="215.1" x2="789.1" y2="229.9" stroke="#2dd4bf" stroke-width="1"/><rect x="784.6" y="220.2" width="9" height="6.4" fill="#2dd4bf" opacity="0.9"/>
+<line x1="804.5" y1="213.4" x2="804.5" y2="221.4" stroke="#2dd4bf" stroke-width="1"/><rect x="800.0" y="216.8" width="9" height="3.4" fill="#2dd4bf" opacity="0.9"/>
+<line x1="819.9" y1="215.9" x2="819.9" y2="226.6" stroke="#ff6b6b" stroke-width="1"/><rect x="815.4" y="216.8" width="9" height="5.1" fill="#ff6b6b" opacity="0.85"/>
+<line x1="835.3000000000001" y1="212.9" x2="835.3000000000001" y2="222.3" stroke="#2dd4bf" stroke-width="1"/><rect x="830.8000000000001" y="218.1" width="9" height="3.8" fill="#2dd4bf" opacity="0.9"/>
+<line x1="850.7" y1="212.5" x2="850.7" y2="221.9" stroke="#2dd4bf" stroke-width="1"/><rect x="846.2" y="215.1" width="9" height="3.0" fill="#2dd4bf" opacity="0.9"/>
+<line x1="866.1" y1="210.0" x2="866.1" y2="217.2" stroke="#ff6b6b" stroke-width="1"/><rect x="861.6" y="215.1" width="9" height="1.7" fill="#ff6b6b" opacity="0.85"/>
+<line x1="881.5" y1="210.8" x2="881.5" y2="221.0" stroke="#2dd4bf" stroke-width="1"/><rect x="877.0" y="215.1" width="9" height="1.7" fill="#2dd4bf" opacity="0.9"/>
+<line x1="896.9" y1="207.0" x2="896.9" y2="218.9" stroke="#2dd4bf" stroke-width="1"/><rect x="892.4" y="210.4" width="9" height="4.7" fill="#2dd4bf" opacity="0.9"/>
+<line x1="912.3000000000001" y1="201.9" x2="912.3000000000001" y2="214.2" stroke="#2dd4bf" stroke-width="1"/><rect x="907.8000000000001" y="204.0" width="9" height="6.4" fill="#2dd4bf" opacity="0.9"/>
+<line x1="927.7" y1="193.0" x2="927.7" y2="206.2" stroke="#2dd4bf" stroke-width="1"/><rect x="923.2" y="197.2" width="9" height="6.8" fill="#2dd4bf" opacity="0.9"/>
+<line x1="943.1" y1="187.9" x2="943.1" y2="200.6" stroke="#2dd4bf" stroke-width="1"/><rect x="938.6" y="192.6" width="9" height="4.6" fill="#2dd4bf" opacity="0.9"/>
+</g>
+        <!-- your entries -->
+        <path d="M 244 292 l 6 10 l -12 0 z" fill="#7aa2ff"/>
+        <text x="252" y="301" fill="#7aa2ff" font-size="9.5">买入 4,158.3</text>
+        <path d="M 492 226 l 6 -10 l -12 0 z" fill="#7aa2ff"/>
+        <text x="500" y="223" fill="#7aa2ff" font-size="9.5">平多 4,177.0 · +$18.0</text>
+        <path d="M 676 222 l 6 10 l -12 0 z" fill="#7aa2ff"/>
+        <text x="684" y="231" fill="#7aa2ff" font-size="9.5">买入 4,178.6 · 持仓中</text>
+        <!-- TP of open human position -->
+        <line x1="0" y1="105" x2="980" y2="105" stroke="rgba(45,212,191,.45)" stroke-dasharray="3 5"/>
+        <text x="8" y="101" fill="#2dd4bf" font-size="9.5">止盈 4,205 · 人轨持仓</text>
+        <!-- current price -->
+        <line x1="0" y1="193" x2="980" y2="193" stroke="#2dd4bf" stroke-width="1" opacity=".7"/>
+        <rect x="912" y="182" width="64" height="19" rx="3" fill="rgba(45,212,191,.15)" stroke="rgba(45,212,191,.5)"/>
+        <text x="920" y="196" fill="#2dd4bf" font-size="11">4,184.4</text>
+      </svg>
+      <div class="chart-foot">
+        <span>现价 <b class="pos">4,184.4</b></span>
+        <span>距失效位 <b>+0.82%</b></span>
+        <span>早盘最低 <b>4,153.1</b>（未破位）</span>
+        <span>本周期机会 ≥0.3% 已出现 <b>6</b> 次</span>
+        <span>你已捕获 <b>2</b>/6</span>
+        <span class="dim">机器轨捕获 · 收盘揭示</span>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="panel">
+        <div class="panel-h"><span class="t">CONTEXT · 15m</span><span class="right">大级别定方向 · 可收起 ▾</span></div>
+        <svg viewBox="0 0 460 96" style="width:100%;display:block">
+          <rect x="0" y="10" width="460" height="76" fill="rgba(122,162,255,.04)"/>
+          <line x1="0" y1="34" x2="460" y2="34" stroke="rgba(255,255,255,.12)" stroke-dasharray="2 5"/>
+          <text x="430" y="31" fill="#788391" font-size="9">4,200</text>
+          <polyline points="0.0,61.8 11.8,64.2 23.6,66.8 35.4,70.1 47.2,72.4 59.0,75.7 70.8,74.6 82.6,75.6 94.4,79.0 106.2,80.9 117.9,84 129.7,83.3 141.5,82.1 153.3,79.8 165.1,78.9 176.9,78.1 188.7,74.7 200.5,72.2 212.3,70.1 224.1,71.0 235.9,71.2 247.7,68.4 259.5,68.8 271.3,65.9 283.1,65.4 294.9,62.5 306.7,59.0 318.5,59.7 330.3,57.2 342.1,54.7 353.8,55.9 365.6,56.6 377.4,54.5 389.2,55.6 401.0,54.7 412.8,54.5 424.6,52.0 436.4,53.0 448.2,52.8 460.0,53.9" fill="none" stroke="#7aa2ff" stroke-width="1.4" opacity=".85"/>
+        </svg>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><span class="t">CONTEXT · 1h</span><span class="right">趋势背景</span></div>
+        <svg viewBox="0 0 460 96" style="width:100%;display:block">
+          <line x1="0" y1="60" x2="460" y2="60" stroke="rgba(216,170,63,.35)" stroke-dasharray="2 5"/>
+          <text x="398" y="57" fill="#d8aa3f" font-size="9">周期开盘</text>
+          <polyline points="0.0,73.8 17.0,71.5 34.1,69.4 51.1,66.6 68.1,63.7 85.2,60.5 102.2,58.2 119.3,57.0 136.3,53.6 153.3,52.7 170.4,50.5 187.4,48.2 204.4,47.7 221.5,46.1 238.5,43.8 255.6,42.1 272.6,41.3 289.6,38.1 306.7,38.2 323.7,34.9 340.7,34.2 357.8,33.8 374.8,30.5 391.9,29.9 408.9,27.8 425.9,26.5 443.0,23.1 460.0,19.9" fill="none" stroke="#a4acb8" stroke-width="1.4" opacity=".8"/>
+        </svg>
+      </div>
+    </div>
+    </div>
+
+    <!-- rail -->
+    <div class="rail">
+      <div class="panel machine-card">
+        <div class="track-h"><span class="tdot ai"></span>机器轨 MACHINE <span class="blind-badge">盲测中 · 仅显示 PnL</span></div>
+        <div class="pnl-wrap">
+          <span class="total pos">+$33.10</span>
+          <span class="pnl-split">已实现 <b class="pos num">+$38.20</b><br>未实现 <b class="neg num">−$5.10</b></span>
+        </div>
+        <div class="layer"><span class="tdot live"></span>底仓网格 · tp1 · 方向不可知<span class="st pos">运行中</span></div>
+        <div class="layer"><span class="tdot" style="background:var(--amber)"></span>趋势腿 · tp2 · 按作战单方向=多<span class="st warn">已武装（命中率 ≥60% ✓）</span></div>
+        <div class="machine-note">进出场点位、库存、网格状态收盘后揭示。本界面无干预入口；紧急停机走 运维 → 停机开关。</div>
+      </div>
+
+      <div class="panel human-card">
+        <div class="track-h"><span class="tdot human"></span>人轨 HUMAN · 手动下单</div>
+        <div class="ticket">
+          <div class="line">
+            <span class="seg"><span class="on" style="background:rgba(45,212,191,.14);color:var(--teal)">买入</span><span>卖出</span></span>
+            <span class="amt"><span>$2k</span><span class="on">$4k</span><span>$8k</span></span>
+            <span class="seg" style="font-size:11px"><span class="on">限价</span><span>市价</span></span>
+          </div>
+          <div class="line">
+            <span class="inp"><span class="dim" style="font-size:11px">价格</span><span class="box">4,183.0</span></span>
+            <span class="inp"><span class="dim" style="font-size:11px">止损</span><span class="box">4,150.0</span></span>
+            <span class="inp"><span class="dim" style="font-size:11px">止盈</span><span class="box">4,205.0</span></span>
+            <button class="btn buy">下单 →</button>
+          </div>
+        </div>
+        <div class="pos-line">持仓 <b>多 $8k @ 4,178.6</b> · 未实现 <b class="pos">+$11.1</b> ｜ 今日 <b>2</b> 笔 · 已实现 <b class="pos">+$18.0</b></div>
+        <div class="disc"><span class="ok">✓ Range 内</span><span class="ok">✓ 与作战单方向一致</span><span class="dim">违规单照常执行，对账标红</span></div>
+        <div class="machine-note">纸面阶段：本面板即下单入口（paper 撮合）。实盘阶段：接券商 API，真实成交自动同步进同一本台账。</div>
+      </div>
+
+      <div class="panel risk-card">
+        <div class="track-h" style="color:var(--muted)"><span class="tdot" style="background:var(--amber)"></span>风险 · 10× 杠杆</div>
+        <div class="kv"><span>保证金占用</span><b>32%</b></div>
+        <div class="kv"><span>历史最差单周期（10×）</span><b class="neg">−$3,080</b></div>
+        <div class="kv"><span>破 Range 动作</span><b>机器轨全平 + 重挂一次</b></div>
+        <div class="kv"><span>NIGHT 周期注意</span><b class="warn">横跨 NY17:00 swap 时点</b></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ③ 对账 ============ -->
+  <div class="moment"><span class="no">③</span><span class="t">周期结束 · 对账复盘</span><span class="s">ATTRIBUTION — 同一把尺量人和机器；月均日现金流为主数字</span><div class="rule"></div></div>
+
+  <div class="attr-grid">
+    <div class="panel" style="padding:16px">
+      <div style="font-size:11px;color:var(--faint);letter-spacing:.07em">月均日现金流 · 7 月（双轨合计）</div>
+      <div class="cash-big pos">$58</div>
+      <div class="cash-sub">今日两周期合计 +$51.1 · 本月 4 个交易日</div>
+      <div class="target-bar"><i></i></div>
+      <div class="calib">
+        目标区间 <b>$200–300/天</b> —— 校准（$10k · 10×）：<br>
+        系统地板（方向不可知网格）≈ <b>$80/天</b> · 神谕天花板 ≈ <b>$140/天</b><br>
+        <span class="warn">按当前本金，目标高于天花板；达标需本金 ≥$25k 或目标降档</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h"><span class="t">上一周期对账 · NIGHT 07-04 21:00 → 09:00</span><span class="right">点击任一行 → 跳转回放对应光标</span></div>
+      <table>
+        <thead><tr><th>轨</th><th>笔数</th><th>胜率</th><th>已实现</th><th>捕获比</th><th>周期内最大回撤</th><th>纪律违规</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tdot human" style="display:inline-block;margin-right:7px"></span>人轨</td><td>4</td><td>50.0%</td><td class="pos">+$21.40</td><td>2/8</td><td class="neg">−$86</td><td class="viol">1 ⚠</td></tr>
+          <tr><td><span class="tdot ai" style="display:inline-block;margin-right:7px"></span>机器轨</td><td>9</td><td>66.7%</td><td class="pos">+$45.30</td><td>5/8</td><td class="neg">−$310</td><td>0</td></tr>
+        </tbody>
+      </table>
+      <div class="verdict-in">💬 一句话裁决…（写入复盘流）<span style="margin-left:auto"><button class="btn">归档</button></span></div>
+    </div>
+
+    <div class="panel">
+      <div class="track-h" style="color:var(--muted)">作战单判卷 · NIGHT 07-04</div>
+      <div class="judge">
+        <div class="row"><span class="who">你</span><span>做多 · Range 4,140–4,205</span><span class="j-ok" style="margin-left:auto">✓ 实际 +0.42%</span></div>
+        <div class="row"><span class="who">AI</span><span>做空 · Range 4,135–4,195</span><span class="j-bad" style="margin-left:auto">✗ 方向错</span></div>
+        <div class="row dim" style="font-size:11px">记分板更新：你 17/26（65.4%）· AI 14/26（53.8%）</div>
+        <div class="row" style="border-top:1px dashed var(--line);padding-top:10px">
+          <button class="btn">查看完整回放 →</button>
+          <span class="dim" style="font-size:11px">回放页叠加机会普查标记（8 次 ≥0.3%）</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <div class="panel-h"><span class="t">双轨同步回放 · SYNCED REPLAY</span><span class="right">同一周期、同一光标 —— 左右对比你和机器的每一笔</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
+      <div style="border-right:1px solid var(--line)">
+        <div class="track-h" style="color:var(--blue)"><span class="tdot human"></span>人轨 · 4 笔 · +$21.40</div>
+        <svg viewBox="0 0 980 380" style="width:100%;display:block">
+          <rect x="0" y="41" width="980" height="298" fill="rgba(122,162,255,.04)"/>
+          <use href="#c1m"/>
+          <path d="M 244 292 l 6 10 l -12 0 z" fill="#7aa2ff"/>
+          <path d="M 492 226 l 6 -10 l -12 0 z" fill="#7aa2ff"/>
+          <path d="M 676 222 l 6 10 l -12 0 z" fill="#7aa2ff"/>
+          <line x1="738" y1="20" x2="738" y2="360" stroke="rgba(245,184,75,.8)" stroke-width="1"/>
+        </svg>
+      </div>
+      <div>
+        <div class="track-h" style="color:var(--violet)"><span class="tdot ai"></span>机器轨 · 9 笔 · +$45.30（收盘已揭示）</div>
+        <svg viewBox="0 0 980 380" style="width:100%;display:block">
+          <use href="#c1m"/>
+          <g fill="#b894ff">
+            <path d="M 214 302 l 5 9 l -10 0 z"/><path d="M 306 318 l 5 9 l -10 0 z"/><path d="M 383 262 l 5 -9 l -10 0 z"/>
+            <path d="M 522 254 l 5 9 l -10 0 z"/><path d="M 614 232 l 5 -9 l -10 0 z"/><path d="M 736 216 l 5 -9 l -10 0 z"/>
+          </g>
+          <line x1="738" y1="20" x2="738" y2="360" stroke="rgba(245,184,75,.8)" stroke-width="1"/>
+        </svg>
+      </div>
+    </div>
+    <div class="chart-foot" style="align-items:center">
+      <button class="btn" style="padding:4px 12px">▶</button>
+      <span class="dim num">同步光标 07-04 23:37</span>
+      <span style="flex:1;height:4px;border-radius:3px;background:var(--surface3);position:relative"><i style="position:absolute;left:0;top:0;bottom:0;width:62%;background:var(--amber);border-radius:3px"></i></span>
+      <span class="dim">速度 ×8 · 两图共用周期与光标 · 点标记跳详情</span>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <div class="panel-h"><span class="t">结果台账 · WEEKLY LEDGER</span><span class="right">以日记账、以周看结果、以月下结论</span></div>
+    <table>
+      <thead><tr><th>7 月第 1 周</th><th>07-01</th><th>07-02</th><th>07-03</th><th>07-04</th><th>07-05 *</th><th>周合计</th></tr></thead>
+      <tbody>
+        <tr><td><span class="tdot human" style="display:inline-block;margin-right:7px"></span>人轨</td><td class="pos">+$28.1</td><td class="neg">−$54.0</td><td class="pos">+$62.3</td><td class="pos">+$35.6</td><td class="pos">+$29.1</td><td class="pos">+$101.1</td></tr>
+        <tr><td><span class="tdot ai" style="display:inline-block;margin-right:7px"></span>机器轨</td><td class="pos">+$34.9</td><td class="pos">+$13.0</td><td class="pos">+$76.7</td><td class="pos">+$35.4</td><td class="pos">+$22.0</td><td class="pos">+$182.0</td></tr>
+        <tr><td><b>合计</b></td><td class="pos">+$63.0</td><td class="neg">−$41.0</td><td class="pos">+$139.0</td><td class="pos">+$71.0</td><td class="pos">+$51.1</td><td class="pos"><b>+$283.1</b></td></tr>
+      </tbody>
+    </table>
+    <div class="verdict-in" style="margin-top:10px">周现金流目标 $1,000–1,500（$200–300 × 5 交易日）· 本周完成 <b class="warn mono">23%</b><span style="margin-left:auto" class="dim">* 进行中 · 周日晚自动生成周报卡片 → 飞书推送</span></div>
+  </div>
+
+  <div class="foot">
+    <span><b>口径</b> 双轨各 $10,000 纸面 · 默认 10× · 机器轨盘中仅披露 realized/unrealized PnL</span>
+    <span><b>协议</b> 盲答→锁定→揭示 · 无输入=AI 兜底 · 皆无=站下（fail-closed）</span>
+    <span><b>数据源</b> 及格线/地板/天花板 = R5-B/R5-C（家族 r5*_grid_*，108 试验）· 机会数 = R5-A 普查</span>
+    <span class="mono dim">mockup dualtrack-v2 · 2026-07-05</span>
+  </div>
+</div>
+</body>
+</html>
