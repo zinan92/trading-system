@@ -26,6 +26,7 @@ from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
 from services.market_view_intake import MarketViewIntake
 from services.replay_state import ReplayState
+from services.tiger_venue_status import TigerVenueStatus
 
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CYCLE_ID_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_(DAY|NIGHT)$")
@@ -57,6 +58,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/dashboard-v2.html",
             "/dashboard-v3.html",
             "/dashboard-v4.html",
+            "/dashboard-dualtrack-v5.html",
             "/dashboard-replay.html",
             "/dashboard-replay-v4.html",
             "/ops-dashboard.html",
@@ -103,6 +105,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/dualtrack/ledger":
             self._handle_dualtrack_ledger_get(parsed.query)
+            return
+        if parsed.path == "/api/dualtrack/venue/tiger":
+            self._handle_dualtrack_tiger_venue_get()
             return
         super().do_GET()
 
@@ -156,6 +161,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_dualtrack_ledger_get(self, query: str) -> None:
         params = parse_qs(query)
         self._write_json(200, build_dualtrack_ledger_response(week=params.get("week", [None])[0]))
+
+    def _handle_dualtrack_tiger_venue_get(self) -> None:
+        self._write_json(200, build_dualtrack_tiger_venue_response())
 
     def _handle_dualtrack_post(self, path: str) -> None:
         try:
@@ -501,6 +509,10 @@ def build_dualtrack_attribution_response(cycle_id: str, *, output_root: Path | N
 
 def build_dualtrack_ledger_response(*, output_root: Path | None = None, week: str | None = None) -> dict:
     return DualTrackScorer(output_root).ledger_payload(week=week)
+
+
+def build_dualtrack_tiger_venue_response(*, output_root: Path | None = None) -> dict:
+    return TigerVenueStatus(output_root).snapshot()
 
 
 def build_dualtrack_verdict_post_response(payload: dict, *, output_root: Path | None = None) -> dict:

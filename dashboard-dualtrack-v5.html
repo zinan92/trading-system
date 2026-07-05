@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>人机双轨作战台 - Trading Orchestrator</title>
+<style>
+:root{
+  --bg:#08090b; --surface:#111318; --surface2:#171b22; --surface3:#202631;
+  --line:rgba(255,255,255,.1); --line2:rgba(255,255,255,.16);
+  --text:#f2f4f7; --muted:#a4acb8; --faint:#788391;
+  --gold:#d8aa3f; --teal:#2dd4bf; --blue:#7aa2ff; --red:#ff6b6b; --amber:#f5b84b; --violet:#b894ff;
+  --shadow:0 14px 44px rgba(0,0,0,.32);
+  --mono:"SFMono-Regular","Roboto Mono","Menlo","Consolas",monospace;
+}
+*{box-sizing:border-box}
+html,body{min-height:100%;overflow-x:hidden}
+body{margin:0;background:linear-gradient(180deg,rgba(122,162,255,.05),rgba(8,9,11,0) 220px),var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif}
+a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}.pos{color:var(--teal)}.neg{color:var(--red)}.warn{color:var(--amber)}.dim{color:var(--faint)}
+.shell{width:min(1600px,100%);margin:0 auto;padding:18px 22px 40px}.topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}.brand{display:flex;align-items:center;gap:11px}.mark{width:34px;height:34px;border-radius:8px;border:1px solid rgba(216,170,63,.45);display:grid;place-items:center;color:var(--gold);font-weight:900;background:rgba(216,170,63,.08)}.brand-title{font-size:16px;font-weight:760;line-height:1.1}.brand-sub{font-size:11px;color:var(--muted);margin-top:2px}.badge-paper{font-size:10px;letter-spacing:.08em;border:1px solid rgba(216,170,63,.5);color:var(--gold);border-radius:4px;padding:2px 6px}.tabs{display:flex;gap:2px;margin-left:18px}.tab{background:none;border:none;color:var(--muted);font-size:13px;padding:8px 13px;border-bottom:2px solid transparent;cursor:pointer}.tab.active{color:var(--text);border-bottom-color:var(--gold);font-weight:640}.spacer{flex:1}.cycle-chip{display:inline-flex;align-items:center;gap:8px;font-size:12px;border:1px solid var(--line2);background:var(--surface2);border-radius:6px;padding:5px 11px}.cycle-chip b{color:var(--text)}.clock{font-size:12px;color:var(--faint)}
+.moment{display:flex;align-items:center;gap:12px;margin:22px 0 10px}.moment .no{width:22px;height:22px;border-radius:50%;border:1px solid var(--line2);display:grid;place-items:center;font-size:11px;color:var(--muted);font-family:var(--mono)}.moment .t{font-size:12px;letter-spacing:.1em;color:var(--muted);font-weight:640}.moment .s{font-size:11px;color:var(--faint)}.moment .rule{flex:1;height:1px;background:var(--line)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:0}.panel-h{display:flex;align-items:baseline;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line)}.panel-h .t{font-size:12px;letter-spacing:.08em;color:var(--muted);font-weight:640}.panel-h .right{margin-left:auto;font-size:11px;color:var(--faint)}
+.blind-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:14px}.track-h{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid var(--line);font-size:12px;font-weight:640}.tdot{width:8px;height:8px;border-radius:50%;display:inline-block}.tdot.human{background:var(--blue)}.tdot.ai{background:var(--violet)}.tdot.live{background:var(--teal);animation:pulse 1.6s infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.q-body{padding:14px 16px;display:grid;gap:12px}.q-row{display:grid;grid-template-columns:94px 1fr;gap:10px;align-items:center;font-size:12.5px}.q-row .k{color:var(--faint);font-size:11px;letter-spacing:.06em}.seg{display:inline-flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden}.seg button,.seg span{padding:6px 14px;font-size:12px;color:var(--muted);border:0;border-right:1px solid var(--line);background:transparent;cursor:pointer}.seg button:last-child,.seg span:last-child{border-right:none}.seg .on{background:rgba(122,162,255,.14);color:var(--blue);font-weight:640}.inp{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}.box,input,select,textarea{background:var(--surface2);border:1px solid var(--line2);border-radius:5px;padding:7px 10px;color:var(--text);font:12.5px/1.2 var(--mono);min-width:86px}textarea{width:100%;min-height:44px;resize:vertical}.conf{display:flex;align-items:center;gap:8px}.conf input{accent-color:var(--blue);width:min(260px,100%)}.lock-row{display:flex;align-items:center;gap:12px;border-top:1px dashed var(--line);padding-top:12px}.btn{font-size:12.5px;border-radius:6px;padding:8px 14px;cursor:pointer;border:1px solid var(--line2);background:var(--surface2);color:var(--text)}.btn.primary{border-color:rgba(122,162,255,.55);background:rgba(122,162,255,.12);color:var(--blue);font-weight:660}.btn.buy{border-color:rgba(45,212,191,.5);background:rgba(45,212,191,.1);color:var(--teal);font-weight:660}.btn.sell{border-color:rgba(255,107,107,.48);background:rgba(255,107,107,.09);color:var(--red);font-weight:660}.btn[disabled]{opacity:.45;cursor:not-allowed}.blind-note{font-size:11px;color:var(--faint)}.blind-note b{color:var(--amber);font-weight:600}
+.ai-blur{position:relative;min-height:230px;overflow:hidden}.ai-blur .fake{padding:16px;filter:blur(7px);opacity:.55;user-select:none}.fake .ln{height:11px;border-radius:3px;background:var(--surface3);margin:12px 0}.ai-blur .veil{position:absolute;inset:0;display:grid;place-items:center}.veil .msg{text-align:center;color:var(--muted);font-size:12.5px}
+.plan-strip{display:grid;grid-template-columns:1.2fr 1.2fr 1fr;gap:14px;margin-bottom:14px}.plan-card{border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:12px 16px;position:relative}.plan-card.human{box-shadow:inset 3px 0 0 var(--blue)}.plan-card.ai{box-shadow:inset 3px 0 0 var(--violet)}.plan-card .hd{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:8px}.plan-card .live-badge{margin-left:auto;font-size:10px;color:var(--teal);border:1px solid rgba(45,212,191,.4);border-radius:4px;padding:1px 7px;background:rgba(45,212,191,.07)}.plan-card .row{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px}.kv{color:var(--muted)}.kv b{font-family:var(--mono);font-weight:600;color:var(--text)}.kv .lab{color:var(--faint);font-size:10.5px;display:block;letter-spacing:.06em}.diff{color:var(--amber);font-size:11px;margin-top:7px}.scoreboard{border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:12px 16px}.scoreboard .big{font-size:24px;font-weight:720;font-family:var(--mono)}.scoreboard .sub{font-size:11px;color:var(--faint);margin-top:3px}.gate-ok{display:inline-block;font-size:10.5px;color:var(--teal);border:1px solid rgba(45,212,191,.4);border-radius:4px;padding:1px 7px;background:rgba(45,212,191,.07);margin-left:8px;vertical-align:3px}
+.mid-grid{display:grid;grid-template-columns:minmax(0,2.1fr) minmax(0,1fr);gap:14px;align-items:start}.chart-wrap{display:flex;flex-direction:column;gap:14px;min-width:0}.chart-svg{width:100%;display:block;min-height:380px}.chart-foot{display:flex;gap:14px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}.chart-foot b{font-family:var(--mono);color:var(--text);font-weight:600}.tf-seg{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;font-size:11px}.tf-seg button{padding:3px 10px;color:var(--faint);background:transparent;border:0;border-right:1px solid var(--line);cursor:pointer}.tf-seg .on{background:var(--surface3);color:var(--text)}
+.context-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.context-grid details{overflow:hidden}.context-grid summary{list-style:none;cursor:pointer}.context-body{height:100px}.rail{display:flex;flex-direction:column;gap:14px;min-width:0}.machine-card{border:1px solid rgba(184,148,255,.3)}.machine-card .track-h{color:var(--violet)}.blind-badge{margin-left:auto;font-size:10px;color:var(--violet);border:1px solid rgba(184,148,255,.4);border-radius:4px;padding:1px 7px;background:rgba(184,148,255,.07)}.pnl-wrap{padding:14px 16px;display:flex;align-items:baseline;gap:16px}.pnl-wrap .total{font-size:30px;font-weight:740;font-family:var(--mono)}.pnl-split{font-size:11.5px;color:var(--muted);line-height:1.7}.layer{display:flex;align-items:center;gap:8px;padding:8px 16px;border-top:1px dashed var(--line);font-size:12px}.layer .st{margin-left:auto;font-size:10.5px;font-family:var(--mono)}.machine-note{padding:9px 16px;border-top:1px solid var(--line);font-size:10.5px;color:var(--faint)}.human-card{border:1px solid rgba(122,162,255,.3)}.human-card .track-h{color:var(--blue)}.ticket{padding:12px 16px;display:grid;gap:10px}.ticket .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.amt{display:inline-flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden;font-size:11.5px;font-family:var(--mono)}.amt button{padding:5px 12px;color:var(--muted);border:0;border-right:1px solid var(--line);background:transparent;cursor:pointer}.amt button:last-child{border-right:none}.amt .on{background:rgba(122,162,255,.14);color:var(--blue)}.pos-line{padding:10px 16px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted)}.pos-line b{font-family:var(--mono);font-weight:600}.disc{padding:8px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--faint);display:flex;gap:14px;flex-wrap:wrap}.disc .ok{color:var(--teal)}.risk-card .kv{display:flex;justify-content:space-between;gap:14px;padding:8px 16px;border-bottom:1px dashed var(--line);font-size:12px;color:var(--muted)}.risk-card .kv:last-child{border-bottom:none}
+.attr-grid{display:grid;grid-template-columns:1.1fr 1.6fr 1fr;gap:14px;align-items:stretch}.cash-card{padding:16px}.cash-big{font-size:34px;font-weight:760;font-family:var(--mono)}.cash-sub{font-size:11px;color:var(--faint);margin-top:2px}.target-bar{height:7px;border-radius:4px;background:var(--surface3);margin:12px 0 6px;position:relative;overflow:hidden}.target-bar i{position:absolute;left:0;top:0;bottom:0;width:24%;background:linear-gradient(90deg,var(--teal),rgba(45,212,191,.5));border-radius:4px}.calib{font-size:11px;color:var(--faint);line-height:1.8}.calib b{color:var(--muted);font-weight:600;font-family:var(--mono)}table{width:100%;border-collapse:collapse}th{font-size:10px;letter-spacing:.09em;color:var(--faint);text-align:right;font-weight:600;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}th:first-child{text-align:left}td{font-size:12.5px;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:right;font-family:var(--mono)}td:first-child{text-align:left;font-family:inherit}tr:last-child td{border-bottom:none}.viol{color:var(--red);font-weight:640}.judge{padding:12px 16px;display:grid;gap:10px;font-size:12.5px}.judge .row{display:flex;gap:10px;align-items:center}.judge .who{width:34px;font-size:11px;color:var(--faint)}.j-ok{color:var(--teal);font-family:var(--mono)}.j-bad{color:var(--red);font-family:var(--mono)}.verdict-in{margin:0 16px 14px;border:1px dashed var(--line2);border-radius:7px;padding:9px 12px;font-size:12px;color:var(--faint);display:flex;gap:10px;align-items:center}.foot{margin-top:18px;font-size:11px;color:var(--faint);display:flex;gap:18px;flex-wrap:wrap;padding:0 4px}.foot b{color:var(--muted);font-weight:600}.status-line{min-height:18px;font-size:11px;color:var(--faint)}.hidden{display:none!important}
+@media(max-width:1100px){.blind-grid,.plan-strip,.mid-grid,.attr-grid{grid-template-columns:1fr}.context-grid{grid-template-columns:1fr}.tabs{margin-left:0}.q-row{grid-template-columns:1fr}.shell{padding:14px 12px 32px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand">
+      <div class="mark">TO</div>
+      <div><div class="brand-title">Trading Orchestrator <span class="dim" style="font-weight:400;font-size:12px">GOLD / XAU-USD CFD</span> <span class="badge-paper">PAPER</span></div><div class="brand-sub">人机双轨作战台 · Dual-Track Console</div></div>
+    </div>
+    <nav class="tabs" aria-label="primary navigation">
+      <a class="tab" href="dashboard-v4.html">指挥台</a>
+      <a class="tab active" href="dashboard-dualtrack-v5.html">双轨作战台</a>
+      <a class="tab" href="dashboard-replay-v4.html">回放</a>
+      <a class="tab" href="ops-dashboard.html">运维</a>
+    </nav>
+    <div class="spacer"></div>
+    <span class="cycle-chip" id="cycleChip"><b>周期</b><span class="num">loading</span></span>
+    <span class="clock num" id="clockText">--</span>
+  </div>
+
+  <div class="moment"><span class="no">1</span><span class="t">周期开始前 · 盲答协议</span><span class="s">BLIND PLAN - 你先答，AI 后揭示；截止未答 = AI 作战单自动生效；两者皆无 = 机器轨站下</span><div class="rule"></div></div>
+  <div class="blind-grid">
+    <div class="panel">
+      <div class="track-h"><span class="tdot human"></span><span id="blindTitle">你的作战单 · 盲答中</span><span class="dim num" style="margin-left:auto;font-weight:400" id="lockCountdown">--</span></div>
+      <form class="q-body" id="planForm">
+        <div class="q-row"><span class="k">方向</span><span class="seg" id="directionSeg"><button type="button" data-value="long" class="on">做多</button><button type="button" data-value="short">做空</button><button type="button" data-value="flat">观望</button></span></div>
+        <div class="q-row"><span class="k">RANGE</span><span class="inp"><input id="rangeLow" type="number" step="0.1" value="4150.0"><span class="dim">-</span><input id="rangeHigh" type="number" step="0.1" value="4220.0"></span></div>
+        <div class="q-row"><span class="k">关键位 · 可多个</span><textarea id="keyLevels">4168, 4180, 4200, 4212</textarea></div>
+        <div class="q-row"><span class="k">失效条件 · 结构化</span><span class="inp"><select id="invalidSide"><option value="below">跌破</option><option value="above">升破</option></select><input id="invalidPrice" type="number" step="0.1" value="4150.0"><select id="invalidConfirm"><option value="close_1m">1m 收盘确认</option><option value="touch">触及即失效</option></select><button class="btn" type="button" id="addInvalid">+</button></span></div>
+        <div class="q-row"><span class="k">已添加</span><div id="invalidList" class="status-line"></div></div>
+        <div class="q-row"><span class="k">信心</span><span class="conf"><input id="confidence" type="range" min="1" max="10" value="7"><span class="num" id="confidenceText">7/10</span></span></div>
+        <div class="lock-row"><button class="btn primary" id="lockPlanBtn" type="submit">锁定作战单</button><span class="blind-note">锁定后<b>不可修改</b>；锁定前 API 与页面均<b>不显示任何 AI 观点</b>。</span></div>
+        <div class="status-line" id="planStatus"></div>
+      </form>
+    </div>
+    <div class="panel ai-blur" id="aiBlindPanel">
+      <div class="track-h"><span class="tdot ai"></span>AI 作战单 · Obsidian 每日观点</div>
+      <div id="aiPanelBody"></div>
+    </div>
+  </div>
+
+  <div class="moment"><span class="no">2</span><span class="t">盘中 · 双轨执行</span><span class="s">DUAL-TRACK - 机器轨按作战单执行（对你保盲），人轨手动交易；互不干扰</span><div class="rule"></div></div>
+  <div class="plan-strip">
+    <div class="plan-card human" id="humanPlanCard"></div>
+    <div class="plan-card ai" id="aiPlanCard"></div>
+    <div class="scoreboard" id="scoreboardCard"></div>
+  </div>
+
+  <div class="mid-grid">
+    <div class="chart-wrap">
+      <div class="panel">
+        <div class="panel-h"><span class="t">GOLD · XAU/USD</span><span class="tf-seg"><button class="on" data-tf="1m">1m</button><button data-tf="5m">5m</button></span><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--teal)"><span class="tdot live"></span>LIVE · WebSocket K 线</span><span class="right">只显示你的标记 - 机器轨点位收盘后揭示</span></div>
+        <svg id="mainChart" class="chart-svg" viewBox="0 0 980 380" role="img" aria-label="GOLD live chart"></svg>
+        <div class="chart-foot" id="chartFoot"></div>
+      </div>
+      <div class="context-grid">
+        <details class="panel" open><summary class="panel-h"><span class="t">CONTEXT · 15m</span><span class="right">大级别定方向</span></summary><svg id="ctx15" class="context-body" viewBox="0 0 460 96"></svg></details>
+        <details class="panel" open><summary class="panel-h"><span class="t">CONTEXT · 1h</span><span class="right">趋势背景</span></summary><svg id="ctx1h" class="context-body" viewBox="0 0 460 96"></svg></details>
+      </div>
+    </div>
+    <div class="rail">
+      <div class="panel machine-card" id="machineCard"></div>
+      <div class="panel human-card">
+        <div class="track-h"><span class="tdot human"></span>人轨 HUMAN · 手动下单</div>
+        <form class="ticket" id="orderForm">
+          <div class="line"><span class="seg" id="orderSide"><button type="button" class="on" data-value="buy">买入</button><button type="button" data-value="sell">卖出</button></span><span class="amt" id="orderNotional"><button type="button" data-value="2000">$2k</button><button type="button" class="on" data-value="4000">$4k</button><button type="button" data-value="8000">$8k</button></span><span class="seg" id="orderType"><button type="button" class="on" data-value="limit">限价</button><button type="button" data-value="market">市价</button></span></div>
+          <div class="line"><span class="inp"><span class="dim" style="font-size:11px">价格</span><input id="orderPrice" type="number" step="0.1" value="4183.0"></span><span class="inp"><span class="dim" style="font-size:11px">止损</span><input id="orderSl" type="number" step="0.1" value="4150.0"></span><span class="inp"><span class="dim" style="font-size:11px">止盈</span><input id="orderTp" type="number" step="0.1" value="4205.0"></span><button class="btn buy" type="submit">下单</button></div>
+          <div class="status-line" id="orderStatus"></div>
+        </form>
+        <div class="pos-line" id="humanPositionLine">持仓 --</div>
+        <div class="disc" id="disciplineLine"><span class="dim">违规单照常执行，对账标红</span></div>
+        <div class="machine-note">纸面阶段：本面板即下单入口（paper 撮合）。实盘阶段：接券商 API，真实成交自动同步进同一本台账。</div>
+      </div>
+      <div class="panel risk-card" id="riskCard"></div>
+      <div class="panel risk-card" id="venueCard"></div>
+    </div>
+  </div>
+
+  <div class="moment"><span class="no">3</span><span class="t">周期结束 · 对账复盘</span><span class="s">ATTRIBUTION - 同一把尺量人和机器；月均日现金流为主数字</span><div class="rule"></div></div>
+  <div class="attr-grid">
+    <div class="panel cash-card" id="cashFlowCard"></div>
+    <div class="panel" id="attributionTable"></div>
+    <div class="panel" id="planJudgeCard"></div>
+  </div>
+  <div class="panel" style="margin-top:14px">
+    <div class="panel-h"><span class="t">结果台账 · WEEKLY LEDGER</span><span class="right">以日记账、以周看结果、以月下结论</span></div>
+    <div id="ledgerTable"></div>
+  </div>
+
+  <div class="foot">
+    <span><b>口径</b> 双轨各 $10,000 纸面 · 默认 10x · 机器轨盘中仅披露 realized/unrealized PnL</span>
+    <span><b>协议</b> 盲答->锁定->揭示 · 无输入=AI 兜底 · 皆无=站下（fail-closed）</span>
+    <span><b>行情</b> 浏览器直连 Binance USD-M `xauusdt@kline_1m` 作为 CFD price proxy；不同场所价格可能有细微偏差</span>
+    <span class="mono dim">dashboard-dualtrack-v5 · 2026-07-05</span>
+  </div>
+</div>
+<script>
+const API_BASE = location.origin;
+const state = {
+  cycle:null, plan:null, machine:null, human:null, attribution:null, ledger:null, tigerVenue:null,
+  direction:"long", orderSide:"buy", orderType:"limit", orderNotional:4000,
+  invalidation:[{side:"below", price:4150, confirm:"close_1m"}],
+  candles: seedCandles()
+};
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = (value) => `${Number(value || 0) >= 0 ? "+" : "-"}$${Math.abs(Number(value || 0)).toFixed(2)}`;
+const fmt = (value, digits=1) => Number(value || 0).toLocaleString("en-US", {minimumFractionDigits:digits, maximumFractionDigits:digits});
+const css = getComputedStyle(document.documentElement);
+
+function setSegment(rootId, key){
+  $(rootId).addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-value]");
+    if(!button) return;
+    [...$(rootId).querySelectorAll("button")].forEach(item => item.classList.toggle("on", item === button));
+    state[key] = button.dataset.value;
+    if(key === "orderNotional") state[key] = Number(button.dataset.value);
+  });
+}
+setSegment("directionSeg", "direction"); setSegment("orderSide", "orderSide"); setSegment("orderType", "orderType"); setSegment("orderNotional", "orderNotional");
+$("confidence").addEventListener("input", () => $("confidenceText").textContent = `${$("confidence").value}/10`);
+$("addInvalid").addEventListener("click", () => {
+  state.invalidation.push({side:$("invalidSide").value, price:Number($("invalidPrice").value), confirm:$("invalidConfirm").value});
+  renderInvalidation();
+});
+$("planForm").addEventListener("submit", lockPlan);
+$("orderForm").addEventListener("submit", submitOrder);
+
+async function api(path, options={}){
+  const response = await fetch(`${API_BASE}${path}`, {cache:"no-store", headers:{"Content-Type":"application/json"}, ...options});
+  if(!response.ok) throw new Error((await response.json().catch(() => ({}))).message || response.statusText);
+  return response.json();
+}
+async function loadAll(){
+  try{
+    state.cycle = await api("/api/dualtrack/cycle/current");
+    const cycleId = state.cycle.cycle_id;
+    const [plan, machine, human, ledger, tigerVenue] = await Promise.all([
+      api(`/api/dualtrack/plan/${cycleId}`),
+      api(`/api/dualtrack/machine/${cycleId}`).catch(() => null),
+      api(`/api/dualtrack/human/${cycleId}`).catch(() => null),
+      api("/api/dualtrack/ledger").catch(() => null),
+      api("/api/dualtrack/venue/tiger").catch(() => null)
+    ]);
+    state.plan = plan; state.machine = machine; state.human = human; state.ledger = ledger; state.tigerVenue = tigerVenue;
+    state.attribution = cycleClosed(state.cycle) ? await api(`/api/dualtrack/attribution/${cycleId}`).catch(() => null) : null;
+  }catch(error){
+    $("planStatus").textContent = `API: ${error.message}`;
+  }
+  renderAll();
+}
+function renderAll(){
+  renderTopbar(); renderInvalidation(); renderBlind(); renderPlanStrip(); renderMachine(); renderHuman(); renderRisk(); renderVenue(); renderCharts(); renderAttribution(); renderLedger();
+}
+function renderTopbar(){
+  const cycle = state.cycle || {};
+  $("cycleChip").innerHTML = `<b>${esc(cycle.kind || "周期")}</b><span class="num">${esc(cycle.cycle_id || "--")}</span><b class="num">剩 ${seconds(cycle.countdown_seconds)}</b>`;
+  $("clockText").textContent = new Date().toLocaleString("zh-CN", {timeZone:"Asia/Shanghai", hour12:false});
+  $("lockCountdown").textContent = cycle.start_cst ? `开始 ${cycle.start_cst.slice(11,16)} CST` : "--";
+}
+function renderInvalidation(){
+  $("invalidList").innerHTML = state.invalidation.map((row, i) => `<span class="box">${row.side === "below" ? "跌破" : "升破"} ${fmt(row.price)} · ${row.confirm === "touch" ? "触及" : "1m收盘"} <button type="button" class="btn" style="padding:2px 6px" onclick="removeInvalid(${i})">x</button></span>`).join(" ");
+}
+window.removeInvalid = (i) => { state.invalidation.splice(i, 1); renderInvalidation(); };
+function renderBlind(){
+  const human = state.plan?.human_plan;
+  const ai = state.plan?.ai_plan;
+  $("blindTitle").textContent = human?.status === "locked" ? `你的作战单 · 已锁定 ${shortTime(human.locked_at)}` : "你的作战单 · 盲答中";
+  $("lockPlanBtn").disabled = human?.status === "locked";
+  if(state.plan?.ai_plan_revealed && ai){
+    $("aiBlindPanel").classList.remove("ai-blur");
+    $("aiPanelBody").innerHTML = planBody(ai, "ai");
+  }else{
+    $("aiBlindPanel").classList.add("ai-blur");
+    $("aiPanelBody").innerHTML = `<div class="fake"><div class="ln" style="width:62%"></div><div class="ln" style="width:84%"></div><div class="ln" style="width:47%"></div><div class="ln" style="width:75%"></div><div class="ln" style="width:56%"></div></div><div class="veil"><div class="msg">锁定你的作战单后揭示<br><span class="dim" style="font-size:11px">防锚定 · 双份 track record 独立计分</span></div></div>`;
+  }
+}
+function renderPlanStrip(){
+  $("humanPlanCard").innerHTML = planCard(state.plan?.human_plan, "human", "你的作战单", "生效中 · 驱动机器轨");
+  $("aiPlanCard").innerHTML = state.plan?.ai_plan_revealed ? planCard(state.plan?.ai_plan, "ai", "AI 作战单", "对照") : `<div class="hd"><span class="tdot ai"></span>AI 作战单 · 未揭示</div><div class="dim">盲测窗口内不提供 AI 观点。</div>`;
+  const board = state.attribution?.scoreboard || {};
+  const human = board.human?.rolling_30 || {};
+  const rate = human.graded ? `${(human.hit_rate * 100).toFixed(1)}%` : "--";
+  $("scoreboardCard").innerHTML = `<div style="font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:6px">方向记分板 · 近 30 日</div><div class="big ${human.hit_rate >= .6 ? "pos" : "warn"}">${rate}<span style="font-size:13px;color:var(--muted);font-weight:400"> ${human.hits || 0}/${human.graded || 0}</span>${board.trend_leg_gate?.armed ? '<span class="gate-ok">>=60% 趋势腿资格</span>' : ""}</div><div class="sub">判断层记分：只判作战单方向，与执行轨无关 · 及格线 60%（R5-C）</div>`;
+}
+function planCard(plan, kind, title, badge){
+  if(!plan) return `<div class="hd"><span class="tdot ${kind}"></span>${title} · 缺失</div><div class="dim">无作战单。</div>`;
+  return `<div class="hd"><span class="tdot ${kind}"></span>${title} · ${esc(plan.status || "locked")} <span class="live-badge">${esc(badge)}</span></div>${planBody(plan, kind)}`;
+}
+function planBody(plan){
+  const inv = (plan.invalidation || []).map(row => `${row.side === "below" ? "<" : ">"} ${fmt(row.price)} ${row.confirm}`).join(" / ");
+  return `<div class="row"><span class="kv"><span class="lab">方向</span><b>${dirText(plan.direction)}</b></span><span class="kv"><span class="lab">RANGE</span><b>${fmt(plan.range?.low)} - ${fmt(plan.range?.high)}</b></span><span class="kv"><span class="lab">关键位</span><b>${(plan.key_levels || []).map(v => fmt(v,0)).join(" / ") || "--"}</b></span><span class="kv"><span class="lab">失效</span><b class="neg">${esc(inv || "--")}</b></span><span class="kv"><span class="lab">信心</span><b>${plan.confidence ?? "--"}/10</b></span></div>`;
+}
+function renderMachine(){
+  const payload = state.machine || {};
+  const total = Number(payload.realized_pnl || 0) + Number(payload.unrealized_pnl || 0);
+  const fullReveal = Array.isArray(payload.fills);
+  $("machineCard").innerHTML = `<div class="track-h"><span class="tdot ai"></span>机器轨 MACHINE <span class="blind-badge">${fullReveal ? "收盘已揭示" : "盲测中 · 仅显示 PnL"}</span></div><div class="pnl-wrap"><span class="total ${total >= 0 ? "pos" : "neg"}">${money(total)}</span><span class="pnl-split">已实现 <b class="${payload.realized_pnl >= 0 ? "pos" : "neg"} num">${money(payload.realized_pnl)}</b><br>未实现 <b class="${payload.unrealized_pnl >= 0 ? "pos" : "neg"} num">${money(payload.unrealized_pnl)}</b></span></div>${(payload.layers || ["grid:pending","trend:pending"]).map(layer => `<div class="layer"><span class="tdot live"></span>${esc(layer)}<span class="st ${layer.includes("stand_down") ? "warn" : "pos"}">${layer.includes("stand_down") ? "站下" : "运行"}</span></div>`).join("")}<div class="machine-note">${fullReveal ? `${payload.fills.length} fills revealed after close.` : "进出场点位、库存、网格状态收盘后揭示。本界面不提供机器轨干预操作。"}</div>`;
+}
+function renderHuman(){
+  const fills = state.human?.fills || [];
+  const realized = fills.reduce((sum, fill) => sum + Number(fill.realized_pnl || 0), 0);
+  const bad = fills.filter(fill => fill.out_of_plan).length;
+  $("humanPositionLine").innerHTML = `今日 <b>${fills.length}</b> 笔 · 已实现 <b class="${realized >= 0 ? "pos" : "neg"}">${money(realized)}</b>`;
+  $("disciplineLine").innerHTML = bad ? `<span class="viol">${bad} 笔计划外</span><span class="dim">违规单照常执行，对账标红</span>` : `<span class="ok">Range 内</span><span class="ok">与作战单方向一致</span><span class="dim">违规单照常执行，对账标红</span>`;
+}
+function renderRisk(){
+  $("riskCard").innerHTML = `<div class="track-h" style="color:var(--muted)"><span class="tdot" style="background:var(--amber)"></span>风险 · 10x 杠杆</div><div class="kv"><span>单轨纸面资金</span><b>$10,000</b></div><div class="kv"><span>机器轨动作</span><b>失效全平 + re-arm 一次</b></div><div class="kv"><span>人工轨纪律</span><b>只标记，不阻断</b></div><div class="kv"><span>NIGHT 周期</span><b class="warn">横跨 NY17:00 swap 时点</b></div>`;
+}
+function renderVenue(){
+  const venue = state.tigerVenue || {};
+  const recon = venue.reconciliation || {};
+  const sync = venue.order_sync || {};
+  const kill = venue.kill_switch || {};
+  const contract = venue.contract || {};
+  const account = venue.account_sync || {};
+  const drill = venue.paper_order_drill || {};
+  const orderReady = venue.paper_order_readiness || {};
+  const tone = venue.status === "ready" ? "pos" : venue.status === "blocked" || venue.status === "manual_review" ? "neg" : "warn";
+  const networkClosed = venue.safety?.network_modification_observed ? "需复核" : "无网络动作";
+  const accountCopy = account.sync_status === "synced" ? `${esc(account.segment_key || "--")} · ${account.balance_present ? "balance ok" : "no balance"}` : esc(account.sync_status || "missing");
+  const drillCopy = drill.status === "pass" ? `${drill.passing_scenarios || 0}/${drill.scenario_count || 0} pass` : esc(drill.status || "missing");
+  const orderReadyCopy = orderReady.status === "ready_for_attended_paper_order" ? "ready · needs auth" : esc(orderReady.status || "missing");
+  $("venueCard").innerHTML = `<div class="track-h" style="color:var(--muted)"><span class="tdot" style="background:var(--teal)"></span>老虎 TIGER · PAPER VENUE <span class="blind-badge ${tone}">${esc(venue.status || "missing")}</span></div><div class="kv"><span>执行合约</span><b class="${contract.ready || contract.status === "missing" ? "pos" : "warn"}">${esc(contract.execution_symbol || "--")} · ${esc(contract.status || "missing")}</b></div><div class="kv"><span>账户证据</span><b class="${account.sync_status === "synced" && account.balance_present ? "pos" : "warn"}">${accountCopy}</b></div><div class="kv"><span>下单演练</span><b class="${drill.status === "pass" || drill.status === "missing" ? "pos" : "warn"}">${drillCopy}</b></div><div class="kv"><span>授权门</span><b class="${orderReady.status === "ready_for_attended_paper_order" || orderReady.status === "missing" ? "pos" : "warn"}">${orderReadyCopy}</b></div><div class="kv"><span>对账</span><b class="${recon.confirmation_status === "confirmed_flat" ? "pos" : "warn"}">${esc(recon.confirmation_status || "missing")}</b></div><div class="kv"><span>订单/成交同步</span><b class="${sync.sync_status === "synced" ? "pos" : "warn"}">${esc(sync.sync_status || "missing")} · O${sync.open_order_count || 0}/F${sync.filled_order_count || 0}</b></div><div class="kv"><span>Kill-switch</span><b class="${venue.safety?.network_modification_observed ? "neg" : "pos"}">${esc(kill.status || "missing")} · ${networkClosed}</b></div><div class="kv"><span>新单门</span><b class="${venue.can_open_new_orders ? "pos" : "warn"}">${venue.can_open_new_orders ? "confirmed flat" : "blocked/unknown"}</b></div>`;
+}
+function renderAttribution(){
+  const attr = state.attribution;
+  const weeklyTotal = Number(state.ledger?.daily?.reduce?.((sum, row) => sum + Number(row.total_pnl || 0), 0) || attr?.ledger?.weekly?.total_pnl || 0);
+  $("cashFlowCard").innerHTML = `<div style="font-size:11px;color:var(--faint);letter-spacing:.07em">月均日现金流 · 双轨合计</div><div class="cash-big ${weeklyTotal >= 0 ? "pos" : "neg"}">${money(weeklyTotal)}</div><div class="cash-sub">当前台账合计 · 周/月结论以 ledger 为准</div><div class="target-bar"><i></i></div><div class="calib">目标区间 <b>$200-300/天</b> -- 校准（$10k · 10x）：<br>系统地板（方向不可知网格）≈ <b>$80/天</b> · 神谕天花板 ≈ <b>$140/天</b><br><span class="warn">按当前本金，目标高于天花板；达标需本金 >=$25k 或目标降档</span></div>`;
+  const tracks = attr?.tracks || {};
+  $("attributionTable").innerHTML = `<div class="panel-h"><span class="t">周期对账 · ${esc(attr?.cycle_id || "未收盘")}</span><span class="right">closed cycles only</span></div><table><thead><tr><th>轨</th><th>笔数</th><th>胜率</th><th>已实现</th><th>捕获比</th><th>纪律违规</th></tr></thead><tbody>${trackRow("人轨", "human", tracks.human)}${trackRow("机器轨", "ai", tracks.machine)}</tbody></table><div class="verdict-in"><input id="verdictText" placeholder="一句话裁决..." style="flex:1;font-family:inherit"><button class="btn" onclick="submitVerdict()">归档</button></div>`;
+  const grades = attr?.plan_grades || {};
+  $("planJudgeCard").innerHTML = `<div class="track-h" style="color:var(--muted)">作战单判卷 · ${esc(attr?.cycle_id || "--")}</div><div class="judge">${judgeRow("你", grades.human)}${judgeRow("AI", grades.ai)}<div class="row dim" style="font-size:11px">direction-only grading · flat plans ungraded</div><div class="row" style="border-top:1px dashed var(--line);padding-top:10px"><a class="btn" href="dashboard-replay-v4.html?layout=dualtrack&cycle=${encodeURIComponent(attr?.cycle_id || "")}">查看完整回放</a><span class="dim" style="font-size:11px">双轨同步回放由 DT6 接入</span></div></div>`;
+}
+function renderLedger(){
+  const rows = state.ledger?.daily || state.attribution?.ledger?.weekly?.days || [];
+  $("ledgerTable").innerHTML = `<table><thead><tr><th>日期</th><th>机器轨</th><th>人轨</th><th>合计</th></tr></thead><tbody>${rows.length ? rows.map(row => `<tr><td>${esc(row.date)}</td><td class="${row.tracks?.machine?.realized_pnl >= 0 ? "pos" : "neg"}">${money(row.tracks?.machine?.realized_pnl)}</td><td class="${row.tracks?.human?.realized_pnl >= 0 ? "pos" : "neg"}">${money(row.tracks?.human?.realized_pnl)}</td><td class="${row.total_pnl >= 0 ? "pos" : "neg"}"><b>${money(row.total_pnl)}</b></td></tr>`).join("") : `<tr><td colspan="4" class="dim">暂无 ledger row</td></tr>`}</tbody></table><div class="verdict-in" style="margin-top:10px">周现金流目标 $1,000-1,500（$200-300 x 5 交易日）<span style="margin-left:auto" class="dim">周日晚自动生成周报卡片 -> 飞书推送</span></div>`;
+}
+function trackRow(label, dot, row={}){
+  const wins = Number(row.win_rate || 0) * 100;
+  return `<tr><td><span class="tdot ${dot}" style="margin-right:7px"></span>${label}</td><td>${row.fill_count || 0}</td><td>${wins.toFixed(1)}%</td><td class="${row.realized_pnl >= 0 ? "pos" : "neg"}">${money(row.realized_pnl)}</td><td>${row.captured || 0}/${row.opportunity_count || 0}</td><td class="${row.discipline_violations ? "viol" : ""}">${row.discipline_violations || 0}</td></tr>`;
+}
+function judgeRow(label, row={}){
+  const cls = row.hit ? "j-ok" : row.graded ? "j-bad" : "dim";
+  const text = row.graded ? (row.hit ? "方向对" : "方向错") : "未判";
+  return `<div class="row"><span class="who">${label}</span><span>${dirText(row.direction)}</span><span class="${cls}" style="margin-left:auto">${text}</span></div>`;
+}
+async function lockPlan(event){
+  event.preventDefault();
+  const cycleId = state.cycle?.cycle_id;
+  if(!cycleId) return;
+  const payload = {cycle_id:cycleId, direction:state.direction, range:{low:Number($("rangeLow").value), high:Number($("rangeHigh").value)}, key_levels:$("keyLevels").value.split(/[,\n]/).map(v => Number(v.trim())).filter(Boolean), invalidation:state.invalidation, confidence:Number($("confidence").value), source:"console"};
+  try{ await api("/api/dualtrack/plan", {method:"POST", body:JSON.stringify(payload)}); $("planStatus").textContent = "已锁定"; await loadAll(); }catch(error){ $("planStatus").textContent = error.message; }
+}
+async function submitOrder(event){
+  event.preventDefault();
+  const cycleId = state.cycle?.cycle_id;
+  if(!cycleId) return;
+  const payload = {cycle_id:cycleId, ts:new Date().toISOString(), side:state.orderSide, order_type:state.orderType, price:Number($("orderPrice").value), notional:state.orderNotional, sl:Number($("orderSl").value), tp:Number($("orderTp").value)};
+  try{ await api("/api/dualtrack/orders", {method:"POST", body:JSON.stringify(payload)}); $("orderStatus").textContent = "paper fill recorded"; await loadAll(); }catch(error){ $("orderStatus").textContent = error.message; }
+}
+async function submitVerdict(){
+  const cycleId = state.attribution?.cycle_id || state.cycle?.cycle_id;
+  const note = $("verdictText")?.value || "";
+  if(!cycleId || !note.trim()) return;
+  await api("/api/dualtrack/verdict", {method:"POST", body:JSON.stringify({cycle_id:cycleId, note})}).catch(error => alert(error.message));
+}
+function renderCharts(){
+  drawChart($("mainChart"), state.candles, true);
+  drawMini($("ctx15"), state.candles.filter((_, i) => i % 4 === 0));
+  drawMini($("ctx1h"), state.candles.filter((_, i) => i % 10 === 0));
+  const last = state.candles[state.candles.length - 1];
+  $("orderPrice").value = Number(last.close).toFixed(1);
+  $("chartFoot").innerHTML = `<span>现价 <b class="${last.close >= last.open ? "pos" : "neg"}">${fmt(last.close)}</b></span><span>关键位 <b>${(state.plan?.human_plan?.key_levels || [4180,4200]).map(v => fmt(v,0)).join(" / ")}</b></span><span>你已捕获 <b>${state.attribution?.tracks?.human?.captured || 0}</b>/${state.attribution?.tracks?.human?.opportunity_count || 0}</span><span class="dim">机器轨捕获 · 收盘揭示</span>`;
+}
+function drawChart(svg, candles, withMarkers){
+  const w = 980, h = 380, pad = 28, bodyW = 8;
+  const plan = state.plan?.human_plan;
+  const lows = candles.map(c => c.low).concat(plan?.range?.low || []);
+  const highs = candles.map(c => c.high).concat(plan?.range?.high || []);
+  const min = Math.min(...lows) - 4, max = Math.max(...highs) + 4;
+  const y = price => pad + (max - price) / (max - min) * (h - pad * 2);
+  const x = i => 28 + i * ((w - 56) / Math.max(1, candles.length - 1));
+  let html = "";
+  if(plan?.range){ const yHigh = y(plan.range.high), yLow = y(plan.range.low); html += `<rect x="0" y="${yHigh}" width="${w}" height="${Math.max(1,yLow-yHigh)}" fill="rgba(122,162,255,.05)"/><line x1="0" y1="${yHigh}" x2="${w}" y2="${yHigh}" stroke="rgba(122,162,255,.4)" stroke-dasharray="6 5"/><line x1="0" y1="${yLow}" x2="${w}" y2="${yLow}" stroke="rgba(255,107,107,.55)" stroke-dasharray="6 5"/><text x="8" y="${yHigh-5}" fill="#7aa2ff" font-size="10">RANGE 上沿 ${fmt(plan.range.high)}</text><text x="8" y="${yLow+14}" fill="#ff6b6b" font-size="10">失效 / 止损 ${fmt(plan.range.low)}</text>`; }
+  (plan?.key_levels || [4180,4200]).forEach(level => { html += `<line x1="0" y1="${y(level)}" x2="${w}" y2="${y(level)}" stroke="rgba(255,255,255,.14)" stroke-dasharray="2 5"/><text x="932" y="${y(level)-4}" fill="#788391" font-size="10">${fmt(level,0)}</text>`; });
+  candles.forEach((c, i) => { const xi = x(i), up = c.close >= c.open, color = up ? css.getPropertyValue("--teal") : css.getPropertyValue("--red"); html += `<line x1="${xi}" y1="${y(c.high)}" x2="${xi}" y2="${y(c.low)}" stroke="${color}" stroke-width="1"/><rect x="${xi-bodyW/2}" y="${Math.min(y(c.open), y(c.close))}" width="${bodyW}" height="${Math.max(1, Math.abs(y(c.open)-y(c.close)))}" fill="${color}" opacity=".9"/>`; });
+  const humanFills = state.human?.fills || [];
+  if(withMarkers){ humanFills.slice(-8).forEach(fill => { const xi = x(Math.floor(candles.length * .55)), yi = y(fill.price); const up = fill.side === "buy"; html += `<path d="M ${xi} ${yi} l 6 ${up ? 10 : -10} l -12 0 z" fill="#7aa2ff"/><text x="${xi+8}" y="${yi+4}" fill="#7aa2ff" font-size="9.5">${fill.side} ${fmt(fill.price)}</text>`; if(fill.tp) html += `<line x1="0" y1="${y(fill.tp)}" x2="${w}" y2="${y(fill.tp)}" stroke="rgba(45,212,191,.45)" stroke-dasharray="3 5"/>`; if(fill.sl) html += `<line x1="0" y1="${y(fill.sl)}" x2="${w}" y2="${y(fill.sl)}" stroke="rgba(255,107,107,.45)" stroke-dasharray="3 5"/>`; }); }
+  const last = candles[candles.length - 1]; html += `<line x1="0" y1="${y(last.close)}" x2="${w}" y2="${y(last.close)}" stroke="#2dd4bf" opacity=".7"/><rect x="912" y="${y(last.close)-11}" width="64" height="19" rx="3" fill="rgba(45,212,191,.15)" stroke="rgba(45,212,191,.5)"/><text x="920" y="${y(last.close)+3}" fill="#2dd4bf" font-size="11">${fmt(last.close)}</text>`;
+  svg.innerHTML = html;
+}
+function drawMini(svg, candles){
+  const w = 460, h = 96, min = Math.min(...candles.map(c => c.low)), max = Math.max(...candles.map(c => c.high));
+  const y = price => 12 + (max - price) / (max - min || 1) * 72;
+  const pts = candles.map((c,i) => `${i * (w / Math.max(1, candles.length - 1))},${y(c.close).toFixed(1)}`).join(" ");
+  svg.innerHTML = `<rect x="0" y="10" width="${w}" height="76" fill="rgba(122,162,255,.04)"/><polyline points="${pts}" fill="none" stroke="#7aa2ff" stroke-width="1.4" opacity=".85"/>`;
+}
+function seedCandles(){
+  const rows = []; let price = 4172;
+  for(let i=0;i<64;i++){ const drift = Math.sin(i/5)*2 + (i-30)*.18; const close = price + drift + (i%7===0 ? -8 : 1.8); rows.push({open:price, high:Math.max(price,close)+3, low:Math.min(price,close)-3, close}); price = close; }
+  return rows;
+}
+function startKlineStream(){
+  try{
+    const ws = new WebSocket("wss://fstream.binance.com/stream?streams=xauusdt@kline_1m");
+    ws.onmessage = event => { const payload = JSON.parse(event.data); const k = payload.data?.k; if(!k) return; const candle = {open:Number(k.o), high:Number(k.h), low:Number(k.l), close:Number(k.c)}; state.candles = [...state.candles.slice(-63), candle]; renderCharts(); };
+  }catch(_error){}
+}
+function dirText(direction){ return ({long:"做多", short:"做空", flat:"观望", absent:"缺失"})[direction] || "--"; }
+function seconds(value){ const s = Math.max(0, Number(value || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h${String(m).padStart(2,"0")}m`; }
+function shortTime(value){ return value ? String(value).slice(11,16) : "--"; }
+function cycleClosed(cycle){ return Boolean(cycle?.end && Date.now() >= Date.parse(cycle.end)); }
+loadAll(); startKlineStream(); setInterval(loadAll, 30000);
+</script>
+</body>
+</html>

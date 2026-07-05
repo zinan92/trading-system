@@ -127,6 +127,7 @@ POST /api/dualtrack/orders                 # human paper order (limit|market + s
 GET  /api/dualtrack/human/{cycle_id}       # human positions/fills (own track: full)
 GET  /api/dualtrack/attribution/{cycle_id} # closed cycles only: both tracks, same ruler
 GET  /api/dualtrack/ledger?week=...        # daily rows + weekly rollup
+GET  /api/dualtrack/venue/tiger            # DT5-adjacent read-only venue card
 POST /api/dualtrack/verdict                # one-line review note per cycle
 ```
 
@@ -157,7 +158,10 @@ POST /api/dualtrack/verdict                # one-line review note per cycle
   lines, key levels; machine card PnL-only; order ticket; risk card), 
   attribution (monthly cash-flow header with floor/ceiling calibration note
   ALWAYS visible, dual-track table, plan grading, verdict input, weekly
-  ledger table).
+  ledger table). The Tiger paper venue card and `/api/dualtrack/venue/tiger`
+  are an additive DT5-adjacent venue-status surface, outside the locked
+  dual-track core contract; they are read-only and must not add broker control
+  actions.
 - **DT6 Synced dual replay.** Extend the replay page with
   `layout=dualtrack&cycle=...`: two panes, one transport, human fills left,
   machine fills right (closed cycles only).
