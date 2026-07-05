@@ -59,6 +59,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/dashboard-v3.html",
             "/dashboard-v4.html",
             "/dashboard-dualtrack-v5.html",
+            "/dashboard-dualtrack-replay.html",
             "/dashboard-replay.html",
             "/dashboard-replay-v4.html",
             "/ops-dashboard.html",

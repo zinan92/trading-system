@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>双轨同步回放 - Trading Orchestrator</title>
+<style>
+:root{--bg:#08090b;--surface:#101318;--surface2:#151922;--line:#242a35;--line2:#303846;--text:#eceff5;--muted:#9aa3b2;--faint:#697281;--gold:#d8aa3f;--blue:#7aa2ff;--violet:#b894ff;--teal:#2dd4bf;--red:#ff6b6b;--amber:#eab84f;--mono:"SFMono-Regular","Roboto Mono",ui-monospace,monospace;--sans:-apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Microsoft YaHei",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased}.shell{width:min(1480px,100%);margin:0 auto;padding:18px 22px 36px}.topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}.brand{display:flex;align-items:center;gap:11px}.mark{width:34px;height:34px;border-radius:8px;border:1px solid rgba(216,170,63,.45);display:grid;place-items:center;color:var(--gold);font-weight:900;background:rgba(216,170,63,.08)}.title{font-size:16px;font-weight:760}.sub{font-size:11px;color:var(--muted);margin-top:2px}.badge{font-size:10px;letter-spacing:.08em;border:1px solid rgba(216,170,63,.5);color:var(--gold);border-radius:4px;padding:2px 6px}.spacer{flex:1}.tab{color:var(--muted);text-decoration:none;font-size:13px;padding:8px 12px;border-bottom:2px solid transparent}.tab.active{color:var(--text);border-bottom-color:var(--gold)}.chip{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;border:1px solid var(--line2);background:var(--surface2);border-radius:6px;padding:5px 10px}.panel{border:1px solid var(--line);background:var(--surface);border-radius:10px;overflow:hidden}.panel-h{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line);font-size:12px;font-weight:680}.right{margin-left:auto;color:var(--faint);font-weight:400}.dot{width:8px;height:8px;border-radius:50%;display:inline-block}.human{background:var(--blue)}.machine{background:var(--violet)}.live{background:var(--teal)}.warn-dot{background:var(--amber)}.hero{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;margin-bottom:14px}.status-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line)}.metric{background:var(--surface);padding:13px 14px}.metric .k{font-size:11px;color:var(--faint)}.metric .v{font-family:var(--mono);font-size:20px;font-weight:760;margin-top:5px}.pos{color:var(--teal)}.neg{color:var(--red)}.muted{color:var(--muted)}.copy{padding:14px 16px;color:var(--muted);font-size:12px;line-height:1.55}.transport{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line);background:var(--surface2)}button{font:inherit}.btn{border:1px solid var(--line2);background:#0d1118;color:var(--muted);border-radius:7px;padding:6px 10px;cursor:pointer}.btn.primary{border-color:rgba(216,170,63,.55);background:rgba(216,170,63,.11);color:var(--gold)}.range{flex:1;min-width:220px}.range input{width:100%;accent-color:var(--gold)}.timebox{font-family:var(--mono);font-size:12px;color:var(--text);min-width:150px}.panes{display:grid;grid-template-columns:1fr 1fr;gap:14px}.pane-body{position:relative}.chart{width:100%;height:410px;display:block;background:linear-gradient(180deg,rgba(255,255,255,.015),transparent)}.legend{display:flex;gap:12px;padding:9px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);flex-wrap:wrap}.legend b{font-family:var(--mono);color:var(--text)}.detail{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:14px}.fill-table{width:100%;border-collapse:collapse;font-size:12px}.fill-table th,.fill-table td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left}.fill-table th{color:var(--faint);font-weight:520}.fill-table td{color:var(--muted)}.selected{outline:1px solid rgba(216,170,63,.55);background:rgba(216,170,63,.06)}.empty{padding:22px;color:var(--muted);font-size:13px;text-align:center}.closed-only{display:none;border:1px solid rgba(234,184,79,.4);background:rgba(234,184,79,.08);border-radius:10px;padding:22px;margin-top:12px}.closed-only h2{font-size:18px;margin:0 0 8px}.closed-only p{margin:0;color:var(--muted);line-height:1.55}.foot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--faint);font-family:var(--mono);font-size:11px;margin-top:18px}svg text{font-family:var(--mono)}.marker{cursor:pointer}.marker.future{opacity:.32}.cursor-label{font-family:var(--mono);font-size:10px;fill:var(--gold)}
+@media(max-width:980px){.hero,.panes,.detail{grid-template-columns:1fr}.status-grid{grid-template-columns:1fr 1fr}.shell{padding:14px 12px 28px}.chart{height:330px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand"><div class="mark">DT</div><div><div class="title">双轨同步回放 <span class="badge">CLOSED ONLY</span></div><div class="sub">Synced Dual Replay · 人轨 HUMAN / 机器轨 MACHINE</div></div></div>
+    <a class="tab" href="dashboard-dualtrack-v5.html">双轨作战台</a>
+    <a class="tab active" href="dashboard-dualtrack-replay.html?layout=dualtrack">双轨回放</a>
+    <a class="tab" href="dashboard-replay-v4.html">单笔回放</a>
+    <div class="spacer"></div>
+    <span class="chip" id="cycleChip">cycle --</span>
+  </div>
+
+  <div id="closedOnly" class="closed-only">
+    <h2>周期尚未收盘 · 回放拒绝渲染</h2>
+    <p>D6-1 CLOSED CYCLES ONLY：双轨回放会揭示机器轨成交，因此只读取收盘后的 attribution。当前周期没有 closed attribution，本页不会请求盘中机器轨接口，也不会展示机器轨成交。</p>
+  </div>
+
+  <main id="app">
+    <section class="hero">
+      <div class="panel">
+        <div class="panel-h"><span class="dot live"></span>周期摘要 <span class="right" id="cycleWindow">--</span></div>
+        <div class="status-grid">
+          <div class="metric"><div class="k">机器轨 PnL</div><div class="v" id="machinePnl">--</div></div>
+          <div class="metric"><div class="k">人轨 PnL</div><div class="v" id="humanPnl">--</div></div>
+          <div class="metric"><div class="k">机会捕获</div><div class="v" id="captureText">--</div></div>
+          <div class="metric"><div class="k">方向判卷</div><div class="v" id="gradeText">--</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><span class="dot warn-dot"></span>安全合同 <span class="right">D6-1</span></div>
+        <div class="copy">本页只在 `GET /api/dualtrack/attribution/{cycle}` 成功后渲染。未收盘、无 attribution、或接口 404 时直接显示拒绝态；页面没有盘中机器轨 fallback。</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="transport">
+        <button class="btn" id="prevBtn">‹ 上一分钟</button>
+        <button class="btn primary" id="playBtn">▶ 播放</button>
+        <button class="btn" id="nextBtn">下一分钟 ›</button>
+        <div class="range"><input id="cursorRange" type="range" min="0" max="0" value="0" aria-label="shared replay cursor"></div>
+        <div class="timebox" id="cursorText">--</div>
+      </div>
+      <div class="panes">
+        <div class="panel pane">
+          <div class="panel-h"><span class="dot human"></span>人轨 HUMAN <span class="right" id="humanStats">--</span></div>
+          <div class="pane-body"><svg id="humanChart" class="chart" viewBox="0 0 680 410" role="img" aria-label="human replay pane"></svg></div>
+          <div class="legend" id="humanLegend"></div>
+        </div>
+        <div class="panel pane">
+          <div class="panel-h"><span class="dot machine"></span>机器轨 MACHINE <span class="right" id="machineStats">--</span></div>
+          <div class="pane-body"><svg id="machineChart" class="chart" viewBox="0 0 680 410" role="img" aria-label="machine replay pane"></svg></div>
+          <div class="legend" id="machineLegend"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="detail">
+      <div class="panel">
+        <div class="panel-h"><span class="dot human"></span>成交序列 · HUMAN</div>
+        <div id="humanTable"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><span class="dot machine"></span>成交序列 · MACHINE</div>
+        <div id="machineTable"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="foot"><span>dashboard-dualtrack-replay · layout=dualtrack</span><span>attribution-only · closed cycles only · no machine fallback</span></div>
+</div>
+
+<script>
+const API_BASE = location.protocol === "file:" ? "http://127.0.0.1:8765" : location.origin;
+const params = new URLSearchParams(location.search);
+const state = {cycleId:params.get("cycle") || "", attribution:null, bars:[], cursor:0, timer:null, selected:null};
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+const money = (value) => `${num(value) >= 0 ? "+" : "-"}$${Math.abs(num(value)).toFixed(2)}`;
+const price = (value) => num(value).toLocaleString("en-US",{minimumFractionDigits:1,maximumFractionDigits:1});
+async function api(path){
+  const response = await fetch(`${API_BASE}${path}`, {cache:"no-store"});
+  if(!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json();
+}
+async function loadDualtrackReplay(){
+  if(params.get("layout") && params.get("layout") !== "dualtrack") renderClosedOnly("layout must be dualtrack");
+  if(!state.cycleId) return renderClosedOnly("missing cycle");
+  $("cycleChip").textContent = state.cycleId;
+  try{
+    state.attribution = await api(`/api/dualtrack/attribution/${encodeURIComponent(state.cycleId)}`);
+    const market = await api("/api/dualtrack/market/bars?limit=720").catch(() => null);
+    state.bars = cycleBars(market?.bars || [], state.attribution.cycle);
+    if(!state.bars.length) state.bars = fallbackBars(state.attribution.cycle, allFills());
+    initReplay();
+  }catch(error){
+    renderClosedOnly(error.message);
+  }
+}
+function renderClosedOnly(reason){
+  $("app").style.display = "none";
+  $("closedOnly").style.display = "block";
+  $("cycleChip").textContent = state.cycleId || "cycle --";
+  $("closedOnly").querySelector("p").innerHTML = `D6-1 CLOSED CYCLES ONLY：双轨回放会揭示机器轨成交，因此只读取收盘后的 attribution。当前周期没有 closed attribution（${esc(reason)}），本页不会请求盘中机器轨接口，也不会展示机器轨成交。`;
+}
+function initReplay(){
+  const bars = state.bars;
+  state.cursor = Math.max(0, bars.length - 1);
+  $("cursorRange").max = String(Math.max(0, bars.length - 1));
+  $("cursorRange").value = String(state.cursor);
+  $("cursorRange").addEventListener("input", event => setCursor(Number(event.target.value)));
+  $("prevBtn").addEventListener("click", () => setCursor(state.cursor - 1));
+  $("nextBtn").addEventListener("click", () => setCursor(state.cursor + 1));
+  $("playBtn").addEventListener("click", togglePlay);
+  $("humanChart").addEventListener("click", selectFillFromEvent);
+  $("machineChart").addEventListener("click", selectFillFromEvent);
+  renderSummary();
+  renderAll();
+}
+function cycleBars(rows, cycle){
+  const start = Date.parse(cycle?.start || "");
+  const end = Date.parse(cycle?.end || "");
+  return rows.map(normalizeBar).filter(row => {
+    const t = Date.parse(row.timestamp);
+    return Number.isFinite(t) && (!Number.isFinite(start) || t >= start) && (!Number.isFinite(end) || t <= end);
+  });
+}
+function normalizeBar(row){
+  return {timestamp:row.timestamp, open:num(row.open), high:num(row.high), low:num(row.low), close:num(row.close)};
+}
+function fallbackBars(cycle, fills){
+  const start = Date.parse(cycle?.start || "") || Date.now();
+  const end = Date.parse(cycle?.end || "") || start + 59 * 60000;
+  const count = Math.max(12, Math.min(120, Math.round((end - start) / 60000) + 1));
+  const open = num(cycle?.open_price || fills[0]?.price || 4000);
+  const close = num(cycle?.close_price || open);
+  const rows = [];
+  for(let i=0;i<count;i++){
+    const t = new Date(start + i * ((end - start) / Math.max(1,count - 1))).toISOString();
+    const wave = Math.sin(i / 2) * Math.max(1, Math.abs(close - open) * .25);
+    const c = open + (close - open) * (i / Math.max(1,count - 1)) + wave;
+    const o = rows.length ? rows[rows.length - 1].close : open;
+    rows.push({timestamp:t, open:o, high:Math.max(o,c)+2, low:Math.min(o,c)-2, close:c});
+  }
+  return rows;
+}
+function renderSummary(){
+  const attr = state.attribution;
+  const cycle = attr.cycle || {};
+  const human = attr.tracks?.human || {};
+  const machine = attr.tracks?.machine || {};
+  $("cycleWindow").textContent = `${shortTime(cycle.start)} -> ${shortTime(cycle.end)} · ${cycle.realized_direction || "--"}`;
+  $("machinePnl").textContent = money(machine.realized_pnl);
+  $("machinePnl").className = `v ${num(machine.realized_pnl) >= 0 ? "pos" : "neg"}`;
+  $("humanPnl").textContent = money(human.realized_pnl);
+  $("humanPnl").className = `v ${num(human.realized_pnl) >= 0 ? "pos" : "neg"}`;
+  $("captureText").textContent = `${human.captured || 0}/${human.opportunity_count || 0} vs ${machine.captured || 0}/${machine.opportunity_count || 0}`;
+  $("gradeText").textContent = `${gradeLabel(attr.plan_grades?.human)} / ${gradeLabel(attr.plan_grades?.ai)}`;
+  $("humanStats").textContent = `${human.fill_count || 0} fills · ${money(human.realized_pnl)}`;
+  $("machineStats").textContent = `${machine.fill_count || 0} fills · ${money(machine.realized_pnl)}`;
+}
+function renderAll(){
+  $("cursorRange").value = String(state.cursor);
+  $("cursorText").textContent = shortTime(state.bars[state.cursor]?.timestamp);
+  renderPane("human", $("humanChart"), fillsFor("human"));
+  renderPane("machine", $("machineChart"), fillsFor("machine"));
+  renderFillTable("human", fillsFor("human"));
+  renderFillTable("machine", fillsFor("machine"));
+}
+function renderPane(track, svg, fills){
+  const bars = state.bars;
+  const visible = bars.slice(0, state.cursor + 1);
+  const domainPrices = bars.flatMap(row => [row.high,row.low]).concat(fills.map(fill => num(fill.price)));
+  const min = Math.min(...domainPrices) - 4;
+  const max = Math.max(...domainPrices) + 4;
+  const w = 680, h = 410, pad = 34;
+  const x = index => pad + index * ((w - pad * 2) / Math.max(1, bars.length - 1));
+  const y = value => pad + (max - value) / Math.max(1, max - min) * (h - pad * 2);
+  const tsToX = ts => {
+    const t = Date.parse(ts || "");
+    const first = Date.parse(bars[0]?.timestamp || "");
+    const last = Date.parse(bars[bars.length - 1]?.timestamp || "");
+    if(!Number.isFinite(t) || !Number.isFinite(first) || !Number.isFinite(last) || first === last) return x(state.cursor);
+    return pad + ((t - first) / (last - first)) * (w - pad * 2);
+  };
+  let html = `<rect x="0" y="0" width="${w}" height="${h}" fill="transparent"/>`;
+  for(let i=0;i<5;i++){ const yy = pad + i * ((h - pad * 2) / 4); html += `<line x1="${pad}" y1="${yy}" x2="${w-pad}" y2="${yy}" stroke="rgba(255,255,255,.06)"/>`; }
+  bars.forEach((bar, index) => {
+    const xi = x(index), up = bar.close >= bar.open, color = up ? "#2dd4bf" : "#ff6b6b";
+    const opacity = index <= state.cursor ? ".95" : ".22";
+    html += `<line x1="${xi}" y1="${y(bar.high)}" x2="${xi}" y2="${y(bar.low)}" stroke="${color}" opacity="${opacity}"/>`;
+    html += `<rect x="${xi-3}" y="${Math.min(y(bar.open),y(bar.close))}" width="6" height="${Math.max(1,Math.abs(y(bar.open)-y(bar.close)))}" fill="${color}" opacity="${opacity}"/>`;
+  });
+  const cursorX = x(state.cursor);
+  html += `<line x1="${cursorX}" y1="${pad}" x2="${cursorX}" y2="${h-pad}" stroke="rgba(216,170,63,.75)" stroke-dasharray="4 4"/><text class="cursor-label" x="${cursorX+6}" y="25">${esc(shortTime(bars[state.cursor]?.timestamp))}</text>`;
+  fills.forEach((fill, index) => {
+    const fx = tsToX(fill.ts), fy = y(num(fill.price)), buy = fill.side === "buy", color = track === "human" ? "#7aa2ff" : "#b894ff";
+    const future = Date.parse(fill.ts || "") > Date.parse(bars[state.cursor]?.timestamp || "");
+    const selected = state.selected?.track === track && state.selected?.index === index;
+    const path = buy ? `M ${fx} ${fy+8} l 8 -14 l -16 0 z` : `M ${fx} ${fy-8} l 8 14 l -16 0 z`;
+    html += `<g class="marker ${future ? "future" : ""}" data-track="${track}" data-index="${index}"><path d="${path}" fill="${color}" stroke="${selected ? "#d8aa3f" : color}" stroke-width="${selected ? 2 : 1}"/><text x="${fx+10}" y="${fy+4}" fill="${color}" font-size="10">${esc(fill.event || fill.side)} ${price(fill.price)}</text></g>`;
+  });
+  svg.innerHTML = html;
+  const liveFills = fills.filter(fill => Date.parse(fill.ts || "") <= Date.parse(bars[state.cursor]?.timestamp || ""));
+  $(`${track}Legend`).innerHTML = `<span>游标前成交 <b>${liveFills.length}</b>/${fills.length}</span><span>当前价 <b>${price(bars[state.cursor]?.close)}</b></span><span>点击三角标记查看 fill detail</span>`;
+}
+function renderFillTable(track, fills){
+  const rows = fills.map((fill, index) => {
+    const selected = state.selected?.track === track && state.selected?.index === index;
+    return `<tr class="${selected ? "selected" : ""}" data-track="${track}" data-index="${index}"><td>${shortTime(fill.ts)}</td><td>${esc(fill.event || "--")}</td><td>${esc(fill.side || "--")}</td><td>${price(fill.price)}</td><td>${money(fill.realized_pnl)}</td></tr>`;
+  }).join("");
+  const table = rows ? `<table class="fill-table"><thead><tr><th>时间</th><th>事件</th><th>方向</th><th>价格</th><th>PnL</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">本轨无成交</div>`;
+  $(`${track}Table`).innerHTML = table;
+  $(`${track}Table`).querySelectorAll("tr[data-track]").forEach(row => row.addEventListener("click", selectFillFromEvent));
+}
+function fillsFor(track){
+  return (state.attribution?.fills?.[track] || []).slice().sort((a,b) => Date.parse(a.ts || "") - Date.parse(b.ts || ""));
+}
+function allFills(){ return fillsFor("human").concat(fillsFor("machine")); }
+function selectFillFromEvent(event){
+  const node = event.target.closest("[data-track][data-index]");
+  if(!node) return;
+  state.selected = {track:node.dataset.track, index:Number(node.dataset.index)};
+  const fill = fillsFor(state.selected.track)[state.selected.index];
+  const idx = nearestBarIndex(fill?.ts);
+  if(idx >= 0) state.cursor = idx;
+  renderAll();
+}
+function setCursor(index){
+  state.cursor = Math.max(0, Math.min(state.bars.length - 1, index));
+  renderAll();
+}
+function togglePlay(){
+  if(state.timer){ clearInterval(state.timer); state.timer = null; $("playBtn").textContent = "▶ 播放"; return; }
+  $("playBtn").textContent = "Ⅱ 暂停";
+  state.timer = setInterval(() => {
+    if(state.cursor >= state.bars.length - 1) setCursor(0);
+    else setCursor(state.cursor + 1);
+  }, 650);
+}
+function nearestBarIndex(ts){
+  const t = Date.parse(ts || "");
+  if(!Number.isFinite(t)) return -1;
+  let best = 0, dist = Infinity;
+  state.bars.forEach((bar, index) => {
+    const d = Math.abs(Date.parse(bar.timestamp || "") - t);
+    if(d < dist){ dist = d; best = index; }
+  });
+  return best;
+}
+function shortTime(value){
+  if(!value) return "--";
+  const d = new Date(value);
+  if(Number.isNaN(d.getTime())) return "--";
+  return `${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")} ${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}`;
+}
+function gradeLabel(row){
+  if(!row) return "--";
+  if(!row.graded) return "未判";
+  return row.hit ? "方向对" : "方向错";
+}
+loadDualtrackReplay();
+</script>
+</body>
+</html>

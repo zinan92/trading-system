@@ -173,6 +173,10 @@ class DualTrackScorer:
                 "machine": _track_stats(machine_fills, captured=cycle["machine_captured"], opportunity_count=len(opportunities)),
                 "human": _track_stats(human_fills, captured=cycle["human_captured"], opportunity_count=len(opportunities)),
             },
+            "fills": {
+                "machine": machine_fills,
+                "human": human_fills,
+            },
             "opportunities": opportunities,
             "plan_grades": cycle["plan_grades"],
             "scoreboard": scoreboard,
