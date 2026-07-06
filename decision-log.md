@@ -76,6 +76,59 @@ Date: 2026-07-06
 
 - A missing market payload still renders the warning because the page otherwise uses frontend seed candles. Loading failures should be visibly unsafe, not silently chart-like.
 
+
+## DualTrack DT9 Decision Page P1 Cleanup
+
+Date: 2026-07-06
+
+### Decisions
+
+- Remove Tiger venue and connector onboarding panels from `dashboard-dualtrack-v5.html`.
+  - Rationale: the dual-track decision page should focus on chart, plan, machine track, human track, risk, and replay/ledger context; operator onboarding state belongs on ops surfaces.
+  - Evidence: `dashboard-dualtrack-v5.html` no longer contains `venueCard`, `connectorCard`, `/api/dualtrack/venue/tiger`, `/api/connectors`, `老虎`, `TIGER`, or `CONNECTOR`.
+
+- Keep backing API endpoints and services untouched for P1.
+  - Rationale: this phase is a page-scope cleanup, not an ops backend deletion; other tooling can continue to consume those read models.
+  - Evidence: P1 commit `c4b1539` changed only `dashboard-dualtrack-v5.html`.
+
+- Replace positive UI assertions for OPS/connector copy with a negative static contract.
+  - Rationale: future changes should fail tests if this decision page reintroduces venue onboarding/admin content.
+  - Evidence: `tests/test_dashboard_dualtrack_static.py::test_dualtrack_v5_removes_ops_connector_panels_from_decision_page`.
+
+### Gotchas
+
+- P1 deliberately leaves connector and Tiger APIs in `pipelines/dashboard_server.py` and service modules. Removing or relocating those endpoints is outside this phase.
+
+- The forbidden words still appear in static tests as negative assertions; the contract is that `dashboard-dualtrack-v5.html` does not contain them.
+
+- Do not start P2 polish until this P1 surface cleanup is accepted or explicitly continued.
+
+## DualTrack DT9 Decision Page P2 Polish
+
+Date: 2026-07-06
+
+### Decisions
+
+- Increase the 15m/1h context chart viewport and rendered height from 96/100px to 150px.
+  - Rationale: the operator needs to read floor/high/low labels and the trend line without zooming or guessing.
+  - Evidence: `dashboard-dualtrack-v5.html` uses `viewBox="0 0 460 150"` and `.context-body{height:150px;display:block}`.
+
+- Enlarge mini-chart annotations and trend styling without changing the market-data path.
+  - Rationale: P2 is a visual-readability pass; timeframe aggregation and backend payload selection were already handled before this phase.
+  - Evidence: `drawMini()` keeps the same candle inputs while using larger labels, a wider plot area, and a thicker trend polyline.
+
+- Rebuild plan cards as grouped label/value blocks.
+  - Rationale: direction/range, key levels, invalidation, and confidence/source are different operator decisions and should not be compressed into one raw inline row.
+  - Evidence: `planBody()` now renders `.plan-grid` and `.plan-metric` groups for `方向 / RANGE`, `关键位`, `失效条件`, and `信心 / 来源`.
+
+### Gotchas
+
+- P2 must not alter source selection, timeframe derivation, default venue, or any trading/action endpoint. This pass is presentation only.
+
+- The AI card can still be hidden during the blind window; the grouped layout applies when the AI plan is revealed or rendered in the top plan strip.
+
+- The main-chart blank-space check should be done in a browser because the original symptom was visual layout, not a backend invariant.
+
 ## Tiger Connector Current Authorization Gate
 
 Date: 2026-07-06

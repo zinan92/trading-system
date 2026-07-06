@@ -20,11 +20,6 @@ def test_dualtrack_v5_matches_locked_visual_contract_sections():
     assert "你的作战单 · 盲答中" in html
     assert "AI 作战单 · Obsidian 每日观点" in html
     assert "机器轨 MACHINE" in html
-    assert "老虎 TIGER · PAPER VENUE" in html
-    assert "执行合约" in html
-    assert "账户证据" in html
-    assert "下单演练" in html
-    assert "授权门" in html
     assert "月均日现金流 · 双轨合计" in html
     assert "系统地板（方向不可知网格）" in html
     assert "神谕天花板" in html
@@ -40,7 +35,6 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     assert 'cycleClosed(state.cycle) ? await api(`/api/dualtrack/attribution/${cycleId}`)' in html
     assert "function cycleClosed(cycle)" in html
     assert 'api("/api/dualtrack/ledger")' in html
-    assert 'api("/api/dualtrack/venue/tiger")' in html
     assert 'api("/api/dualtrack/verdict"' in html
     assert 'api("/api/dualtrack/market/bars?limit=96")' in html
     assert "BACKEND · 只读 K 线" in html
@@ -58,6 +52,46 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     assert "xauusdt@kline_1m" not in html
     assert "WebSocket(" not in html
     assert "venue-divergence" not in html
+
+
+def test_dualtrack_v5_removes_ops_connector_panels_from_decision_page():
+    html = read_html()
+
+    forbidden = [
+        "venueCard",
+        "connectorCard",
+        "/api/dualtrack/venue/tiger",
+        "老虎",
+        "TIGER",
+        "CONNECTOR",
+        "接入 CONNECTOR",
+        "接入目录",
+        "验证接入",
+        "预览激活",
+        "写入预检",
+    ]
+    for item in forbidden:
+        assert item not in html
+
+
+def test_dualtrack_v5_p2_uses_readable_context_charts_and_grouped_plan_cards():
+    html = read_html()
+
+    assert ".context-body{height:150px;display:block}" in html
+    assert 'id="ctx15" class="context-body" viewBox="0 0 460 150"' in html
+    assert 'id="ctx1h" class="context-body" viewBox="0 0 460 150"' in html
+    assert "const w = 460, h = 150" in html
+    assert 'stroke-width="2.4"' in html
+    assert 'font-size="12">H ${fmt(baseHigh)}' in html
+    assert 'font-size="12">floor ${fmt(floor)}' in html
+    assert 'font-size="14">${change >= 0 ? "+" : ""}${change.toFixed(2)}%' in html
+    assert "plan-grid" in html
+    assert "plan-metric" in html
+    assert '<span class="lab">方向 / RANGE</span>' in html
+    assert '<span class="lab">信心 / 来源</span>' in html
+    assert '<span class="lab">关键位</span>' in html
+    assert '<span class="lab">失效条件</span>' in html
+    assert '<div class="row"><span class="kv"><span class="lab">方向</span>' not in html
 
 
 def test_dualtrack_v5_keeps_machine_track_blind_and_without_intervention_surface():
