@@ -30,7 +30,7 @@ def test_dualtrack_v5_matches_locked_visual_contract_sections():
     assert "神谕天花板" in html
 
 
-def test_dualtrack_v5_uses_dualtrack_api_contracts_and_live_kline():
+def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     html = read_html()
 
     assert 'api("/api/dualtrack/cycle/current")' in html
@@ -42,9 +42,22 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_live_kline():
     assert 'api("/api/dualtrack/ledger")' in html
     assert 'api("/api/dualtrack/venue/tiger")' in html
     assert 'api("/api/dualtrack/verdict"' in html
-    assert "xauusdt@kline_1m" in html
+    assert 'api("/api/dualtrack/market/bars?limit=96")' in html
+    assert "BACKEND · 只读 K 线" in html
+    assert "后端只读接口 `/api/dualtrack/market/bars`" in html
+    assert "marketBarsToCandles" in html
+    assert 'id="chartSyntheticWarning"' in html
+    assert "data-synthetic-market-warning" in html
+    assert "模拟数据 · 非真实价格" in html
+    assert "function isSyntheticMarket(payload)" in html
+    assert "payload.is_synthetic === true" in html
+    assert 'provider.includes("synthetic_seed")' in html
+    assert 'mode.includes("synthetic")' in html
+    assert "function renderSyntheticWarning()" in html
+    assert 'warning.classList.toggle("hidden", !synthetic)' in html
+    assert "xauusdt@kline_1m" not in html
+    assert "WebSocket(" not in html
     assert "venue-divergence" not in html
-    assert "不同场所价格可能有细微偏差" in html
 
 
 def test_dualtrack_v5_keeps_machine_track_blind_and_without_intervention_surface():
@@ -92,3 +105,22 @@ def test_dashboard_server_exposes_read_only_tiger_venue_endpoint(monkeypatch):
     response = dashboard_server.build_dualtrack_tiger_venue_response(output_root=ROOT / "outputs")
 
     assert response == {"status": "ready", "safety": {"dashboard_read_only": True}}
+
+
+def test_dashboard_server_exposes_read_only_market_bars_endpoint(tmp_path):
+    from pipelines import dashboard_server
+
+    response = dashboard_server.build_dualtrack_market_bars_response(
+        market_db=tmp_path / "missing.db",
+        config={},
+        as_of="2026-07-05T01:03:59+00:00",
+        limit=2,
+    )
+
+    assert response["schema_version"] == "dualtrack-market-bars-v1"
+    assert response["status"] == "seeded"
+    assert response["is_synthetic"] is True
+    assert "synthetic_seed" in response["quality_flags"]
+    assert response["safety"]["read_only"] is True
+    assert response["safety"]["opens_order_clients"] is False
+    assert "/api/dualtrack/market/bars" not in dashboard_server._DUALTRACK_POST_ENDPOINTS

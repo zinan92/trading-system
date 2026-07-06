@@ -23,8 +23,8 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
 .blind-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:14px}.track-h{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid var(--line);font-size:12px;font-weight:640}.tdot{width:8px;height:8px;border-radius:50%;display:inline-block}.tdot.human{background:var(--blue)}.tdot.ai{background:var(--violet)}.tdot.live{background:var(--teal);animation:pulse 1.6s infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .q-body{padding:14px 16px;display:grid;gap:12px}.q-row{display:grid;grid-template-columns:94px 1fr;gap:10px;align-items:center;font-size:12.5px}.q-row .k{color:var(--faint);font-size:11px;letter-spacing:.06em}.seg{display:inline-flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden}.seg button,.seg span{padding:6px 14px;font-size:12px;color:var(--muted);border:0;border-right:1px solid var(--line);background:transparent;cursor:pointer}.seg button:last-child,.seg span:last-child{border-right:none}.seg .on{background:rgba(122,162,255,.14);color:var(--blue);font-weight:640}.inp{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}.box,input,select,textarea{background:var(--surface2);border:1px solid var(--line2);border-radius:5px;padding:7px 10px;color:var(--text);font:12.5px/1.2 var(--mono);min-width:86px}textarea{width:100%;min-height:44px;resize:vertical}.conf{display:flex;align-items:center;gap:8px}.conf input{accent-color:var(--blue);width:min(260px,100%)}.lock-row{display:flex;align-items:center;gap:12px;border-top:1px dashed var(--line);padding-top:12px}.btn{font-size:12.5px;border-radius:6px;padding:8px 14px;cursor:pointer;border:1px solid var(--line2);background:var(--surface2);color:var(--text)}.btn.primary{border-color:rgba(122,162,255,.55);background:rgba(122,162,255,.12);color:var(--blue);font-weight:660}.btn.buy{border-color:rgba(45,212,191,.5);background:rgba(45,212,191,.1);color:var(--teal);font-weight:660}.btn.sell{border-color:rgba(255,107,107,.48);background:rgba(255,107,107,.09);color:var(--red);font-weight:660}.btn[disabled]{opacity:.45;cursor:not-allowed}.blind-note{font-size:11px;color:var(--faint)}.blind-note b{color:var(--amber);font-weight:600}
 .ai-blur{position:relative;min-height:230px;overflow:hidden}.ai-blur .fake{padding:16px;filter:blur(7px);opacity:.55;user-select:none}.fake .ln{height:11px;border-radius:3px;background:var(--surface3);margin:12px 0}.ai-blur .veil{position:absolute;inset:0;display:grid;place-items:center}.veil .msg{text-align:center;color:var(--muted);font-size:12.5px}
-.plan-strip{display:grid;grid-template-columns:1.2fr 1.2fr 1fr;gap:14px;margin-bottom:14px}.plan-card{border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:12px 16px;position:relative}.plan-card.human{box-shadow:inset 3px 0 0 var(--blue)}.plan-card.ai{box-shadow:inset 3px 0 0 var(--violet)}.plan-card .hd{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:8px}.plan-card .live-badge{margin-left:auto;font-size:10px;color:var(--teal);border:1px solid rgba(45,212,191,.4);border-radius:4px;padding:1px 7px;background:rgba(45,212,191,.07)}.plan-card .row{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px}.kv{color:var(--muted)}.kv b{font-family:var(--mono);font-weight:600;color:var(--text)}.kv .lab{color:var(--faint);font-size:10.5px;display:block;letter-spacing:.06em}.diff{color:var(--amber);font-size:11px;margin-top:7px}.scoreboard{border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:12px 16px}.scoreboard .big{font-size:24px;font-weight:720;font-family:var(--mono)}.scoreboard .sub{font-size:11px;color:var(--faint);margin-top:3px}.gate-ok{display:inline-block;font-size:10.5px;color:var(--teal);border:1px solid rgba(45,212,191,.4);border-radius:4px;padding:1px 7px;background:rgba(45,212,191,.07);margin-left:8px;vertical-align:3px}
-.mid-grid{display:grid;grid-template-columns:minmax(0,2.1fr) minmax(0,1fr);gap:14px;align-items:start}.chart-wrap{display:flex;flex-direction:column;gap:14px;min-width:0}.chart-svg{width:100%;display:block;min-height:380px}.chart-foot{display:flex;gap:14px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}.chart-foot b{font-family:var(--mono);color:var(--text);font-weight:600}.tf-seg{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;font-size:11px}.tf-seg button{padding:3px 10px;color:var(--faint);background:transparent;border:0;border-right:1px solid var(--line);cursor:pointer}.tf-seg .on{background:var(--surface3);color:var(--text)}
+.plan-strip{display:grid;grid-template-columns:1.15fr 1.15fr .9fr 1.2fr;gap:14px;margin-bottom:14px}.plan-card{border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:12px 16px;position:relative}.plan-card.human{box-shadow:inset 3px 0 0 var(--blue)}.plan-card.ai{box-shadow:inset 3px 0 0 var(--violet)}.plan-card .hd{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:8px}.plan-card .live-badge{margin-left:auto;font-size:10px;color:var(--teal);border:1px solid rgba(45,212,191,.4);border-radius:4px;padding:1px 7px;background:rgba(45,212,191,.07)}.plan-card .row{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px}.kv{color:var(--muted)}.kv b{font-family:var(--mono);font-weight:600;color:var(--text)}.kv .lab{color:var(--faint);font-size:10.5px;display:block;letter-spacing:.06em}.diff{color:var(--amber);font-size:11px;margin-top:7px}.scoreboard{border-radius:10px;border:1px solid var(--line);background:var(--surface);padding:12px 16px}.scoreboard .big{font-size:24px;font-weight:720;font-family:var(--mono)}.scoreboard .sub{font-size:11px;color:var(--faint);margin-top:3px}.gate-ok{display:inline-block;font-size:10.5px;color:var(--teal);border:1px solid rgba(45,212,191,.4);border-radius:4px;padding:1px 7px;background:rgba(45,212,191,.07);margin-left:8px;vertical-align:3px}.status-card{box-shadow:inset 3px 0 0 var(--amber)}.status-row{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);padding:3px 0}.status-row b{margin-left:auto;font-family:var(--mono);font-weight:600}.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.status-dot.ok{background:var(--teal)}.status-dot.warn{background:var(--amber)}.status-dot.blocked{background:var(--red)}
+.mid-grid{display:grid;grid-template-columns:minmax(0,2.1fr) minmax(0,1fr);gap:14px;align-items:start}.chart-wrap{display:flex;flex-direction:column;gap:14px;min-width:0}.chart-stage{position:relative;min-height:380px}.chart-svg{width:100%;display:block;min-height:380px}.synthetic-warning{position:absolute;left:18px;right:18px;top:44%;transform:translateY(-50%);display:grid;gap:5px;place-items:center;padding:14px 18px;border:1px solid rgba(255,107,107,.62);background:rgba(24,10,12,.88);box-shadow:0 12px 36px rgba(0,0,0,.32);color:var(--red);font-weight:760;text-align:center;pointer-events:none}.synthetic-warning b{font-size:22px;letter-spacing:0}.synthetic-warning span{font-size:12px;color:#ffb3b3;font-weight:600}.chart-foot{display:flex;gap:14px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}.chart-foot b{font-family:var(--mono);color:var(--text);font-weight:600}.tf-seg{display:inline-flex;border:1px solid var(--line);border-radius:5px;overflow:hidden;font-size:11px}.tf-seg button{padding:3px 10px;color:var(--faint);background:transparent;border:0;border-right:1px solid var(--line);cursor:pointer}.tf-seg .on{background:var(--surface3);color:var(--text)}
 .context-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.context-grid details{overflow:hidden}.context-grid summary{list-style:none;cursor:pointer}.context-body{height:100px}.rail{display:flex;flex-direction:column;gap:14px;min-width:0}.machine-card{border:1px solid rgba(184,148,255,.3)}.machine-card .track-h{color:var(--violet)}.blind-badge{margin-left:auto;font-size:10px;color:var(--violet);border:1px solid rgba(184,148,255,.4);border-radius:4px;padding:1px 7px;background:rgba(184,148,255,.07)}.pnl-wrap{padding:14px 16px;display:flex;align-items:baseline;gap:16px}.pnl-wrap .total{font-size:30px;font-weight:740;font-family:var(--mono)}.pnl-split{font-size:11.5px;color:var(--muted);line-height:1.7}.layer{display:flex;align-items:center;gap:8px;padding:8px 16px;border-top:1px dashed var(--line);font-size:12px}.layer .st{margin-left:auto;font-size:10.5px;font-family:var(--mono)}.machine-note{padding:9px 16px;border-top:1px solid var(--line);font-size:10.5px;color:var(--faint)}.human-card{border:1px solid rgba(122,162,255,.3)}.human-card .track-h{color:var(--blue)}.ticket{padding:12px 16px;display:grid;gap:10px}.ticket .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.amt{display:inline-flex;border:1px solid var(--line2);border-radius:6px;overflow:hidden;font-size:11.5px;font-family:var(--mono)}.amt button{padding:5px 12px;color:var(--muted);border:0;border-right:1px solid var(--line);background:transparent;cursor:pointer}.amt button:last-child{border-right:none}.amt .on{background:rgba(122,162,255,.14);color:var(--blue)}.pos-line{padding:10px 16px;border-top:1px dashed var(--line);font-size:12px;color:var(--muted)}.pos-line b{font-family:var(--mono);font-weight:600}.disc{padding:8px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--faint);display:flex;gap:14px;flex-wrap:wrap}.disc .ok{color:var(--teal)}.risk-card .kv{display:flex;justify-content:space-between;gap:14px;padding:8px 16px;border-bottom:1px dashed var(--line);font-size:12px;color:var(--muted)}.risk-card .kv:last-child{border-bottom:none}
 .attr-grid{display:grid;grid-template-columns:1.1fr 1.6fr 1fr;gap:14px;align-items:stretch}.cash-card{padding:16px}.cash-big{font-size:34px;font-weight:760;font-family:var(--mono)}.cash-sub{font-size:11px;color:var(--faint);margin-top:2px}.target-bar{height:7px;border-radius:4px;background:var(--surface3);margin:12px 0 6px;position:relative;overflow:hidden}.target-bar i{position:absolute;left:0;top:0;bottom:0;width:24%;background:linear-gradient(90deg,var(--teal),rgba(45,212,191,.5));border-radius:4px}.calib{font-size:11px;color:var(--faint);line-height:1.8}.calib b{color:var(--muted);font-weight:600;font-family:var(--mono)}table{width:100%;border-collapse:collapse}th{font-size:10px;letter-spacing:.09em;color:var(--faint);text-align:right;font-weight:600;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}th:first-child{text-align:left}td{font-size:12.5px;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:right;font-family:var(--mono)}td:first-child{text-align:left;font-family:inherit}tr:last-child td{border-bottom:none}.viol{color:var(--red);font-weight:640}.judge{padding:12px 16px;display:grid;gap:10px;font-size:12.5px}.judge .row{display:flex;gap:10px;align-items:center}.judge .who{width:34px;font-size:11px;color:var(--faint)}.j-ok{color:var(--teal);font-family:var(--mono)}.j-bad{color:var(--red);font-family:var(--mono)}.verdict-in{margin:0 16px 14px;border:1px dashed var(--line2);border-radius:7px;padding:9px 12px;font-size:12px;color:var(--faint);display:flex;gap:10px;align-items:center}.foot{margin-top:18px;font-size:11px;color:var(--faint);display:flex;gap:18px;flex-wrap:wrap;padding:0 4px}.foot b{color:var(--muted);font-weight:600}.status-line{min-height:18px;font-size:11px;color:var(--faint)}.hidden{display:none!important}
 @media(max-width:1100px){.blind-grid,.plan-strip,.mid-grid,.attr-grid{grid-template-columns:1fr}.context-grid{grid-template-columns:1fr}.tabs{margin-left:0}.q-row{grid-template-columns:1fr}.shell{padding:14px 12px 32px}}
@@ -74,18 +74,25 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
     <div class="plan-card human" id="humanPlanCard"></div>
     <div class="plan-card ai" id="aiPlanCard"></div>
     <div class="scoreboard" id="scoreboardCard"></div>
+    <div class="scoreboard status-card" id="runtimeStatusCard"></div>
   </div>
 
   <div class="mid-grid">
     <div class="chart-wrap">
       <div class="panel">
-        <div class="panel-h"><span class="t">GOLD · XAU/USD</span><span class="tf-seg"><button class="on" data-tf="1m">1m</button><button data-tf="5m">5m</button></span><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--teal)"><span class="tdot live"></span>LIVE · WebSocket K 线</span><span class="right">只显示你的标记 - 机器轨点位收盘后揭示</span></div>
-        <svg id="mainChart" class="chart-svg" viewBox="0 0 980 380" role="img" aria-label="GOLD live chart"></svg>
+        <div class="panel-h"><span class="t">GOLD · XAU/USD</span><span class="tf-seg"><button class="on" data-tf="1m">1m</button><button data-tf="5m">5m</button></span><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--teal)"><span class="tdot live"></span>BACKEND · 只读 K 线</span><span class="right">只显示你的标记 - 机器轨点位收盘后揭示</span></div>
+        <div class="chart-stage">
+          <svg id="mainChart" class="chart-svg" viewBox="0 0 980 380" role="img" aria-label="GOLD live chart"></svg>
+          <div id="chartSyntheticWarning" class="synthetic-warning hidden" role="alert" aria-hidden="true" data-synthetic-market-warning>
+            <b>模拟数据 · 非真实价格</b>
+            <span>仅用于占位展示，不可用于交易信号或手动下单判断</span>
+          </div>
+        </div>
         <div class="chart-foot" id="chartFoot"></div>
       </div>
       <div class="context-grid">
-        <details class="panel" open><summary class="panel-h"><span class="t">CONTEXT · 15m</span><span class="right">大级别定方向</span></summary><svg id="ctx15" class="context-body" viewBox="0 0 460 96"></svg></details>
-        <details class="panel" open><summary class="panel-h"><span class="t">CONTEXT · 1h</span><span class="right">趋势背景</span></summary><svg id="ctx1h" class="context-body" viewBox="0 0 460 96"></svg></details>
+        <details class="panel" open><summary class="panel-h"><span class="t">CONTEXT · 15m</span><span class="right" id="ctx15Meta">大级别定方向</span></summary><svg id="ctx15" class="context-body" viewBox="0 0 460 96"></svg></details>
+        <details class="panel" open><summary class="panel-h"><span class="t">CONTEXT · 1h</span><span class="right" id="ctx1hMeta">趋势背景</span></summary><svg id="ctx1h" class="context-body" viewBox="0 0 460 96"></svg></details>
       </div>
     </div>
     <div class="rail">
@@ -103,6 +110,7 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
       </div>
       <div class="panel risk-card" id="riskCard"></div>
       <div class="panel risk-card" id="venueCard"></div>
+      <div class="panel risk-card" id="connectorCard"></div>
     </div>
   </div>
 
@@ -120,22 +128,33 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
   <div class="foot">
     <span><b>口径</b> 双轨各 $10,000 纸面 · 默认 10x · 机器轨盘中仅披露 realized/unrealized PnL</span>
     <span><b>协议</b> 盲答->锁定->揭示 · 无输入=AI 兜底 · 皆无=站下（fail-closed）</span>
-    <span><b>行情</b> 浏览器直连 Binance USD-M `xauusdt@kline_1m` 作为 CFD price proxy；不同场所价格可能有细微偏差</span>
+    <span><b>行情</b> 后端只读接口 `/api/dualtrack/market/bars`；优先 Tiger/COMEX，本地无数据时才降级到已缓存 feed</span>
     <span class="mono dim">dashboard-dualtrack-v5 · 2026-07-05</span>
   </div>
 </div>
 <script>
 const API_BASE = location.origin;
 const state = {
-  cycle:null, plan:null, machine:null, human:null, attribution:null, ledger:null, tigerVenue:null,
+  cycle:null, plan:null, machine:null, human:null, attribution:null, ledger:null, tigerVenue:null, tigerPaperRefreshRunbook:null, connectorCatalog:null, connectorDryRun:null, connectorActivationPlan:null, connectorConfigStatus:null, connectorRefreshRunbook:null, connectorSwitchReview:null, market:null, context15:null, context1h:null, runtimeStatus:null,
   direction:"long", orderSide:"buy", orderType:"limit", orderNotional:4000,
   invalidation:[{side:"below", price:4150, confirm:"close_1m"}],
-  candles: seedCandles()
+  candles: seedCandles(), context15Candles:[], context1hCandles:[]
 };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = (value) => `${Number(value || 0) >= 0 ? "+" : "-"}$${Math.abs(Number(value || 0)).toFixed(2)}`;
 const fmt = (value, digits=1) => Number(value || 0).toLocaleString("en-US", {minimumFractionDigits:digits, maximumFractionDigits:digits});
+const hasPrice = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+const fmtPrice = (value, digits=1) => hasPrice(value) ? fmt(value, digits) : "--";
+const rangeText = plan => {
+  const low = fmtPrice(plan.range?.low);
+  const high = hasPrice(plan.range?.high) ? fmt(plan.range.high) : (plan.direction === "long" ? "open upside" : "--");
+  const lowText = hasPrice(plan.range?.low) ? low : (plan.direction === "short" ? "open downside" : low);
+  return `${lowText} - ${high}`;
+};
+const invalidationText = plan => (plan.invalidation || [])
+  .map(row => `${row.side === "below" ? "<" : ">"} ${fmtPrice(row.price)} ${row.confirm}`)
+  .join(" / ");
 const css = getComputedStyle(document.documentElement);
 
 function setSegment(rootId, key){
@@ -165,14 +184,27 @@ async function loadAll(){
   try{
     state.cycle = await api("/api/dualtrack/cycle/current");
     const cycleId = state.cycle.cycle_id;
-    const [plan, machine, human, ledger, tigerVenue] = await Promise.all([
+    const [plan, machine, human, ledger, tigerVenue, tigerPaperRefreshRunbook, connectorCatalog, connectorConfigStatus, connectorRefreshRunbook, connectorSwitchReview, market, context15, context1h, runtimeStatus] = await Promise.all([
       api(`/api/dualtrack/plan/${cycleId}`),
       api(`/api/dualtrack/machine/${cycleId}`).catch(() => null),
       api(`/api/dualtrack/human/${cycleId}`).catch(() => null),
       api("/api/dualtrack/ledger").catch(() => null),
-      api("/api/dualtrack/venue/tiger").catch(() => null)
+      api("/api/dualtrack/venue/tiger").catch(() => null),
+      api("/api/dualtrack/venue/tiger/paper-order-refresh-runbook").catch(() => null),
+      api("/api/connectors/catalog").catch(() => null),
+      api("/api/connectors/config/status").catch(() => null),
+      api("/api/connectors/config/price-feed-refresh-runbook").catch(() => null),
+      api("/api/connectors/config/attended-switch-review").catch(() => null),
+      api("/api/dualtrack/market/bars?limit=96").catch(() => null),
+      api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=15m&limit=64").catch(() => null),
+      api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=1h&limit=64").catch(() => null),
+      api("/api/dualtrack/runtime/status").catch(() => null)
     ]);
-    state.plan = plan; state.machine = machine; state.human = human; state.ledger = ledger; state.tigerVenue = tigerVenue;
+    state.plan = plan; state.machine = machine; state.human = human; state.ledger = ledger; state.tigerVenue = tigerVenue; state.tigerPaperRefreshRunbook = tigerPaperRefreshRunbook; state.connectorCatalog = connectorCatalog; state.connectorConfigStatus = connectorConfigStatus; state.connectorRefreshRunbook = connectorRefreshRunbook; state.connectorSwitchReview = connectorSwitchReview; state.market = market; state.context15 = context15; state.context1h = context1h; state.runtimeStatus = runtimeStatus;
+    const marketCandles = marketBarsToCandles(market);
+    if(marketCandles.length) state.candles = marketCandles;
+    state.context15Candles = marketBarsToCandles(context15);
+    state.context1hCandles = marketBarsToCandles(context1h);
     state.attribution = cycleClosed(state.cycle) ? await api(`/api/dualtrack/attribution/${cycleId}`).catch(() => null) : null;
   }catch(error){
     $("planStatus").textContent = `API: ${error.message}`;
@@ -180,7 +212,7 @@ async function loadAll(){
   renderAll();
 }
 function renderAll(){
-  renderTopbar(); renderInvalidation(); renderBlind(); renderPlanStrip(); renderMachine(); renderHuman(); renderRisk(); renderVenue(); renderCharts(); renderAttribution(); renderLedger();
+  renderTopbar(); renderInvalidation(); renderBlind(); renderPlanStrip(); renderRuntimeStatus(); renderMachine(); renderHuman(); renderRisk(); renderVenue(); renderConnector(); renderCharts(); renderAttribution(); renderLedger();
 }
 function renderTopbar(){
   const cycle = state.cycle || {};
@@ -206,8 +238,8 @@ function renderBlind(){
   }
 }
 function renderPlanStrip(){
-  $("humanPlanCard").innerHTML = planCard(state.plan?.human_plan, "human", "你的作战单", "生效中 · 驱动机器轨");
-  $("aiPlanCard").innerHTML = state.plan?.ai_plan_revealed ? planCard(state.plan?.ai_plan, "ai", "AI 作战单", "对照") : `<div class="hd"><span class="tdot ai"></span>AI 作战单 · 未揭示</div><div class="dim">盲测窗口内不提供 AI 观点。</div>`;
+  $("humanPlanCard").innerHTML = planCard(state.plan?.human_plan, "human", "你的作战单", humanPlanBadge(state.plan?.human_plan));
+  $("aiPlanCard").innerHTML = state.plan?.ai_plan_revealed ? planCard(state.plan?.ai_plan, "ai", "AI 作战单", aiPlanBadge(state.plan?.ai_plan)) : `<div class="hd"><span class="tdot ai"></span>AI 作战单 · 未揭示</div><div class="dim">盲测窗口内不提供 AI 观点。</div>`;
   const board = state.attribution?.scoreboard || {};
   const human = board.human?.rolling_30 || {};
   const rate = human.graded ? `${(human.hit_rate * 100).toFixed(1)}%` : "--";
@@ -218,8 +250,22 @@ function planCard(plan, kind, title, badge){
   return `<div class="hd"><span class="tdot ${kind}"></span>${title} · ${esc(plan.status || "locked")} <span class="live-badge">${esc(badge)}</span></div>${planBody(plan, kind)}`;
 }
 function planBody(plan){
-  const inv = (plan.invalidation || []).map(row => `${row.side === "below" ? "<" : ">"} ${fmt(row.price)} ${row.confirm}`).join(" / ");
-  return `<div class="row"><span class="kv"><span class="lab">方向</span><b>${dirText(plan.direction)}</b></span><span class="kv"><span class="lab">RANGE</span><b>${fmt(plan.range?.low)} - ${fmt(plan.range?.high)}</b></span><span class="kv"><span class="lab">关键位</span><b>${(plan.key_levels || []).map(v => fmt(v,0)).join(" / ") || "--"}</b></span><span class="kv"><span class="lab">失效</span><b class="neg">${esc(inv || "--")}</b></span><span class="kv"><span class="lab">信心</span><b>${plan.confidence ?? "--"}/10</b></span></div>`;
+  const inv = invalidationText(plan);
+  return `<div class="row"><span class="kv"><span class="lab">方向</span><b>${dirText(plan.direction)}</b></span><span class="kv"><span class="lab">RANGE</span><b>${rangeText(plan)}</b></span><span class="kv"><span class="lab">关键位</span><b>${(plan.key_levels || []).map(v => fmt(v,0)).join(" / ") || "--"}</b></span><span class="kv"><span class="lab">失效</span><b class="neg">${esc(inv || "--")}</b></span><span class="kv"><span class="lab">信心</span><b>${plan.confidence ?? "--"}/10</b></span><span class="kv"><span class="lab">来源</span><b>${esc(planSourceText(plan))}</b></span><span class="kv"><span class="lab">锁定</span><b>${plan.locked_at ? shortTime(plan.locked_at) : "未锁/late"}</b></span></div><div class="diff">${esc(planEligibilityText(plan))}</div>`;
+}
+function renderRuntimeStatus(){
+  const status = state.runtimeStatus || {};
+  const checks = status.checks || [];
+  const sample = status.sample || {};
+  const runner = status.runner || {};
+  const closeout = status.closeout || {};
+  const previous = status.previous_closeout || {};
+  const tone = status.status === "blocked" ? "blocked" : status.status === "ok" ? "ok" : "warn";
+  const rows = checks.map(check => `<div class="status-row"><span class="status-dot ${check.status === "ok" ? "ok" : "blocked"}"></span><span>${esc(check.message)}</span><b class="${check.status === "ok" ? "pos" : "neg"}">${esc(check.name)}</b></div>`).join("");
+  const tickAge = runner.age_seconds == null ? "--" : `${Math.round(Number(runner.age_seconds) / 60)}m`;
+  const machineFills = sample.machine_fills_hidden ? "收盘揭示" : esc(sample.machine_fill_count ?? "--");
+  const previousText = previous.cycle_id ? `${previous.cycle_id} · ${previous.attribution_available ? "可复盘" : "待归因"}` : "--";
+  $("runtimeStatusCard").innerHTML = `<div style="font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:6px">运行红灯 · 样本完整性</div><div class="big ${tone === "ok" ? "pos" : tone === "blocked" ? "neg" : "warn"}">${statusText(status.status)}</div><div class="sub">tick ${tickAge} · bars ${esc(runner.bar_count ?? "--")} · ${sample.valid_now ? "样本有效" : "样本需复核"}</div>${rows}<div class="status-row"><span>机器成交</span><b class="dim">${machineFills}</b></div><div class="status-row"><span>人轨成交</span><b>${esc(sample.human_fill_count ?? 0)}</b></div><div class="status-row"><span>当前闭环</span><b class="${closeout.attribution_available ? "pos" : "warn"}">${closeout.attribution_available ? "已生成" : "等待收盘"}</b></div><div class="status-row"><span>最近收盘</span><b class="${previous.attribution_available ? "pos" : "warn"}">${esc(previousText)}</b></div>`;
 }
 function renderMachine(){
   const payload = state.machine || {};
@@ -246,21 +292,260 @@ function renderVenue(){
   const account = venue.account_sync || {};
   const drill = venue.paper_order_drill || {};
   const orderReady = venue.paper_order_readiness || {};
+  const orderRefreshRunbook = state.tigerPaperRefreshRunbook?.status && state.tigerPaperRefreshRunbook.status !== "missing"
+    ? state.tigerPaperRefreshRunbook
+    : venue.paper_order_refresh_runbook || {};
+  const approval = venue.paper_order_approval || {};
+  const realtime = venue.realtime_validation || {};
+  const priceFeed = venue.price_feed_readiness || {};
+  const acceptance = venue.price_feed_acceptance || {};
+  const sourcePreflight = venue.data_source_preflight || {};
+  const catalog = state.connectorCatalog || {};
   const tone = venue.status === "ready" ? "pos" : venue.status === "blocked" || venue.status === "manual_review" ? "neg" : "warn";
   const networkClosed = venue.safety?.network_modification_observed ? "需复核" : "无网络动作";
   const accountCopy = account.sync_status === "synced" ? `${esc(account.segment_key || "--")} · ${account.balance_present ? "balance ok" : "no balance"}` : esc(account.sync_status || "missing");
   const drillCopy = drill.status === "pass" ? `${drill.passing_scenarios || 0}/${drill.scenario_count || 0} pass` : esc(drill.status || "missing");
   const orderReadyCopy = orderReady.status === "ready_for_attended_paper_order" ? "ready · needs auth" : esc(orderReady.status || "missing");
-  $("venueCard").innerHTML = `<div class="track-h" style="color:var(--muted)"><span class="tdot" style="background:var(--teal)"></span>老虎 TIGER · PAPER VENUE <span class="blind-badge ${tone}">${esc(venue.status || "missing")}</span></div><div class="kv"><span>执行合约</span><b class="${contract.ready || contract.status === "missing" ? "pos" : "warn"}">${esc(contract.execution_symbol || "--")} · ${esc(contract.status || "missing")}</b></div><div class="kv"><span>账户证据</span><b class="${account.sync_status === "synced" && account.balance_present ? "pos" : "warn"}">${accountCopy}</b></div><div class="kv"><span>下单演练</span><b class="${drill.status === "pass" || drill.status === "missing" ? "pos" : "warn"}">${drillCopy}</b></div><div class="kv"><span>授权门</span><b class="${orderReady.status === "ready_for_attended_paper_order" || orderReady.status === "missing" ? "pos" : "warn"}">${orderReadyCopy}</b></div><div class="kv"><span>对账</span><b class="${recon.confirmation_status === "confirmed_flat" ? "pos" : "warn"}">${esc(recon.confirmation_status || "missing")}</b></div><div class="kv"><span>订单/成交同步</span><b class="${sync.sync_status === "synced" ? "pos" : "warn"}">${esc(sync.sync_status || "missing")} · O${sync.open_order_count || 0}/F${sync.filled_order_count || 0}</b></div><div class="kv"><span>Kill-switch</span><b class="${venue.safety?.network_modification_observed ? "neg" : "pos"}">${esc(kill.status || "missing")} · ${networkClosed}</b></div><div class="kv"><span>新单门</span><b class="${venue.can_open_new_orders ? "pos" : "warn"}">${venue.can_open_new_orders ? "confirmed flat" : "blocked/unknown"}</b></div>`;
+  const orderAction = orderReady.operator_next_action || {};
+  const orderEvidenceCopy = orderAction.status === "refresh_stale_evidence"
+    ? `stale ${esc(orderAction.stale_evidence_count || 0)}/${esc(orderReady.blocker_count || 0)} · ${esc((orderAction.blocker_names || []).slice(0, 2).join(", ") || "evidence")}`
+    : orderAction.status === "ready_for_operator_review"
+      ? "current · explicit auth required"
+      : esc(orderAction.status || "missing");
+  const orderRefreshCopy = orderAction.refresh_step_count
+    ? `${esc(orderAction.refresh_step_count)} steps · ${orderAction.opens_trade_client_read_only ? "read-only TradeClient" : "no TradeClient"} · ${orderAction.submits_orders ? "orders" : "no orders"}`
+    : "--";
+  const orderRunbookCopy = orderRefreshRunbook.status && orderRefreshRunbook.status !== "missing"
+    ? `${esc(orderRefreshRunbook.status)} · ${orderRefreshRunbook.matches_current_readiness ? "current" : "stale package"} · ${esc(orderRefreshRunbook.command_count || 0)} steps · ${orderRefreshRunbook.generation_opens_trade_client ? "opens client" : "artifact only"}`
+    : "missing";
+  const approvalCopy = approval.status === "ready_for_operator_approval" ? `ready · ${esc(approval.ticket_id || "runbook")}` : esc(approval.status || "missing");
+  const approvalTone = approval.submit_requested || approval.real_tiger_network_call_attempted ? "neg" : approval.status === "ready_for_operator_approval" || approval.status === "missing" ? "pos" : "warn";
+  const catalogCopy = catalog.summary ? `${catalog.summary.ready_price_feed_count || 0} feeds · ${catalog.summary.ready_broker_count || 0} brokers` : "missing";
+  const realtimeTone = realtime.status === "pass" ? "pos" : realtime.status === "fail" ? "neg" : "warn";
+  const realtimeCopy = realtime.status === "pending_market_open" ? `pending · ${esc(realtime.next_trading_window?.start || "--")}` : realtime.status === "pass" ? `pass · ${esc(realtime.polls?.second_timestamp || realtime.checked_at || "--")}` : esc(realtime.status || "missing");
+  const realtimeGate = realtime.market_hours_gate || {};
+  const gateTone = realtimeGate.ready_for_price_feed_promotion ? "pos" : realtimeGate.exit_code === 75 ? "warn" : realtimeGate.required ? "neg" : "warn";
+  const gateCopy = realtimeGate.required ? `${esc(realtimeGate.operator_action || "required")} · exit ${esc(realtimeGate.exit_code ?? "--")}` : "not enforced";
+  const priceFeedTone = priceFeed.ready_for_price_feed ? "pos" : priceFeed.status === "missing" ? "warn" : "warn";
+  const priceFeedCopy = priceFeed.ready_for_price_feed ? `ready · ${esc(priceFeed.latest_timestamp || "--")}` : `${esc(priceFeed.status || "missing")} · B${esc(priceFeed.blocker_count ?? 0)}`;
+  const acceptanceTone = acceptance.status === "accepted" ? "pos" : acceptance.status === "blocked" ? "warn" : "warn";
+  const acceptanceCopy = acceptance.status === "accepted" ? `accepted · ${esc(acceptance.checked_at || "--")}` : acceptance.status === "pending_market_open" ? `pending · exit ${esc(acceptance.exit_code ?? "--")}` : `${esc(acceptance.status || "missing")} · B${esc(acceptance.blocker_count ?? 0)}`;
+  const acceptanceActionTone = acceptance.operator_status === "accepted" ? "pos" : acceptance.operator_status === "rerun_acceptance_now" ? "warn" : acceptance.operator_status === "blocked" ? "neg" : "warn";
+  const acceptanceActionCopy = acceptance.operator_status === "rerun_acceptance_now" ? "rerun now" : acceptance.operator_status === "waiting_market_open" ? `wait · ${esc(acceptance.next_trading_window?.start || "--")}` : esc(acceptance.operator_status || "missing");
+  const sourceGate = sourcePreflight.gate || {};
+  const sourceTone = sourcePreflight.ready_for_live ? "pos" : sourcePreflight.status === "missing" ? "warn" : "warn";
+  const sourceCopy = sourcePreflight.ready_for_live ? `${esc(sourcePreflight.latest_provider || "--")} · live` : sourceGate.status === "pending_market_open" ? `pending · ${esc(sourceGate.next_trading_window?.start || "--")}` : `${esc(sourcePreflight.status || "missing")} · ${esc(sourcePreflight.latest_provider || "--")}`;
+  const paperEntryCopy = venue.can_enter_attended_paper_order ? "review only · needs explicit auth" : `blocked · recon ${venue.can_open_new_orders ? "flat" : "not flat"}`;
+  $("venueCard").innerHTML = `<div class="track-h" style="color:var(--muted)"><span class="tdot" style="background:var(--teal)"></span>老虎 TIGER · PAPER VENUE <span class="blind-badge ${tone}">${esc(venue.status || "missing")}</span></div><div class="kv"><span>接入目录</span><b class="${catalog.summary ? "pos" : "warn"}">${catalogCopy}</b></div><div class="kv"><span>行情验证</span><b class="${realtimeTone}">${realtimeCopy}</b></div><div class="kv"><span>行情门禁</span><b class="${gateTone}">${gateCopy}</b></div><div class="kv"><span>价格源门</span><b class="${priceFeedTone}">${priceFeedCopy}</b></div><div class="kv"><span>验收收据</span><b class="${acceptanceTone}">${acceptanceCopy}</b></div><div class="kv"><span>验收下一步</span><b class="${acceptanceActionTone}">${acceptanceActionCopy}</b></div><div class="kv"><span>数据源预检</span><b class="${sourceTone}">${sourceCopy}</b></div><div class="kv"><span>执行合约</span><b class="${contract.ready || contract.status === "missing" ? "pos" : "warn"}">${esc(contract.execution_symbol || "--")} · ${esc(contract.status || "missing")}</b></div><div class="kv"><span>账户证据</span><b class="${account.sync_status === "synced" && account.balance_present ? "pos" : "warn"}">${accountCopy}</b></div><div class="kv"><span>下单演练</span><b class="${drill.status === "pass" || drill.status === "missing" ? "pos" : "warn"}">${drillCopy}</b></div><div class="kv"><span>授权门</span><b class="${orderReady.status === "ready_for_attended_paper_order" || orderReady.status === "missing" ? "pos" : "warn"}">${orderReadyCopy}</b></div><div class="kv"><span>下单证据</span><b class="${orderAction.status === "ready_for_operator_review" ? "warn" : "warn"}">${orderEvidenceCopy}</b></div><div class="kv"><span>刷新路径</span><b class="${orderAction.refresh_step_count ? "warn" : "dim"}">${orderRefreshCopy}</b></div><div class="kv"><span>证据刷新包</span><b class="${orderRefreshRunbook.status === "ready_for_operator_refresh" ? "warn" : "dim"}">${orderRunbookCopy}</b></div><div class="kv"><span>授权包</span><b class="${approvalTone}">${approvalCopy}</b></div><div class="kv"><span>对账</span><b class="${recon.confirmation_status === "confirmed_flat" ? "pos" : "warn"}">${esc(recon.confirmation_status || "missing")}</b></div><div class="kv"><span>订单/成交同步</span><b class="${sync.sync_status === "synced" ? "pos" : "warn"}">${esc(sync.sync_status || "missing")} · O${sync.open_order_count || 0}/F${sync.filled_order_count || 0}</b></div><div class="kv"><span>Kill-switch</span><b class="${venue.safety?.network_modification_observed ? "neg" : "pos"}">${esc(kill.status || "missing")} · ${networkClosed}</b></div><div class="kv"><span>新单门</span><b class="${venue.can_enter_attended_paper_order ? "warn" : "warn"}">${paperEntryCopy}</b></div>`;
+}
+function renderConnector(){
+  const catalog = state.connectorCatalog || {};
+  const connectors = catalog.connectors || [];
+  const selected = $("connectorSelect")?.value || connectors.find(item => item.id === "tiger_openapi")?.id || connectors[0]?.id || "tiger_openapi";
+  const current = connectors.find(item => item.id === selected) || connectors[0] || {};
+  const roles = current.roles || [];
+  const credentials = current.credential_requirements || [];
+  const dry = state.connectorDryRun || {};
+  const activation = state.connectorActivationPlan || {};
+  const configStatus = state.connectorConfigStatus || {};
+  const dryTone = dry.status === "ready_for_operator_setup" ? "pos" : dry.status === "blocked" ? "warn" : "dim";
+  const activationTone = activation.status === "preview_ready" ? "pos" : activation.status === "blocked" ? "warn" : "dim";
+  const options = connectors.length ? connectors.map(item => `<option value="${esc(item.id)}" ${item.id === selected ? "selected" : ""}>${esc(item.label || item.id)}</option>`).join("") : `<option value="tiger_openapi">Tiger OpenAPI</option>`;
+  const roleButtons = roles.length ? roles.map(role => `<button type="button" class="on" data-role="${esc(role)}">${esc(role)}</button>`).join("") : `<button type="button" class="on" data-role="price_feed">price_feed</button>`;
+  const credentialChecks = credentials.length ? credentials.map(item => `<label class="inp"><input type="checkbox" data-credential="${esc(item.name)}" data-kind="${esc(item.kind)}" ${item.present ? "checked" : ""}>${esc(item.name)}</label>`).join("") : `<span class="dim">no credential</span>`;
+  const dryIssue = connectorIssue(dry.blockers);
+  const activationIssue = connectorIssue(activation.warnings) || connectorIssue(activation.blockers);
+  const activationGate = activation.activation_gate || {};
+  const activationRunbook = activation.activation_runbook || {};
+  const configApplyPackage = activation.config_apply_package || {};
+  const switchAudit = activation.switch_audit || {};
+  const profileRows = connectorProfileRows(activation.dualtrack_profile_preview || {});
+  const configRows = connectorConfigRows(configStatus);
+  const configBoundary = configApplyPackage.config_write_boundary || {};
+  const packageId = configApplyPackage.package_id || configBoundary.expected_package_id || "";
+  const packageIdCopy = packageId ? String(packageId).slice(0, 16) : "--";
+  const writeBoundaryCopy = configBoundary.requires_package_id ? `package bound · ${configBoundary.can_apply_from_this_endpoint ? "inline" : "separate"}` : configBoundary.requires_separate_config_write_milestone ? "separate write" : "--";
+  const gateTone = activationGate.status === "preview_ready" ? "pos" : activationGate.status === "blocked" ? "warn" : activationGate.status ? "warn" : "dim";
+  const gateCopy = activationGate.operator_status === "waiting_market_open" ? `wait · ${esc(activationGate.next_trading_window?.start || "--")}` : esc(activationGate.operator_status || activationGate.status || "--");
+  const runbookTone = activationRunbook.status === "ready_for_separate_config_write" ? "pos" : activationRunbook.status ? "warn" : "dim";
+  const runbookCopy = activationRunbook.status ? `${esc(activationRunbook.status)} · ${esc(activationRunbook.phase_count || 0)} steps` : "--";
+  const packageTone = configApplyPackage.status === "ready_for_explicit_config_write" ? "pos" : configApplyPackage.status ? "warn" : "dim";
+  const packageCopy = configApplyPackage.status ? `${esc(configApplyPackage.status)} · ${esc(configApplyPackage.change_count || 0)} changes` : "--";
+  const auditTone = switchAudit.status === "ready_for_explicit_config_write" ? "pos" : switchAudit.status ? "warn" : "dim";
+  const auditCopy = switchAudit.status ? `${esc(switchAudit.status)} · ${esc(switchAudit.check_count || 0)} checks` : "--";
+  const dryRows = dry.status ? `<div class="kv"><span>验证阻塞</span><b class="${dry.blockers?.length ? "warn" : "pos"}">${dryIssue ? esc(dryIssue) : "none"}</b></div>` : "";
+  const activationRows = activation.status ? `<div class="kv"><span>配置预览</span><b class="${activationTone}">${esc(activation.status)} · ${activation.change_count || 0} changes</b></div><div class="kv"><span>切换审计</span><b class="${auditTone}">${auditCopy}</b></div><div class="kv"><span>切换门</span><b class="${gateTone}">${gateCopy}</b></div><div class="kv"><span>切换步骤</span><b class="${runbookTone}">${runbookCopy}</b></div><div class="kv"><span>审批包</span><b class="${packageTone}">${packageCopy}</b></div><div class="kv"><span>审批包ID</span><b class="${packageId ? "warn" : "dim"}">${esc(packageIdCopy)}</b></div><div class="kv"><span>写入边界</span><b class="${configBoundary.requires_package_id ? "warn" : "dim"}">${esc(writeBoundaryCopy)}</b></div>${profileRows}<div class="kv"><span>预览警告</span><b class="${activation.warnings?.length || activation.blockers?.length ? "warn" : "pos"}">${activationIssue ? esc(activationIssue) : "none"}</b></div><div class="kv"><span>后续风险</span><b class="${activation.warnings?.length ? "warn" : "pos"}">${activation.warnings?.length || 0} warnings</b></div>` : "";
+  $("connectorCard").innerHTML = `<div class="track-h" style="color:var(--muted)"><span class="tdot" style="background:var(--blue)"></span>接入 CONNECTOR <span class="blind-badge ${dryTone}">${esc(dry.status || "dry-run")}</span></div><form class="ticket" id="connectorForm"><div class="line"><span class="inp"><span class="dim" style="font-size:11px">平台</span><select id="connectorSelect">${options}</select></span><span class="seg" id="connectorRoles">${roleButtons}</span></div><div class="line"><span class="dim" style="font-size:11px">凭证</span>${credentialChecks}</div><div class="line"><button class="btn primary" type="submit">验证接入</button><button class="btn" type="button" id="connectorActivationBtn">预览激活</button><button class="btn" type="button" id="connectorApplyDryRunBtn">写入预检</button><span class="${dryTone}" id="connectorStatus">${esc(dry.status || "--")}</span></div></form>${dryRows}${activationRows}${configRows}`;
+  $("connectorSelect").addEventListener("change", () => { state.connectorDryRun = null; state.connectorActivationPlan = null; state.connectorConfigStatus = null; renderConnector(); });
+  $("connectorRoles").addEventListener("click", event => {
+    const button = event.target.closest("button[data-role]");
+    if(button) button.classList.toggle("on");
+  });
+  $("connectorForm").addEventListener("submit", submitConnectorDryRun);
+  $("connectorActivationBtn").addEventListener("click", submitConnectorActivationPlan);
+  $("connectorApplyDryRunBtn").addEventListener("click", submitConnectorConfigDryRun);
+}
+function connectorIssue(rows){
+  const row = (rows || []).find(item => item?.summary);
+  if(!row) return "";
+  const acceptance = row.evidence?.acceptance || {};
+  if(acceptance.operator_summary) return acceptance.operator_summary;
+  const next = acceptance.next_trading_window?.start;
+  if(acceptance.status === "pending_market_open" && next) return `${row.summary} · ${next}`;
+  return row.summary;
+}
+function connectorProfileRows(profile){
+  if(!profile?.status || profile.status === "not_applicable") return "";
+  const effect = profile.runtime_effect || {};
+  const gates = profile.gates || {};
+  const tone = profile.status === "preview_ready" ? "pos" : profile.status === "blocked" ? "warn" : "warn";
+  const symbol = `${esc(effect.market_symbol || "--")} ${esc(effect.timeframe || "")}`.trim();
+  const venue = esc(effect.provider || effect.market_session || "--");
+  const quantityMode = effect.quantity_mode === "integer_contracts" ? "整数张" : esc(effect.quantity_mode || "--");
+  const qty = `${quantityMode} · ${esc(effect.contracts_per_rung || "--")}x${esc(effect.contract_multiplier || "--")}oz`;
+  const fee = Number.isFinite(Number(effect.commission_per_contract_side_usd)) ? `$${Number(effect.commission_per_contract_side_usd).toFixed(2)}/side` : "--";
+  const refresh = effect.refresh_order_sync_before_import === "read_only_tradeclient_when_applied" ? "read-only refresh" : esc(effect.refresh_order_sync_before_import || "artifact");
+  const sync = effect.human_fill_sync_before_close === "enabled" ? `on · ${refresh}` : esc(effect.human_fill_sync_before_close || "--");
+  const gateCopy = gates.can_enable_broker_orders_from_this_profile ? "orders armed" : gates.requires_strategy_edge_approval ? "edge gate · orders off" : "orders off";
+  return `<div class="kv"><span>双轨档案</span><b class="${tone}">${esc(profile.status)} · ${esc(profile.change_count || 0)} changes</b></div><div class="kv"><span>MGC运行层</span><b class="${tone}">${symbol} · ${venue}</b></div><div class="kv"><span>MGC费用/粒度</span><b class="${tone}">${fee} · ${qty}</b></div><div class="kv"><span>人工成交同步</span><b class="${sync.startsWith("on") ? "warn" : "dim"}">${sync}</b></div><div class="kv"><span>策略/下单门</span><b class="${gates.can_enable_broker_orders_from_this_profile ? "neg" : "warn"}">${gateCopy}</b></div>`;
+}
+function connectorStageRows(status){
+  const stage = status.operator_stage || {};
+  if(!stage.stage) return "";
+  const commands = stage.refresh_commands || [];
+  const preview = commands.find(item => item.name === "preview_tiger_price_feed_acceptance_refresh") || {};
+  const acceptance = commands.find(item => item.name === "refresh_tiger_price_feed_acceptance") || {};
+  const reviewApi = state.connectorSwitchReview?.status && state.connectorSwitchReview.status !== "missing" ? state.connectorSwitchReview : null;
+  const switchReview = reviewApi ? {
+    status: reviewApi.status,
+    package_id: reviewApi.package_id,
+    can_switch_config_with_operator_authorization: reviewApi.can_switch_config_with_operator_authorization,
+    requires_operator_command: reviewApi.requires_operator_command,
+    rollback_required: reviewApi.rollback_required,
+    post_apply_validation_count: reviewApi.post_apply_validation_count,
+    can_trade_machine_track_after_switch: reviewApi.after_switch_gates?.can_trade_machine_track,
+    can_submit_tiger_orders_after_switch: reviewApi.after_switch_gates?.can_submit_tiger_orders,
+  } : stage.attended_switch_review || {};
+  const stageTone = stage.can_switch_config_with_operator_authorization ? "warn" : stage.stage === "post_switch_validated" ? "pos" : "warn";
+  const nextTone = stage.next_action === "operator_review_authorization_then_run_attended_config_apply_if_approved" ? "warn" : stage.next_action ? "warn" : "dim";
+  const previewCopy = preview.command ? `plan-only · ${preview.opens_quote_client ? "opens quote" : "no Tiger client"}` : "--";
+  const acceptanceCopy = acceptance.command ? `${acceptance.opens_quote_client ? "QuoteClient only" : "no quote"} · ${acceptance.submits_orders ? "orders" : "no orders"}` : "--";
+  const runtimeSwitched = reviewApi ? reviewApi.runtime_switched_to_tiger_mgc : stage.runtime_switched_to_tiger_mgc;
+  const canTradeMachineTrack = reviewApi ? reviewApi.can_trade_machine_track : stage.can_trade_machine_track;
+  const canSubmitTigerOrders = reviewApi ? reviewApi.can_submit_tiger_orders : stage.can_submit_tiger_orders;
+  const switchCopy = runtimeSwitched ? "Tiger/MGC active" : "not switched";
+  const tradeCopy = canTradeMachineTrack ? "machine track open" : "machine track closed";
+  const reviewTone = switchReview.can_switch_config_with_operator_authorization ? "warn" : "dim";
+  const reviewCopy = switchReview.status ? `${esc(switchReview.status)} · ${switchReview.requires_operator_command ? "explicit command" : "no command"}` : "--";
+  const switchPackage = switchReview.package_id ? String(switchReview.package_id).slice(0, 16) : "--";
+  const validationCopy = switchReview.post_apply_validation_count ? `${esc(switchReview.post_apply_validation_count)} checks · rollback ${switchReview.rollback_required ? "required" : "not ready"}` : "--";
+  const switchOrderCopy = `machine ${switchReview.can_trade_machine_track_after_switch ? "open" : "closed"} · orders ${switchReview.can_submit_tiger_orders_after_switch ? "open" : "closed"}`;
+  return `<div class="kv"><span>接入阶段</span><b class="${stageTone}">${esc(stage.stage)} · ${switchCopy}</b></div><div class="kv"><span>阶段下一步</span><b class="${nextTone}">${esc(stage.next_action || "--")}</b></div><div class="kv"><span>人工切换</span><b class="${reviewTone}">${reviewCopy}</b></div><div class="kv"><span>切换包ID</span><b class="${switchReview.package_id ? "warn" : "dim"}">${esc(switchPackage)}</b></div><div class="kv"><span>切后验收</span><b class="${switchReview.post_apply_validation_count ? "warn" : "dim"}">${validationCopy}</b></div><div class="kv"><span>切后交易</span><b class="${switchReview.can_submit_tiger_orders_after_switch ? "neg" : "warn"}">${switchOrderCopy}</b></div><div class="kv"><span>刷新预览</span><b class="${preview.command ? "warn" : "dim"}">${esc(previewCopy)} · writes plan ${preview.writes_plan_artifact ? "yes" : "no"}</b></div><div class="kv"><span>真实验收</span><b class="${acceptance.command ? "warn" : "dim"}">${esc(acceptanceCopy)} · config ${acceptance.writes_runtime_config ? "write" : "no write"}</b></div><div class="kv"><span>交易权限</span><b class="${canSubmitTigerOrders ? "neg" : "warn"}">${tradeCopy} · orders ${canSubmitTigerOrders ? "open" : "closed"}</b></div>`;
+}
+function connectorRefreshStepLabel(name){
+  if(name === "preview_tiger_price_feed_acceptance_refresh") return "预览验收计划";
+  if(name === "refresh_tiger_price_feed_acceptance") return "运行只读行情验收";
+  if(name === "refresh_final_readiness_audit") return "刷新最终审计";
+  if(name === "show_connector_switch_status") return "查看当前阶段";
+  return name || "--";
+}
+function connectorRefreshRunbookRows(runbook){
+  const commands = runbook?.command_sequence || [];
+  if(!commands.length) return "";
+  return commands.map((item, index) => {
+    const unsafe = item.opens_trade_client || item.submits_orders || item.writes_runtime_config;
+    const tone = unsafe ? "neg" : item.opens_quote_client ? "warn" : "pos";
+    const safety = [
+      item.opens_quote_client ? "QuoteClient only" : "no Tiger client",
+      item.opens_trade_client ? "TradeClient" : "no TradeClient",
+      item.submits_orders ? "orders" : "no orders",
+      item.writes_runtime_config ? "config write" : "no config write",
+    ].join(" / ");
+    return `<div class="kv"><span>刷新步骤 ${index + 1}</span><b class="${tone}">${esc(connectorRefreshStepLabel(item.name))} · ${esc(safety)}</b></div>`;
+  }).join("");
+}
+function connectorRefreshWindowRows(runbook, summary){
+  const gate = runbook?.refresh_window_gate || {};
+  const status = gate.status || summary?.refresh_window_status || "";
+  if(!status) return "";
+  const canRun = gate.can_run_quote_client_step || summary?.refresh_window_can_run_quote_client_step;
+  const nextOpen = gate.next_open || summary?.refresh_window_next_open || "--";
+  const copy = status === "ready_to_run_acceptance_now"
+    ? "COMEX open · run read-only acceptance"
+    : status === "wait_for_comex_open"
+      ? `wait · ${nextOpen}`
+      : status;
+  const safety = gate.safety || {};
+  const safetyCopy = [
+    safety.opens_quote_client ? "QuoteClient" : "local calendar",
+    safety.opens_trade_client ? "TradeClient" : "no TradeClient",
+    safety.submits_orders ? "orders" : "no orders",
+    safety.writes_runtime_config ? "config write" : "no config write",
+  ].join(" / ");
+  return `<div class="kv"><span>验收窗口</span><b class="${canRun ? "warn" : "dim"}">${esc(copy)} · ${esc(safetyCopy)}</b></div>`;
+}
+function connectorConfigRows(status){
+  const apply = status.latest_apply || {};
+  const check = status.latest_check || {};
+  const handoff = status.latest_handoff || {};
+  const rehearsal = status.latest_rehearsal || {};
+  const authorization = status.latest_authorization || {};
+  const readinessAudit = status.latest_readiness_audit || {};
+  const postSwitch = status.latest_post_switch_validation || {};
+  const refreshRunbookSource = state.connectorRefreshRunbook?.status && state.connectorRefreshRunbook.status !== "missing"
+    ? state.connectorRefreshRunbook
+    : null;
+  const refreshRunbook = refreshRunbookSource
+    ? {
+        status: state.connectorRefreshRunbook.status,
+        command_count: state.connectorRefreshRunbook.command_sequence?.length || 0,
+        status_snapshot_exists: Boolean(state.connectorRefreshRunbook.status_receipt?.schema_version),
+      }
+    : status.latest_price_feed_refresh_runbook || {};
+  const rollback = status.latest_rollback || {};
+  const backup = status.backup || {};
+  const applyTone = apply.status === "applied" ? "pos" : apply.status === "blocked" ? "warn" : apply.status === "dry_run_ready" ? "pos" : "dim";
+  const checkTone = check.status === "ready_for_attended_config_write" ? "warn" : check.status === "blocked" ? "warn" : "dim";
+  const handoffTone = handoff.status === "ready_for_operator_review" ? "warn" : handoff.status === "blocked" ? "warn" : "dim";
+  const rehearsalTone = rehearsal.status === "passed" && rehearsal.runtime_config_unchanged ? "pos" : rehearsal.status === "missing" ? "dim" : "warn";
+  const authorizationTone = authorization.status === "ready_for_operator_authorization" ? "warn" : authorization.status === "blocked" ? "warn" : "dim";
+  const auditTone = readinessAudit.status === "go_for_attended_config_switch" ? "warn" : readinessAudit.status === "blocked" ? "warn" : "dim";
+  const postSwitchTone = postSwitch.status === "validated_post_switch" ? "pos" : postSwitch.status === "blocked" ? "warn" : "dim";
+  const guardStatus = check.write_preflight_status || (check.usable_for_attended_config_write ? "ready" : "missing");
+  const guardTone = guardStatus === "ready" ? "warn" : guardStatus === "blocked" ? "warn" : "dim";
+  const guardCopy = `${esc(guardStatus)} · ${esc(check.write_preflight_blocker_count || 0)} blockers`;
+  const rehearsalCopy = `${esc(rehearsal.status || "missing")} · runtime ${rehearsal.runtime_config_unchanged ? "unchanged" : "unknown"}`;
+  const authorizationCopy = `${esc(authorization.status || "missing")} · ${esc(authorization.blocker_count || 0)} blockers`;
+  const auditCopy = `${esc(readinessAudit.status || "missing")} · ${esc(readinessAudit.blocker_count || 0)} blockers`;
+  const postSwitchCopy = `${esc(postSwitch.status || "missing")} · ${esc(postSwitch.blocker_count || 0)} blockers`;
+  const runbookCopy = `${esc(refreshRunbook.status || "missing")} · ${esc(refreshRunbook.command_count || 0)} steps`;
+  const snapshotCopy = refreshRunbook.status_snapshot_exists ? "status snapshot ready" : "status snapshot missing";
+  const checkAction = check.operator_next_action?.action || "--";
+  const validationCopy = `${esc(check.post_apply_validation_count || 0)} steps`;
+  const rollbackCopy = check.rollback_required ? "required" : "not ready";
+  const backupCopy = backup.created ? `${esc(backup.file_count || 0)} files · ${shortPath(backup.backup_dir)}` : "not created";
+  const rollbackTone = rollback.status === "rolled_back" ? "pos" : rollback.status === "blocked" ? "warn" : "dim";
+  const applyPackage = apply.package_id ? String(apply.package_id).slice(0, 16) : "--";
+  const checkPackage = check.package_id ? String(check.package_id).slice(0, 16) : "--";
+  return `${connectorStageRows(status)}<div class="kv"><span>刷新操作包</span><b class="${refreshRunbook.status === "ready_for_operator_refresh" ? "warn" : "dim"}">${runbookCopy}</b></div><div class="kv"><span>操作包证据</span><b class="${refreshRunbook.status_snapshot_exists ? "pos" : "warn"}">${snapshotCopy}</b></div>${connectorRefreshWindowRows(refreshRunbookSource, refreshRunbook)}${connectorRefreshRunbookRows(refreshRunbookSource)}<div class="kv"><span>写入预检</span><b class="${applyTone}">${esc(apply.status || status.status || "missing")} · ${esc(apply.mode || "--")}</b></div><div class="kv"><span>预检包ID</span><b class="${apply.package_id ? "warn" : "dim"}">${esc(applyPackage)}</b></div><div class="kv"><span>包检查</span><b class="${checkTone}">${esc(check.status || "missing")} · ${esc(checkPackage)}</b></div><div class="kv"><span>授权下一步</span><b class="${checkTone}">${esc(checkAction)}</b></div><div class="kv"><span>写入守卫</span><b class="${guardTone}">${guardCopy}</b></div><div class="kv"><span>切换演练</span><b class="${rehearsalTone}">${rehearsalCopy}</b></div><div class="kv"><span>交接单</span><b class="${handoffTone}">${esc(handoff.status || "missing")} · ${esc(handoff.evidence_count || 0)} evidence</b></div><div class="kv"><span>最终授权包</span><b class="${authorizationTone}">${authorizationCopy}</b></div><div class="kv"><span>最终审计</span><b class="${auditTone}">${auditCopy}</b></div><div class="kv"><span>运行现状</span><b class="${handoffTone}">${esc(handoff.broker_provider || "--")} · ${esc(handoff.dualtrack_symbol || "--")}</b></div><div class="kv"><span>写后验收</span><b class="${check.post_apply_validation_count ? "warn" : "dim"}">${validationCopy}</b></div><div class="kv"><span>切后验收</span><b class="${postSwitchTone}">${postSwitchCopy}</b></div><div class="kv"><span>回滚边界</span><b class="${check.rollback_required ? "warn" : "dim"}">${rollbackCopy}</b></div><div class="kv"><span>配置写入收据</span><b class="${applyTone}">${esc(apply.apply_id || "--")} · ${esc(apply.change_count || 0)} changes</b></div><div class="kv"><span>备份位置</span><b class="${backup.created ? "pos" : "dim"}">${backupCopy}</b></div><div class="kv"><span>回滚收据</span><b class="${rollbackTone}">${esc(rollback.status || "missing")} · ${esc(rollback.restored_file_count || 0)} files</b></div>`;
 }
 function renderAttribution(){
   const attr = state.attribution;
+  const closeout = state.runtimeStatus?.closeout || {};
+  const previous = state.runtimeStatus?.previous_closeout || {};
   const weeklyTotal = Number(state.ledger?.daily?.reduce?.((sum, row) => sum + Number(row.total_pnl || 0), 0) || attr?.ledger?.weekly?.total_pnl || 0);
   $("cashFlowCard").innerHTML = `<div style="font-size:11px;color:var(--faint);letter-spacing:.07em">月均日现金流 · 双轨合计</div><div class="cash-big ${weeklyTotal >= 0 ? "pos" : "neg"}">${money(weeklyTotal)}</div><div class="cash-sub">当前台账合计 · 周/月结论以 ledger 为准</div><div class="target-bar"><i></i></div><div class="calib">目标区间 <b>$200-300/天</b> -- 校准（$10k · 10x）：<br>系统地板（方向不可知网格）≈ <b>$80/天</b> · 神谕天花板 ≈ <b>$140/天</b><br><span class="warn">按当前本金，目标高于天花板；达标需本金 >=$25k 或目标降档</span></div>`;
+  if(!attr){
+    const previousReplay = previous.replay_url || "";
+    const previousLink = previous.attribution_available ? `<a class="btn" href="${esc(previousReplay)}">查看最近回放</a>` : `<span class="warn">等待上一周期归因</span>`;
+    $("attributionTable").innerHTML = `<div class="panel-h"><span class="t">周期对账 · 未收盘</span><span class="right">waiting close</span></div><div class="judge"><div class="row"><span>机器 fills</span><span class="dim" style="margin-left:auto">盘中隐藏，收盘揭示</span></div><div class="row"><span>归因</span><span class="warn" style="margin-left:auto">等待周期结束</span></div><div class="row"><span>Ledger</span><span class="${closeout.ledger_available ? "pos" : "dim"}" style="margin-left:auto">${closeout.ledger_available ? "已存在" : "等待收盘写入"}</span></div><div class="row" style="border-top:1px dashed var(--line);padding-top:10px"><span>最近已收盘</span><span class="${previous.attribution_available ? "pos" : "warn"}" style="margin-left:auto">${esc(previous.cycle_id || "--")} · ${previous.attribution_available ? "可复盘" : "待归因"}</span></div></div>`;
+    $("planJudgeCard").innerHTML = `<div class="track-h" style="color:var(--muted)">复盘闭环 · ${esc(state.cycle?.cycle_id || "--")}</div><div class="judge"><div class="row"><span class="who">Replay</span><span class="dim">当前周期收盘后开放机器 fills</span><span class="warn" style="margin-left:auto">等待</span></div><div class="row"><span class="who">上一周期</span><span class="dim">机器 ${esc(previous.machine_fill_count ?? 0)} / 人 ${esc(previous.human_fill_count ?? 0)} fills</span><span style="margin-left:auto">${previousLink}</span></div><div class="row"><span class="who">判卷</span><span class="dim">direction-only</span><span class="warn" style="margin-left:auto">等待</span></div><div class="row"><span class="who">Ledger</span><span class="${previous.ledger_available ? "pos" : "warn"}" style="margin-left:auto">${previous.ledger_available ? "最近已入账" : "等待写入"}</span></div></div>`;
+    return;
+  }
   const tracks = attr?.tracks || {};
   $("attributionTable").innerHTML = `<div class="panel-h"><span class="t">周期对账 · ${esc(attr?.cycle_id || "未收盘")}</span><span class="right">closed cycles only</span></div><table><thead><tr><th>轨</th><th>笔数</th><th>胜率</th><th>已实现</th><th>捕获比</th><th>纪律违规</th></tr></thead><tbody>${trackRow("人轨", "human", tracks.human)}${trackRow("机器轨", "ai", tracks.machine)}</tbody></table><div class="verdict-in"><input id="verdictText" placeholder="一句话裁决..." style="flex:1;font-family:inherit"><button class="btn" onclick="submitVerdict()">归档</button></div>`;
   const grades = attr?.plan_grades || {};
-  $("planJudgeCard").innerHTML = `<div class="track-h" style="color:var(--muted)">作战单判卷 · ${esc(attr?.cycle_id || "--")}</div><div class="judge">${judgeRow("你", grades.human)}${judgeRow("AI", grades.ai)}<div class="row dim" style="font-size:11px">direction-only grading · flat plans ungraded</div><div class="row" style="border-top:1px dashed var(--line);padding-top:10px"><a class="btn" href="dashboard-dualtrack-replay.html?layout=dualtrack&cycle=${encodeURIComponent(attr?.cycle_id || "")}">查看完整回放</a><span class="dim" style="font-size:11px">DT6 · 双轨同步回放</span></div></div>`;
+  $("planJudgeCard").innerHTML = `<div class="track-h" style="color:var(--muted)">作战单判卷 · ${esc(attr?.cycle_id || "--")}</div><div class="judge">${judgeRow("你", grades.human)}${judgeRow("AI", grades.ai)}<div class="row dim" style="font-size:11px">direction-only grading · flat plans ungraded</div><div class="row"><span>Attribution</span><span class="${closeout.attribution_available ? "pos" : "warn"}" style="margin-left:auto">${closeout.attribution_available ? "ready" : "missing"}</span></div><div class="row"><span>Ledger</span><span class="${closeout.ledger_available ? "pos" : "warn"}" style="margin-left:auto">${closeout.ledger_available ? "ready" : "missing"}</span></div><div class="row" style="border-top:1px dashed var(--line);padding-top:10px"><a class="btn" href="${esc(closeout.replay_url || `dashboard-dualtrack-replay.html?layout=dualtrack&cycle=${encodeURIComponent(attr?.cycle_id || "")}`)}">查看完整回放</a><span class="dim" style="font-size:11px">DT6 · 双轨同步回放</span></div></div>`;
 }
 function renderLedger(){
   const rows = state.ledger?.daily || state.attribution?.ledger?.weekly?.days || [];
@@ -289,6 +574,59 @@ async function submitOrder(event){
   const payload = {cycle_id:cycleId, ts:new Date().toISOString(), side:state.orderSide, order_type:state.orderType, price:Number($("orderPrice").value), notional:state.orderNotional, sl:Number($("orderSl").value), tp:Number($("orderTp").value)};
   try{ await api("/api/dualtrack/orders", {method:"POST", body:JSON.stringify(payload)}); $("orderStatus").textContent = "paper fill recorded"; await loadAll(); }catch(error){ $("orderStatus").textContent = error.message; }
 }
+async function submitConnectorDryRun(event){
+  event.preventDefault();
+  const payload = connectorPayload();
+  try{
+    state.connectorDryRun = await api("/api/connectors/onboarding/dry-run", {method:"POST", body:JSON.stringify(payload)});
+    renderConnector();
+  }catch(error){
+    state.connectorDryRun = {status:"blocked", blockers:[{summary:error.message}]};
+    renderConnector();
+  }
+}
+function connectorPayload(){
+  const connectorId = $("connectorSelect")?.value || "tiger_openapi";
+  const roles = [...document.querySelectorAll("#connectorRoles button.on")].map(item => item.dataset.role).filter(Boolean);
+  const confirmations = {};
+  document.querySelectorAll("#connectorCard input[data-credential]").forEach(input => {
+    confirmations[input.dataset.credential] = input.dataset.kind === "file_path"
+      ? {present:input.checked, file_exists:input.checked, owner_only:input.checked}
+      : {present:input.checked};
+  });
+  return {connector_id:connectorId, requested_roles:roles, credential_confirmations:confirmations};
+}
+async function submitConnectorActivationPlan(){
+  const payload = connectorPayload();
+  try{
+    state.connectorActivationPlan = await api("/api/connectors/activation/plan", {method:"POST", body:JSON.stringify(payload)});
+    renderConnector();
+  }catch(error){
+    state.connectorActivationPlan = {status:"blocked", blockers:[{summary:error.message}], change_count:0, warnings:[]};
+    renderConnector();
+  }
+}
+async function submitConnectorConfigDryRun(){
+  if(!state.connectorActivationPlan?.schema_version){
+    state.connectorConfigStatus = {status:"blocked", latest_apply:{status:"blocked", mode:"dry_run", apply_id:"run activation preview first", change_count:0}, latest_rollback:{status:"missing"}, backup:{created:false}};
+    renderConnector();
+    return;
+  }
+  try{
+    const result = await api("/api/connectors/config/apply", {method:"POST", body:JSON.stringify({activation_plan:state.connectorActivationPlan})});
+    state.connectorConfigStatus = {
+      status: result.status,
+      latest_apply: {status:result.status, mode:result.mode, apply_id:result.apply_id, connector_id:result.connector_id, package_id:result.package_id, change_count:result.change_counts?.total || 0, backup_created:result.backup?.created, backup_dir:result.backup?.backup_dir, blocker_count:result.blockers?.length || 0, warning_count:result.warnings?.length || 0},
+      latest_rollback: state.connectorConfigStatus?.latest_rollback || {status:"missing"},
+      backup: {created:result.backup?.created === true, backup_dir:result.backup?.backup_dir || "", file_count:result.backup?.files?.length || 0},
+      safety: result.safety || {}
+    };
+    renderConnector();
+  }catch(error){
+    state.connectorConfigStatus = {status:"blocked", latest_apply:{status:"blocked", mode:"dry_run", apply_id:error.message, change_count:0}, latest_rollback:{status:"missing"}, backup:{created:false}};
+    renderConnector();
+  }
+}
 async function submitVerdict(){
   const cycleId = state.attribution?.cycle_id || state.cycle?.cycle_id;
   const note = $("verdictText")?.value || "";
@@ -297,22 +635,34 @@ async function submitVerdict(){
 }
 function renderCharts(){
   drawChart($("mainChart"), state.candles, true);
-  drawMini($("ctx15"), state.candles.filter((_, i) => i % 4 === 0));
-  drawMini($("ctx1h"), state.candles.filter((_, i) => i % 10 === 0));
+  renderSyntheticWarning();
+  drawMini($("ctx15"), state.context15Candles, state.context15, "15m");
+  drawMini($("ctx1h"), state.context1hCandles, state.context1h, "1h");
+  $("ctx15Meta").textContent = contextMeta(state.context15, state.context15Candles);
+  $("ctx1hMeta").textContent = contextMeta(state.context1h, state.context1hCandles);
   const last = state.candles[state.candles.length - 1];
   $("orderPrice").value = Number(last.close).toFixed(1);
-  $("chartFoot").innerHTML = `<span>现价 <b class="${last.close >= last.open ? "pos" : "neg"}">${fmt(last.close)}</b></span><span>关键位 <b>${(state.plan?.human_plan?.key_levels || [4180,4200]).map(v => fmt(v,0)).join(" / ")}</b></span><span>你已捕获 <b>${state.attribution?.tracks?.human?.captured || 0}</b>/${state.attribution?.tracks?.human?.opportunity_count || 0}</span><span class="dim">机器轨捕获 · 收盘揭示</span>`;
+  $("chartFoot").innerHTML = `<span>现价 <b class="${last.close >= last.open ? "pos" : "neg"}">${fmt(last.close)}</b></span><span>关键位 <b>${(state.plan?.human_plan?.key_levels || [4180,4200]).map(v => fmt(v,0)).join(" / ")}</b></span><span>你已捕获 <b>${state.attribution?.tracks?.human?.captured || 0}</b>/${state.attribution?.tracks?.human?.opportunity_count || 0}</span><span class="dim">${marketSourceText()}</span>`;
 }
 function drawChart(svg, candles, withMarkers){
   const w = 980, h = 380, pad = 28, bodyW = 8;
   const plan = state.plan?.human_plan;
-  const lows = candles.map(c => c.low).concat(plan?.range?.low || []);
-  const highs = candles.map(c => c.high).concat(plan?.range?.high || []);
+  const lows = candles.map(c => c.low).concat(hasPrice(plan?.range?.low) ? [Number(plan.range.low)] : []);
+  const highs = candles.map(c => c.high).concat(hasPrice(plan?.range?.high) ? [Number(plan.range.high)] : []);
   const min = Math.min(...lows) - 4, max = Math.max(...highs) + 4;
   const y = price => pad + (max - price) / (max - min) * (h - pad * 2);
   const x = i => 28 + i * ((w - 56) / Math.max(1, candles.length - 1));
   let html = "";
-  if(plan?.range){ const yHigh = y(plan.range.high), yLow = y(plan.range.low); html += `<rect x="0" y="${yHigh}" width="${w}" height="${Math.max(1,yLow-yHigh)}" fill="rgba(122,162,255,.05)"/><line x1="0" y1="${yHigh}" x2="${w}" y2="${yHigh}" stroke="rgba(122,162,255,.4)" stroke-dasharray="6 5"/><line x1="0" y1="${yLow}" x2="${w}" y2="${yLow}" stroke="rgba(255,107,107,.55)" stroke-dasharray="6 5"/><text x="8" y="${yHigh-5}" fill="#7aa2ff" font-size="10">RANGE 上沿 ${fmt(plan.range.high)}</text><text x="8" y="${yLow+14}" fill="#ff6b6b" font-size="10">失效 / 止损 ${fmt(plan.range.low)}</text>`; }
+  if(plan?.range){
+    if(hasPrice(plan.range.high) && hasPrice(plan.range.low)){
+      const yHigh = y(plan.range.high), yLow = y(plan.range.low);
+      html += `<rect x="0" y="${yHigh}" width="${w}" height="${Math.max(1,yLow-yHigh)}" fill="rgba(122,162,255,.05)"/><line x1="0" y1="${yHigh}" x2="${w}" y2="${yHigh}" stroke="rgba(122,162,255,.4)" stroke-dasharray="6 5"/><text x="8" y="${yHigh-5}" fill="#7aa2ff" font-size="10">RANGE 上沿 ${fmt(plan.range.high)}</text>`;
+    }
+    if(hasPrice(plan.range.low)){
+      const yLow = y(plan.range.low);
+      html += `<line x1="0" y1="${yLow}" x2="${w}" y2="${yLow}" stroke="rgba(255,107,107,.55)" stroke-dasharray="6 5"/><text x="8" y="${yLow+14}" fill="#ff6b6b" font-size="10">失效 / 止损 ${fmt(plan.range.low)}</text>`;
+    }
+  }
   (plan?.key_levels || [4180,4200]).forEach(level => { html += `<line x1="0" y1="${y(level)}" x2="${w}" y2="${y(level)}" stroke="rgba(255,255,255,.14)" stroke-dasharray="2 5"/><text x="932" y="${y(level)-4}" fill="#788391" font-size="10">${fmt(level,0)}</text>`; });
   candles.forEach((c, i) => { const xi = x(i), up = c.close >= c.open, color = up ? css.getPropertyValue("--teal") : css.getPropertyValue("--red"); html += `<line x1="${xi}" y1="${y(c.high)}" x2="${xi}" y2="${y(c.low)}" stroke="${color}" stroke-width="1"/><rect x="${xi-bodyW/2}" y="${Math.min(y(c.open), y(c.close))}" width="${bodyW}" height="${Math.max(1, Math.abs(y(c.open)-y(c.close)))}" fill="${color}" opacity=".9"/>`; });
   const humanFills = state.human?.fills || [];
@@ -320,28 +670,120 @@ function drawChart(svg, candles, withMarkers){
   const last = candles[candles.length - 1]; html += `<line x1="0" y1="${y(last.close)}" x2="${w}" y2="${y(last.close)}" stroke="#2dd4bf" opacity=".7"/><rect x="912" y="${y(last.close)-11}" width="64" height="19" rx="3" fill="rgba(45,212,191,.15)" stroke="rgba(45,212,191,.5)"/><text x="920" y="${y(last.close)+3}" fill="#2dd4bf" font-size="11">${fmt(last.close)}</text>`;
   svg.innerHTML = html;
 }
-function drawMini(svg, candles){
-  const w = 460, h = 96, min = Math.min(...candles.map(c => c.low)), max = Math.max(...candles.map(c => c.high));
-  const y = price => 12 + (max - price) / (max - min || 1) * 72;
-  const pts = candles.map((c,i) => `${i * (w / Math.max(1, candles.length - 1))},${y(c.close).toFixed(1)}`).join(" ");
-  svg.innerHTML = `<rect x="0" y="10" width="${w}" height="76" fill="rgba(122,162,255,.04)"/><polyline points="${pts}" fill="none" stroke="#7aa2ff" stroke-width="1.4" opacity=".85"/>`;
+function drawMini(svg, candles, market, label){
+  const w = 460, h = 96, padX = 10, padY = 12;
+  if(!candles.length){
+    svg.innerHTML = `<rect x="0" y="10" width="${w}" height="76" fill="rgba(255,107,107,.04)"/><text x="14" y="52" fill="#ff6b6b" font-size="11">${label} context 无真实数据</text>`;
+    return;
+  }
+  const plan = state.plan?.human_plan || {};
+  const closes = candles.map(c => c.close);
+  const first = closes[0], last = closes[closes.length - 1];
+  const baseLow = Math.min(...candles.map(c => c.low));
+  const baseHigh = Math.max(...candles.map(c => c.high));
+  const span = Math.max(1, baseHigh - baseLow);
+  const floor = hasPrice(plan.range?.low) ? Number(plan.range.low) : null;
+  const includeFloor = floor !== null && floor >= baseLow - span * .4 && floor <= baseHigh + span * .4;
+  const min = Math.min(baseLow, includeFloor ? floor : baseLow) - span * .08;
+  const max = Math.max(baseHigh, includeFloor ? floor : baseHigh) + span * .08;
+  const y = price => padY + (max - price) / (max - min || 1) * (h - padY * 2);
+  const x = i => padX + i * ((w - padX * 2 - 54) / Math.max(1, candles.length - 1));
+  const pts = candles.map((c,i) => `${x(i).toFixed(1)},${y(c.close).toFixed(1)}`).join(" ");
+  const change = first ? (last - first) / first * 100 : 0;
+  const color = change >= 0 ? css.getPropertyValue("--teal") : css.getPropertyValue("--red");
+  let html = `<rect x="0" y="10" width="${w}" height="76" fill="rgba(122,162,255,.04)"/>`;
+  html += `<line x1="0" y1="${y(baseHigh)}" x2="${w}" y2="${y(baseHigh)}" stroke="rgba(255,255,255,.10)" stroke-dasharray="2 5"/><text x="388" y="${Math.max(12,y(baseHigh)-3)}" fill="#788391" font-size="9">H ${fmt(baseHigh)}</text>`;
+  html += `<line x1="0" y1="${y(baseLow)}" x2="${w}" y2="${y(baseLow)}" stroke="rgba(255,255,255,.10)" stroke-dasharray="2 5"/><text x="388" y="${Math.min(92,y(baseLow)+10)}" fill="#788391" font-size="9">L ${fmt(baseLow)}</text>`;
+  if(includeFloor) html += `<line x1="0" y1="${y(floor)}" x2="${w}" y2="${y(floor)}" stroke="rgba(255,107,107,.45)" stroke-dasharray="4 4"/><text x="10" y="${y(floor)-4}" fill="#ff6b6b" font-size="9">floor ${fmt(floor)}</text>`;
+  html += `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.7" opacity=".9"/>`;
+  html += `<circle cx="${x(candles.length-1)}" cy="${y(last)}" r="2.6" fill="${color}"/><text x="10" y="24" fill="${color}" font-size="11">${change >= 0 ? "+" : ""}${change.toFixed(2)}%</text><text x="388" y="${y(last)+3}" fill="${color}" font-size="10">${fmt(last)}</text>`;
+  if(market?.fresh === false) html += `<text x="10" y="88" fill="#ffcc66" font-size="9">stale / fallback</text>`;
+  svg.innerHTML = html;
 }
 function seedCandles(){
   const rows = []; let price = 4172;
   for(let i=0;i<64;i++){ const drift = Math.sin(i/5)*2 + (i-30)*.18; const close = price + drift + (i%7===0 ? -8 : 1.8); rows.push({open:price, high:Math.max(price,close)+3, low:Math.min(price,close)-3, close}); price = close; }
   return rows;
 }
-function startKlineStream(){
-  try{
-    const ws = new WebSocket("wss://fstream.binance.com/stream?streams=xauusdt@kline_1m");
-    ws.onmessage = event => { const payload = JSON.parse(event.data); const k = payload.data?.k; if(!k) return; const candle = {open:Number(k.o), high:Number(k.h), low:Number(k.l), close:Number(k.c)}; state.candles = [...state.candles.slice(-63), candle]; renderCharts(); };
-  }catch(_error){}
+function marketBarsToCandles(payload){
+  return (payload?.bars || []).map(row => ({
+    open:Number(row.open),
+    high:Number(row.high),
+    low:Number(row.low),
+    close:Number(row.close),
+    timestamp:row.timestamp,
+    provider:row.provider
+  })).filter(row => Number.isFinite(row.close));
+}
+function isSyntheticMarket(payload){
+  if(!payload) return true;
+  const provider = String(payload.provider || "").toLowerCase();
+  const mode = String(payload.source_mode || "").toLowerCase();
+  const flags = (payload.quality_flags || []).map(flag => String(flag).toLowerCase()).join(" ");
+  return payload.is_synthetic === true || provider.includes("synthetic_seed") || mode.includes("synthetic") || flags.includes("synthetic_seed");
+}
+function renderSyntheticWarning(){
+  const warning = $("chartSyntheticWarning");
+  if(!warning) return;
+  const synthetic = isSyntheticMarket(state.market);
+  warning.classList.toggle("hidden", !synthetic);
+  warning.setAttribute("aria-hidden", synthetic ? "false" : "true");
+}
+function marketSourceText(){
+  const market = state.market;
+  if(!market) return "行情 · 后端读取中";
+  if(isSyntheticMarket(market)) return `行情 · 模拟数据 · 非真实价格 · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
+  const mode = {tiger_openapi:"Tiger/COMEX", binance_usdm_fallback:"本地 Binance 缓存", requested_symbol:"指定本地序列", synthetic_fallback:"展示种子数据"}[market.source_mode] || market.source_mode;
+  return `行情 · ${mode} · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
+}
+function contextMeta(market, candles){
+  if(!market || !candles.length) return "无真实 context";
+  const mode = {derived_from_1m:"1m聚合", derived_from_5m:"5m聚合", requested_symbol:"原生序列", binance_usdm_fallback:"Binance缓存", tiger_openapi:"Tiger/COMEX"}[market.source_mode] || market.source_mode;
+  const first = candles[0].close, last = candles[candles.length - 1].close;
+  const change = first ? (last - first) / first * 100 : 0;
+  const floor = state.plan?.human_plan?.range?.low;
+  const floorText = hasPrice(floor) ? ` · 距floor ${(last - Number(floor)).toFixed(1)}` : "";
+  const fresh = market.fresh === false ? "stale" : "fresh";
+  return `${trendLabel(candles)} · ${mode} · ${fresh} · ${change >= 0 ? "+" : ""}${change.toFixed(2)}%${floorText}`;
+}
+function trendLabel(candles){
+  if(candles.length < 3) return "context不足";
+  const first = candles[0].close, last = candles[candles.length - 1].close;
+  const range = Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low));
+  const move = last - first;
+  if(Math.abs(move) < Math.max(1, range * .18)) return "震荡";
+  return move > 0 ? "上行" : "下行";
+}
+function planSourceText(plan){
+  if(!plan) return "--";
+  if(plan.author === "human" && plan.source === "obsidian") return "Obsidian -> 人轨";
+  if(plan.author === "ai" && plan.source === "obsidian") return "Obsidian fallback";
+  return `${plan.source || "--"} / ${plan.author || "--"}`;
+}
+function planEligibilityText(plan){
+  if(!plan) return "";
+  if(plan.author === "human" && plan.status !== "locked") return "late/draft：显示与记录，不参与盲测评分";
+  if(plan.author === "ai" && plan.source === "obsidian") return "注意：当前 AI 轨不是独立 AI 源，而是 Obsidian fallback";
+  if(plan.status === "locked") return "已锁定：可进入盲测评分";
+  return `${plan.status || "unknown"}：需复核`;
+}
+function humanPlanBadge(plan){
+  if(!plan) return "缺失";
+  return plan.status === "locked" ? "已锁定 · 可评分" : "late/draft · 不评分";
+}
+function aiPlanBadge(plan){
+  if(!plan) return "缺失";
+  return plan.source === "obsidian" ? "fallback · 非独立" : "独立对照";
+}
+function statusText(status){
+  return ({ok:"OK", warn:"WATCH", blocked:"BLOCKED"})[status] || "UNKNOWN";
 }
 function dirText(direction){ return ({long:"做多", short:"做空", flat:"观望", absent:"缺失"})[direction] || "--"; }
 function seconds(value){ const s = Math.max(0, Number(value || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h${String(m).padStart(2,"0")}m`; }
 function shortTime(value){ return value ? String(value).slice(11,16) : "--"; }
+function shortPath(value){ if(!value) return "--"; const parts = String(value).split("/").filter(Boolean); return parts.slice(-3).join("/") || value; }
 function cycleClosed(cycle){ return Boolean(cycle?.end && Date.now() >= Date.parse(cycle.end)); }
-loadAll(); startKlineStream(); setInterval(loadAll, 30000);
+loadAll(); setInterval(loadAll, 30000);
 </script>
 </body>
 </html>

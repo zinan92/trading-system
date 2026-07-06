@@ -22,6 +22,7 @@ from services.dualtrack_clock import cycle_window, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
+from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
 from services.market_view_intake import MarketViewIntake
@@ -107,6 +108,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/dualtrack/ledger":
             self._handle_dualtrack_ledger_get(parsed.query)
             return
+        if parsed.path == "/api/dualtrack/market/bars":
+            self._handle_dualtrack_market_bars_get(parsed.query)
+            return
         if parsed.path == "/api/dualtrack/venue/tiger":
             self._handle_dualtrack_tiger_venue_get()
             return
@@ -162,6 +166,30 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_dualtrack_ledger_get(self, query: str) -> None:
         params = parse_qs(query)
         self._write_json(200, build_dualtrack_ledger_response(week=params.get("week", [None])[0]))
+
+    def _handle_dualtrack_market_bars_get(self, query: str) -> None:
+        params = parse_qs(query)
+        symbol = (params.get("symbol") or [""])[0].strip()
+        timeframe = (params.get("timeframe") or [""])[0].strip()
+        if symbol and not _SYMBOL_PATTERN.match(symbol):
+            self._write_error(400, "invalid_symbol", "symbol contains unsupported characters")
+            return
+        if timeframe and not _TIMEFRAME_PATTERN.match(timeframe):
+            self._write_error(400, "invalid_timeframe", "expected timeframe like 1m, 5m, 1h, or 1d")
+            return
+        try:
+            limit = int((params.get("limit") or ["96"])[0])
+        except ValueError:
+            self._write_error(400, "invalid_limit", "limit must be an integer")
+            return
+        self._write_json(
+            200,
+            build_dualtrack_market_bars_response(
+                symbol=symbol or None,
+                timeframe=timeframe or None,
+                limit=limit,
+            ),
+        )
 
     def _handle_dualtrack_tiger_venue_get(self) -> None:
         self._write_json(200, build_dualtrack_tiger_venue_response())
@@ -510,6 +538,23 @@ def build_dualtrack_attribution_response(cycle_id: str, *, output_root: Path | N
 
 def build_dualtrack_ledger_response(*, output_root: Path | None = None, week: str | None = None) -> dict:
     return DualTrackScorer(output_root).ledger_payload(week=week)
+
+
+def build_dualtrack_market_bars_response(
+    *,
+    symbol: str | None = None,
+    timeframe: str | None = None,
+    limit: int = 96,
+    market_db: Path | None = None,
+    config: dict | None = None,
+    as_of: str | None = None,
+) -> dict:
+    return DualTrackMarketFeed(market_db=market_db, config=config).snapshot(
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+        as_of=as_of,
+    )
 
 
 def build_dualtrack_tiger_venue_response(*, output_root: Path | None = None) -> dict:
