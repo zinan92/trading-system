@@ -1,0 +1,25 @@
+{
+  "name": "standard-kline",
+  "version": "0.1.0",
+  "description": "Provider-agnostic OHLCV candlestick chart wrapper around TradingView Lightweight Charts, with clamped zoom/pan/fit and synthetic-data flagging.",
+  "main": "standard-kline.js",
+  "files": [
+    "standard-kline.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test standard-kline.test.js"
+  },
+  "peerDependencies": {
+    "lightweight-charts": "^5.2.0"
+  },
+  "keywords": [
+    "candlestick",
+    "ohlcv",
+    "trading",
+    "chart",
+    "lightweight-charts"
+  ],
+  "license": "MIT"
+}
