@@ -9,6 +9,7 @@ from services.bias_ledger import BiasLedger
 from services.broker_adapter import LiveBrokerAdapter
 from services.data_source_preflight import DataSourcePreflight
 from services.data_archive_manifest import DataArchiveManifest
+from services.dualtrack_cycle_heartbeat import DualTrackCycleHeartbeat
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
 from services.mock_runtime import MockTradingRuntime
@@ -51,6 +52,7 @@ class CompletionAudit:
             self._strategy_guardrails(run_date),
             self._daily_review_run(run_date),
             self._schedule_artifacts(run_date),
+            self._dualtrack_cycle_liveness(run_date),
             self._dashboard(),
             self._broker_feed_smoke(run_date),
             self._broker_bridge_smoke(run_date),
@@ -543,6 +545,30 @@ class CompletionAudit:
                 "launch_agents_dir": schedule.get("launch_agents_dir"),
                 "jobs": schedule.get("jobs", []),
                 "schedule_status": schedule_status,
+            },
+        )
+
+    def _dualtrack_cycle_liveness(self, run_date: str, as_of: str | datetime | None = None) -> dict:
+        heartbeat = DualTrackCycleHeartbeat(self.output_root).run(as_of=as_of)
+        if heartbeat.get("status") in {"fresh", "not_scheduled"}:
+            return self._requirement(
+                "dualtrack_cycle_liveness",
+                "pass",
+                "DualTrack close-cycle 产物存活心跳正常或未启用双轨调度",
+                heartbeat,
+            )
+        return self._requirement(
+            "dualtrack_cycle_liveness",
+            "fail",
+            "DualTrack close-cycle 产物过期或缺失",
+            {
+                "run_date": run_date,
+                "status": heartbeat.get("status"),
+                "reason": heartbeat.get("reason"),
+                "expected_boundary": heartbeat.get("expected_boundary"),
+                "latest_artifact_at": heartbeat.get("latest_artifact_at"),
+                "missed_boundaries": heartbeat.get("missed_boundaries", []),
+                "close_grace_minutes": heartbeat.get("close_grace_minutes"),
             },
         )
 

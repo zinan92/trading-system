@@ -1818,3 +1818,41 @@ Date: 2026-07-08
 - `undecidable` rows exclude both hit rate and Brier. This is intentional for moves inside the neutral threshold.
 
 - A future repair flow for `pending_data` is not implemented in this task. If the product wants late-arriving market data to unblock old views, that needs an explicit rule for appending a new repair/adjudication event without mutating prior rows.
+
+## DualTrack Schedule Drift Heartbeat
+
+Date: 2026-07-08
+
+### Decisions
+
+- Add a dedicated `DualTrackCycleHeartbeat` service for close-cycle liveness.
+  - Rationale: `schedule_status` can prove launchd shape, but it cannot prove the 12h DualTrack close artifact actually exists. The heartbeat closes that gap without touching orders, broker, or risk paths.
+  - Evidence: `services/dualtrack_cycle_heartbeat.py`, `tests/test_dualtrack_cycle_heartbeat.py`.
+
+- Derive expected close boundaries from `configs/dualtrack.yaml` `cycle_hours_utc` with a fixed `CLOSE_GRACE_MINUTES=120`.
+  - Rationale: the check should follow the configured DAY/NIGHT windows instead of hardcoding dates or labels.
+  - Evidence: latest required boundary was `2026-07-07T13:00:00+00:00`; heartbeat reported `fresh` after backfill.
+
+- Require both attribution and daily ledger coverage for a boundary to count as closed.
+  - Rationale: a single artifact can be partial; completion should require both the per-cycle attribution and the daily rollup.
+  - Evidence: backfilled `2026-07-06_DAY` and `2026-07-06_NIGHT` attribution files plus `outputs/dualtrack/ledger/daily/2026-07-06.json`.
+
+- Wire `_dualtrack_cycle_liveness` into `CompletionAudit` immediately after `_schedule_artifacts`.
+  - Rationale: schedule drift should fail completion even if static schedule files exist.
+  - Evidence: related pytest suite passes with the new audit check.
+
+- Follow the live launchd safety rule strictly: install only after dry-run/package ack, then roll back when an originally loaded job becomes unloaded.
+  - Rationale: Phase 2 touches live launchd; a half-installed scheduler is worse than a known stale scheduler.
+  - Evidence: install made `dashboard` unload, rollback restored the prior shape, and `strategies` was manually bootstrapped back to loaded.
+
+### Gotchas
+
+- `launchctl kickstart` timeout is not by itself the source of truth. `pipelines.schedule_status --json` is the authoritative post-check for installed, matching, and loaded counts.
+
+- Rollback can also leave a different label unloaded. After rollback, verify all 9 labels and recover only the failed label if needed.
+
+- Current live scheduler state is still `stale_installed`: `installed_count=9`, `loaded_count=9`, `matching_generated_count=0`, `mismatched_jobs=9`. This is safe-loaded, but it is not the Phase 2 healthy DOD.
+
+- Backfill must only run when source intraday data is complete. If data is incomplete, write a void reason such as `schedule_drift_gap`; do not fabricate a close score.
+
+- The heartbeat can be `fresh` while launchd is still `stale_installed`. Artifact liveness and scheduler install health are separate gates.

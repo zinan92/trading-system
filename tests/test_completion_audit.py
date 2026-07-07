@@ -3,9 +3,29 @@ from datetime import datetime, timedelta, timezone
 
 from services.completion_audit import CompletionAudit
 from services.bias_ledger import BiasLedger
+from services.dualtrack_cycle_heartbeat import DualTrackCycleHeartbeat
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
 from schemas.market_data import Bar
+
+
+def _write_current_dualtrack_liveness(root: Path) -> None:
+    heartbeat = DualTrackCycleHeartbeat(root)
+    schedule, error = heartbeat._cycle_schedule()
+    assert schedule is not None and not error
+    expected = heartbeat._latest_required_boundary(datetime.now(timezone.utc), schedule)
+    assert expected is not None
+    start = heartbeat._previous_start_before_boundary(expected, schedule)
+    cycle_id = heartbeat._cycle_id_for_start(start, schedule)
+    date_part = cycle_id.rsplit("_", 1)[0]
+    write_json(root / "dualtrack" / "ledger" / "daily" / f"{date_part}.json", [{
+        "date": date_part,
+        "cycles": {cycle_id: {"machine": 0, "human": 0}},
+    }])
+    write_json(root / "dualtrack" / "attribution" / f"{cycle_id}.json", [{
+        "cycle_id": cycle_id,
+        "status": "closed",
+    }])
 
 
 def test_completion_audit_surfaces_paper_ready_with_live_broker_warning(tmp_path: Path):
@@ -86,6 +106,7 @@ def test_completion_audit_surfaces_paper_ready_with_live_broker_warning(tmp_path
             }
         ],
     )
+    _write_current_dualtrack_liveness(root)
 
     result = CompletionAudit(root, db_path).run(run_date)
 
@@ -108,6 +129,7 @@ def test_completion_audit_surfaces_paper_ready_with_live_broker_warning(tmp_path
     assert statuses["human_bias_ledger"] == "pass"
     assert statuses["strategy_guardrails"] == "pass"
     assert statuses["schedule_artifacts"] == "warn"
+    assert statuses["dualtrack_cycle_liveness"] == "pass"
     journal_evidence = next(item for item in result["requirements"] if item["name"] == "journal_and_review")["evidence"]
     assert journal_evidence["learning_ledger_rows"] == 1
     assert journal_evidence["strategy_proposal_rows"] == 1
