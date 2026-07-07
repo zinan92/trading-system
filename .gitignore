@@ -7,6 +7,8 @@ __pycache__/
 configs/live.env
 configs/live.env.*
 !configs/live.env.template
+configs/tiger_openapi_config.properties
+*tiger_openapi_config.properties
 
 # runtime state / artifacts
 .DS_Store
