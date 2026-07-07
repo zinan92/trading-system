@@ -137,6 +137,13 @@ class DashboardState:
         doctor_rows = load_json(self.output_root / "doctor" / "current.json")
         schedule_rows = load_json(self.output_root / "schedules" / "current.json")
         schedule_status_rows = load_json(self.output_root / "schedules" / "status_current.json")
+        schedule_install_plan_rows = load_json(self.output_root / "schedules" / "install_plan_current.json")
+        schedule_install_rows = load_json(self.output_root / "schedules" / "install_current.json")
+        schedule_rollback_plan_rows = load_json(self.output_root / "schedules" / "rollback_plan_current.json")
+        schedule_rollback_rows = load_json(self.output_root / "schedules" / "rollback_current.json")
+        schedule_post_install_verify_rows = load_json(self.output_root / "schedules" / "post_install_verify_current.json")
+        schedule_takeover_package_rows = load_json(self.output_root / "schedules" / "takeover_package_current.json")
+        schedule_takeover_package_check_rows = load_json(self.output_root / "schedules" / "takeover_package_check_current.json")
         risk = self._risk_summary(run_date, tickets, risk_blocks)
         runner = RunnerStatusStore(self.output_root).current()
         data_source_preflight = data_source_preflight_rows[-1] if data_source_preflight_rows else {}
@@ -351,6 +358,13 @@ class DashboardState:
             "doctor": doctor_rows[-1] if doctor_rows else {},
             "schedule": schedule_rows[-1] if schedule_rows else {},
             "schedule_status": schedule_status_rows[-1] if schedule_status_rows else {},
+            "schedule_install_plan": schedule_install_plan_rows[-1] if schedule_install_plan_rows else {},
+            "schedule_install": schedule_install_rows[-1] if schedule_install_rows else {},
+            "schedule_rollback_plan": schedule_rollback_plan_rows[-1] if schedule_rollback_plan_rows else {},
+            "schedule_rollback": schedule_rollback_rows[-1] if schedule_rollback_rows else {},
+            "schedule_post_install_verify": schedule_post_install_verify_rows[-1] if schedule_post_install_verify_rows else {},
+            "schedule_takeover_package": schedule_takeover_package_rows[-1] if schedule_takeover_package_rows else {},
+            "schedule_takeover_package_check": schedule_takeover_package_check_rows[-1] if schedule_takeover_package_check_rows else {},
             "performance": self._performance_summary(open_trades, closed_trades),
             "risk": risk,
             "runner": runner,

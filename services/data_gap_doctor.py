@@ -4,14 +4,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services.journal_store import load_json, write_json
+from services.market_store import MarketStore
 
 
 class DataGapDoctor:
-    def __init__(self, output_root: Path) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        market_db: Path | None = None,
+        *,
+        write_legacy_artifacts: bool | None = None,
+        max_market_db_bars: int = 10000,
+    ) -> None:
         self.output_root = output_root
+        self.market_db = market_db
+        self.write_legacy_artifacts = write_legacy_artifacts
+        self.max_market_db_bars = int(max_market_db_bars)
 
     def run(self, run_date: str, symbol: str = "GOLD", timeframe: str = "5m") -> dict:
         bars = load_json(self.output_root / "clean_bars" / run_date / f"{symbol}_{timeframe}.json")
+        source = "clean_bars"
+        if not bars and self.market_db and self.market_db.exists():
+            bars = [bar.to_dict() for bar in MarketStore(self.market_db).load_bars(symbol, timeframe, self.max_market_db_bars)]
+            source = "market_db"
         manifest_rows = load_json(self.output_root / "clean_bars" / run_date / "manifest.json")
         manifest = next((item for item in manifest_rows if item.get("symbol") == symbol and item.get("timeframe") == timeframe), {})
         expected_seconds = self._timeframe_seconds(timeframe)
@@ -26,6 +41,8 @@ class DataGapDoctor:
             "status": status,
             "symbol": symbol,
             "timeframe": timeframe,
+            "source_key": f"{symbol}_{timeframe}",
+            "source": source,
             "clean_rows": clean_rows,
             "gap_count": len(gaps),
             "paper_snapshot_gap_count": len(snapshot_gaps),
@@ -39,9 +56,18 @@ class DataGapDoctor:
             "paper_snapshot_gaps": snapshot_gaps[-20:],
             "repair_actions": self._repair_actions(gaps, snapshot_gaps),
         }
-        write_json(self.output_root / "data_gaps" / "current.json", [payload])
-        write_json(self.output_root / "data_gaps" / f"{run_date}.json", [payload])
+        scoped_root = self.output_root / "data_gaps" / payload["source_key"]
+        write_json(scoped_root / "current.json", [payload])
+        write_json(scoped_root / f"{run_date}.json", [payload])
+        if self._should_write_legacy(symbol, timeframe):
+            write_json(self.output_root / "data_gaps" / "current.json", [payload])
+            write_json(self.output_root / "data_gaps" / f"{run_date}.json", [payload])
         return payload
+
+    def _should_write_legacy(self, symbol: str, timeframe: str) -> bool:
+        if self.write_legacy_artifacts is not None:
+            return bool(self.write_legacy_artifacts)
+        return symbol == "GOLD" and timeframe == "5m"
 
     def _gaps(self, bars: list[dict], expected_seconds: int) -> tuple[list[dict], list[dict]]:
         gaps = []

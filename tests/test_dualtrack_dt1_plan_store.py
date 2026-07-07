@@ -88,6 +88,64 @@ def test_invariant_3_precedence_human_then_ai_then_fail_closed(tmp_path: Path) -
     assert store.effective_plan("2026-07-06_DAY", as_of="2026-07-06T01:00:00+00:00") is None
 
 
+def test_ai_plan_from_market_view_keeps_long_target_out_of_invalidation(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    write_json(output / "market_views" / "2026-07-05.json", [{
+        "run_date": "2026-07-05",
+        "direction_bias": "long_bias",
+        "direction_score": 65,
+        "key_levels": [
+            "4155-4160：回调后重新找多的位置。",
+            "4210：当前上方目标位，回调后做多的目标。",
+        ],
+        "expiry": {
+            "expire_below": 4155.0,
+            "expire_above": 4210.0,
+            "target_price": 4210.0,
+        },
+    }])
+    store = DualTrackPlanStore(output)
+
+    plan = store.ensure_ai_plan(
+        "2026-07-05_DAY",
+        cycle_open=4182.93,
+        prev_cycle_range=12.26,
+        now="2026-07-05T01:00:00+00:00",
+    )
+
+    assert plan is not None
+    assert plan["range"] == {"low": 4155.0, "high": None}
+    assert plan["invalidation"] == [{"side": "below", "price": 4155.0, "confirm": "touch"}]
+    assert 4155.0 in plan["key_levels"]
+    assert 4210.0 in plan["key_levels"]
+
+
+def test_human_plan_import_from_market_view_is_draft_after_lock_deadline(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    write_json(output / "market_views" / "2026-07-05.json", [{
+        "run_date": "2026-07-05",
+        "direction_bias": "long_bias",
+        "direction_score": 65,
+        "key_levels": ["4155-4160", "4210"],
+        "expiry": {"expire_below": 4155.0, "expire_above": 4210.0},
+    }])
+    store = DualTrackPlanStore(output)
+
+    plan = store.ensure_human_plan_from_market_view(
+        "2026-07-05_DAY",
+        cycle_open=4182.93,
+        prev_cycle_range=12.26,
+        now="2026-07-05T02:00:00+00:00",
+    )
+
+    assert plan is not None
+    assert plan["author"] == "human"
+    assert plan["source"] == "obsidian"
+    assert plan["status"] == "draft"
+    assert plan["locked_at"] is None
+    assert plan["range"] == {"low": 4155.0, "high": None}
+
+
 def test_invariant_8_structured_invalidation_only() -> None:
     with pytest.raises(ValueError, match="invalidation"):
         validate_plan(_plan() | {"invalidation": "breaks 4150"}, author="human", status="locked")

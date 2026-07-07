@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -15,9 +16,9 @@ from services.market_store import MarketStore
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
-def _bar(ts: datetime, open_: float, close: float) -> Bar:
+def _bar(ts: datetime, open_: float, close: float, *, symbol: str = "GOLD") -> Bar:
     return Bar(
-        symbol="GOLD",
+        symbol=symbol,
         timeframe="1m",
         timestamp=ts.isoformat(),
         open=open_,
@@ -29,11 +30,11 @@ def _bar(ts: datetime, open_: float, close: float) -> Bar:
     )
 
 
-def _seed_bars(store: MarketStore, start: datetime, closes: list[float]) -> list[Bar]:
+def _seed_bars(store: MarketStore, start: datetime, closes: list[float], *, symbol: str = "GOLD") -> list[Bar]:
     rows = []
     previous = closes[0]
     for index, close in enumerate(closes):
-        rows.append(_bar(start + timedelta(minutes=index), previous, close))
+        rows.append(_bar(start + timedelta(minutes=index), previous, close, symbol=symbol))
         previous = close
     store.upsert_bars(rows)
     return rows
@@ -88,6 +89,84 @@ def _realized_pnl(fills: list[dict]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
 
 
+def _comex_config() -> dict:
+    config = deepcopy(TEST_CONFIG)
+    config["market_session"] = {
+        "enabled": True,
+        "venue": "comex_futures",
+        "timezone": "America/New_York",
+    }
+    return config
+
+
+def _human_sync_config(*, refresh: bool = False) -> dict:
+    config = deepcopy(TEST_CONFIG)
+    config["human_fill_sync"] = {
+        "enabled": True,
+        "provider": "tiger_openapi",
+        "run_before_close": True,
+        "refresh_order_sync_before_import": refresh,
+        "require_success_before_close": True,
+    }
+    return config
+
+
+def _mgc_dualtrack_config(*, refresh: bool = False) -> dict:
+    config = _human_sync_config(refresh=refresh)
+    config["market_data"] = {
+        "symbol": "MGCmain",
+        "timeframe": "1m",
+        "provider": "tiger_openapi:COMEX",
+    }
+    config["market_session"] = {
+        "enabled": True,
+        "venue": "comex_futures",
+        "timezone": "America/New_York",
+    }
+    config["grid"] = {**config["grid"], "spacing_bp": 6.0, "max_rungs": 2}
+    config["execution_cost_model"] = {
+        "venue": "tiger_mgc",
+        "quantity_mode": "integer_contracts",
+        "contract_multiplier": 10,
+        "contracts_per_rung": 1,
+    }
+    return config
+
+
+def _write_tiger_order_sync(output: Path, rows: list[dict]) -> None:
+    write_json(output / "tiger_order_sync" / "current.json", [{
+        "run_date": "2026-07-05",
+        "provider": "tiger_openapi",
+        "mode": "paper",
+        "sync_status": "synced",
+        "error": "",
+        "open_order_count": 0,
+        "filled_order_count": len(rows),
+        "exchange_open_orders": [],
+        "exchange_filled_orders": rows,
+        "checked_at": "2026-07-05T01:03:00+00:00",
+    }])
+
+
+def _tiger_fill(**overrides) -> dict:
+    return {
+        "symbol": "MGC2608",
+        "root_symbol": "MGC",
+        "order_id": "T200",
+        "parent_id": "",
+        "side": "BUY",
+        "type": "LMT",
+        "status": "FILLED",
+        "quantity": 1.0,
+        "filled_quantity": 1.0,
+        "average_fill_price": 3992.0,
+        "currency": "USD",
+        "filled_at": "2026-07-05T01:02:03+00:00",
+        "source": "tiger_filled_orders",
+        **overrides,
+    }
+
+
 def test_d8_1_prefix_replay_matches_batch_runner_on_same_prefix(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
@@ -127,6 +206,43 @@ def test_d8_2_missing_market_view_fails_closed_and_machine_stands_down(tmp_path:
     assert load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_machine.json") == []
     audit_events = [row["event"] for row in load_json(output / "dualtrack" / "audit" / "2026-07-05_DAY.json")]
     assert "ai_plan_absent" in audit_events
+
+
+def test_obsidian_plan_sync_imports_current_draft_and_next_locked(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    _write_market_view(output)
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+
+    result = runner.sync_obsidian_human_plans(as_of="2026-07-05T02:30:00+00:00", include_next=True)
+
+    day_plan = load_json(output / "dualtrack" / "plans" / "2026-07-05_DAY_human.json")[0]
+    night_plan = load_json(output / "dualtrack" / "plans" / "2026-07-05_NIGHT_human.json")[0]
+    assert result["event"] == "sync_obsidian_plan"
+    assert [item["cycle_id"] for item in result["results"]] == ["2026-07-05_DAY", "2026-07-05_NIGHT"]
+    assert day_plan["status"] == "draft"
+    assert day_plan["locked_at"] is None
+    assert night_plan["status"] == "locked"
+    assert night_plan["locked_at"] == "2026-07-05T02:30:00+00:00"
+    assert day_plan["source"] == night_plan["source"] == "obsidian"
+    assert day_plan["range"] == night_plan["range"] == {"low": 3960.0, "high": None}
+
+
+def test_live_tick_syncs_obsidian_plan_and_runs_intraday(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    _write_market_view(output)
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+
+    result = runner.live_tick(as_of="2026-07-05T02:30:00+00:00")
+
+    assert result["event"] == "live_tick"
+    assert result["sync"]["results"][0]["plan_status"] == "draft"
+    assert result["sync"]["results"][1]["plan_status"] == "locked"
+    assert result["intraday"]["status"] == "ran"
+    assert load_json(output / "dualtrack" / "runner" / "2026-07-05_DAY.json")[-1]["event"] == "intraday"
 
 
 def test_d8_3_intraday_tick_is_idempotent_for_same_bar_set(tmp_path: Path) -> None:
@@ -242,6 +358,140 @@ def test_d8_4_close_cycle_is_single_shot(tmp_path: Path) -> None:
     assert list(daily["cycles"]) == [cycle_id]
 
 
+def test_tiger_human_fill_sync_runs_before_close_and_scoring(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    config = _human_sync_config()
+    DualTrackPlanStore(output, config=config).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    _write_tiger_order_sync(output, [_tiger_fill()])
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
+
+    result = runner.close_cycle(cycle_id, as_of="2026-07-05T13:00:00+00:00")
+
+    assert result["status"] == "closed"
+    assert result["human_fill_sync"]["status"] == "synced"
+    assert result["human_fill_sync"]["imported_count"] == 1
+    attribution = result["attribution"]
+    assert attribution["tracks"]["human"]["fill_count"] == 1
+    assert attribution["tracks"]["human"]["realized_pnl"] == -2.7
+    assert attribution["fills"]["human"][0]["external_order_id"] == "T200"
+    runner_events = [row["event"] for row in load_json(output / "dualtrack" / "runner" / f"{cycle_id}.json")]
+    assert "human_fill_sync" in runner_events
+    assert runner_events.index("human_fill_sync") < runner_events.index("close")
+
+
+def test_mgc_dualtrack_close_scores_machine_and_human_with_same_tiger_contract_cost_model(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    store = MarketStore(db)
+    _seed_bars(store, datetime(2026, 7, 5, 22, 0, tzinfo=timezone.utc), [4185.0, 4170.0, 4190.0], symbol="MGCmain")
+    _seed_bars(
+        store,
+        datetime(2026, 7, 6, 1, 0, tzinfo=timezone.utc),
+        [4183.0, 4180.0, 4183.5, 4180.5, 4183.5],
+        symbol="MGCmain",
+    )
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-06_DAY"
+    config = _mgc_dualtrack_config()
+    DualTrackPlanStore(output, config=config).save_human_plan(
+        _plan(cycle_id),
+        now="2026-07-06T00:59:00+00:00",
+    )
+    _write_tiger_order_sync(output, [_tiger_fill(average_fill_price=4182.0, filled_at="2026-07-06T01:02:03+00:00")])
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
+
+    result = runner.close_cycle(cycle_id, as_of="2026-07-06T13:00:00+00:00")
+
+    assert result["status"] == "closed"
+    assert runner.symbol == "MGCmain"
+    assert result["human_fill_sync"]["status"] == "synced"
+    attribution = result["attribution"]
+    machine_fills = attribution["fills"]["machine"]
+    human_fills = attribution["fills"]["human"]
+    assert machine_fills
+    assert human_fills
+    assert {fill["cost_model"]["venue"] for fill in machine_fills + human_fills} == {"tiger_mgc"}
+    assert {fill["cost_model"]["quantity_mode"] for fill in machine_fills + human_fills} == {"integer_contracts"}
+    assert {fill["contracts"] for fill in machine_fills + human_fills} == {1}
+    assert {fill["quantity"] for fill in machine_fills + human_fills} == {1}
+    assert all(abs(float(fill["notional"]) - (float(fill["price"]) * 10)) < 0.000001 for fill in machine_fills + human_fills)
+    assert all(abs(float(fill["cost"]) - 2.7) < 0.000001 for fill in machine_fills + human_fills)
+    assert attribution["tracks"]["machine"]["realized_pnl"] == _realized_pnl(machine_fills)
+    assert attribution["tracks"]["human"]["realized_pnl"] == _realized_pnl(human_fills)
+    assert attribution["ledger"]["daily"]["tracks"]["machine"]["realized_pnl"] == _realized_pnl(machine_fills)
+    assert attribution["ledger"]["daily"]["tracks"]["human"]["realized_pnl"] == _realized_pnl(human_fills)
+
+
+def test_cycle_runner_uses_configured_market_data_symbol_by_default(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    db = tmp_path / "market.db"
+    store = MarketStore(db)
+    _seed_bars(store, datetime(2026, 7, 4, 13, 0, tzinfo=timezone.utc), [4180.0, 4175.0, 4185.0], symbol="MGCmain")
+    _seed_bars(store, datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [4183.0, 4182.0, 4184.0], symbol="MGCmain")
+    _write_market_view(output)
+    config = deepcopy(TEST_CONFIG)
+    config["market_data"] = {"symbol": "MGCmain", "timeframe": "1m", "provider": "tiger_openapi:COMEX"}
+
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
+    result = runner.pre_cycle("2026-07-05_DAY", as_of="2026-07-05T01:00:00+00:00")
+
+    assert runner.symbol == "MGCmain"
+    assert runner.timeframe == "1m"
+    assert result["status"] == "ai_plan_ready"
+
+
+def test_tiger_human_fill_sync_blocks_close_when_artifact_missing(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    config = _human_sync_config()
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
+
+    result = runner.close_cycle(cycle_id, as_of="2026-07-05T13:00:00+00:00")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "human_fill_sync_blocked"
+    assert result["human_fill_sync"]["status"] == "blocked"
+    assert result["human_fill_sync"]["reason"] == "order_sync_missing"
+    assert not (output / "dualtrack" / "attribution" / f"{cycle_id}.json").exists()
+    assert not (output / "dualtrack" / "fills" / f"{cycle_id}_machine.json").exists()
+
+
+def test_tiger_human_fill_sync_can_refresh_order_sync_before_import(tmp_path: Path, monkeypatch) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    config = _human_sync_config(refresh=True)
+    DualTrackPlanStore(output, config=config).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+
+    class _FakeOrderSync:
+        def __init__(self, output_root):
+            self.output_root = output_root
+
+        def run(self, run_date: str) -> dict:
+            _write_tiger_order_sync(Path(self.output_root), [_tiger_fill(order_id="T201")])
+            return {
+                "run_date": run_date,
+                "sync_status": "synced",
+                "filled_order_count": 1,
+                "open_order_count": 0,
+            }
+
+    monkeypatch.setattr(cycle_runner_module, "TigerOpenApiOrderSync", _FakeOrderSync)
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
+
+    result = runner.close_cycle(cycle_id, as_of="2026-07-05T13:00:00+00:00")
+
+    assert result["status"] == "closed"
+    assert result["human_fill_sync"]["refreshed_order_sync"] is True
+    assert result["human_fill_sync"]["order_sync_refresh"]["sync_status"] == "synced"
+    assert result["attribution"]["fills"]["human"][0]["external_order_id"] == "T201"
+
+
 def test_d8_5_orchestrated_intraday_machine_payload_stays_pnl_only(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
@@ -349,3 +599,58 @@ def test_dt8_empty_market_db_skip_paths_and_auto_are_safe(tmp_path: Path) -> Non
 
     assert auto["event"] == "auto"
     assert [row["status"] for row in auto["results"]] == ["skipped", "skipped", "skipped"]
+
+
+def test_comex_session_auto_skips_during_daily_break(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    runner = DualTrackCycleRunner(
+        output_root=output,
+        market_db=tmp_path / "market_data.db",
+        config=_comex_config(),
+    )
+
+    result = runner.auto(as_of="2026-07-06T21:30:00+00:00")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "market_closed"
+    assert result["market_session"]["reason"] == "daily_break"
+    assert result["market_session"]["next_open"] == "2026-07-06T22:00:00+00:00"
+    assert not (output / "dualtrack" / "fills").exists()
+
+
+def test_comex_session_intraday_skips_during_weekend_close(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_NIGHT"
+    DualTrackPlanStore(output, config=_comex_config()).save_human_plan(_plan(cycle_id), now="2026-07-05T12:59:00+00:00")
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=_comex_config())
+
+    result = runner.intraday_tick(cycle_id, as_of="2026-07-05T21:30:00+00:00")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "market_closed"
+    assert result["market_session"]["reason"] == "weekend_closed"
+    assert load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json") == []
+
+
+def test_comex_session_mask_filters_closed_break_bars_from_cycle_and_previous_range(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    store = MarketStore(db)
+    cycle_id = "2026-07-06_NIGHT"
+    rows = [
+        _bar(datetime(2026, 7, 6, 20, 59, tzinfo=timezone.utc), 4180.0, 4181.0),
+        _bar(datetime(2026, 7, 6, 21, 30, tzinfo=timezone.utc), 4181.0, 5000.0),
+        _bar(datetime(2026, 7, 6, 22, 0, tzinfo=timezone.utc), 4181.0, 4182.0),
+    ]
+    store.upsert_bars(rows)
+    runner = DualTrackCycleRunner(output_root=tmp_path / "outputs", market_db=db, config=_comex_config())
+
+    cycle_bars = runner._cycle_bars(cycle_id, as_of="2026-07-06T22:01:00+00:00")
+    previous_range = runner.previous_cycle_range("2026-07-07_DAY")
+
+    assert [bar.timestamp for bar in cycle_bars] == [
+        "2026-07-06T20:59:00+00:00",
+        "2026-07-06T22:00:00+00:00",
+    ]
+    assert previous_range == 2.0

@@ -65,6 +65,7 @@ class Strategy:
             "adr_exhaustion_reversion",
             "bollinger_reversion",
             "bollinger_reclaim_filter",
+            "vwap_zscore_reversion",
             "breakout",
             "fibonacci",
             "ema50_position",

@@ -6,6 +6,7 @@ from typing import Any, Iterable
 
 from schemas.market_data import Bar
 from services.config_loader import ROOT, load_pipeline_config
+from services.dualtrack_clock import cycle_window_from_id, parse_utc
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_store import DualTrackPlanStore
 from services.journal_store import load_json, write_json
@@ -31,6 +32,8 @@ class DualTrackScorer:
         realized_direction = _direction(open_price, close_price)
         machine_fills = load_json(self._fills_path(cycle_id, "machine"))
         human_fills = load_json(self._fills_path(cycle_id, "human"))
+        machine_trades = self._trade_rows(cycle_id, "machine", machine_fills)
+        human_trades = self._trade_rows(cycle_id, "human", human_fills)
         opportunities = census_opportunities(
             rows,
             reversal_bp=float(self.config["census"]["reversal_bp"]),
@@ -56,13 +59,26 @@ class DualTrackScorer:
             "human_captured": human_captured,
             "machine_realized_pnl": _pnl(machine_fills),
             "human_realized_pnl": _pnl(human_fills),
+            "pnl_delta_machine_minus_human": round(_pnl(machine_fills) - _pnl(human_fills), 8),
+            "machine_trade_count": len(machine_trades),
+            "human_trade_count": len(human_trades),
             "plan_grades": plan_grades,
         }
         _preserve_machine_state(cycle, existing_cycle)
         write_json(self.root / "cycles" / f"{cycle_id}.json", [cycle])
         daily = self._write_daily_ledger(cycle_id, machine_fills, human_fills)
         weekly = self._write_weekly_ledger(daily["date"])
-        attribution = self._attribution(cycle, machine_fills, human_fills, opportunities, scoreboard, daily, weekly)
+        attribution = self._attribution(
+            cycle,
+            machine_fills,
+            human_fills,
+            machine_trades,
+            human_trades,
+            opportunities,
+            scoreboard,
+            daily,
+            weekly,
+        )
         write_json(self.root / "attribution" / f"{cycle_id}.json", [attribution])
         return attribution
 
@@ -97,9 +113,17 @@ class DualTrackScorer:
         for author in ("human", "ai"):
             plan = self.store.load_plan(cycle_id, author)
             direction = str((plan or {}).get("direction") or "absent")
-            graded = direction in {"long", "short"} and realized_direction in {"long", "short"}
+            eligible = author != "human" or _is_clean_human_plan(cycle_id, plan, self.config)
+            graded = eligible and direction in {"long", "short"} and realized_direction in {"long", "short"}
             hit = bool(graded and direction == realized_direction)
-            grades[author] = {"cycle_id": cycle_id, "author": author, "direction": direction, "graded": graded, "hit": hit}
+            grades[author] = {
+                "cycle_id": cycle_id,
+                "author": author,
+                "direction": direction,
+                "graded": graded,
+                "hit": hit,
+                "eligible": eligible,
+            }
         return grades
 
     def _update_scoreboard(self, cycle_id: str, grades: dict[str, Any]) -> dict[str, Any]:
@@ -125,11 +149,17 @@ class DualTrackScorer:
         row = existing[-1] if existing else {"date": date, "cycles": {}}
         machine = _pnl(machine_fills)
         human = _pnl(human_fills)
-        row["cycles"][cycle_id] = {"machine": machine, "human": human, "total": round(machine + human, 8)}
+        row["cycles"][cycle_id] = {
+            "machine": machine,
+            "human": human,
+            "delta_machine_minus_human": round(machine - human, 8),
+            "total": round(machine + human, 8),
+        }
         row["tracks"] = {
             "machine": {"realized_pnl": round(sum(item["machine"] for item in row["cycles"].values()), 8)},
             "human": {"realized_pnl": round(sum(item["human"] for item in row["cycles"].values()), 8)},
         }
+        row["delta_machine_minus_human"] = round(row["tracks"]["machine"]["realized_pnl"] - row["tracks"]["human"]["realized_pnl"], 8)
         row["total_pnl"] = round(row["tracks"]["machine"]["realized_pnl"] + row["tracks"]["human"]["realized_pnl"], 8)
         write_json(path, [row])
         return row
@@ -151,6 +181,7 @@ class DualTrackScorer:
             "week": week,
             "days": daily_rows,
             "tracks": {"machine": {"realized_pnl": machine}, "human": {"realized_pnl": human}},
+            "delta_machine_minus_human": round(machine - human, 8),
             "total_pnl": round(machine + human, 8),
             "target_usd": list(self.config["weekly_target_usd"]),
         }
@@ -162,6 +193,8 @@ class DualTrackScorer:
         cycle: dict[str, Any],
         machine_fills: list[dict[str, Any]],
         human_fills: list[dict[str, Any]],
+        machine_trades: list[dict[str, Any]],
+        human_trades: list[dict[str, Any]],
         opportunities: list[dict[str, Any]],
         scoreboard: dict[str, Any],
         daily: dict[str, Any],
@@ -172,12 +205,16 @@ class DualTrackScorer:
             "status": "closed",
             "cycle": cycle,
             "tracks": {
-                "machine": _track_stats(machine_fills, captured=cycle["machine_captured"], opportunity_count=len(opportunities)),
-                "human": _track_stats(human_fills, captured=cycle["human_captured"], opportunity_count=len(opportunities)),
+                "machine": _track_stats(machine_fills, machine_trades, captured=cycle["machine_captured"], opportunity_count=len(opportunities)),
+                "human": _track_stats(human_fills, human_trades, captured=cycle["human_captured"], opportunity_count=len(opportunities)),
             },
             "fills": {
                 "machine": machine_fills,
                 "human": human_fills,
+            },
+            "trades": {
+                "machine": machine_trades,
+                "human": human_trades,
             },
             "opportunities": opportunities,
             "plan_grades": cycle["plan_grades"],
@@ -187,6 +224,18 @@ class DualTrackScorer:
 
     def _fills_path(self, cycle_id: str, track: str) -> Path:
         return self.root / "fills" / f"{cycle_id}_{track}.json"
+
+    def _trades_path(self, cycle_id: str, track: str) -> Path:
+        return self.root / "trades" / f"{cycle_id}_{track}.json"
+
+    def _trade_rows(self, cycle_id: str, track: str, fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        existing = load_json(self._trades_path(cycle_id, track))
+        if existing:
+            return existing
+        trades = _trades_from_fills(fills, track=track)
+        if trades:
+            write_json(self._trades_path(cycle_id, track), trades)
+        return trades
 
 
 def census_opportunities(bars: Iterable[Bar], *, reversal_bp: float, min_run_pct: float) -> list[dict[str, Any]]:
@@ -249,12 +298,14 @@ def _append_run(
         })
 
 
-def _track_stats(fills: list[dict[str, Any]], *, captured: int, opportunity_count: int) -> dict[str, Any]:
+def _track_stats(fills: list[dict[str, Any]], trades: list[dict[str, Any]], *, captured: int, opportunity_count: int) -> dict[str, Any]:
     pnl = _pnl(fills)
-    exits = [fill for fill in fills if float(fill.get("realized_pnl", 0.0)) != 0]
-    wins = [fill for fill in exits if float(fill.get("realized_pnl", 0.0)) > 0]
+    exits = [trade for trade in trades if trade.get("status") == "closed"]
+    wins = [trade for trade in exits if float(trade.get("realized_pnl", 0.0)) > 0]
     return {
         "fill_count": len(fills),
+        "trade_count": len(trades),
+        "closed_trade_count": len(exits),
         "win_rate": round(len(wins) / len(exits), 4) if exits else 0.0,
         "realized_pnl": pnl,
         "captured": captured,
@@ -279,6 +330,14 @@ def _score_rows(rows: list[dict[str, Any]], window: int) -> dict[str, Any]:
     }
 
 
+def _is_clean_human_plan(cycle_id: str, plan: dict[str, Any] | None, config: dict[str, Any]) -> bool:
+    if not plan or plan.get("status") != "locked" or not plan.get("locked_at"):
+        return False
+    deadline_min = int(config.get("plan_lock_deadline_min_before_cycle", 0))
+    window = cycle_window_from_id(cycle_id, lock_deadline_min_before_cycle=deadline_min)
+    return parse_utc(plan.get("locked_at")) <= window.lock_deadline
+
+
 def _existing_cycle(cycle_id: str, root: Path) -> dict[str, Any]:
     rows = load_json(root / "cycles" / f"{cycle_id}.json")
     return rows[-1] if rows else {}
@@ -300,6 +359,56 @@ def _direction(open_price: float, close_price: float) -> str:
 
 def _pnl(fills: list[dict[str, Any]]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
+
+
+def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[str, Any]]:
+    trades: dict[str, dict[str, Any]] = {}
+    for fill in fills:
+        event = str(fill.get("event") or "")
+        if event == "entry":
+            trade_id = str(fill.get("trade_id") or fill.get("fill_id") or "")
+            trades[trade_id] = {
+                "trade_id": trade_id,
+                "track": track,
+                "position_id": str(fill.get("position_id") or fill.get("layer") or ""),
+                "side": "long" if fill.get("side") == "buy" else "short",
+                "entry_fill_id": fill.get("fill_id", ""),
+                "entry_ts": fill.get("ts", ""),
+                "entry_price": fill.get("price"),
+                "units": fill.get("pnl_units", 0.0),
+                "remaining_units": fill.get("remaining_units", fill.get("pnl_units", 0.0)),
+                "entry_cost": fill.get("cost", 0.0),
+                "exit_fills": [],
+                "gross_pnl": 0.0,
+                "realized_pnl": round(float(fill.get("realized_pnl", 0.0) or 0.0), 8),
+                "status": fill.get("position_status", "open"),
+            }
+            continue
+        if event not in {"exit", "stop", "target", "flatten"}:
+            continue
+        matches = fill.get("matched_entries") or []
+        if not matches:
+            matches = [{"trade_id": str(fill.get("trade_id") or ""), "units": fill.get("pnl_units", 0.0), "gross_pnl": fill.get("gross_pnl", 0.0), "realized_pnl": fill.get("realized_pnl", 0.0)}]
+        for match in matches:
+            trade_id = str(match.get("trade_id") or fill.get("trade_id") or "")
+            trade = trades.get(trade_id)
+            if not trade:
+                continue
+            trade["exit_fills"].append({
+                "fill_id": fill.get("fill_id", ""),
+                "event": event,
+                "ts": fill.get("ts", ""),
+                "price": fill.get("price"),
+                "units": match.get("units"),
+                "realized_pnl": match.get("realized_pnl", fill.get("realized_pnl", 0.0)),
+            })
+            trade["gross_pnl"] = round(float(trade.get("gross_pnl", 0.0)) + float(match.get("gross_pnl", fill.get("gross_pnl", 0.0)) or 0.0), 8)
+            trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + float(match.get("realized_pnl", fill.get("realized_pnl", 0.0)) or 0.0), 8)
+            trade["remaining_units"] = 0.0
+            trade["exit_ts"] = fill.get("ts", "")
+            trade["exit_price"] = fill.get("price")
+            trade["status"] = "closed"
+    return list(trades.values())
 
 
 def _iso_week(date: str) -> str:

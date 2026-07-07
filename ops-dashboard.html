@@ -833,7 +833,16 @@ function opsRowLabelText(value) {
     risk: ['Risk', '风险'],
     improvement: ['Improvement', '改进'],
     'install status': ['Install status', '安装状态'],
+    'install plan': ['Install plan', '安装预检'],
+    'install apply': ['Install apply', '安装执行'],
+    'rollback plan': ['Rollback plan', '回退预检'],
+    'rollback apply': ['Rollback apply', '回退执行'],
+    'post-install verify': ['Post-install verify', '安装后验证'],
+    'takeover package': ['Takeover package', '接管授权包'],
+    'package check': ['Package check', '授权包检查'],
     'installed / loaded': ['Installed / loaded', '已安装/已加载'],
+    'current / active': ['Current / active', '当前版本/已激活'],
+    'stale installs': ['Stale installs', '旧版安装'],
     'launch agents': ['Launch agents', '启动代理'],
     'gold 5m total': ['GOLD 5m total', 'GOLD 5m 总行数'],
     'gold 5m non-seed': ['GOLD 5m non-seed', 'GOLD 5m 非种子行数'],
@@ -1164,7 +1173,7 @@ async function loadDashboard(full=false) {
   refreshPublicAccess();
   try {
     const api = await loadApiSnapshot(date, mode);
-    let bars, manifest, signals, backtests, tickets, orders, positions, decisions, pending, review, journal, latestQuote, riskState, riskBlocks, openTrades, closedTrades, paperExecutionBlocks, performance, paperPerformance, paperExitMonitor, paperExitDecisions, paperRiskActions, equityCurve, paperReconciliation, paperAttribution, dailyReview, operationRunbook, schedule, scheduleStatus, runner, botSupervisor, botCheckpoint, marketDb, dataProvenance, ohlcQuality, marketDataGate, strategyConfig, riskRules, brokerPreflight, dataSourcePreflight, dataSourceLineage, dataTrust, officialFeedReceipt, officialFeedOnboarding, brokerFeedDoctor, brokerFeed, brokerFeedSmoke, oandaFeed, oandaAccount, binanceFeed, tradingPlan, eveningReview, brokerReceipts, brokerReceiptSummary, mt5BridgeSmoke, liveOrderRequests, mockRuntime, mockUat, liveReadiness, liveEnv, liveActivation, liveApproval, liveSubmissionSafety, liveBrokerPreflight, liveDryRunDrill, liveSwitchPlan, liveCutover, strategyReview, strategySnapshot, learningLedger, strategyProposal, strategyLearningActions, strategyExperiments, strategyImprovementPlan, strategyPromotionGate, strategyGuardrails, riskMonitor, paperAutoGate, dataQuality, dataGaps, dataGapRepair, dataArchive, dataIntegrity, health, audit, doctor, alerts, collectorRuns, dataHealth, liveReconciliation;
+    let bars, manifest, signals, backtests, tickets, orders, positions, decisions, pending, review, journal, latestQuote, riskState, riskBlocks, openTrades, closedTrades, paperExecutionBlocks, performance, paperPerformance, paperExitMonitor, paperExitDecisions, paperRiskActions, equityCurve, paperReconciliation, paperAttribution, dailyReview, operationRunbook, schedule, scheduleStatus, scheduleInstallPlan, scheduleInstallReceipt, scheduleRollbackPlan, scheduleRollbackReceipt, schedulePostInstallVerify, scheduleTakeoverPackage, scheduleTakeoverPackageCheck, runner, botSupervisor, botCheckpoint, marketDb, dataProvenance, ohlcQuality, marketDataGate, strategyConfig, riskRules, brokerPreflight, dataSourcePreflight, dataSourceLineage, dataTrust, officialFeedReceipt, officialFeedOnboarding, brokerFeedDoctor, brokerFeed, brokerFeedSmoke, oandaFeed, oandaAccount, binanceFeed, tradingPlan, eveningReview, brokerReceipts, brokerReceiptSummary, mt5BridgeSmoke, liveOrderRequests, mockRuntime, mockUat, liveReadiness, liveEnv, liveActivation, liveApproval, liveSubmissionSafety, liveBrokerPreflight, liveDryRunDrill, liveSwitchPlan, liveCutover, strategyReview, strategySnapshot, learningLedger, strategyProposal, strategyLearningActions, strategyExperiments, strategyImprovementPlan, strategyPromotionGate, strategyGuardrails, riskMonitor, paperAutoGate, dataQuality, dataGaps, dataGapRepair, dataArchive, dataIntegrity, health, audit, doctor, alerts, collectorRuns, dataHealth, liveReconciliation;
     if (api) {
       ({ bars, manifest, signals, backtests, tickets, orders, positions, decisions, pending, review } = api);
       journal = api.journal || '';
@@ -1186,6 +1195,13 @@ async function loadDashboard(full=false) {
       operationRunbook = api.operation_runbook || {};
       schedule = api.schedule || {};
       scheduleStatus = api.schedule_status || {};
+      scheduleInstallPlan = api.schedule_install_plan || {};
+      scheduleInstallReceipt = api.schedule_install || {};
+      scheduleRollbackPlan = api.schedule_rollback_plan || {};
+      scheduleRollbackReceipt = api.schedule_rollback || {};
+      schedulePostInstallVerify = api.schedule_post_install_verify || {};
+      scheduleTakeoverPackage = api.schedule_takeover_package || {};
+      scheduleTakeoverPackageCheck = api.schedule_takeover_package_check || {};
       runner = api.runner || {};
       botSupervisor = api.bot_supervisor || {};
       botCheckpoint = api.bot_checkpoint || {};
@@ -1278,6 +1294,13 @@ async function loadDashboard(full=false) {
       operationRunbook = {};
       schedule = {};
       scheduleStatus = {};
+      scheduleInstallPlan = {};
+      scheduleInstallReceipt = {};
+      scheduleRollbackPlan = {};
+      scheduleRollbackReceipt = {};
+      schedulePostInstallVerify = {};
+      scheduleTakeoverPackage = {};
+      scheduleTakeoverPackageCheck = {};
       runner = {};
       botSupervisor = {};
       botCheckpoint = {};
@@ -1407,7 +1430,7 @@ async function loadDashboard(full=false) {
     renderBotRunner(runner);
     renderBotSupervisor(botSupervisor);
     renderBotCheckpoint(botCheckpoint);
-    renderSchedule(schedule, scheduleStatus);
+    renderSchedule(schedule, scheduleStatus, scheduleInstallPlan, scheduleInstallReceipt, scheduleRollbackPlan, scheduleRollbackReceipt, schedulePostInstallVerify, scheduleTakeoverPackage, scheduleTakeoverPackageCheck);
     renderCoverage(marketDb);
     renderDataArchive(dataArchive);
     renderDataIntegrity(dataIntegrity);
@@ -3337,16 +3360,56 @@ function renderBotCheckpoint(checkpoint) {
   $('bot-checkpoint').innerHTML = rows.join('');
 }
 
-function renderSchedule(schedule, scheduleStatus) {
+function renderSchedule(schedule, scheduleStatus, scheduleInstallPlan, scheduleInstallReceipt, scheduleRollbackPlan, scheduleRollbackReceipt, schedulePostInstallVerify, scheduleTakeoverPackage, scheduleTakeoverPackageCheck) {
   if (!schedule || !Object.keys(schedule).length) {
     $('schedule').innerHTML = '<div class="empty">No local schedule generated. Run python3 -m pipelines.schedule.</div>';
     return;
   }
   const statusCls = scheduleStatus?.status === 'active' ? 'buy' : (scheduleStatus?.status === 'installed' ? 'watch' : 'sell');
+  const planSummary = scheduleInstallPlan?.summary || {};
+  const planStatus = scheduleInstallPlan?.status || 'missing';
+  const planCls = planStatus === 'noop' ? 'buy' : (planStatus === 'ready' ? 'watch' : 'sell');
+  const installStatus = scheduleInstallReceipt?.status || 'missing';
+  const installGate = scheduleInstallReceipt?.package_gate || {};
+  const installGateBlocked = installStatus === 'blocked' && installGate?.ok === false && !!installGate?.blocker;
+  const installCls = installStatus === 'active' || installStatus === 'noop' ? 'buy' : (installGateBlocked ? 'watch' : (installStatus === 'blocked' ? 'sell' : 'watch'));
+  const installDetail = installGateBlocked
+    ? `gate ${installGate.blocker}${installGate.expected_package_id ? ` / expect ${String(installGate.expected_package_id).slice(0, 12)}` : ''}`
+    : (scheduleInstallReceipt?.blocker || `backups ${scheduleInstallReceipt?.backup_count ?? 0}`);
+  const rollbackSummary = scheduleRollbackPlan?.summary || {};
+  const rollbackPlanStatus = scheduleRollbackPlan?.status || 'missing';
+  const rollbackPlanCls = rollbackPlanStatus === 'ready' ? 'watch' : (rollbackPlanStatus === 'missing' ? 'watch' : 'sell');
+  const rollbackStatus = scheduleRollbackReceipt?.status || 'missing';
+  const rollbackCls = rollbackStatus === 'rolled_back' ? 'buy' : (rollbackStatus === 'blocked' ? 'sell' : 'watch');
+  const verifyStatus = schedulePostInstallVerify?.status || 'missing';
+  const verifyCls = verifyStatus === 'pass' ? 'buy' : (verifyStatus === 'missing' ? 'watch' : 'sell');
+  const verifyChecks = schedulePostInstallVerify?.checks || [];
+  const failedVerify = verifyChecks.filter(check => check.status !== 'pass').map(check => check.name).join(', ');
+  const takeoverStatus = scheduleTakeoverPackage?.status || 'missing';
+  const takeoverSummary = scheduleTakeoverPackage?.summary || {};
+  const takeoverPackageId = scheduleTakeoverPackage?.package_id || '';
+  const takeoverExpiresAt = scheduleTakeoverPackage?.expires_at || '';
+  const takeoverExpiresMs = takeoverExpiresAt ? Date.parse(takeoverExpiresAt) : NaN;
+  const takeoverExpired = Number.isFinite(takeoverExpiresMs) && takeoverExpiresMs < Date.now();
+  const takeoverCls = takeoverExpired ? 'sell' : (takeoverStatus === 'ready_for_attended_install' || takeoverStatus === 'already_current' ? 'buy' : (takeoverStatus === 'missing' ? 'watch' : 'sell'));
+  const takeoverExpiryText = takeoverExpiresAt ? (takeoverExpired ? 'expired' : `expires ${String(takeoverExpiresAt).replace('T', ' ').replace('+00:00', 'Z')}`) : '';
+  const takeoverDetail = `${takeoverPackageId ? `pkg ${takeoverPackageId.slice(0, 12)} / ` : ''}replace ${takeoverSummary.requires_reinstall_count ?? 0}${takeoverExpiryText ? ` / ${takeoverExpiryText}` : ''}`;
+  const packageCheckStatus = scheduleTakeoverPackageCheck?.status || 'missing';
+  const packageCheckNextAction = scheduleTakeoverPackageCheck?.operator_next_action?.action || scheduleTakeoverPackageCheck?.blocker || 'run check-current';
+  const packageCheckCls = packageCheckStatus === 'ready_for_attended_install' || packageCheckStatus === 'already_current' ? 'buy' : (packageCheckStatus === 'missing' ? 'watch' : 'sell');
   const rows = [
     row('status', schedule.status || 'unknown', schedule.generated_at || 'n/a', schedule.status === 'generated' ? 'buy' : 'watch'),
     row('install status', scheduleStatus?.status || 'unknown', scheduleStatus?.message || 'run schedule_status', statusCls),
+    row('takeover package', takeoverStatus, takeoverDetail, takeoverCls),
+    row('package check', packageCheckStatus, packageCheckNextAction, packageCheckCls),
+    row('post-install verify', verifyStatus, failedVerify || `${verifyChecks.length || 0} checks`, verifyCls),
+    row('install plan', planStatus, `replace ${planSummary.requires_reinstall_count ?? 0} / blocked ${planSummary.blocked_count ?? 0}`, planCls),
+    row('install apply', installStatus, installDetail, installCls),
+    row('rollback plan', rollbackPlanStatus, scheduleRollbackPlan?.blocker || `restore ${rollbackSummary.restorable_count ?? 0} / blocked ${rollbackSummary.blocked_count ?? 0}`, rollbackPlanCls),
+    row('rollback apply', rollbackStatus, scheduleRollbackReceipt?.blocker || `pre-backups ${scheduleRollbackReceipt?.pre_rollback_backup_count ?? 0}`, rollbackCls),
     row('installed / loaded', `${scheduleStatus?.installed_count ?? 0}/${scheduleStatus?.required_count ?? 3}`, `${scheduleStatus?.loaded_count ?? 0}/${scheduleStatus?.required_count ?? 3}`, statusCls),
+    row('current / active', `${scheduleStatus?.matching_generated_count ?? 0}/${scheduleStatus?.required_count ?? 3}`, `${scheduleStatus?.active_current_count ?? 0}/${scheduleStatus?.required_count ?? 3}`, statusCls),
+    row('stale installs', (scheduleStatus?.mismatched_jobs || []).length, (scheduleStatus?.mismatched_jobs || []).map(label => label.replace('com.wendy.trading-orchestrator.', '')).join(', ') || 'none', (scheduleStatus?.mismatched_jobs || []).length ? 'sell' : 'buy'),
     row('launch agents', (schedule.jobs || []).length, schedule.launch_agents_dir || '--', 'watch'),
   ];
   (schedule.jobs || []).forEach(job => rows.push(row(

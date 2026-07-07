@@ -8,13 +8,22 @@ from typing import Any, Sequence
 
 from schemas.market_data import Bar
 from services.config_loader import ROOT, load_pipeline_config
-from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc
+from services.dualtrack_clock import (
+    cycle_window,
+    cycle_window_from_id,
+    filter_bars_for_market_session,
+    market_session_enabled,
+    market_session_status,
+    parse_utc,
+)
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
+from services.dualtrack_tiger_human_sync import DualTrackTigerHumanSync
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
+from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
 
 
 class DualTrackCycleRunner:
@@ -30,16 +39,17 @@ class DualTrackCycleRunner:
         output_root: Path | None = None,
         market_db: Path | None = None,
         config: dict[str, Any] | None = None,
-        symbol: str = "GOLD",
-        timeframe: str = "1m",
+        symbol: str | None = None,
+        timeframe: str | None = None,
     ) -> None:
         pipeline_config = load_pipeline_config()
         self.output_root = Path(output_root) if output_root else ROOT / pipeline_config.get("output_root", "outputs")
         env_market_db = os.getenv("TRADING_ORCHESTRATOR_MARKET_DB")
         self.market_db = Path(market_db or env_market_db or ROOT / pipeline_config.get("local_market_db", "data/market_data.db"))
         self.config = config or dualtrack_config()
-        self.symbol = symbol
-        self.timeframe = timeframe
+        market_data = self.config.get("market_data") if isinstance(self.config.get("market_data"), dict) else {}
+        self.symbol = symbol or str(market_data.get("symbol") or "GOLD")
+        self.timeframe = timeframe or str(market_data.get("timeframe") or "1m")
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
         self.machine = DualTrackMachineRunner(self.output_root, config=self.config)
         self.scorer = DualTrackScorer(self.output_root, config=self.config)
@@ -51,6 +61,12 @@ class DualTrackCycleRunner:
             self.store.audit(cycle_id, "cycle_runner_pre_cycle_skipped", {"reason": "cycle_bars_missing"})
             return {"event": "pre_cycle", "cycle_id": cycle_id, "status": "skipped", "reason": "cycle_bars_missing"}
         prev_range = self.previous_cycle_range(cycle_id)
+        human_plan = self.store.ensure_human_plan_from_market_view(
+            cycle_id,
+            cycle_open=float(bars[0].open),
+            prev_cycle_range=prev_range,
+            now=as_of or cycle_window_from_id(cycle_id).start,
+        )
         plan = self.store.ensure_ai_plan(
             cycle_id,
             cycle_open=float(bars[0].open),
@@ -62,6 +78,7 @@ class DualTrackCycleRunner:
             "event": "pre_cycle",
             "cycle_id": cycle_id,
             "status": "ai_plan_ready" if plan else "fail_closed_no_ai_plan",
+            "human_plan_present": human_plan is not None,
             "ai_plan_present": plan is not None,
             "prev_range": prev_range,
             "bar_count": len(bars),
@@ -70,6 +87,16 @@ class DualTrackCycleRunner:
 
     def intraday_tick(self, cycle_id: str | None = None, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         window = cycle_window(as_of) if cycle_id is None else cycle_window_from_id(cycle_id)
+        session_status = self._market_session_status(as_of)
+        if self._market_session_enabled() and not session_status["is_open"]:
+            self.store.audit(window.cycle_id, "cycle_runner_intraday_skipped", {"reason": "market_closed", "market_session": session_status})
+            return {
+                "event": "intraday",
+                "cycle_id": window.cycle_id,
+                "status": "skipped",
+                "reason": "market_closed",
+                "market_session": session_status,
+            }
         bars = self._cycle_bars(window.cycle_id, as_of=as_of)
         if not bars:
             self.store.audit(window.cycle_id, "cycle_runner_intraday_skipped", {"reason": "cycle_bars_missing"})
@@ -94,6 +121,16 @@ class DualTrackCycleRunner:
         if not bars:
             self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": "cycle_bars_missing"})
             return {"event": "close", "cycle_id": cycle_id, "status": "skipped", "reason": "cycle_bars_missing"}
+        human_fill_sync = self._sync_human_fills_before_close(cycle_id, as_of=as_of or cycle_window_from_id(cycle_id).end)
+        if self._human_fill_sync_blocks_close(human_fill_sync):
+            self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": "human_fill_sync_blocked", "human_fill_sync": human_fill_sync})
+            return {
+                "event": "close",
+                "cycle_id": cycle_id,
+                "status": "skipped",
+                "reason": "human_fill_sync_blocked",
+                "human_fill_sync": human_fill_sync,
+            }
         prev_range = self.previous_cycle_range(cycle_id)
         trend_gate_armed = self._frozen_or_freeze_trend_gate(cycle_id, as_of=cycle_window_from_id(cycle_id).start)
         self.machine.run_effective_plan(
@@ -104,8 +141,14 @@ class DualTrackCycleRunner:
             trend_gate_armed=trend_gate_armed,
         )
         attribution = self.scorer.close_cycle(cycle_id, bars)
-        self._write_runner_state(cycle_id, "close", {"bar_count": len(bars), "prev_range": prev_range})
-        return {"event": "close", "cycle_id": cycle_id, "status": "closed", "attribution": attribution}
+        detail = {"bar_count": len(bars), "prev_range": prev_range}
+        if human_fill_sync is not None:
+            detail["human_fill_sync"] = self._human_fill_sync_summary(human_fill_sync)
+        self._write_runner_state(cycle_id, "close", detail)
+        payload = {"event": "close", "cycle_id": cycle_id, "status": "closed", "attribution": attribution}
+        if human_fill_sync is not None:
+            payload["human_fill_sync"] = human_fill_sync
+        return payload
 
     def fast_forward_day(self, date: str) -> dict[str, Any]:
         results = []
@@ -119,6 +162,18 @@ class DualTrackCycleRunner:
 
     def auto(self, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         now = parse_utc(as_of)
+        session_status = self._market_session_status(now)
+        if self._market_session_enabled() and not session_status["is_open"]:
+            current = cycle_window(now)
+            self._write_runner_state(current.cycle_id, "auto_skipped", {"reason": "market_closed", "market_session": session_status})
+            return {
+                "event": "auto",
+                "as_of": now.isoformat(),
+                "status": "skipped",
+                "reason": "market_closed",
+                "market_session": session_status,
+                "results": [],
+            }
         current = cycle_window(now)
         previous = cycle_window(current.start - timedelta(minutes=1))
         results = [self.close_cycle(previous.cycle_id, as_of=now)]
@@ -126,11 +181,61 @@ class DualTrackCycleRunner:
         results.append(self.intraday_tick(current.cycle_id, as_of=now))
         return {"event": "auto", "as_of": now.isoformat(), "results": results}
 
+    def sync_obsidian_human_plans(
+        self,
+        cycle_id: str | None = None,
+        *,
+        as_of: str | datetime | None = None,
+        include_next: bool = False,
+    ) -> dict[str, Any]:
+        now = parse_utc(as_of)
+        cycle_ids = [cycle_id] if cycle_id else [cycle_window(now).cycle_id]
+        if include_next and not cycle_id:
+            current = cycle_window(now)
+            next_cycle = cycle_window(current.end).cycle_id
+            if next_cycle not in cycle_ids:
+                cycle_ids.append(next_cycle)
+        results = [self.sync_obsidian_human_plan(item, as_of=now) for item in cycle_ids]
+        return {"event": "sync_obsidian_plan", "as_of": now.isoformat(), "results": results}
+
+    def sync_obsidian_human_plan(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
+        now = parse_utc(as_of)
+        reference_open = self._reference_open_for_plan(cycle_id, as_of=now)
+        if reference_open is None:
+            self.store.audit(cycle_id, "human_plan_import_skipped", {"reason": "reference_price_missing", "source": "obsidian"})
+            return {"cycle_id": cycle_id, "status": "skipped", "reason": "reference_price_missing"}
+        plan = self.store.ensure_human_plan_from_market_view(
+            cycle_id,
+            cycle_open=reference_open,
+            prev_cycle_range=self.previous_cycle_range(cycle_id),
+            now=now,
+        )
+        if not plan:
+            return {"cycle_id": cycle_id, "status": "skipped", "reason": "market_view_missing_or_not_directional"}
+        return {
+            "cycle_id": cycle_id,
+            "status": "synced",
+            "plan_status": plan.get("status"),
+            "direction": plan.get("direction"),
+            "source": plan.get("source"),
+        }
+
+    def live_tick(self, *, as_of: str | datetime | None = None) -> dict[str, Any]:
+        now = parse_utc(as_of)
+        return {
+            "event": "live_tick",
+            "as_of": now.isoformat(),
+            "sync": self.sync_obsidian_human_plans(as_of=now, include_next=True),
+            "intraday": self.intraday_tick(as_of=now),
+        }
+
     def previous_cycle_range(self, cycle_id: str) -> float:
         window = cycle_window_from_id(cycle_id)
         start = window.start - timedelta(hours=12)
         end = window.start - timedelta(seconds=1)
-        bars = self.market.load_bars_between(self.symbol, self.timeframe, start.isoformat(), end.isoformat())
+        bars = self._filter_market_session_bars(
+            self.market.load_bars_between(self.symbol, self.timeframe, start.isoformat(), end.isoformat())
+        )
         if not bars:
             return 0.0
         return round(max(float(bar.high) for bar in bars) - min(float(bar.low) for bar in bars), 8)
@@ -142,7 +247,21 @@ class DualTrackCycleRunner:
             end = window.end - timedelta(seconds=1)
         if end < window.start:
             return []
-        return self.market.load_bars_between(self.symbol, self.timeframe, window.start.isoformat(), end.isoformat())
+        return self._filter_market_session_bars(
+            self.market.load_bars_between(self.symbol, self.timeframe, window.start.isoformat(), end.isoformat())
+        )
+
+    def _reference_open_for_plan(self, cycle_id: str, *, as_of: str | datetime | None = None) -> float | None:
+        bars = self._cycle_bars(cycle_id, as_of=as_of)
+        if bars:
+            return float(bars[0].open)
+        latest = self.market.load_latest_bar(self.symbol, self.timeframe)
+        if latest:
+            return float(latest["close"])
+        quote = self.market.load_latest_quote(self.symbol)
+        if quote:
+            return float(quote["close"])
+        return None
 
     def _write_runner_state(self, cycle_id: str, event: str, detail: dict[str, Any]) -> None:
         path = self.output_root / "dualtrack" / "runner" / f"{cycle_id}.json"
@@ -183,17 +302,90 @@ class DualTrackCycleRunner:
         gate = board.get("trend_leg_gate") if isinstance(board.get("trend_leg_gate"), dict) else {}
         return bool(gate.get("armed", False))
 
+    def _market_session_enabled(self) -> bool:
+        return market_session_enabled(self.config)
+
+    def _market_session_status(self, as_of: str | datetime | None) -> dict[str, Any]:
+        return market_session_status(as_of, config=self.config)
+
+    def _filter_market_session_bars(self, bars: list[Bar]) -> list[Bar]:
+        return filter_bars_for_market_session(bars, self.config)
+
+    def _sync_human_fills_before_close(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any] | None:
+        settings = self._human_fill_sync_settings()
+        if not bool(settings.get("enabled", False)) or not bool(settings.get("run_before_close", True)):
+            return None
+        provider = str(settings.get("provider") or "").lower()
+        if provider not in {"tiger_openapi", "tiger"}:
+            report = {
+                "status": "blocked",
+                "reason": "unsupported_human_fill_sync_provider",
+                "provider": provider,
+                "cycle_id": cycle_id,
+                "refreshed_order_sync": False,
+            }
+            self._write_human_fill_sync_runner_report(cycle_id, report)
+            return report
+        run_date = cycle_id.split("_", 1)[0]
+        refresh_report = None
+        if bool(settings.get("refresh_order_sync_before_import", False)):
+            refresh_report = TigerOpenApiOrderSync(self.output_root).run(run_date)
+        import_report = DualTrackTigerHumanSync(self.output_root, config=self.config).run(run_date)
+        report = {
+            **import_report,
+            "cycle_id": cycle_id,
+            "refreshed_order_sync": refresh_report is not None,
+            "order_sync_refresh": self._human_fill_sync_summary(refresh_report) if refresh_report else None,
+        }
+        self._write_human_fill_sync_runner_report(cycle_id, report)
+        return report
+
+    def _human_fill_sync_blocks_close(self, report: dict[str, Any] | None) -> bool:
+        if report is None:
+            return False
+        if not bool(self._human_fill_sync_settings().get("require_success_before_close", True)):
+            return False
+        return str(report.get("status") or "") not in {"synced", "partial"}
+
+    def _human_fill_sync_settings(self) -> dict[str, Any]:
+        settings = self.config.get("human_fill_sync")
+        return settings if isinstance(settings, dict) else {}
+
+    def _write_human_fill_sync_runner_report(self, cycle_id: str, report: dict[str, Any]) -> None:
+        self._write_runner_state(cycle_id, "human_fill_sync", self._human_fill_sync_summary(report))
+
+    def _human_fill_sync_summary(self, report: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(report, dict):
+            return {}
+        keys = (
+            "status",
+            "reason",
+            "sync_status",
+            "provider",
+            "target",
+            "source_sync_status",
+            "source_filled_order_count",
+            "filled_order_count",
+            "open_order_count",
+            "imported_count",
+            "duplicate_count",
+            "skipped_count",
+            "refreshed_order_sync",
+        )
+        return {key: report.get(key) for key in keys if key in report}
+
 
 def build_parser() -> argparse.ArgumentParser:  # pragma: no cover - thin CLI wrapper
     parser = argparse.ArgumentParser(description="Run the dual-track cycle orchestrator.")
-    parser.add_argument("--event", choices=("auto", "pre-cycle", "intraday", "close", "fast-forward-day"), default="auto")
+    parser.add_argument("--event", choices=("auto", "pre-cycle", "intraday", "close", "fast-forward-day", "sync-obsidian-plan", "live-tick"), default="auto")
     parser.add_argument("--cycle-id", default="")
     parser.add_argument("--date", default="")
     parser.add_argument("--as-of", default="")
     parser.add_argument("--market-db", default="")
     parser.add_argument("--output-root", default="")
-    parser.add_argument("--symbol", default="GOLD")
-    parser.add_argument("--timeframe", default="1m")
+    parser.add_argument("--symbol", default=None)
+    parser.add_argument("--timeframe", default=None)
+    parser.add_argument("--include-next", action="store_true")
     return parser
 
 
@@ -208,6 +400,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin C
     as_of = args.as_of or None
     if args.event == "auto":
         payload = runner.auto(as_of=as_of)
+    elif args.event == "live-tick":
+        payload = runner.live_tick(as_of=as_of)
+    elif args.event == "sync-obsidian-plan":
+        payload = runner.sync_obsidian_human_plans(
+            args.cycle_id or None,
+            as_of=as_of,
+            include_next=bool(args.include_next),
+        )
     elif args.event == "fast-forward-day":
         if not args.date:
             raise SystemExit("--date is required for fast-forward-day")

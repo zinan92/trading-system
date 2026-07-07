@@ -5,6 +5,23 @@
     "day_start": 1,
     "night_start": 13
   },
+  "market_data": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "provider": ""
+  },
+  "market_session": {
+    "enabled": false,
+    "venue": "",
+    "timezone": "UTC"
+  },
+  "human_fill_sync": {
+    "enabled": false,
+    "provider": "",
+    "run_before_close": true,
+    "refresh_order_sync_before_import": false,
+    "require_success_before_close": true
+  },
   "plan_lock_deadline_min_before_cycle": 0,
   "grid": {
     "spacing_bp": 20,

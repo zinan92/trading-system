@@ -154,6 +154,41 @@ def test_dashboard_state_aggregates_outputs_and_risk(tmp_path: Path):
     write_json(root / "doctor" / "current.json", [{"status": "warn", "summary": {"paper_ready": True, "live_ready": False}, "next_actions": ["import official feed"]}])
     write_json(root / "schedules" / "current.json", [{"status": "generated", "jobs": [{"label": "com.wendy.trading-orchestrator.runner"}]}])
     write_json(root / "schedules" / "status_current.json", [{"status": "generated_only", "installed_count": 0, "loaded_count": 0, "required_count": 3}])
+    write_json(root / "schedules" / "install_plan_current.json", [{
+        "status": "ready",
+        "summary": {"requires_reinstall_count": 3, "blocked_count": 0},
+        "safety": {"dry_run": True, "writes_launch_agents": False, "runs_launchctl_modification": False},
+    }])
+    write_json(root / "schedules" / "install_current.json", [{
+        "status": "blocked",
+        "blocker": "missing_acknowledgement",
+        "safety": {"writes_launch_agents": False, "runs_launchctl_modification": False},
+    }])
+    write_json(root / "schedules" / "rollback_plan_current.json", [{
+        "status": "blocked",
+        "blocker": "missing_backup_records",
+        "summary": {"restorable_count": 0, "blocked_count": 0},
+    }])
+    write_json(root / "schedules" / "rollback_current.json", [{
+        "status": "blocked",
+        "blocker": "missing_acknowledgement",
+        "safety": {"writes_launch_agents": False, "runs_launchctl_modification": False},
+    }])
+    write_json(root / "schedules" / "post_install_verify_current.json", [{
+        "status": "blocked",
+        "checks": [{"name": "schedule_current_active", "status": "fail"}],
+    }])
+    write_json(root / "schedules" / "takeover_package_current.json", [{
+        "status": "ready_for_attended_install",
+        "package_id": "pkg123456789",
+        "expires_at": "2026-05-13T12:15:00+00:00",
+        "summary": {"requires_reinstall_count": 3},
+    }])
+    write_json(root / "schedules" / "takeover_package_check_current.json", [{
+        "status": "ready_for_attended_install",
+        "usable_for_attended_install": True,
+        "operator_next_action": {"action": "authorize_attended_install"},
+    }])
     (root / "runner_status").mkdir(parents=True, exist_ok=True)
     (root / "runner_status" / "current.json").write_text('{"state": "ok", "run_date": "2026-05-13"}\n', encoding="utf-8")
     MarketStore(tmp_path / "market.db").upsert_quote(Bar("GOLD", "5m", "2026-05-13T00:05:00+00:00", 4580, 4580, 4580, 4580, 0, "gold-api.com", ["live_quote"]))
@@ -249,6 +284,13 @@ def test_dashboard_state_aggregates_outputs_and_risk(tmp_path: Path):
     assert state["doctor"]["status"] == "warn"
     assert state["schedule"]["status"] == "generated"
     assert state["schedule_status"]["status"] == "generated_only"
+    assert state["schedule_install_plan"]["status"] == "ready"
+    assert state["schedule_install"]["blocker"] == "missing_acknowledgement"
+    assert state["schedule_rollback_plan"]["blocker"] == "missing_backup_records"
+    assert state["schedule_rollback"]["status"] == "blocked"
+    assert state["schedule_post_install_verify"]["status"] == "blocked"
+    assert state["schedule_takeover_package"]["status"] == "ready_for_attended_install"
+    assert state["schedule_takeover_package_check"]["operator_next_action"]["action"] == "authorize_attended_install"
     assert "performance_board" in state
     assert "strategy_detail" in state
     assert "dashboard_health" in state

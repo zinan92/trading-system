@@ -11,6 +11,23 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
     "capital_per_track_usd": 10_000,
     "max_leverage": 10,
     "cycle_hours_utc": {"day_start": 1, "night_start": 13},
+    "market_data": {
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "provider": "",
+    },
+    "market_session": {
+        "enabled": False,
+        "venue": "",
+        "timezone": "UTC",
+    },
+    "human_fill_sync": {
+        "enabled": False,
+        "provider": "",
+        "run_before_close": True,
+        "refresh_order_sync_before_import": False,
+        "require_success_before_close": True,
+    },
     "plan_lock_deadline_min_before_cycle": 0,
     "grid": {
         "spacing_bp": 20.0,

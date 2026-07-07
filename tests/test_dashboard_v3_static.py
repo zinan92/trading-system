@@ -1662,6 +1662,41 @@ def test_ops_dashboard_links_back_to_trader_console():
     assert "opsRowLabelText(left)" in html
     assert "opsRowValueText(mid)" in html
     assert "opsRowValueText(right)" in html
+    assert "'install plan': ['Install plan', '安装预检']" in html
+    assert "'install apply': ['Install apply', '安装执行']" in html
+    assert "'rollback plan': ['Rollback plan', '回退预检']" in html
+    assert "'rollback apply': ['Rollback apply', '回退执行']" in html
+    assert "'post-install verify': ['Post-install verify', '安装后验证']" in html
+    assert "'takeover package': ['Takeover package', '接管授权包']" in html
+    assert "'package check': ['Package check', '授权包检查']" in html
+    assert "'current / active': ['Current / active', '当前版本/已激活']" in html
+    assert "'stale installs': ['Stale installs', '旧版安装']" in html
+    assert "scheduleInstallPlan = api.schedule_install_plan || {}" in html
+    assert "scheduleInstallReceipt = api.schedule_install || {}" in html
+    assert "scheduleRollbackPlan = api.schedule_rollback_plan || {}" in html
+    assert "scheduleRollbackReceipt = api.schedule_rollback || {}" in html
+    assert "schedulePostInstallVerify = api.schedule_post_install_verify || {}" in html
+    assert "scheduleTakeoverPackage = api.schedule_takeover_package || {}" in html
+    assert "scheduleTakeoverPackageCheck = api.schedule_takeover_package_check || {}" in html
+    assert "renderSchedule(schedule, scheduleStatus, scheduleInstallPlan, scheduleInstallReceipt, scheduleRollbackPlan, scheduleRollbackReceipt, schedulePostInstallVerify, scheduleTakeoverPackage, scheduleTakeoverPackageCheck)" in html
+    assert "scheduleInstallPlan?.summary" in html
+    assert "scheduleInstallReceipt?.blocker" in html
+    assert "scheduleInstallReceipt?.package_gate" in html
+    assert "installGateBlocked" in html
+    assert "gate ${installGate.blocker}" in html
+    assert "scheduleRollbackPlan?.summary" in html
+    assert "scheduleRollbackReceipt?.blocker" in html
+    assert "schedulePostInstallVerify?.checks" in html
+    assert "scheduleTakeoverPackage?.summary" in html
+    assert "scheduleTakeoverPackage?.package_id" in html
+    assert "scheduleTakeoverPackage?.expires_at" in html
+    assert "takeoverExpired" in html
+    assert "takeoverExpiryText" in html
+    assert "scheduleTakeoverPackageCheck?.operator_next_action?.action" in html
+    assert "packageCheckNextAction" in html
+    assert "scheduleStatus?.matching_generated_count" in html
+    assert "scheduleStatus?.active_current_count" in html
+    assert "scheduleStatus?.mismatched_jobs" in html
     assert "document.title = opsText('GoldBot OPS Console', '黄金运维控制台')" in html
     assert "function parseOpsBilingualPair" in html
     assert "function renderOpsSectionHeadings" in html

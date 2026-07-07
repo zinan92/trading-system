@@ -359,6 +359,47 @@
       "session_end_utc": 20
     }
   },
+  "gold_1m_vwap_zscore_reversion": {
+    "symbol": "GOLD",
+    "timeframe": "1m",
+    "engine": "vwap_zscore_reversion",
+    "enabled": true,
+    "live": false,
+    "starting_equity": 10000,
+    "classification": {
+      "family": "statistical_mean_reversion",
+      "family_label": "统计均值回归",
+      "style": "vwap_zscore_reversion",
+      "style_label": "VWAP + Z-score 回收",
+      "directionality": "long_short",
+      "frequency_bucket": "low_to_medium",
+      "role": "shadow_bollinger_quality_filter_candidate",
+      "holding_period": "scalp_to_intraday",
+      "expected_trades_per_day_min": 1,
+      "expected_trades_per_day_max": 3,
+      "return_profile": "statistical_reversion_fewer_trades_higher_quality",
+      "risk_profile": "medium"
+    },
+    "experiment_role": "shadow_candidate",
+    "signal": {
+      "min_bars": 96,
+      "zscore_lookback_bars": 24,
+      "vwap_lookback_bars": 72,
+      "atr_lookback_bars": 14,
+      "min_atr_pct": 0.015,
+      "max_atr_pct": 0.22,
+      "adx_lookback_bars": 14,
+      "max_adx": 26,
+      "min_abs_zscore": 2.0,
+      "min_remaining_zscore": 0.35,
+      "min_vwap_gap_pct": 0.04,
+      "min_reclaim_pct": 0.01,
+      "min_volume_ratio": 0.65,
+      "max_volume_ratio": 1.8,
+      "session_start_utc": 7,
+      "session_end_utc": 20
+    }
+  },
   "gold_1m_breakout": {
     "symbol": "GOLD",
     "timeframe": "1m",

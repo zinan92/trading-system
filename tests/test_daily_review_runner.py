@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from services.daily_review_runner import DailyReviewRunner
+from services.bias_ledger import BiasLedger
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
 from schemas.market_data import Bar
@@ -38,6 +39,15 @@ def test_daily_review_runner_writes_receipt_and_review_artifacts(tmp_path: Path)
     write_json(root / "broker_receipts" / "summary_current.json", [{"errors": [], "total_receipts": 0}])
     write_json(root / "mt5_bridge_smoke" / "current.json", [{"status": "pass", "order": {"order_id": "o1"}}])
     write_json(root / "broker_receipts" / "current.json", [{"order_id": "o1", "status": "filled"}])
+    BiasLedger(root, db_path).append_open_view(
+        {
+            "run_date": run_date,
+            "generated_at": "2026-05-26T00:00:00+00:00",
+            "direction_score": 65,
+            "reference_price": 4510,
+            "expiry": {"expires_at": "2099-05-26T12:00:00+00:00", "valid_for_hours": 12},
+        }
+    )
     (root / "runner_status").mkdir(parents=True, exist_ok=True)
     (root / "runner_status" / "current.json").write_text(f'{{"run_date": "{run_date}", "state": "ok", "interval_seconds": 300, "finished_at": "{datetime.now(timezone.utc).replace(microsecond=0).isoformat()}"}}\n', encoding="utf-8")
 

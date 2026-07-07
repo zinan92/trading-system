@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
@@ -29,6 +32,18 @@ TEST_CONFIG = {
     "census": {"reversal_bp": 10, "min_run_pct": 0.3},
     "weekly_target_usd": [1000, 1500],
 }
+
+
+def _mgc_config() -> dict:
+    config = deepcopy(TEST_CONFIG)
+    config["grid"] = {**config["grid"], "spacing_bp": 6.0, "max_rungs": 2}
+    config["execution_cost_model"] = {
+        "venue": "tiger_mgc",
+        "quantity_mode": "integer_contracts",
+        "contract_multiplier": 10,
+        "contracts_per_rung": 1,
+    }
+    return config
 
 
 def _bar(ts: datetime, o: float, h: float, low: float, c: float) -> Bar:
@@ -205,6 +220,83 @@ def test_lab_stop_none_path_still_uses_range_k_prev_range_geometry() -> None:
         3928.0,
         3920.0,
     ]
+
+
+def test_machine_runner_tiger_mgc_mode_uses_integer_contracts_and_fixed_side_cost(tmp_path: Path) -> None:
+    config = _mgc_config()
+    runner = DualTrackMachineRunner(tmp_path / "outputs", config=config)
+    cycle = _cycle("2026-07-05_DAY", [4183.0, 4180.0, 4183.2], prev_range=20.0)
+
+    state = runner.run_plan(
+        cycle.cycle_id,
+        _plan(cycle.cycle_id, floor=4160.0),
+        cycle.bars,
+        prev_range=cycle.prev_range,
+        trend_gate_armed=False,
+    )
+    fills = json.loads(
+        (tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle.cycle_id}_machine.json").read_text(encoding="utf-8")
+    )
+    account = json.loads(
+        (tmp_path / "outputs" / "dualtrack" / "accounts" / f"{cycle.cycle_id}_machine.json").read_text(encoding="utf-8")
+    )[0]
+    entry = next(fill for fill in fills if fill["event"] == "entry")
+    target = next(fill for fill in fills if fill["event"] == "target")
+
+    assert entry["contracts"] == 1
+    assert entry["quantity"] == 1
+    assert entry["notional"] == pytest.approx(entry["price"] * 10)
+    assert entry["cost"] == pytest.approx(2.7)
+    assert entry["realized_pnl"] == pytest.approx(-2.7)
+    assert target["contracts"] == 1
+    assert target["cost"] == pytest.approx(2.7)
+    assert target["notional"] == pytest.approx(target["price"] * 10)
+    assert target["realized_pnl"] == pytest.approx(((target["price"] - entry["price"]) * 10) - 2.7)
+    assert fills[0]["cost_model"]["venue"] == "tiger_mgc"
+    assert account["cost_model"]["venue"] == "tiger_mgc"
+    assert state["machine_realized_pnl"] == pytest.approx(sum(fill["realized_pnl"] for fill in fills))
+
+
+def test_ai_bracket_plan_enters_and_exits_at_take_profit(tmp_path: Path) -> None:
+    runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
+    cycle = _cycle("2026-07-05_DAY", [4000.0, 3998.0, 4012.0], prev_range=40.0)
+    plan = {
+        **_plan(cycle.cycle_id),
+        "bracket": {"entry": 3998.0, "take_profit": 4010.0, "stop_loss": 3990.0},
+    }
+
+    state = runner.run_plan(cycle.cycle_id, plan, cycle.bars, prev_range=cycle.prev_range, trend_gate_armed=False)
+    fills = json.loads((tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle.cycle_id}_machine.json").read_text())
+
+    assert state["layers"] == ["bracket:target"]
+    assert [fill["event"] for fill in fills] == ["entry", "target"]
+    assert fills[1]["gross_pnl"] == pytest.approx((4010.0 - 3998.0) * (1000.0 / 3998.0))
+    assert state["machine_realized_pnl"] == pytest.approx(sum(fill["realized_pnl"] for fill in fills))
+
+
+def test_ai_bracket_plan_stops_or_flattens_inside_cycle_window(tmp_path: Path) -> None:
+    runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
+    stop_cycle = _cycle("2026-07-05_DAY", [4000.0, 3998.0, 3988.0], prev_range=40.0)
+    stop_plan = {
+        **_plan(stop_cycle.cycle_id),
+        "bracket": {"entry": 3998.0, "take_profit": 4010.0, "stop_loss": 3990.0, "notional": 1000.0},
+    }
+    flatten_cycle = _cycle("2026-07-05_NIGHT", [4000.0, 3998.0, 4002.0], prev_range=40.0)
+    flatten_plan = {
+        **_plan(flatten_cycle.cycle_id),
+        "bracket": {"entry": 3998.0, "take_profit": 4010.0, "stop_loss": 3990.0, "notional": 1000.0},
+    }
+
+    stop_state = runner.run_plan(stop_cycle.cycle_id, stop_plan, stop_cycle.bars, prev_range=stop_cycle.prev_range, trend_gate_armed=False)
+    flatten_state = runner.run_plan(flatten_cycle.cycle_id, flatten_plan, flatten_cycle.bars, prev_range=flatten_cycle.prev_range, trend_gate_armed=False)
+    stop_fills = json.loads((tmp_path / "outputs" / "dualtrack" / "fills" / f"{stop_cycle.cycle_id}_machine.json").read_text())
+    flatten_fills = json.loads((tmp_path / "outputs" / "dualtrack" / "fills" / f"{flatten_cycle.cycle_id}_machine.json").read_text())
+
+    assert stop_state["layers"] == ["bracket:stop"]
+    assert stop_state["stop_hit"] is True
+    assert stop_fills[-1]["event"] == "stop"
+    assert flatten_state["layers"] == ["bracket:flatten"]
+    assert flatten_fills[-1]["event"] == "flatten"
 
 
 def test_invariant_3_no_effective_plan_fail_closed_machine_stands_down(tmp_path: Path) -> None:

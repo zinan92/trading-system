@@ -194,8 +194,8 @@ tr:last-child td{border-bottom:none}
       <div class="q-body">
         <div class="q-row"><span class="k">方向</span>
           <span class="seg"><span class="on">做多</span><span>做空</span><span>观望</span></span></div>
-        <div class="q-row"><span class="k">RANGE</span>
-          <span class="inp"><span class="box">4,150.0</span><span class="dim">—</span><span class="box">4,220.0</span></span></div>
+        <div class="q-row"><span class="k">FLOOR / UPSIDE</span>
+          <span class="inp"><span class="box">4,150.0 · 失效 floor</span><span class="dim">—</span><span class="box" style="color:var(--faint);border-style:dashed">上方开放 open upside</span></span></div>
         <div class="q-row"><span class="k">关键位 · 可多个</span>
           <span class="inp"><span class="box">4,168</span><span class="box">4,180</span><span class="box">4,200</span><span class="box">4,212</span><span class="box" style="min-width:0;color:var(--faint);border-style:dashed">＋ 添加</span></span></div>
         <div class="q-row"><span class="k">失效条件 · 结构化</span>
@@ -227,7 +227,7 @@ tr:last-child td{border-bottom:none}
       <div class="hd"><span class="tdot human"></span>你的作战单 · 08:47 已锁定 <span class="live-badge">生效中 · 驱动机器轨</span></div>
       <div class="row">
         <span class="kv"><span class="lab">方向</span><b>做多</b></span>
-        <span class="kv"><span class="lab">RANGE</span><b>4,150 – 4,220</b></span>
+        <span class="kv"><span class="lab">FLOOR / UPSIDE</span><b>4,150 – open</b></span>
         <span class="kv"><span class="lab">关键位</span><b>4,168 / 4,180 / 4,200 / 4,212</b></span>
         <span class="kv"><span class="lab">失效</span><b class="neg">1m收盘 &lt; 4,150</b></span>
         <span class="kv"><span class="lab">信心</span><b>7/10</b></span>
@@ -237,11 +237,11 @@ tr:last-child td{border-bottom:none}
       <div class="hd"><span class="tdot ai"></span>AI 作战单 · 已揭示（对照，不生效）</div>
       <div class="row">
         <span class="kv"><span class="lab">方向</span><b>做多</b></span>
-        <span class="kv"><span class="lab">RANGE</span><b>4,155 – 4,215</b></span>
+        <span class="kv"><span class="lab">FLOOR / UPSIDE</span><b>4,155 – open</b></span>
         <span class="kv"><span class="lab">关键位</span><b>4,178 / 4,204</b></span>
         <span class="kv"><span class="lab">失效</span><b class="neg">1m收盘 &lt; 4,155</b></span>
       </div>
-      <div class="diff">分歧：方向一致 · 你的 Range 上下各宽 5 美元</div>
+      <div class="diff">分歧：方向一致 · 你的 floor 更低 5 美元；关键位只做结构标记，不是上限</div>
     </div>
     <div class="scoreboard">
       <div style="font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:6px">方向记分板 · 近 30 日</div>
@@ -265,7 +265,7 @@ tr:last-child td{border-bottom:none}
         <rect x="0" y="41" width="980" height="298" fill="rgba(122,162,255,.05)"/>
         <line x1="0" y1="41" x2="980" y2="41" stroke="rgba(122,162,255,.4)" stroke-dasharray="6 5" stroke-width="1"/>
         <line x1="0" y1="339" x2="980" y2="339" stroke="rgba(255,107,107,.55)" stroke-dasharray="6 5" stroke-width="1.2"/>
-        <text x="8" y="37" fill="#7aa2ff" font-size="10">RANGE 上沿 4,220</text>
+        <text x="8" y="37" fill="#7aa2ff" font-size="10">关键位 4,220（结构标记，不封顶）</text>
         <text x="8" y="353" fill="#ff6b6b" font-size="10">失效 / 止损 4,150 · 破位机器轨全平 · 人轨止损同位</text>
         <!-- key levels -->
         <line x1="0" y1="211" x2="980" y2="211" stroke="rgba(255,255,255,.14)" stroke-dasharray="2 5"/>

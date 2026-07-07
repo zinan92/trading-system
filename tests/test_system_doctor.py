@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from services.bias_ledger import BiasLedger
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
 from services.system_doctor import SystemDoctor
@@ -50,6 +51,15 @@ def test_system_doctor_reports_warn_and_next_action_without_official_feed(tmp_pa
     (root / "runner_status").mkdir(parents=True, exist_ok=True)
     (root / "runner_status" / "current.json").write_text('{"state": "ok"}\n', encoding="utf-8")
     write_json(root / "oanda_feed" / "current.json", [{"status": "skipped", "ready": False, "imported_rows": 0, "missing_env": ["OANDA_API_TOKEN", "OANDA_ACCOUNT_ID"]}])
+    BiasLedger(root, db_path).append_open_view(
+        {
+            "run_date": run_date,
+            "generated_at": "2026-05-26T00:00:00+00:00",
+            "direction_score": 65,
+            "reference_price": 4570,
+            "expiry": {"expires_at": "2099-05-26T12:00:00+00:00", "valid_for_hours": 12},
+        }
+    )
 
     result = SystemDoctor(root).run(run_date)
 

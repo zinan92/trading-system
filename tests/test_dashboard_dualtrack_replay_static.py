@@ -63,6 +63,14 @@ def test_dualtrack_replay_page_uses_closed_attribution_only() -> None:
 
     assert "<title>双轨同步回放 - Trading Orchestrator</title>" in html
     assert "D6-1 CLOSED CYCLES ONLY" in html
+    assert "data/vendor/lightweight-charts.standalone.production.js" in html
+    assert "packages/standard-kline/standard-kline.js" in html
+    assert "StandardKline.StandardKlineChart" in html
+    assert "window.dualtrackReplayKlines" in html
+    assert "function buildTrackFillPriceLines(fills, color)" in html
+    assert "function buildTrackFillMarkers(fills, candles, track, color)" in html
+    assert '<svg id="humanChart"' not in html
+    assert '<svg id="machineChart"' not in html
     assert 'api(`/api/dualtrack/attribution/${encodeURIComponent(state.cycleId)}`)' in html
     assert 'api("/api/dualtrack/market/bars?limit=720")' in html
     assert "/api/dualtrack/machine" not in html

@@ -2,6 +2,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from services.completion_audit import CompletionAudit
+from services.bias_ledger import BiasLedger
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
 from schemas.market_data import Bar
@@ -43,6 +44,15 @@ def test_completion_audit_surfaces_paper_ready_with_live_broker_warning(tmp_path
     write_json(root / "strategy_snapshots" / f"{run_date}.json", [{"config_hash": "abc123def456"}])
     write_json(root / "learning_ledger" / f"{run_date}.json", [{"learning_state": "collect_more_paper_trades"}])
     write_json(root / "strategy_change_proposals" / f"{run_date}.json", [{"status": "hold_parameters"}])
+    BiasLedger(root, db_path).append_open_view(
+        {
+            "run_date": run_date,
+            "generated_at": "2026-05-25T00:00:00+00:00",
+            "direction_score": 65,
+            "reference_price": 4570,
+            "expiry": {"expires_at": "2099-05-25T12:00:00+00:00", "valid_for_hours": 12},
+        }
+    )
     write_json(root / "strategy_guardrails" / f"{run_date}.json", [{"status": "warn", "allow_new_paper_order": True, "summary": {"warnings": 1}}])
     write_json(root / "risk_monitor" / f"{run_date}.json", [{"status": "warn", "kill_switch_active": False, "allow_paper_auto_approve": True}])
     write_json(root / "live_switch_plan" / f"{run_date}.json", [{"status": "blocked"}])
@@ -69,6 +79,9 @@ def test_completion_audit_surfaces_paper_ready_with_live_broker_warning(tmp_path
                     {"label": "com.wendy.trading-orchestrator.daily-review"},
                     {"label": "com.wendy.trading-orchestrator.dashboard"},
                     {"label": "com.wendy.trading-orchestrator.strategies"},
+                    {"label": "com.wendy.trading-orchestrator.dualtrack-cycle"},
+                    {"label": "com.wendy.trading-orchestrator.dualtrack-live-tick"},
+                    {"label": "com.wendy.trading-orchestrator.deadman-ping"},
                 ],
             }
         ],
@@ -92,6 +105,7 @@ def test_completion_audit_surfaces_paper_ready_with_live_broker_warning(tmp_path
     assert statuses["paper_trade_attribution"] == "pass"
     assert statuses["risk_monitor"] == "pass"
     assert statuses["journal_and_review"] == "pass"
+    assert statuses["human_bias_ledger"] == "pass"
     assert statuses["strategy_guardrails"] == "pass"
     assert statuses["schedule_artifacts"] == "warn"
     journal_evidence = next(item for item in result["requirements"] if item["name"] == "journal_and_review")["evidence"]

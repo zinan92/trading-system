@@ -7,7 +7,7 @@ import re
 import subprocess
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
@@ -17,14 +17,19 @@ from services.run_date import utc_run_date
 
 from services.code_reload import CodeReloadGuard
 from services.config_loader import ROOT, load_pipeline_config
+from services.connector_activation_plan import ConnectorActivationPlan
+from services.connector_config_apply import ConnectorConfigApply
+from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
-from services.dualtrack_clock import cycle_window, seconds_until_end
+from services.dualtrack_clock import cycle_window, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
+from services.connector_catalog import ConnectorCatalog
+from services.journal_store import load_json
 from services.market_view_intake import MarketViewIntake
 from services.replay_state import ReplayState
 from services.tiger_venue_status import TigerVenueStatus
@@ -40,6 +45,43 @@ _PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v4.html"
 _LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v4.html"
 _CLOUDFLARED_LOG = Path("/Users/wendy/work/选题工作台/launchd-tunnel.log")
 _DUALTRACK_POST_ENDPOINTS = {"/api/dualtrack/plan", "/api/dualtrack/orders", "/api/dualtrack/verdict"}
+_CONNECTOR_PRICE_FEED_REFRESH_RUNBOOK_ENDPOINT_SAFETY = {
+    "read_only": True,
+    "generates_runbook": False,
+    "opens_network_clients": False,
+    "opens_quote_client": False,
+    "opens_trade_client": False,
+    "submits_orders": False,
+    "writes_runtime_config": False,
+    "credential_values_exposed": False,
+    "raw_command_text_exposed": False,
+}
+_CONNECTOR_ATTENDED_SWITCH_REVIEW_ENDPOINT_SAFETY = {
+    "read_only": True,
+    "generates_authorization": False,
+    "runs_config_apply": False,
+    "opens_network_clients": False,
+    "opens_quote_client": False,
+    "opens_trade_client": False,
+    "submits_orders": False,
+    "writes_runtime_config": False,
+    "credential_values_exposed": False,
+    "raw_acknowledgement_exposed": False,
+    "attended_apply_command_exposed": False,
+}
+_TIGER_PAPER_ORDER_REFRESH_RUNBOOK_ENDPOINT_SAFETY = {
+    "read_only": True,
+    "generates_runbook": False,
+    "opens_network_clients": False,
+    "opens_quote_client": False,
+    "opens_trade_client": False,
+    "submits_orders": False,
+    "cancels_orders": False,
+    "closes_positions": False,
+    "writes_runtime_config": False,
+    "credential_values_exposed": False,
+    "raw_command_text_exposed": False,
+}
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -111,8 +153,26 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/dualtrack/market/bars":
             self._handle_dualtrack_market_bars_get(parsed.query)
             return
+        if parsed.path == "/api/dualtrack/runtime/status":
+            self._handle_dualtrack_runtime_status_get(parsed.query)
+            return
         if parsed.path == "/api/dualtrack/venue/tiger":
             self._handle_dualtrack_tiger_venue_get()
+            return
+        if parsed.path == "/api/dualtrack/venue/tiger/paper-order-refresh-runbook":
+            self._handle_tiger_paper_order_refresh_runbook_get()
+            return
+        if parsed.path == "/api/connectors/catalog":
+            self._handle_connector_catalog_get()
+            return
+        if parsed.path == "/api/connectors/config/status":
+            self._handle_connector_config_status_get()
+            return
+        if parsed.path == "/api/connectors/config/attended-switch-review":
+            self._handle_connector_attended_switch_review_get()
+            return
+        if parsed.path == "/api/connectors/config/price-feed-refresh-runbook":
+            self._handle_connector_price_feed_refresh_runbook_get()
             return
         super().do_GET()
 
@@ -120,6 +180,18 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/market-view/intake":
             self._handle_market_view_intake_api()
+            return
+        if parsed.path == "/api/connectors/onboarding/dry-run":
+            self._handle_connector_onboarding_dry_run()
+            return
+        if parsed.path == "/api/connectors/activation/plan":
+            self._handle_connector_activation_plan()
+            return
+        if parsed.path == "/api/connectors/config/apply":
+            self._handle_connector_config_apply()
+            return
+        if parsed.path == "/api/connectors/config/rollback":
+            self._handle_connector_config_rollback()
             return
         if parsed.path in _DUALTRACK_POST_ENDPOINTS:
             self._handle_dualtrack_post(parsed.path)
@@ -193,6 +265,53 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def _handle_dualtrack_tiger_venue_get(self) -> None:
         self._write_json(200, build_dualtrack_tiger_venue_response())
+
+    def _handle_tiger_paper_order_refresh_runbook_get(self) -> None:
+        self._write_json(200, build_tiger_paper_order_refresh_runbook_response())
+
+    def _handle_dualtrack_runtime_status_get(self, query: str) -> None:
+        params = parse_qs(query)
+        self._write_json(200, build_dualtrack_runtime_status_response(as_of=(params.get("as_of") or [None])[0]))
+
+    def _handle_connector_catalog_get(self) -> None:
+        self._write_json(200, build_connector_catalog_response())
+
+    def _handle_connector_config_status_get(self) -> None:
+        self._write_json(200, build_connector_config_status_response())
+
+    def _handle_connector_attended_switch_review_get(self) -> None:
+        self._write_json(200, build_connector_attended_switch_review_response())
+
+    def _handle_connector_price_feed_refresh_runbook_get(self) -> None:
+        self._write_json(200, build_connector_price_feed_refresh_runbook_response())
+
+    def _handle_connector_onboarding_dry_run(self) -> None:
+        try:
+            payload = self._read_json_body(max_bytes=32_000)
+            self._write_json(200, build_connector_onboarding_dry_run_response(payload))
+        except ValueError as exc:
+            self._write_error(400, "invalid_connector_onboarding_dry_run", str(exc))
+
+    def _handle_connector_activation_plan(self) -> None:
+        try:
+            payload = self._read_json_body(max_bytes=32_000)
+            self._write_json(200, build_connector_activation_plan_response(payload))
+        except ValueError as exc:
+            self._write_error(400, "invalid_connector_activation_plan", str(exc))
+
+    def _handle_connector_config_apply(self) -> None:
+        try:
+            payload = self._read_json_body(max_bytes=256_000)
+            self._write_json(200, build_connector_config_apply_response(payload))
+        except ValueError as exc:
+            self._write_error(400, "invalid_connector_config_apply", str(exc))
+
+    def _handle_connector_config_rollback(self) -> None:
+        try:
+            payload = self._read_json_body(max_bytes=128_000)
+            self._write_json(200, build_connector_config_rollback_response(payload))
+        except ValueError as exc:
+            self._write_error(400, "invalid_connector_config_rollback", str(exc))
 
     def _handle_dualtrack_post(self, path: str) -> None:
         try:
@@ -557,8 +676,375 @@ def build_dualtrack_market_bars_response(
     )
 
 
+def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, as_of: str | None = None) -> dict:
+    cfg = dualtrack_config()
+    deadline = int(cfg.get("plan_lock_deadline_min_before_cycle", 0))
+    now = parse_utc(as_of)
+    window = cycle_window(now, lock_deadline_min_before_cycle=deadline)
+    output = Path(output_root) if output_root else ROOT / load_pipeline_config().get("output_root", "outputs")
+    store = DualTrackPlanStore(output, config=cfg)
+    machine = DualTrackMachineRunner(output, config=cfg).machine_payload(window.cycle_id, as_of=now)
+    market = DualTrackMarketFeed().snapshot(limit=5, as_of=now.isoformat())
+    runner_rows = _json_rows(output / "dualtrack" / "runner" / f"{window.cycle_id}.json")
+    latest_runner = runner_rows[-1] if runner_rows else {}
+    runner_ts = latest_runner.get("ts")
+    runner_age = _age_seconds(runner_ts, now) if runner_ts else None
+    runner_max_age = 600
+    runner_ok = runner_age is not None and runner_age <= runner_max_age
+    cycle_rows = _json_rows(output / "dualtrack" / "cycles" / f"{window.cycle_id}.json")
+    cycle_state = cycle_rows[-1] if cycle_rows else {}
+    attribution_rows = _json_rows(output / "dualtrack" / "attribution" / f"{window.cycle_id}.json")
+    ledger_rows = _json_rows(output / "dualtrack" / "ledger" / "daily" / f"{window.cycle_id.split('_', 1)[0]}.json")
+    human_fills = _json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_human.json")
+    machine_fills = _json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_machine.json")
+    previous_window = cycle_window(window.start - timedelta(seconds=1), lock_deadline_min_before_cycle=deadline)
+    previous_attribution_rows = _json_rows(output / "dualtrack" / "attribution" / f"{previous_window.cycle_id}.json")
+    previous_ledger_rows = _json_rows(output / "dualtrack" / "ledger" / "daily" / f"{previous_window.cycle_id.split('_', 1)[0]}.json")
+    previous_human_fills = _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_human.json")
+    previous_machine_fills = _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_machine.json")
+    effective = store.effective_plan(window.cycle_id, as_of=now)
+    reveal_allowed = store.reveal_allowed(window.cycle_id, as_of=now)
+    closed = now >= window.end
+    market_ok = bool(market.get("fresh")) and market.get("source_mode") != "synthetic_fallback"
+    stood_down = bool(cycle_state.get("machine_stood_down", effective is None))
+    sample_ok = bool(effective) and market_ok and runner_ok and not stood_down
+    checks = [
+        _runtime_check("market", market_ok, "行情新鲜", "行情过期或展示种子", {
+            "source_mode": market.get("source_mode"),
+            "provider": market.get("provider"),
+            "latest_timestamp": market.get("latest_timestamp"),
+            "age_minutes": market.get("age_minutes"),
+        }),
+        _runtime_check("runner", runner_ok, "live tick 正常", "live tick 心跳过期或缺失", {
+            "latest_ts": runner_ts,
+            "age_seconds": runner_age,
+            "max_age_seconds": runner_max_age,
+            "event": latest_runner.get("event"),
+        }),
+        _runtime_check("effective_plan", bool(effective), "有效作战单存在", "无有效作战单，机器轨应站下", {
+            "author": (effective or {}).get("effective_author") if reveal_allowed else "",
+            "reveal_allowed": reveal_allowed,
+        }),
+        _runtime_check("machine", not stood_down, "机器轨未站下", "机器轨站下", {
+            "layers": list(machine.get("layers") or cycle_state.get("layers") or []),
+        }),
+    ]
+    if closed:
+        checks.append(_runtime_check("close", bool(attribution_rows), "收盘归因已生成", "收盘归因缺失", {
+            "attribution_available": bool(attribution_rows),
+            "ledger_available": bool(ledger_rows),
+        }))
+    status = "blocked" if any(item["status"] == "blocked" for item in checks) else "warn" if not closed else "ok"
+    next_tick_due_at = None
+    if runner_ts:
+        next_tick_due_at = (parse_utc(runner_ts) + timedelta(seconds=300)).isoformat()
+    return {
+        "schema_version": "dualtrack-runtime-status-v1",
+        "status": status,
+        "checked_at": now.isoformat(),
+        "cycle_id": window.cycle_id,
+        "closed": closed,
+        "checks": checks,
+        "market": {
+            "status": market.get("status"),
+            "source_mode": market.get("source_mode"),
+            "symbol": market.get("symbol"),
+            "timeframe": market.get("timeframe"),
+            "provider": market.get("provider"),
+            "fresh": bool(market.get("fresh")),
+            "latest_timestamp": market.get("latest_timestamp"),
+            "age_minutes": market.get("age_minutes"),
+        },
+        "runner": {
+            "latest_ts": runner_ts,
+            "event": latest_runner.get("event", ""),
+            "age_seconds": runner_age,
+            "max_age_seconds": runner_max_age,
+            "next_tick_due_at": next_tick_due_at,
+            "bar_count": (latest_runner.get("detail") or {}).get("bar_count"),
+        },
+        "sample": {
+            "valid_now": sample_ok,
+            "has_effective_plan": effective is not None,
+            "effective_author": (effective or {}).get("effective_author") if reveal_allowed else "",
+            "machine_stood_down": stood_down,
+            "machine_pnl": round(float(machine.get("realized_pnl", 0.0)) + float(machine.get("unrealized_pnl", 0.0)), 8),
+            "human_fill_count": len(human_fills),
+            "machine_fill_count": len(machine_fills) if closed else None,
+            "machine_fills_hidden": not closed,
+        },
+        "closeout": {
+            "attribution_available": bool(attribution_rows),
+            "ledger_available": bool(ledger_rows),
+            "replay_url": f"dashboard-dualtrack-replay.html?layout=dualtrack&cycle={window.cycle_id}",
+        },
+        "previous_closeout": {
+            "cycle_id": previous_window.cycle_id,
+            "attribution_available": bool(previous_attribution_rows),
+            "ledger_available": bool(previous_ledger_rows),
+            "replay_url": f"dashboard-dualtrack-replay.html?layout=dualtrack&cycle={previous_window.cycle_id}",
+            "human_fill_count": len(previous_human_fills),
+            "machine_fill_count": len(previous_machine_fills),
+            "machine_fills_hidden": False,
+        },
+    }
+
+
 def build_dualtrack_tiger_venue_response(*, output_root: Path | None = None) -> dict:
     return TigerVenueStatus(output_root).snapshot()
+
+
+def build_tiger_paper_order_refresh_runbook_response(*, output_root: Path | None = None) -> dict:
+    config = load_pipeline_config()
+    root = Path(output_root) if output_root else ROOT / str(config.get("output_root", "outputs"))
+    path = root / "tiger_paper_order_readiness" / "refresh_runbook_current.json"
+    rows = load_json(path)
+    venue = build_dualtrack_tiger_venue_response(output_root=root)
+    summary = venue.get("paper_order_refresh_runbook", {}) if isinstance(venue.get("paper_order_refresh_runbook"), dict) else {}
+    if not rows or not isinstance(rows[-1], dict):
+        return {
+            "schema_version": "tiger-paper-order-refresh-runbook-api-v1",
+            "status": "missing",
+            "served_from": str(path),
+            "command_steps": [],
+            "command_count": 0,
+            "matches_current_readiness": False,
+            "redaction": {
+                "raw_command_text_exposed": False,
+                "credential_values_exposed": False,
+            },
+            "endpoint_safety": dict(_TIGER_PAPER_ORDER_REFRESH_RUNBOOK_ENDPOINT_SAFETY),
+        }
+    receipt = rows[-1]
+    generation = receipt.get("generation_safety", {}) if isinstance(receipt.get("generation_safety"), dict) else {}
+    sequence = receipt.get("command_sequence_safety", {}) if isinstance(receipt.get("command_sequence_safety"), dict) else {}
+    steps = []
+    for row in (receipt.get("command_sequence") or []):
+        if not isinstance(row, dict):
+            continue
+        steps.append(
+            {
+                "name": str(row.get("name") or ""),
+                "label": str(row.get("label") or ""),
+                "opens_trade_client": row.get("opens_trade_client") is True,
+                "opens_trade_client_mode": str(row.get("opens_trade_client_mode") or ""),
+                "submits_orders": row.get("submits_orders") is True,
+                "writes_runtime_config": row.get("writes_runtime_config") is True,
+            }
+        )
+    return {
+        "schema_version": "tiger-paper-order-refresh-runbook-api-v1",
+        "status": str(receipt.get("status") or "missing"),
+        "served_from": str(path),
+        "runbook_id": str(receipt.get("runbook_id") or ""),
+        "checked_at": str(receipt.get("checked_at") or ""),
+        "run_date": str(receipt.get("run_date") or ""),
+        "readiness_status": str(receipt.get("readiness_status") or ""),
+        "readiness_checked_at": str(receipt.get("readiness_checked_at") or ""),
+        "matches_current_readiness": summary.get("matches_current_readiness") is True,
+        "source_readiness_checked_at": str(summary.get("source_readiness_checked_at") or ""),
+        "current_readiness_checked_at": str(summary.get("current_readiness_checked_at") or ""),
+        "blocker_count": int(receipt.get("blocker_count") or 0),
+        "stale_evidence_count": int(receipt.get("stale_evidence_count") or 0),
+        "blocker_names": [str(name) for name in (receipt.get("blocker_names") or []) if name],
+        "command_count": len(steps),
+        "command_steps": steps,
+        "generation_safety": {
+            "artifact_only": generation.get("artifact_only") is True,
+            "opens_quote_client": generation.get("opens_quote_client") is True,
+            "opens_trade_client": generation.get("opens_trade_client") is True,
+            "submits_orders": generation.get("submits_orders") is True,
+            "cancels_orders": generation.get("cancels_orders") is True,
+            "closes_positions": generation.get("closes_positions") is True,
+            "writes_runtime_config": generation.get("writes_runtime_config") is True,
+            "credential_values_exposed": generation.get("credential_values_exposed") is True,
+        },
+        "command_sequence_safety": {
+            "opens_trade_client_read_only": sequence.get("opens_trade_client_read_only") is True,
+            "submits_orders": sequence.get("submits_orders") is True,
+            "writes_runtime_config": sequence.get("writes_runtime_config") is True,
+        },
+        "redaction": {
+            "raw_command_text_exposed": False,
+            "credential_values_exposed": False,
+        },
+        "endpoint_safety": dict(_TIGER_PAPER_ORDER_REFRESH_RUNBOOK_ENDPOINT_SAFETY),
+    }
+
+
+def build_connector_catalog_response() -> dict:
+    return ConnectorCatalog().snapshot()
+
+
+def build_connector_onboarding_dry_run_response(payload: dict, *, output_root: Path | None = None) -> dict:
+    return ConnectorOnboardingDryRun(output_root=output_root).evaluate(payload)
+
+
+def build_connector_activation_plan_response(payload: dict, *, output_root: Path | None = None) -> dict:
+    return ConnectorActivationPlan(output_root=output_root).evaluate(payload)
+
+
+def build_connector_config_status_response(*, output_root: Path | None = None) -> dict:
+    return ConnectorConfigApply(output_root=output_root).status()
+
+
+def build_connector_attended_switch_review_response(*, output_root: Path | None = None) -> dict:
+    status = build_connector_config_status_response(output_root=output_root)
+    stage = status.get("operator_stage", {}) if isinstance(status.get("operator_stage"), dict) else {}
+    review = stage.get("attended_switch_review", {}) if isinstance(stage.get("attended_switch_review"), dict) else {}
+    latest_check = status.get("latest_check", {}) if isinstance(status.get("latest_check"), dict) else {}
+    latest_authorization = status.get("latest_authorization", {}) if isinstance(status.get("latest_authorization"), dict) else {}
+    latest_audit = status.get("latest_readiness_audit", {}) if isinstance(status.get("latest_readiness_audit"), dict) else {}
+    current_runtime = status.get("current_runtime", {}) if isinstance(status.get("current_runtime"), dict) else {}
+    return {
+        "schema_version": "connector-attended-switch-review-api-v1",
+        "status": str(review.get("status") or "missing"),
+        "checked_at": str(status.get("checked_at") or ""),
+        "operator_stage": str(stage.get("stage") or ""),
+        "stage_summary": str(stage.get("summary") or ""),
+        "next_action": str(stage.get("next_action") or ""),
+        "package_id": str(review.get("package_id") or latest_audit.get("package_id") or latest_authorization.get("package_id") or latest_check.get("package_id") or ""),
+        "authorization_id": str(review.get("authorization_id") or latest_authorization.get("authorization_id") or ""),
+        "audit_id": str(review.get("audit_id") or latest_audit.get("audit_id") or ""),
+        "can_switch_config_with_operator_authorization": review.get("can_switch_config_with_operator_authorization") is True,
+        "runtime_switched_to_tiger_mgc": stage.get("runtime_switched_to_tiger_mgc") is True,
+        "current_broker_provider": str(current_runtime.get("broker_provider") or ""),
+        "current_dualtrack_symbol": str(current_runtime.get("dualtrack_symbol") or ""),
+        "can_trade_machine_track": stage.get("can_trade_machine_track") is True,
+        "can_submit_tiger_orders": stage.get("can_submit_tiger_orders") is True,
+        "requires_operator_command": review.get("requires_operator_command") is True,
+        "requires_warning_acceptance": review.get("requires_warning_acceptance") is True,
+        "requires_acknowledgement": review.get("requires_acknowledgement") is True,
+        "requires_package_id": review.get("requires_package_id") is True,
+        "rollback_required": review.get("rollback_required") is True,
+        "post_apply_validation_count": int(review.get("post_apply_validation_count") or 0),
+        "current_runtime": {
+            "broker_provider": str(current_runtime.get("broker_provider") or ""),
+            "dualtrack_symbol": str(current_runtime.get("dualtrack_symbol") or ""),
+            "runtime_switched_to_tiger_mgc": stage.get("runtime_switched_to_tiger_mgc") is True,
+        },
+        "after_switch_gates": {
+            "can_trade_machine_track": review.get("can_trade_machine_track_after_switch") is True,
+            "can_submit_tiger_orders": review.get("can_submit_tiger_orders_after_switch") is True,
+            "not_authorized": list(review.get("not_authorized_after_switch") or []),
+        },
+        "evidence": {
+            "write_check_status": str(latest_check.get("status") or "missing"),
+            "authorization_status": str(latest_authorization.get("status") or "missing"),
+            "final_readiness_audit_status": str(latest_audit.get("status") or "missing"),
+            "final_readiness_audit_checked_at": str(latest_audit.get("checked_at") or ""),
+            "authorization_markdown": str(review.get("authorization_markdown") or ""),
+            "final_readiness_audit_markdown": str(review.get("final_readiness_audit_markdown") or ""),
+        },
+        "redaction": {
+            "raw_acknowledgement_exposed": False,
+            "attended_apply_command_exposed": False,
+            "credential_values_exposed": False,
+        },
+        "endpoint_safety": dict(_CONNECTOR_ATTENDED_SWITCH_REVIEW_ENDPOINT_SAFETY),
+    }
+
+
+def build_connector_price_feed_refresh_runbook_response(*, output_root: Path | None = None) -> dict:
+    config = load_pipeline_config()
+    root = Path(output_root) if output_root else ROOT / str(config.get("output_root", "outputs"))
+    path = root / "connector_config_apply" / "price_feed_refresh_runbook_current.json"
+    rows = load_json(path)
+    if rows and isinstance(rows[-1], dict):
+        receipt = dict(rows[-1])
+        receipt.setdefault("served_from", str(path))
+        receipt["command_sequence"] = _redacted_runbook_steps(receipt.get("command_sequence"))
+        receipt["status_receipt"] = _redacted_connector_status_snapshot(receipt.get("status_receipt"))
+        receipt["redaction"] = {
+            "raw_command_text_exposed": False,
+            "credential_values_exposed": False,
+        }
+        receipt["endpoint_safety"] = dict(_CONNECTOR_PRICE_FEED_REFRESH_RUNBOOK_ENDPOINT_SAFETY)
+        return receipt
+    return {
+        "schema_version": "connector-price-feed-refresh-runbook-v1",
+        "status": "missing",
+        "served_from": str(path),
+        "command_sequence": [],
+        "safety": {
+            "read_only": True,
+            "opens_network_clients": False,
+            "opens_quote_client": False,
+            "opens_trade_client": False,
+            "submits_orders": False,
+            "writes_runtime_config": False,
+            "credential_values_exposed": False,
+        },
+        "endpoint_safety": dict(_CONNECTOR_PRICE_FEED_REFRESH_RUNBOOK_ENDPOINT_SAFETY),
+    }
+
+
+def _redacted_runbook_steps(rows: object) -> list[dict]:
+    steps = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        steps.append(
+            {
+                "name": str(row.get("name") or ""),
+                "purpose": str(row.get("purpose") or ""),
+                "opens_quote_client": row.get("opens_quote_client") is True,
+                "opens_trade_client": row.get("opens_trade_client") is True,
+                "submits_orders": row.get("submits_orders") is True,
+                "writes_runtime_config": row.get("writes_runtime_config") is True,
+                "writes_market_db": row.get("writes_market_db") is True,
+                "writes_plan_artifact": row.get("writes_plan_artifact") is True,
+            }
+        )
+    return steps
+
+
+def _redacted_connector_status_snapshot(status: object) -> dict:
+    if not isinstance(status, dict):
+        return {}
+    operator_stage = status.get("operator_stage", {}) if isinstance(status.get("operator_stage"), dict) else {}
+    return {
+        "schema_version": str(status.get("schema_version") or ""),
+        "checked_at": str(status.get("checked_at") or ""),
+        "status": str(status.get("status") or ""),
+        "operator_stage": {
+            "stage": str(operator_stage.get("stage") or ""),
+            "next_action": str(operator_stage.get("next_action") or ""),
+            "runtime_switched_to_tiger_mgc": operator_stage.get("runtime_switched_to_tiger_mgc") is True,
+            "price_feed_ready": operator_stage.get("price_feed_ready") is True,
+            "can_switch_config_with_operator_authorization": operator_stage.get("can_switch_config_with_operator_authorization") is True,
+            "can_trade_machine_track": operator_stage.get("can_trade_machine_track") is True,
+            "can_submit_tiger_orders": operator_stage.get("can_submit_tiger_orders") is True,
+        },
+    }
+
+
+def build_connector_config_apply_response(
+    payload: dict,
+    *,
+    output_root: Path | None = None,
+    pipeline_config_path: Path | None = None,
+    dualtrack_config_path: Path | None = None,
+) -> dict:
+    return ConnectorConfigApply(
+        output_root=output_root,
+        pipeline_config_path=pipeline_config_path,
+        dualtrack_config_path=dualtrack_config_path,
+    ).apply(payload)
+
+
+def build_connector_config_rollback_response(
+    payload: dict,
+    *,
+    output_root: Path | None = None,
+    pipeline_config_path: Path | None = None,
+    dualtrack_config_path: Path | None = None,
+) -> dict:
+    return ConnectorConfigApply(
+        output_root=output_root,
+        pipeline_config_path=pipeline_config_path,
+        dualtrack_config_path=dualtrack_config_path,
+    ).rollback(payload)
 
 
 def build_dualtrack_verdict_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
@@ -664,6 +1150,13 @@ def build_ops_status_contract(payload: dict, *, strategy_id: str = "") -> dict:
             "bot_checkpoint": payload.get("bot_checkpoint", {}),
             "schedule": payload.get("schedule", {}),
             "schedule_status": payload.get("schedule_status", {}),
+            "schedule_install_plan": payload.get("schedule_install_plan", {}),
+            "schedule_install": payload.get("schedule_install", {}),
+            "schedule_rollback_plan": payload.get("schedule_rollback_plan", {}),
+            "schedule_rollback": payload.get("schedule_rollback", {}),
+            "schedule_post_install_verify": payload.get("schedule_post_install_verify", {}),
+            "schedule_takeover_package": payload.get("schedule_takeover_package", {}),
+            "schedule_takeover_package_check": payload.get("schedule_takeover_package_check", {}),
         },
         "data": {
             "market_data_gate": payload.get("market_data_gate", {}),
@@ -1401,6 +1894,13 @@ def compact_ops_payload(payload: dict) -> dict:
         "operation_runbook",
         "schedule",
         "schedule_status",
+        "schedule_install_plan",
+        "schedule_install",
+        "schedule_rollback_plan",
+        "schedule_rollback",
+        "schedule_post_install_verify",
+        "schedule_takeover_package",
+        "schedule_takeover_package_check",
         "runner",
         "system_vitals",
         "bot_supervisor",
@@ -2262,6 +2762,29 @@ def _compact_exit_decision(decision: dict) -> dict:
         "generated_at",
     )
     return {key: decision.get(key) for key in keep if key in decision}
+
+
+def _json_rows(path: Path) -> list[dict]:
+    try:
+        if not path.exists():
+            return []
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _age_seconds(ts: str, now) -> int:
+    return max(0, int((now - parse_utc(ts)).total_seconds()))
+
+
+def _runtime_check(name: str, ok: bool, ok_message: str, blocked_message: str, evidence: dict) -> dict:
+    return {
+        "name": name,
+        "status": "ok" if ok else "blocked",
+        "message": ok_message if ok else blocked_message,
+        "evidence": evidence,
+    }
 
 
 def main() -> None:

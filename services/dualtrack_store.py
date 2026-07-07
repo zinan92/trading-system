@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ INVALIDATION_SIDES = {"below", "above"}
 INVALIDATION_SIDE_ALIASES = {"跌破": "below", "升破": "above"}
 INVALIDATION_CONFIRMS = {"close_1m", "touch"}
 INVALIDATION_CONFIRM_ALIASES = {"1m收盘": "close_1m", "1m 收盘": "close_1m", "触及": "touch"}
+_NUMBER_PATTERN = re.compile(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?")
 
 
 class DualTrackPlanStore:
@@ -70,9 +72,11 @@ class DualTrackPlanStore:
         if not view:
             self.audit(cycle_id, "ai_plan_absent", {"reason": "market_view_missing"})
             return None
-        plan = self._ai_plan_from_market_view(
+        plan = self._plan_from_market_view(
             cycle_id,
             view,
+            author="ai",
+            status="fallback_active",
             cycle_open=float(cycle_open),
             prev_cycle_range=float(prev_cycle_range),
             now=now,
@@ -81,6 +85,49 @@ class DualTrackPlanStore:
             self.audit(cycle_id, "ai_plan_absent", {"reason": "market_view_not_directional"})
             return None
         return self.save_ai_plan(plan, now=now)
+
+    def ensure_human_plan_from_market_view(
+        self,
+        cycle_id: str,
+        *,
+        cycle_open: float,
+        prev_cycle_range: float,
+        now: str | datetime | None = None,
+    ) -> dict[str, Any] | None:
+        existing = self.load_plan(cycle_id, "human")
+        if existing and existing.get("status") == "locked":
+            return existing
+        window = self._window(cycle_id)
+        status = "locked" if parse_utc(now) <= window.lock_deadline else "draft"
+        run_date = cycle_id.split("_", 1)[0]
+        try:
+            view = MarketViewStore(self.output_root).latest(run_date)
+        except Exception as exc:  # noqa: BLE001 - unreadable operator source must fail closed.
+            self.audit(cycle_id, "human_plan_import_failed", {"reason": str(exc), "source": "obsidian"})
+            return None
+        if not view:
+            self.audit(cycle_id, "human_plan_absent", {"reason": "market_view_missing", "source": "obsidian"})
+            return None
+        plan = self._plan_from_market_view(
+            cycle_id,
+            view,
+            author="human",
+            status=status,
+            cycle_open=float(cycle_open),
+            prev_cycle_range=float(prev_cycle_range),
+            now=now,
+        )
+        if plan is None:
+            self.audit(cycle_id, "human_plan_absent", {"reason": "market_view_not_directional", "source": "obsidian"})
+            return None
+        normalized = validate_plan(plan, author="human", status=status, now=now)
+        write_json(self._plan_path(cycle_id, "human"), [normalized])
+        self.audit(
+            cycle_id,
+            "human_plan_imported_from_market_view",
+            {"author": "human", "source": "obsidian", "status": status},
+        )
+        return normalized
 
     def reveal_allowed(self, cycle_id: str, *, as_of: str | datetime | None = None) -> bool:
         human = self.load_plan(cycle_id, "human")
@@ -118,11 +165,13 @@ class DualTrackPlanStore:
         rows.append({"ts": _now().isoformat(), "cycle_id": cycle_id, "event": event, "detail": detail})
         write_json(path, rows)
 
-    def _ai_plan_from_market_view(
+    def _plan_from_market_view(
         self,
         cycle_id: str,
         view: dict[str, Any],
         *,
+        author: str,
+        status: str,
         cycle_open: float,
         prev_cycle_range: float,
         now: str | datetime | None,
@@ -146,15 +195,15 @@ class DualTrackPlanStore:
             plan_range = {"low": None, "high": None}
         return {
             "cycle_id": cycle_id,
-            "author": "ai",
+            "author": author,
             "direction": direction,
             "range": plan_range,
             "key_levels": key_levels,
             "invalidation": invalidation,
             "confidence": confidence,
-            "locked_at": parse_utc(now).isoformat(),
+            "locked_at": parse_utc(now).isoformat() if status != "draft" else None,
             "source": "obsidian",
-            "status": "fallback_active",
+            "status": status,
         }
 
     def _plan_path(self, cycle_id: str, author: str) -> Path:
@@ -194,7 +243,7 @@ def validate_plan(
         if confidence < 1 or confidence > 10:
             raise ValueError("confidence must be 1..10 or null")
     locked_at = payload.get("locked_at") or (parse_utc(now).isoformat() if status != "draft" else None)
-    return {
+    normalized = {
         "cycle_id": cycle_id,
         "author": author,
         "direction": direction,
@@ -206,6 +255,10 @@ def validate_plan(
         "source": str(payload.get("source") or ("console" if author == "human" else "obsidian")),
         "status": status,
     }
+    bracket = _normalize_bracket(payload, direction=direction)
+    if bracket is not None:
+        normalized["bracket"] = bracket
+    return normalized
 
 
 def _normalize_range(direction: str, range_payload: dict[str, Any], invalidation: list[dict[str, Any]]) -> tuple[float | None, float | None]:
@@ -257,6 +310,50 @@ def _normalize_invalidation(row: Any) -> dict[str, Any]:
     return {"side": side, "price": _required_float(row.get("price"), "invalidation.price"), "confirm": confirm}
 
 
+def _normalize_bracket(payload: dict[str, Any], *, direction: str) -> dict[str, Any] | None:
+    bracket = payload.get("bracket") if isinstance(payload.get("bracket"), dict) else {}
+    entry = _price_from(bracket.get("entry", payload.get("entry")))
+    take_profit = _price_from(_first_present(bracket, payload, ["take_profit", "tp", "target"]))
+    stop_loss = _price_from(_first_present(bracket, payload, ["stop_loss", "sl", "stop"]))
+    if entry is None and take_profit is None and stop_loss is None:
+        return None
+    if direction not in {"long", "short"}:
+        raise ValueError("bracket plans require long or short direction")
+    if entry is None or take_profit is None or stop_loss is None:
+        raise ValueError("bracket plans require entry, take_profit, and stop_loss")
+    if direction == "long" and not (stop_loss < entry < take_profit):
+        raise ValueError("long bracket requires stop_loss < entry < take_profit")
+    if direction == "short" and not (take_profit < entry < stop_loss):
+        raise ValueError("short bracket requires take_profit < entry < stop_loss")
+    normalized: dict[str, Any] = {
+        "mode": "bracket",
+        "entry": entry,
+        "take_profit": take_profit,
+        "stop_loss": stop_loss,
+        "same_bar_priority": str(bracket.get("same_bar_priority") or payload.get("same_bar_priority") or "stop"),
+    }
+    for key in ("notional", "contracts"):
+        value = _first_present(bracket, payload, [key])
+        if value not in (None, ""):
+            normalized[key] = _required_float(value, f"bracket.{key}")
+    return normalized
+
+
+def _price_from(value: Any) -> float | None:
+    if isinstance(value, dict):
+        value = value.get("price")
+    return _optional_float(value, "bracket price")
+
+
+def _first_present(primary: dict[str, Any], secondary: dict[str, Any], keys: list[str]) -> Any:
+    for key in keys:
+        if primary.get(key) not in (None, ""):
+            return primary.get(key)
+        if secondary.get(key) not in (None, ""):
+            return secondary.get(key)
+    return None
+
+
 def _direction_from_market_view(view: dict[str, Any]) -> str | None:
     bias = str(view.get("direction_bias") or "").lower()
     if bias in {"strong_long", "long_bias", "long", "bullish"}:
@@ -278,27 +375,22 @@ def _direction_from_market_view(view: dict[str, Any]) -> str | None:
 
 def _invalidation_from_market_view(view: dict[str, Any], *, low: float, high: float, direction: str) -> list[dict[str, Any]]:
     expiry = view.get("expiry") if isinstance(view.get("expiry"), dict) else {}
-    rows = []
-    if expiry.get("expire_below") is not None:
-        rows.append({"side": "below", "price": float(expiry["expire_below"]), "confirm": "touch"})
-    if expiry.get("expire_above") is not None:
-        rows.append({"side": "above", "price": float(expiry["expire_above"]), "confirm": "touch"})
-    if rows:
-        return rows
     if direction == "long":
-        return [{"side": "below", "price": low, "confirm": "touch"}]
+        return [{"side": "below", "price": float(expiry.get("expire_below") or low), "confirm": "touch"}]
     if direction == "short":
-        return [{"side": "above", "price": high, "confirm": "touch"}]
-    return [{"side": "below", "price": low, "confirm": "touch"}, {"side": "above", "price": high, "confirm": "touch"}]
+        return [{"side": "above", "price": float(expiry.get("expire_above") or high), "confirm": "touch"}]
+    return [
+        {"side": "below", "price": float(expiry.get("expire_below") or low), "confirm": "touch"},
+        {"side": "above", "price": float(expiry.get("expire_above") or high), "confirm": "touch"},
+    ]
 
 
 def _float_list(value: Any) -> list[float]:
     rows = []
     for item in value or []:
-        try:
-            rows.append(float(str(item).replace(",", "").strip()))
-        except (TypeError, ValueError):
-            continue
+        match = _NUMBER_PATTERN.search(str(item))
+        if match:
+            rows.append(float(match.group(0).replace(",", "")))
     return rows
 
 

@@ -11,7 +11,7 @@ from pipelines.dashboard_server import (
     compact_strategy_payload,
     compact_trader_payload,
 )
-from services.journal_store import load_json
+from services.journal_store import load_json, write_json
 
 
 ORAL_MARKET_VIEW = (
@@ -70,6 +70,297 @@ def test_market_view_intake_api_rejects_bad_payload(tmp_path: Path):
         assert "raw_text" in str(exc)
     else:
         raise AssertionError("expected empty raw_text to be rejected")
+
+
+def test_connector_price_feed_refresh_runbook_api_serves_existing_artifact_read_only(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    runbook_path = output_root / "connector_config_apply" / "price_feed_refresh_runbook_current.json"
+    write_json(
+        runbook_path,
+        [
+            {
+                "schema_version": "connector-price-feed-refresh-runbook-v1",
+                "status": "ready_for_operator_refresh",
+                "runbook_id": "price_feed_refresh_1",
+                "command_sequence": [
+                    {
+                        "name": "preview_tiger_price_feed_acceptance_refresh",
+                        "command": "python3 -m pipelines.tiger_price_feed_acceptance --plan-only",
+                    }
+                ],
+                "refresh_window_gate": {
+                    "schema_version": "connector-price-feed-refresh-window-gate-v1",
+                    "status": "ready_to_run_acceptance_now",
+                    "operator_action": "run_price_feed_acceptance_sequence_now",
+                    "is_open": True,
+                    "next_open": None,
+                    "can_preview_now": True,
+                    "can_run_quote_client_step": True,
+                    "safety": {
+                        "read_only": True,
+                        "uses_local_session_calendar": True,
+                        "opens_network_clients": False,
+                        "opens_quote_client": False,
+                        "opens_trade_client": False,
+                        "submits_orders": False,
+                        "writes_runtime_config": False,
+                    },
+                },
+                "status_receipt": {"schema_version": "connector-config-status-v1"},
+                "endpoint_safety": {
+                    "read_only": False,
+                    "generates_runbook": True,
+                    "opens_trade_client": True,
+                    "submits_orders": True,
+                    "writes_runtime_config": True,
+                },
+                "safety": {
+                    "read_only": True,
+                    "opens_network_clients": False,
+                    "opens_quote_client": False,
+                    "opens_trade_client": False,
+                    "submits_orders": False,
+                    "writes_runtime_config": False,
+                    "credential_values_exposed": False,
+                },
+            }
+        ],
+    )
+
+    response = dashboard_server.build_connector_price_feed_refresh_runbook_response(output_root=output_root)
+    serialized = str(response)
+
+    assert response["status"] == "ready_for_operator_refresh"
+    assert response["runbook_id"] == "price_feed_refresh_1"
+    assert response["served_from"] == str(runbook_path)
+    assert response["command_sequence"][0]["name"] == "preview_tiger_price_feed_acceptance_refresh"
+    assert "command" not in response["command_sequence"][0]
+    assert response["refresh_window_gate"]["status"] == "ready_to_run_acceptance_now"
+    assert response["refresh_window_gate"]["can_run_quote_client_step"] is True
+    assert response["refresh_window_gate"]["safety"]["opens_quote_client"] is False
+    assert response["refresh_window_gate"]["safety"]["opens_trade_client"] is False
+    assert response["refresh_window_gate"]["safety"]["submits_orders"] is False
+    assert response["refresh_window_gate"]["safety"]["writes_runtime_config"] is False
+    assert response["endpoint_safety"]["read_only"] is True
+    assert response["endpoint_safety"]["generates_runbook"] is False
+    assert response["endpoint_safety"]["opens_network_clients"] is False
+    assert response["endpoint_safety"]["opens_quote_client"] is False
+    assert response["endpoint_safety"]["opens_trade_client"] is False
+    assert response["endpoint_safety"]["submits_orders"] is False
+    assert response["endpoint_safety"]["writes_runtime_config"] is False
+    assert response["endpoint_safety"]["credential_values_exposed"] is False
+    assert response["endpoint_safety"]["raw_command_text_exposed"] is False
+    assert response["redaction"]["raw_command_text_exposed"] is False
+    assert "python3 -m" not in serialized
+
+
+def test_tiger_paper_order_refresh_runbook_api_redacts_raw_commands(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    readiness_path = output_root / "tiger_paper_order_readiness" / "current.json"
+    runbook_path = output_root / "tiger_paper_order_readiness" / "refresh_runbook_current.json"
+    write_json(
+        readiness_path,
+        [
+            {
+                "status": "blocked",
+                "ready_for_attended_paper_order": False,
+                "can_submit_without_explicit_operator_authorization": False,
+                "real_tiger_network_call_attempted": False,
+                "checks": [{"name": "order_sync", "status": "fail"}],
+                "blockers": [
+                    {
+                        "name": "order_sync",
+                        "status": "fail",
+                        "evidence": {
+                            "checked_at": "2026-07-05T13:21:20+00:00",
+                            "required_run_date": "2026-07-06",
+                            "current_for_run_date": False,
+                        },
+                    }
+                ],
+                "next_commands": ["python3 -m pipelines.tiger_openapi_order_sync --date 2026-07-06 --json"],
+                "checked_at": "2026-07-06T09:30:09+00:00",
+            }
+        ],
+    )
+    write_json(
+        runbook_path,
+        [
+            {
+                "schema_version": "tiger-paper-order-readiness-refresh-runbook-v1",
+                "status": "ready_for_operator_refresh",
+                "runbook_id": "paper_order_refresh_runbook_test",
+                "run_date": "2026-07-06",
+                "readiness_status": "blocked",
+                "readiness_checked_at": "2026-07-06T09:30:09+00:00",
+                "blocker_count": 1,
+                "stale_evidence_count": 1,
+                "blocker_names": ["order_sync"],
+                "command_sequence": [
+                    {
+                        "name": "refresh_order_sync",
+                        "label": "refresh orders/fills",
+                        "command": "python3 -m pipelines.tiger_openapi_order_sync --date 2026-07-06 --json",
+                        "opens_trade_client": True,
+                        "opens_trade_client_mode": "read_only",
+                        "submits_orders": False,
+                        "writes_runtime_config": False,
+                    }
+                ],
+                "generation_safety": {
+                    "artifact_only": True,
+                    "opens_quote_client": False,
+                    "opens_trade_client": False,
+                    "submits_orders": False,
+                    "cancels_orders": False,
+                    "closes_positions": False,
+                    "writes_runtime_config": False,
+                    "credential_values_exposed": False,
+                },
+                "command_sequence_safety": {
+                    "opens_trade_client_read_only": True,
+                    "submits_orders": False,
+                    "writes_runtime_config": False,
+                },
+                "checked_at": "2026-07-06T09:38:45+00:00",
+            }
+        ],
+    )
+
+    response = dashboard_server.build_tiger_paper_order_refresh_runbook_response(output_root=output_root)
+    serialized = str(response)
+
+    assert response["schema_version"] == "tiger-paper-order-refresh-runbook-api-v1"
+    assert response["status"] == "ready_for_operator_refresh"
+    assert response["served_from"] == str(runbook_path)
+    assert response["matches_current_readiness"] is True
+    assert response["command_count"] == 1
+    assert response["command_steps"] == [
+        {
+            "name": "refresh_order_sync",
+            "label": "refresh orders/fills",
+            "opens_trade_client": True,
+            "opens_trade_client_mode": "read_only",
+            "submits_orders": False,
+            "writes_runtime_config": False,
+        }
+    ]
+    assert response["generation_safety"]["opens_trade_client"] is False
+    assert response["command_sequence_safety"]["opens_trade_client_read_only"] is True
+    assert response["endpoint_safety"]["read_only"] is True
+    assert response["endpoint_safety"]["opens_trade_client"] is False
+    assert response["endpoint_safety"]["submits_orders"] is False
+    assert response["endpoint_safety"]["writes_runtime_config"] is False
+    assert response["endpoint_safety"]["raw_command_text_exposed"] is False
+    assert response["redaction"]["raw_command_text_exposed"] is False
+    assert "python3 -m" not in serialized
+
+
+def test_connector_attended_switch_review_api_redacts_write_authorization(monkeypatch):
+    status = {
+        "schema_version": "connector-config-status-v1",
+        "checked_at": "2026-07-06T09:21:12+00:00",
+        "current_runtime": {"broker_provider": "binance_usdm", "dualtrack_symbol": "GOLD"},
+        "latest_check": {
+            "status": "ready_for_attended_config_write",
+            "package_id": "pkg_1",
+        },
+        "latest_authorization": {
+            "status": "ready_for_operator_authorization",
+            "authorization_id": "auth_1",
+            "package_id": "pkg_1",
+            "attended_apply_command": "python3 -m pipelines.connector_config_apply apply --acknowledgement SECRET_ACK",
+        },
+        "latest_readiness_audit": {
+            "status": "go_for_attended_config_switch",
+            "audit_id": "audit_1",
+            "package_id": "pkg_1",
+            "checked_at": "2026-07-06T09:20:00+00:00",
+        },
+        "operator_stage": {
+            "stage": "ready_for_attended_config_switch",
+            "summary": "ready",
+            "next_action": "operator_review_authorization_then_run_attended_config_apply_if_approved",
+            "runtime_switched_to_tiger_mgc": False,
+            "can_trade_machine_track": False,
+            "can_submit_tiger_orders": False,
+            "attended_switch_review": {
+                "status": "ready_for_operator_review",
+                "package_id": "pkg_1",
+                "authorization_id": "auth_1",
+                "audit_id": "audit_1",
+                "can_switch_config_with_operator_authorization": True,
+                "requires_operator_command": True,
+                "requires_warning_acceptance": True,
+                "requires_acknowledgement": True,
+                "requires_package_id": True,
+                "rollback_required": True,
+                "post_apply_validation_count": 4,
+                "authorization_markdown": "outputs/connector_config_apply/authorization_current.md",
+                "final_readiness_audit_markdown": "outputs/connector_config_apply/final_readiness_audit_current.md",
+                "runtime_config_writes_from_status_endpoint": False,
+                "opens_network_clients_from_status_endpoint": False,
+                "submits_orders_from_status_endpoint": False,
+                "can_trade_machine_track_after_switch": False,
+                "can_submit_tiger_orders_after_switch": False,
+                "not_authorized_after_switch": ["Tiger paper TradeClient order submission"],
+            },
+        },
+    }
+    monkeypatch.setattr(dashboard_server, "build_connector_config_status_response", lambda *, output_root=None: status)
+
+    response = dashboard_server.build_connector_attended_switch_review_response()
+    serialized = str(response)
+
+    assert response["schema_version"] == "connector-attended-switch-review-api-v1"
+    assert response["status"] == "ready_for_operator_review"
+    assert response["package_id"] == "pkg_1"
+    assert response["authorization_id"] == "auth_1"
+    assert response["audit_id"] == "audit_1"
+    assert response["runtime_switched_to_tiger_mgc"] is False
+    assert response["current_broker_provider"] == "binance_usdm"
+    assert response["current_dualtrack_symbol"] == "GOLD"
+    assert response["can_trade_machine_track"] is False
+    assert response["can_submit_tiger_orders"] is False
+    assert response["requires_operator_command"] is True
+    assert response["requires_acknowledgement"] is True
+    assert response["rollback_required"] is True
+    assert response["after_switch_gates"]["can_trade_machine_track"] is False
+    assert response["after_switch_gates"]["can_submit_tiger_orders"] is False
+    assert response["endpoint_safety"]["read_only"] is True
+    assert response["endpoint_safety"]["runs_config_apply"] is False
+    assert response["endpoint_safety"]["writes_runtime_config"] is False
+    assert response["endpoint_safety"]["opens_trade_client"] is False
+    assert response["endpoint_safety"]["submits_orders"] is False
+    assert response["endpoint_safety"]["raw_acknowledgement_exposed"] is False
+    assert response["endpoint_safety"]["attended_apply_command_exposed"] is False
+    assert response["redaction"]["raw_acknowledgement_exposed"] is False
+    assert response["redaction"]["attended_apply_command_exposed"] is False
+    assert "SECRET_ACK" not in serialized
+    assert "python3 -m pipelines.connector_config_apply apply" not in serialized
+
+
+def test_connector_price_feed_refresh_runbook_api_missing_is_read_only(tmp_path: Path):
+    response = dashboard_server.build_connector_price_feed_refresh_runbook_response(output_root=tmp_path / "outputs")
+
+    assert response["status"] == "missing"
+    assert response["command_sequence"] == []
+    assert response["served_from"].endswith("connector_config_apply/price_feed_refresh_runbook_current.json")
+    assert response["safety"]["read_only"] is True
+    assert response["safety"]["opens_network_clients"] is False
+    assert response["safety"]["opens_quote_client"] is False
+    assert response["safety"]["opens_trade_client"] is False
+    assert response["safety"]["submits_orders"] is False
+    assert response["safety"]["writes_runtime_config"] is False
+    assert response["safety"]["credential_values_exposed"] is False
+    assert response["endpoint_safety"]["read_only"] is True
+    assert response["endpoint_safety"]["generates_runbook"] is False
+    assert response["endpoint_safety"]["opens_network_clients"] is False
+    assert response["endpoint_safety"]["opens_quote_client"] is False
+    assert response["endpoint_safety"]["opens_trade_client"] is False
+    assert response["endpoint_safety"]["submits_orders"] is False
+    assert response["endpoint_safety"]["writes_runtime_config"] is False
+    assert response["endpoint_safety"]["credential_values_exposed"] is False
 
 
 def test_compact_trader_payload_keeps_reader_fields_and_drops_ops_bulk():
@@ -304,6 +595,13 @@ def _contract_payload() -> dict:
         "paper_trade_attribution": {"status": "pass"},
         "paper_exit_monitor": {"status": "pass"},
         "runner": {"state": "ok"},
+        "schedule_install_plan": {"status": "ready"},
+        "schedule_install": {"status": "blocked", "blocker": "missing_acknowledgement"},
+        "schedule_rollback_plan": {"status": "blocked", "blocker": "missing_backup_records"},
+        "schedule_rollback": {"status": "blocked", "blocker": "missing_backup_records"},
+        "schedule_post_install_verify": {"status": "blocked", "checks": [{"name": "schedule_current_active", "status": "fail"}]},
+        "schedule_takeover_package": {"status": "ready_for_attended_install"},
+        "schedule_takeover_package_check": {"status": "ready_for_attended_install", "operator_next_action": {"action": "authorize_attended_install"}},
         "alerts": {"overall_status": "ok"},
         "operation_runbook": {"status": "paper_auto_ready"},
     }
@@ -526,6 +824,11 @@ def test_trader_overview_contract_is_reader_facing_and_drops_ops_only_sections()
         "legacy_live_reconciliation",
         "alerts",
         "operation_runbook",
+        "schedule_post_install_verify",
+        "schedule_takeover_package",
+        "schedule_takeover_package_check",
+        "schedule_install",
+        "schedule_rollback",
     ):
         assert ops_key not in overview
     assert "demo_blocker" not in overview["current_strategy"]
@@ -540,6 +843,11 @@ def test_ops_status_contract_keeps_diagnostics_outside_trader_contract():
     assert ops["status"] == "ok"
     assert ops["backend"]["backend_maturity"]["status"] == "warn"
     assert ops["backend"]["dashboard_health"]["checks"][0]["name"] == "api"
+    assert ops["runner"]["schedule_install"]["blocker"] == "missing_acknowledgement"
+    assert ops["runner"]["schedule_rollback_plan"]["blocker"] == "missing_backup_records"
+    assert ops["runner"]["schedule_post_install_verify"]["checks"][0]["name"] == "schedule_current_active"
+    assert ops["runner"]["schedule_takeover_package"]["status"] == "ready_for_attended_install"
+    assert ops["runner"]["schedule_takeover_package_check"]["operator_next_action"]["action"] == "authorize_attended_install"
     assert ops["data"]["source_contracts"]["performance_board"]["section"] == "performance_board"
     assert ops["execution"]["live_reconciliation"]["truth_scope"] == "active_demo_strategy"
     assert ops["diagnostics"]["full_diagnostics_query"] == "/api/dashboard?view=full"

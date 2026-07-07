@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from schemas.market_data import Bar
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
@@ -111,6 +113,56 @@ def test_acceptance_6_ledger_arithmetic_sums_fills_cycles_daily_and_weekly(tmp_p
     assert weekly["total_pnl"] == daily["total_pnl"]
 
 
+def test_12h_cycle_closes_human_manual_trade_and_ai_bracket_pnl(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    store = DualTrackPlanStore(output, config=TEST_CONFIG)
+    machine = DualTrackMachineRunner(output, config=TEST_CONFIG)
+    human = DualTrackHumanEngine(output, config=TEST_CONFIG)
+    scorer = DualTrackScorer(output, config=TEST_CONFIG)
+    cycle_id = "2026-07-05_DAY"
+    bars = _bars(datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [4000.0, 3998.0, 4012.0, 4020.0])
+    store.save_human_plan(_plan(cycle_id, "long"), now="2026-07-05T00:59:00+00:00")
+    store.save_ai_plan(
+        {
+            **_plan(cycle_id, "long"),
+            "author": "ai",
+            "bracket": {"entry": 3998.0, "take_profit": 4010.0, "stop_loss": 3990.0, "notional": 1000.0},
+        },
+        now="2026-07-05T00:50:00+00:00",
+    )
+    machine.run_effective_plan(cycle_id, bars, prev_range=80.0, as_of="2026-07-05T01:00:00+00:00")
+    human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:01:00+00:00",
+        "side": "buy",
+        "order_type": "market",
+        "price": 4000.0,
+        "notional": 1000.0,
+        "position_id": "manual-a",
+    })
+    human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T12:59:00+00:00",
+        "side": "sell",
+        "order_type": "market",
+        "price": 4020.0,
+        "position_id": "manual-a",
+    })
+
+    attr = scorer.close_cycle(cycle_id, bars)
+
+    assert attr["cycle"]["effective_plan_author"] == "ai"
+    assert attr["tracks"]["human"]["trade_count"] == 1
+    assert attr["tracks"]["machine"]["trade_count"] == 1
+    assert attr["trades"]["human"][0]["status"] == "closed"
+    assert attr["trades"]["machine"][0]["status"] == "closed"
+    assert attr["fills"]["machine"][-1]["event"] == "target"
+    assert attr["tracks"]["human"]["realized_pnl"] == pytest.approx(4.89975)
+    assert attr["ledger"]["daily"]["cycles"][cycle_id]["delta_machine_minus_human"] == pytest.approx(
+        attr["tracks"]["machine"]["realized_pnl"] - attr["tracks"]["human"]["realized_pnl"]
+    )
+
+
 def test_flat_plans_are_ungraded(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     store = DualTrackPlanStore(output, config=TEST_CONFIG)
@@ -121,5 +173,21 @@ def test_flat_plans_are_ungraded(tmp_path: Path) -> None:
 
     attr = scorer.close_cycle(cycle_id, bars)
 
+    assert attr["plan_grades"]["human"]["graded"] is False
+    assert attr["scoreboard"]["human"]["graded"] == 0
+
+
+def test_late_draft_human_plan_is_not_graded_as_blind_answer(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    store = DualTrackPlanStore(output, config=TEST_CONFIG)
+    scorer = DualTrackScorer(output, config=TEST_CONFIG)
+    cycle_id = "2026-07-05_DAY"
+    bars = _bars(datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [4000.0, 4005.0, 4010.0])
+    store.save_human_plan(_plan(cycle_id, "long"), now="2026-07-05T02:00:00+00:00", lock=False)
+
+    attr = scorer.close_cycle(cycle_id, bars)
+
+    assert attr["plan_grades"]["human"]["direction"] == "long"
+    assert attr["plan_grades"]["human"]["eligible"] is False
     assert attr["plan_grades"]["human"]["graded"] is False
     assert attr["scoreboard"]["human"]["graded"] == 0

@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from schemas.market_data import Bar
-from services.config_loader import ROOT, load_pipeline_config
+from services.config_loader import ROOT, load_pipeline_config, load_risk_rules
 from services.dualtrack_clock import cycle_window_from_id, parse_utc
 from services.dualtrack_config import base_rung_notional, dualtrack_config
+from services.dualtrack_costs import dualtrack_cost_descriptor, dualtrack_order_cost
 from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
 from services.dualtrack_store import DualTrackPlanStore
 from services.journal_store import load_json, write_json
@@ -19,6 +20,7 @@ class DualTrackMachineRunner:
         self.output_root = Path(output_root) if output_root else ROOT / pipeline_config.get("output_root", "outputs")
         self.root = self.output_root / "dualtrack"
         self.config = config or dualtrack_config()
+        self.cost_rules = load_risk_rules().get("default", {}).get("paper_execution_costs", {})
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
 
     def run_effective_plan(
@@ -31,6 +33,9 @@ class DualTrackMachineRunner:
         trend_gate_armed: bool | None = None,
     ) -> dict[str, Any]:
         plan = self.store.effective_plan(cycle_id, as_of=as_of)
+        ai_plan = self.store.load_plan(cycle_id, "ai")
+        if ai_plan and _plan_bracket(ai_plan):
+            plan = {**ai_plan, "effective_author": "ai"}
         return self.run_plan(cycle_id, plan, bars, prev_range=prev_range, trend_gate_armed=trend_gate_armed)
 
     def run_plan(
@@ -59,8 +64,29 @@ class DualTrackMachineRunner:
             )
 
         existing_cycle = self._existing_cycle_state(cycle_id)
+        bracket = _plan_bracket(plan)
+        if bracket:
+            fills, layers, stop_hit = self._simulate_bracket(cycle_id, plan, bracket, rows)
+            write_json(self._fills_path(cycle_id), fills)
+            self._write_account(cycle_id, "machine", fills)
+            state = self._cycle_state(
+                cycle_id,
+                rows,
+                fills,
+                machine_stood_down=False,
+                effective_plan_author=str(plan.get("effective_author") or plan.get("author") or ""),
+                layers=layers,
+                trend_gate_armed=gate_armed,
+                stop_hit=stop_hit,
+                rearms=0,
+            )
+            _preserve_gate_snapshot(state, existing_cycle)
+            write_json(self._cycle_path(cycle_id), [state])
+            return state
         grid = self.config["grid"]
         stop = _hard_stop(plan, direction)
+        max_rungs = self._grid_max_rungs()
+        grid_cost_kwargs = self._grid_cost_kwargs()
         base = simulate_conditional_grid(
             cycle_id=cycle_id,
             bars=rows,
@@ -68,14 +94,15 @@ class DualTrackMachineRunner:
             prev_range=prev_range,
             spacing_bp=float(grid["spacing_bp"]),
             range_k=float(grid["range_k"]),
-            rung_notional=base_rung_notional(self.config),
-            max_rungs=10,
+            rung_notional=base_rung_notional(self.config, max_rungs=max_rungs),
+            max_rungs=max_rungs,
             cost_per_side_bp=float(self.config["cost_per_side_bp"]),
             tp_mult=float(grid["tp_mult_base"]),
             re_arm_max=int(grid["re_arm_max"]),
             budget_sizing=False,
             layer="grid",
             stop=stop,
+            **grid_cost_kwargs,
         )
         fills = [self._annotate_fill(fill) for fill in base.fills]
         trend = None
@@ -88,14 +115,15 @@ class DualTrackMachineRunner:
                 prev_range=prev_range,
                 spacing_bp=float(grid["spacing_bp"]),
                 range_k=float(grid["range_k"]),
-                rung_notional=base_rung_notional(self.config) * trend_budget_pct,
-                max_rungs=10,
+                rung_notional=base_rung_notional(self.config, max_rungs=max_rungs) * trend_budget_pct,
+                max_rungs=max_rungs,
                 cost_per_side_bp=float(self.config["cost_per_side_bp"]),
                 tp_mult=float(grid["tp_mult_trend"]),
                 re_arm_max=int(grid["re_arm_max"]),
                 budget_sizing=False,
                 layer="trend",
                 stop=stop,
+                **grid_cost_kwargs,
             )
             fills.extend(self._annotate_fill(fill) for fill in trend.fills)
         # Intraday/auto recomputes must replace the per-cycle machine fills, never append.
@@ -243,7 +271,7 @@ class DualTrackMachineRunner:
         return {
             **fill,
             "track": "machine",
-            "cost_model": {"cost_per_side_bp": float(self.config["cost_per_side_bp"])},
+            "cost_model": fill.get("cost_model") or self._cost_model_descriptor(),
         }
 
     def _write_account(self, cycle_id: str, track: str, fills: list[dict[str, Any]]) -> None:
@@ -255,8 +283,118 @@ class DualTrackMachineRunner:
             "starting_cash": starting,
             "realized_pnl": round(realized, 8),
             "ending_cash": round(starting + realized, 8),
-            "cost_model": {"cost_per_side_bp": float(self.config["cost_per_side_bp"])},
+            "cost_model": self._cost_model_descriptor(),
         }])
+
+    def _grid_max_rungs(self) -> int:
+        return int(self.config.get("grid", {}).get("max_rungs", 10))
+
+    def _grid_cost_kwargs(self) -> dict[str, Any]:
+        model = self.config.get("execution_cost_model")
+        if not isinstance(model, dict) or not model.get("venue"):
+            return {}
+        return {"execution_cost_model": model, "cost_rules": self.cost_rules}
+
+    def _cost_model_descriptor(self) -> dict[str, Any]:
+        return dualtrack_cost_descriptor(self.config, self.cost_rules)
+
+    def _bracket_notional(self, bracket: dict[str, Any]) -> float | None:
+        value = _optional_float(bracket.get("notional"))
+        if value is not None:
+            return value
+        model = self.config.get("execution_cost_model")
+        if isinstance(model, dict) and model.get("venue"):
+            return None
+        return base_rung_notional(self.config, max_rungs=self._grid_max_rungs())
+
+    def _simulate_bracket(
+        self,
+        cycle_id: str,
+        plan: dict[str, Any],
+        bracket: dict[str, Any],
+        rows: tuple[Bar, ...],
+    ) -> tuple[list[dict[str, Any]], list[str], bool]:
+        direction = _direction_to_int(plan.get("direction"))
+        entry_price = float(bracket["entry"])
+        take_profit = float(bracket["take_profit"])
+        stop_loss = float(bracket["stop_loss"])
+        entry_index = _first_touch_index(rows, entry_price)
+        if entry_index is None:
+            return [], ["bracket:armed_no_fill"], False
+
+        entry_cost = dualtrack_order_cost(
+            config=self.config,
+            price=entry_price,
+            notional=self._bracket_notional(bracket),
+            contracts=_optional_float(bracket.get("contracts")),
+            cost_rules=self.cost_rules,
+            require_contracts=False,
+        )
+        entry_fill = _bracket_fill(
+            cycle_id,
+            rows[entry_index],
+            side="buy" if direction > 0 else "sell",
+            price=entry_price,
+            event="entry",
+            order_cost=entry_cost,
+            realized_pnl=-entry_cost.cost,
+            sl=stop_loss,
+            tp=take_profit,
+        )
+        fills = [self._annotate_fill(entry_fill)]
+        exit_event = ""
+        exit_price = 0.0
+        exit_bar = rows[-1]
+        for bar in rows[entry_index:]:
+            stop_hit = _stop_touched(bar, direction=direction, stop_loss=stop_loss)
+            target_hit = _target_touched(bar, direction=direction, take_profit=take_profit)
+            if not stop_hit and not target_hit:
+                continue
+            if stop_hit and target_hit and str(bracket.get("same_bar_priority") or "stop") != "target":
+                exit_event, exit_price = "stop", stop_loss
+            elif target_hit:
+                exit_event, exit_price = "target", take_profit
+            else:
+                exit_event, exit_price = "stop", stop_loss
+            exit_bar = bar
+            break
+        if not exit_event:
+            exit_event = "flatten"
+            exit_price = float(rows[-1].close)
+        exit_cost = dualtrack_order_cost(
+            config=self.config,
+            price=exit_price,
+            notional=_exit_notional(entry_cost, entry_price, exit_price),
+            contracts=entry_cost.contracts,
+            cost_rules=self.cost_rules,
+            require_contracts=False,
+        )
+        gross_pnl = direction * (exit_price - entry_price) * _cost_units(entry_cost, entry_price)
+        exit_fill = _bracket_fill(
+            cycle_id,
+            exit_bar,
+            side="sell" if direction > 0 else "buy",
+            price=exit_price,
+            event=exit_event,
+            order_cost=exit_cost,
+            realized_pnl=gross_pnl - exit_cost.cost,
+            sl=stop_loss,
+            tp=take_profit if exit_event != "stop" else None,
+            gross_pnl=gross_pnl,
+        )
+        exit_fill["matched_entries"] = [{
+            "fill_id": entry_fill["fill_id"],
+            "trade_id": entry_fill["trade_id"],
+            "units": _cost_units(entry_cost, entry_price),
+            "entry_price": entry_price,
+            "gross_pnl": round(gross_pnl, 8),
+            "realized_pnl": round(gross_pnl - exit_cost.cost, 8),
+        }]
+        fills[0]["remaining_units"] = 0.0
+        fills[0]["closed_units"] = round(_cost_units(entry_cost, entry_price), 10)
+        fills[0]["position_status"] = "closed"
+        fills.append(self._annotate_fill(exit_fill))
+        return fills, [f"bracket:{exit_event}"], exit_event == "stop"
 
 
 def _hard_stop(plan: dict[str, Any], direction: int) -> GridStop | None:
@@ -265,6 +403,90 @@ def _hard_stop(plan: dict[str, Any], direction: int) -> GridStop | None:
         if row.get("side") == wanted:
             return GridStop(side=wanted, price=float(row["price"]), confirm=str(row.get("confirm") or "touch"))
     return None
+
+
+def _plan_bracket(plan: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(plan, dict):
+        return None
+    bracket = plan.get("bracket")
+    return bracket if isinstance(bracket, dict) else None
+
+
+def _first_touch_index(rows: tuple[Bar, ...], price: float) -> int | None:
+    for index, bar in enumerate(rows):
+        if float(bar.low) <= float(price) <= float(bar.high):
+            return index
+    return None
+
+
+def _stop_touched(bar: Bar, *, direction: int, stop_loss: float) -> bool:
+    return float(bar.low) <= stop_loss if direction > 0 else float(bar.high) >= stop_loss
+
+
+def _target_touched(bar: Bar, *, direction: int, take_profit: float) -> bool:
+    return float(bar.high) >= take_profit if direction > 0 else float(bar.low) <= take_profit
+
+
+def _bracket_fill(
+    cycle_id: str,
+    bar: Bar,
+    *,
+    side: str,
+    price: float,
+    event: str,
+    order_cost,
+    realized_pnl: float,
+    sl: float | None,
+    tp: float | None,
+    gross_pnl: float = 0.0,
+) -> dict[str, Any]:
+    suffix = "0001" if event == "entry" else "0002"
+    trade_id = f"{cycle_id}_ai_bracket_trade_0001"
+    return {
+        "fill_id": f"{cycle_id}_bracket_{suffix}",
+        "trade_id": trade_id,
+        "ts": bar.timestamp,
+        "side": side,
+        "price": float(price),
+        "sl": sl,
+        "tp": tp,
+        "layer": "bracket",
+        "event": event,
+        "rung": 0,
+        "order_type": "limit" if event == "entry" else "market",
+        "out_of_plan": False,
+        "gross_pnl": round(float(gross_pnl), 8),
+        "realized_pnl": round(float(realized_pnl), 8),
+        "pnl_units": round(_cost_units(order_cost, price), 10),
+        "remaining_units": round(_cost_units(order_cost, price), 10) if event == "entry" else 0.0,
+        "position_id": "ai_bracket",
+        "position_status": "open" if event == "entry" else "closed",
+        **order_cost.fill_fields(),
+    }
+
+
+def _cost_units(order_cost, price: float) -> float:
+    if order_cost.contracts is not None:
+        multiplier = 1.0
+        model = order_cost.cost_model if isinstance(order_cost.cost_model, dict) else {}
+        if model.get("contract_multiplier") is not None:
+            multiplier = float(model["contract_multiplier"])
+        elif isinstance(model.get("side_cost"), dict) and model["side_cost"].get("contract_multiplier") is not None:
+            multiplier = float(model["side_cost"]["contract_multiplier"])
+        return float(order_cost.contracts) * multiplier
+    return float(order_cost.notional) / float(price)
+
+
+def _exit_notional(entry_cost, entry_price: float, exit_price: float) -> float | None:
+    if entry_cost.contracts is not None:
+        return None
+    return _cost_units(entry_cost, entry_price) * float(exit_price)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    return float(value)
 
 
 def _direction_to_int(direction: Any) -> int:
