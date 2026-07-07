@@ -61,13 +61,21 @@ class MultiStrategyRunner:
 
     def _broker_adapter_for(self, strategy, scoped: Path):
         config = load_pipeline_config()
-        demo = config.get("demo_trading", {}) or {}
-        if demo.get("enabled") is True and str(demo.get("active_strategy_id", "")) == strategy.strategy_id:
-            from services.binance_demo_broker_adapter import BinanceDemoBrokerAdapter
+        active = self._active_demo_broker_config(strategy, config=config)
+        if active is not None:
+            broker_config, demo = active
+            provider = str(broker_config.get("provider") or "")
+            if provider == "binance_usdm":
+                from services.binance_demo_broker_adapter import BinanceDemoBrokerAdapter
 
-            profile_name = str(demo.get("broker_profile", config.get("broker", {}).get("provider", "binance_usdm")))
-            broker_config = (config.get("broker_profiles", {}) or {}).get(profile_name) or config.get("broker", {})
-            return BinanceDemoBrokerAdapter(scoped, broker_config, demo)
+                return BinanceDemoBrokerAdapter(scoped, broker_config, demo)
+            if provider == "tiger_openapi":
+                from services.broker_adapter import build_live_broker_adapter
+
+                return build_live_broker_adapter(scoped, True, broker_config)
+            from services.broker_adapter import build_live_broker_adapter
+
+            return build_live_broker_adapter(scoped, False, broker_config)
 
         # A `live` strategy routes execution through the live broker (its own
         # scoped namespace); everyone else returns None -> the default paper path.
@@ -75,16 +83,28 @@ class MultiStrategyRunner:
         # still decide whether a real order is actually sent.
         if not getattr(strategy, "live", False):
             return None
-        from services.broker_adapter import LiveBrokerAdapter
+        from services.broker_adapter import build_live_broker_adapter, resolve_broker_config
 
-        return LiveBrokerAdapter(scoped, bool(config.get("live_trading_enabled", False)), config.get("broker", {}))
+        return build_live_broker_adapter(scoped, bool(config.get("live_trading_enabled", False)), resolve_broker_config(config))
 
-    def _active_demo_broker_config(self, strategy) -> tuple[dict, dict] | None:
-        config = load_pipeline_config()
+    def _active_demo_broker_config(self, strategy, *, config: dict | None = None) -> tuple[dict, dict] | None:
+        config = config or load_pipeline_config()
         demo = config.get("demo_trading", {}) or {}
         if demo.get("enabled") is True and str(demo.get("active_strategy_id", "")) == strategy.strategy_id:
             profile_name = str(demo.get("broker_profile", config.get("broker", {}).get("provider", "binance_usdm")))
-            broker_config = (config.get("broker_profiles", {}) or {}).get(profile_name) or config.get("broker", {})
+            broker_config = dict((config.get("broker_profiles", {}) or {}).get(profile_name) or config.get("broker", {}) or {})
+            provider = str(broker_config.get("provider") or profile_name)
+            if provider == "tiger_openapi":
+                merged = {
+                    **broker_config,
+                    "provider": "tiger_openapi",
+                    "environment": str(broker_config.get("environment", "paper")),
+                    "profile": profile_name,
+                    "request_dir": str(broker_config.get("request_dir", "tiger_order_requests")),
+                }
+                return merged, demo
+            if provider != "binance_usdm":
+                return {**broker_config, "provider": provider, "profile": profile_name}, demo
             merged = {
                 **broker_config,
                 "provider": "binance_usdm",
@@ -94,18 +114,47 @@ class MultiStrategyRunner:
                 "request_dir": str(demo.get("request_dir", broker_config.get("request_dir", "demo_order_requests"))),
                 "protective_failure_action": str(demo.get("protective_failure_action", "reduce_only_close")),
                 "instrument_map": {"GOLD": "XAUUSDT", "XAUUSD": "XAUUSDT", **broker_config.get("instrument_map", {})},
+                "profile": profile_name,
             }
             return merged, demo
         return None
 
     def _execution_profile_for(self, strategy) -> dict:
         config = load_pipeline_config()
-        demo = config.get("demo_trading", {}) or {}
-        if demo.get("enabled") is True and str(demo.get("active_strategy_id", "")) == strategy.strategy_id:
+        active = self._active_demo_broker_config(strategy, config=config)
+        if active is not None:
+            broker_config, demo = active
+            provider = str(broker_config.get("provider") or "")
+            if provider == "tiger_openapi":
+                apply_live_env()
+                props_env = str(broker_config.get("props_path_env", "TIGER_OPENAPI_CONFIG_PATH"))
+                credentials_present = live_env_value_present(props_env)
+                network_armed = bool(
+                    credentials_present
+                    and not broker_config.get("dry_run", True)
+                    and str(broker_config.get("network_order_submission") or "") == "paper_tradeclient"
+                    and broker_config.get("confirm_tiger_paper_orders") is True
+                )
+                return {
+                    "adapter": "tiger_openapi_paper",
+                    "mode": "tiger_paper_profile_gated",
+                    "strategy_id": strategy.strategy_id,
+                    "armed": network_armed,
+                    "credentials_present": credentials_present,
+                    "credential_env_names": [props_env],
+                    "provider": provider,
+                    "profile": str(broker_config.get("profile") or ""),
+                    "environment": str(broker_config.get("environment", "paper")),
+                    "dry_run": bool(broker_config.get("dry_run", True)),
+                    "network_order_submission": str(broker_config.get("network_order_submission") or "not_implemented_fail_closed"),
+                    "confirm_tiger_paper_orders": broker_config.get("confirm_tiger_paper_orders") is True,
+                    "live_endpoint_allowed": False,
+                    "requires_operator_authorization": True,
+                    "request_dir": str(broker_config.get("request_dir", "tiger_order_requests")),
+                    "note": "Automatic execution is routed through the Tiger paper adapter profile, but network submission remains guarded by Tiger paper profile flags.",
+                }
             from services.binance_demo_broker_adapter import DEMO_BASE_URL, DEMO_SYMBOL
 
-            profile_name = str(demo.get("broker_profile", config.get("broker", {}).get("provider", "binance_usdm")))
-            broker_config = (config.get("broker_profiles", {}) or {}).get(profile_name) or config.get("broker", {})
             apply_live_env()
             key_env = str(broker_config.get("api_key_env", "BINANCE_API_KEY"))
             secret_env = str(broker_config.get("api_secret_env", "BINANCE_API_SECRET"))
@@ -126,8 +175,19 @@ class MultiStrategyRunner:
                 "request_dir": str(demo.get("request_dir", "demo_order_requests")),
                 "note": "Automatic execution uses Binance Futures Demo only; no live Binance endpoint is allowed by this adapter.",
             }
+        demo = config.get("demo_trading", {}) or {}
+        if demo.get("enabled") is True and str(demo.get("active_strategy_id", "")) == strategy.strategy_id:
+            return {
+                "adapter": "demo_profile",
+                "mode": "demo_profile_unresolved",
+                "strategy_id": strategy.strategy_id,
+                "armed": False,
+                "note": "Active demo strategy is configured, but no broker profile could be resolved.",
+            }
         if getattr(strategy, "live", False):
-            broker = config.get("broker", {})
+            from services.broker_adapter import resolve_broker_config
+
+            broker = resolve_broker_config(config)
             return {
                 "adapter": "live",
                 "mode": "live_adapter_gated",
@@ -150,20 +210,26 @@ class MultiStrategyRunner:
         if active is None:
             return None
         broker_config, _demo = active
+        if str(broker_config.get("provider") or "") == "tiger_openapi":
+            from services.tiger_openapi_reconciliation import TigerOpenApiPaperReconciliation
+
+            return TigerOpenApiPaperReconciliation(scoped, broker_config).run(run_date)
         from services.live_reconciliation import LiveBrokerReconciliation
 
         return LiveBrokerReconciliation(scoped, broker_config).run(run_date)
 
     def _demo_reconciliation_block_reason(self, report: dict) -> str:
+        provider = str(report.get("provider") or "binance_usdm")
+        label = "Tiger paper" if provider == "tiger_openapi" else "Binance demo"
         if report.get("suspected_naked_position"):
-            return f"Binance demo suspected naked position: {report.get('escalation_action') or report.get('reason_code')}"
+            return f"{label} suspected naked position: {report.get('escalation_action') or report.get('reason_code')}"
         if report.get("confirmation_status") == "cannot_confirm":
-            return f"Binance demo reconciliation cannot confirm venue state: {report.get('error')}"
+            return f"{label} reconciliation cannot confirm venue state: {report.get('error')}"
         if report.get("error"):
-            return f"Binance demo reconciliation failed: {report['error']}"
+            return f"{label} reconciliation failed: {report['error']}"
         reasons = sorted({str(item.get("reason", "reconciliation drift")) for item in report.get("drifts", [])})
         suffix = "; ".join(reasons) if reasons else "unknown drift"
-        return f"Binance demo reconciliation drift: {suffix}"
+        return f"{label} reconciliation drift: {suffix}"
 
     def _reconciliation_status(self, report: dict | None) -> str:
         if report is None:

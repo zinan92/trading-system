@@ -22,11 +22,22 @@ class LiveReadiness:
         self.market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
 
     def run(self, run_date: str) -> dict:
-        data_source = DataSourcePreflight(self.output_root, self.market_db).run(run_date)
+        broker = broker_preflight(self.output_root)
+        source_identity = self._market_data_identity_for_broker(broker)
+        data_source = DataSourcePreflight(
+            self.output_root,
+            self.market_db,
+            symbol=source_identity["symbol"],
+            timeframe=source_identity["timeframe"],
+            write_legacy_artifacts=source_identity["write_legacy_artifacts"],
+        ).run(run_date)
         live_env = LiveEnvStatus(self.output_root).run(run_date)
         oanda_account = OandaAccountPreflight(output_root=self.output_root).run(run_date)
-        broker = broker_preflight(self.output_root)
-        gaps = DataGapDoctor(self.output_root).run(run_date)
+        gaps = DataGapDoctor(
+            self.output_root,
+            self.market_db,
+            write_legacy_artifacts=source_identity["write_legacy_artifacts"],
+        ).run(run_date, symbol=source_identity["symbol"], timeframe=source_identity["timeframe"])
         checks = [
             self._official_market_data(data_source),
             self._data_gaps(gaps),
@@ -55,15 +66,36 @@ class LiveReadiness:
         write_json(self.output_root / "live_readiness" / f"{run_date}.json", [payload])
         return payload
 
+    def _market_data_identity_for_broker(self, broker: dict) -> dict:
+        provider = str(broker.get("provider") or self.config.get("broker", {}).get("provider", ""))
+        if provider == "tiger_openapi":
+            feed = self.config.get("tiger_futures_feed", {}) or {}
+            symbol = str(feed.get("output_symbol") or feed.get("contract") or "MGCmain")
+            timeframe = str(feed.get("timeframe") or "1m")
+            return {
+                "provider": provider,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "write_legacy_artifacts": False,
+            }
+        return {
+            "provider": provider,
+            "symbol": "GOLD",
+            "timeframe": "5m",
+            "write_legacy_artifacts": True,
+        }
+
     def _official_market_data(self, data_source: dict) -> dict:
         ready, summary = official_broker_ohlc_status(data_source)
         return self._check("official_market_data", "pass" if ready else "fail", summary, data_source)
 
     def _data_gaps(self, gaps: dict) -> dict:
+        symbol = str(gaps.get("symbol") or "GOLD")
+        timeframe = str(gaps.get("timeframe") or "5m")
         if gaps.get("status") == "pass":
-            return self._check("data_gaps", "pass", "No hard GOLD 5m data gaps detected.", gaps)
+            return self._check("data_gaps", "pass", f"No hard {symbol} {timeframe} data gaps detected.", gaps)
         if gaps.get("status") == "warn":
-            return self._check("data_gaps", "fail", "Live mode requires continuous official 5m bars; warning gaps must be resolved first.", gaps)
+            return self._check("data_gaps", "fail", f"Live mode requires continuous {symbol} {timeframe} bars; warning gaps must be resolved first.", gaps)
         return self._check("data_gaps", "fail", "Live mode blocked by missing or failing data gap check.", gaps)
 
     def _execution_mode(self, broker: dict) -> dict:
@@ -76,7 +108,7 @@ class LiveReadiness:
 
     def _broker_provider(self, broker: dict) -> dict:
         provider = str(broker.get("provider") or self.config.get("broker", {}).get("provider", ""))
-        allowed = {"oanda_rest", "mt5_file_bridge", "binance_usdm"}
+        allowed = {"oanda_rest", "mt5_file_bridge", "binance_usdm", "tiger_openapi"}
         if broker.get("mode") != "live":
             return self._check("broker_provider", "fail", "Broker preflight is still in paper mode; live broker provider is not active.", {"provider": provider, "allowed": sorted(allowed), "broker_preflight": broker})
         if provider in allowed and broker.get("ready"):
@@ -100,6 +132,10 @@ class LiveReadiness:
             if not missing and broker.get("ready"):
                 return self._check("broker_credentials", "pass", "Binance USDM API credentials are present.", broker)
             return self._check("broker_credentials", "fail", "Binance USDM live broker credentials are missing or invalid.", broker)
+        if provider == "tiger_openapi":
+            if not missing and broker.get("props_path_exists") and broker.get("props_path_owner_only") and broker.get("ready"):
+                return self._check("broker_credentials", "pass", "Tiger OpenAPI config file is present and owner-only.", broker)
+            return self._check("broker_credentials", "fail", "Tiger OpenAPI config file is missing, unsafe, or preflight is not ready.", broker)
         return self._check("broker_credentials", "fail", "No live broker credential check is available for the active provider.", broker)
 
     def _live_env(self, live_env: dict) -> dict:
@@ -170,7 +206,75 @@ class LiveReadiness:
             if feed.get("status") == "pass" and feed.get("ready"):
                 return self._check("broker_feedback", "pass", "Binance USDM venue feed has successful evidence.", feed)
             return self._check("broker_feedback", "fail", "Binance live mode requires a successful Binance USDM venue feed import first.", feed)
+        if provider == "tiger_openapi":
+            return self._tiger_broker_feedback()
         return self._check("broker_feedback", "fail", "No broker feedback loop is available for the active provider.", {"provider": provider})
+
+    def _tiger_broker_feedback(self) -> dict:
+        readiness = (load_json(self.output_root / "tiger_price_feed_readiness" / "current.json") or [{}])[-1]
+        acceptance = (load_json(self.output_root / "tiger_price_feed_acceptance" / "current.json") or [{}])[-1]
+        evidence = {
+            "price_feed_readiness": self._tiger_price_feed_readiness_evidence(readiness),
+            "price_feed_acceptance": self._tiger_price_feed_acceptance_evidence(acceptance),
+        }
+        if readiness.get("ready_for_price_feed") is True:
+            return self._check(
+                "broker_feedback",
+                "pass",
+                "Tiger OpenAPI price feed has passed readiness and can be used as broker feedback evidence.",
+                evidence,
+            )
+        if acceptance.get("status") == "pending_market_open":
+            next_window = evidence["price_feed_acceptance"]["next_trading_window"].get("start") or "the next trading window"
+            return self._check(
+                "broker_feedback",
+                "fail",
+                f"Tiger OpenAPI price feed is waiting for market-hours acceptance; rerun after {next_window}.",
+                evidence,
+            )
+        if acceptance.get("status") == "blocked":
+            return self._check(
+                "broker_feedback",
+                "fail",
+                "Tiger OpenAPI price feed acceptance is blocked; inspect tiger_price_feed_acceptance before live readiness.",
+                evidence,
+            )
+        return self._check(
+            "broker_feedback",
+            "fail",
+            "Tiger live mode requires a passing tiger_price_feed_readiness artifact first.",
+            evidence,
+        )
+
+    def _tiger_price_feed_readiness_evidence(self, readiness: dict) -> dict:
+        return {
+            "status": str(readiness.get("status") or "missing"),
+            "ready_for_price_feed": readiness.get("ready_for_price_feed") is True,
+            "contract": str(readiness.get("contract") or ""),
+            "blocker_count": len([row for row in (readiness.get("blockers") or []) if isinstance(row, dict)]),
+            "checked_at": str(readiness.get("checked_at") or ""),
+            "can_enable_broker_orders_from_this_gate": readiness.get("can_enable_broker_orders_from_this_gate") is True,
+        }
+
+    def _tiger_price_feed_acceptance_evidence(self, acceptance: dict) -> dict:
+        steps = acceptance.get("steps", {}) if isinstance(acceptance.get("steps"), dict) else {}
+        realtime = steps.get("realtime_validation", {}) if isinstance(steps.get("realtime_validation"), dict) else {}
+        gate = realtime.get("market_hours_gate", {}) if isinstance(realtime.get("market_hours_gate"), dict) else {}
+        next_window = gate.get("next_trading_window", {}) if isinstance(gate.get("next_trading_window"), dict) else {}
+        return {
+            "status": str(acceptance.get("status") or "missing"),
+            "ready_for_price_feed": acceptance.get("ready_for_price_feed") is True,
+            "exit_code": acceptance.get("exit_code"),
+            "blocker_count": len([row for row in (acceptance.get("blockers") or []) if isinstance(row, dict)]),
+            "operator_action": str(gate.get("operator_action") or ""),
+            "next_trading_window": {
+                "start": str(next_window.get("start") or ""),
+                "end": str(next_window.get("end") or ""),
+                "trading_date": str(next_window.get("trading_date") or ""),
+            },
+            "checked_at": str(acceptance.get("checked_at") or ""),
+            "can_enable_broker_orders_from_this_gate": acceptance.get("can_enable_broker_orders_from_this_gate") is True,
+        }
 
     def _summary(self, checks: list[dict]) -> dict:
         failed = [item["name"] for item in checks if item["status"] == "fail"]
@@ -186,7 +290,7 @@ class LiveReadiness:
         if by_name.get("execution_mode", {}).get("status") == "fail":
             actions.append("Keep paper mode until all live checks pass; only then set execution_mode=live and live_trading_enabled=true.")
         if by_name.get("broker_provider", {}).get("status") == "fail":
-            actions.append("Configure broker.provider as binance_usdm, oanda_rest, or mt5_file_bridge and make its preflight pass.")
+            actions.append("Configure broker.provider as binance_usdm, oanda_rest, mt5_file_bridge, or tiger_openapi and make its preflight pass.")
         if by_name.get("broker_credentials", {}).get("status") == "fail":
             actions.append("Copy configs/live.env.template to configs/live.env, set required broker credentials, then rerun broker preflight.")
         if by_name.get("oanda_account", {}).get("status") == "fail":

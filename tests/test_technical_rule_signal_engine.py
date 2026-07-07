@@ -36,6 +36,7 @@ def test_registry_selects_technical_rule_engines():
         "adr_exhaustion_reversion",
         "bollinger_reversion",
         "bollinger_reclaim_filter",
+        "vwap_zscore_reversion",
         "breakout",
         "fibonacci",
         "ema50_position",
@@ -132,6 +133,45 @@ def test_bollinger_reclaim_filter_requires_reclaim_volatility_and_session():
 
     off_session = list(bars)
     off_session[-1] = Bar("GOLD", "1m", "2026-05-26T22:00:00+00:00", bars[-1].open, bars[-1].high, bars[-1].low, bars[-1].close, 10, "test", [])
+    assert engine.generate(GOLD, off_session, run_date="2026-05-26").direction == "watch"
+
+
+def test_vwap_zscore_reversion_requires_statistical_stretch_reclaim_and_session():
+    closes = [100.0 + (0.03 if index % 2 else -0.03) for index in range(78)] + [99.50, 99.72]
+    bars = [
+        Bar("GOLD", "1m", f"2026-05-26T14:{index % 60:02d}:00+00:00", bar.open, bar.high, bar.low, bar.close, 12, bar.provider, bar.quality_flags)
+        for index, bar in enumerate(_bars(closes))
+    ]
+    bars[-1] = Bar("GOLD", "1m", "2026-05-26T14:59:00+00:00", 99.55, 99.76, 99.50, 99.72, 16, "test", [])
+    engine = TechnicalRuleSignalEngine(
+        {
+            "engine": "vwap_zscore_reversion",
+            "signal": {
+                "min_bars": 80,
+                "zscore_lookback_bars": 24,
+                "vwap_lookback_bars": 72,
+                "atr_lookback_bars": 14,
+                "adx_lookback_bars": 14,
+                "min_abs_zscore": 1.4,
+                "min_remaining_zscore": 0.2,
+                "min_vwap_gap_pct": 0.03,
+                "min_reclaim_pct": 0.01,
+                "min_atr_pct": 0.01,
+                "max_atr_pct": 1.2,
+                "max_adx": 120,
+                "min_volume_ratio": 0.8,
+                "max_volume_ratio": 2.0,
+                "session_start_utc": 7,
+                "session_end_utc": 20,
+            },
+        }
+    )
+    signal = engine.generate(GOLD, bars, run_date="2026-05-26")
+    assert signal.direction == "long"
+    assert signal.regime == "vwap_zscore_reversion"
+
+    off_session = list(bars)
+    off_session[-1] = Bar("GOLD", "1m", "2026-05-26T22:00:00+00:00", bars[-1].open, bars[-1].high, bars[-1].low, bars[-1].close, 16, "test", [])
     assert engine.generate(GOLD, off_session, run_date="2026-05-26").direction == "watch"
 
 

@@ -19,11 +19,39 @@
       "min_daily_executed_trades_per_strategy": 5
     },
     "paper_execution_costs": {
+      "type": "notional_pct",
       "spread_pct": 0.01,
       "slippage_pct": 0.005,
       "commission_pct_notional": 0.001,
       "commission_per_order": 0.0,
-      "min_commission": 0.0
+      "min_commission": 0.0,
+      "venues": {
+        "binance_usdm": {
+          "type": "notional_pct",
+          "spread_pct": 0.01,
+          "slippage_pct": 0.005,
+          "commission_pct_notional": 0.001,
+          "commission_per_order": 0.0,
+          "min_commission": 0.0
+        },
+        "tiger_mgc": {
+          "type": "fixed_per_contract",
+          "provider": "tiger_openapi:COMEX",
+          "root_symbol": "MGC",
+          "contract_multiplier": 10,
+          "spread_pct": 0.0,
+          "slippage_pct": 0.0,
+          "min_contracts": 1,
+          "commission_per_contract_side": 2.7,
+          "exchange_fee_per_contract_side": 0.0,
+          "clearing_fee_per_contract_side": 0.0,
+          "min_commission": 0.0,
+          "requires_bill_confirmation": true
+        }
+      },
+      "venue_aliases": {
+        "tiger_openapi:COMEX:MGC": "tiger_mgc"
+      }
     },
     "live_money_guardrails": {
       "daily_loss_limit_pct": 1.0,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
@@ -17,9 +18,11 @@ class DataSourcePreflight:
         checked_at: datetime | None = None,
         symbol: str = "GOLD",
         timeframe: str = "5m",
+        write_legacy_artifacts: bool | None = None,
     ) -> None:
         config = load_pipeline_config()
         self.config = config
+        self._explicit_output_root = output_root is not None
         self.output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
         self.market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
         # The freshness/price-sanity thresholds are the GOLD instrument's, shared
@@ -28,17 +31,20 @@ class DataSourcePreflight:
         # the default (GOLD/5m) is byte-identical to the legacy global preflight.
         self.symbol = symbol
         self.timeframe = timeframe
+        self.source_key = f"{symbol}_{timeframe}"
+        self.write_legacy_artifacts = self._default_write_legacy_artifacts(write_legacy_artifacts)
         self.source_config = config.get("market_data_sources", {}).get(f"{symbol.lower()}_{timeframe}", {}) or config.get("market_data_sources", {}).get("gold_5m", {})
         self.checked_at = checked_at
 
     def run(self, run_date: str) -> dict:
         checked_at = (self.checked_at or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
         clean_bars = load_json(self.output_root / "clean_bars" / run_date / f"{self.symbol}_{self.timeframe}.json")
-        latest = clean_bars[-1] if clean_bars else {}
+        store = MarketStore(self.market_db) if self.market_db.exists() else None
+        latest = clean_bars[-1] if clean_bars else (store.load_latest_bar(self.symbol, self.timeframe) if store else {})
         data_quality = self._load_gold_data_quality(run_date)
         data_quality_allows_trading = data_quality.get("allows_trading") if data_quality else None
         data_quality_reasons = data_quality.get("reasons", []) if data_quality else []
-        coverage = MarketStore(self.market_db).coverage() if self.market_db.exists() else []
+        coverage = store.coverage() if store else []
         gold_coverage = [item for item in coverage if item["symbol"] == self.symbol and item["timeframe"] == self.timeframe]
         official_providers = set(self.source_config.get("official_broker_providers", ["broker_csv", "mt5_csv", "ibkr", "oanda"]))
         public_providers = set(self.source_config.get("public_providers", ["gold-api.com", "yahoo_chart:GC=F"]))
@@ -49,8 +55,9 @@ class DataSourcePreflight:
         public_rows = sum(item["rows"] for item in gold_coverage if item["provider"] in public_providers)
         latest_provider = str(latest.get("provider", ""))
         latest_price = latest.get("close")
-        latest_quote = MarketStore(self.market_db).load_latest_quote(self.symbol) if self.market_db.exists() else {}
+        latest_quote = store.load_latest_quote(self.symbol) if store else {}
         price_sanity = self._price_sanity(latest, latest_quote)
+        execution_venue_readiness_gate = self._execution_venue_readiness_gate(execution_venue_providers, latest_provider)
         max_live_bar_lag_minutes = float(self.source_config.get("max_live_bar_lag_minutes", 15))
         max_public_quote_age_minutes = float(self.source_config.get("max_public_quote_age_minutes", max_live_bar_lag_minutes))
         live_bar_lag_minutes = self._live_bar_lag_minutes(latest, latest_quote)
@@ -58,9 +65,11 @@ class DataSourcePreflight:
         latest_record = latest_quote or latest
         latest_record_age_minutes = self._record_age_minutes(latest_record, checked_at)
         checks_current_session = self._is_current_run_date(run_date, checked_at)
+        market_session_freshness = self._market_session_freshness(execution_venue_readiness_gate, checked_at)
+        current_session_freshness_enforced = bool(checks_current_session and not market_session_freshness["suspend_current_session_freshness"])
         latest_record_is_fresh = (
             True
-            if not checks_current_session
+            if not current_session_freshness_enforced
             else latest_record_age_minutes is not None and latest_record_age_minutes <= max_public_quote_age_minutes
         )
         price_sanity_passes = bool(price_sanity.get("passes", True))
@@ -74,6 +83,7 @@ class DataSourcePreflight:
             and live_bar_is_fresh
             and latest_record_is_fresh
             and price_sanity_passes
+            and execution_venue_readiness_gate["allows_live"]
         )
         ready_for_live = bool(official_live_ready or execution_venue_live_ready)
         status = "pass" if ready_for_live else ("warn" if ready_for_paper else "fail")
@@ -88,6 +98,12 @@ class DataSourcePreflight:
             message = "; ".join(price_sanity.get("reasons", [])) or f"{self.symbol} price sanity check failed"
         elif official_rows > 0 and latest_provider in official_providers and not live_bar_is_fresh:
             message = f"official {self.symbol} {self.timeframe} latest bar is stale by {live_bar_lag_minutes:.1f} minutes; refresh broker/MT5 feed"
+        elif (
+            execution_venue_rows > 0
+            and latest_provider in execution_venue_providers
+            and not execution_venue_readiness_gate["allows_live"]
+        ):
+            message = execution_venue_readiness_gate["summary"]
         elif data_quality_allows_trading is False:
             message = "; ".join(data_quality_reasons) or "data quality gate blocked paper trading"
         elif ready_for_paper:
@@ -97,6 +113,9 @@ class DataSourcePreflight:
         payload = {
             "run_date": run_date,
             "checked_at": checked_at.isoformat(),
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "source_key": self.source_key,
             "status": status,
             "message": message,
             "ready_for_paper": ready_for_paper,
@@ -116,7 +135,8 @@ class DataSourcePreflight:
             "latest_record_age_minutes": round(latest_record_age_minutes, 2) if latest_record_age_minutes is not None else None,
             "max_public_quote_age_minutes": max_public_quote_age_minutes,
             "latest_record_is_fresh": latest_record_is_fresh,
-            "current_session_freshness_enforced": checks_current_session,
+            "current_session_freshness_enforced": current_session_freshness_enforced,
+            "market_session_freshness": market_session_freshness,
             "market_db": str(self.market_db),
             "coverage": gold_coverage,
             "official_broker_providers": sorted(official_providers),
@@ -126,10 +146,151 @@ class DataSourcePreflight:
             "execution_venue_rows": execution_venue_rows,
             "public_rows": public_rows,
             "live_data_mode": "official_broker" if official_live_ready else ("execution_venue" if execution_venue_live_ready else "not_live_ready"),
+            "execution_venue_readiness_gate": execution_venue_readiness_gate,
         }
-        write_json(self.output_root / "data_source_preflight" / "current.json", [payload])
-        write_json(self.output_root / "data_source_preflight" / f"{run_date}.json", [payload])
+        scoped_root = self.output_root / "data_source_preflight" / self.source_key
+        write_json(scoped_root / "current.json", [payload])
+        write_json(scoped_root / f"{run_date}.json", [payload])
+        if self.write_legacy_artifacts:
+            write_json(self.output_root / "data_source_preflight" / "current.json", [payload])
+            write_json(self.output_root / "data_source_preflight" / f"{run_date}.json", [payload])
         return payload
+
+    def _default_write_legacy_artifacts(self, override: bool | None) -> bool:
+        if override is not None:
+            return bool(override)
+        # Backward compatibility for the canonical global preflight and scoped
+        # strategy roots. Shared-output ad hoc checks for non-default instruments
+        # are namespaced so they do not overwrite GOLD/5m dashboard state.
+        return self._explicit_output_root or (self.symbol == "GOLD" and self.timeframe == "5m")
+
+    def _execution_venue_readiness_gate(self, execution_venue_providers: set[str], latest_provider: str) -> dict[str, Any]:
+        if not self._requires_tiger_price_feed_gate(execution_venue_providers, latest_provider):
+            return {
+                "required": False,
+                "provider": "",
+                "status": "not_required",
+                "allows_live": True,
+                "summary": "No execution-venue-specific readiness gate is required for this provider.",
+                "evidence": {},
+            }
+
+        readiness = self._latest_artifact("tiger_price_feed_readiness")
+        acceptance = self._latest_artifact("tiger_price_feed_acceptance")
+        if readiness.get("ready_for_price_feed") is True:
+            return {
+                "required": True,
+                "provider": "tiger_openapi",
+                "status": "pass",
+                "allows_live": True,
+                "summary": "Tiger OpenAPI price-feed readiness has passed.",
+                "evidence": self._tiger_price_feed_gate_evidence(readiness, acceptance),
+            }
+
+        acceptance_status = str(acceptance.get("status") or "missing")
+        evidence = self._tiger_price_feed_gate_evidence(readiness, acceptance)
+        if acceptance_status == "pending_market_open":
+            next_window = evidence["acceptance"]["next_trading_window"].get("start") or "the next trading window"
+            return {
+                "required": True,
+                "provider": "tiger_openapi",
+                "status": "pending_market_open",
+                "allows_live": False,
+                "summary": f"Tiger OpenAPI price feed is waiting for market-hours acceptance; rerun after {next_window}.",
+                "evidence": evidence,
+            }
+        return {
+            "required": True,
+            "provider": "tiger_openapi",
+            "status": "blocked",
+            "allows_live": False,
+            "summary": "Tiger OpenAPI price feed must pass readiness before it can be treated as execution-grade market data.",
+            "evidence": evidence,
+        }
+
+    def _requires_tiger_price_feed_gate(self, execution_venue_providers: set[str], latest_provider: str) -> bool:
+        if not any(provider.startswith("tiger_openapi") for provider in execution_venue_providers):
+            return False
+        if not latest_provider.startswith("tiger_openapi"):
+            return False
+        return bool(self.source_config.get("require_tiger_price_feed_readiness", True))
+
+    def _latest_artifact(self, artifact: str) -> dict[str, Any]:
+        path = self.output_root / artifact / "current.json"
+        if not path.exists():
+            return {}
+        rows = load_json(path)
+        return rows[-1] if rows and isinstance(rows[-1], dict) else {}
+
+    def _tiger_price_feed_gate_evidence(self, readiness: dict[str, Any], acceptance: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "readiness": {
+                "status": str(readiness.get("status") or "missing"),
+                "ready_for_price_feed": readiness.get("ready_for_price_feed") is True,
+                "contract": str(readiness.get("contract") or ""),
+                "blocker_count": len([row for row in readiness.get("blockers", []) or [] if isinstance(row, dict)]),
+                "checked_at": str(readiness.get("checked_at") or ""),
+                "can_enable_broker_orders_from_this_gate": readiness.get("can_enable_broker_orders_from_this_gate") is True,
+            },
+            "acceptance": {
+                "status": str(acceptance.get("status") or "missing"),
+                "ready_for_price_feed": acceptance.get("ready_for_price_feed") is True,
+                "exit_code": acceptance.get("exit_code"),
+                "next_trading_window": self._tiger_acceptance_next_window(acceptance),
+                "checked_at": str(acceptance.get("checked_at") or ""),
+                "can_enable_broker_orders_from_this_gate": acceptance.get("can_enable_broker_orders_from_this_gate") is True,
+            },
+        }
+
+    def _tiger_acceptance_next_window(self, acceptance: dict[str, Any]) -> dict[str, str]:
+        steps = acceptance.get("steps", {}) if isinstance(acceptance.get("steps"), dict) else {}
+        realtime = steps.get("realtime_validation", {}) if isinstance(steps.get("realtime_validation"), dict) else {}
+        gate = realtime.get("market_hours_gate", {}) if isinstance(realtime.get("market_hours_gate"), dict) else {}
+        next_window = gate.get("next_trading_window", {}) if isinstance(gate.get("next_trading_window"), dict) else {}
+        return {
+            "start": str(next_window.get("start") or ""),
+            "end": str(next_window.get("end") or ""),
+            "trading_date": str(next_window.get("trading_date") or ""),
+        }
+
+    def _market_session_freshness(self, execution_venue_readiness_gate: dict[str, Any], checked_at: datetime) -> dict[str, Any]:
+        if execution_venue_readiness_gate.get("provider") != "tiger_openapi":
+            return {
+                "status": "not_applicable",
+                "suspend_current_session_freshness": False,
+                "summary": "No exchange-session freshness override applies.",
+            }
+        if execution_venue_readiness_gate.get("status") != "pending_market_open":
+            return {
+                "status": "market_hours_not_pending",
+                "suspend_current_session_freshness": False,
+                "summary": "Tiger market-hours acceptance is not pending a future open window.",
+            }
+        evidence = execution_venue_readiness_gate.get("evidence", {}) if isinstance(execution_venue_readiness_gate.get("evidence"), dict) else {}
+        acceptance = evidence.get("acceptance", {}) if isinstance(evidence.get("acceptance"), dict) else {}
+        next_window = acceptance.get("next_trading_window", {}) if isinstance(acceptance.get("next_trading_window"), dict) else {}
+        start = self._parse_time(str(next_window.get("start") or ""))
+        if start is None or checked_at < start:
+            return {
+                "status": "market_closed_pending_open",
+                "suspend_current_session_freshness": True,
+                "summary": "Tiger/COMEX is before the next trading window; historical bars are not stale solely because the exchange is closed.",
+                "next_trading_window": {
+                    "start": str(next_window.get("start") or ""),
+                    "end": str(next_window.get("end") or ""),
+                    "trading_date": str(next_window.get("trading_date") or ""),
+                },
+            }
+        return {
+            "status": "market_window_started",
+            "suspend_current_session_freshness": False,
+            "summary": "The pending Tiger/COMEX trading window has started; current-session freshness is enforced.",
+            "next_trading_window": {
+                "start": str(next_window.get("start") or ""),
+                "end": str(next_window.get("end") or ""),
+                "trading_date": str(next_window.get("trading_date") or ""),
+            },
+        }
 
     def _price_sanity(self, latest_bar: dict, latest_quote: dict) -> dict:
         config = self.source_config.get("price_sanity", {})

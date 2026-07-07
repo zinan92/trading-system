@@ -71,7 +71,13 @@ class LiveMoneyGuardrails:
         self.output_root = Path(output_root)
         self.broker_config = broker_config or {}
         self.rules = load_risk_rules().get("default", {})
-        self.live_rules = self.rules.get("live_money_guardrails", {}) if isinstance(self.rules.get("live_money_guardrails"), dict) else {}
+        base_live_rules = self.rules.get("live_money_guardrails", {}) if isinstance(self.rules.get("live_money_guardrails"), dict) else {}
+        broker_live_rules = (
+            self.broker_config.get("live_money_guardrails", {})
+            if isinstance(self.broker_config.get("live_money_guardrails"), dict)
+            else {}
+        )
+        self.live_rules = {**base_live_rules, **broker_live_rules}
         self.halt_store = LiveHaltStore(self.output_root)
 
     def limits(self) -> dict:
@@ -99,7 +105,8 @@ class LiveMoneyGuardrails:
     ) -> dict:
         reconciliation = reconciliation if isinstance(reconciliation, dict) and reconciliation else self._latest_reconciliation(run_date)
         limits = self.limits()
-        candidate_notional = abs(float(requested_price or 0) * float(quantity or 0))
+        notional_multiplier = self._notional_multiplier(symbol, ticket)
+        candidate_notional = abs(float(requested_price or 0) * float(quantity or 0) * notional_multiplier)
         daily_loss = self._daily_loss_snapshot(run_date, reconciliation, limits)
         exposure = self._exposure_snapshot(reconciliation, candidate_notional, requested_price)
         daily_orders = self._daily_entry_order_count(run_date)
@@ -185,6 +192,7 @@ class LiveMoneyGuardrails:
                 "side": side,
                 "requested_price": round(float(requested_price or 0), 8),
                 "quantity": round(float(quantity or 0), 12),
+                "notional_multiplier": round(notional_multiplier, 8),
                 "notional": round(candidate_notional, 8),
             },
             "daily_loss": daily_loss,
@@ -202,6 +210,17 @@ class LiveMoneyGuardrails:
         rows = load_json(path)
         rows.append(result)
         write_json(path, rows)
+
+    def _notional_multiplier(self, symbol: str, ticket: dict) -> float:
+        configured = self.broker_config.get("contract_specs", {}) if isinstance(self.broker_config.get("contract_specs"), dict) else {}
+        spec = configured.get(symbol) or configured.get(str(ticket.get("asset") or ""))
+        if isinstance(spec, dict) and spec.get("multiplier") is not None:
+            parsed = self._finite_float(spec.get("multiplier"), "contract_specs.multiplier")
+            return parsed if parsed and parsed > 0 else 1.0
+        if self.broker_config.get("contract_multiplier") is not None:
+            parsed = self._finite_float(self.broker_config.get("contract_multiplier"), "contract_multiplier")
+            return parsed if parsed and parsed > 0 else 1.0
+        return 1.0
 
     def _latest_reconciliation(self, run_date: str) -> dict:
         candidates = []

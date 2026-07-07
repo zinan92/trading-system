@@ -130,3 +130,58 @@ def test_live_env_status_reports_secret_hygiene(monkeypatch, tmp_path: Path):
     assert hygiene["status"] == "warn"
     assert "OANDA_API_TOKEN" in hygiene["placeholder_keys"]
     assert hygiene["permissions"]["group_or_other_access"] is True
+
+
+def test_live_env_status_requires_tiger_props_path(monkeypatch, tmp_path: Path):
+    from services import live_env as live_env_module
+
+    root = tmp_path / "outputs"
+    env = tmp_path / "live.env"
+    env.write_text("TIGER_OPENAPI_CONFIG_PATH=/secure/tiger_openapi_config.properties\n", encoding="utf-8")
+    env.chmod(0o600)
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(env))
+    monkeypatch.delenv("TIGER_OPENAPI_CONFIG_PATH", raising=False)
+    monkeypatch.setattr(
+        live_env_module,
+        "load_pipeline_config",
+        lambda: {
+            "output_root": str(root),
+            "broker": {"provider": "tiger_openapi", "props_path_env": "TIGER_OPENAPI_CONFIG_PATH"},
+        },
+    )
+
+    result = live_env_module.LiveEnvStatus(output_root=root, env_path=env).run("2026-07-05")
+
+    assert result["status"] == "pass"
+    assert result["required_keys"] == ["TIGER_OPENAPI_CONFIG_PATH"]
+    assert "TIGER_OPENAPI_CONFIG_PATH" in result["present_keys"]
+
+
+def test_live_env_status_resolves_tiger_broker_profile(monkeypatch, tmp_path: Path):
+    from services import live_env as live_env_module
+
+    root = tmp_path / "outputs"
+    env = tmp_path / "live.env"
+    env.write_text("TIGER_OPENAPI_CONFIG_PATH=/secure/tiger_openapi_config.properties\n", encoding="utf-8")
+    env.chmod(0o600)
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(env))
+    monkeypatch.delenv("TIGER_OPENAPI_CONFIG_PATH", raising=False)
+    monkeypatch.setattr(
+        live_env_module,
+        "load_pipeline_config",
+        lambda: {
+            "output_root": str(root),
+            "broker": {"profile": "tiger_openapi_paper"},
+            "broker_profiles": {
+                "tiger_openapi_paper": {
+                    "provider": "tiger_openapi",
+                    "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+                }
+            },
+        },
+    )
+
+    result = live_env_module.LiveEnvStatus(output_root=root, env_path=env).run("2026-07-05")
+
+    assert result["status"] == "pass"
+    assert result["required_keys"] == ["TIGER_OPENAPI_CONFIG_PATH"]

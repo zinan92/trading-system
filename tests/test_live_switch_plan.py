@@ -58,6 +58,59 @@ def test_live_switch_plan_accepts_execution_venue_market_data(tmp_path: Path):
     assert steps["official_5m_data"]["status"] == "done"
 
 
+def test_live_switch_plan_accepts_ready_tiger_provider(tmp_path: Path):
+    root = tmp_path / "outputs"
+    run_date = "2026-07-05"
+    write_json(root / "data_source_preflight" / "current.json", [{"ready_for_live": True, "live_data_mode": "official_broker", "official_rows": 240}])
+    write_json(root / "live_env" / "current.json", [{"status": "pass"}])
+    write_json(root / "oanda_account" / "current.json", [{"status": "skipped", "instrument_ready": False}])
+    write_json(root / "broker_preflight" / "current.json", [{"provider": "tiger_openapi", "ready": True}])
+    write_json(root / "live_readiness" / "current.json", [{"status": "fail", "live_ready": False}])
+    write_json(root / "live_activation" / "current.json", [{"status": "blocked", "dry_run_ready": False, "real_money_ready": False}])
+    write_json(root / "schedules" / "status_current.json", [{"status": "active"}])
+
+    result = LiveSwitchPlan(root).run(run_date)
+
+    steps = {item["name"]: item for item in result["steps"]}
+    assert steps["broker_provider"]["status"] == "done"
+
+
+def test_live_switch_plan_uses_scoped_tiger_market_data(tmp_path: Path):
+    root = tmp_path / "outputs"
+    run_date = "2026-07-05"
+    write_json(root / "data_source_preflight" / "current.json", [{"ready_for_live": False, "message": "legacy GOLD gate should not decide Tiger"}])
+    write_json(
+        root / "data_source_preflight" / "MGCmain_1m" / "current.json",
+        [
+            {
+                "symbol": "MGCmain",
+                "timeframe": "1m",
+                "source_key": "MGCmain_1m",
+                "ready_for_live": True,
+                "live_data_mode": "execution_venue",
+                "latest_provider": "tiger_openapi:COMEX",
+                "official_rows": 0,
+                "execution_venue_rows": 500,
+                "execution_venue_providers": ["tiger_openapi:COMEX"],
+            }
+        ],
+    )
+    write_json(root / "live_env" / "current.json", [{"status": "pass"}])
+    write_json(root / "oanda_account" / "current.json", [{"status": "skipped", "instrument_ready": False}])
+    write_json(root / "broker_preflight" / "current.json", [{"provider": "tiger_openapi", "ready": True}])
+    write_json(root / "live_readiness" / "current.json", [{"status": "fail", "live_ready": False}])
+    write_json(root / "live_activation" / "current.json", [{"status": "blocked", "dry_run_ready": False, "real_money_ready": False}])
+    write_json(root / "schedules" / "status_current.json", [{"status": "active"}])
+
+    result = LiveSwitchPlan(root).run(run_date)
+
+    steps = {item["name"]: item for item in result["steps"]}
+    assert steps["official_5m_data"]["status"] == "done"
+    assert steps["official_5m_data"]["evidence"]["source_key"] == "MGCmain_1m"
+    assert result["artifacts"]["data_source_preflight"].endswith("data_source_preflight/MGCmain_1m/current.json")
+    assert any("MGCmain 1m" in item for item in result["safety_order"])
+
+
 def test_live_switch_plan_passes_when_all_live_inputs_are_ready(tmp_path: Path):
     root = tmp_path / "outputs"
     run_date = "2026-05-26"

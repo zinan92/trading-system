@@ -88,6 +88,323 @@ def test_data_source_preflight_accepts_execution_venue_feed_for_live_when_enable
     assert "execution venue market data is active" in result["message"]
 
 
+def test_data_source_preflight_blocks_tiger_live_until_price_feed_acceptance(tmp_path: Path, monkeypatch):
+    root = tmp_path / "outputs"
+    db_path = tmp_path / "market_data.db"
+    run_date = "2026-07-06"
+    start = datetime(2026, 7, 6, tzinfo=timezone.utc)
+    config = {
+        "market_data_sources": {
+            "mgcmain_1m": {
+                "public_providers": [],
+                "execution_venue_providers": ["tiger_openapi:COMEX"],
+                "official_broker_providers": [],
+                "allow_execution_venue_for_live": True,
+                "require_tiger_price_feed_readiness": True,
+                "max_live_bar_lag_minutes": 15,
+                "max_public_quote_age_minutes": 15,
+                "price_sanity": {"enabled": True, "min_price": 3000, "max_price": 6000, "max_quote_bar_deviation_pct": 3},
+            }
+        }
+    }
+    monkeypatch.setattr("services.data_source_preflight.load_pipeline_config", lambda: config)
+    bars = [
+        Bar("MGCmain", "1m", (start + timedelta(minutes=index)).isoformat(), 4180, 4182, 4179, 4180 + index, 10, "tiger_openapi:COMEX", ["execution_venue_feed"])
+        for index in range(3)
+    ]
+    MarketStore(db_path).upsert_bars(bars)
+    write_json(root / "clean_bars" / run_date / "MGCmain_1m.json", [bar.to_dict() for bar in bars])
+    write_json(
+        root / "tiger_price_feed_readiness" / "current.json",
+        [
+            {
+                "status": "blocked",
+                "ready_for_price_feed": False,
+                "contract": "MGCmain",
+                "blockers": [{"name": "realtime_market_hours_gate", "status": "fail"}],
+                "can_enable_broker_orders_from_this_gate": False,
+            }
+        ],
+    )
+    write_json(
+        root / "tiger_price_feed_acceptance" / "current.json",
+        [
+            {
+                "status": "pending_market_open",
+                "ready_for_price_feed": False,
+                "exit_code": 75,
+                "can_enable_broker_orders_from_this_gate": False,
+                "steps": {
+                    "realtime_validation": {
+                        "market_hours_gate": {
+                            "next_trading_window": {"start": "2026-07-05T22:00:00+00:00", "end": "2026-07-06T21:00:00+00:00", "trading_date": "2026-07-06"}
+                        }
+                    }
+                },
+            }
+        ],
+    )
+
+    result = DataSourcePreflight(root, db_path, checked_at=start + timedelta(minutes=3), symbol="MGCmain", timeframe="1m").run(run_date)
+
+    assert result["status"] == "warn"
+    assert result["ready_for_paper"] is True
+    assert result["ready_for_live"] is False
+    assert result["live_data_mode"] == "not_live_ready"
+    assert result["execution_venue_rows"] == 3
+    assert result["execution_venue_readiness_gate"]["required"] is True
+    assert result["execution_venue_readiness_gate"]["status"] == "pending_market_open"
+    assert result["execution_venue_readiness_gate"]["allows_live"] is False
+    assert result["execution_venue_readiness_gate"]["evidence"]["readiness"]["can_enable_broker_orders_from_this_gate"] is False
+    assert "waiting for market-hours acceptance" in result["message"]
+
+
+def test_data_source_preflight_treats_tiger_closed_session_bars_as_paper_usable(tmp_path: Path, monkeypatch):
+    root = tmp_path / "outputs"
+    db_path = tmp_path / "market_data.db"
+    run_date = "2026-07-05"
+    config = {
+        "market_data_sources": {
+            "mgcmain_1m": {
+                "public_providers": [],
+                "execution_venue_providers": ["tiger_openapi:COMEX"],
+                "official_broker_providers": [],
+                "allow_execution_venue_for_live": True,
+                "require_tiger_price_feed_readiness": True,
+                "max_live_bar_lag_minutes": 15,
+                "max_public_quote_age_minutes": 15,
+                "price_sanity": {"enabled": True, "min_price": 3000, "max_price": 6000, "max_quote_bar_deviation_pct": 3},
+            }
+        }
+    }
+    monkeypatch.setattr("services.data_source_preflight.load_pipeline_config", lambda: config)
+    latest_close = datetime(2026, 7, 3, 16, 59, tzinfo=timezone.utc)
+    MarketStore(db_path).upsert_bars(
+        [
+            Bar("MGCmain", "1m", latest_close.isoformat(), 4186, 4187, 4185, 4186.9, 10, "tiger_openapi:COMEX", ["execution_venue_feed"])
+        ]
+    )
+    write_json(
+        root / "tiger_price_feed_readiness" / "current.json",
+        [
+            {
+                "status": "blocked",
+                "ready_for_price_feed": False,
+                "contract": "MGCmain",
+                "blockers": [{"name": "realtime_market_hours_gate", "status": "fail"}],
+                "can_enable_broker_orders_from_this_gate": False,
+            }
+        ],
+    )
+    write_json(
+        root / "tiger_price_feed_acceptance" / "current.json",
+        [
+            {
+                "status": "pending_market_open",
+                "ready_for_price_feed": False,
+                "exit_code": 75,
+                "can_enable_broker_orders_from_this_gate": False,
+                "steps": {
+                    "realtime_validation": {
+                        "market_hours_gate": {
+                            "next_trading_window": {
+                                "start": "2026-07-05T22:00:00+00:00",
+                                "end": "2026-07-06T21:00:00+00:00",
+                                "trading_date": "2026-07-06",
+                            }
+                        }
+                    }
+                },
+            }
+        ],
+    )
+
+    result = DataSourcePreflight(
+        root,
+        db_path,
+        checked_at=datetime(2026, 7, 5, 17, 10, tzinfo=timezone.utc),
+        symbol="MGCmain",
+        timeframe="1m",
+    ).run(run_date)
+
+    assert result["status"] == "warn"
+    assert result["ready_for_paper"] is True
+    assert result["ready_for_live"] is False
+    assert result["latest_record_age_minutes"] > 2800
+    assert result["latest_record_is_fresh"] is True
+    assert result["current_session_freshness_enforced"] is False
+    assert result["market_session_freshness"]["status"] == "market_closed_pending_open"
+    assert result["execution_venue_readiness_gate"]["status"] == "pending_market_open"
+    assert "waiting for market-hours acceptance" in result["message"]
+
+
+def test_data_source_preflight_enforces_tiger_freshness_after_pending_window_starts(tmp_path: Path, monkeypatch):
+    root = tmp_path / "outputs"
+    db_path = tmp_path / "market_data.db"
+    run_date = "2026-07-05"
+    config = {
+        "market_data_sources": {
+            "mgcmain_1m": {
+                "public_providers": [],
+                "execution_venue_providers": ["tiger_openapi:COMEX"],
+                "official_broker_providers": [],
+                "allow_execution_venue_for_live": True,
+                "require_tiger_price_feed_readiness": True,
+                "max_live_bar_lag_minutes": 15,
+                "max_public_quote_age_minutes": 15,
+                "price_sanity": {"enabled": True, "min_price": 3000, "max_price": 6000, "max_quote_bar_deviation_pct": 3},
+            }
+        }
+    }
+    monkeypatch.setattr("services.data_source_preflight.load_pipeline_config", lambda: config)
+    MarketStore(db_path).upsert_bars(
+        [
+            Bar("MGCmain", "1m", "2026-07-03T16:59:00+00:00", 4186, 4187, 4185, 4186.9, 10, "tiger_openapi:COMEX", ["execution_venue_feed"])
+        ]
+    )
+    write_json(root / "tiger_price_feed_readiness" / "current.json", [{"status": "blocked", "ready_for_price_feed": False, "blockers": [{"name": "realtime_market_hours_gate"}]}])
+    write_json(
+        root / "tiger_price_feed_acceptance" / "current.json",
+        [
+            {
+                "status": "pending_market_open",
+                "ready_for_price_feed": False,
+                "exit_code": 75,
+                "steps": {
+                    "realtime_validation": {
+                        "market_hours_gate": {
+                            "next_trading_window": {
+                                "start": "2026-07-05T22:00:00+00:00",
+                                "end": "2026-07-06T21:00:00+00:00",
+                                "trading_date": "2026-07-06",
+                            }
+                        }
+                    }
+                },
+            }
+        ],
+    )
+
+    result = DataSourcePreflight(
+        root,
+        db_path,
+        checked_at=datetime(2026, 7, 5, 22, 30, tzinfo=timezone.utc),
+        symbol="MGCmain",
+        timeframe="1m",
+    ).run(run_date)
+
+    assert result["status"] == "fail"
+    assert result["ready_for_paper"] is False
+    assert result["latest_record_is_fresh"] is False
+    assert result["current_session_freshness_enforced"] is True
+    assert result["market_session_freshness"]["status"] == "market_window_started"
+    assert "stale" in result["message"]
+
+
+def test_data_source_preflight_accepts_tiger_live_after_price_feed_readiness(tmp_path: Path, monkeypatch):
+    root = tmp_path / "outputs"
+    db_path = tmp_path / "market_data.db"
+    run_date = "2026-07-06"
+    start = datetime(2026, 7, 6, tzinfo=timezone.utc)
+    config = {
+        "market_data_sources": {
+            "mgcmain_1m": {
+                "public_providers": [],
+                "execution_venue_providers": ["tiger_openapi:COMEX"],
+                "official_broker_providers": [],
+                "allow_execution_venue_for_live": True,
+                "require_tiger_price_feed_readiness": True,
+                "max_live_bar_lag_minutes": 15,
+                "max_public_quote_age_minutes": 15,
+                "price_sanity": {"enabled": True, "min_price": 3000, "max_price": 6000, "max_quote_bar_deviation_pct": 3},
+            }
+        }
+    }
+    monkeypatch.setattr("services.data_source_preflight.load_pipeline_config", lambda: config)
+    bars = [
+        Bar("MGCmain", "1m", (start + timedelta(minutes=index)).isoformat(), 4180, 4182, 4179, 4180 + index, 10, "tiger_openapi:COMEX", ["execution_venue_feed"])
+        for index in range(3)
+    ]
+    MarketStore(db_path).upsert_bars(bars)
+    write_json(root / "clean_bars" / run_date / "MGCmain_1m.json", [bar.to_dict() for bar in bars])
+    write_json(
+        root / "tiger_price_feed_readiness" / "current.json",
+        [
+            {
+                "status": "ready_for_price_feed",
+                "ready_for_price_feed": True,
+                "contract": "MGCmain",
+                "blockers": [],
+                "checked_at": "2026-07-06T00:03:00+00:00",
+                "can_enable_broker_orders_from_this_gate": False,
+            }
+        ],
+    )
+    write_json(
+        root / "tiger_price_feed_acceptance" / "current.json",
+        [
+            {
+                "status": "accepted",
+                "ready_for_price_feed": True,
+                "exit_code": 0,
+                "checked_at": "2026-07-06T00:03:00+00:00",
+                "can_enable_broker_orders_from_this_gate": False,
+            }
+        ],
+    )
+
+    result = DataSourcePreflight(root, db_path, checked_at=start + timedelta(minutes=3), symbol="MGCmain", timeframe="1m").run(run_date)
+
+    assert result["status"] == "pass"
+    assert result["ready_for_live"] is True
+    assert result["live_data_mode"] == "execution_venue"
+    assert result["execution_venue_readiness_gate"]["status"] == "pass"
+    assert result["execution_venue_readiness_gate"]["allows_live"] is True
+    assert result["execution_venue_readiness_gate"]["evidence"]["acceptance"]["can_enable_broker_orders_from_this_gate"] is False
+
+
+def test_data_source_preflight_namespaces_shared_non_default_artifacts(tmp_path: Path, monkeypatch):
+    root = tmp_path / "outputs"
+    db_path = tmp_path / "market_data.db"
+    run_date = "2026-07-06"
+    start = datetime(2026, 7, 6, tzinfo=timezone.utc)
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(root))
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_MARKET_DB", str(db_path))
+    config = {
+        "output_root": "outputs",
+        "local_market_db": "data/market_data.db",
+        "market_data_sources": {
+            "mgcmain_1m": {
+                "public_providers": [],
+                "execution_venue_providers": ["tiger_openapi:COMEX"],
+                "official_broker_providers": [],
+                "allow_execution_venue_for_live": True,
+                "require_tiger_price_feed_readiness": True,
+                "max_live_bar_lag_minutes": 15,
+                "max_public_quote_age_minutes": 15,
+                "price_sanity": {"enabled": True, "min_price": 3000, "max_price": 6000, "max_quote_bar_deviation_pct": 3},
+            }
+        },
+    }
+    monkeypatch.setattr("services.data_source_preflight.load_pipeline_config", lambda: config)
+    bar = Bar("MGCmain", "1m", start.isoformat(), 4180, 4182, 4179, 4180, 10, "tiger_openapi:COMEX", ["execution_venue_feed"])
+    MarketStore(db_path).upsert_bars([bar])
+    write_json(root / "data_source_preflight" / "current.json", [{"source_key": "GOLD_5m", "status": "pass"}])
+    write_json(
+        root / "tiger_price_feed_readiness" / "current.json",
+        [{"status": "ready_for_price_feed", "ready_for_price_feed": True, "contract": "MGCmain", "blockers": []}],
+    )
+
+    result = DataSourcePreflight(checked_at=start + timedelta(minutes=1), symbol="MGCmain", timeframe="1m").run(run_date)
+
+    assert result["source_key"] == "MGCmain_1m"
+    assert load_json(root / "data_source_preflight" / "current.json")[0]["source_key"] == "GOLD_5m"
+    scoped = load_json(root / "data_source_preflight" / "MGCmain_1m" / "current.json")[0]
+    assert scoped["source_key"] == "MGCmain_1m"
+    assert scoped["latest_provider"] == "tiger_openapi:COMEX"
+    assert scoped["latest_bar"]["timestamp"] == start.isoformat()
+
+
 def test_data_source_preflight_blocks_paper_when_data_quality_blocks(tmp_path: Path):
     root = tmp_path / "outputs"
     db_path = tmp_path / "market_data.db"

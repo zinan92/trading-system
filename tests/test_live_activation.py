@@ -59,6 +59,43 @@ def test_live_activation_accepts_execution_venue_market_data_but_still_blocks_mi
     assert checks["live_env"]["status"] == "fail"
 
 
+def test_live_activation_uses_scoped_tiger_market_data(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
+    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(tmp_path / "absent.env"))
+    root = tmp_path / "outputs"
+    run_date = "2026-07-05"
+    write_json(root / "data_source_preflight" / f"{run_date}.json", [{"ready_for_live": False, "message": "legacy GOLD gate should not decide Tiger"}])
+    write_json(
+        root / "data_source_preflight" / "MGCmain_1m" / f"{run_date}.json",
+        [
+            {
+                "symbol": "MGCmain",
+                "timeframe": "1m",
+                "source_key": "MGCmain_1m",
+                "ready_for_live": True,
+                "live_data_mode": "execution_venue",
+                "latest_provider": "tiger_openapi:COMEX",
+                "official_rows": 0,
+                "execution_venue_rows": 500,
+                "execution_venue_providers": ["tiger_openapi:COMEX"],
+            }
+        ],
+    )
+    write_json(root / "broker_preflight" / "current.json", [{"provider": "tiger_openapi", "ready": True}])
+    write_json(root / "schedules" / "status_current.json", [{"status": "active"}])
+    write_json(root / "mock_runtime" / "current.json", [{"mock_ready": True, "mock_running": True}])
+
+    result = LiveActivationGate(root).run(run_date)
+
+    checks = {item["name"]: item for item in result["checks"]}
+    assert result["status"] == "blocked"
+    assert checks["official_5m_data"]["status"] == "pass"
+    assert checks["official_5m_data"]["evidence"]["source_key"] == "MGCmain_1m"
+    assert "MGCmain execution venue 1m OHLC is ready" in checks["official_5m_data"]["summary"]
+    assert checks["broker_provider_configured"]["status"] == "pass"
+
+
 def test_live_activation_can_reach_dry_run_ready_with_official_data(monkeypatch, tmp_path: Path):
     root = tmp_path / "outputs"
     run_date = "2026-05-26"

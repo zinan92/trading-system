@@ -197,6 +197,119 @@ def test_oanda_rest_blocks_real_submit_when_credentials_missing(tmp_path: Path, 
         adapter.submit_order(BrokerOrderRequest("2026-05-12", _ticket(), latest_price=4570.0, actual_size=0.25))
 
 
+def test_tiger_openapi_preflight_checks_owner_only_props(tmp_path: Path, monkeypatch):
+    props = tmp_path / "tiger_openapi_config.properties"
+    props.write_text("tiger_id=placeholder\n", encoding="utf-8")
+    props.chmod(0o600)
+    monkeypatch.setenv("TIGER_OPENAPI_CONFIG_PATH", str(props))
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(tmp_path / "missing-live.env"))
+    adapter = LiveBrokerAdapter(
+        tmp_path / "outputs",
+        True,
+        {
+            "provider": "tiger_openapi",
+            "environment": "paper",
+            "dry_run": True,
+            "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+            "allowed_symbols": ["MGC2608"],
+            "contract_map": {"MGC2608": "MGC2608"},
+        },
+    )
+
+    readiness = adapter.preflight()
+
+    assert readiness["provider"] == "tiger_openapi"
+    assert readiness["ready"] is True
+    assert readiness["props_path_owner_only"] is True
+    assert readiness["network_order_submission"] == "not_implemented"
+
+
+def test_tiger_openapi_dry_run_records_local_request_only(tmp_path: Path, monkeypatch):
+    props = tmp_path / "tiger_openapi_config.properties"
+    props.write_text("tiger_id=placeholder\n", encoding="utf-8")
+    props.chmod(0o600)
+    monkeypatch.setenv("TIGER_OPENAPI_CONFIG_PATH", str(props))
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(tmp_path / "missing-live.env"))
+    root = tmp_path / "outputs"
+    ticket = {**_ticket(), "asset": "MGC2608", "entry_zone": "4180-4190"}
+    adapter = LiveBrokerAdapter(
+        root,
+        True,
+        {
+            "provider": "tiger_openapi",
+            "environment": "paper",
+            "dry_run": True,
+            "request_dir": "tiger_order_requests",
+            "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+            "allowed_symbols": ["MGC2608"],
+            "contract_map": {"MGC2608": "MGC2608"},
+        },
+    )
+
+    order = adapter.submit_order(BrokerOrderRequest("2026-07-05", ticket, latest_price=4186.0, actual_size=1))
+    requests = load_json(root / "tiger_order_requests" / "2026-07-05.json")
+
+    assert order.status == "dry_run"
+    assert requests[0]["provider"] == "tiger_openapi"
+    assert requests[0]["readiness"]["network_order_submission"] == "not_implemented"
+    assert requests[0]["request"]["quantity"] == 1
+    assert requests[0]["request"]["submission_intent"] == "tiger_tradeclient_future_order"
+    assert requests[0]["request"]["network_order_created"] is False
+    assert requests[0]["request"]["environment"] == "paper"
+    assert requests[0]["request"]["contract"] == "MGC2608"
+    assert requests[0]["request"]["sec_type"] == "FUT"
+    assert requests[0]["request"]["exchange"] == "COMEX"
+    assert requests[0]["request"]["side"] == "BUY"
+    assert requests[0]["request"]["order_type"] == "LIMIT"
+    assert requests[0]["request"]["limit_price"] == 4186.0
+
+
+def test_tiger_openapi_dry_run_requires_whole_contracts(tmp_path: Path, monkeypatch):
+    props = tmp_path / "tiger_openapi_config.properties"
+    props.write_text("tiger_id=placeholder\n", encoding="utf-8")
+    props.chmod(0o600)
+    monkeypatch.setenv("TIGER_OPENAPI_CONFIG_PATH", str(props))
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(tmp_path / "missing-live.env"))
+    adapter = LiveBrokerAdapter(
+        tmp_path / "outputs",
+        True,
+        {
+            "provider": "tiger_openapi",
+            "environment": "paper",
+            "dry_run": True,
+            "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+            "allowed_symbols": ["MGC2608"],
+            "contract_map": {"MGC2608": "MGC2608"},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="positive whole-contract integer"):
+        adapter.submit_order(BrokerOrderRequest("2026-07-05", {**_ticket(), "asset": "MGC2608"}, latest_price=4186.0, actual_size=0.5))
+
+
+def test_tiger_openapi_non_dry_run_is_fail_closed(tmp_path: Path, monkeypatch):
+    props = tmp_path / "tiger_openapi_config.properties"
+    props.write_text("tiger_id=placeholder\n", encoding="utf-8")
+    props.chmod(0o600)
+    monkeypatch.setenv("TIGER_OPENAPI_CONFIG_PATH", str(props))
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(tmp_path / "missing-live.env"))
+    adapter = LiveBrokerAdapter(
+        tmp_path / "outputs",
+        True,
+        {
+            "provider": "tiger_openapi",
+            "environment": "paper",
+            "dry_run": False,
+            "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+            "allowed_symbols": ["MGC2608"],
+            "contract_map": {"MGC2608": "MGC2608"},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Tiger OpenAPI network order submission is not implemented"):
+        adapter.submit_order(BrokerOrderRequest("2026-07-05", {**_ticket(), "asset": "MGC2608"}, latest_price=4186.0, actual_size=1))
+
+
 def test_oanda_rest_preflight_treats_placeholder_credentials_as_missing(tmp_path: Path, monkeypatch):
     env = tmp_path / "live.env"
     env.write_text("OANDA_API_TOKEN=CHANGE_ME\nOANDA_ACCOUNT_ID=your_account_id\n", encoding="utf-8")

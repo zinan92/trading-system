@@ -19,21 +19,22 @@ class LiveActivationGate:
 
     def run(self, run_date: str) -> dict:
         live_env = LiveEnvStatus(self.output_root).run(run_date)
-        data_source = self._latest("data_source_preflight", run_date)
         live_readiness = self._latest("live_readiness", run_date)
         approval = LiveApprovalStore(self.output_root).status(run_date)
         schedule = (load_json(self.output_root / "schedules" / "status_current.json") or [{}])[-1]
         mock = (load_json(self.output_root / "mock_runtime" / "current.json") or [{}])[-1]
         broker = (load_json(self.output_root / "broker_preflight" / "current.json") or [{}])[-1]
-        supported_providers = {"oanda_rest", "mt5_file_bridge", "binance_usdm"}
+        provider = self._configured_provider(broker)
+        data_source = self._market_data_preflight(self._market_data_identity(provider), run_date)
+        supported_providers = {"oanda_rest", "mt5_file_bridge", "binance_usdm", "tiger_openapi"}
         official_data_ready, official_data_summary = official_broker_ohlc_status(data_source)
         checks = [
             self._check_bool("official_5m_data", official_data_ready, official_data_summary, data_source),
             self._check_bool("live_env", live_env.get("status") == "pass", "Required broker env keys are present.", live_env),
-            self._check_bool("schedule_active", schedule.get("status") == "active", "runner, trading plan, evening review, daily review, strategies, and dashboard are installed and loaded.", schedule),
+            self._check_bool("schedule_active", schedule.get("status") == "active", "runner, trading plan, evening review, daily review, strategies, dashboard, dualtrack cycle/live tick, and deadman ping are installed and loaded.", schedule),
             self._check_bool("mock_runtime", mock.get("mock_ready") and mock.get("mock_running"), "Mock trading loop is healthy and fresh.", mock),
             self._check_bool("journal_review", self._journal_artifacts_exist(run_date), "Daily journal/review artifacts exist.", {"run_date": run_date}),
-            self._check_bool("broker_provider_configured", str(self.config.get("broker", {}).get("provider", "")) in supported_providers, "Supported live broker provider is configured.", {"provider": self.config.get("broker", {}).get("provider", ""), "supported": sorted(supported_providers)}),
+            self._check_bool("broker_provider_configured", provider in supported_providers, "Supported live broker provider is configured.", {"provider": provider, "supported": sorted(supported_providers)}),
         ]
         dry_run_ready = all(item["status"] == "pass" for item in checks)
         real_money_checks = [
@@ -67,6 +68,37 @@ class LiveActivationGate:
             rows = load_json(self.output_root / name / "current.json")
         return rows[-1] if rows else {}
 
+    def _configured_provider(self, broker: dict) -> str:
+        if broker.get("provider"):
+            return str(broker.get("provider"))
+        broker_config = dict(self.config.get("broker", {}) or {})
+        profile_name = str(self.config.get("broker_profile") or broker_config.get("broker_profile") or broker_config.get("profile") or "").strip()
+        if profile_name:
+            profile = dict((self.config.get("broker_profiles", {}) or {}).get(profile_name, {}) or {})
+            if profile.get("provider"):
+                return str(profile.get("provider"))
+        return str(broker_config.get("provider", ""))
+
+    def _market_data_identity(self, provider: str) -> dict:
+        if provider == "tiger_openapi":
+            feed = self.config.get("tiger_futures_feed", {}) or {}
+            symbol = str(feed.get("output_symbol") or feed.get("contract") or "MGCmain")
+            timeframe = str(feed.get("timeframe") or feed.get("period") or "1m")
+            return {"provider": provider, "symbol": symbol, "timeframe": timeframe, "source_key": f"{symbol}_{timeframe}"}
+        return {"provider": provider, "symbol": "GOLD", "timeframe": "5m", "source_key": "GOLD_5m"}
+
+    def _market_data_preflight(self, identity: dict, run_date: str) -> dict:
+        source_key = str(identity.get("source_key") or "GOLD_5m")
+        if source_key != "GOLD_5m":
+            for path in [
+                self.output_root / "data_source_preflight" / source_key / f"{run_date}.json",
+                self.output_root / "data_source_preflight" / source_key / "current.json",
+            ]:
+                rows = load_json(path)
+                if rows:
+                    return rows[-1]
+        return self._latest("data_source_preflight", run_date)
+
     def _journal_artifacts_exist(self, run_date: str) -> bool:
         required = [
             self.output_root / "journals" / f"{run_date}.md",
@@ -88,11 +120,11 @@ class LiveActivationGate:
         actions = []
         by_name = {item["name"]: item for item in [*dry_checks, *real_checks] if item["status"] != "pass"}
         if "official_5m_data" in by_name:
-            actions.append("Connect execution-grade XAUUSD/XAUUSDT 5m bars, such as Binance USDM, until the market-data gate passes.")
+            actions.append("Connect execution-grade broker or execution-venue OHLC bars for the active provider until the market-data gate passes.")
         if "live_env" in by_name:
             actions.append("Copy configs/live.env.template to configs/live.env and fill the active broker keys locally.")
         if "broker_provider_configured" in by_name:
-            actions.append("Set broker.provider to binance_usdm, oanda_rest, or mt5_file_bridge only after dry-run readiness is satisfied.")
+            actions.append("Set broker.provider to binance_usdm, oanda_rest, mt5_file_bridge, or tiger_openapi only after dry-run readiness is satisfied.")
         if "execution_live" in by_name:
             actions.append("Keep execution_mode=paper until dry_run_ready is true and you intentionally switch to live.")
         if "broker_not_dry_run" in by_name:

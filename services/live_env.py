@@ -86,7 +86,7 @@ class LiveEnvStatus:
         self.output_root = output_root or ROOT / config.get("output_root", "outputs")
         self.env_path = env_path or Path(os.getenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(DEFAULT_ENV_PATH)))
         self.oanda_config = config.get("oanda_feed", {})
-        self.broker_config = config.get("broker", {})
+        self.broker_config = self._resolve_broker_config(config)
 
     def run(self, run_date: str) -> dict:
         file_values = parse_env_file(self.env_path)
@@ -127,10 +127,26 @@ class LiveEnvStatus:
         elif provider == "binance_usdm":
             keys.add(str(self.broker_config.get("api_key_env", "BINANCE_API_KEY")))
             keys.add(str(self.broker_config.get("api_secret_env", "BINANCE_API_SECRET")))
+        elif provider == "tiger_openapi":
+            keys.add(str(self.broker_config.get("props_path_env", "TIGER_OPENAPI_CONFIG_PATH")))
         elif provider not in {"manual_gateway", "mt5_file_bridge"}:
             keys.add(str(self.broker_config.get("api_key_env", "BROKER_API_KEY")))
             keys.add(str(self.broker_config.get("account_id_env", "BROKER_ACCOUNT_ID")))
         return sorted(keys)
+
+    def _resolve_broker_config(self, config: dict) -> dict:
+        broker_config = dict(config.get("broker", {}) or {})
+        profile_name = str(config.get("broker_profile") or broker_config.get("broker_profile") or broker_config.get("profile") or "").strip()
+        if not profile_name:
+            return broker_config
+        profiles = config.get("broker_profiles", {}) or {}
+        profile = dict(profiles.get(profile_name, {}) or {})
+        overrides = {
+            key: value
+            for key, value in broker_config.items()
+            if key not in {"profile", "broker_profile"}
+        }
+        return {**profile, **overrides, "profile": profile_name}
 
     def _secret_hygiene(self, file_values: dict[str, str]) -> dict:
         template_path = ROOT / "configs" / "live.env.template"

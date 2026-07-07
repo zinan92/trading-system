@@ -168,6 +168,84 @@ def test_live_money_guardrails_requires_account_history_and_real_balance_observe
     assert "exchange balance was not observed" in missing_balance["daily_loss"]["reason"]
 
 
+def test_live_money_guardrails_fail_closed_for_tiger_reconciliation_without_accounting(tmp_path: Path):
+    root = tmp_path / "outputs"
+    tiger_reconciliation = {
+        "run_date": _RUN_DATE,
+        "checked_at": _checked_at(),
+        "provider": "tiger_openapi",
+        "mode": "paper",
+        "confirmation_status": "confirmed_flat",
+        "can_open_new_orders": True,
+        "exchange_positions": [],
+        "exchange_open_orders": [],
+        "account_observation": {
+            "account_observed": True,
+            "positions_observed": True,
+            "open_orders_observed": True,
+            "reason": "Tiger paper positions/open orders observed",
+        },
+    }
+
+    result = LiveMoneyGuardrails(root, broker_config={"provider": "tiger_openapi", "request_dir": "tiger_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_tiger_guard", "asset": "MGC2608", "action": "prepare_buy"},
+        symbol="MGC2608",
+        side="BUY",
+        requested_price=4186.0,
+        quantity=1,
+        source="tiger_openapi:paper",
+        reconciliation=tiger_reconciliation,
+    )
+
+    assert result["allows_new_order"] is False
+    assert result["status"] == "BLOCKED_MONEY_GUARDRAIL_UNKNOWN"
+    assert result["primary_blocker"]["code"] == "daily_loss_unknown"
+    assert "exchange balance was not observed" in result["daily_loss"]["reason"]
+
+
+def test_live_money_guardrails_can_use_tiger_account_sync_accounting(tmp_path: Path):
+    root = tmp_path / "outputs"
+    tiger_reconciliation = {
+        "run_date": _RUN_DATE,
+        "checked_at": _checked_at(),
+        "provider": "tiger_openapi",
+        "mode": "paper",
+        "confirmation_status": "confirmed_flat",
+        "can_open_new_orders": True,
+        "exchange_positions": [],
+        "exchange_open_orders": [],
+        "account_observation": {
+            "account_observed": True,
+            "balance_present": True,
+            "accounting_observed": True,
+            "accounting_source": "tiger_openapi.get_prime_assets",
+        },
+        "exchange_balance": {"asset": "USD", "balance": 25000.0, "available": 24000.0, "balance_present": True},
+        "exchange_accounting": {
+            "net_realized_pnl_estimate": 0.0,
+            "unrealized_pnl_estimate": 0.0,
+            "utc_trading_day": {"run_date": _RUN_DATE, "start_time_ms": _DAY_START_MS, "end_time_ms": _DAY_END_MS},
+        },
+    }
+
+    result = LiveMoneyGuardrails(root, broker_config={"provider": "tiger_openapi", "request_dir": "tiger_order_requests"}).evaluate_order(
+        _RUN_DATE,
+        ticket={"ticket_id": "ticket_tiger_guard", "asset": "MGC2608", "action": "prepare_buy"},
+        symbol="MGC2608",
+        side="BUY",
+        requested_price=5.0,
+        quantity=1,
+        source="tiger_openapi:paper",
+        reconciliation=tiger_reconciliation,
+    )
+
+    assert result["allows_new_order"] is True
+    assert result["status"] == "READY"
+    assert result["daily_loss"]["known"] is True
+    assert result["daily_loss"]["reference_equity"] == 25000.0
+
+
 def test_live_money_guardrails_allows_or_blocks_only_with_fresh_same_utc_day_finite_reconciliation(tmp_path: Path):
     root = tmp_path / "outputs"
 

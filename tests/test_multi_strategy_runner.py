@@ -181,6 +181,128 @@ def test_only_configured_chan2_strategy_routes_to_binance_demo_adapter(tmp_path:
     assert inactive is None
 
 
+def test_configured_demo_strategy_can_route_to_tiger_profile_adapter(monkeypatch, tmp_path: Path):
+    from services.strategy_registry import Strategy
+
+    config = {
+        "output_root": "outputs",
+        "live_trading_enabled": False,
+        "broker": {"provider": "binance_usdm"},
+        "demo_trading": {
+            "enabled": True,
+            "active_strategy_id": "gold_1m_macd",
+            "broker_profile": "tiger_openapi_paper",
+        },
+        "broker_profiles": {
+            "tiger_openapi_paper": {
+                "provider": "tiger_openapi",
+                "environment": "paper",
+                "dry_run": True,
+                "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+                "request_dir": "tiger_order_requests",
+                "network_order_submission": "not_implemented_fail_closed",
+                "confirm_tiger_paper_orders": False,
+            }
+        },
+    }
+    monkeypatch.setattr("services.multi_strategy_runner.load_pipeline_config", lambda: config)
+    runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
+
+    active = runner._broker_adapter_for(Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False), tmp_path / "out" / "s")
+    inactive = runner._broker_adapter_for(Strategy("gold_1m_chan", "GOLD", {"signal": {}}, live=False), tmp_path / "out" / "s")
+
+    assert active is not None and active.name == "tiger_openapi_paper"
+    assert active.broker_config["provider"] == "tiger_openapi"
+    assert active.broker_config["dry_run"] is True
+    assert inactive is None
+
+
+def test_tiger_demo_execution_profile_is_guarded_and_secret_safe(monkeypatch, tmp_path: Path):
+    from services.strategy_registry import Strategy
+
+    monkeypatch.setenv("TIGER_OPENAPI_CONFIG_PATH", str(tmp_path / "tiger_openapi_config.properties"))
+    config = {
+        "output_root": "outputs",
+        "live_trading_enabled": False,
+        "broker": {"provider": "binance_usdm"},
+        "demo_trading": {
+            "enabled": True,
+            "active_strategy_id": "gold_1m_macd",
+            "broker_profile": "tiger_openapi_paper",
+        },
+        "broker_profiles": {
+            "tiger_openapi_paper": {
+                "provider": "tiger_openapi",
+                "environment": "paper",
+                "dry_run": True,
+                "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+                "request_dir": "tiger_order_requests",
+                "network_order_submission": "not_implemented_fail_closed",
+                "confirm_tiger_paper_orders": False,
+            }
+        },
+    }
+    monkeypatch.setattr("services.multi_strategy_runner.load_pipeline_config", lambda: config)
+    runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
+
+    profile = runner._execution_profile_for(Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False))
+
+    assert profile["adapter"] == "tiger_openapi_paper"
+    assert profile["mode"] == "tiger_paper_profile_gated"
+    assert profile["provider"] == "tiger_openapi"
+    assert profile["profile"] == "tiger_openapi_paper"
+    assert profile["dry_run"] is True
+    assert profile["armed"] is False
+    assert profile["credential_env_names"] == ["TIGER_OPENAPI_CONFIG_PATH"]
+    assert str(tmp_path) not in json.dumps(profile)
+
+
+def test_tiger_demo_reconciliation_uses_tiger_read_only_service(monkeypatch, tmp_path: Path):
+    from services.strategy_registry import Strategy
+    import services.tiger_openapi_reconciliation as tiger_recon
+
+    config = {
+        "output_root": "outputs",
+        "broker": {"provider": "binance_usdm"},
+        "demo_trading": {
+            "enabled": True,
+            "active_strategy_id": "gold_1m_macd",
+            "broker_profile": "tiger_openapi_paper",
+        },
+        "broker_profiles": {
+            "tiger_openapi_paper": {
+                "provider": "tiger_openapi",
+                "environment": "paper",
+                "dry_run": True,
+                "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+            }
+        },
+    }
+    captured = {}
+
+    class FakeTigerReconciliation:
+        def __init__(self, output_root, broker_config):
+            captured["output_root"] = output_root
+            captured["broker_config"] = broker_config
+
+        def run(self, run_date):
+            return {"provider": "tiger_openapi", "run_date": run_date, "reconciled": True, "confirmation_status": "confirmed_flat"}
+
+    monkeypatch.setattr("services.multi_strategy_runner.load_pipeline_config", lambda: config)
+    monkeypatch.setattr(tiger_recon, "TigerOpenApiPaperReconciliation", FakeTigerReconciliation)
+    runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
+
+    report = runner._demo_reconciliation_for(
+        Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False),
+        tmp_path / "out" / "strategies" / "gold_1m_macd",
+        "2026-07-05",
+    )
+
+    assert report["provider"] == "tiger_openapi"
+    assert captured["broker_config"]["provider"] == "tiger_openapi"
+    assert "Tiger paper" in runner._demo_reconciliation_block_reason({"provider": "tiger_openapi", "drifts": [{"reason": "drift"}]})
+
+
 def test_demo_execution_profile_surfaces_armed_state_without_secrets(tmp_path: Path, monkeypatch):
     from services.strategy_registry import Strategy
 

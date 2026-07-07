@@ -72,6 +72,8 @@ class TechnicalRuleSignalEngine:
             return self._bollinger_reversion(candles)
         if self.engine_type == "bollinger_reclaim_filter":
             return self._bollinger_reclaim_filter(candles)
+        if self.engine_type == "vwap_zscore_reversion":
+            return self._vwap_zscore_reversion(candles)
         if self.engine_type == "breakout":
             return self._breakout(candles)
         if self.engine_type == "london_ny_compression_breakout":
@@ -366,6 +368,122 @@ class TechnicalRuleSignalEngine:
                 ],
                 "价格重新突破上轨，或回到均线前动能耗尽。",
                 strength=73,
+                confidence=64,
+            )
+        return None
+
+    def _vwap_zscore_reversion(self, candles: list) -> dict | None:
+        if not self._in_utc_session(str(candles[-1].timestamp)):
+            return None
+        zscore_lookback = int(self.signal_cfg.get("zscore_lookback_bars", 24))
+        vwap_lookback = int(self.signal_cfg.get("vwap_lookback_bars", 72))
+        atr_lookback = int(self.signal_cfg.get("atr_lookback_bars", 14))
+        adx_lookback = int(self.signal_cfg.get("adx_lookback_bars", 14))
+        min_abs_zscore = float(self.signal_cfg.get("min_abs_zscore", 2.0))
+        min_remaining_zscore = float(self.signal_cfg.get("min_remaining_zscore", 0.35))
+        min_vwap_gap_pct = float(self.signal_cfg.get("min_vwap_gap_pct", 0.04))
+        min_reclaim_pct = float(self.signal_cfg.get("min_reclaim_pct", 0.01))
+        min_atr_pct = float(self.signal_cfg.get("min_atr_pct", 0.015))
+        max_atr_pct = float(self.signal_cfg.get("max_atr_pct", 0.22))
+        max_adx = float(self.signal_cfg.get("max_adx", 26))
+        min_volume_ratio = float(self.signal_cfg.get("min_volume_ratio", 0.65))
+        max_volume_ratio = float(self.signal_cfg.get("max_volume_ratio", 1.8))
+        min_required = max(zscore_lookback + 1, vwap_lookback, atr_lookback + 1, adx_lookback * 2 + 1)
+        if len(candles) < min_required:
+            return None
+        atr_pct = self._atr_pct(candles, atr_lookback)
+        if atr_pct < min_atr_pct or atr_pct > max_atr_pct:
+            return None
+        adx_value, plus_di, minus_di = self._adx(candles, adx_lookback)
+        if adx_value > max_adx:
+            return None
+        rows = candles[-vwap_lookback:]
+        vwap = self._rolling_vwap(rows)
+        if vwap <= 0:
+            return None
+        current_closes = [float(bar.close) for bar in candles[-zscore_lookback:]]
+        prior_closes = [float(bar.close) for bar in candles[-zscore_lookback - 1 : -1]]
+        current_mean = sum(current_closes) / len(current_closes)
+        prior_mean = sum(prior_closes) / len(prior_closes)
+        current_std = math.sqrt(sum((close - current_mean) ** 2 for close in current_closes) / len(current_closes))
+        prior_std = math.sqrt(sum((close - prior_mean) ** 2 for close in prior_closes) / len(prior_closes))
+        if current_std <= 0 or prior_std <= 0:
+            return None
+        close = float(candles[-1].close)
+        prev = float(candles[-2].close)
+        open_price = float(candles[-1].open)
+        current_z = (close - current_mean) / current_std
+        prior_z = (prev - prior_mean) / prior_std
+        vwap_gap_pct = abs(close - vwap) / vwap * 100
+        reclaim_pct = abs(close - prev) / prev * 100 if prev else 0.0
+        recent_volume = sum(max(float(bar.volume), 0.0) for bar in rows[-3:]) / min(3, len(rows))
+        average_volume = sum(max(float(bar.volume), 0.0) for bar in rows) / len(rows)
+        volume_ratio = recent_volume / average_volume if average_volume else 0.0
+        if (
+            vwap_gap_pct < min_vwap_gap_pct
+            or reclaim_pct < min_reclaim_pct
+            or volume_ratio < min_volume_ratio
+            or volume_ratio > max_volume_ratio
+        ):
+            return None
+        if (
+            prior_z <= -min_abs_zscore
+            and -current_z >= min_remaining_zscore
+            and abs(current_z) < abs(prior_z)
+            and close > prev
+            and close > open_price
+            and close < vwap
+        ):
+            return self._setup(
+                "long",
+                "vwap_zscore_reversion",
+                "GOLD started reverting upward after a downside statistical stretch below VWAP while trend strength stayed capped.",
+                [
+                    f"close={close:.2f}",
+                    f"vwap={vwap:.2f}",
+                    f"zscore={current_z:.2f}",
+                    f"prior_zscore={prior_z:.2f}",
+                    f"vwap_gap={vwap_gap_pct:.3f}%",
+                    f"reclaim={reclaim_pct:.3f}%",
+                    f"atr={atr_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"volume_ratio={volume_ratio:.2f}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 7)}-{self.signal_cfg.get('session_end_utc', 20)}",
+                ],
+                "价格继续扩大负 Z-score、ADX 升破趋势阈值，或触及 VWAP 前失去回收动能。",
+                strength=74,
+                confidence=64,
+            )
+        if (
+            prior_z >= min_abs_zscore
+            and current_z >= min_remaining_zscore
+            and abs(current_z) < abs(prior_z)
+            and close < prev
+            and close < open_price
+            and close > vwap
+        ):
+            return self._setup(
+                "short",
+                "vwap_zscore_reversion",
+                "GOLD started reverting downward after an upside statistical stretch above VWAP while trend strength stayed capped.",
+                [
+                    f"close={close:.2f}",
+                    f"vwap={vwap:.2f}",
+                    f"zscore={current_z:.2f}",
+                    f"prior_zscore={prior_z:.2f}",
+                    f"vwap_gap={vwap_gap_pct:.3f}%",
+                    f"reclaim={reclaim_pct:.3f}%",
+                    f"atr={atr_pct:.3f}%",
+                    f"adx={adx_value:.2f}",
+                    f"plus_di={plus_di:.2f}",
+                    f"minus_di={minus_di:.2f}",
+                    f"volume_ratio={volume_ratio:.2f}",
+                    f"session_utc={self.signal_cfg.get('session_start_utc', 7)}-{self.signal_cfg.get('session_end_utc', 20)}",
+                ],
+                "价格继续扩大正 Z-score、ADX 升破趋势阈值，或触及 VWAP 前失去回收动能。",
+                strength=74,
                 confidence=64,
             )
         return None
@@ -1152,6 +1270,7 @@ class TechnicalRuleSignalEngine:
             "adr_exhaustion_reversion": 120,
             "bollinger_reversion": 30,
             "bollinger_reclaim_filter": 50,
+            "vwap_zscore_reversion": 80,
             "breakout": 50,
             "london_ny_compression_breakout": 50,
             "ny_opening_range_breakout": 80,

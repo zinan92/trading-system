@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import stat
 import time
 import urllib.error
 import urllib.parse
@@ -85,6 +86,10 @@ class LiveBrokerAdapter:
                 if not reconciliation["ready"]:
                     raise RuntimeError(reconciliation["block_reason"])
             return self._submit_binance_order(request, readiness)
+        if self.provider == "tiger_openapi":
+            if not self.dry_run:
+                raise NotImplementedError("Tiger OpenAPI network order submission is not implemented; adapter is fail-closed")
+            return self._submit_tiger_order(request, readiness)
         if not self.dry_run:
             raise NotImplementedError(f"live broker provider {self.provider} is not wired for real order submission yet")
         return self._record_dry_run_request(request, readiness)
@@ -132,6 +137,8 @@ class LiveBrokerAdapter:
             return self._oanda_preflight()
         if self.provider == "binance_usdm":
             return self._binance_preflight()
+        if self.provider == "tiger_openapi":
+            return self._tiger_preflight()
         api_key_env = str(self.broker_config.get("api_key_env", "BROKER_API_KEY"))
         account_id_env = str(self.broker_config.get("account_id_env", "BROKER_ACCOUNT_ID"))
         missing = [name for name in [api_key_env, account_id_env] if not live_env_value_present(name)]
@@ -157,6 +164,52 @@ class LiveBrokerAdapter:
             "env_file": env["path"],
             "env_file_exists": env["exists"],
             "allowed_symbols": allowed_symbols,
+            "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        }
+
+    def _tiger_preflight(self) -> dict:
+        env = apply_live_env()
+        props_path_env = str(self.broker_config.get("props_path_env", "TIGER_OPENAPI_CONFIG_PATH"))
+        props_path = os.getenv(props_path_env, "")
+        props_exists = bool(props_path and Path(props_path).exists())
+        props_mode = ""
+        props_owner_only = False
+        if props_exists:
+            mode = stat.S_IMODE(Path(props_path).stat().st_mode)
+            props_mode = oct(mode)
+            props_owner_only = not bool(mode & 0o077)
+        missing = [] if props_exists else [props_path_env]
+        block_reason = ""
+        if not self.live_trading_enabled:
+            block_reason = "live_trading_enabled is false"
+        elif missing:
+            block_reason = f"missing Tiger OpenAPI config path env: {props_path_env}"
+        elif not props_owner_only:
+            block_reason = "Tiger OpenAPI config file must be owner-only (chmod 600)"
+        elif self.dry_run:
+            block_reason = "Tiger OpenAPI dry_run enabled; request artifact only"
+        else:
+            block_reason = "Tiger OpenAPI network order submission is not implemented; fail-closed"
+        ready = bool(self.live_trading_enabled and not missing and props_owner_only and self.dry_run)
+        return {
+            "provider": self.provider,
+            "mode": "live",
+            "environment": str(self.broker_config.get("environment", "paper")),
+            "dry_run": self.dry_run,
+            "live_trading_enabled": self.live_trading_enabled,
+            "ready": ready,
+            "block_reason": block_reason,
+            "props_path_env": props_path_env,
+            "props_path_present": bool(props_path),
+            "props_path_exists": props_exists,
+            "props_path_owner_only": props_owner_only,
+            "props_path_mode": props_mode,
+            "missing_env": missing,
+            "env_file": env["path"],
+            "env_file_exists": env["exists"],
+            "allowed_symbols": list(self.broker_config.get("allowed_symbols", [])),
+            "contract_map": dict(self.broker_config.get("contract_map", {})),
+            "network_order_submission": "not_implemented",
             "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         }
 
@@ -290,6 +343,62 @@ class LiveBrokerAdapter:
         rows.append(payload)
         write_json(path, rows)
         return receipt
+
+    def _submit_tiger_order(self, request: BrokerOrderRequest, readiness: dict) -> PaperOrder:
+        ticket = request.ticket
+        requested_price = float(request.latest_price or self._entry_midpoint(ticket["entry_zone"]))
+        raw_quantity = float(request.actual_size or self._quantity(ticket, requested_price))
+        quantity = self._tiger_contract_quantity(raw_quantity)
+        order_id = self._order_id(ticket["ticket_id"], request.run_date, requested_price)
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        payload = self._tiger_order_payload(ticket, order_id, requested_price, quantity)
+        receipt = PaperOrder(
+            order_id=order_id,
+            ticket_id=ticket["ticket_id"],
+            status="dry_run",
+            requested_price=round(requested_price, 4),
+            fill_price=None,
+            quantity=quantity,
+            filled_at="",
+            rejection_reason="Tiger OpenAPI dry-run request recorded locally; no broker order sent",
+        )
+        self._record_live_request(request, order_id, now, ticket, payload, readiness, receipt, broker_response={})
+        return receipt
+
+    def _tiger_contract_quantity(self, raw_quantity: float) -> int:
+        quantity = int(raw_quantity)
+        if quantity <= 0 or abs(raw_quantity - quantity) > 1e-9:
+            raise RuntimeError("Tiger futures quantity must be a positive whole-contract integer")
+        return quantity
+
+    def _tiger_order_payload(self, ticket: dict, order_id: str, requested_price: float, quantity: int) -> dict:
+        symbol = str(ticket.get("asset") or "")
+        allowed = {str(item) for item in self.broker_config.get("allowed_symbols", [])}
+        if allowed and symbol not in allowed:
+            raise RuntimeError(f"Tiger symbol {symbol} is not allowed by broker profile")
+        contract = str((self.broker_config.get("contract_map", {}) or {}).get(symbol, symbol))
+        order_type = "MARKET" if str(ticket.get("order_type", "limit")).lower() == "market" else "LIMIT"
+        side = "BUY" if self._is_buy_action(str(ticket.get("action", ""))) else "SELL"
+        time_in_force = str(ticket.get("time_in_force", "day")).upper()
+        payload = {
+            "submission_intent": "tiger_tradeclient_future_order",
+            "network_order_created": False,
+            "environment": str(self.broker_config.get("environment", "paper")),
+            "order_id": order_id,
+            "symbol": symbol,
+            "contract": contract,
+            "sec_type": "FUT",
+            "exchange": str(self.broker_config.get("exchange", "COMEX")),
+            "side": side,
+            "order_type": order_type,
+            "quantity": quantity,
+            "time_in_force": time_in_force,
+            "limit_price": None if order_type == "MARKET" else round(requested_price, 4),
+            "stop_loss": ticket.get("stop_loss"),
+            "targets": ticket.get("targets", []),
+            "source_ticket_id": ticket.get("ticket_id"),
+        }
+        return payload
 
     def _record_mt5_file_bridge_request(self, request: BrokerOrderRequest, readiness: dict) -> PaperOrder:
         ticket = request.ticket
@@ -1879,11 +1988,40 @@ class LiveBrokerAdapter:
         return rows[-1] if rows else {}
 
 
+def resolve_broker_config(config: dict | None = None) -> dict:
+    config = config or load_pipeline_config()
+    broker_config = dict(config.get("broker", {}) or {})
+    profile_name = str(config.get("broker_profile") or broker_config.get("broker_profile") or broker_config.get("profile") or "").strip()
+    if not profile_name:
+        return broker_config
+    profiles = config.get("broker_profiles", {}) or {}
+    if profile_name not in profiles:
+        raise ValueError(f"unknown broker profile: {profile_name}")
+    overrides = {
+        key: value
+        for key, value in broker_config.items()
+        if key not in {"profile", "broker_profile"}
+    }
+    return {**dict(profiles[profile_name]), **overrides, "profile": profile_name}
+
+
+def _live_adapter_for_provider(output_root: Path, live_trading_enabled: bool, broker_config: dict) -> BrokerAdapter:
+    if str(broker_config.get("provider", "")).lower() == "tiger_openapi" and str(broker_config.get("environment", "")).lower() == "paper":
+        from services.tiger_openapi_broker_adapter import TigerOpenApiPaperBrokerAdapter
+
+        return TigerOpenApiPaperBrokerAdapter(output_root, broker_config)
+    return LiveBrokerAdapter(output_root, live_trading_enabled, broker_config)
+
+
+def build_live_broker_adapter(output_root: Path, live_trading_enabled: bool, broker_config: dict) -> BrokerAdapter:
+    return _live_adapter_for_provider(output_root, live_trading_enabled, broker_config)
+
+
 def broker_preflight(output_root: Path | None = None) -> dict:
     config = load_pipeline_config()
     root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     mode = str(config.get("execution_mode", "paper")).lower()
-    broker_config = config.get("broker", {})
+    broker_config = resolve_broker_config(config)
     if mode == "paper":
         result = {
             "provider": broker_config.get("provider", "manual_gateway"),
@@ -1896,7 +2034,7 @@ def broker_preflight(output_root: Path | None = None) -> dict:
             "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         }
     else:
-        result = LiveBrokerAdapter(root, bool(config.get("live_trading_enabled", False)), broker_config).preflight()
+        result = _live_adapter_for_provider(root, bool(config.get("live_trading_enabled", False)), broker_config).preflight()
     write_json(root / "broker_preflight" / "current.json", [result])
     return result
 
@@ -1907,5 +2045,5 @@ def build_broker_adapter(output_root: Path) -> BrokerAdapter:
     if mode == "paper":
         return PaperBrokerAdapter(output_root)
     if mode == "live":
-        return LiveBrokerAdapter(output_root, bool(config.get("live_trading_enabled", False)), config.get("broker", {}))
+        return _live_adapter_for_provider(output_root, bool(config.get("live_trading_enabled", False)), resolve_broker_config(config))
     raise ValueError(f"unknown execution_mode: {mode}")

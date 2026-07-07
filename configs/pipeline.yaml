@@ -71,6 +71,22 @@
         "max_price": 6000,
         "max_quote_bar_deviation_pct": 3
       }
+    },
+    "mgcmain_1m": {
+      "public_providers": [],
+      "execution_venue_providers": ["tiger_openapi:COMEX"],
+      "official_broker_providers": [],
+      "require_official_for_live": false,
+      "allow_execution_venue_for_live": true,
+      "require_tiger_price_feed_readiness": true,
+      "max_live_bar_lag_minutes": 15,
+      "max_public_quote_age_minutes": 15,
+      "price_sanity": {
+        "enabled": true,
+        "min_price": 3000,
+        "max_price": 6000,
+        "max_quote_bar_deviation_pct": 3
+      }
     }
   },
   "broker_feed": {
@@ -112,6 +128,19 @@
     "limit": 500,
     "timeout_seconds": 10
   },
+  "tiger_futures_feed": {
+    "enabled": false,
+    "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+    "provider": "tiger_openapi:COMEX",
+    "contract": "MGCmain",
+    "output_symbol": "MGCmain",
+    "exchange": "COMEX",
+    "period": "1m",
+    "timeframe": "1m",
+    "limit": 500,
+    "grab_quote_permission": false,
+    "timeout_seconds": 10
+  },
   "broker_profiles": {
     "binance_usdm": {
       "provider": "binance_usdm",
@@ -144,6 +173,74 @@
       "request_dir": "testnet_order_requests",
       "protective_order_endpoint": "algoOrder",
       "reconcile_account_history": true,
+      "timeout_seconds": 10
+    },
+    "tiger_openapi_paper": {
+      "provider": "tiger_openapi",
+      "environment": "paper",
+      "exchange": "COMEX",
+      "dry_run": true,
+      "props_path_env": "TIGER_OPENAPI_CONFIG_PATH",
+      "base_currency": "USD",
+      "account_segment_priority": ["C", "F", "S"],
+      "confirm_tiger_paper_orders": false,
+      "preview_before_place": true,
+      "require_flat_before_entry": true,
+      "require_no_open_orders_before_entry": true,
+      "require_reconciliation_before_entry": true,
+      "require_attached_protection_before_entry": true,
+      "contract_multiplier": 10,
+      "allowed_symbols": ["MGCmain", "MGC2608", "1OZmain", "1OZ2608"],
+      "contract_map": {
+        "MGCmain": "MGCmain",
+        "MGC2608": "MGC2608",
+        "1OZmain": "1OZmain",
+        "1OZ2608": "1OZ2608"
+      },
+      "execution_contract_map": {
+        "MGCmain": "MGC2608",
+        "MGC": "MGC2608",
+        "1OZmain": "1OZ2608",
+        "1OZ": "1OZ2608"
+      },
+      "rollover_policy": {
+        "rollover_days_before_contract_month": 14,
+        "deadline_basis": "first_day_of_contract_month"
+      },
+      "require_live_money_guardrails_before_entry": true,
+      "attended_paper_canary": {
+        "enabled": true,
+        "scope": "explicit_tiger_paper_canary_only",
+        "max_contracts": 1,
+        "max_candidate_stop_loss_pct_of_equity": 2.5,
+        "live_money_guardrails": {
+          "single_order_max_notional": 45000.0,
+          "total_account_max_notional": 45000.0,
+          "max_daily_entry_orders": 1,
+          "max_reconciliation_age_seconds": 600
+        }
+      },
+      "contract_specs": {
+        "MGC2608": {
+          "symbol": "MGC",
+          "currency": "USD",
+          "exchange": "COMEX",
+          "contract_month": "202608",
+          "multiplier": 10,
+          "local_symbol": "MGC2608"
+        },
+        "1OZ2608": {
+          "symbol": "1OZ",
+          "currency": "USD",
+          "exchange": "COMEX",
+          "contract_month": "202608",
+          "multiplier": 1,
+          "local_symbol": "1OZ2608"
+        }
+      },
+      "request_dir": "tiger_order_requests",
+      "network_order_submission": "not_implemented_fail_closed",
+      "enable_tiger_kill_switch_network_actions": false,
       "timeout_seconds": 10
     }
   },

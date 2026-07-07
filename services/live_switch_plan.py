@@ -6,23 +6,25 @@ from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
-from services.official_market_data_gate import is_official_broker_ohlc_ready
+from services.official_market_data_gate import is_execution_grade_ohlc_ready
 
 
 class LiveSwitchPlan:
     def __init__(self, output_root: Path | None = None) -> None:
         config = load_pipeline_config()
+        self.config = config
         self.output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
 
     def run(self, run_date: str) -> dict:
-        data_source = self._latest("data_source_preflight", run_date)
+        broker = self._latest("broker_preflight", None)
+        market_data_identity = self._market_data_identity_for_broker(broker)
+        data_source = self._market_data_preflight(market_data_identity, run_date)
         live_env = self._latest("live_env", run_date)
         oanda_account = self._latest("oanda_account", run_date)
-        broker = self._latest("broker_preflight", None)
         live_readiness = self._latest("live_readiness", run_date)
         activation = self._latest("live_activation", run_date)
         schedule = self._latest("schedules", "status_current", dated=False)
-        steps = self._steps(data_source, live_env, oanda_account, broker, live_readiness, activation, schedule)
+        steps = self._steps(data_source, live_env, oanda_account, broker, live_readiness, activation, schedule, market_data_identity)
         payload = {
             "run_date": run_date,
             "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -32,12 +34,12 @@ class LiveSwitchPlan:
             "steps": steps,
             "commands": self._commands(run_date),
             "safety_order": [
-                "Keep execution_mode=paper until execution-grade GOLD/XAUUSD 5m data is live-ready.",
+                f"Keep execution_mode=paper until execution-grade {market_data_identity['symbol']} {market_data_identity['timeframe']} data is live-ready.",
                 "Use broker dry_run first; do not disable dry_run before live_readiness passes.",
                 "Require a dated human approval artifact before real-money execution.",
             ],
             "artifacts": {
-                "data_source_preflight": str(self.output_root / "data_source_preflight" / "current.json"),
+                "data_source_preflight": str(self._market_data_preflight_path(market_data_identity)),
                 "live_env": str(self.output_root / "live_env" / "current.json"),
                 "oanda_account": str(self.output_root / "oanda_account" / "current.json"),
                 "live_readiness": str(self.output_root / "live_readiness" / "current.json"),
@@ -49,15 +51,25 @@ class LiveSwitchPlan:
         self._write_markdown(run_date, payload)
         return payload
 
-    def _steps(self, data_source: dict, live_env: dict, oanda_account: dict, broker: dict, live_readiness: dict, activation: dict, schedule: dict) -> list[dict]:
+    def _steps(
+        self,
+        data_source: dict,
+        live_env: dict,
+        oanda_account: dict,
+        broker: dict,
+        live_readiness: dict,
+        activation: dict,
+        schedule: dict,
+        market_data_identity: dict,
+    ) -> list[dict]:
         provider = str(broker.get("provider") or "")
         oanda_required = provider == "oanda_rest"
         return [
-            self._step("schedule", schedule.get("status") == "active", "launchd runner, trading plan, evening review, daily review, strategies, and dashboard are active.", schedule),
-            self._step("official_5m_data", is_official_broker_ohlc_ready(data_source), "Connect execution-grade Binance USDM or broker GOLD 5m bars until OHLC is live-ready.", data_source),
+            self._step("schedule", schedule.get("status") == "active", "launchd runner, trading plan, evening review, daily review, strategies, dashboard, dualtrack cycle/live tick, and deadman ping are active.", schedule),
+            self._step("official_5m_data", is_execution_grade_ohlc_ready(data_source), self._market_data_action(market_data_identity), data_source),
             self._step("live_env", live_env.get("status") == "pass", "Create configs/live.env with the active broker keys.", live_env),
             self._step("oanda_account", (not oanda_required) or (oanda_account.get("status") == "pass" and oanda_account.get("instrument_ready") is True), "Confirm OANDA account and XAU_USD instrument are reachable only when OANDA is the active broker.", {"provider": provider, "oanda_account": oanda_account}),
-            self._step("broker_provider", broker.get("provider") in {"binance_usdm", "oanda_rest", "mt5_file_bridge"} and broker.get("ready") is True, "Configure a supported live broker provider and make broker_preflight pass.", broker),
+            self._step("broker_provider", broker.get("provider") in {"binance_usdm", "oanda_rest", "mt5_file_bridge", "tiger_openapi"} and broker.get("ready") is True, "Configure a supported live broker provider and make broker_preflight pass.", broker),
             self._step("live_readiness", live_readiness.get("live_ready") is True, "Make all live_readiness checks pass before disabling broker dry_run.", live_readiness),
             self._step("human_approval", activation.get("approval", {}).get("approved") is True or activation.get("real_money_ready") is True, "Create dated human approval only after dry-run readiness is proven.", activation),
         ]
@@ -77,6 +89,41 @@ class LiveSwitchPlan:
             f"python3 -m pipelines.live_activation --date {run_date}",
             f"python3 -m pipelines.live_approval --date {run_date} --request",
         ]
+
+    def _market_data_identity_for_broker(self, broker: dict) -> dict:
+        provider = str(broker.get("provider") or self.config.get("broker", {}).get("provider", ""))
+        if provider == "tiger_openapi":
+            feed = self.config.get("tiger_futures_feed", {}) or {}
+            symbol = str(feed.get("output_symbol") or feed.get("contract") or "MGCmain")
+            timeframe = str(feed.get("timeframe") or feed.get("period") or "1m")
+            return {"provider": provider, "symbol": symbol, "timeframe": timeframe, "source_key": f"{symbol}_{timeframe}"}
+        return {"provider": provider, "symbol": "GOLD", "timeframe": "5m", "source_key": "GOLD_5m"}
+
+    def _market_data_preflight(self, identity: dict, run_date: str) -> dict:
+        source_key = str(identity.get("source_key") or "GOLD_5m")
+        if source_key != "GOLD_5m":
+            for path in [
+                self.output_root / "data_source_preflight" / source_key / f"{run_date}.json",
+                self.output_root / "data_source_preflight" / source_key / "current.json",
+            ]:
+                rows = load_json(path)
+                if rows:
+                    return rows[-1]
+        return self._latest("data_source_preflight", run_date)
+
+    def _market_data_preflight_path(self, identity: dict) -> Path:
+        source_key = str(identity.get("source_key") or "GOLD_5m")
+        if source_key == "GOLD_5m":
+            return self.output_root / "data_source_preflight" / "current.json"
+        return self.output_root / "data_source_preflight" / source_key / "current.json"
+
+    def _market_data_action(self, identity: dict) -> str:
+        symbol = str(identity.get("symbol") or "GOLD")
+        timeframe = str(identity.get("timeframe") or "5m")
+        provider = str(identity.get("provider") or "")
+        if provider == "tiger_openapi":
+            return f"Connect execution-grade Tiger OpenAPI {symbol} {timeframe} bars until OHLC is live-ready."
+        return f"Connect execution-grade broker or execution-venue {symbol} {timeframe} bars until OHLC is live-ready."
 
     def _write_markdown(self, run_date: str, payload: dict) -> None:
         lines = [
