@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config, load_risk_rules, load_strategy_config
+from services.bias_ledger import BiasLedger
 from services.broker_adapter import LiveBrokerAdapter
 from services.data_source_preflight import DataSourcePreflight
 from services.data_archive_manifest import DataArchiveManifest
@@ -46,6 +47,7 @@ class CompletionAudit:
             self._paper_reconciliation(run_date),
             self._paper_trade_attribution(run_date),
             self._journal_and_review(run_date),
+            self._human_bias_ledger(run_date),
             self._strategy_guardrails(run_date),
             self._daily_review_run(run_date),
             self._schedule_artifacts(run_date),
@@ -397,6 +399,71 @@ class CompletionAudit:
                 },
             )
         return self._requirement("strategy_guardrails", "fail", "strategy guardrails 产物结构不完整", guardrails)
+
+    def _human_bias_ledger(self, run_date: str) -> dict:
+        ledger = BiasLedger(self.output_root, self.market_db)
+        if not ledger.ledger_path.exists():
+            return self._requirement(
+                "human_bias_ledger",
+                "fail",
+                "人轨方向分裁决账本不存在",
+                {"ledger": str(ledger.ledger_path), "run_date": run_date},
+            )
+        if not ledger.summary_path.exists():
+            return self._requirement(
+                "human_bias_ledger",
+                "fail",
+                "人轨方向分 summary 缺失",
+                {"ledger": str(ledger.ledger_path), "summary": str(ledger.summary_path)},
+            )
+        events = ledger.events()
+        summary = self._load_mapping(ledger.summary_path)
+        if int(summary.get("ledger_event_count", -1)) != len(events):
+            return self._requirement(
+                "human_bias_ledger",
+                "fail",
+                "人轨方向分 summary 不是最新派生结果",
+                {
+                    "ledger": str(ledger.ledger_path),
+                    "summary": str(ledger.summary_path),
+                    "summary_event_count": summary.get("ledger_event_count"),
+                    "ledger_event_count": len(events),
+                },
+            )
+        blockers = ledger.overdue_blockers()
+        if blockers:
+            return self._requirement(
+                "human_bias_ledger",
+                "fail",
+                "存在已过期但未裁决的人轨方向分",
+                {
+                    "run_date": run_date,
+                    "overdue_blockers": [
+                        {
+                            "view_id": item.get("view_id"),
+                            "status": item.get("status"),
+                            "pending_reason": item.get("pending_reason"),
+                            "expires_at": item.get("expires_at"),
+                        }
+                        for item in blockers
+                    ],
+                },
+            )
+        return self._requirement(
+            "human_bias_ledger",
+            "pass",
+            "人轨方向分账本存在，summary 新鲜，且没有 overdue-open/pending 条目",
+            {
+                "run_date": run_date,
+                "ledger": str(ledger.ledger_path),
+                "summary": str(ledger.summary_path),
+                "total": summary.get("total"),
+                "adjudicated": summary.get("adjudicated"),
+                "pending_data": summary.get("pending_data"),
+                "hit_rate": summary.get("hit_rate"),
+                "mean_brier": summary.get("mean_brier"),
+            },
+        )
 
     def _daily_review_run(self, run_date: str) -> dict:
         rows = load_json(self.output_root / "daily_review_runs" / f"{run_date}.json")

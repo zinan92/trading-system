@@ -7,6 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from services.journal_store import write_json
+from services.bias_ledger import BiasLedger
 from services.market_view import MarketViewStore
 
 
@@ -56,9 +57,15 @@ class MarketViewIntake:
     any ambiguous interpretation.
     """
 
-    def __init__(self, output_root: Path, obsidian_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        obsidian_root: Path | None = None,
+        market_db: Path | None = None,
+    ) -> None:
         self.output_root = Path(output_root)
         self.store = MarketViewStore(output_root, obsidian_root=obsidian_root)
+        self.bias_ledger = BiasLedger(self.output_root, market_db)
 
     def draft(self, run_date: str, raw_text: str) -> MarketViewDraft:
         text = _normalize(raw_text)
@@ -79,9 +86,25 @@ class MarketViewIntake:
             expire_below=_extract_bound(text, "below"),
         )
 
-    def record(self, run_date: str, raw_text: str, *, write_obsidian: bool = False) -> dict:
+    def record(
+        self,
+        run_date: str,
+        raw_text: str,
+        *,
+        write_obsidian: bool = False,
+        as_of: str | datetime | None = None,
+    ) -> dict:
+        self.bias_ledger.guard_before_record(as_of=as_of)
         draft = self.draft(run_date, raw_text)
         payload = self.store.record(**draft.to_record_kwargs(), write_obsidian=write_obsidian)
+        ledger_entry = self.bias_ledger.append_open_view(payload)
+        payload["bias_ledger"] = {
+            "view_id": ledger_entry["view_id"],
+            "status": ledger_entry["status"],
+            "pending_reason": ledger_entry["pending_reason"],
+            "price_at_issue": ledger_entry["price_at_issue"],
+            "expires_at": ledger_entry["expires_at"],
+        }
         payload["intake"] = {
             "parser": "market_view_intake_v1",
             "confidence": draft.confidence,
