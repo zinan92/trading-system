@@ -44,6 +44,7 @@ class ScheduleManager:
             self._dashboard_job(log_dir, dashboard_port),
             self._strategies_job(log_dir),
             self._dualtrack_cycle_job(log_dir),
+            self._dualtrack_live_tick_job(log_dir),
             self._deadman_ping_job(log_dir),
         ]
         for job in jobs:
@@ -139,6 +140,15 @@ class ScheduleManager:
             [self.python, "-m", "pipelines.dualtrack_cycle_runner", "--event", "auto"],
             log_dir,
             extra={"StartInterval": 60, "RunAtLoad": True},
+        )
+
+    def _dualtrack_live_tick_job(self, log_dir: Path) -> dict:
+        label = "com.wendy.trading-orchestrator.dualtrack-live-tick"
+        return self._base_job(
+            label,
+            [self.python, "-m", "pipelines.dualtrack_cycle_runner", "--event", "live-tick"],
+            log_dir,
+            extra={"StartInterval": 300, "RunAtLoad": True},
         )
 
     def _dashboard_job(self, log_dir: Path, port: int) -> dict:

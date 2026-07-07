@@ -515,6 +515,9 @@ class CompletionAudit:
             "com.wendy.trading-orchestrator.daily-review",
             "com.wendy.trading-orchestrator.dashboard",
             "com.wendy.trading-orchestrator.strategies",
+            "com.wendy.trading-orchestrator.dualtrack-cycle",
+            "com.wendy.trading-orchestrator.dualtrack-live-tick",
+            "com.wendy.trading-orchestrator.deadman-ping",
         ]
         missing = [label for label in required if label not in jobs]
         if missing:
@@ -534,7 +537,7 @@ class CompletionAudit:
         return self._requirement(
             "schedule_artifacts",
             "pass",
-            "本地 launchd 调度配置已生成并安装，可自动运行 runner、早盘计划、晚盘复盘、daily review、strategies 和 dashboard",
+            "本地 launchd 调度配置已生成并安装，可自动运行 runner、早盘计划、晚盘复盘、daily review、strategies、dashboard、dualtrack cycle/live tick 和 deadman ping",
             {
                 "generated_at": schedule.get("generated_at"),
                 "launch_agents_dir": schedule.get("launch_agents_dir"),

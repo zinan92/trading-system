@@ -35,24 +35,36 @@ class ScheduleStatus:
             "com.wendy.trading-orchestrator.dashboard",
             "com.wendy.trading-orchestrator.strategies",
             "com.wendy.trading-orchestrator.dualtrack-cycle",
+            "com.wendy.trading-orchestrator.dualtrack-live-tick",
             "com.wendy.trading-orchestrator.deadman-ping",
         }
         present = {job.get("label") for job in jobs}
         missing_generated = sorted(required - present)
-        installed_count = sum(1 for job in jobs if job.get("installed") and job.get("matches_generated"))
-        loaded_count = sum(1 for job in jobs if job.get("installed") and job.get("matches_generated") and job.get("loaded"))
+        installed_count = sum(1 for job in jobs if job.get("installed"))
+        loaded_count = sum(1 for job in jobs if job.get("installed") and job.get("loaded"))
+        matching_generated_count = sum(1 for job in jobs if job.get("installed") and job.get("matches_generated"))
+        active_current_count = sum(1 for job in jobs if job.get("installed") and job.get("matches_generated") and job.get("loaded"))
+        missing_installed_jobs = sorted(str(job.get("label") or "") for job in jobs if not job.get("installed"))
+        mismatched_jobs = sorted(str(job.get("label") or "") for job in jobs if job.get("installed") and not job.get("matches_generated"))
+        unloaded_jobs = sorted(str(job.get("label") or "") for job in jobs if job.get("installed") and job.get("matches_generated") and not job.get("loaded"))
         if not schedule:
             status = "missing"
             message = "schedule artifacts have not been generated"
         elif missing_generated:
             status = "fail"
             message = "generated schedule is missing required jobs"
-        elif installed_count == len(required) and loaded_count == len(required):
+        elif active_current_count == len(required):
             status = "active"
-            message = "all launchd jobs are installed and loaded"
-        elif installed_count == len(required):
+            message = "all launchd jobs match the generated schedule and are loaded"
+        elif matching_generated_count == len(required):
             status = "installed"
-            message = "all launchd jobs are installed, but at least one is not loaded"
+            message = "all launchd jobs match the generated schedule, but at least one is not loaded"
+        elif mismatched_jobs:
+            status = "stale_installed"
+            message = "installed launchd plists differ from the generated schedule; reinstall generated plists"
+        elif installed_count:
+            status = "partial_installed"
+            message = "some generated launchd plists are installed, but the current generated schedule is not fully installed"
         else:
             status = "generated_only"
             message = "launchd plists are generated but not installed in ~/Library/LaunchAgents"
@@ -67,6 +79,11 @@ class ScheduleStatus:
             "missing_generated_jobs": missing_generated,
             "installed_count": installed_count,
             "loaded_count": loaded_count,
+            "matching_generated_count": matching_generated_count,
+            "active_current_count": active_current_count,
+            "missing_installed_jobs": missing_installed_jobs,
+            "mismatched_jobs": mismatched_jobs,
+            "unloaded_jobs": unloaded_jobs,
             "required_count": len(required),
             "jobs": jobs,
             "install_commands": schedule.get("install_commands", []),
