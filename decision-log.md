@@ -2200,3 +2200,46 @@ Date: 2026-07-08
 - Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed.
 - Full regression: `python3 -m pytest -q` passed with `1244 passed`.
 - Browser phase: `http://127.0.0.1:8765/dashboard-dualtrack-v5.html` loaded with no JS errors; screenshot saved at `outputs/codex_browser_comments_fix.png`.
+
+## 2026-07-09 Task 09a Split Canvas Rebuild
+
+### Decisions
+
+- Ship Task 09 in two steps and complete only 09a in this pass.
+  - Rationale: the owner value is the new mental model first: two independent canvases with the same clear widget set. The order-level trades/config/unrealized PnL work changes backend data contracts and belongs in 09b.
+  - Boundary: `dashboard-dualtrack-v5.html` remains untouched and `dashboard-dualtrack-split.html` is a parallel page, not a cutover.
+
+- Add the split canvas as a new shell entry named `双画布`.
+  - Rationale: the existing `作战台` link remains production-safe on v5, while the new page is reachable for review and incremental hardening.
+
+- Keep 09a on existing read endpoints only.
+  - Reused: cycle/current, plan, machine, human, ledger, runtime/status, market/bars, attribution only after `cycleClosed`.
+  - Deferred to 09b: `/api/dualtrack/trades/<cycle_id>?track=...`, `/api/dualtrack/config`, `apply_unrealized()`, and full risk/PnL data wiring.
+
+- Render real K lines through `standard-kline`, not mockup drawings.
+  - Rationale: the split page must inherit the time axis, hover/crosshair, source metadata, and Lightweight Charts behavior from the standard package.
+  - Evidence: the browser DOM contains six chart hosts with real canvas children and `window.dualtrackStandardKline` is present.
+
+- Encode the 14-widget registry as static page structure before deeper data wiring.
+  - Rationale: future changes can target a stable widget slug (`direction`, `levels`, `signal`, `kline`, `context`, `order`, `risk`, `position`, `fills`, `pnl`, `data`, `status`, `review`, plus header `phase`) without re-litigating layout names.
+
+### Gotchas
+
+- Do not fetch machine order-level trades in mid phase. 09a intentionally has no `/api/dualtrack/trades/` call path, and the machine canvas keeps the blind veil visible in `mid`.
+
+- Do not rename `pnl` back to `balance`, and do not display `Context图`; the owner-approved wording is `收益`/`pnl` and `大级别图`/`context`.
+
+- Risk widget copy must keep the simplified-liquidation warning visible. The 09a skeleton includes the directional labels (`最大可亏(距SL)` versus `距失效价`) but real leverage/config math is still 09b.
+
+- The split page is now part of the design-token whitelist. Any new inline color literal in its style block should fail `tests/test_design_tokens_static.py`.
+
+- Browser visual proof matters here: static tests can lock naming and endpoints, but only browser validation catches right-edge overflow, missing chart canvases, and phase display mistakes.
+
+### Evidence
+
+- Red phase: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_design_tokens_static.py` failed because `dashboard-dualtrack-split.html` and the shell/cache registrations did not exist.
+- Green phase: the same command passed with `14 passed`.
+- Focused regression: `python3 -m pytest -q tests/test_command_center_api.py tests/test_dashboard_dualtrack_static.py tests/test_dashboard_dualtrack_split_static.py tests/test_design_tokens_static.py tests/test_standard_kline_adapter.py` passed with `50 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `16` tests.
+- Full regression: `python3 -m pytest -q` passed with `1251 passed`.
+- Browser phase: `http://127.0.0.1:8765/dashboard-dualtrack-split.html` loaded with 0 console errors, no horizontal overflow at `1451x1324`, six K-line canvas hosts, and machine `mid`/`post` phase toggling correctly hid/restored the blind veil.

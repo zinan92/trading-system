@@ -105,6 +105,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/dashboard.html",
             "/dashboard-v4.html",
             "/command-center.html",
+            "/dashboard-dualtrack-split.html",
             "/dashboard-dualtrack-v5.html",
             "/dashboard-dualtrack-replay.html",
             "/dashboard-replay.html",

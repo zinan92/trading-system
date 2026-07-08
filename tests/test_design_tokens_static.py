@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HTML_OBJECTS = [
     "command-center.html",
+    "dashboard-dualtrack-split.html",
     "dashboard-dualtrack-v5.html",
     "dashboard-dualtrack-replay.html",
     "ops-dashboard.html",

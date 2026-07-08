@@ -14,6 +14,7 @@
     trader: "dashboard-v4.html",
     cockpit: "dashboard-v4.html",
     dualtrack: "dashboard-dualtrack-v5.html",
+    dualtrackSplit: "dashboard-dualtrack-split.html",
   };
 
   let timer = null;
@@ -48,6 +49,7 @@
     const items = [
       ["command", "指挥台", "command-center.html"],
       ["dualtrack", "作战台", "dashboard-dualtrack-v5.html"],
+      ["dualtrackSplit", "双画布", "dashboard-dualtrack-split.html"],
       ["ops", "运维", "ops-dashboard.html"],
     ];
     return `<nav class="gb-shell-nav" aria-label="全局房间导航">${items.map(([id, label, href]) => {
