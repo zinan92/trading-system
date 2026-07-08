@@ -11,6 +11,17 @@ def read_html() -> str:
     return (ROOT / "dashboard-dualtrack-v5.html").read_text(encoding="utf-8")
 
 
+def extract_function(html: str, name: str) -> str:
+    marker = f"function {name}"
+    start = html.index(marker)
+    next_start = html.find("\nfunction ", start + len(marker))
+    if next_start == -1:
+        next_start = html.find("\nconst ", start + len(marker))
+    if next_start == -1:
+        next_start = len(html)
+    return html[start:next_start]
+
+
 def test_dualtrack_v5_matches_locked_visual_contract_sections():
     html = read_html()
 
@@ -26,7 +37,7 @@ def test_dualtrack_v5_matches_locked_visual_contract_sections():
     assert "月均日现金流 · 双轨合计" in html
     assert "系统地板（方向不可知网格）" in html
     assert "神谕天花板" in html
-    assert "运行红灯 · 样本完整性" in html
+    assert "运行状态 · 样本完整性" in html
     assert "复盘闭环" in html
 
 
@@ -40,7 +51,7 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     assert 'cycleClosed(state.cycle) ? await api(`/api/dualtrack/attribution/${cycleId}`)' in html
     assert "function cycleClosed(cycle)" in html
     assert 'api("/api/dualtrack/ledger")' in html
-    assert 'api("/api/dualtrack/market/bars?limit=96")' in html
+    assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=96`" in html
     assert 'api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=15m&limit=64")' in html
     assert 'api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=1h&limit=64")' in html
     assert 'api("/api/dualtrack/runtime/status")' in html
@@ -113,13 +124,12 @@ def test_dualtrack_v5_p2_uses_readable_context_charts_and_grouped_plan_cards():
     html = read_html()
 
     assert ".context-body{height:150px;display:block}" in html
-    assert 'id="ctx15" class="context-body" viewBox="0 0 460 150"' in html
-    assert 'id="ctx1h" class="context-body" viewBox="0 0 460 150"' in html
-    assert "const w = 460, h = 150" in html
-    assert 'stroke-width="2.4"' in html
-    assert 'font-size="12">H ${fmt(baseHigh)}' in html
-    assert 'font-size="12">floor ${fmt(floor)}' in html
-    assert 'font-size="14">${change >= 0 ? "+" : ""}${change.toFixed(2)}%' in html
+    assert '<div id="ctx15" class="context-body" data-standard-kline-context="15m"></div>' in html
+    assert '<div id="ctx1h" class="context-body" data-standard-kline-context="1h"></div>' in html
+    assert "function renderContextKline(" in html
+    assert "ensureContextKline(" in html
+    assert "height:150" in html
+    assert "function drawMini" not in html
     assert "plan-grid" in html
     assert "plan-metric" in html
     assert '<span class="lab">方向 / RANGE</span>' in html
@@ -206,6 +216,77 @@ def test_dashboard_server_exposes_read_only_market_bars_endpoint(tmp_path):
     assert response["safety"]["read_only"] is True
     assert response["safety"]["opens_order_clients"] is False
     assert "/api/dualtrack/market/bars" not in dashboard_server._DUALTRACK_POST_ENDPOINTS
+
+
+def test_dualtrack_v5_task06_main_timeframe_switch_is_wired() -> None:
+    html = read_html()
+
+    assert "state.mainTf" in html
+    assert "function bindTimeframeSegment()" in html
+    assert 'button[data-tf]' in html
+    assert "state.mainTf = button.dataset.tf" in html
+    assert "renderMainKline()" in html
+    assert "loadMainMarket()" in html
+    assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=96`" in html
+    assert 'api("/api/dualtrack/market/bars?limit=96")' not in html
+
+
+def test_dualtrack_v5_task06_context_charts_use_standard_kline_not_svg_drawmini() -> None:
+    html = read_html()
+
+    assert '<div id="ctx15" class="context-body" data-standard-kline-context="15m"></div>' in html
+    assert '<div id="ctx1h" class="context-body" data-standard-kline-context="1h"></div>' in html
+    assert "function renderContextKline(" in html
+    assert "ensureContextKline(" in html
+    assert "state.contextKlines" in html
+    assert "new StandardKline.StandardKlineChart" in html
+    assert "function drawMini" not in html
+    assert "drawMini(" not in html
+
+
+def test_dualtrack_v5_task06_runtime_status_copy_clarifies_watch_semantics() -> None:
+    html = read_html()
+
+    assert "运行状态 · 样本完整性" in html
+    assert "盘中 · 正常" in html
+    assert "需处理 ·" in html
+    assert "已收盘 · 已评分" in html
+    assert "运行红灯 · 样本完整性" not in html
+    assert "WATCH" not in extract_function(html, "statusText")
+
+
+def test_dualtrack_v5_task06_layers_are_display_mapped_to_chinese() -> None:
+    html = read_html()
+
+    assert "const LAYER_LABELS" in html
+    assert '"grid:traded":"网格 · 已成交"' in html
+    assert '"trend:armed":"趋势 · 已激活"' in html
+    assert "layerLabel(layer)" in html
+    assert "${esc(layer)}" not in extract_function(html, "renderMachine")
+
+
+def test_dualtrack_v5_task06_replay_links_disable_empty_urls() -> None:
+    html = read_html()
+
+    assert "replayLink(" in html
+    assert "暂无可回放周期" in html
+    assert 'href=""' not in html
+    assert 'href="${esc(previousReplay)}"' not in html
+    assert 'href="${esc(closeout.replay_url ||' not in html
+
+
+def test_dualtrack_v5_task06_blind_protocol_does_not_feed_machine_points_to_intraday_charts() -> None:
+    html = read_html()
+    main = extract_function(html, "renderMainKline")
+    context = extract_function(html, "renderContextKline")
+
+    assert "state.human?.fills" in main
+    assert "state.machine.fills" not in main
+    assert "state.machine?.fills" not in main
+    assert "state.machine.fills" not in context
+    assert "state.machine?.fills" not in context
+    assert "markers:" not in context
+    assert "priceLines:" not in context
 
 
 def test_dashboard_server_runtime_status_hides_machine_fills_until_close(tmp_path, monkeypatch):

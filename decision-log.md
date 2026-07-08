@@ -2035,3 +2035,38 @@ Date: 2026-07-08
 - The page must never default to green when the command-center API fetch fails. The fallback state is `UNKNOWN` with "数据不可读".
 
 - The shell still retains the `cockpit -> dashboard-v4.html` URL mapping for deep links and replay returns even though cockpit is no longer in the primary nav.
+
+## 2026-07-08 DualTrack Console Functional Fixes
+
+### Decisions
+
+- Treat `runtime_status.status == "warn"` during an open cycle as a display clarity issue, not a backend state change.
+  - Rationale: backend `warn` currently means "not closed yet" when no sub-check is blocked; the frontend now renders that as "盘中 · 正常" and reserves alarm copy for actual blocked checks.
+  - Evidence: `dashboard-dualtrack-v5.html`, `tests/test_dashboard_dualtrack_static.py`.
+
+- Route the main K-line timeframe selector through the backend market-bars API.
+  - Rationale: the existing 1m/5m buttons had no handler; switching now updates `state.mainTf`, requests `timeframe=${state.mainTf}`, and rerenders the same human-only overlays against the new candles.
+  - Evidence: `bindTimeframeSegment`, `loadMainMarket`, and the static contract test.
+
+- Honor the requested timeframe in the read-only default market feed fallback.
+  - Rationale: browser validation showed `/api/dualtrack/market/bars?timeframe=5m` could still return the default 1m candidate when no symbol was specified; the reader now checks native 5m rows first, then derives the requested timeframe from fresh fallback 1m bars.
+  - Boundary: default no-symbol requests may skip stale candidates to find a fresh fallback, while explicit symbol requests keep stale real derived bars instead of silently falling to synthetic display data.
+
+- Replace the 15m/1h handwritten SVG context charts with `StandardKlineChart` instances without overlays.
+  - Rationale: context charts are for higher-timeframe direction only; using the standard K-line package makes them readable while avoiding any fill markers or plan price lines.
+  - Blind-protocol guard: context rendering passes no `markers` and no `priceLines`; the main chart still reads only `state.human?.fills`.
+
+- Keep machine fill density controls machine-scoped.
+  - Rationale: duplicate TP/SL/fill prices should be grouped when machine overlays are rendered after close, but the intraday human chart must keep its own markers unchanged.
+  - Strategy: `buildMachineOverlay()` dedupes near-identical price lines within 0.05% and buckets multiple markers that land on the same candle time.
+
+- Disable replay buttons when the replay URL is missing.
+  - Rationale: an empty `href` refreshes the current page and looks like a broken action; the UI now shows "暂无可回放周期" / "暂无完整回放" instead.
+
+### Gotchas
+
+- Do not "fix" WATCH by changing `pipelines/dashboard_server.py` status semantics; other code may still depend on `warn` meaning open-cycle watch state.
+
+- `dashboard-dualtrack-v5.html` currently has no separate machine K-line card; the machine overlay helpers are intentionally not attached to the intraday main chart.
+
+- Context charts must remain fill-free. Adding markers there would create a new blind-protocol leak surface even if the data came from the human track.

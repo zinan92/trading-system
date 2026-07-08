@@ -207,6 +207,80 @@ def test_dualtrack_market_feed_derives_context_timeframes_from_one_minute_bars(t
     assert "derived_source:GOLD:1m->15m" in payload["access_issues"]
 
 
+def test_dualtrack_market_feed_keeps_stale_explicit_derived_symbol_instead_of_seed(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    rows = []
+    start = datetime(2026, 7, 6, 3, 0, tzinfo=timezone.utc)
+    for index in range(20):
+        price = 4000 + index
+        rows.append(
+            Bar(
+                symbol="GOLD",
+                timeframe="1m",
+                timestamp=(start + timedelta(minutes=index)).isoformat(),
+                open=price,
+                high=price + 2,
+                low=price - 1,
+                close=price + 1,
+                volume=10,
+                provider="binance_usdm",
+                quality_flags=[],
+            )
+        )
+    MarketStore(db).upsert_bars(rows)
+
+    payload = DualTrackMarketFeed(market_db=db, config=_config()).snapshot(
+        symbol="GOLD",
+        timeframe="15m",
+        limit=2,
+        as_of="2026-07-06T05:00:00+00:00",
+    )
+
+    assert payload["status"] == "stale"
+    assert payload["source_mode"] == "derived_from_1m"
+    assert payload["symbol"] == "GOLD"
+    assert payload["timeframe"] == "15m"
+    assert payload["is_synthetic"] is False
+    assert payload["bar_count"] == 2
+    assert "derived_source:GOLD:1m->15m" in payload["access_issues"]
+
+
+def test_dualtrack_market_feed_derives_requested_default_timeframe_from_fallback_symbol(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    rows = []
+    start = datetime(2026, 7, 6, 3, 0, tzinfo=timezone.utc)
+    for index in range(10):
+        price = 4000 + index
+        rows.append(
+            Bar(
+                symbol="GOLD",
+                timeframe="1m",
+                timestamp=(start + timedelta(minutes=index)).isoformat(),
+                open=price,
+                high=price + 2,
+                low=price - 1,
+                close=price + 1,
+                volume=10,
+                provider="binance_usdm",
+                quality_flags=[],
+            )
+        )
+    MarketStore(db).upsert_bars(rows)
+
+    payload = DualTrackMarketFeed(market_db=db, config=_config()).snapshot(
+        timeframe="5m",
+        limit=2,
+        as_of="2026-07-06T03:10:00+00:00",
+    )
+
+    assert payload["status"] == "derived"
+    assert payload["source_mode"] == "derived_from_1m"
+    assert payload["symbol"] == "GOLD"
+    assert payload["timeframe"] == "5m"
+    assert payload["bar_count"] == 2
+    assert payload["requested"] == {"symbol": "", "timeframe": "5m", "limit": 2}
+
+
 def test_dualtrack_market_feed_missing_db_uses_seed_without_creating_db(tmp_path: Path) -> None:
     db = tmp_path / "missing" / "market_data.db"
 

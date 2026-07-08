@@ -85,7 +85,9 @@ def test_dualtrack_replay_page_uses_closed_attribution_only() -> None:
 def test_dualtrack_console_deep_links_to_dt6_replay() -> None:
     html = (ROOT / "dashboard-dualtrack-v5.html").read_text(encoding="utf-8")
 
-    assert "dashboard-dualtrack-replay.html?layout=dualtrack&cycle=" in html
+    assert "replayLink(closeout.replay_url" in html
+    assert "replayLink(previous.replay_url" in html
+    assert "暂无可回放周期" in html
     assert "DT6 · 双轨同步回放" in html
 
 

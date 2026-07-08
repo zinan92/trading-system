@@ -64,9 +64,14 @@ class DualTrackMarketFeed:
                     if not freshness["fresh"]:
                         status = "stale"
                     return self._payload(status, candidate, bars, requested, access_issues, freshness=freshness)
-            derived = self._derived_bars(symbol=symbol, timeframe=timeframe, limit=resolved_limit)
-            if derived:
+            for derived in self._derived_candidates(candidates, symbol=symbol, timeframe=timeframe, limit=resolved_limit):
                 freshness = self._freshness(derived["bars"][-1], checked_at=checked_at)
+                if not freshness["fresh"] and not symbol:
+                    access_issues.append(
+                        f"stale_source:{derived['source']['symbol']}:{derived['source']['timeframe']}:"
+                        f"{derived['bars'][-1].get('timestamp', '')}"
+                    )
+                    continue
                 return self._payload(
                     "derived" if freshness["fresh"] else "stale",
                     derived["source"],
@@ -105,20 +110,39 @@ class DualTrackMarketFeed:
 
         tiger = self.config.get("tiger_futures_feed", {}) or {}
         binance = self.config.get("binance_usdm_1m_feed", {}) or {}
+        requested_timeframe = timeframe or ""
         return [
             {
                 "symbol": str(tiger.get("output_symbol") or tiger.get("contract") or "MGCmain"),
-                "timeframe": str(tiger.get("timeframe") or tiger.get("period") or "1m"),
+                "timeframe": requested_timeframe or str(tiger.get("timeframe") or tiger.get("period") or "1m"),
                 "provider": str(tiger.get("provider") or "tiger_openapi:COMEX"),
                 "source_mode": "tiger_openapi",
             },
             {
                 "symbol": str(binance.get("output_symbol") or "GOLD"),
-                "timeframe": str(binance.get("timeframe") or binance.get("interval") or "1m"),
+                "timeframe": requested_timeframe or str(binance.get("timeframe") or binance.get("interval") or "1m"),
                 "provider": "binance_usdm",
                 "source_mode": "binance_usdm_fallback",
             },
         ]
+
+    def _derived_candidates(self, candidates: list[dict], *, symbol: str | None, timeframe: str | None, limit: int) -> list[dict]:
+        if symbol:
+            derived = self._derived_bars(symbol=symbol, timeframe=timeframe, limit=limit)
+            return [derived] if derived else []
+        if not timeframe:
+            return []
+        rows: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for candidate in candidates:
+            key = (str(candidate["symbol"]), str(timeframe))
+            if key in seen:
+                continue
+            seen.add(key)
+            derived = self._derived_bars(symbol=candidate["symbol"], timeframe=timeframe, limit=limit)
+            if derived:
+                rows.append(derived)
+        return rows
 
     def _load_bars(self, symbol: str, timeframe: str, limit: int) -> list[dict]:
         uri = f"file:{quote(str(self.market_db.resolve()))}?mode=ro"
