@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>双轨分栏布局 · Mockup V1(纯静态,无后端)</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --bg:#0a0b0c; --panel:#101216; --panel2:#15181e;
+  --ink:#e8eaed; --muted:#9aa3ad; --faint:#5d666f;
+  --gold:#d8aa3f; --run:#35d07f; --warn:#e8a33d; --block:#ef5f5f; --unknown:#7d8590;
+  --human:#7aa2ff; --machine:#b894ff;
+  --rule:rgba(255,255,255,.08); --rule-strong:rgba(255,255,255,.16); --r:6px;
+  --mono:"SFMono-Regular","Roboto Mono",Menlo,Consolas,ui-monospace,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.5 var(--sans);padding:20px 22px 60px;max-width:1560px;margin:0 auto}
+.mock-tag{position:fixed;right:14px;bottom:14px;background:var(--panel2);border:1px dashed var(--rule-strong);border-radius:var(--r);padding:6px 12px;font-size:11px;color:var(--faint);z-index:9}
+h1{font-size:16px;font-weight:700;display:flex;align-items:center;gap:12px;margin-bottom:14px}
+h1 .v{font-family:var(--mono);font-size:11px;color:var(--gold);border:1px solid var(--gold);border-radius:4px;padding:1px 8px}
+.tracks-strip{display:flex;gap:8px;margin-left:auto}
+.tk{font-size:11px;border:1px solid var(--rule-strong);border-radius:20px;padding:3px 12px;color:var(--muted);display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+.tk .d{width:7px;height:7px;border-radius:50%}
+.tk.h{border-color:rgba(122,162,255,.5);color:var(--human)} .tk.h .d{background:var(--human)}
+.tk.m{border-color:rgba(184,148,255,.5);color:var(--machine)} .tk.m .d{background:var(--machine)}
+.tk.ai{border-style:dashed;color:var(--faint)} .tk.ai .d{background:var(--unknown)}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);overflow:hidden}
+.ph{padding:9px 14px;border-bottom:1px solid var(--rule);font-size:11px;letter-spacing:.07em;color:var(--muted);font-weight:600;display:flex;gap:10px;align-items:center}
+.ph .r{margin-left:auto;color:var(--faint);font-weight:400;letter-spacing:0}
+.mono{font-family:var(--mono)}
+/* ===== 顶部:联合记分板 ===== */
+.scoreboard{display:grid;grid-template-columns:1fr 1.1fr 1fr;gap:0;margin-bottom:14px;background:var(--panel);border:1px solid var(--rule);border-radius:var(--r)}
+.sb{padding:14px 18px;display:flex;flex-direction:column;gap:2px}
+.sb+.sb{border-left:1px solid var(--rule)}
+.sb .k{font-size:10px;letter-spacing:.1em;color:var(--faint);font-weight:600}
+.sb .big{font-family:var(--mono);font-size:26px;font-weight:700}
+.sb .sub{font-size:11px;color:var(--faint)}
+.sb.center{align-items:center;text-align:center;background:var(--panel2)}
+.pos{color:var(--run)} .neg{color:var(--block)}
+.calib{display:flex;gap:18px;margin-top:6px;font-size:11px;color:var(--faint)}
+.calib b{font-family:var(--mono);color:var(--muted);font-weight:600}
+/* ===== 双栏 ===== */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+.col{display:flex;flex-direction:column;gap:12px;min-width:0}
+.col.human>.panel{border-left:3px solid var(--human)}
+.col.machine>.panel{border-left:3px solid var(--machine)}
+.col-h{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;padding:2px 2px 0}
+.col-h .d{width:8px;height:8px;border-radius:50%}
+.col.human .col-h{color:var(--human)} .col.human .col-h .d{background:var(--human)}
+.col.machine .col-h{color:var(--machine)} .col.machine .col-h .d{background:var(--machine)}
+.col-h .r{margin-left:auto}
+/* 三件套 plan */
+.plan3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:12px 14px}
+.p3{border:1px solid var(--rule);background:var(--panel2);border-radius:var(--r);padding:10px 12px;min-width:0}
+.p3 .lab{font-size:10px;letter-spacing:.08em;color:var(--faint);font-weight:600;display:block;margin-bottom:6px}
+.p3 .val{font-family:var(--mono);font-size:12px;font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+.p3 .val .lv{display:inline-block;border:1px solid var(--rule-strong);border-radius:4px;padding:0 6px;margin:1px 3px 1px 0;color:var(--muted)}
+.p3 .val .lv.hot{color:var(--gold);border-color:rgba(216,170,63,.45)}
+.dir-long{color:var(--run)} .dir-short{color:var(--block)} .dir-both{color:var(--warn)}
+/* 图表 */
+.chart{position:relative;padding:0}
+.chart svg{display:block;width:100%;height:300px}
+.axis-lab{font:10px var(--mono);fill:var(--faint)}
+.ol-lab{font:600 10px var(--mono)}
+.chart-foot{display:flex;gap:14px;padding:8px 14px;border-top:1px solid var(--rule);font-size:11px;color:var(--faint);flex-wrap:wrap}
+.chart-foot b{color:var(--muted);font-family:var(--mono);font-weight:600}
+/* 机器轨总开关 */
+.mtoggle{margin-left:auto;font-size:11px;border:1px solid rgba(184,148,255,.5);color:var(--machine);background:rgba(184,148,255,.08);border-radius:5px;padding:4px 12px;cursor:pointer;font-weight:600}
+.mtoggle.off{border-color:var(--rule-strong);color:var(--faint);background:transparent}
+.machine-ol{transition:opacity .18s}
+.ghost .machine-ol{opacity:.14;filter:grayscale(1)}
+/* 一键下单 */
+.trade{padding:12px 14px;display:grid;gap:10px}
+.tapline{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tap{border-radius:var(--r);padding:10px 0;text-align:center;cursor:pointer;border:1px solid}
+.tap .t{font-size:11px;font-weight:600;letter-spacing:.06em}
+.tap .p{font-family:var(--mono);font-size:18px;font-weight:700}
+.tap.sell{border-color:rgba(239,95,95,.55);background:rgba(239,95,95,.10);color:var(--block)}
+.tap.buy{border-color:rgba(53,208,127,.55);background:rgba(53,208,127,.10);color:var(--run)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row .k{font-size:10px;letter-spacing:.08em;color:var(--faint);font-weight:600;min-width:64px}
+.pill{border:1px solid var(--rule-strong);border-radius:5px;padding:4px 12px;font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer}
+.pill.on{border-color:rgba(122,162,255,.6);color:var(--human);background:rgba(122,162,255,.10);font-weight:600}
+.preset-note{border:1px dashed var(--rule-strong);border-radius:var(--r);padding:8px 12px;font-size:11px;color:var(--muted)}
+.preset-note b{font-family:var(--mono);color:var(--ink);font-weight:600}
+.preset-note .sl{color:var(--block)} .preset-note .tp{color:var(--run)}
+/* 持仓行 / 状态行 */
+.kvrow{display:flex;gap:14px;padding:9px 14px;border-top:1px solid var(--rule);font-size:12px;color:var(--muted);flex-wrap:wrap}
+.kvrow b{font-family:var(--mono);color:var(--ink);font-weight:600}
+/* 共享 context */
+.ctx{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.ctx svg{display:block;width:100%;height:130px}
+.note{margin-top:14px;border:1px dashed var(--rule-strong);border-radius:var(--r);padding:10px 14px;font-size:11.5px;color:var(--faint);line-height:1.7}
+.note b{color:var(--muted)}
+@media(max-width:1100px){.split{grid-template-columns:1fr}.scoreboard{grid-template-columns:1fr}.sb+.sb{border-left:none;border-top:1px solid var(--rule)}}
+</style>
+</head>
+<body>
+<div class="mock-tag">MOCKUP · 静态假数据 · 未连后端</div>
+
+<h1>双轨作战台 · 分栏布局提案 <span class="v">V1</span>
+  <span class="tracks-strip">
+    <span class="tk h"><span class="d"></span>人轨</span>
+    <span class="tk m"><span class="d"></span>机器轨 · 网格</span>
+    <span class="tk ai"><span class="d"></span>AI 分析轨 · 规划中</span>
+  </span>
+</h1>
+
+<!-- ===== 联合记分板:对比本身居中 ===== -->
+<div class="scoreboard">
+  <div class="sb">
+    <span class="k">人轨 · 本周期已实现</span>
+    <span class="big neg">-$0.20</span>
+    <span class="sub">1 笔 · 手动</span>
+  </div>
+  <div class="sb center">
+    <span class="k">DELTA · 机 − 人</span>
+    <span class="big neg">-$144.98</span>
+    <span class="sub" style="color:var(--human)">人轨领先</span>
+    <div class="calib"><span>分项校准(积累中)</span><span>方向 <b>--%</b></span><span>位置 <b>--%</b></span><span>信号 <b>--%</b></span></div>
+  </div>
+  <div class="sb">
+    <span class="k">机器轨 · 本周期已实现</span>
+    <span class="big neg">-$145.18</span>
+    <span class="sub">18 格成交 · 网格</span>
+  </div>
+</div>
+
+<!-- ===== 双栏 ===== -->
+<div class="split">
+
+  <!-- 左:人轨 -->
+  <div class="col human">
+    <div class="col-h"><span class="d"></span>人轨 HUMAN <span class="r" style="font-size:10px;color:var(--faint);font-weight:400">口述三件套 → 独立打分</span></div>
+
+    <div class="panel">
+      <div class="ph">你的作战单 · 已锁定 13:04 <span class="r">修改机会 1/1 · 12h 生效</span></div>
+      <div class="plan3">
+        <div class="p3"><span class="lab">① 大方向</span><span class="val dir-long">做多 ▲<br><span style="color:var(--faint);font-weight:400">信心 7/10</span></span></div>
+        <div class="p3"><span class="lab">② 关键位置</span><span class="val"><span class="lv">3960</span><span class="lv">4100</span><span class="lv hot">4155</span><span class="lv">4190</span><span class="lv hot">4200</span><span class="lv">4210</span></span></div>
+        <div class="p3"><span class="lab">③ 入场点</span><span class="val" style="font-family:var(--sans);font-weight:400;color:var(--muted)">回踩 <b class="mono" style="color:var(--ink)">4155</b> 企稳做多;突破 <b class="mono" style="color:var(--ink)">4200</b> 回踩确认加仓</span></div>
+      </div>
+    </div>
+
+    <div class="panel chart">
+      <div class="ph">GOLD · 1m <span class="r">你的入场 / TP / SL / 成交</span></div>
+      <svg viewBox="0 0 760 300" id="chartH"></svg>
+      <div class="chart-foot"><span>持仓 <b>多 0.98 @4,076.5</b></span><span>浮动 <b class="pos">+$3.60</b></span><span>TP <b style="color:var(--run)">4,092.0</b></span><span>SL <b style="color:var(--block)">4,072.0</b></span></div>
+    </div>
+
+    <div class="panel">
+      <div class="ph">一键下单 <span class="r">价格来自盘口 · 点按钮即下单</span></div>
+      <div class="trade">
+        <div class="tapline">
+          <div class="tap sell"><div class="t">做空 SELL</div><div class="p">4,079.8</div></div>
+          <div class="tap buy"><div class="t">做多 BUY</div><div class="p">4,080.2</div></div>
+        </div>
+        <div class="row"><span class="k">金额</span><span class="pill">$1k</span><span class="pill on">$2k</span><span class="pill">$5k</span><span class="pill">$8k</span></div>
+        <div class="row"><span class="k">TP/SL 预设</span><span class="pill on">关键位 SL · 1.5R TP</span><span class="pill">固定 0.3% / 0.6%</span><span class="pill">手动</span></div>
+        <div class="preset-note">按当前预设,点「做多 4,080.2」将自动同时挂出:<b class="sl">SL 4,072.0</b>(最近关键位下方)· <b class="tp">TP 4,092.5</b>(1.5R)—— 无需手动输入任何价格。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右:机器轨 -->
+  <div class="col machine" id="machineCol">
+    <div class="col-h"><span class="d"></span>机器轨 MACHINE · 网格
+      <button class="mtoggle" id="mtg" onclick="toggleMachine()">标记显示中 · 点击置灰</button>
+    </div>
+
+    <div class="panel">
+      <div class="ph">机器作战单 · 同源作战单执行 <span class="r">收盘已揭示</span></div>
+      <div class="plan3">
+        <div class="p3"><span class="lab">① 方向</span><span class="val dir-long">做多 ▲<br><span style="color:var(--faint);font-weight:400">来自生效作战单</span></span></div>
+        <div class="p3"><span class="lab">② 网格带</span><span class="val"><span class="lv hot">4060</span>–<span class="lv hot">4100</span><br><span style="color:var(--faint);font-weight:400">档距 20bp · 10 档</span></span></div>
+        <div class="p3"><span class="lab">③ 触发逻辑</span><span class="val" style="font-family:var(--sans);font-weight:400;color:var(--muted)">条件网格逐档挂单;跌破 <b class="mono" style="color:var(--ink)">4155</b> 失效全平 + re-arm 一次</span></div>
+      </div>
+    </div>
+
+    <div class="panel chart">
+      <div class="ph">GOLD · 1m <span class="r">网格成交 / 止损 · 盲测期为素图,收盘揭示</span></div>
+      <svg viewBox="0 0 760 300" id="chartM"></svg>
+      <div class="chart-foot"><span>已成交 <b>18/18 格</b></span><span>已实现 <b class="neg">-$145.18</b></span><span>硬止损 <b style="color:var(--block)">4,155 touch</b></span><span>状态 <b>网格·已成交 / 趋势·已激活</b></span></div>
+    </div>
+
+    <div class="panel">
+      <div class="ph">网格运行状态</div>
+      <div class="kvrow"><span>方向 <b class="dir-long">多</b></span><span>档距 <b>20bp</b></span><span>单档 <b>$1,000</b></span><span>re-arm <b>1 次可用</b></span></div>
+      <div class="kvrow"><span>本界面不提供机器轨干预操作 · 进出场点位收盘后揭示</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 共享 context ===== -->
+<div class="ctx">
+  <div class="panel"><div class="ph">CONTEXT · 15m(共享 · 无任何轨道标记)</div><svg viewBox="0 0 760 130" id="ctx15"></svg></div>
+  <div class="panel"><div class="ph">CONTEXT · 1h(共享 · 无任何轨道标记)</div><svg viewBox="0 0 760 130" id="ctx1h"></svg></div>
+</div>
+
+<div class="note">
+<b>布局规则(本提案的骨架)</b>:① 记分板是唯一共享横条——对比(delta)居中,分项校准(方向/位置/信号 各自准确率)在其下积累;② 每轨一栏、一张自己的图,两图时间轴联动(mockup 静态未演示);③ 机器轨标记默认全显,右上一个总开关整体置灰/恢复,无逐项挑选;④ 作战单统一拆成三件套(方向/位置/入场),人与机同构,后期逐项独立打分、各取最优;⑤ 盲测期机器图为素图,收盘揭示(本页展示的是揭示后状态);⑥ AI 分析轨建成后以同构第三栏加入,任意挑两栏对战。
+</div>
+
+<script>
+/* ===== 静态假 K 线(确定性,无后端) ===== */
+function seedCandles(n, start, drift){
+  const out=[]; let p=start; let s=7;
+  for(let i=0;i<n;i++){ s=(s*16807)%2147483647; const r1=(s/2147483647)-.5;
+    s=(s*16807)%2147483647; const r2=(s/2147483647);
+    const o=p, c=p + r1*6 + drift, hi=Math.max(o,c)+r2*2.4, lo=Math.min(o,c)-r2*2.2;
+    out.push({o,c,hi,lo}); p=c; }
+  return out;
+}
+function draw(svgId, candles, opts){
+  const svg=document.getElementById(svgId); const W=760, H=+svg.viewBox.baseVal.height;
+  const padR=54, padY=12; const n=candles.length; const bw=(W-padR)/n;
+  let lo=Infinity, hi=-Infinity; candles.forEach(k=>{lo=Math.min(lo,k.lo);hi=Math.max(hi,k.hi);});
+  (opts.lines||[]).forEach(l=>{lo=Math.min(lo,l.p-1);hi=Math.max(hi,l.p+1);});
+  const y=v=>padY+(hi-v)/(hi-lo)*(H-2*padY);
+  let el='';
+  for(let g=0;g<4;g++){const gy=padY+g*(H-2*padY)/3; const gv=(hi-(gy-padY)/(H-2*padY)*(hi-lo));
+    el+=`<line x1="0" y1="${gy}" x2="${W-padR}" y2="${gy}" stroke="rgba(255,255,255,.05)"/><text class="axis-lab" x="${W-padR+6}" y="${gy+3}">${gv.toFixed(0)}</text>`;}
+  candles.forEach((k,i)=>{const x=i*bw+bw*.5; const up=k.c>=k.o; const col=up?'#35d07f':'#ef5f5f';
+    el+=`<line x1="${x}" y1="${y(k.hi)}" x2="${x}" y2="${y(k.lo)}" stroke="${col}" stroke-width="1"/>`;
+    el+=`<rect x="${x-bw*.32}" y="${y(Math.max(k.o,k.c))}" width="${bw*.64}" height="${Math.max(1.5,Math.abs(y(k.o)-y(k.c)))}" fill="${col}"/>`;});
+  (opts.lines||[]).forEach(l=>{
+    el+=`<g class="${l.cls||''}"><line x1="0" y1="${y(l.p)}" x2="${W-padR}" y2="${y(l.p)}" stroke="${l.c}" stroke-dasharray="${l.solid?'':'5 4'}" stroke-width="${l.w||1}"/>`+
+        `<rect x="${W-padR}" y="${y(l.p)-8}" width="${padR}" height="16" fill="${l.c}" opacity=".9"/><text class="ol-lab" x="${W-padR+4}" y="${y(l.p)+3}" fill="#0a0b0c">${l.t}</text></g>`;});
+  (opts.marks||[]).forEach(m=>{const x=m.i*bw+bw*.5; const yy=y(m.p)+(m.up?14:-10);
+    el+=`<g class="${m.cls||''}"><path d="M${x} ${m.up?yy-8:yy+8} l-5 ${m.up?8:-8} h10 z" fill="${m.c}"/>`+
+        (m.t?`<text class="ol-lab" x="${x+7}" y="${yy+(m.up?2:0)}" fill="${m.c}">${m.t}</text>`:'')+`</g>`;});
+  svg.innerHTML=el;
+}
+const base=seedCandles(88, 4062, .22);
+draw('chartH', base, {
+  lines:[ {p:4092,c:'#35d07f',t:'TP 4092'}, {p:4072,c:'#ef5f5f',t:'SL 4072'}, {p:4155,c:'#7aa2ff',t:'关键 4155',w:1} ],
+  marks:[ {i:31,p:base[31].lo,up:true,c:'#7aa2ff',t:'你 买入 4,076.5'} ]
+});
+const mlines=[ {p:4155,c:'#ef5f5f',t:'失效 4155',w:2} ];
+const mmarks=[];
+[8,15,22,29,36,43,50,57,64].forEach((i,idx)=>{ mmarks.push({i, p:base[i].lo, up:true, c:'#b894ff', t: idx%3===0?`格${idx+1}`:'', cls:'machine-ol'}); });
+[12,26,40,54,68].forEach(i=>{ mmarks.push({i, p:base[i].hi, up:false, c:'#b894ff', t:'', cls:'machine-ol'}); });
+mlines.push({p:4066,c:'#b894ff',t:'网格下沿',cls:'machine-ol'});
+mlines.push({p:4098,c:'#b894ff',t:'网格上沿',cls:'machine-ol'});
+draw('chartM', base, {lines:mlines, marks:mmarks});
+draw('ctx15', seedCandles(64, 4120, -.5), {lines:[]});
+draw('ctx1h', seedCandles(64, 4160, -.8), {lines:[]});
+function toggleMachine(){
+  const col=document.getElementById('machineCol'); const btn=document.getElementById('mtg');
+  col.classList.toggle('ghost');
+  const off=col.classList.contains('ghost');
+  btn.textContent = off ? '标记已置灰 · 点击恢复' : '标记显示中 · 点击置灰';
+  btn.classList.toggle('off', off);
+}
+</script>
+</body>
+</html>

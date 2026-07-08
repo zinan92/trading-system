@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>双轨画布 · Mockup V3.1(widget 命名标准化 · 14 类注册表)</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  --bg:#0a0b0c; --panel:#101216; --panel2:#15181e;
+  --ink:#e8eaed; --muted:#9aa3ad; --faint:#5d666f;
+  --gold:#d8aa3f; --run:#35d07f; --warn:#e8a33d; --block:#ef5f5f; --unknown:#7d8590;
+  --human:#7aa2ff; --machine:#b894ff;
+  --rule:rgba(255,255,255,.08); --rule-strong:rgba(255,255,255,.16); --r:6px;
+  --mono:"SFMono-Regular","Roboto Mono",Menlo,Consolas,ui-monospace,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.5 var(--sans);padding:18px 20px 60px;max-width:1760px;margin:0 auto}
+.mock-tag{position:fixed;right:14px;bottom:14px;background:var(--panel2);border:1px dashed var(--rule-strong);border-radius:var(--r);padding:6px 12px;font-size:11px;color:var(--faint);z-index:9}
+h1{font-size:15px;font-weight:700;margin-bottom:12px;display:flex;gap:10px;align-items:center}
+h1 .v{font-family:var(--mono);font-size:11px;color:var(--gold);border:1px solid var(--gold);border-radius:4px;padding:1px 8px}
+h1 .s{color:var(--faint);font-weight:400;font-size:11.5px}
+.mono{font-family:var(--mono)}
+.pos{color:var(--run)} .neg{color:var(--block)}
+.canvases{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.canvas{border:1px solid var(--rule-strong);border-radius:8px;background:rgba(255,255,255,.012);padding:12px;min-width:0}
+.canvas.human{border-top:3px solid var(--human)}
+.canvas.machine{border-top:3px solid var(--machine)}
+.c-head{display:flex;align-items:center;gap:10px;padding:2px 4px 12px}
+.c-head .d{width:9px;height:9px;border-radius:50%}
+.canvas.human .c-head .t{color:var(--human)} .canvas.human .c-head .d{background:var(--human)}
+.canvas.machine .c-head .t{color:var(--machine)} .canvas.machine .c-head .d{background:var(--machine)}
+.c-head .t{font-size:14px;font-weight:700}
+.phase{display:inline-flex;border:1px solid var(--rule-strong);border-radius:6px;overflow:hidden;margin-left:auto}
+.phase button{border:0;background:transparent;color:var(--faint);font:600 11px var(--sans);padding:5px 14px;cursor:pointer;border-right:1px solid var(--rule)}
+.phase button:last-child{border-right:0}
+.phase button.on{background:var(--panel2);color:var(--ink)}
+.mtoggle{font-size:11px;border:1px solid rgba(184,148,255,.5);color:var(--machine);background:rgba(184,148,255,.08);border-radius:5px;padding:4px 12px;cursor:pointer;font-weight:600;margin-left:10px}
+.mtoggle.off{border-color:var(--rule-strong);color:var(--faint);background:transparent}
+.c-body{display:flex;flex-direction:column;gap:10px;transition:opacity .18s}
+.canvas.ghost .c-body{opacity:.32;filter:grayscale(1);pointer-events:none}
+/* widget 壳:名字 + slug */
+.w{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);overflow:hidden}
+.wh{padding:8px 12px;border-bottom:1px solid var(--rule);font-size:10px;letter-spacing:.06em;color:var(--faint);font-weight:600;display:flex;gap:8px;align-items:center}
+.wh .nm{color:var(--muted)}
+.wh .slug{font-family:var(--mono);color:var(--faint);font-weight:400;border:1px solid var(--rule);border-radius:3px;padding:0 5px;font-size:9.5px}
+.wh .r{margin-left:auto;font-weight:400;letter-spacing:0}
+.wb{padding:10px 12px}
+.trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.trio .w{min-width:0}
+.val-dir{font-family:var(--mono);font-size:15px;font-weight:700}
+.sub{font-size:11px;color:var(--faint)}
+.lv{display:inline-block;border:1px solid var(--rule-strong);border-radius:4px;padding:0 6px;margin:2px 3px 0 0;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.lv.hot{color:var(--gold);border-color:rgba(216,170,63,.45)}
+.lockrow{display:flex;gap:10px;align-items:center}
+.btn{font-size:12px;border-radius:6px;padding:7px 14px;cursor:pointer;border:1px solid var(--rule-strong);background:var(--panel2);color:var(--ink);font-weight:600}
+.btn.primary{border-color:rgba(122,162,255,.55);background:rgba(122,162,255,.12);color:var(--human)}
+/* ===== 主图行:K线图 70 | 大级别图 30 ===== */
+.chartrow{display:grid;grid-template-columns:7fr 3fr;gap:10px;align-items:stretch}
+.towers{display:flex;flex-direction:column;gap:10px;min-width:0}
+.towers .w{flex:1;display:flex;flex-direction:column}
+.towers svg{display:block;width:100%;flex:1;min-height:0}
+.chartw{position:relative}
+.chartw>.stage{position:relative}
+.chartw svg.main{display:block;width:100%;height:330px;touch-action:none}
+.axis-lab{font:10px var(--mono);fill:var(--faint)}
+.ol-lab{font:600 10px var(--mono)}
+.inbtns{position:absolute;top:10px;left:12px;display:flex;gap:8px}
+.inbtn{display:flex;flex-direction:column;align-items:center;gap:1px;border-radius:6px;padding:5px 14px;cursor:pointer;border:1px solid;user-select:none;backdrop-filter:blur(2px)}
+.inbtn .t{font-size:10px;font-weight:700;letter-spacing:.06em}
+.inbtn .p{font-family:var(--mono);font-size:14px;font-weight:700}
+.inbtn.sell{border-color:rgba(239,95,95,.6);background:rgba(20,10,11,.85);color:var(--block)}
+.inbtn.buy{border-color:rgba(53,208,127,.6);background:rgba(9,17,13,.85);color:var(--run)}
+.draghint{position:absolute;top:12px;right:64px;font-size:10.5px;color:var(--gold);background:rgba(10,11,12,.8);border:1px dashed rgba(216,170,63,.5);border-radius:4px;padding:2px 8px}
+.confirmbar{position:absolute;left:12px;right:64px;bottom:6px;display:flex;gap:8px;align-items:center;background:rgba(10,11,12,.92);border:1px solid var(--rule-strong);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--muted)}
+.confirmbar b{font-family:var(--mono);color:var(--ink);font-weight:600}
+.confirmbar .sl{color:var(--block)} .confirmbar .tp{color:var(--run)}
+.confirmbar .go{margin-left:auto;border:1px solid rgba(53,208,127,.6);color:var(--run);background:rgba(53,208,127,.1);border-radius:4px;padding:2px 12px;cursor:pointer;font-weight:700}
+.confirmbar .no{border:1px solid var(--rule-strong);color:var(--faint);background:transparent;border-radius:4px;padding:2px 10px;cursor:pointer}
+.blindveil{position:absolute;inset:0;display:grid;place-items:center;background:rgba(10,11,12,.6)}
+.blindveil span{border:1px solid rgba(184,148,255,.5);color:var(--machine);background:rgba(10,11,12,.92);border-radius:6px;padding:8px 16px;font-size:12px;font-weight:600}
+.pills{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.pill{border:1px solid var(--rule-strong);border-radius:5px;padding:4px 12px;font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer}
+.pill.on{border-color:rgba(122,162,255,.6);color:var(--human);background:rgba(122,162,255,.10);font-weight:600}
+.k2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kv{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted);padding:3px 0}
+.kv b{font-family:var(--mono);color:var(--ink);font-weight:600}
+.fill-line{display:flex;gap:10px;font-size:11.5px;color:var(--muted);padding:4px 0;border-bottom:1px dashed var(--rule);font-family:var(--mono)}
+.fill-line:last-child{border-bottom:0}
+.fill-tbl{width:100%;border-collapse:collapse;font-size:11px}
+.fill-tbl th{text-align:left;color:var(--faint);font-weight:600;font-size:9.5px;letter-spacing:.04em;padding:2px 6px 5px;border-bottom:1px solid var(--rule)}
+.fill-tbl td{padding:5px 6px;border-bottom:1px dashed var(--rule);font-family:var(--mono)}
+.fill-tbl tr:last-child td{border-bottom:0}
+.fst{display:inline-flex;align-items:center;gap:5px;font-family:var(--sans);font-weight:600;font-size:10.5px}
+.fst .dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+.fst.open{color:var(--run)} .fst.open .dot{background:var(--run)}
+.fst.closed{color:var(--faint)} .fst.closed .dot{background:var(--faint)}
+.gr-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:12px;color:var(--muted)}
+.gr-row+.gr-row{border-top:1px dashed var(--rule)}
+.gpass{color:var(--run);font-weight:600;font-size:11.5px}
+.gblock{color:var(--block);font-weight:600;font-size:11.5px}
+.gpending{color:var(--faint);font-size:11px}
+.replay-link{color:var(--human);text-decoration:none;font-size:11.5px;font-weight:600}
+.canvas.machine .replay-link{color:var(--machine)}
+/* 收益 pnl:独立汇总条 */
+.score4{display:grid;grid-template-columns:repeat(4,1fr)}
+.sc{padding:10px 14px;border-right:1px solid var(--rule)}
+.sc:last-child{border-right:0}
+.sc .k{font-size:10px;letter-spacing:.08em;color:var(--faint);font-weight:600}
+.sc .v{font-family:var(--mono);font-size:18px;font-weight:700}
+.statusrow{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--muted);padding:4px 0}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--run)}
+.rv-h{font-size:10.5px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.rv-h+.rv-h{margin-top:10px;padding-top:8px;border-top:1px dashed var(--rule)}
+.rv-sec+.rv-sec .rv-h{margin-top:10px;padding-top:8px;border-top:1px dashed var(--rule)}
+#cvM[data-phase="mid"] .m-ol{display:none}
+[data-phase="pre"] .phased:not(.ph-pre){display:none}
+[data-phase="mid"] .phased:not(.ph-mid){display:none}
+[data-phase="post"] .phased:not(.ph-post){display:none}
+.note{margin-top:14px;border:1px dashed var(--rule-strong);border-radius:var(--r);padding:10px 14px;font-size:11.5px;color:var(--faint);line-height:1.8}
+.note b{color:var(--muted)}
+.note table{border-collapse:collapse;margin-top:6px}
+.note td,.note th{border:1px solid var(--rule);padding:3px 10px;font-size:11px;text-align:left}
+.note th{color:var(--muted)}
+.note td.mono{color:var(--gold)}
+@media(max-width:1200px){.canvases{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="mock-tag">MOCKUP V3.1 · 静态假数据 · 未连后端</div>
+<h1>双轨画布 <span class="v">V3.1</span><span class="s">14 类 widget 注册表 · 收益改名 pnl · Context图改名大级别图 · 新增风险/数据 · 归因+判卷+台账合并为复盘</span></h1>
+
+<div class="canvases">
+
+<!-- ================= 左画布:人轨 ================= -->
+<div class="canvas human" id="cvH" data-phase="mid">
+  <div class="c-head"><span class="d"></span><span class="t">人轨 HUMAN</span>
+    <span class="phase" data-for="cvH" data-widget="phase"><button data-p="pre">盘前</button><button data-p="mid" class="on">盘中</button><button data-p="post">盘后复盘</button></span>
+  </div>
+  <div class="c-body">
+
+    <div class="trio">
+      <div class="w"><div class="wh"><span class="nm">方向</span><span class="slug">direction</span><span class="r ph-pre" style="color:var(--human)">可编辑</span></div>
+        <div class="wb"><span class="val-dir pos">做多 ▲</span><div class="sub">信心 7/10 · 12h 生效 · 修改机会 1/1</div></div></div>
+      <div class="w"><div class="wh"><span class="nm">关键位</span><span class="slug">levels</span></div>
+        <div class="wb"><span class="lv">3960</span><span class="lv">4100</span><span class="lv hot">4155</span><span class="lv">4190</span><span class="lv hot">4200</span><span class="lv">4210</span></div></div>
+      <div class="w"><div class="wh"><span class="nm">信号</span><span class="slug">signal</span></div>
+        <div class="wb sub" style="font-size:12px;color:var(--muted)">回踩 <b class="mono" style="color:var(--ink)">4155</b> 企稳做多;突破 <b class="mono" style="color:var(--ink)">4200</b> 回踩确认加仓</div></div>
+    </div>
+
+    <div class="w ph-pre"><div class="wb lockrow"><button class="btn primary">锁定作战单</button><span class="sub">锁定后进入盲测;截止未答 = 生效作战单自动接管</span></div></div>
+
+    <!-- K线图 70 | 大级别图 30 -->
+    <div class="chartrow ph-mid ph-post">
+      <div class="w chartw"><div class="wh"><span class="nm">K线图 · GOLD 1m</span><span class="slug">kline</span><span class="r">TP/SL 虚线可拖</span></div>
+        <div class="stage">
+          <svg viewBox="0 0 760 330" class="main" id="svgH"></svg>
+          <div class="inbtns">
+            <div class="inbtn sell"><span class="t">做空 SELL</span><span class="p">4,079.8</span></div>
+            <div class="inbtn buy" onclick="toggleSuggest(true)"><span class="t">做多 BUY</span><span class="p">4,080.2</span></div>
+          </div>
+          <span class="draghint">建议 TP=前高 4,092 · SL=前低 4,057 · 拖动可覆盖</span>
+          <div class="confirmbar" id="cbar">将下单:<b>买入 $2k @4,080.2</b><span class="sl">SL <b id="slv">4,057.0</b>(前低)</span><span class="tp">TP <b id="tpv">4,092.0</b>(前高)</span><button class="go" onclick="toggleSuggest(false)">确认</button><button class="no" onclick="toggleSuggest(false)">取消</button></div>
+        </div>
+      </div>
+      <div class="towers">
+        <div class="w"><div class="wh"><span class="nm">大级别图 · 15m</span><span class="slug">context</span></div><svg viewBox="0 0 340 132" id="twH1"></svg></div>
+        <div class="w"><div class="wh"><span class="nm">大级别图 · 1h</span><span class="slug">context</span></div><svg viewBox="0 0 340 132" id="twH2"></svg></div>
+      </div>
+    </div>
+
+    <div class="w ph-mid ph-post"><div class="wh"><span class="nm">下单 · 手动</span><span class="slug">order</span><span class="r">仅参数 · 触发键在K线图内</span></div>
+      <div class="wb pills"><span class="sub" style="min-width:38px">金额</span><span class="pill">$1k</span><span class="pill on">$2k</span><span class="pill">$5k</span><span class="pill">$8k</span>
+      <span class="sub" style="min-width:60px;margin-left:8px">TP/SL 预设</span><span class="pill on">前高 / 前低</span><span class="pill">手动</span></div></div>
+
+    <div class="k2 ph-mid ph-post">
+      <div class="w"><div class="wh"><span class="nm">持仓</span><span class="slug">position</span></div><div class="wb">
+        <div class="kv"><span>方向/数量</span><b class="pos">多 0.98</b></div>
+        <div class="kv"><span>均价</span><b>4,076.5</b></div>
+        <div class="kv"><span>TP / SL</span><b><span class="pos">4,092</span> / <span class="neg">4,057</span></b></div></div></div>
+      <div class="w"><div class="wh"><span class="nm">风险</span><span class="slug">risk</span></div><div class="wb">
+        <div class="kv"><span>杠杆</span><b>10x</b></div>
+        <div class="kv"><span>保证金占用</span><b>$399.5</b></div>
+        <div class="kv"><span>最大可亏(距SL)</span><b class="neg">-$19.11</b></div>
+        <div class="kv"><span>强平距离</span><b>3,668.9 · -10.0%</b></div>
+        <div class="kv"><span>SL 状态</span><b class="pos">有效 · 已挂单</b></div></div></div>
+    </div>
+
+    <div class="w ph-mid ph-post"><div class="wh"><span class="nm">成交</span><span class="slug">fills</span><span class="r">每行一个 order</span></div><div class="wb">
+      <table class="fill-tbl">
+        <thead><tr><th>状态</th><th>方向</th><th>数量</th><th>开仓</th><th>平仓</th><th>已实现</th><th>未实现</th></tr></thead>
+        <tbody>
+          <tr><td><span class="fst open"><span class="dot"></span>持仓中</span></td><td class="pos">多</td><td>0.98</td><td>4,076.5</td><td>--</td><td>--</td><td class="pos">+$3.60</td></tr>
+          <tr><td><span class="fst closed"><span class="dot"></span>已平仓</span></td><td class="neg">空</td><td>0.32</td><td>4,083.0</td><td>4,079.4</td><td class="pos">+$1.15</td><td>--</td></tr>
+        </tbody>
+      </table></div></div>
+
+    <div class="w ph-mid ph-post"><div class="wh"><span class="nm">收益</span><span class="slug">pnl</span><span class="r">summary 类 · 独立 widget</span></div>
+      <div class="score4">
+        <div class="sc"><div class="k">已实现</div><div class="v neg">-$0.20</div></div>
+        <div class="sc"><div class="k">未实现</div><div class="v pos">+$3.60</div></div>
+        <div class="sc"><div class="k">今日</div><div class="v pos">+$3.40</div></div>
+        <div class="sc"><div class="k">一周</div><div class="v neg">-$0.20</div></div>
+      </div></div>
+
+    <div class="k2">
+      <div class="w"><div class="wh"><span class="nm">数据</span><span class="slug">data</span></div><div class="wb">
+        <div class="kv"><span>数据源</span><b>Tiger/COMEX(主)</b></div>
+        <div class="kv"><span>K线类型</span><b>原生 1m</b></div>
+        <div class="kv"><span>新鲜度</span><b class="pos">fresh · 3s 前</b></div>
+        <div class="kv"><span>bar 数量</span><b>92 主图 · 56 大级别图</b></div></div></div>
+      <div class="w"><div class="wh"><span class="nm">状态</span><span class="slug">status</span></div><div class="wb">
+        <div class="statusrow"><span class="dot"></span>行情新鲜 · live tick 正常</div>
+        <div class="statusrow ph-mid"><span class="dot"></span>盘中 · 手动交易窗口开放</div>
+        <div class="statusrow ph-post"><span class="dot" style="background:var(--gold)"></span>盘后 · 已收盘 · 复盘见下方</div>
+      </div></div>
+    </div>
+
+    <div class="w ph-post"><div class="wh"><span class="nm">复盘</span><span class="slug">review</span><span class="r">盘后 · 本轨自评</span></div><div class="wb">
+      <div class="rv-sec">
+        <div class="rv-h">归因</div>
+        <div class="kv"><span>笔数</span><b>2</b></div>
+        <div class="sub" style="padding-bottom:4px">1 已平仓 · 1 持仓中</div>
+        <div class="kv"><span>胜率</span><b>100%</b></div>
+        <div class="kv"><span>已实现</span><b class="pos">+$1.15</b></div>
+        <div class="kv"><span>捕获比</span><b>38%</b></div>
+        <div class="kv"><span>纪律违规</span><b>0</b></div>
+      </div>
+      <div class="rv-sec">
+        <div class="rv-h">判卷 · direction-only · 自评</div>
+        <div class="gr-row"><span>方向</span><span class="gpass">✓ 过</span></div>
+        <div class="gr-row"><span>关键位</span><span class="gpending">未建立评分口径</span></div>
+        <div class="gr-row"><span>信号</span><span class="gpending">未建立评分口径</span></div>
+        <div class="gr-row"><span>回放</span><a class="replay-link" href="dashboard-dualtrack-replay.html">查看本周期回放 →</a></div>
+      </div>
+      <div class="rv-sec">
+        <div class="rv-h">台账 · 最近周期 · 本轨</div>
+        <table class="fill-tbl">
+          <thead><tr><th>周期</th><th>结果</th><th>已实现</th><th>裁决</th></tr></thead>
+          <tbody>
+            <tr><td>07-07 NIGHT</td><td class="pos">过</td><td class="pos">+$4.10</td><td style="font-family:var(--sans);color:var(--muted)">方向对,止盈慢</td></tr>
+            <tr><td>07-07 DAY</td><td class="neg">未达</td><td class="neg">-$1.85</td><td style="font-family:var(--sans);color:var(--muted)">信号迟入</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div></div>
+
+  </div>
+</div>
+
+<!-- ================= 右画布:机器轨 ================= -->
+<div class="canvas machine" id="cvM" data-phase="mid">
+  <div class="c-head"><span class="d"></span><span class="t">机器轨 MACHINE · 网格</span>
+    <span class="phase" data-for="cvM" data-widget="phase"><button data-p="pre">盘前</button><button data-p="mid" class="on">盘中</button><button data-p="post">盘后复盘</button></span>
+    <button class="mtoggle" id="mtg" onclick="toggleGhost()">显示中 · 点击整列置灰</button>
+  </div>
+  <div class="c-body">
+
+    <div class="trio">
+      <div class="w"><div class="wh"><span class="nm">方向</span><span class="slug">direction</span></div>
+        <div class="wb"><span class="val-dir pos">做多 ▲</span><div class="sub">来自生效作战单</div></div></div>
+      <div class="w"><div class="wh"><span class="nm">关键位</span><span class="slug">levels</span></div>
+        <div class="wb"><span class="lv hot">4060</span>–<span class="lv hot">4100</span><div class="sub" style="margin-top:4px">档距 20bp · 10 档</div></div></div>
+      <div class="w"><div class="wh"><span class="nm">信号</span><span class="slug">signal</span></div>
+        <div class="wb sub" style="font-size:12px;color:var(--muted)">条件网格逐档挂单;跌破 <b class="mono" style="color:var(--ink)">4155</b> 失效全平 + re-arm 一次</div></div>
+    </div>
+
+    <div class="w ph-pre"><div class="wb lockrow"><span class="sub">盘前:机器轨等待生效作战单;两者皆无 = 机器轨站下</span></div></div>
+
+    <div class="chartrow ph-mid ph-post">
+      <div class="w chartw"><div class="wh"><span class="nm">K线图 · GOLD 1m</span><span class="slug">kline</span><span class="r ph-mid" style="color:var(--machine)">盲测中 · 仅显示 PnL</span><span class="r ph-post">收盘已揭示</span></div>
+        <div class="stage">
+          <svg viewBox="0 0 760 330" class="main" id="svgM"></svg>
+          <div class="blindveil ph-mid"><span>盲测中 · 网格点位收盘后揭示 · 当前仅公布 PnL</span></div>
+        </div>
+      </div>
+      <div class="towers">
+        <div class="w"><div class="wh"><span class="nm">大级别图 · 15m</span><span class="slug">context</span></div><svg viewBox="0 0 340 132" id="twM1"></svg></div>
+        <div class="w"><div class="wh"><span class="nm">大级别图 · 1h</span><span class="slug">context</span></div><svg viewBox="0 0 340 132" id="twM2"></svg></div>
+      </div>
+    </div>
+
+    <div class="w ph-mid ph-post"><div class="wh"><span class="nm">下单 · 自动</span><span class="slug">order</span><span class="r">只读参数 · 不提供干预</span></div>
+      <div class="wb pills"><span class="pill">单档 $1,000</span><span class="pill">档距 20bp</span><span class="pill">re-arm 1 次可用</span><span class="pill">失效 4,155 touch 全平</span></div></div>
+
+    <div class="k2 ph-mid ph-post">
+      <div class="w"><div class="wh"><span class="nm">持仓</span><span class="slug">position</span></div><div class="wb">
+        <div class="kv"><span>方向/数量</span><b class="pos">多 1.20</b></div>
+        <div class="kv"><span>均价</span><b>4,081.3</b></div>
+        <div class="kv"><span>TP / SL</span><b><span class="sub">逐档</span> / <span class="neg">4,155</span></b></div></div></div>
+      <div class="w"><div class="wh"><span class="nm">风险</span><span class="slug">risk</span></div><div class="wb">
+        <div class="kv"><span>杠杆</span><b>10x</b></div>
+        <div class="kv"><span>保证金占用</span><b>$489.8</b></div>
+        <div class="kv"><span>距失效价(4,155)</span><b>$88.44</b></div>
+        <div class="kv"><span>强平距离</span><b>3,673.2 · -10.0%</b></div>
+        <div class="kv"><span>SL 状态</span><b class="pos">逐档止损 · 有效</b></div></div></div>
+    </div>
+
+    <div class="w ph-mid ph-post"><div class="wh"><span class="nm">成交</span><span class="slug">fills</span><span class="r ph-post">每行一个 order · 已全部揭示</span></div><div class="wb">
+      <div class="fill-line ph-mid"><span class="sub">盲测中 · 共 18 格 · 明细收盘揭示</span></div>
+      <table class="fill-tbl ph-post">
+        <thead><tr><th>状态</th><th>方向</th><th>数量</th><th>开仓</th><th>平仓</th><th>已实现</th><th>未实现</th></tr></thead>
+        <tbody>
+          <tr><td><span class="fst closed"><span class="dot"></span>已平仓</span></td><td class="pos">多</td><td>0.10</td><td>4,062.1</td><td>4,081.3</td><td class="pos">+$1.94</td><td>--</td></tr>
+          <tr><td><span class="fst closed"><span class="dot"></span>已平仓</span></td><td class="pos">多</td><td>0.10</td><td>4,066.3</td><td>4,081.3</td><td class="pos">+$1.50</td><td>--</td></tr>
+          <tr><td><span class="fst open"><span class="dot"></span>持仓中</span></td><td class="pos">多</td><td>0.10</td><td>4,098.4</td><td>--</td><td>--</td><td class="neg">-$1.71</td></tr>
+        </tbody>
+      </table>
+      <div class="fill-line ph-post"><span class="sub">共 18 格 · 已全部揭示 · 上表节选 3 格</span></div></div></div>
+
+    <div class="w ph-mid ph-post"><div class="wh"><span class="nm">收益</span><span class="slug">pnl</span><span class="r">summary 类 · 独立 widget</span></div>
+      <div class="score4">
+        <div class="sc"><div class="k">已实现</div><div class="v neg">-$145.18</div></div>
+        <div class="sc"><div class="k">未实现</div><div class="v">+$0.00</div></div>
+        <div class="sc"><div class="k">今日</div><div class="v neg">-$145.18</div></div>
+        <div class="sc"><div class="k">一周</div><div class="v neg">-$232.87</div></div>
+      </div></div>
+
+    <div class="k2">
+      <div class="w"><div class="wh"><span class="nm">数据</span><span class="slug">data</span></div><div class="wb">
+        <div class="kv"><span>数据源</span><b>Tiger/COMEX(主)</b></div>
+        <div class="kv"><span>K线类型</span><b>原生 1m</b></div>
+        <div class="kv"><span>新鲜度</span><b class="pos">fresh · 3s 前</b></div>
+        <div class="kv"><span>bar 数量</span><b>92 主图 · 56 大级别图</b></div></div></div>
+      <div class="w"><div class="wh"><span class="nm">状态</span><span class="slug">status</span></div><div class="wb">
+        <div class="statusrow"><span class="dot"></span>网格 · 已成交</div>
+        <div class="statusrow"><span class="dot"></span>趋势 · 已激活</div>
+        <div class="statusrow ph-post"><span class="dot" style="background:var(--gold)"></span>盘后 · 已收盘 · 复盘见下方</div>
+      </div></div>
+    </div>
+
+    <div class="w ph-post"><div class="wh"><span class="nm">复盘</span><span class="slug">review</span><span class="r">盘后 · 本轨自评</span></div><div class="wb">
+      <div class="rv-sec">
+        <div class="rv-h">归因</div>
+        <div class="kv"><span>笔数</span><b>18</b></div>
+        <div class="sub" style="padding-bottom:4px">17 已平仓 · 1 持仓中</div>
+        <div class="kv"><span>胜率</span><b>61%</b></div>
+        <div class="kv"><span>已实现</span><b class="neg">-$145.18</b></div>
+        <div class="kv"><span>捕获比</span><b>22%</b></div>
+        <div class="kv"><span>纪律违规</span><b class="neg">1</b></div>
+      </div>
+      <div class="rv-sec">
+        <div class="rv-h">判卷 · direction-only · 自评</div>
+        <div class="gr-row"><span>方向</span><span class="gpass">✓ 过</span></div>
+        <div class="gr-row"><span>关键位</span><span class="gpending">未建立评分口径</span></div>
+        <div class="gr-row"><span>信号</span><span class="gpending">未建立评分口径</span></div>
+        <div class="gr-row"><span>回放</span><a class="replay-link" href="dashboard-dualtrack-replay.html">查看本周期回放 →</a></div>
+      </div>
+      <div class="rv-sec">
+        <div class="rv-h">台账 · 最近周期 · 本轨</div>
+        <table class="fill-tbl">
+          <thead><tr><th>周期</th><th>结果</th><th>已实现</th><th>裁决</th></tr></thead>
+          <tbody>
+            <tr><td>07-07 NIGHT</td><td class="neg">未达</td><td class="neg">-$145.18</td><td style="font-family:var(--sans);color:var(--muted)">网格提前失效</td></tr>
+            <tr><td>07-07 DAY</td><td class="pos">过</td><td class="pos">+$62.40</td><td style="font-family:var(--sans);color:var(--muted)">网格捕获良好</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div></div>
+
+  </div>
+</div>
+</div>
+
+<div class="note">
+<b>Widget 命名注册表(14 类 · 一个直白中文词一个 widget)</b>
+<table>
+<tr><th>中文名</th><th>slug</th><th>职责</th><th>人轨内容</th><th>机器轨内容</th></tr>
+<tr><td>阶段</td><td class="mono">phase</td><td>盘前/盘中/盘后复盘 切换(画布头部页签,非独立卡片,用 <span class="mono">data-widget="phase"</span> 标记以便定位)</td><td>手动切换</td><td>手动切换</td></tr>
+<tr><td>方向</td><td class="mono">direction</td><td>方向判断</td><td>多/空/观望 + 信心 + 修改机会</td><td>生效作战单方向</td></tr>
+<tr><td>关键位</td><td class="mono">levels</td><td>关键价格位</td><td>关键位 chips</td><td>网格带 + 档距</td></tr>
+<tr><td>信号</td><td class="mono">signal</td><td>入场信号</td><td>入场逻辑</td><td>网格触发 + 失效规则</td></tr>
+<tr><td>K线图</td><td class="mono">kline</td><td>主图(70% 宽)+ 图内下单 + 可拖 TP/SL</td><td>自己的标记/持仓线</td><td>盲测素图 → 收盘揭示</td></tr>
+<tr><td>大级别图</td><td class="mono">context</td><td>大周期 K 线(30% 宽,竖排两个,周期可选;<b>同一 widget 两个实例</b>,用 slot=15m/1h 区分,不是两个新 widget)</td><td>私有</td><td>私有</td></tr>
+<tr><td>下单</td><td class="mono">order</td><td>下单参数面板(自己不是按钮,真正触发键在 K线图 widget 内)</td><td>金额 + TP/SL 预设</td><td>只读自动参数</td></tr>
+<tr><td>风险</td><td class="mono">risk</td><td>杠杆/保证金占用/最大可亏/强平距离/SL 有效性</td><td>手动仓风险</td><td>网格仓风险</td></tr>
+<tr><td>持仓</td><td class="mono">position</td><td>当前持仓(方向/数量/均价/TP-SL)</td><td>手动仓</td><td>网格仓</td></tr>
+<tr><td>成交</td><td class="mono">fills</td><td>逐 order 成交表(状态+已实现+未实现)</td><td>持仓中/已平仓,盘中即可见明细</td><td>盘中仅笔数(盲测),盘后逐格揭示</td></tr>
+<tr><td>收益</td><td class="mono">pnl</td><td>收益汇总(summary 类,独立;已实现/未实现/今日/一周)</td><td>同构</td><td>同构</td></tr>
+<tr><td>数据</td><td class="mono">data</td><td>数据源/新鲜度/K线类型(原生·聚合·fallback)/bar 数量</td><td>只读</td><td>只读</td></tr>
+<tr><td>状态</td><td class="mono">status</td><td>运行中健康度(不含评分/归因内容)</td><td>行情/交易窗口</td><td>网格/趋势层</td></tr>
+<tr><td>复盘</td><td class="mono">review</td><td>盘后 · 归因+判卷+台账合并为一个 widget 的三个分节,各轨自评不跨轨比较</td><td>自评</td><td>自评</td></tr>
+</table>
+V3.1 变更(在 V3 基础上,来自第二轮命名评审):① <b>收益 balance → pnl</b>(balance 更像账户余额,这里展示的是 PnL 汇总);② <b>Context图 → 大级别图</b>(中文页面不夹英文,slug 仍是 context,同一 widget 两个 slot 实例);③ 新增 <b>风险 risk</b>(杠杆/保证金/最大可亏/强平距离/SL 有效性,原来散落在持仓/下单里);④ 新增 <b>数据 data</b>(数据源/新鲜度/K线类型/bar 数量,一等公民化,不再只是图表 header 里一行小字);⑤ <b>归因+判卷+台账 合并为复盘 review</b> 一个 widget(三个分节,不再是三张卡片);⑥ 判卷分节里"关键位"/"信号"两行改为显式"未建立评分口径"(灰态,不给 ✓/✗)——后端 <span class="mono">_grade_plans()</span> 目前只做 direction-only 评分,继续假装三项都评分过是在编造;⑦ 状态 widget 移除"已评分..."内容,运行健康度和复盘判断分开;⑧ <b>阶段 phase</b> 正式收录进注册表(仍以画布头部页签实现,补了 <span class="mono">data-widget</span> 标记方便工程定位)。其余延续 V2/V3:零共享、双画布、相位页签、整列置灰、TP/SL 前高前低可拖、判卷各轨自评不做跨轨头对头计分条(已与所有者确认)。
+</div>
+
+<script>
+document.querySelectorAll('.ph-pre,.ph-mid,.ph-post').forEach(el=>el.classList.add('phased'));
+function seedCandles(n,start,drift){const out=[];let p=start,s=7;
+  for(let i=0;i<n;i++){s=(s*16807)%2147483647;const r1=(s/2147483647)-.5;
+    s=(s*16807)%2147483647;const r2=(s/2147483647);
+    const o=p,c=p+r1*6+drift,hi=Math.max(o,c)+r2*2.4,lo=Math.min(o,c)-r2*2.2;
+    out.push({o,c,hi,lo});p=c;}
+  return out;}
+const scales={};
+function draw(svgId,candles,opts){
+  const svg=document.getElementById(svgId);const W=+svg.viewBox.baseVal.width,H=+svg.viewBox.baseVal.height;
+  const padR=48,padY=10,n=candles.length,bw=(W-padR)/n;
+  let lo=Infinity,hi=-Infinity;candles.forEach(k=>{lo=Math.min(lo,k.lo);hi=Math.max(hi,k.hi);});
+  (opts.lines||[]).forEach(l=>{lo=Math.min(lo,l.p-1);hi=Math.max(hi,l.p+1);});
+  const y=v=>padY+(hi-v)/(hi-lo)*(H-2*padY);
+  scales[svgId]={y,inv:py=>hi-(py-padY)/(H-2*padY)*(hi-lo),H,W,padR};
+  let el='';
+  for(let g=0;g<4;g++){const gy=padY+g*(H-2*padY)/3;const gv=hi-(gy-padY)/(H-2*padY)*(hi-lo);
+    el+=`<line x1="0" y1="${gy}" x2="${W-padR}" y2="${gy}" stroke="rgba(255,255,255,.05)"/><text class="axis-lab" x="${W-padR+5}" y="${gy+3}">${gv.toFixed(0)}</text>`;}
+  candles.forEach((k,i)=>{const x=i*bw+bw*.5;const up=k.c>=k.o;const col=up?'#35d07f':'#ef5f5f';
+    el+=`<line x1="${x}" y1="${y(k.hi)}" x2="${x}" y2="${y(k.lo)}" stroke="${col}"/>`;
+    el+=`<rect x="${x-bw*.32}" y="${y(Math.max(k.o,k.c))}" width="${bw*.64}" height="${Math.max(1.5,Math.abs(y(k.o)-y(k.c)))}" fill="${col}"/>`;});
+  (opts.lines||[]).forEach(l=>{
+    el+=`<g class="${l.cls||''}" ${l.id?`id="${l.id}"`:''}>`+
+        `<line x1="0" y1="${y(l.p)}" x2="${W-padR}" y2="${y(l.p)}" stroke="${l.c}" stroke-dasharray="${l.solid?'':'6 4'}" stroke-width="${l.w||1.4}"/>`+
+        `<rect x="${W-padR}" y="${y(l.p)-8}" width="${padR}" height="16" fill="${l.c}" opacity=".92"/>`+
+        `<text class="ol-lab lab" x="${W-padR+4}" y="${y(l.p)+3}" fill="#0a0b0c">${l.t}</text>`+
+        (l.drag?`<rect class="hit" x="0" y="${y(l.p)-9}" width="${W}" height="18" fill="transparent" style="cursor:ns-resize"/>`:'')+`</g>`;});
+  (opts.marks||[]).forEach(m=>{const x=m.i*bw+bw*.5;const yy=y(m.p)+(m.up?14:-10);
+    el+=`<g class="${m.cls||''}"><path d="M${x} ${m.up?yy-8:yy+8} l-5 ${m.up?8:-8} h10 z" fill="${m.c}"/>`+
+        (m.t?`<text class="ol-lab" x="${x+7}" y="${yy+(m.up?2:0)}" fill="${m.c}">${m.t}</text>`:'')+`</g>`;});
+  svg.innerHTML=el;
+}
+const base=seedCandles(92,4062,.22);
+draw('svgH',base,{lines:[
+  {p:4076.5,c:'#7aa2ff',t:'持仓 4076.5',solid:true,w:1},
+  {p:4092,c:'#35d07f',t:'TP 4092',id:'tpLine',drag:true,w:1.6},
+  {p:4057,c:'#ef5f5f',t:'SL 4057',id:'slLine',drag:true,w:1.6},
+],marks:[{i:34,p:base[34].lo,up:true,c:'#7aa2ff',t:'你 4,076.5'}]});
+const mm=[];[8,15,22,29,36,43,50,57,64,71].forEach((i,x)=>mm.push({i,p:base[i].lo,up:true,c:'#b894ff',t:x%3===0?`格${x+1}`:'',cls:'m-ol'}));
+[12,26,40,54,68].forEach(i=>mm.push({i,p:base[i].hi,up:false,c:'#b894ff',t:'',cls:'m-ol'}));
+draw('svgM',base,{lines:[
+  {p:4155,c:'#ef5f5f',t:'失效 4155',w:2},
+  {p:4098,c:'#b894ff',t:'网格上沿',cls:'m-ol'},{p:4062,c:'#b894ff',t:'网格下沿',cls:'m-ol'},
+],marks:mm});
+draw('twH1',seedCandles(56,4120,-.5),{lines:[]});
+draw('twH2',seedCandles(56,4160,-.8),{lines:[]});
+draw('twM1',seedCandles(56,4120,-.5),{lines:[]});
+draw('twM2',seedCandles(56,4160,-.8),{lines:[]});
+document.querySelectorAll('.phase').forEach(seg=>{
+  seg.addEventListener('click',e=>{
+    const b=e.target.closest('button');if(!b)return;
+    seg.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+    document.getElementById(seg.dataset.for).dataset.phase=b.dataset.p;
+  });
+});
+function toggleGhost(){
+  const cv=document.getElementById('cvM'),btn=document.getElementById('mtg');
+  cv.classList.toggle('ghost');
+  const off=cv.classList.contains('ghost');
+  btn.textContent=off?'已整列置灰 · 点击恢复':'显示中 · 点击整列置灰';
+  btn.classList.toggle('off',off);
+}
+function makeDraggable(lineId,labelPrefix,confirmId){
+  const g=document.getElementById(lineId);if(!g)return;
+  const svg=document.getElementById('svgH');const sc=scales['svgH'];
+  const hit=g.querySelector('.hit'),ln=g.querySelector('line'),bx=g.querySelector('rect:not(.hit)'),tx=g.querySelector('text.lab');
+  let dragging=false;
+  const pt=svg.createSVGPoint();
+  function toSvgY(evt){pt.x=evt.clientX;pt.y=evt.clientY;return pt.matrixTransform(svg.getScreenCTM().inverse()).y;}
+  hit.addEventListener('pointerdown',e=>{dragging=true;hit.setPointerCapture(e.pointerId);});
+  hit.addEventListener('pointermove',e=>{
+    if(!dragging)return;
+    const yPx=Math.max(10,Math.min(sc.H-10,toSvgY(e)));
+    const price=sc.inv(yPx);
+    ln.setAttribute('y1',yPx);ln.setAttribute('y2',yPx);
+    bx.setAttribute('y',yPx-8);tx.setAttribute('y',yPx+3);
+    hit.setAttribute('y',yPx-9);
+    tx.textContent=`${labelPrefix} ${price.toFixed(0)}`;
+    document.getElementById(confirmId).textContent=price.toFixed(1);
+  });
+  hit.addEventListener('pointerup',()=>dragging=false);
+}
+makeDraggable('tpLine','TP','tpv');
+makeDraggable('slLine','SL','slv');
+function toggleSuggest(show){document.getElementById('cbar').style.display=show?'flex':'none';}
+</script>
+</body>
+</html>
