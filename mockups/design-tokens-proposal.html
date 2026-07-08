@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Phase D · 设计系统审计与统一 Token 提案</title>
+<link rel="icon" href="data:,">
+<style>
+/* ============ 本页即提案:以下 token 就是提案本身(源自指挥台 mockup A 方向,扩展补全) ============ */
+:root{
+  /* 表面 */
+  --bg:#0a0b0c; --panel:#101216; --panel2:#15181e;
+  /* 墨色 */
+  --ink:#e8eaed; --muted:#9aa3ad; --faint:#5d666f;
+  /* 品牌(唯一装饰色,只给品牌时刻) */
+  --gold:#d8aa3f;
+  /* 四态语义(状态即颜色,颜色只表状态) */
+  --run:#35d07f; --warn:#e8a33d; --block:#ef5f5f; --unknown:#7d8590;
+  /* 双轨身份色(仅此两个身份) */
+  --human:#7aa2ff; --machine:#b894ff;
+  /* 发丝线 */
+  --rule:rgba(255,255,255,.08); --rule-strong:rgba(255,255,255,.16);
+  --mono:"IBM Plex Mono","SFMono-Regular",Menlo,Consolas,monospace;
+  --sans:"IBM Plex Sans",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  --r:6px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.55 var(--sans);padding:32px 28px 64px;max-width:1180px;margin:0 auto}
+h1{font-size:20px;font-weight:700;letter-spacing:.01em}
+h1 small{color:var(--faint);font-weight:400;font-size:12px;margin-left:12px}
+h2{font-size:14px;font-weight:700;margin:36px 0 4px;display:flex;align-items:center;gap:10px}
+h2 .no{color:var(--gold);font-family:var(--mono);font-size:12px}
+h2::after{content:"";flex:1;height:1px;background:var(--rule)}
+.sub{color:var(--muted);font-size:12px;margin-bottom:14px}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);margin-bottom:14px;overflow:hidden}
+.panel-h{padding:10px 16px;border-bottom:1px solid var(--rule);font-size:11px;letter-spacing:.08em;color:var(--muted);font-weight:600;display:flex;gap:10px;align-items:baseline}
+.panel-h .r{margin-left:auto;color:var(--faint);font-weight:400;letter-spacing:0}
+.panel-b{padding:14px 16px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:10px;letter-spacing:.09em;color:var(--faint);font-weight:600;padding:8px 16px;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{font-size:12px;padding:8px 16px;border-bottom:1px solid var(--rule);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+td.mono,.mono{font-family:var(--mono)}
+.sw{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:7px;border:1px solid var(--rule-strong)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rule);border-radius:4px;padding:2px 8px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.bad{color:var(--block)} .good{color:var(--run)} .warned{color:var(--warn)}
+.k{color:var(--faint);font-size:11px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+@media(max-width:900px){.grid2,.grid3{grid-template-columns:1fr}}
+.tok{display:flex;align-items:center;gap:10px;padding:7px 16px;border-bottom:1px solid var(--rule);font-size:12px}
+.tok:last-child{border-bottom:none}
+.tok .name{font-family:var(--mono);color:var(--ink);min-width:120px}
+.tok .val{font-family:var(--mono);color:var(--muted);min-width:150px}
+.tok .use{color:var(--faint);font-size:11.5px}
+.typerow{display:flex;align-items:baseline;gap:16px;padding:8px 16px;border-bottom:1px solid var(--rule)}
+.typerow:last-child{border-bottom:none}
+.typerow .k{min-width:150px}
+.note{border:1px dashed var(--rule-strong);border-radius:var(--r);padding:12px 16px;font-size:12px;color:var(--muted);margin:14px 0}
+.note b{color:var(--gold);font-weight:600}
+/* before/after 样例卡 */
+.demo-old .pm{border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.025);border-radius:6px;padding:8px 9px;margin-bottom:8px}
+.demo-old .pm .lab{color:#788391;font-size:10px;display:block;letter-spacing:.07em;margin-bottom:5px}
+.demo-old .pm b{display:block;font-family:var(--mono);font-weight:640;color:#f2f4f7;font-size:12.5px}
+.demo-new .pm{border:1px solid var(--rule);background:var(--panel2);border-radius:var(--r);padding:10px 14px;margin-bottom:8px}
+.demo-new .pm .lab{color:var(--faint);font-size:10px;display:block;letter-spacing:.08em;margin-bottom:6px;font-weight:600}
+.demo-new .pm b{display:block;font-family:var(--mono);font-weight:600;color:var(--ink);font-size:12px}
+.demo-new .pm b.neg{color:var(--block)}
+.demo-old .pm b.neg{color:#ff6b6b}
+.verdict-demo{display:flex;gap:10px;align-items:center;padding:12px 16px}
+.dot{width:9px;height:9px;border-radius:50%}
+ol{margin:6px 0 0 18px;color:var(--muted);font-size:12px}
+li{margin-bottom:5px}
+.q{border-left:2px solid var(--gold);padding:10px 14px;background:var(--panel2);border-radius:0 var(--r) var(--r) 0;margin-bottom:10px;font-size:12.5px}
+.q b{color:var(--ink)}
+.q .rec{color:var(--gold);font-size:11.5px;margin-top:4px;display:block}
+</style>
+</head>
+<body>
+
+<h1>Phase D · 设计系统审计与统一 Token 提案 <small>2026-07-08 · 本页本身即用提案的 token 渲染(自证)</small></h1>
+<p class="sub">流程:本页先定视觉语言(你批准/修改)→ task-07 把批准的 token 铺到全部现役页面。所有"现状"数据都是从代码里逐值提取的,不是印象。</p>
+
+<h2><span class="no">A</span>现状取证 · 混乱是量化的,不是感觉</h2>
+
+<div class="panel">
+<div class="panel-h">A1 · 同一个"品牌金",三个值、两个名字 <span class="r">互相冲突的命名:同名不同值 / 同值不同名</span></div>
+<table>
+<tr><th>页面</th><th>变量名</th><th>实际值</th><th>问题</th></tr>
+<tr><td>指挥台 command-center</td><td class="mono">--amber</td><td class="mono"><span class="sw" style="background:#d8aa3f"></span>#d8aa3f</td><td>把品牌金叫成 amber</td></tr>
+<tr><td>作战台 dualtrack-v5 / 驾驶舱 v4</td><td class="mono">--gold + --amber</td><td class="mono"><span class="sw" style="background:#d8aa3f"></span>#d8aa3f + <span class="sw" style="background:#f5b84b"></span>#f5b84b</td><td>两个金并存,各处混用</td></tr>
+<tr><td>运维 ops</td><td class="mono">--gold</td><td class="mono"><span class="sw" style="background:#b78322"></span>#b78322</td><td>第三个金</td></tr>
+</table>
+</div>
+
+<div class="grid2">
+<div class="panel">
+<div class="panel-h">A2 · 正文白,三种;红色,三种</div>
+<div class="panel-b">
+<div class="chips" style="margin-bottom:8px"><span class="k" style="min-width:64px">正文白</span>
+<span class="chip"><span class="sw" style="background:#f4f0e7"></span>#f4f0e7 暖象牙·指挥台</span>
+<span class="chip"><span class="sw" style="background:#f2f4f7"></span>#f2f4f7 冷白·作战台</span>
+<span class="chip"><span class="sw" style="background:#eceff5"></span>#eceff5 回放</span></div>
+<div class="chips"><span class="k" style="min-width:64px">红</span>
+<span class="chip"><span class="sw" style="background:#ff5d5d"></span>#ff5d5d</span>
+<span class="chip"><span class="sw" style="background:#ff6b6b"></span>#ff6b6b</span>
+<span class="chip"><span class="sw" style="background:#b64232"></span>#b64232</span></div>
+<div class="chips" style="margin-top:8px"><span class="k" style="min-width:64px">灰阶</span><span class="chip">7+ 个不同的 muted/faint 灰散落各页</span></div>
+</div>
+</div>
+<div class="panel">
+<div class="panel-h">A3 · 结构性分裂</div>
+<div class="panel-b" style="font-size:12px;color:var(--muted)">
+<ol>
+<li><b class="bad">运维页是另一个宇宙</b>:浅色纸面主题(#f6efe4 底 + 墨色字),与全站深色完全割裂,shell 深色顶栏压在浅色页上。</li>
+<li><b class="bad">驾驶舱 v4 体内残留两代旧 token</b>(--v1-* 系列共 7+ 个变量仍在文件里)。</li>
+<li>面板变量命名分裂:--panel/--panel2 vs --surface/--surface2/--surface3,值也各不相同(6 个深灰面)。</li>
+<li>边框:白色 alpha 五档(.07/.08/.10/.11/.16)+ 指挥台一条金色调边线,无规律。</li>
+<li>等宽字体栈 3 种写法;唯一被批准的方向(mockup A)指定 IBM Plex,生产页面无一使用。</li>
+</ol>
+</div>
+</div>
+</div>
+
+<div class="grid2">
+<div class="panel">
+<div class="panel-h">A4 · 字重:作战台一页用了 8 个字重 <span class="r">你说的"加粗不统一"</span></div>
+<div class="panel-b">
+<div class="chips">
+<span class="chip">400 ×3</span><span class="chip">600 ×9</span><span class="chip class=" bad"">640 ×7</span><span class="chip">660 ×3</span><span class="chip">720 ×1</span><span class="chip">740 ×1</span><span class="chip">760 ×3</span><span class="chip">900 ×1</span>
+</div>
+<p style="font-size:11.5px;color:var(--faint);margin-top:10px">640/660/720/740/760 这类伪精度值是逐次生成时随手写的,肉眼根本分不出 640 和 660——这就是"有的粗有的不粗"观感的来源。指挥台另用 760/820。</p>
+</div>
+</div>
+<div class="panel">
+<div class="panel-h">A5 · 字号:作战台 12 个字号含半像素档</div>
+<div class="panel-b">
+<div class="chips">
+<span class="chip">10</span><span class="chip bad">10.5</span><span class="chip">11</span><span class="chip bad">11.5</span><span class="chip">12</span><span class="chip bad">12.5</span><span class="chip">13</span><span class="chip">16</span><span class="chip">22</span><span class="chip">24</span><span class="chip">30</span><span class="chip">34</span>
+</div>
+<p style="font-size:11.5px;color:var(--faint);margin-top:10px">10.5/11.5/12.5 三个半像素档与整数档并存,相邻层级差 0.5px 肉眼不可辨,徒增混乱。</p>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-h">A6 · 你点名的"文字顶到框最左边" <span class="r">根因:.plan-metric 水平内边距仅 9px,而全站面板标准是 16px</span></div>
+<div class="panel-b mono" style="font-size:11.5px;color:var(--muted)">.plan-metric { padding: <b class="bad">8px 9px</b> }  ← AI作战单/Obsidian 观点框内的每个小格子;周围面板全部是 padding: 10px <b class="good">16px</b></div>
+</div>
+
+<h2><span class="no">B</span>统一 Token 提案 · 一套语言,全站通用</h2>
+<p class="sub">基础取自你已批准的指挥台视觉方向(mockup A · 机构终端),补全其未覆盖的部分。原则:<b style="color:var(--gold)">金色只给品牌 · 颜色只表状态与身份 · 尺寸走整数阶梯 · 三档字重</b></p>
+
+<div class="grid3">
+<div class="panel">
+<div class="panel-h">B1 · 颜色(全部 12 个,不再多)</div>
+<div class="tok"><span class="sw" style="background:#0a0b0c"></span><span class="name">--bg</span><span class="val">#0a0b0c</span><span class="use">页面底</span></div>
+<div class="tok"><span class="sw" style="background:#101216"></span><span class="name">--panel</span><span class="val">#101216</span><span class="use">面板</span></div>
+<div class="tok"><span class="sw" style="background:#15181e"></span><span class="name">--panel2</span><span class="val">#15181e</span><span class="use">面板内嵌格</span></div>
+<div class="tok"><span class="sw" style="background:#e8eaed"></span><span class="name">--ink</span><span class="val">#e8eaed</span><span class="use">正文(冷白,弃暖象牙)</span></div>
+<div class="tok"><span class="sw" style="background:#9aa3ad"></span><span class="name">--muted</span><span class="val">#9aa3ad</span><span class="use">次要文字</span></div>
+<div class="tok"><span class="sw" style="background:#5d666f"></span><span class="name">--faint</span><span class="val">#5d666f</span><span class="use">标签/脚注</span></div>
+<div class="tok"><span class="sw" style="background:#d8aa3f"></span><span class="name">--gold</span><span class="val">#d8aa3f</span><span class="use">品牌,仅此一金</span></div>
+</div>
+<div class="panel">
+<div class="panel-h">B2 · 语义色(状态 4 + 身份 2)</div>
+<div class="tok"><span class="sw" style="background:#35d07f"></span><span class="name">--run</span><span class="val">#35d07f</span><span class="use">正常/盈利/上涨</span></div>
+<div class="tok"><span class="sw" style="background:#e8a33d"></span><span class="name">--warn</span><span class="val">#e8a33d</span><span class="use">降级/待办</span></div>
+<div class="tok"><span class="sw" style="background:#ef5f5f"></span><span class="name">--block</span><span class="val">#ef5f5f</span><span class="use">阻断/亏损/下跌</span></div>
+<div class="tok"><span class="sw" style="background:#7d8590"></span><span class="name">--unknown</span><span class="val">#7d8590</span><span class="use">未知(fail-closed 灰)</span></div>
+<div class="tok"><span class="sw" style="background:#7aa2ff"></span><span class="name">--human</span><span class="val">#7aa2ff</span><span class="use">人轨身份</span></div>
+<div class="tok"><span class="sw" style="background:#b894ff"></span><span class="name">--machine</span><span class="val">#b894ff</span><span class="use">机器轨身份</span></div>
+<div class="panel-b" style="font-size:11px;color:var(--faint);border-top:1px solid var(--rule)">teal #2dd4bf 退役:盈利归 --run,K线涨跌由图表库配置对齐 run/block。</div>
+</div>
+<div class="panel">
+<div class="panel-h">B3 · 线与形</div>
+<div class="tok"><span class="name">--rule</span><span class="val">rgba(255,255,255,.08)</span><span class="use">默认发丝线</span></div>
+<div class="tok"><span class="name">--rule-strong</span><span class="val">rgba(255,255,255,.16)</span><span class="use">强调分隔</span></div>
+<div class="tok"><span class="name">--r</span><span class="val">6px</span><span class="use">全站唯一圆角</span></div>
+<div class="tok"><span class="name">阴影</span><span class="val">无</span><span class="use">纯平面,弃 box-shadow</span></div>
+<div class="tok"><span class="name">金色边线</span><span class="val">禁用</span><span class="use">仅裁决带等品牌时刻可用</span></div>
+</div>
+</div>
+
+<div class="grid2">
+<div class="panel">
+<div class="panel-h">B4 · 字号阶梯(7 档整数)与字重(3 档)</div>
+<div class="typerow"><span class="k">--fs-0 · 10px</span><span style="font-size:10px;letter-spacing:.08em;color:var(--faint);font-weight:600">格内小标签 LABEL</span></div>
+<div class="typerow"><span class="k">--fs-1 · 11px</span><span style="font-size:11px;color:var(--muted)">面板题头 · 脚注</span></div>
+<div class="typerow"><span class="k">--fs-2 · 12px</span><span style="font-size:12px">表格 · 数据行(默认)</span></div>
+<div class="typerow"><span class="k">--fs-3 · 13px</span><span style="font-size:13px">正文</span></div>
+<div class="typerow"><span class="k">--fs-4 · 16px</span><span style="font-size:16px;font-weight:600">小标题</span></div>
+<div class="typerow"><span class="k">--fs-5 · 22px</span><span style="font-size:22px;font-weight:700;font-family:var(--mono)">关键数字</span></div>
+<div class="typerow"><span class="k">--fs-6 · 34px</span><span style="font-size:34px;font-weight:700;font-family:var(--mono)">裁决带</span></div>
+<div class="panel-b" style="font-size:11px;color:var(--faint);border-top:1px solid var(--rule)">字重仅 <b class="mono" style="color:var(--ink)">400</b>(正文)/ <b class="mono" style="color:var(--ink)">600</b>(标签·数值·强调)/ <b class="mono" style="color:var(--ink)">700</b>(裁决·标题)。640/660/720/740/760/820/900 全部消灭。数字一律 tabular-nums 等宽。</div>
+</div>
+<div class="panel">
+<div class="panel-h">B5 · 间距与盒子规则</div>
+<div class="panel-b" style="font-size:12px;color:var(--muted)">
+<ol>
+<li>间距阶梯:<span class="mono" style="color:var(--ink)">4 / 8 / 12 / 16 / 24</span>,不再出现 5/7/9/14 这类游离值。</li>
+<li><b style="color:var(--ink)">盒内规则(修你点名的顶边问题)</b>:任何带边框的格子,水平内边距 ≥ <span class="mono good">12px</span>;面板级 16px。</li>
+<li>面板题头统一:11px / 600 / letter-spacing .08em / --muted,下接 --rule 发丝线。</li>
+<li>可点元素:cursor:pointer + 边框/颜色 hover,禁 scale 位移。</li>
+<li>中文为主,术语英文;不再中英混标题(如"运行红灯 · SYSTEM VERDICT"这类双语题头收敛为中文 + 可选 mono 小注)。</li>
+</ol>
+</div>
+</div>
+</div>
+
+<h2><span class="no">C</span>Before / After · 就用你骂过的那个框</h2>
+<div class="grid2">
+<div class="panel demo-old">
+<div class="panel-h">现状 · AI作战单格子 <span class="r">9px 内边距 · 640 伪字重 · 两种金并存</span></div>
+<div class="panel-b">
+<div class="pm"><span class="lab">方向 / RANGE</span><b>做多 · 4,155.0 — open upside</b></div>
+<div class="pm"><span class="lab">失效条件</span><b class="neg">&lt; 4,155.0 touch</b></div>
+</div>
+</div>
+<div class="panel demo-new">
+<div class="panel-h">提案 · 同一格子 <span class="r">12-14px 内边距 · 600 字重 · panel2 面 · 发丝线</span></div>
+<div class="panel-b">
+<div class="pm"><span class="lab">方向 / RANGE</span><b>做多 · 4,155.0 — open upside</b></div>
+<div class="pm"><span class="lab">失效条件</span><b class="neg">&lt; 4,155.0 touch</b></div>
+</div>
+</div>
+</div>
+<div class="panel">
+<div class="panel-h">四态裁决(全站唯一的状态表达)</div>
+<div class="verdict-demo">
+<span class="dot" style="background:var(--run)"></span><span class="mono" style="color:var(--run);font-weight:700">RUN 运行</span>
+<span class="dot" style="background:var(--warn);margin-left:18px"></span><span class="mono" style="color:var(--warn);font-weight:700">DEGRADED 降级</span>
+<span class="dot" style="background:var(--block);margin-left:18px"></span><span class="mono" style="color:var(--block);font-weight:700">BLOCKED 阻断</span>
+<span class="dot" style="background:var(--unknown);margin-left:18px"></span><span class="mono" style="color:var(--unknown);font-weight:700">UNKNOWN 未知</span>
+</div>
+</div>
+
+<h2><span class="no">D</span>需要你拍板的三个问题</h2>
+<div class="q"><b>Q1 · 运维页(ops)怎么办?</b> 它是全站唯一浅色纸面页。选项:(a) 转深色并入统一系统;(b) 保留浅色作为刻意的"事故白皮书"气质。<span class="rec">我的建议:(a) 转深色。一套系统的价值就在"一套";事故场景更不该切换视觉语境。</span></div>
+<div class="q"><b>Q2 · K线涨跌色</b> 现在图表用 teal/red,提案把正负统一到 --run/--block(绿涨红跌)。确认吗?<span class="rec">我的建议:确认。状态色和盈亏色同源,减少一套心智映射。</span></div>
+<div class="q"><b>Q3 · IBM Plex 字体</b> mockup A 指定 IBM Plex Mono/Sans,但引入需本地字体文件(禁 CDN)。选项:(a) 本地内置 Plex 字体文件;(b) 放弃 Plex,用系统栈(SF Mono 等)。<span class="rec">我的建议:(b) 系统栈。单人本地系统,字体文件收益小于维护成本;栈写死一份全站引用即可。</span></div>
+
+<div class="note"><b>批准后的落地(task-07)</b>:一个 assets/tokens.css 作为唯一来源 → 五个现役页 + shell 全部改为引用 token(删除各自的 :root)→ 清除 v4 的 --v1-* 残留 → 静态测试断言"页面不得再定义自有颜色字面量"。运维页转深色(若 Q1=a)。改动全是样式层,零业务逻辑。</div>
+
+</body>
+</html>
