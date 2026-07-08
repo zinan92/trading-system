@@ -13,6 +13,16 @@ STRATEGY_ID = "gold_1m_macd"
 TIMEFRAME = "1m"
 
 
+def _demo_flat_only_pipeline_config() -> dict:
+    return {
+        "demo_trading": {
+            "enabled": True,
+            "active_strategy_id": STRATEGY_ID,
+            "require_flat_before_entry": True,
+        }
+    }
+
+
 def _classification() -> dict:
     return {
         "family": "test",
@@ -327,7 +337,8 @@ def test_cycle_audit_consumes_trade_permission_for_position_limit(tmp_path: Path
     assert permission["primary_blocker"]["code"] == "position_limit"
 
 
-def test_cycle_audit_uses_canonical_permission_for_flat_only_open_position(tmp_path: Path):
+def test_cycle_audit_uses_canonical_permission_for_flat_only_open_position(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("pipelines.dashboard_server.load_pipeline_config", _demo_flat_only_pipeline_config)
     base, namespace = _namespace(tmp_path)
     _write_system_vitals(base)
     _seed_common_artifacts(namespace, signal_direction="long", decision="go")

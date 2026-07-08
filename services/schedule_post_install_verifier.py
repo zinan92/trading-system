@@ -10,6 +10,7 @@ from services.journal_store import load_json, write_json
 from services.runner_status import RunnerStatusStore
 from services.schedule_installer import ScheduleInstaller
 from services.schedule_status import ScheduleStatus
+from services.schedule_profiles import is_focus_profile
 
 
 class SchedulePostInstallVerifier:
@@ -35,7 +36,7 @@ class SchedulePostInstallVerifier:
             self._schedule_check(schedule_status),
             self._install_check(install_receipt),
             self._rollback_check(install_receipt, rollback_plan),
-            self._runner_check(runner),
+            self._runner_check(runner, str(schedule_status.get("profile") or "")),
         ]
         status = self._rollup(checks)
         payload = {
@@ -109,7 +110,12 @@ class SchedulePostInstallVerifier:
             "restorable_count": restorable_count,
         })
 
-    def _runner_check(self, runner: dict) -> dict:
+    def _runner_check(self, runner: dict, profile: str = "") -> dict:
+        if is_focus_profile(profile):
+            return self._check("runner_heartbeat", "pass", "runner heartbeat is parked by focus schedule profile", {
+                "profile": profile,
+                "restore_path": "schedule.profile: full",
+            })
         if not runner:
             return self._check("runner_heartbeat", "warn", "runner heartbeat is missing", {
                 "path": str(self.output_root / "runner_status" / "current.json"),

@@ -1913,3 +1913,78 @@ Date: 2026-07-08
 - `_binance_exception_error()` is intentionally the *only* new abstraction — the entry-submit path (`_classify_binance_entry_submit_error`) already had correct error-body capture before this change and was left untouched to keep the diff minimal on a file with a history of mainnet-blocking bugs.
 - Downstream consumers (`dashboard_state.py`, `health_check.py`, `trade_ticket_notifier.py`, `paper_executor.py`) all read these dicts via `.get(...)` with no exact-shape assertions, so adding `http_status`/`binance_error` keys is safe; `trade_ticket_notifier._protective_error_summary()` in particular will now surface the real Binance rejection reason in operator-facing alert text instead of a useless generic HTTP status line.
 - Two live naked-position incidents on `gold_1m_macd` (Binance USDM demo/testnet) during this investigation window were manually flattened via `pipelines.binance_demo_close_position --confirm-close-demo-position` after dry-run verification; both confirmed `system_state=READY`/`exchange_positions=[]` afterward. Neither incident involved real money.
+
+## 2026-07-08 DualTrack Focus Mode Schedule
+
+### Decisions
+
+- Park the strategy fleet for the 12-hour human-vs-AI DualTrack loop.
+  - Rationale: owner scope is now only the human manual range/trade lane plus the DualTrack machine grid lane; the wider MACD/chan/bollinger/vwap/breakout fleet is negative expected value for the current close-the-loop objective and was tied to two demo naked-position incidents.
+  - Evidence: `configs/strategy.yaml` keeps all 25 strategy entries but has 0 enabled strategies; `configs/pipeline.yaml` sets `demo_trading.enabled=false`.
+
+- Make local launchd generation profile-driven.
+  - Rationale: focus mode should be reversible without deleting builders or strategy definitions.
+  - Evidence: `schedule.profile=dualtrack_focus` generates only `dualtrack-cycle`, `dualtrack-live-tick`, `dashboard`, and `deadman-ping`; `schedule.profile=full` restores the 9-job schedule.
+
+- Generated schedule plists must not depend on the shell environment at generation time.
+  - Rationale: a regenerated plist must not silently strip deadman routing because the operator shell lacks runtime env vars.
+  - Evidence: schedule generation and `deadman_ping` call `apply_live_env()` and load keys from `configs/live.env`; tests cover key presence/absence without committing secret values.
+
+- Treat daily review and runner heartbeat as parked in focus mode, not as passing trading evidence.
+  - Rationale: parked checks should not degrade the focus loop, but they also should not pretend the full workflow is operating.
+  - Evidence: `completion_audit.daily_review_run` returns `warn` with `parked_by_focus_mode`; system-state removes `daily_review` under focus and keeps `dualtrack_heartbeat`.
+
+- Keep bias-ledger intake alive outside the parked `trading-plan` launchd job.
+  - Rationale: human direction scoring is required for the 12-hour comparison loop.
+  - Evidence: `dashboard_server` still exposes the market-view intake POST path and CLI/Obsidian intake paths still call `MarketViewIntake.record()`.
+
+### Recovery Path
+
+- To return to full mode: set `configs/pipeline.yaml` `schedule.profile` to `full`, re-enable the selected strategy entries in `configs/strategy.yaml`, decide explicitly whether `demo_trading.enabled` should be restored, regenerate schedules, then run schedule install dry-run before applying.
+
+### Validation
+
+- TDD red-to-green targeted tests covered focus config, profile job sets, byte-identical live-env generation, orphan removal/rollback, focus audit/system-state semantics, and all-disabled runner no-op.
+- Live install on 2026-07-08 ended `active` with `required_count=4`, `loaded_count=4`, `matching_generated_count=4`, `orphan_count=0`; 5 old full-mode LaunchAgents were backed up and removed.
+- Full test suite: `1203 passed`.
+
+### Gotchas
+
+- In focus mode a healthy launchd surface is 4 jobs, not 9. Seeing no `runner`, `strategies`, `trading-plan`, `daily-review`, or `evening-review` launchd label is expected.
+- `completion_audit` can still be overall `fail` because business evidence such as the human bias ledger is missing; that is not the same as schedule failure.
+- Do not print deadman URL values in logs, tests, decision notes, or PR text; only report key presence and delivery status.
+
+
+## 2026-07-08 DualTrack Focus Mode Feed Gap
+
+### Decisions
+
+- Add a dedicated focus-mode GOLD 1m feed heartbeat instead of re-enabling the full `strategies` launchd job.
+  - Rationale: GOLD 1m bars are shared DualTrack infrastructure, but the existing automatic refresh lived inside the fleet strategy job that focus mode intentionally parked.
+  - Evidence: `pipelines/gold_1m_feed_heartbeat.py` only calls `run_binance_usdm_1m_feed_import`; focus launchd now includes `com.wendy.trading-orchestrator.gold-1m-feed`.
+
+- Keep `full` schedule at 9 jobs.
+  - Rationale: full mode already refreshes GOLD 1m through `pipelines.strategies`; adding a second heartbeat there would duplicate writes.
+  - Evidence: `services/schedule_profiles.py` adds `gold-1m-feed` only to `FOCUS_SCHEDULE_LABELS`.
+
+- Let system-state freshness use the local market DB when the preflight artifact is stale.
+  - Rationale: the heartbeat writes bars to SQLite, not `data_source_preflight/current.json`; reading only the artifact would keep reporting stale data after the feed is actually healthy.
+  - Evidence: `/api/system-state` now reports `data_freshness=RUN` with `source=local_market_db`.
+
+- Add a one-hour freshness gate to naked-position reconciliation.
+  - Rationale: a stale `BLOCKED_*` reconciliation snapshot should not remain a permanent live warning after focus mode stops refreshing demo strategy reconciliation.
+  - Implementation choice: fresh `BLOCKED_*` stays `BLOCKED`; stale active demo reconciliation becomes `UNKNOWN`; stale inactive/demo-disabled reconciliation is `RUN` with `skipped=true` because no demo strategy is currently scheduled to refresh it.
+
+### Validation
+
+- Live dry-run showed exactly one new job: `com.wendy.trading-orchestrator.gold-1m-feed`; the existing 4 focus jobs were already current and no orphans were planned.
+- Live install ended `active` with `required_count=5`, `loaded_count=5`, `matching_generated_count=5`, and `orphan_count=0`.
+- GOLD 1m DB latest bar advanced from `2026-07-08T04:06:00+00:00` to `2026-07-08T05:08:00+00:00` after the new heartbeat ran.
+- Full test suite: `1210 passed`.
+
+### Gotchas
+
+- `pipelines/backfill_gold_1m.py --refresh-only` also calls the same import function, but it is a manual/backfill tool, not a launchd heartbeat.
+- `data_source_preflight/current.json` may remain stale even when the market DB is fresh; system-state must look at the DB for this focus-mode feed heartbeat.
+- Rollback of a newly created launchd job has no old plist backup; rollback must remove the created plist rather than block on a missing backup.
+

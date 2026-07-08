@@ -15,10 +15,11 @@ def main() -> None:
     parser.add_argument("--review-hour", type=int, default=23)
     parser.add_argument("--review-minute", type=int, default=55)
     parser.add_argument("--dashboard-port", type=int, default=8765)
+    parser.add_argument("--profile", choices=["dualtrack_focus", "full"], default="", help="Override configs/pipeline.yaml schedule.profile.")
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     args = parser.parse_args()
 
-    result = ScheduleManager().build(
+    result = ScheduleManager(profile=args.profile or None).build(
         review_hour=args.review_hour,
         review_minute=args.review_minute,
         dashboard_port=args.dashboard_port,

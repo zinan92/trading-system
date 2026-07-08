@@ -28,6 +28,23 @@ def test_live_activation_blocks_without_official_data_and_env(tmp_path: Path, mo
     assert load_json(root / "live_activation" / "current.json")[0]["status"] == "blocked"
 
 
+def test_live_activation_schedule_summary_uses_focus_profile(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(tmp_path / "absent.env"))
+    root = tmp_path / "outputs"
+    run_date = "2026-07-08"
+    write_json(root / "data_source_preflight" / f"{run_date}.json", [{"ready_for_live": False}])
+    write_json(root / "schedules" / "status_current.json", [{"status": "active", "profile": "dualtrack_focus", "required_count": 4}])
+    write_json(root / "mock_runtime" / "current.json", [{"mock_ready": True, "mock_running": True}])
+
+    result = LiveActivationGate(root).run(run_date)
+
+    schedule = next(item for item in result["checks"] if item["name"] == "schedule_active")
+    assert schedule["status"] == "pass"
+    assert "dualtrack focus schedule is active" in schedule["summary"]
+    assert "GOLD 1m feed" in schedule["summary"]
+    assert "runner, trading plan" not in schedule["summary"]
+
+
 def test_live_activation_accepts_execution_venue_market_data_but_still_blocks_missing_env(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("BINANCE_API_KEY", raising=False)
     monkeypatch.delenv("BINANCE_API_SECRET", raising=False)

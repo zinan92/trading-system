@@ -16,6 +16,7 @@ from services.mock_runtime import MockTradingRuntime
 from services.mock_trading_uat import MockTradingUAT
 from services.risk_monitor import RiskMonitor
 from services.schedule_status import ScheduleStatus
+from services.schedule_profiles import labels_for_profile, profile_from_config, profile_from_schedule, is_focus_profile
 from services.live_activation import LiveActivationGate
 from services.live_cutover_package import LiveCutoverPackage
 from services.live_readiness import LiveReadiness
@@ -468,6 +469,18 @@ class CompletionAudit:
         )
 
     def _daily_review_run(self, run_date: str) -> dict:
+        profile = profile_from_config(self.config)
+        if is_focus_profile(profile):
+            return self._requirement(
+                "daily_review_run",
+                "warn",
+                "parked_by_focus_mode: 每日复盘 runner 已按聚焦模式停放",
+                {
+                    "profile": profile,
+                    "restore_path": "schedule.profile: full",
+                    "command": f"python3 -m pipelines.daily_review --date {run_date}",
+                },
+            )
         rows = load_json(self.output_root / "daily_review_runs" / f"{run_date}.json")
         receipt = rows[-1] if rows else {}
         if not receipt:
@@ -502,6 +515,8 @@ class CompletionAudit:
         rows = load_json(self.output_root / "schedules" / "current.json")
         schedule = rows[-1] if rows else {}
         schedule_status = ScheduleStatus(self.output_root).run(run_date)
+        profile = profile_from_schedule(schedule, self.config)
+        required = labels_for_profile(profile)
         if not schedule:
             return self._requirement(
                 "schedule_artifacts",
@@ -510,42 +525,29 @@ class CompletionAudit:
                 {"command": "python3 -m pipelines.schedule"},
             )
         jobs = {item.get("label"): item for item in schedule.get("jobs", [])}
-        required = [
-            "com.wendy.trading-orchestrator.runner",
-            "com.wendy.trading-orchestrator.trading-plan",
-            "com.wendy.trading-orchestrator.evening-review",
-            "com.wendy.trading-orchestrator.daily-review",
-            "com.wendy.trading-orchestrator.dashboard",
-            "com.wendy.trading-orchestrator.strategies",
-            "com.wendy.trading-orchestrator.dualtrack-cycle",
-            "com.wendy.trading-orchestrator.dualtrack-live-tick",
-            "com.wendy.trading-orchestrator.deadman-ping",
-        ]
         missing = [label for label in required if label not in jobs]
+        schedule_evidence = {
+            "profile": profile,
+            "required_labels": required,
+            "generated_at": schedule.get("generated_at"),
+            "launch_agents_dir": schedule.get("launch_agents_dir"),
+            "jobs": schedule.get("jobs", []),
+            "schedule_status": schedule_status,
+        }
         if missing:
-            return self._requirement("schedule_artifacts", "fail", "本地调度配置缺少必要任务", {"missing": missing, "schedule": schedule})
+            return self._requirement("schedule_artifacts", "fail", "本地调度配置缺少必要任务", {"missing": missing, **schedule_evidence})
         if schedule_status.get("status") not in {"active", "installed"}:
             return self._requirement(
                 "schedule_artifacts",
                 "warn",
                 "本地 launchd 调度配置已生成，但尚未安装/加载，不能证明每天自动运行",
-                {
-                    "generated_at": schedule.get("generated_at"),
-                    "launch_agents_dir": schedule.get("launch_agents_dir"),
-                    "jobs": schedule.get("jobs", []),
-                    "schedule_status": schedule_status,
-                },
+                schedule_evidence,
             )
         return self._requirement(
             "schedule_artifacts",
             "pass",
-            "本地 launchd 调度配置已生成并安装，可自动运行 runner、早盘计划、晚盘复盘、daily review、strategies、dashboard、dualtrack cycle/live tick 和 deadman ping",
-            {
-                "generated_at": schedule.get("generated_at"),
-                "launch_agents_dir": schedule.get("launch_agents_dir"),
-                "jobs": schedule.get("jobs", []),
-                "schedule_status": schedule_status,
-            },
+            f"本地 launchd 调度配置已按 {profile} profile 生成并安装",
+            schedule_evidence,
         )
 
     def _dualtrack_cycle_liveness(self, run_date: str, as_of: str | datetime | None = None) -> dict:

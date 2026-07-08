@@ -7,6 +7,7 @@ from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.deadman_ping import ExternalDeadmanPing
+from services.live_env import apply_live_env
 from services.run_date import utc_run_date
 
 
@@ -30,6 +31,7 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     args = parser.parse_args()
 
+    apply_live_env()
     result = ExternalDeadmanPing(
         _output_root(),
         _market_db(),

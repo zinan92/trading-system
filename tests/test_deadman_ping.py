@@ -1,5 +1,7 @@
 import json
+import os
 import sqlite3
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -197,3 +199,38 @@ def test_deadman_ping_treats_missing_reconciliation_as_possible_position(tmp_pat
     assert result["exposure"]["has_open_position"] is True
     assert result["exposure"]["position_unknown"] is True
     assert result["exposure"]["reconciliation_freshness"]["reason_code"] == "live_reconciliation_missing"
+
+
+def test_deadman_ping_cli_loads_deadman_url_from_live_env(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.delenv("TRADING_ORCHESTRATOR_DEADMAN_URL", raising=False)
+    monkeypatch.delenv("TRADING_ORCHESTRATOR_DEADMAN_POSITION_URL", raising=False)
+    live_env = tmp_path / "live.env"
+    live_env.write_text("TRADING_ORCHESTRATOR_DEADMAN_URL=https://example.invalid/deadman\n", encoding="utf-8")
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_LIVE_ENV", str(live_env))
+    captured = {}
+
+    class FakeDeadmanPing:
+        def __init__(self, output_root, market_db, *, url, position_url, timeout_seconds):
+            captured["env_url"] = os.getenv("TRADING_ORCHESTRATOR_DEADMAN_URL", "")
+            captured["url_arg"] = url
+            captured["position_url_arg"] = position_url
+            captured["timeout_seconds"] = timeout_seconds
+
+        def run(self, run_date: str, dry_run: bool = False) -> dict:
+            return {
+                "status": "dry_run_sent" if dry_run else "sent",
+                "severity": "normal",
+                "configured": True,
+                "exposure": {"has_open_position": False},
+            }
+
+    import pipelines.deadman_ping as deadman_ping_cli
+
+    monkeypatch.setattr(deadman_ping_cli, "ExternalDeadmanPing", FakeDeadmanPing)
+    monkeypatch.setattr(sys, "argv", ["deadman_ping", "--date", "2026-07-08", "--dry-run", "--json"])
+
+    deadman_ping_cli.main()
+    capsys.readouterr()
+
+    assert captured["env_url"] == "https://example.invalid/deadman"
+    assert captured["url_arg"] is None

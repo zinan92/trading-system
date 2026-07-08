@@ -244,6 +244,9 @@
       "timeout_seconds": 10
     }
   },
+  "schedule": {
+    "profile": "dualtrack_focus"
+  },
   "testnet_trading": {
     "enabled": false,
     "broker_profile": "binance_usdm_testnet",
@@ -254,7 +257,7 @@
     "note": "Manual-only Binance USDM testnet drill profile for XAUUSDT. It is not used by the default runner and never targets mainnet."
   },
   "demo_trading": {
-    "enabled": true,
+    "enabled": false,
     "active_strategy_id": "gold_1m_macd",
     "broker_profile": "binance_usdm",
     "request_dir": "demo_order_requests",

@@ -1,7 +1,7 @@
 {
   "gold_5m_v1": {
     "symbol": "GOLD",
-    "enabled": true,
+    "enabled": false,
     "classification": {
       "family": "trend_macro",
       "family_label": "趋势/宏观",
@@ -60,7 +60,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "chan",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "chan",
@@ -92,7 +92,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "chan",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "chan",
@@ -124,7 +124,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "chan",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "chan",
@@ -151,7 +151,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "macd",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "momentum",
@@ -178,7 +178,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "macd_trend_volatility_filter",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "momentum",
@@ -214,7 +214,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "chan",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "chan",
@@ -242,7 +242,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "grid",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "grid",
@@ -268,7 +268,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "adr_exhaustion_reversion",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "volatility_exhaustion_reversion",
@@ -304,7 +304,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "bollinger_reversion",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "mean_reversion",
@@ -330,7 +330,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "bollinger_reclaim_filter",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "mean_reversion",
@@ -363,7 +363,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "vwap_zscore_reversion",
-    "enabled": true,
+    "enabled": false,
     "live": false,
     "starting_equity": 10000,
     "classification": {
@@ -404,7 +404,7 @@
     "symbol": "GOLD",
     "timeframe": "1m",
     "engine": "breakout",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "breakout",
@@ -430,7 +430,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "fibonacci",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "fibonacci",
@@ -456,7 +456,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "ema50_position",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "position",
@@ -482,7 +482,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "adx_ema_pullback",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "trend_pullback",
@@ -518,7 +518,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "london_ny_compression_breakout",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "session_breakout",
@@ -552,7 +552,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "false_breakout_reversal",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "range_reversal",
@@ -589,7 +589,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "breakout_retest_continuation",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "breakout_continuation",
@@ -627,7 +627,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "psych_level_rejection",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "liquidity_reversal",
@@ -664,7 +664,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "vwap_extension_reversion",
-    "enabled": true,
+    "enabled": false,
     "starting_equity": 10000,
     "classification": {
       "family": "microstructure_mean_reversion",
@@ -700,7 +700,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "ny_opening_range_breakout",
-    "enabled": true,
+    "enabled": false,
     "live": false,
     "starting_equity": 10000,
     "classification": {
@@ -739,7 +739,7 @@
     "symbol": "GOLD",
     "timeframe": "5m",
     "engine": "vwap_trend_pullback",
-    "enabled": true,
+    "enabled": false,
     "live": false,
     "starting_equity": 10000,
     "classification": {

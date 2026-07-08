@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.schedule_profiles import is_focus_profile, profile_from_config, profile_from_schedule
 
 
 STATUS_ORDER = {"RUN": 0, "DEGRADED": 1, "UNKNOWN": 2, "BLOCKED": 3}
 SCHEDULE_MAX_AGE = timedelta(hours=24)
 DATA_MAX_AGE = timedelta(minutes=30)
+NAKED_POSITION_MAX_AGE = timedelta(hours=1)
 _CACHE_TTL_SECONDS = 30
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -50,15 +53,18 @@ def build_system_state(output_root: Path | None = None, *, as_of: str | datetime
         if cached and (datetime.now(timezone.utc).timestamp() - cached[0]) < _CACHE_TTL_SECONDS:
             return cached[1]
     try:
+        profile = _current_schedule_profile(root)
         checks = [
-            _check_naked_position(root),
+            _check_naked_position(root, now),
             _check_schedule(root, now),
             _check_dualtrack_heartbeat(root, now),
-            _check_daily_review(root),
             _check_data_freshness(root, now),
         ]
+        if not is_focus_profile(profile):
+            checks.insert(3, _check_daily_review(root))
         payload = {
             "generated_at": now.isoformat(),
+            "schedule_profile": profile,
             "overall": _overall(checks),
             "checks": [check.to_dict() for check in checks],
         }
@@ -86,20 +92,38 @@ def _default_output_root() -> Path:
     return ROOT / str(config.get("output_root", "outputs"))
 
 
+def _current_schedule_profile(root: Path) -> str:
+    config = load_pipeline_config()
+    row, error = _latest_row(root / "schedules" / "current.json")
+    if error:
+        return profile_from_config(config)
+    return profile_from_schedule(row, config)
+
+
 def _overall(checks: list[SystemCheck]) -> str:
     return max((check.status for check in checks), key=lambda status: STATUS_ORDER.get(status, 2))
 
 
-def _check_naked_position(root: Path) -> SystemCheck:
+def _check_naked_position(root: Path, now: datetime) -> SystemCheck:
     paths = sorted((root / "strategies").glob("*/live_reconciliation/current.json"))
     if not paths:
         return _unknown("naked_position", "live_reconciliation_artifact_missing", "处理裸头寸")
+    active_demo = _active_demo_strategy_id()
     healthy = 0
+    skipped = 0
     for path in paths:
         strategy = path.parents[1].name
         row, error = _latest_row(path)
         if error:
             return _unknown("naked_position", f"{strategy}: {error}", "处理裸头寸")
+        checked_at, parse_error = _row_time(row, "checked_at", "generated_at")
+        if parse_error or checked_at is None:
+            return _unknown("naked_position", f"{strategy}: {parse_error or 'timestamp_missing'}", "刷新裸头寸检查")
+        if now - checked_at > NAKED_POSITION_MAX_AGE:
+            if strategy != active_demo:
+                skipped += 1
+                continue
+            return _unknown("naked_position", f"{strategy}: stale live_reconciliation since {checked_at.isoformat()}", "刷新裸头寸检查")
         state = str(row.get("system_state") or row.get("status") or "")
         if state.startswith("BLOCKED"):
             since = _first_text(row, "blocked_since", "checked_at", "generated_at", "run_date")
@@ -116,13 +140,32 @@ def _check_naked_position(root: Path) -> SystemCheck:
                 evidence={"artifact": str(path), "system_state": state},
             )
         healthy += 1
+    if healthy == 0 and skipped:
+        return SystemCheck(
+            id="naked_position",
+            status="RUN",
+            reason=f"demo reconciliation not scheduled for {skipped} inactive strategy artifact(s)",
+            room="ops",
+            cta="查看运维",
+            skipped=True,
+            evidence={"inactive_stale_artifacts": skipped},
+        )
     return SystemCheck(
         id="naked_position",
         status="RUN",
         reason=f"no blocked live reconciliation across {healthy} strategy artifact(s)",
         room="ops",
         cta="查看运维",
+        evidence={"inactive_stale_artifacts": skipped} if skipped else None,
     )
+
+
+def _active_demo_strategy_id() -> str:
+    config = load_pipeline_config()
+    demo = config.get("demo_trading", {}) if isinstance(config.get("demo_trading"), dict) else {}
+    if demo.get("enabled") is True:
+        return str(demo.get("active_strategy_id") or "")
+    return ""
 
 
 def _check_schedule(root: Path, now: datetime) -> SystemCheck:
@@ -235,18 +278,25 @@ def _check_daily_review(root: Path) -> SystemCheck:
 def _check_data_freshness(root: Path, now: datetime) -> SystemCheck:
     path = root / "data_source_preflight" / "current.json"
     row, error = _latest_row(path)
-    if error:
+    db_latest = _latest_gold_1m_from_market_db(root)
+    if error and db_latest is None:
         return _unknown("data_freshness", error, "检查行情")
-    raw_ts = _first_text(row, "latest_timestamp", "checked_at")
-    latest_bar = row.get("latest_bar")
-    if isinstance(latest_bar, dict) and latest_bar.get("timestamp"):
-        raw_ts = str(latest_bar["timestamp"])
-    if not raw_ts:
+    artifact_latest: datetime | None = None
+    if not error:
+        raw_ts = _first_text(row, "latest_timestamp", "checked_at")
+        latest_bar = row.get("latest_bar")
+        if isinstance(latest_bar, dict) and latest_bar.get("timestamp"):
+            raw_ts = str(latest_bar["timestamp"])
+        if raw_ts:
+            try:
+                artifact_latest = _parse_utc(str(raw_ts))
+            except ValueError:
+                if db_latest is None:
+                    return _unknown("data_freshness", "latest_bar_timestamp_invalid", "检查行情")
+    latest = max([item for item in [artifact_latest, db_latest] if item is not None], default=None)
+    if latest is None:
         return _unknown("data_freshness", "latest_bar_timestamp_missing", "检查行情")
-    try:
-        latest = _parse_utc(str(raw_ts))
-    except ValueError:
-        return _unknown("data_freshness", "latest_bar_timestamp_invalid", "检查行情")
+    source = "local_market_db" if db_latest is not None and latest == db_latest else "data_source_preflight"
     age = now - latest
     if age > DATA_MAX_AGE:
         return SystemCheck(
@@ -255,7 +305,7 @@ def _check_data_freshness(root: Path, now: datetime) -> SystemCheck:
             reason=f"GOLD latest bar age {int(age.total_seconds() // 60)} minutes",
             room="ops",
             cta="刷新行情",
-            evidence={"latest_timestamp": latest.isoformat()},
+            evidence={"latest_timestamp": latest.isoformat(), "source": source},
         )
     return SystemCheck(
         id="data_freshness",
@@ -263,8 +313,31 @@ def _check_data_freshness(root: Path, now: datetime) -> SystemCheck:
         reason=f"GOLD latest bar age {int(max(age.total_seconds(), 0) // 60)} minutes",
         room="ops",
         cta="查看行情",
-        evidence={"latest_timestamp": latest.isoformat()},
+        evidence={"latest_timestamp": latest.isoformat(), "source": source},
     )
+
+
+def _latest_gold_1m_from_market_db(root: Path) -> datetime | None:
+    config = load_pipeline_config()
+    raw = str(config.get("local_market_db") or "data/market_data.db")
+    path = Path(raw) if Path(raw).is_absolute() else root.parent / raw
+    if not path.exists():
+        return None
+    try:
+        with sqlite3.connect(path) as conn:
+            row = conn.execute(
+                "select max(timestamp) from bars where symbol = ? and timeframe = ?",
+                ("GOLD", "1m"),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    value = row[0] if row else None
+    if not value:
+        return None
+    try:
+        return _parse_utc(str(value))
+    except ValueError:
+        return None
 
 
 def _latest_row(path: Path) -> tuple[dict[str, Any], str]:

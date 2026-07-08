@@ -7,13 +7,16 @@ from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
+from services.live_env import apply_live_env
+from services.schedule_profiles import labels_for_profile, profile_from_config, normalize_schedule_profile, PROJECT_LABEL_PREFIX
 
 
 class ScheduleManager:
-    def __init__(self, output_root: Path | None = None, repo_root: Path | None = None) -> None:
+    def __init__(self, output_root: Path | None = None, repo_root: Path | None = None, profile: str | None = None) -> None:
         config = load_pipeline_config()
         self.repo_root = repo_root or ROOT
         self.output_root = output_root or ROOT / config.get("output_root", "outputs")
+        self.profile = normalize_schedule_profile(profile) if profile else profile_from_config(config)
         self.python = os.getenv("TRADING_ORCHESTRATOR_PYTHON", "python3")
         # The chan strategy needs Python >= 3.11 + pandas, so the strategies job
         # runs on a dedicated interpreter. The other jobs (runner/daily-review/
@@ -31,29 +34,37 @@ class ScheduleManager:
         evening_review_hour: int = 23,
         evening_review_minute: int = 30,
     ) -> dict:
+        apply_live_env()
         root = self.output_root / "schedules"
         launch_dir = root / "launch_agents"
         log_dir = root / "logs"
         launch_dir.mkdir(parents=True, exist_ok=True)
         log_dir.mkdir(parents=True, exist_ok=True)
-        jobs = [
-            self._runner_job(log_dir),
-            self._trading_plan_job(log_dir, plan_hour, plan_minute),
-            self._evening_review_job(log_dir, evening_review_hour, evening_review_minute),
-            self._daily_review_job(log_dir, review_hour, review_minute),
-            self._dashboard_job(log_dir, dashboard_port),
-            self._strategies_job(log_dir),
-            self._dualtrack_cycle_job(log_dir),
-            self._dualtrack_live_tick_job(log_dir),
-            self._deadman_ping_job(log_dir),
-        ]
+        for stale in launch_dir.glob(f"{PROJECT_LABEL_PREFIX}*.plist"):
+            stale.unlink()
+        all_jobs = {
+            "com.wendy.trading-orchestrator.runner": self._runner_job(log_dir),
+            "com.wendy.trading-orchestrator.trading-plan": self._trading_plan_job(log_dir, plan_hour, plan_minute),
+            "com.wendy.trading-orchestrator.evening-review": self._evening_review_job(log_dir, evening_review_hour, evening_review_minute),
+            "com.wendy.trading-orchestrator.daily-review": self._daily_review_job(log_dir, review_hour, review_minute),
+            "com.wendy.trading-orchestrator.dashboard": self._dashboard_job(log_dir, dashboard_port),
+            "com.wendy.trading-orchestrator.strategies": self._strategies_job(log_dir),
+            "com.wendy.trading-orchestrator.dualtrack-cycle": self._dualtrack_cycle_job(log_dir),
+            "com.wendy.trading-orchestrator.gold-1m-feed": self._gold_1m_feed_job(log_dir),
+            "com.wendy.trading-orchestrator.dualtrack-live-tick": self._dualtrack_live_tick_job(log_dir),
+            "com.wendy.trading-orchestrator.deadman-ping": self._deadman_ping_job(log_dir),
+        }
+        jobs = [all_jobs[label] for label in labels_for_profile(self.profile)]
         for job in jobs:
             path = launch_dir / f"{job['Label']}.plist"
             with path.open("wb") as handle:
                 plistlib.dump(job, handle, sort_keys=True)
         install_commands = [
             f"mkdir -p ~/Library/LaunchAgents",
-            f"cp {launch_dir}/com.wendy.trading-orchestrator.*.plist ~/Library/LaunchAgents/",
+            *[
+                f"cp {launch_dir}/{job['Label']}.plist ~/Library/LaunchAgents/"
+                for job in jobs
+            ],
             *[
                 f"launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/{job['Label']}.plist"
                 for job in jobs
@@ -62,6 +73,8 @@ class ScheduleManager:
         payload = {
             "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "status": "generated",
+            "profile": self.profile,
+            "required_labels": labels_for_profile(self.profile),
             "repo_root": str(self.repo_root),
             "launch_agents_dir": str(launch_dir),
             "log_dir": str(log_dir),
@@ -138,6 +151,15 @@ class ScheduleManager:
         return self._base_job(
             label,
             [self.python, "-m", "pipelines.dualtrack_cycle_runner", "--event", "auto"],
+            log_dir,
+            extra={"StartInterval": 60, "RunAtLoad": True},
+        )
+
+    def _gold_1m_feed_job(self, log_dir: Path) -> dict:
+        label = "com.wendy.trading-orchestrator.gold-1m-feed"
+        return self._base_job(
+            label,
+            [self.python, "-m", "pipelines.gold_1m_feed_heartbeat"],
             log_dir,
             extra={"StartInterval": 60, "RunAtLoad": True},
         )

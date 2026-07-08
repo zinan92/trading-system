@@ -92,6 +92,7 @@ def test_completion_audit_surfaces_paper_ready_with_live_broker_warning(tmp_path
         [
             {
                 "status": "generated",
+                "profile": "full",
                 "jobs": [
                     {"label": "com.wendy.trading-orchestrator.runner"},
                     {"label": "com.wendy.trading-orchestrator.trading-plan"},
@@ -157,6 +158,48 @@ def test_completion_audit_warns_when_bridge_smoke_missing(tmp_path: Path):
     statuses = {item["name"]: item["status"] for item in result["requirements"]}
 
     assert statuses["broker_bridge_smoke"] == "warn"
+
+
+def test_completion_audit_focus_profile_parks_daily_review_without_passing(tmp_path: Path):
+    result = CompletionAudit(tmp_path / "outputs", tmp_path / "missing.db")._daily_review_run("2026-05-26")
+
+    assert result["name"] == "daily_review_run"
+    assert result["status"] == "warn"
+    assert "parked_by_focus_mode" in result["summary"]
+    assert result["evidence"]["restore_path"] == "schedule.profile: full"
+
+
+def test_completion_audit_focus_profile_requires_only_focus_schedule_jobs(tmp_path: Path):
+    root = tmp_path / "outputs"
+    write_json(
+        root / "schedules" / "current.json",
+        [
+            {
+                "status": "generated",
+                "profile": "dualtrack_focus",
+                "jobs": [
+                    {"label": "com.wendy.trading-orchestrator.dashboard"},
+                    {"label": "com.wendy.trading-orchestrator.dualtrack-cycle"},
+                    {"label": "com.wendy.trading-orchestrator.gold-1m-feed"},
+                    {"label": "com.wendy.trading-orchestrator.dualtrack-live-tick"},
+                    {"label": "com.wendy.trading-orchestrator.deadman-ping"},
+                ],
+            }
+        ],
+    )
+
+    result = CompletionAudit(root, tmp_path / "missing.db")._schedule_artifacts("2026-05-26")
+
+    assert result["name"] == "schedule_artifacts"
+    assert result["status"] == "warn"
+    assert result["evidence"]["profile"] == "dualtrack_focus"
+    assert result["evidence"]["required_labels"] == [
+        "com.wendy.trading-orchestrator.dualtrack-cycle",
+        "com.wendy.trading-orchestrator.gold-1m-feed",
+        "com.wendy.trading-orchestrator.dualtrack-live-tick",
+        "com.wendy.trading-orchestrator.dashboard",
+        "com.wendy.trading-orchestrator.deadman-ping",
+    ]
 
 
 def test_completion_audit_fails_when_learning_artifacts_missing(tmp_path: Path):

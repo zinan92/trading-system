@@ -9,6 +9,7 @@ from services.journal_store import load_json, write_json
 from services.live_env import LiveEnvStatus
 from services.live_approval import LiveApprovalStore
 from services.official_market_data_gate import official_broker_ohlc_status
+from services.schedule_profiles import is_focus_profile
 
 
 class LiveActivationGate:
@@ -31,7 +32,7 @@ class LiveActivationGate:
         checks = [
             self._check_bool("official_5m_data", official_data_ready, official_data_summary, data_source),
             self._check_bool("live_env", live_env.get("status") == "pass", "Required broker env keys are present.", live_env),
-            self._check_bool("schedule_active", schedule.get("status") == "active", "runner, trading plan, evening review, daily review, strategies, dashboard, dualtrack cycle/live tick, and deadman ping are installed and loaded.", schedule),
+            self._check_bool("schedule_active", schedule.get("status") == "active", self._schedule_summary(schedule), schedule),
             self._check_bool("mock_runtime", mock.get("mock_ready") and mock.get("mock_running"), "Mock trading loop is healthy and fresh.", mock),
             self._check_bool("journal_review", self._journal_artifacts_exist(run_date), "Daily journal/review artifacts exist.", {"run_date": run_date}),
             self._check_bool("broker_provider_configured", provider in supported_providers, "Supported live broker provider is configured.", {"provider": provider, "supported": sorted(supported_providers)}),
@@ -115,6 +116,12 @@ class LiveActivationGate:
 
     def _check_bool(self, name: str, passed: bool, summary: str, evidence: dict) -> dict:
         return {"name": name, "status": "pass" if passed else "fail", "summary": summary, "evidence": evidence}
+
+    def _schedule_summary(self, schedule: dict) -> str:
+        profile = str(schedule.get("profile") or "")
+        if is_focus_profile(profile):
+            return "dualtrack focus schedule is active: dashboard, dualtrack cycle/live tick, GOLD 1m feed, and deadman ping are installed and loaded."
+        return "full schedule is active: runner, trading plan, evening review, daily review, strategies, dashboard, dualtrack cycle/live tick, and deadman ping are installed and loaded."
 
     def _next_actions(self, dry_checks: list[dict], real_checks: list[dict]) -> list[str]:
         actions = []

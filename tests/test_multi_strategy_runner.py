@@ -72,6 +72,24 @@ _ACTIVE_DEMO_LONG = {
     },
 }
 
+_BINANCE_DEMO_ENABLED_CONFIG = {
+    "output_root": "outputs",
+    "live_trading_enabled": False,
+    "broker": {"provider": "binance_usdm"},
+    "demo_trading": {
+        "enabled": True,
+        "active_strategy_id": "gold_1m_macd",
+        "broker_profile": "binance_usdm",
+        "request_dir": "demo_order_requests",
+        "max_order_quantity": 2.0,
+        "require_flat_before_entry": True,
+    },
+}
+
+
+def _enable_binance_demo(monkeypatch) -> None:
+    monkeypatch.setattr("services.multi_strategy_runner.load_pipeline_config", lambda: _BINANCE_DEMO_ENABLED_CONFIG)
+
 
 def _demo_ticket(run_date: str, suffix: str = "recover") -> dict:
     compact = run_date.replace("-", "")
@@ -168,9 +186,10 @@ def test_live_strategy_routes_to_live_broker_adapter(tmp_path: Path):
     assert live_adapter is not None and live_adapter.name == "live"
 
 
-def test_only_configured_chan2_strategy_routes_to_binance_demo_adapter(tmp_path: Path):
+def test_only_configured_chan2_strategy_routes_to_binance_demo_adapter(monkeypatch, tmp_path: Path):
     from services.strategy_registry import Strategy
 
+    _enable_binance_demo(monkeypatch)
     runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
     scoped = tmp_path / "out" / "strategies" / "x"
 
@@ -306,6 +325,7 @@ def test_tiger_demo_reconciliation_uses_tiger_read_only_service(monkeypatch, tmp
 def test_demo_execution_profile_surfaces_armed_state_without_secrets(tmp_path: Path, monkeypatch):
     from services.strategy_registry import Strategy
 
+    _enable_binance_demo(monkeypatch)
     monkeypatch.setenv("BINANCE_API_KEY", "demo-key")
     monkeypatch.setenv("BINANCE_API_SECRET", "demo-secret")
     runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
@@ -414,6 +434,26 @@ def test_runner_ignores_disabled_strategy_entries(monkeypatch, tmp_path: Path):
     assert not (root / "strategies" / "disabled_swing").exists()
 
 
+def test_runner_noops_gracefully_when_all_strategies_are_disabled(monkeypatch, tmp_path: Path):
+    root = tmp_path / "outputs"
+    _offline_env(monkeypatch, root, tmp_path / "market_data.db")
+    disabled = {
+        "disabled_only": {
+            "symbol": "GOLD",
+            "enabled": False,
+            "classification": _classification("disabled"),
+            "signal": {"long_strength_min": 0, "long_confidence_min": 0, "short_strength_max": -1, "event_block_below": 0},
+        },
+    }
+
+    summary = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(disabled)).run("2026-05-10", paper_auto_approve=True)
+
+    assert summary["strategy_count"] == 0
+    assert summary["strategies"] == []
+    assert summary["classification_audit"]["status"] == "pass"
+    assert (root / "strategies" / "summary_current.json").exists()
+
+
 def test_runs_each_strategy_in_isolated_namespace(monkeypatch, tmp_path: Path):
     root = tmp_path / "outputs"
     _offline_env(monkeypatch, root, tmp_path / "market_data.db")
@@ -439,6 +479,7 @@ def test_runs_each_strategy_in_isolated_namespace(monkeypatch, tmp_path: Path):
 
 
 def test_active_demo_reconciliation_drift_blocks_auto_execution_before_broker(monkeypatch, tmp_path: Path):
+    _enable_binance_demo(monkeypatch)
     root = tmp_path / "outputs"
     _offline_env(monkeypatch, root, tmp_path / "market_data.db")
     run_date = "2026-05-10"
@@ -474,6 +515,7 @@ def test_active_demo_reconciliation_drift_blocks_auto_execution_before_broker(mo
 
 
 def test_runner_recovers_submitting_demo_intent_before_auto_approve(monkeypatch, tmp_path: Path):
+    _enable_binance_demo(monkeypatch)
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
@@ -603,6 +645,7 @@ def test_runner_recovers_submitting_demo_intent_before_auto_approve(monkeypatch,
 
 
 def test_runner_recovers_from_durable_ticket_snapshot_when_ticket_file_is_missing(monkeypatch, tmp_path: Path):
+    _enable_binance_demo(monkeypatch)
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
@@ -650,6 +693,7 @@ def test_runner_recovers_from_durable_ticket_snapshot_when_ticket_file_is_missin
 
 
 def test_runner_expires_accepted_demo_limit_after_ttl_and_cancels_broker_order(monkeypatch, tmp_path: Path):
+    _enable_binance_demo(monkeypatch)
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
@@ -722,6 +766,7 @@ def test_runner_expires_accepted_demo_limit_after_ttl_and_cancels_broker_order(m
 
 
 def test_runner_reprobes_blocked_submitting_intent_after_connectivity_recovers(monkeypatch, tmp_path: Path):
+    _enable_binance_demo(monkeypatch)
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
@@ -773,6 +818,7 @@ def test_runner_reprobes_blocked_submitting_intent_after_connectivity_recovers(m
 
 
 def test_runner_recovers_filled_intent_with_missing_protective_orders(monkeypatch, tmp_path: Path):
+    _enable_binance_demo(monkeypatch)
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
@@ -840,6 +886,7 @@ def test_runner_recovers_filled_intent_with_missing_protective_orders(monkeypatc
 
 
 def test_runner_ambiguous_demo_recovery_blocks_new_orders_until_watchdog_blocks(monkeypatch, tmp_path: Path):
+    _enable_binance_demo(monkeypatch)
     root = tmp_path / "outputs"
     run_date = "2026-06-30"
     runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))

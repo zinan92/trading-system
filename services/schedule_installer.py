@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -10,10 +11,13 @@ from typing import Callable
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.schedule_status import ScheduleStatus
+from services.schedule_profiles import PROJECT_LABEL_PREFIX
 
 
 SCHEDULE_INSTALL_ACKNOWLEDGEMENT = "I_UNDERSTAND_SCHEDULE_INSTALL_WILL_REPLACE_OR_RESTART_LOCAL_LAUNCHD_JOBS"
 SCHEDULE_ROLLBACK_ACKNOWLEDGEMENT = "I_UNDERSTAND_SCHEDULE_ROLLBACK_WILL_RESTORE_LOCAL_LAUNCHD_JOBS_FROM_BACKUP"
+DASHBOARD_LABEL = "com.wendy.trading-orchestrator.dashboard"
+DASHBOARD_HEALTH_URL = "http://127.0.0.1:8765/dashboard-v4.html"
 
 
 class ScheduleInstaller:
@@ -22,11 +26,24 @@ class ScheduleInstaller:
         output_root: Path | None = None,
         launch_agents_dir: Path | None = None,
         command_runner: Callable[[list[str]], subprocess.CompletedProcess] | None = None,
+        *,
+        sleep: Callable[[float], None] | None = None,
+        teardown_poll_seconds: float = 0.5,
+        teardown_timeout_seconds: float = 10.0,
+        bootstrap_retry_delay_seconds: float = 2.0,
+        dashboard_poll_seconds: float = 0.5,
+        dashboard_timeout_seconds: float = 15.0,
     ) -> None:
         config = load_pipeline_config()
         self.output_root = output_root or ROOT / config.get("output_root", "outputs")
         self.launch_agents_dir = launch_agents_dir or Path.home() / "Library" / "LaunchAgents"
         self.command_runner = command_runner or self._run_command
+        self.sleep = sleep or time.sleep
+        self.teardown_poll_seconds = teardown_poll_seconds
+        self.teardown_timeout_seconds = teardown_timeout_seconds
+        self.bootstrap_retry_delay_seconds = bootstrap_retry_delay_seconds
+        self.dashboard_poll_seconds = dashboard_poll_seconds
+        self.dashboard_timeout_seconds = dashboard_timeout_seconds
 
     def plan(self, run_date: str, restart_loaded: bool = True, *, persist: bool = True) -> dict:
         schedule_rows = load_json(self.output_root / "schedules" / "current.json")
@@ -34,22 +51,27 @@ class ScheduleInstaller:
         status = ScheduleStatus(self.output_root, self.launch_agents_dir, self.command_runner).run(run_date)
         inspected = {str(job.get("label") or ""): job for job in status.get("jobs", [])}
         jobs = [self._plan_job(job, inspected.get(str(job.get("label") or ""), {}), restart_loaded) for job in schedule.get("jobs", [])]
+        generated_labels = {str(job.get("label") or "") for job in schedule.get("jobs", [])}
+        orphans = self._plan_orphans(generated_labels)
         blocked = [job for job in jobs if job["action"] == "blocked_missing_generated_plist"]
         stale = [job for job in jobs if job.get("requires_reinstall")]
+        changes_required = bool(stale or orphans)
         payload = {
             "run_date": run_date,
             "planned_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-            "status": "blocked" if blocked else ("ready" if stale else "noop"),
+            "status": "blocked" if blocked else ("ready" if changes_required else "noop"),
             "mode": "dry_run",
             "restart_loaded": restart_loaded,
             "launch_agents_dir": str(self.launch_agents_dir),
             "summary": {
                 "job_count": len(jobs),
                 "requires_reinstall_count": len(stale),
+                "orphan_count": len(orphans),
                 "blocked_count": len(blocked),
                 "already_current_active_count": sum(1 for job in jobs if job["action"] == "already_current_active"),
             },
             "jobs": jobs,
+            "orphans": orphans,
             "schedule_status": status,
             "safety": {
                 "dry_run": True,
@@ -100,6 +122,7 @@ class ScheduleInstaller:
                 "required_acknowledgement": SCHEDULE_INSTALL_ACKNOWLEDGEMENT,
                 "package_gate": package_gate,
                 "jobs": [],
+                "orphans": [],
                 "plan": plan,
                 "schedule_status": plan.get("schedule_status", {}),
                 "safety": self._install_safety(writes=False),
@@ -114,11 +137,23 @@ class ScheduleInstaller:
         backup_dir = self.output_root / "schedules" / "launch_agent_backups" / install_id
         self.launch_agents_dir.mkdir(parents=True, exist_ok=True)
         results = []
-        for job in schedule.get("jobs", []):
-            results.append(self._install_job(job, restart_loaded, backup_dir))
+        for job in self._install_order(schedule.get("jobs", [])):
+            result = self._install_job(job, restart_loaded, backup_dir)
+            results.append(result)
+            if result["status"] == "fail":
+                break
+        orphan_results = []
+        if not any(item["status"] == "fail" for item in results):
+            for orphan in plan.get("orphans", []):
+                result = self._remove_orphan_job(orphan, backup_dir)
+                orphan_results.append(result)
+                if result["status"] == "fail":
+                    break
+        all_results = [*results, *orphan_results]
+        failed = [item for item in all_results if item["status"] == "fail"]
+        rollback = self._rollback_failed_install(run_date, all_results, restart_loaded) if failed else {}
         status = ScheduleStatus(self.output_root, self.launch_agents_dir, self.command_runner).run(run_date)
-        failed = [item for item in results if item["status"] == "fail"]
-        backups = [item["backup"] for item in results if item.get("backup")]
+        backups = [item["backup"] for item in all_results if item.get("backup")]
         payload = {
             "run_date": run_date,
             "installed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -132,6 +167,8 @@ class ScheduleInstaller:
             "backup_dir": str(backup_dir) if backups else "",
             "backup_count": len(backups),
             "jobs": results,
+            "orphans": orphan_results,
+            "rollback": rollback,
             "plan": plan,
             "schedule_status": status,
             "safety": self._install_safety(writes=True),
@@ -151,7 +188,8 @@ class ScheduleInstaller:
         receipt_source = receipt_path or self.output_root / "schedules" / "install_current.json"
         receipt = self._load_receipt(receipt_source)
         status = ScheduleStatus(self.output_root, self.launch_agents_dir, self.command_runner).run(run_date)
-        jobs = [self._rollback_plan_job(job, restart_loaded) for job in receipt.get("jobs", [])]
+        receipt_jobs = [*receipt.get("jobs", []), *receipt.get("orphans", [])]
+        jobs = [self._rollback_plan_job(job, restart_loaded) for job in receipt_jobs]
         blocked = [job for job in jobs if job.get("blocked")]
         restorable = [job for job in jobs if job.get("restorable")]
         if not receipt:
@@ -258,6 +296,7 @@ class ScheduleInstaller:
             "required_acknowledgement": SCHEDULE_INSTALL_ACKNOWLEDGEMENT,
             "package_gate": package_gate or {},
             "jobs": [],
+            "orphans": [],
             "plan": plan,
             "schedule_status": plan.get("schedule_status", {}),
             "safety": self._install_safety(writes=False),
@@ -409,6 +448,32 @@ class ScheduleInstaller:
             "note": self._plan_note(action),
         }
 
+    def _plan_orphans(self, generated_labels: set[str]) -> list[dict]:
+        orphans: list[dict] = []
+        for target in self._orphan_plists(generated_labels):
+            label = target.stem
+            orphans.append({
+                "label": label,
+                "target": str(target),
+                "action": "remove_orphan_and_bootout",
+                "requires_reinstall": True,
+                "planned_commands": [
+                    ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"],
+                    ["rm", str(target)],
+                ],
+                "note": "Installed project LaunchAgent is outside the generated schedule profile and will be backed up, booted out, and removed.",
+            })
+        return orphans
+
+    def _orphan_plists(self, generated_labels: set[str]) -> list[Path]:
+        if not self.launch_agents_dir.exists():
+            return []
+        return [
+            path
+            for path in sorted(self.launch_agents_dir.glob(f"{PROJECT_LABEL_PREFIX}*.plist"))
+            if path.stem not in generated_labels
+        ]
+
     def _install_job(self, job: dict, restart_loaded: bool, backup_dir: Path) -> dict:
         label = str(job.get("label", ""))
         source = Path(str(job.get("plist", "")))
@@ -430,8 +495,22 @@ class ScheduleInstaller:
             shutil.copy2(target, backup_target)
             backup = str(backup_target)
             commands.append({"command": ["backup", str(target), backup], "returncode": 0, "stdout": "", "stderr": ""})
+        created = not target.exists()
         if restart_loaded:
             commands.append(self._command(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], allow_failure=True))
+            wait = self._wait_until_unloaded(label)
+            commands.extend(wait["commands"])
+            if wait["status"] == "fail":
+                return {
+                    "label": label,
+                    "source": str(source),
+                    "target": str(target),
+                    "status": "fail",
+                    "error": wait["error"],
+                    "backup": backup,
+                    "created": created,
+                    "commands": commands,
+                }
         shutil.copy2(source, target)
         commands.append({"command": ["copy", str(source), str(target)], "returncode": 0, "stdout": "", "stderr": ""})
         if not restart_loaded:
@@ -445,10 +524,12 @@ class ScheduleInstaller:
                     "status": "installed",
                     "already_loaded": True,
                     "backup": backup,
+                    "created": created,
                     "commands": commands,
                 }
-        bootstrap = self._command(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(target)], allow_failure=True)
-        commands.append(bootstrap)
+        bootstrap_result = self._bootstrap_with_retries(target)
+        commands.extend(bootstrap_result["commands"])
+        bootstrap = bootstrap_result["last_command"]
         if bootstrap["returncode"] != 0 and "already bootstrapped" not in bootstrap["stderr"].lower():
             return {
                 "label": label,
@@ -457,16 +538,84 @@ class ScheduleInstaller:
                 "status": "fail",
                 "error": bootstrap["stderr"] or bootstrap["stdout"] or "launchctl bootstrap failed",
                 "backup": backup,
+                "created": created,
+                "bootstrap_attempts": bootstrap_result["attempts"],
+                "bootstrap_retry_count": bootstrap_result["retry_count"],
                 "commands": commands,
             }
         if restart_loaded:
             commands.append(self._command(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"], allow_failure=True))
+        if label == DASHBOARD_LABEL:
+            dashboard = self._wait_for_dashboard()
+            commands.extend(dashboard["commands"])
+            if dashboard["status"] == "fail":
+                return {
+                    "label": label,
+                    "source": str(source),
+                    "target": str(target),
+                    "status": "fail",
+                    "error": dashboard["error"],
+                    "backup": backup,
+                    "created": created,
+                    "bootstrap_attempts": bootstrap_result["attempts"],
+                    "bootstrap_retry_count": bootstrap_result["retry_count"],
+                    "commands": commands,
+                }
         return {
             "label": label,
             "source": str(source),
             "target": str(target),
             "status": "installed",
             "backup": backup,
+            "created": created,
+            "bootstrap_attempts": bootstrap_result["attempts"],
+            "bootstrap_retry_count": bootstrap_result["retry_count"],
+            "commands": commands,
+        }
+
+    def _remove_orphan_job(self, orphan: dict, backup_dir: Path) -> dict:
+        label = str(orphan.get("label", ""))
+        target = Path(str(orphan.get("target", "")))
+        commands: list[dict] = []
+        if not label.startswith(PROJECT_LABEL_PREFIX) or not target.name.startswith(PROJECT_LABEL_PREFIX):
+            return {
+                "label": label,
+                "target": str(target),
+                "status": "fail",
+                "error": "refusing to remove non-project launchd plist",
+                "commands": commands,
+            }
+        if not target.exists():
+            return {
+                "label": label,
+                "target": str(target),
+                "status": "removed",
+                "backup": "",
+                "commands": commands,
+            }
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_target = backup_dir / target.name
+        shutil.copy2(target, backup_target)
+        commands.append({"command": ["backup", str(target), str(backup_target)], "returncode": 0, "stdout": "", "stderr": ""})
+        commands.append(self._command(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], allow_failure=True))
+        wait = self._wait_until_unloaded(label)
+        commands.extend(wait["commands"])
+        if wait["status"] == "fail":
+            return {
+                "label": label,
+                "target": str(target),
+                "status": "fail",
+                "error": wait["error"],
+                "backup": str(backup_target),
+                "commands": commands,
+            }
+        target.unlink()
+        commands.append({"command": ["rm", str(target)], "returncode": 0, "stdout": "", "stderr": ""})
+        return {
+            "label": label,
+            "target": str(target),
+            "status": "removed",
+            "backup": str(backup_target),
             "commands": commands,
         }
 
@@ -524,13 +673,15 @@ class ScheduleInstaller:
         target = Path(str(job.get("target") or self.launch_agents_dir / f"{label}.plist"))
         if not label:
             action = "blocked_missing_label"
+        elif job.get("created") is True and not str(job.get("backup", "")):
+            action = "remove_created_job_and_restart" if restart_loaded else "remove_created_job_without_restart"
         elif not str(job.get("backup", "")):
             action = "blocked_missing_backup_record"
         elif not backup.exists():
             action = "blocked_missing_backup_file"
         else:
             action = "restore_backup_and_restart" if restart_loaded else "restore_backup_without_restart"
-        restorable = action.startswith("restore_backup")
+        restorable = action.startswith("restore_backup") or action.startswith("remove_created_job")
         return {
             "label": label,
             "backup": str(backup) if str(job.get("backup", "")) else "",
@@ -539,16 +690,21 @@ class ScheduleInstaller:
             "restorable": restorable,
             "blocked": not restorable,
             "restart_loaded": restart_loaded,
-            "planned_commands": self._rollback_planned_commands(label, backup, target, restart_loaded, restorable),
+            "planned_commands": self._rollback_planned_commands(label, backup, target, restart_loaded, restorable, action),
             "note": self._rollback_plan_note(action),
         }
 
-    def _rollback_planned_commands(self, label: str, backup: Path, target: Path, restart_loaded: bool, restorable: bool) -> list[list[str]]:
+    def _rollback_planned_commands(self, label: str, backup: Path, target: Path, restart_loaded: bool, restorable: bool, action: str) -> list[list[str]]:
         if not label or not restorable:
             return []
         commands: list[list[str]] = []
         if restart_loaded:
             commands.append(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
+        if action.startswith("remove_created_job"):
+            commands.append(["rm", str(target)])
+            if not restart_loaded:
+                commands.append(["launchctl", "print", f"gui/{os.getuid()}/{label}"])
+            return commands
         commands.append(["copy", str(backup), str(target)])
         if not restart_loaded:
             commands.append(["launchctl", "print", f"gui/{os.getuid()}/{label}"])
@@ -561,6 +717,8 @@ class ScheduleInstaller:
         notes = {
             "restore_backup_and_restart": "Rollback would bootout the loaded job, restore the backup plist, bootstrap it, and kickstart it.",
             "restore_backup_without_restart": "Rollback would restore the backup plist on disk, but a loaded launchd job may keep running its current definition until restarted.",
+            "remove_created_job_and_restart": "Rollback would bootout and remove a LaunchAgent plist that was newly created by install.",
+            "remove_created_job_without_restart": "Rollback would remove a newly created LaunchAgent plist without restarting loaded services.",
             "blocked_missing_label": "Install receipt job is missing a label; rollback cannot identify the launchd service.",
             "blocked_missing_backup_record": "Install receipt has no backup path for this job; rollback cannot restore it.",
             "blocked_missing_backup_file": "Backup plist path from the install receipt no longer exists.",
@@ -571,7 +729,41 @@ class ScheduleInstaller:
         label = str(job.get("label", ""))
         backup = Path(str(job.get("backup", "")))
         target = Path(str(job.get("target", "")))
+        action = str(job.get("action", ""))
         commands: list[dict] = []
+        if action.startswith("remove_created_job"):
+            if not label or not target:
+                return {
+                    "label": label,
+                    "backup": str(backup),
+                    "target": str(target),
+                    "status": "fail",
+                    "error": "rollback target is missing",
+                    "commands": commands,
+                }
+            if restart_loaded:
+                commands.append(self._command(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], allow_failure=True))
+                wait = self._wait_until_unloaded(label)
+                commands.extend(wait["commands"])
+                if wait["status"] == "fail":
+                    return {
+                        "label": label,
+                        "backup": "",
+                        "target": str(target),
+                        "status": "fail",
+                        "error": wait["error"],
+                        "commands": commands,
+                    }
+            if target.exists():
+                target.unlink()
+                commands.append({"command": ["rm", str(target)], "returncode": 0, "stdout": "", "stderr": ""})
+            return {
+                "label": label,
+                "backup": "",
+                "target": str(target),
+                "status": "removed",
+                "commands": commands,
+            }
         if not label or not backup.exists() or not target:
             return {
                 "label": label,
@@ -590,6 +782,18 @@ class ScheduleInstaller:
             commands.append({"command": ["backup", str(target), pre_backup], "returncode": 0, "stdout": "", "stderr": ""})
         if restart_loaded:
             commands.append(self._command(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], allow_failure=True))
+            wait = self._wait_until_unloaded(label)
+            commands.extend(wait["commands"])
+            if wait["status"] == "fail":
+                return {
+                    "label": label,
+                    "backup": str(backup),
+                    "target": str(target),
+                    "status": "fail",
+                    "error": wait["error"],
+                    "pre_rollback_backup": pre_backup,
+                    "commands": commands,
+                }
         shutil.copy2(backup, target)
         commands.append({"command": ["copy", str(backup), str(target)], "returncode": 0, "stdout": "", "stderr": ""})
         if not restart_loaded:
@@ -604,8 +808,9 @@ class ScheduleInstaller:
                 "pre_rollback_backup": pre_backup,
                 "commands": commands,
             }
-        bootstrap = self._command(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(target)], allow_failure=True)
-        commands.append(bootstrap)
+        bootstrap_result = self._bootstrap_with_retries(target)
+        commands.extend(bootstrap_result["commands"])
+        bootstrap = bootstrap_result["last_command"]
         if bootstrap["returncode"] != 0 and "already bootstrapped" not in bootstrap["stderr"].lower():
             return {
                 "label": label,
@@ -614,6 +819,8 @@ class ScheduleInstaller:
                 "status": "fail",
                 "error": bootstrap["stderr"] or bootstrap["stdout"] or "launchctl bootstrap failed",
                 "pre_rollback_backup": pre_backup,
+                "bootstrap_attempts": bootstrap_result["attempts"],
+                "bootstrap_retry_count": bootstrap_result["retry_count"],
                 "commands": commands,
             }
         commands.append(self._command(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"], allow_failure=True))
@@ -623,7 +830,85 @@ class ScheduleInstaller:
             "target": str(target),
             "status": "restored",
             "pre_rollback_backup": pre_backup,
+            "bootstrap_attempts": bootstrap_result["attempts"],
+            "bootstrap_retry_count": bootstrap_result["retry_count"],
             "commands": commands,
+        }
+
+    def _install_order(self, jobs: list[dict]) -> list[dict]:
+        return sorted(jobs, key=lambda job: str(job.get("label") or "") == DASHBOARD_LABEL)
+
+    def _wait_until_unloaded(self, label: str) -> dict:
+        commands: list[dict] = []
+        service = f"gui/{os.getuid()}/{label}"
+        deadline = time.monotonic() + self.teardown_timeout_seconds
+        while True:
+            printed = self._command(["launchctl", "print", service], allow_failure=True)
+            commands.append(printed)
+            if printed["returncode"] != 0:
+                return {"status": "pass", "commands": commands}
+            if time.monotonic() >= deadline:
+                return {
+                    "status": "fail",
+                    "error": "launchctl service did not disappear after bootout",
+                    "commands": commands,
+                }
+            self.sleep(self.teardown_poll_seconds)
+
+    def _bootstrap_with_retries(self, target: Path) -> dict:
+        commands: list[dict] = []
+        attempts = 0
+        while attempts < 3:
+            attempts += 1
+            result = self._command(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(target)], allow_failure=True)
+            commands.append(result)
+            if result["returncode"] != 5:
+                break
+            if attempts < 3:
+                self.sleep(self.bootstrap_retry_delay_seconds)
+        return {
+            "commands": commands,
+            "last_command": commands[-1],
+            "attempts": attempts,
+            "retry_count": max(0, attempts - 1),
+        }
+
+    def _wait_for_dashboard(self) -> dict:
+        commands: list[dict] = []
+        deadline = time.monotonic() + self.dashboard_timeout_seconds
+        while True:
+            result = self._command(["curl", "-fsS", "--max-time", "2", DASHBOARD_HEALTH_URL], allow_failure=True)
+            commands.append(result)
+            if result["returncode"] == 0:
+                return {"status": "pass", "commands": commands}
+            if time.monotonic() >= deadline:
+                return {"status": "fail", "error": "dashboard health check failed after bootstrap", "commands": commands}
+            self.sleep(self.dashboard_poll_seconds)
+
+    def _rollback_failed_install(self, run_date: str, results: list[dict], restart_loaded: bool) -> dict:
+        restorable = [
+            {
+                "label": str(item.get("label") or ""),
+                "backup": str(item.get("backup") or ""),
+                "target": str(item.get("target") or ""),
+                "created": bool(item.get("created")),
+                "action": ("remove_created_job_and_restart" if restart_loaded else "remove_created_job_without_restart") if item.get("created") and not item.get("backup") else "",
+            }
+            for item in results
+            if item.get("backup") or item.get("created")
+        ]
+        if not restorable:
+            return {"status": "skipped", "reason": "no_backups_to_restore", "jobs": []}
+        rollback_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        pre_rollback_backup_dir = self.output_root / "schedules" / "rollback_target_backups" / f"failed_install_{rollback_id}"
+        rollback_jobs = [self._rollback_job(job, restart_loaded, pre_rollback_backup_dir) for job in restorable]
+        failed = [item for item in rollback_jobs if item["status"] == "fail"]
+        return {
+            "run_date": run_date,
+            "status": "fail" if failed else "rolled_back",
+            "reason": "install_failed",
+            "pre_rollback_backup_dir": str(pre_rollback_backup_dir),
+            "jobs": rollback_jobs,
         }
 
     def _command(self, command: list[str], allow_failure: bool = False) -> dict:
