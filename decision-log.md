@@ -1892,3 +1892,24 @@ Date: 2026-07-08
 - The shell shows `UNKNOWN` on fetch failure and never hides the status lamp. A missing or malformed artifact must not become green UI.
 
 - Browser favicon requests can create console 404 errors even when page JS is healthy. Current active pages explicitly set `rel="icon" href="data:,"` so console-error checks stay meaningful.
+
+## Binance Protective/Emergency-Close Error Visibility
+
+Date: 2026-07-08
+
+### Decisions
+
+- Capture the actual Binance error body (`{"code", "msg"}`) on protective-order posting, protective-order recovery, protective-coverage checks, and the protective-failure emergency close, instead of the bare `str(exc)` from `urllib.error.HTTPError`.
+  - Rationale: `urllib` raises `HTTPError` before its response body is read; every one of these four sites collapsed every rejection reason into the generic "HTTP Error 400: Bad Request", which is exactly why root-causing a live recurring naked-position incident (two occurrences, 2026-07-05 and 2026-07-07/08, both with identical `protective_status=failed` + `emergency_close=failed` signatures) took manual archaeology through raw order-request artifacts instead of a one-line log read.
+  - Evidence: new `_binance_exception_error()` helper (`services/broker_adapter.py`) reuses the existing, already-correct `_http_error_payload`/`_binance_error_message` pair (previously only applied to the entry-submit path via `_classify_binance_entry_submit_error`) and applies it at the three gap sites that build `protective_errors`/`emergency_close` dicts, plus a fourth read-only site (`_existing_resting_protective_coverage`) where the original string-shaped `error` field is preserved but its content is now enriched.
+  - Tests: `tests/test_binance_demo_broker_adapter.py::test_binance_demo_adapter_protective_and_emergency_close_http_errors_capture_binance_body` (asserts the real Binance `code`/`msg` survives into `protective_errors` and `emergency_close`, TDD red confirmed against the un-fixed code first) and `::test_binance_demo_adapter_protective_non_http_error_keeps_generic_message` (regression guard: non-HTTP exceptions, e.g. `TimeoutError`, still produce `str(exc)` with no `http_status`/`binance_error` keys — this fix is additive-only for `HTTPError`, not a behavior change for other exception types).
+
+- Root cause of the underlying rejection is still **not confirmed**. The failure signature (every `reduceOnly=true` order — stop-loss, take-profit, and the plain-MARKET emergency close — rejected with HTTP 400; the non-`reduceOnly` LIMIT entry always succeeds) is consistent with a Binance Hedge Mode / `positionSide` mismatch, but a direct read-only check (`GET /fapi/v1/positionSide/dual`) returned `401 {"code":-2015,"msg":"Invalid API-key, IP, or permissions for action"}` for this demo API key, so the hypothesis could not be verified in this session.
+  - Rationale for not guessing a fix: acting on an unconfirmed diagnosis on the live-money-adjacent order path violates this repo's own verification discipline; this fix intentionally does nothing except make the next occurrence self-diagnosing.
+  - Next step (not done here): the next time `protective_errors`/`emergency_close` fires, the captured `binance_error.code`/`msg` will state the real reason directly, closing this loop with evidence instead of speculation.
+
+### Gotchas
+
+- `_binance_exception_error()` is intentionally the *only* new abstraction — the entry-submit path (`_classify_binance_entry_submit_error`) already had correct error-body capture before this change and was left untouched to keep the diff minimal on a file with a history of mainnet-blocking bugs.
+- Downstream consumers (`dashboard_state.py`, `health_check.py`, `trade_ticket_notifier.py`, `paper_executor.py`) all read these dicts via `.get(...)` with no exact-shape assertions, so adding `http_status`/`binance_error` keys is safe; `trade_ticket_notifier._protective_error_summary()` in particular will now surface the real Binance rejection reason in operator-facing alert text instead of a useless generic HTTP status line.
+- Two live naked-position incidents on `gold_1m_macd` (Binance USDM demo/testnet) during this investigation window were manually flattened via `pipelines.binance_demo_close_position --confirm-close-demo-position` after dry-run verification; both confirmed `system_state=READY`/`exchange_positions=[]` afterward. Neither incident involved real money.

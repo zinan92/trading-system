@@ -203,6 +203,91 @@ def test_binance_demo_adapter_partial_fill_protects_actual_fill_quantity(tmp_pat
     assert [item["to"] for item in lifecycle["transitions"]] == ["entry", "submitting", "accepted", "partially_filled", "protective_attached"]
 
 
+def test_binance_demo_adapter_protective_and_emergency_close_http_errors_capture_binance_body(tmp_path: Path, monkeypatch):
+    posted = []
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse(_flat_position())
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            body = urllib.parse.parse_qs(request.data.decode("utf-8"))
+            posted.append(body)
+            if len(posted) == 1:
+                return _FakeResponse(_posted_order_response(body, 2000 + len(posted), "FILLED"))
+            raise urllib.error.HTTPError(
+                request.full_url,
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(b"{\"code\":-4061,\"msg\":\"Order's position side does not match user's setting.\"}"),
+            )
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    order = adapter.submit_order(BrokerOrderRequest("2026-07-08", _ticket(), latest_price=4525.5, actual_size=0.002))
+
+    assert order.status == "protective_order_missing"
+    assert len(posted) == 4  # entry + stop-loss + take-profit + emergency close attempt
+
+    requests = load_json(tmp_path / "outputs" / "demo_order_requests" / "2026-07-08.json")
+    response = requests[0]["broker_response"]
+
+    assert response["protective_status"] == "failed"
+    assert len(response["protective_errors"]) == 2
+    for error in response["protective_errors"]:
+        assert error["error_type"] == "HTTPError"
+        assert error["message"] == "Order's position side does not match user's setting."
+        assert error["http_status"] == 400
+        assert error["binance_error"] == {"code": -4061, "msg": "Order's position side does not match user's setting."}
+        assert "payload" in error  # the offending order payload must stay attached for diagnosis
+
+    emergency = response["emergency_close"]
+    assert emergency["status"] == "failed"
+    assert emergency["error_type"] == "HTTPError"
+    assert emergency["message"] == "Order's position side does not match user's setting."
+    assert emergency["http_status"] == 400
+    assert emergency["binance_error"] == {"code": -4061, "msg": "Order's position side does not match user's setting."}
+
+
+def test_binance_demo_adapter_protective_non_http_error_keeps_generic_message(tmp_path: Path, monkeypatch):
+    posted = []
+
+    def opener(request, timeout):
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(_exchange_info())
+        if "/fapi/v2/positionRisk" in request.full_url:
+            return _FakeResponse(_flat_position())
+        if "/fapi/v2/balance" in request.full_url:
+            return _FakeResponse(_balance())
+        if "/fapi/v1/openOrders" in request.full_url:
+            return _FakeResponse([])
+        if request.full_url.endswith("/fapi/v1/order"):
+            body = urllib.parse.parse_qs(request.data.decode("utf-8"))
+            posted.append(body)
+            if len(posted) == 1:
+                return _FakeResponse(_posted_order_response(body, 3000 + len(posted), "FILLED"))
+            raise TimeoutError("demo endpoint timed out")
+        raise AssertionError(request.full_url)
+
+    adapter = _adapter(tmp_path, monkeypatch, opener)
+    order = adapter.submit_order(BrokerOrderRequest("2026-07-08", _ticket(), latest_price=4525.5, actual_size=0.002))
+
+    assert order.status == "protective_order_missing"
+    requests = load_json(tmp_path / "outputs" / "demo_order_requests" / "2026-07-08.json")
+    response = requests[0]["broker_response"]
+    for error in response["protective_errors"]:
+        assert error["error_type"] == "TimeoutError"
+        assert error["message"] == "demo endpoint timed out"
+        assert "http_status" not in error
+        assert "binance_error" not in error
+
+
 def test_binance_demo_adapter_rejected_entry_creates_no_phantom_position(tmp_path: Path, monkeypatch):
     def opener(request, timeout):
         if "/fapi/v1/exchangeInfo" in request.full_url:

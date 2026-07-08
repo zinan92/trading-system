@@ -741,8 +741,7 @@ class LiveBrokerAdapter:
                     responses["protective_errors"].append(
                         {
                             "payload": self._safe_order_payload(protective),
-                            "error_type": type(exc).__name__,
-                            "message": str(exc),
+                            **self._binance_exception_error(exc),
                         }
                     )
             responses["protective_status"] = self._protective_status(payloads, responses)
@@ -983,6 +982,24 @@ class LiveBrokerAdapter:
             return "unknown recovery error"
         return str(payload.get("msg") or payload.get("message") or payload.get("raw") or payload)
 
+    def _binance_exception_error(self, exc: Exception) -> dict:
+        """Classify a failed Binance request for diagnostics.
+
+        ``urllib`` raises ``HTTPError`` before its response body is read, so a
+        bare ``str(exc)`` collapses every rejection reason into the same
+        generic "HTTP Error 400: Bad Request" and the real Binance
+        ``{"code", "msg"}`` body is lost. Read it here instead.
+        """
+        if isinstance(exc, urllib.error.HTTPError):
+            payload = self._http_error_payload(exc)
+            return {
+                "error_type": type(exc).__name__,
+                "message": self._binance_error_message(payload) if payload else str(exc),
+                "http_status": exc.code,
+                "binance_error": payload,
+            }
+        return {"error_type": type(exc).__name__, "message": str(exc)}
+
     def _is_binance_order_payload(self, payload: dict) -> bool:
         if self._is_binance_not_found(payload):
             return False
@@ -1141,8 +1158,7 @@ class LiveBrokerAdapter:
                 responses["protective_errors"].append(
                     {
                         "payload": self._safe_order_payload(protective),
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
+                        **self._binance_exception_error(exc),
                     }
                 )
         protective_status = self._protective_status({"protective_orders": protective_payloads}, responses)
@@ -1408,7 +1424,8 @@ class LiveBrokerAdapter:
         try:
             open_orders = self._binance_open_orders_for_symbol(symbol)
         except (OSError, TimeoutError, RuntimeError, urllib.error.HTTPError, json.JSONDecodeError, ValueError, KeyError) as exc:
-            return {"covered": False, "matching_protective_orders": [], "error": f"{type(exc).__name__}: {exc}"}
+            detail = self._binance_exception_error(exc)
+            return {"covered": False, "matching_protective_orders": [], "error": f"{detail['error_type']}: {detail['message']}"}
         exit_side = "SELL" if position_amt > 0 else "BUY"
         matching = [
             order
@@ -1635,7 +1652,7 @@ class LiveBrokerAdapter:
                 }
             )
         except (OSError, TimeoutError, RuntimeError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as exc:
-            result.update({"status": "failed", "error_type": type(exc).__name__, "message": str(exc)})
+            result.update({"status": "failed", **self._binance_exception_error(exc)})
         return result
 
     def _binance_signed_request(self, method: str, endpoint: str, params: dict) -> dict:
