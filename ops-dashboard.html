@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>黄金交易后台监控</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/shell.css">
 <style>
 :root {
   --bg: #f6efe4;
@@ -355,7 +356,7 @@ if (window.location.protocol === 'file:') {
 <div class="topbar">
   <h1 id="ops-title">OPS Console / 黄金交易后台监控</h1>
   <div class="controls">
-    <a id="trader-link" href="dashboard-v3.html" style="color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 7px 9px; background: var(--panel);">Trader Console / 交易看板</a>
+    <a id="trader-link" href="dashboard-v4.html" style="color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 7px 9px; background: var(--panel);">Trader Console / 交易看板</a>
     <div id="ops-lang-toggle" class="lang-toggle" aria-label="Language / 语言">
       <button type="button" data-ops-lang="zh">中文</button>
       <button type="button" data-ops-lang="en">EN</button>
@@ -632,16 +633,23 @@ if (window.location.protocol === 'file:') {
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const API_BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:8765' : '';
 const readJson = async (path, fallback) => {
-  const res = await fetch(path, { cache: 'no-store' });
-  if (!res.ok) return fallback;
-  return await res.json();
+  try {
+    const res = await fetch(path, { cache: 'no-store' });
+    if (!res.ok) return fallback;
+    return await res.json();
+  } catch {
+    return fallback;
+  }
 };
 const readText = async (path, fallback='') => {
-  const res = await fetch(path, { cache: 'no-store' });
-  if (!res.ok) return fallback;
-  return await res.text();
+  try {
+    const res = await fetch(path, { cache: 'no-store' });
+    if (!res.ok) return fallback;
+    return await res.text();
+  } catch {
+    return fallback;
+  }
 };
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, char => ({
   '&': '&amp;',
@@ -1140,29 +1148,11 @@ function renderOpsStaticLabels() {
 }
 const row = (left, mid, right, cls='') => `<div class="row"><span>${escapeHtml(opsRowLabelText(left))}</span><b>${escapeHtml(opsRowValueText(mid))}</b><span class="pill ${cls}">${escapeHtml(opsRowValueText(right))}</span></div>`;
 const pathFor = (date, name) => `outputs/${name}/${date}.json`;
-const loadApiSnapshot = async (date, mode='ops') => {
-  try {
-    const query = new URLSearchParams();
-    query.set('date', date);
-    if (mode) query.set('view', mode);
-    const res = await fetch(`${API_BASE}/api/dashboard?${query.toString()}`, { cache: 'no-store' });
-    if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-};
-const loadPublicAccessHealth = async () => {
-  const res = await fetch(`${API_BASE}/api/public-access-health`, { cache: 'no-store' });
-  if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) {
-    throw new Error(`HTTP ${res.status}`);
-  }
-  return await res.json();
-};
+const loadApiSnapshot = async () => null;
 let opsDataProvenance = {};
 let opsDataSourceLineage = {};
 let opsActionContext = {};
-let latestPublicAccessHealth = { status: 'checking' };
+let latestPublicAccessHealth = { status: 'retired', diagnosis: 'source_retired', operator_action: 'Use the global shell system state.' };
 window.goldbotOps = {};
 
 async function loadDashboard(full=false) {
@@ -1447,18 +1437,14 @@ async function loadDashboard(full=false) {
 }
 
 async function refreshPublicAccess() {
-  latestPublicAccessHealth = { status: 'checking' };
-  renderPublicAccess(latestPublicAccessHealth);
+  latestPublicAccessHealth = {
+    status: 'retired',
+    diagnosis: 'source_retired',
+    operator_action: 'Use the global shell system state.',
+    checked_at: new Date().toISOString(),
+  };
   renderOpsActionBoard(opsActionContext);
-  try {
-    latestPublicAccessHealth = await loadPublicAccessHealth();
-    renderPublicAccess(latestPublicAccessHealth);
-    renderOpsActionBoard(opsActionContext);
-  } catch (err) {
-    latestPublicAccessHealth = { status: 'fail', diagnosis: 'health_endpoint_failed', operator_action: err.message };
-    renderPublicAccess(latestPublicAccessHealth);
-    renderOpsActionBoard(opsActionContext);
-  }
+  renderPublicAccess(latestPublicAccessHealth);
 }
 
 function renderOpsActionBoard(ctx = {}) {
@@ -1536,7 +1522,7 @@ function renderOpsShiftBrief(cards = [], ctx = {}, red = 0, amber = 0) {
       <small>${escapeHtml(opsText('Trader surface', '交易者界面'))}</small>
       <strong>${escapeHtml(opsText('Keep surfaces separate', '保持界面分离'))}</strong>
       <p>${escapeHtml(traderBody)}</p>
-      <a href="dashboard-v3.html">${escapeHtml(opsText('Open Trader Console', '打开交易看板'))}</a>
+      <a href="dashboard-v4.html">${escapeHtml(opsText('Open Trader Console', '打开交易看板'))}</a>
     </article>`;
 }
 
@@ -1668,12 +1654,12 @@ document.addEventListener('click', event => {
 });
 
 function publicAccessOpsAction(health = {}) {
-  if (!health || health.status === 'checking') {
+  if (!health || health.status === 'checking' || health.status === 'retired') {
     return {
       label: opsText('Public access', '公网入口'),
-      title: opsText('Checking tunnel', '正在检查隧道'),
-      detail: opsText('Waiting for local gateway and public domain probe.', '正在等待本地网关和公网域名探测。'),
-      command: 'GET /api/public-access-health',
+      title: opsText('Source retired', '数据源已下线'),
+      detail: opsText('Global system state now owns the cross-page status light.', '跨页面状态灯已交给全局 shell。'),
+      command: opsText('Use /api/system-state from the global shell.', '使用全局 shell 的 /api/system-state。'),
       cls: 'watch',
       target: 'public-access',
       button: opsText('Open public access', '打开公网检查'),
@@ -2350,6 +2336,14 @@ function renderDoctor(doctor) {
 function renderPublicAccess(health) {
   if (!health || health.status === 'checking') {
     $('public-access').innerHTML = `<div class="empty">${escapeHtml(opsText('Checking public domain and Cloudflare tunnel...', '正在检查公网域名和 Cloudflare 隧道...'))}</div>`;
+    return;
+  }
+  if (health.status === 'retired') {
+    $('public-access').innerHTML = [
+      row(opsText('Overall', '总体'), opsText('Source retired', '数据源已下线'), opsText('Global shell owns status', '全局 shell 接管状态'), 'watch'),
+      row(opsText('Replacement', '替代来源'), '/api/system-state', opsText('single state source', '单一状态源'), 'watch'),
+      row(opsText('Operator action', '运维动作'), opsActionText(health.operator_action || '--'), health.checked_at || '--', 'watch'),
+    ].join('');
     return;
   }
   const cls = health.status === 'ok' ? 'buy' : 'sell';
@@ -3503,5 +3497,6 @@ initializeRunDate();
 loadDashboard(false);
 setInterval(() => loadDashboard(false), 30000);
 </script>
+<script src="assets/shell.js" defer></script>
 </body>
 </html>

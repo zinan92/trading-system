@@ -317,7 +317,7 @@ python3 -m pipelines.dashboard_server --host 127.0.0.1 --port 8765
 Then visit:
 
 ```text
-http://127.0.0.1:8765/dashboard.html
+http://127.0.0.1:8765/dashboard-v4.html
 ```
 
 The API endpoint behind the page is:

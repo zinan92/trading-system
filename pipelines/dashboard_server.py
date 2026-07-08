@@ -7,7 +7,7 @@ import re
 import subprocess
 import threading
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
@@ -32,6 +32,7 @@ from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
 from services.market_view_intake import MarketViewIntake
 from services.replay_state import ReplayState
+from services.system_state import build_system_state
 from services.tiger_venue_status import TigerVenueStatus
 
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -100,6 +101,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         return path in {
             "/dashboard-v2.html",
             "/dashboard-v3.html",
+            "/dashboard.html",
             "/dashboard-v4.html",
             "/dashboard-dualtrack-v5.html",
             "/dashboard-dualtrack-replay.html",
@@ -122,6 +124,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/system/status":
             self._handle_system_status_api(parsed.query)
+            return
+        if parsed.path == "/api/system-state":
+            self._handle_system_state_api()
             return
         if parsed.path == "/api/trader/overview":
             self._handle_trader_overview_api(parsed.query)
@@ -471,6 +476,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_system_status_api(self, query: str) -> None:
         self._handle_contract_api(query, build_system_status_contract)
 
+    def _handle_system_state_api(self) -> None:
+        self._write_json(200, build_system_state_response())
+
     def _handle_trader_overview_api(self, query: str) -> None:
         self._handle_contract_api(query, build_trader_overview_contract)
 
@@ -546,6 +554,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 def dashboard_output_root() -> Path:
     cfg = load_pipeline_config()
     return ROOT / str(cfg.get("output_root", "outputs"))
+
+
+def build_system_state_response(output_root: Path | None = None, *, as_of: str | datetime | None = None) -> dict:
+    return build_system_state(output_root=output_root, as_of=as_of)
 
 
 def build_market_view_intake_response(payload: dict, *, output_root: Path | None = None) -> dict:
@@ -2244,7 +2256,7 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
     trader = _probe_html_features(public_url, timeout, trader_checks)
     trader_vendor_url = _sibling_dashboard_url(public_url, "data/vendor/echarts.min.js") + "?v=20260627-gateway"
     trader_vendor = _probe_http(trader_vendor_url, timeout)
-    replay_filename = "dashboard-replay-v4.html" if is_v4 else "dashboard-replay.html"
+    replay_filename = "dashboard-replay-v4.html"
     replay_url = _sibling_dashboard_url(public_url, replay_filename)
     replay = _probe_html_features(replay_url, timeout, replay_checks)
     replay_vendor_url = _sibling_dashboard_url(public_url, "data/vendor/lightweight-charts.standalone.production.js")
@@ -2794,7 +2806,7 @@ def main() -> None:
     args = parser.parse_args()
 
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
-    print(f"Dashboard server: http://{args.host}:{args.port}/dashboard.html")
+    print(f"Dashboard server: http://{args.host}:{args.port}/dashboard-v4.html")
     print(f"Dashboard API: http://{args.host}:{args.port}/api/dashboard?date={utc_run_date()}")
     _start_code_reload_watcher()
     server.serve_forever()

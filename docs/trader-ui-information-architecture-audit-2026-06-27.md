@@ -1,7 +1,7 @@
 # Trader UI Information Architecture Audit
 
 Date: 2026-06-27
-Scope: `dashboard-v3.html` and `dashboard-replay.html`
+Scope: retired trader console and replay surfaces before the v4 shell migration
 
 ## Executive Summary
 

@@ -200,10 +200,10 @@ class MockTradingUAT:
         return self._check("runtime", "fail", "Mock runtime is not ready.", runtime)
 
     def _dashboard(self) -> dict:
-        dashboard = ROOT / "dashboard.html"
+        dashboard = ROOT / "dashboard-v4.html"
         server = ROOT / "pipelines" / "dashboard_server.py"
         if dashboard.exists() and server.exists():
-            return self._check("dashboard", "pass", "Dashboard and API server entrypoint are present.", {"dashboard": str(dashboard), "server": str(server), "url": "http://127.0.0.1:8765/dashboard.html"})
+            return self._check("dashboard", "pass", "Dashboard and API server entrypoint are present.", {"dashboard": str(dashboard), "server": str(server), "url": "http://127.0.0.1:8765/dashboard-v4.html"})
         return self._check("dashboard", "fail", "Dashboard or API server entrypoint is missing.", {"dashboard": str(dashboard), "server": str(server)})
 
     def _evidence_paths(self, run_date: str) -> dict:
@@ -224,7 +224,7 @@ class MockTradingUAT:
             "health": self.output_root / "health" / f"{run_date}.json",
             "data_archive": self.output_root / "data_archive" / f"{run_date}.json",
             "mock_runtime": self.output_root / "mock_runtime" / f"{run_date}.json",
-            "dashboard": ROOT / "dashboard.html",
+            "dashboard": ROOT / "dashboard-v4.html",
         }
         return {name: str(path) for name, path in paths.items()}
 

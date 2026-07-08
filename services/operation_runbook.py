@@ -75,7 +75,7 @@ class OperationRunbook:
             "blocks": blocks,
             "next_actions": self._next_actions(blocks, official_feed, live_readiness, risk_monitor, paper_risk_actions, journal_path, review_path),
             "artifacts": {
-                "dashboard": "http://127.0.0.1:8765/dashboard.html",
+                "dashboard": "http://127.0.0.1:8765/dashboard-v4.html",
                 "journal": str(journal_path),
                 "review_notes": str(review_path),
                 "daily_review": str(self.output_root / "daily_review_runs" / f"{run_date}.json"),

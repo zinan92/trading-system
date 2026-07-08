@@ -573,11 +573,11 @@ class CompletionAudit:
         )
 
     def _dashboard(self) -> dict:
-        dashboard = ROOT / "dashboard.html"
+        dashboard = ROOT / "dashboard-v4.html"
         server = ROOT / "pipelines" / "dashboard_server.py"
         if not dashboard.exists() or not server.exists():
             return self._requirement("dashboard", "fail", "Dashboard 文件或服务入口缺失", {"dashboard": str(dashboard), "server": str(server)})
-        return self._requirement("dashboard", "pass", "实时 Dashboard 页面和 API 服务入口存在", {"dashboard": str(dashboard), "server": str(server), "url": "http://127.0.0.1:8765/dashboard.html"})
+        return self._requirement("dashboard", "pass", "实时 Dashboard 页面和 API 服务入口存在", {"dashboard": str(dashboard), "server": str(server), "url": "http://127.0.0.1:8765/dashboard-v4.html"})
 
     def _live_broker_boundary(self) -> dict:
         preflight_rows = load_json(self.output_root / "broker_preflight" / "current.json")

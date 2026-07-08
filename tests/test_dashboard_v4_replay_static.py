@@ -38,8 +38,9 @@ def test_v4_replay_has_trader_facing_sections_and_returns_to_v4():
     assert 'class="mstrip"' in html
 
 
-def test_legacy_replay_remains_legacy_route():
+def test_legacy_replay_forwards_to_v4_route():
     html = read_html("dashboard-replay.html")
 
-    assert '<body class="replay-v4 layout-trader-focus">' not in html
-    assert 'new URL("dashboard-v3.html", window.location.href)' in html
+    assert 'content="0; url=dashboard-replay-v4.html"' in html
+    assert 'const next = "dashboard-replay-v4.html" + window.location.search + window.location.hash;' in html
+    assert "window.location.replace(next)" in html

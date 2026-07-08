@@ -128,7 +128,7 @@ class LiveCutoverPackage:
             {"order": 1, "action": "Import official XAUUSD 5m data and confirm live-ready data source.", "command": f"python3 -m pipelines.import_official_feed --date {run_date}"},
             {"order": 2, "action": "Validate broker credentials and account/instrument access without exposing secrets.", "command": f"python3 -m pipelines.oanda_account --date {run_date}"},
             {"order": 3, "action": "Run live readiness and keep execution protected until every check passes.", "command": f"python3 -m pipelines.live_readiness --date {run_date} --json"},
-            {"order": 4, "action": "Review Dashboard, Trading Journal, risk state, open paper positions, and live switch plan.", "command": "open http://127.0.0.1:8765/dashboard.html"},
+            {"order": 4, "action": "Review Dashboard, Trading Journal, risk state, open paper positions, and live switch plan.", "command": "open http://127.0.0.1:8765/dashboard-v4.html"},
             {"order": 5, "action": "Create dated human approval only after dry-run readiness is proven.", "command": f"python3 -m pipelines.live_approval --date {run_date} --request"},
             {"order": 6, "action": "Disable broker dry_run and switch execution_mode to live only after explicit approval.", "command": "edit configs/pipeline.yaml locally"},
             {"order": 7, "action": "Run one live smoke-sized order only if live_activation.real_money_ready=true.", "command": f"python3 -m pipelines.live_activation --date {run_date}"},
@@ -151,7 +151,7 @@ class LiveCutoverPackage:
             "oanda_account": str(self.output_root / "oanda_account" / f"{run_date}.json"),
             "broker_preflight": str(self.output_root / "broker_preflight" / "current.json"),
             "data_source_preflight": str(self.output_root / "data_source_preflight" / f"{run_date}.json"),
-            "dashboard": str(ROOT / "dashboard.html"),
+            "dashboard": str(ROOT / "dashboard-v4.html"),
         }
 
     def _write_markdown(self, run_date: str, payload: dict) -> None:

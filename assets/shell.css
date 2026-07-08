@@ -1,0 +1,187 @@
+:root {
+  --gb-shell-height: 48px;
+  --gb-shell-banner-height: 38px;
+}
+
+body.goldbot-shell-active {
+  padding-top: var(--gb-shell-height) !important;
+}
+
+.gb-shell {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 10000;
+  color: #f3f5f8;
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+.gb-shell-bar {
+  height: var(--gb-shell-height);
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) auto minmax(160px, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 0 18px;
+  background: #08090b;
+  border-bottom: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+}
+
+.gb-shell-left {
+  min-width: 0;
+}
+
+.gb-shell-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .035);
+}
+
+.gb-shell-nav-item,
+.gb-shell-return,
+.gb-shell-status,
+.gb-shell-banner a {
+  color: #aab2bf;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.gb-shell-nav-item,
+.gb-shell-return {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.gb-shell-nav-item:hover,
+.gb-shell-return:hover,
+.gb-shell-banner a:hover {
+  border-color: rgba(216, 170, 63, .45);
+  color: #ffe6a6;
+}
+
+.gb-shell-nav-item.active {
+  color: #f3f5f8;
+  border-color: rgba(216, 170, 63, .45);
+  background: rgba(216, 170, 63, .12);
+}
+
+.gb-shell-return {
+  border-color: rgba(255, 255, 255, .14);
+  background: rgba(255, 255, 255, .04);
+}
+
+.gb-shell-status {
+  justify-self: center;
+  min-width: 104px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .04);
+  font-weight: 760;
+}
+
+.gb-shell-status:hover {
+  border-color: rgba(255, 255, 255, .28);
+}
+
+.gb-shell-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #7a8494;
+  box-shadow: 0 0 0 3px rgba(122, 132, 148, .12);
+}
+
+.gb-shell-status.run .gb-shell-dot {
+  background: #2dd4bf;
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, .14);
+}
+
+.gb-shell-status.degraded .gb-shell-dot {
+  background: #f5b84b;
+  box-shadow: 0 0 0 3px rgba(245, 184, 75, .14);
+}
+
+.gb-shell-status.blocked .gb-shell-dot {
+  background: #ff5d5d;
+  box-shadow: 0 0 0 3px rgba(255, 93, 93, .16);
+}
+
+.gb-shell-right {
+  justify-self: end;
+  color: #8993a3;
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.gb-shell-banner {
+  min-height: var(--gb-shell-banner-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 8px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, .14);
+  text-align: center;
+}
+
+.gb-shell-banner.blocked {
+  color: #ffe1e1;
+  background: #5f1014;
+}
+
+.gb-shell-banner.degraded {
+  color: #2b1d04;
+  background: #f5b84b;
+}
+
+.gb-shell-banner a {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  color: inherit;
+  font-weight: 720;
+}
+
+.gb-shell-banner.hidden {
+  display: none;
+}
+
+body.goldbot-shell-active .topbar .tabs {
+  display: none !important;
+}
+
+@media (max-width: 720px) {
+  .gb-shell-bar {
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .gb-shell-right {
+    display: none;
+  }
+
+  .gb-shell-nav-item,
+  .gb-shell-return {
+    padding: 0 8px;
+  }
+}

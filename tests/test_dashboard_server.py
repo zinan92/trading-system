@@ -939,8 +939,8 @@ def test_public_access_health_distinguishes_tunnel_failure_from_local_dashboard(
     log.write_text("2026 ERR Failed to dial a quic connection: no route to host on port 7844\n", encoding="utf-8")
 
     health = build_public_access_health(
-        public_url="https://goldbot.park-ai-intel.com/dashboard-v3.html",
-        local_url="http://127.0.0.1:8766/dashboard-v3.html",
+        public_url="https://goldbot.park-ai-intel.com/dashboard-v4.html",
+        local_url="http://127.0.0.1:8766/dashboard-v4.html",
         log_path=log,
     )
 
@@ -969,8 +969,8 @@ def test_public_access_health_warns_when_public_deployment_is_stale(monkeypatch,
     monkeypatch.setattr(dashboard_server, "_cloudflared_process_summary", lambda: {"running": True, "processes": []})
 
     health = build_public_access_health(
-        public_url="https://goldbot.park-ai-intel.com/dashboard-v3.html",
-        local_url="http://127.0.0.1:8766/dashboard-v3.html",
+        public_url="https://goldbot.park-ai-intel.com/dashboard-v4.html",
+        local_url="http://127.0.0.1:8766/dashboard-v4.html",
         log_path=tmp_path / "cloudflared.log",
     )
 
@@ -1001,8 +1001,8 @@ def test_public_access_health_reports_public_ops_forbidden(monkeypatch, tmp_path
     monkeypatch.setattr(dashboard_server, "_cloudflared_process_summary", lambda: {"running": True, "processes": []})
 
     health = build_public_access_health(
-        public_url="https://goldbot.park-ai-intel.com/dashboard-v3.html",
-        local_url="http://127.0.0.1:8766/dashboard-v3.html",
+        public_url="https://goldbot.park-ai-intel.com/dashboard-v4.html",
+        local_url="http://127.0.0.1:8766/dashboard-v4.html",
         log_path=tmp_path / "cloudflared.log",
     )
 
@@ -1032,8 +1032,8 @@ def test_public_access_health_reports_public_ops_probe_failure(monkeypatch, tmp_
     monkeypatch.setattr(dashboard_server, "_cloudflared_process_summary", lambda: {"running": True, "processes": []})
 
     health = build_public_access_health(
-        public_url="https://goldbot.park-ai-intel.com/dashboard-v3.html",
-        local_url="http://127.0.0.1:8766/dashboard-v3.html",
+        public_url="https://goldbot.park-ai-intel.com/dashboard-v4.html",
+        local_url="http://127.0.0.1:8766/dashboard-v4.html",
         log_path=tmp_path / "cloudflared.log",
     )
 
@@ -1051,9 +1051,9 @@ def test_probe_failures_return_json_serializable_reason(monkeypatch):
 
     monkeypatch.setattr(dashboard_server, "urlopen", fake_urlopen)
 
-    probe = dashboard_server._probe_http("http://127.0.0.1:9999/dashboard-v3.html", 0.1)
+    probe = dashboard_server._probe_http("http://127.0.0.1:9999/dashboard-v4.html", 0.1)
     feature_probe = dashboard_server._probe_html_features(
-        "http://127.0.0.1:9999/dashboard-v3.html",
+        "http://127.0.0.1:9999/dashboard-v4.html",
         0.1,
         {"nav_detail_preload": "navDetailPreloadIds"},
     )
@@ -1075,28 +1075,28 @@ def test_deployment_feature_summary_reports_missing_trader_and_ops_features(monk
     monkeypatch.setattr(dashboard_server, "_probe_html_features", fake_feature_probe)
     monkeypatch.setattr(dashboard_server, "_probe_http", lambda _url, _timeout: {"ok": True, "status_code": 200})
 
-    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v3.html", 1)
+    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v4.html", 1)
 
     assert summary["status"] == "warn"
     assert summary["ops_url"] == "https://goldbot.park-ai-intel.com/ops-dashboard.html"
     assert summary["trader_vendor_url"] == "https://goldbot.park-ai-intel.com/data/vendor/echarts.min.js?v=20260627-gateway"
-    assert summary["replay_url"] == "https://goldbot.park-ai-intel.com/dashboard-replay.html"
+    assert summary["replay_url"] == "https://goldbot.park-ai-intel.com/dashboard-replay-v4.html"
     assert summary["replay_vendor_url"] == "https://goldbot.park-ai-intel.com/data/vendor/lightweight-charts.standalone.production.js"
     assert "ops:ops_command_copy" in summary["missing_features"]
     assert any(item["name"] == "nav_detail_preload" for item in summary["checks"])
     assert any(item["name"] == "trader_vendor_echarts" for item in summary["checks"])
     assert any(item["name"] == "replay_source_timeframe_scope" for item in summary["checks"])
-    assert any(item["name"] == "replay_page_title" for item in summary["checks"])
+    assert any(item["name"] == "dashboard_v4_title" for item in summary["checks"])
+    assert any(item["name"] == "replay_v4_route" for item in summary["checks"])
+    assert any(item["name"] == "replay_v4_body" for item in summary["checks"])
     assert any(item["name"] == "replay_vendor_lightweight_charts" for item in summary["checks"])
-    assert any(item["name"] == "promotion_dossier" for item in summary["checks"])
     assert any(item["name"] == "gold_cadence_nav_sampling" for item in summary["checks"])
-    assert any(item["name"] == "nav_end_labels" for item in summary["checks"])
     assert all(item["surface"] in {"trader", "replay", "ops"} for item in summary["checks"])
 
 
 def test_deployment_feature_summary_warns_when_replay_page_is_missing(monkeypatch):
     def fake_feature_probe(url, _timeout, features):
-        if "dashboard-replay.html" in url:
+        if "dashboard-replay-v4.html" in url:
             return {
                 "ok": False,
                 "status_code": 404,
@@ -1113,7 +1113,7 @@ def test_deployment_feature_summary_warns_when_replay_page_is_missing(monkeypatc
     monkeypatch.setattr(dashboard_server, "_probe_html_features", fake_feature_probe)
     monkeypatch.setattr(dashboard_server, "_probe_http", lambda _url, _timeout: {"ok": True, "status_code": 200})
 
-    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v3.html", 1)
+    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v4.html", 1)
 
     assert summary["status"] == "warn"
     assert summary["reason"] == "replay_probe_failed"
@@ -1137,7 +1137,7 @@ def test_deployment_feature_summary_warns_when_replay_vendor_is_missing(monkeypa
         lambda url, _timeout: {"ok": False, "status_code": 404} if "lightweight-charts" in url else {"ok": True, "status_code": 200},
     )
 
-    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v3.html", 1)
+    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v4.html", 1)
 
     assert summary["status"] == "warn"
     assert summary["reason"] == "replay_vendor_probe_failed"
@@ -1161,7 +1161,7 @@ def test_deployment_feature_summary_warns_when_trader_vendor_is_missing(monkeypa
         lambda url, _timeout: {"ok": False, "status_code": 404} if "echarts.min.js" in url else {"ok": True, "status_code": 200},
     )
 
-    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v3.html", 1)
+    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v4.html", 1)
 
     assert summary["status"] == "warn"
     assert summary["reason"] == "trader_vendor_probe_failed"
@@ -1188,7 +1188,7 @@ def test_deployment_feature_summary_treats_public_ops_403_as_protected(monkeypat
     monkeypatch.setattr(dashboard_server, "_probe_html_features", fake_feature_probe)
     monkeypatch.setattr(dashboard_server, "_probe_http", lambda _url, _timeout: {"ok": True, "status_code": 200})
 
-    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v3.html", 1)
+    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v4.html", 1)
 
     assert summary["status"] == "warn"
     assert summary["reason"] == "ops_access_forbidden"
@@ -1217,7 +1217,7 @@ def test_deployment_feature_summary_treats_public_ops_timeout_as_probe_failure(m
     monkeypatch.setattr(dashboard_server, "_probe_html_features", fake_feature_probe)
     monkeypatch.setattr(dashboard_server, "_probe_http", lambda _url, _timeout: {"ok": True, "status_code": 200})
 
-    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v3.html", 1)
+    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v4.html", 1)
 
     assert summary["status"] == "warn"
     assert summary["reason"] == "ops_probe_failed"
@@ -1232,6 +1232,7 @@ def test_dashboard_handler_disables_cache_for_dashboard_html():
         "/dashboard-v2.html",
         "/dashboard-v3.html",
         "/dashboard-v4.html",
+        "/dashboard.html",
         "/dashboard-replay.html",
         "/dashboard-replay-v4.html",
         "/ops-dashboard.html?v=123",

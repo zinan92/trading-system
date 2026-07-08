@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 
 const DEFAULT_URL =
-  "http://127.0.0.1:8765/dashboard-replay.html?date=2026-06-27&strategy=gold_1m_chan&cursor=2026-06-27T07%3A25%3A00%2B00%3A00";
+  "http://127.0.0.1:8765/dashboard-replay-v4.html?date=2026-06-27&strategy=gold_1m_chan&cursor=2026-06-27T07%3A25%3A00%2B00%3A00";
 const TIMEFRAME_MS = {
   "1m": 60_000,
   "5m": 5 * 60_000,

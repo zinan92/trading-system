@@ -91,7 +91,7 @@ class SystemDoctor:
             },
             "next_actions": next_actions,
             "artifacts": {
-                "dashboard_url": "http://127.0.0.1:8765/dashboard.html",
+                "dashboard_url": "http://127.0.0.1:8765/dashboard-v4.html",
                 "health": str(self.output_root / "health" / "current.json"),
                 "audit": str(self.output_root / "audits" / "current.json"),
                 "mock_runtime": str(self.output_root / "mock_runtime" / "current.json"),

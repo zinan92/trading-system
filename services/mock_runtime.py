@@ -139,10 +139,10 @@ class MockTradingRuntime:
         return self._check("runner_freshness", "warn", "Runner completed successfully but is stale; start the continuous 5m runner for active mock trading.", evidence)
 
     def _dashboard_artifacts(self) -> dict:
-        dashboard = ROOT / "dashboard.html"
+        dashboard = ROOT / "dashboard-v4.html"
         server = ROOT / "pipelines" / "dashboard_server.py"
         if dashboard.exists() and server.exists():
-            return self._check("dashboard_artifacts", "pass", "Dashboard page and local API server entrypoint exist.", {"dashboard": str(dashboard), "server": str(server), "url": "http://127.0.0.1:8765/dashboard.html"})
+            return self._check("dashboard_artifacts", "pass", "Dashboard page and local API server entrypoint exist.", {"dashboard": str(dashboard), "server": str(server), "url": "http://127.0.0.1:8765/dashboard-v4.html"})
         return self._check("dashboard_artifacts", "fail", "Dashboard file or server entrypoint is missing.", {"dashboard": str(dashboard), "server": str(server)})
 
     def _next_actions(self, checks: list[dict]) -> list[str]:

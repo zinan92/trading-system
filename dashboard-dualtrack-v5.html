@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>人机双轨作战台 - Trading Orchestrator</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/shell.css">
 <style>
 :root{
   --bg:#08090b; --surface:#111318; --surface2:#171b22; --surface3:#202631;
@@ -521,5 +523,6 @@ function shortPath(value){ if(!value) return "--"; const parts = String(value).s
 function cycleClosed(cycle){ return Boolean(cycle?.end && Date.now() >= Date.parse(cycle.end)); }
 loadAll(); setInterval(loadAll, 30000);
 </script>
+<script src="assets/shell.js" defer></script>
 </body>
 </html>

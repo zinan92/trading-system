@@ -1856,3 +1856,39 @@ Date: 2026-07-08
 - Backfill must only run when source intraday data is complete. If data is incomplete, write a void reason such as `schedule_drift_gap`; do not fabricate a close score.
 
 - The heartbeat can be `fresh` while launchd is still `stale_installed`. Artifact liveness and scheduler install health are separate gates.
+
+## Frontend Shell Single State Source
+
+Date: 2026-07-08
+
+### Decisions
+
+- Add `/api/system-state` as the shell's single read-only state source.
+  - Rationale: every current page needs the same fail-closed global status instead of reconstructing system reality from different artifacts.
+  - Evidence: `services/system_state.py`, `pipelines/dashboard_server.py`, `tests/test_system_state_api.py`.
+
+- Keep the aggregation priority `BLOCKED > UNKNOWN > DEGRADED > RUN`.
+  - Rationale: an unreadable input is more dangerous than a known degraded condition, while a known hard block must dominate every other check.
+  - Evidence: system-state tests cover BLOCKED+UNKNOWN and UNKNOWN+DEGRADED priority combinations.
+
+- Inject one vanilla JS/CSS shell into the five current pages without changing their internal layouts.
+  - Rationale: the task is a shared navigation/status shell, not a redesign of page bodies.
+  - Evidence: `assets/shell.js`, `assets/shell.css`, and static shell tests across `ops-dashboard.html`, `dashboard-v4.html`, `dashboard-replay-v4.html`, `dashboard-dualtrack-v5.html`, and `dashboard-dualtrack-replay.html`.
+
+- Retire old dashboard routes as redirect stubs.
+  - Rationale: `dashboard-v3.html`, `dashboard.html`, and `dashboard-replay.html` should not keep attracting new links or tests after v4/v4-replay became the current surfaces.
+  - Evidence: redirect stub tests in `tests/test_dashboard_v3_static.py`, `tests/test_dashboard_replay_static.py`, and `tests/test_frontend_shell_static.py`.
+
+- Remove OPS polling of the stale `/api/dashboard?view=ops` and `/api/public-access-health` paths.
+  - Rationale: OPS should no longer create a repeated console 404 storm for retired data sources; the shell now owns the cross-page status light via `/api/system-state`.
+  - Evidence: `ops-dashboard.html` no longer contains those paths or `dashboard-v3.html`.
+
+### Gotchas
+
+- The current live `/api/system-state` is `DEGRADED`, not `BLOCKED`: latest strategy reconciliation artifacts report no blocked naked position, while schedule status is still `stale_installed` and the latest daily review is `fail`.
+
+- `dualtrack_heartbeat` can be `RUN` while `schedule` is `DEGRADED`; close-cycle artifacts and launchd installation health are intentionally separate checks.
+
+- The shell shows `UNKNOWN` on fetch failure and never hides the status lamp. A missing or malformed artifact must not become green UI.
+
+- Browser favicon requests can create console 404 errors even when page JS is healthy. Current active pages explicitly set `rel="icon" href="data:,"` so console-error checks stay meaningful.

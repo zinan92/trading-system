@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 
-const DEFAULT_URL = "http://127.0.0.1:8765/dashboard-v3.html?date=2026-06-27";
+const DEFAULT_URL = "http://127.0.0.1:8765/dashboard-v4.html?date=2026-06-27";
 const FIRST_PAINT_BANNED_TERMS = [
   "系统证据",
   "已兑现证据",
@@ -682,7 +682,7 @@ async function run() {
     body_text: document.body.innerText.replace(/\s+/g, " ").slice(0, 300),
     is_404: /404|not found/i.test(document.body.innerText),
   }));
-  assertPass(replayRoute.url.includes("dashboard-replay.html"), "Header replay CTA did not route to dashboard-replay.html", replayRoute);
+  assertPass(replayRoute.url.includes("dashboard-replay-v4.html"), "Header replay CTA did not route to dashboard-replay-v4.html", replayRoute);
   assertPass(!replayRoute.is_404, "Header replay CTA opened a 404/not-found page", replayRoute);
   if (!noTradeIndex.skipped) {
     const expectedDate = new URL(url).searchParams.get("date") || "";
