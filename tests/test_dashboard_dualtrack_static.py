@@ -52,11 +52,12 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     assert 'cycleClosed(state.cycle) ? await api(`/api/dualtrack/attribution/${cycleId}`)' in html
     assert "function cycleClosed(cycle)" in html
     assert 'api("/api/dualtrack/ledger")' in html
-    assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=96`" in html
+    assert "const MARKET_BAR_LIMIT = 240" in html
+    assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`" in html
     assert "const context15Tf = contextTimeframe(CONTEXT_SLOTS[0])" in html
     assert "const context1hTf = contextTimeframe(CONTEXT_SLOTS[1])" in html
-    assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context15Tf)}&limit=96`" in html
-    assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context1hTf)}&limit=96`" in html
+    assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context15Tf)}&limit=${MARKET_BAR_LIMIT}`" in html
+    assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context1hTf)}&limit=${MARKET_BAR_LIMIT}`" in html
     assert 'api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=15m&limit=64")' not in html
     assert 'api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=1h&limit=64")' not in html
     assert 'api("/api/dualtrack/runtime/status")' in html
@@ -232,7 +233,7 @@ def test_dualtrack_v5_task06_main_timeframe_switch_is_wired() -> None:
     assert "state.mainTf = button.dataset.tf" in html
     assert "renderMainKline()" in html
     assert "loadMainMarket()" in html
-    assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=96`" in html
+    assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`" in html
     assert 'api("/api/dualtrack/market/bars?limit=96")' not in html
 
 
@@ -343,11 +344,63 @@ def test_dualtrack_v5_task08_indicators_are_bars_only_and_toggleable() -> None:
     assert "dualtrack.main.indicators.ema" in html
     assert "dualtrack.main.indicators.macd" in html
     assert "indicators: mainIndicators()" in main
-    assert "ema:[{period:20},{period:50}]" in html
+    assert "DEFAULT_EMA_PERIODS = [20, 50]" in html
+    assert "ema:emaPeriods().map(period => ({period}))" in html
     assert "macd:{fast:12, slow:26, signal:9}" in html
     assert "indicators:{ema:[{period:50,color:token(\"--muted\")}]" in context
     assert "state.machine" not in main
     assert "state.machine" not in context
+
+
+def test_dualtrack_v5_browser_comments_use_consistent_beijing_time_and_locked_form() -> None:
+    html = read_html()
+
+    assert "北京时间" in html
+    assert "CST" not in html
+    assert "function formatBeijingTime(" in html
+    assert "function formatBeijingDateTime(" in html
+    assert "String(value).slice(11,16)" not in html
+    assert "你的作战单 · 已锁定 北京" in html
+    assert "开始 北京" in html
+    assert "syncPlanFormLock(locked)" in html
+    assert "applyLockedPlanToForm(human)" in html
+    assert 'form.classList.toggle("locked", locked)' in html
+    assert ".q-body.locked" in html
+
+
+def test_dualtrack_v5_browser_comments_explain_sources_and_expose_ema_config() -> None:
+    html = read_html()
+
+    assert 'data-ema-period="0"' in html
+    assert 'data-ema-period="1"' in html
+    assert "function emaPeriods()" in html
+    assert "function bindEmaPeriodControls()" in html
+    assert "dualtrack.main.indicators.ema.periods" in html
+    assert "EMA 20" in html
+    assert "EMA 50" in html
+    assert "sourceModeLabel(" in html
+    assert "fallback：主源不可用或不新鲜" in html
+    assert "由1m聚合" in html
+    assert "原生K线" in html
+
+
+def test_standard_kline_browser_comments_show_time_and_clamp_toolbar() -> None:
+    html = (ROOT / "packages" / "standard-kline" / "standard-kline.js").read_text(encoding="utf-8")
+    dashboard = read_html()
+
+    assert "data-crosshair-time" in html
+    assert "subscribeCrosshairMove" in html
+    assert "tickMarkFormatter" in html
+    assert "timeFormatter" in html
+    assert "formatChartTime(" in html
+    assert ".standard-kline-toolbar{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;" in html
+    assert ".standard-kline-source{margin-left:auto;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" in html
+    assert "source.title = fullText" in html
+    assert "typeof this.options.sourceFormatter === \"function\"" in html
+    assert "timeZone:\"Asia/Shanghai\"" in dashboard
+    assert "sourceFormatter:dashboardKlineSourceLabel" in dashboard
+    assert "MARKET_BAR_LIMIT = 240" in dashboard
+    assert "limit=96" not in extract_function(dashboard, "loadMainMarket")
 
 
 def test_dashboard_server_runtime_status_hides_machine_fills_until_close(tmp_path, monkeypatch):

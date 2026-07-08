@@ -185,6 +185,25 @@
     return Number(value || 0).toLocaleString("en-US", {minimumFractionDigits:digits, maximumFractionDigits:digits});
   }
 
+  function formatChartTime(value, timeZone, includeDate, locale){
+    const zone = timeZone || "UTC";
+    const lang = locale || "en-US";
+    let date = null;
+    if(typeof value === "number"){
+      date = new Date(value * 1000);
+    }else if(value && typeof value === "object" && value.year && value.month && value.day){
+      date = new Date(Date.UTC(Number(value.year), Number(value.month) - 1, Number(value.day)));
+    }else{
+      const parsed = toEpochSeconds(value);
+      if(parsed != null) date = new Date(parsed * 1000);
+    }
+    if(!date || Number.isNaN(date.getTime())) return "";
+    const options = includeDate
+      ? {timeZone:zone, month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false}
+      : {timeZone:zone, hour:"2-digit", minute:"2-digit", hour12:false};
+    return new Intl.DateTimeFormat(lang, options).format(date);
+  }
+
   function normalizePeriod(value, fallback){
     const parsed = Math.floor(Number(value ?? fallback));
     return Number.isFinite(parsed) && parsed > 0 ? parsed : Math.floor(Number(fallback));
@@ -242,10 +261,11 @@
     style.textContent = `
 .standard-kline-root{position:relative;width:100%;height:100%;min-height:320px;display:grid;grid-template-rows:auto minmax(0,1fr);background:transparent;overflow:hidden}
 .standard-kline-root.compact{min-height:220px}
-.standard-kline-toolbar{display:flex;align-items:center;gap:6px;min-height:30px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.08);font:11px/1.2 var(--mono,"SFMono-Regular",ui-monospace,monospace);color:${COLORS.faint};background:rgba(255,255,255,.018)}
+.standard-kline-toolbar{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;min-height:30px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.08);font:11px/1.2 var(--mono,"SFMono-Regular",ui-monospace,monospace);color:${COLORS.faint};background:rgba(255,255,255,.018)}
 .standard-kline-toolbar button{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:${COLORS.text};border-radius:5px;padding:3px 8px;cursor:pointer;font:inherit}
 .standard-kline-toolbar button:hover{border-color:rgba(216,170,63,.45);color:${COLORS.gold}}
-.standard-kline-source{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:58%;color:${COLORS.faint}}
+.standard-kline-crosshair{flex:0 0 auto;color:${COLORS.text};min-width:92px}
+.standard-kline-source{margin-left:auto;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:58%;color:${COLORS.faint};text-align:right}
 .standard-kline-canvas{position:relative;min-width:0;min-height:0;height:100%}
 .standard-kline-overlay{position:absolute;inset:32px 14px 14px 14px;display:none;place-items:center;text-align:center;pointer-events:none;z-index:4}
 .standard-kline-overlay.is-visible{display:grid}
@@ -292,7 +312,7 @@
       this.rootEl.dataset.standardKline = "true";
       this.toolbarEl = root.document.createElement("div");
       this.toolbarEl.className = "standard-kline-toolbar";
-      this.toolbarEl.innerHTML = `<button type="button" data-action="zoom-in" title="Zoom in">+</button><button type="button" data-action="zoom-out" title="Zoom out">-</button><button type="button" data-action="pan-left" title="Pan left">&lt;</button><button type="button" data-action="pan-right" title="Pan right">&gt;</button><button type="button" data-action="fit" title="Fit">fit</button><span class="standard-kline-source" data-source></span>`;
+      this.toolbarEl.innerHTML = `<button type="button" data-action="zoom-in" title="Zoom in">+</button><button type="button" data-action="zoom-out" title="Zoom out">-</button><button type="button" data-action="pan-left" title="Pan left">&lt;</button><button type="button" data-action="pan-right" title="Pan right">&gt;</button><button type="button" data-action="fit" title="Fit">fit</button><span class="standard-kline-crosshair" data-crosshair-time></span><span class="standard-kline-source" data-source></span>`;
       this.chartEl = root.document.createElement("div");
       this.chartEl.className = "standard-kline-canvas";
       this.overlayEl = root.document.createElement("div");
@@ -321,6 +341,8 @@
         return;
       }
       const size = this._size();
+      const timeZone = this.options.timeZone || "UTC";
+      const locale = this.options.locale || "en-US";
       this.chart = lwc.createChart(this.chartEl, {
         width:size.width,
         height:size.height,
@@ -328,11 +350,12 @@
         grid:{vertLines:{color:this.options.gridColor || "rgba(255,255,255,.045)"}, horzLines:{color:this.options.gridColor || COLORS.grid}},
         crosshair:{mode:lwc.CrosshairMode?.Normal ?? 1},
         rightPriceScale:{borderVisible:false, minimumWidth:1, scaleMargins:{top:.08,bottom:this.options.showVolume === false ? .10 : .28}},
-        timeScale:{borderVisible:false, timeVisible:true, secondsVisible:false, rightOffset:8, barSpacing:this.options.compact ? 5 : 7, minBarSpacing:.5, rightBarStaysOnScroll:true},
+        timeScale:{borderVisible:true, timeVisible:true, secondsVisible:false, rightOffset:8, barSpacing:this.options.compact ? 5 : 7, minBarSpacing:.5, rightBarStaysOnScroll:true, tickMarkFormatter:time => formatChartTime(time, timeZone, false, locale)},
         handleScroll:{mouseWheel:true, pressedMouseMove:true, horzTouchDrag:true, vertTouchDrag:true},
         handleScale:{axisPressedMouseMove:true, mouseWheel:true, pinch:true},
-        localization:{priceFormatter:price => formatPrice(price,2)},
+        localization:{priceFormatter:price => formatPrice(price,2), timeFormatter:time => formatChartTime(time, timeZone, true, locale)},
       });
+      this.chart.subscribeCrosshairMove?.(param => this._setCrosshairTime(param?.time));
       this._patchTimeScale();
       this.candleSeries = this.chart.addSeries(lwc.CandlestickSeries, {
         upColor:COLORS.up,
@@ -526,7 +549,23 @@
       const provider = meta?.provider || "unknown";
       const count = meta?.bar_count || this.current.candles.length || 0;
       const flags = normalizeQualityFlags(meta?.quality_flags);
-      source.textContent = `${meta?.symbol || "--"} ${meta?.timeframe || ""} · ${mode} · ${provider} · ${count} bars${flags.length ? " · " + flags.join(",") : ""}`;
+      const fullText = `${meta?.symbol || "--"} ${meta?.timeframe || ""} · ${mode} · ${provider} · ${count} bars${flags.length ? " · " + flags.join(",") : ""}`;
+      let customText = "";
+      if(typeof this.options.sourceFormatter === "function"){
+        try{ customText = this.options.sourceFormatter(meta, this.current) || ""; }catch(_error){}
+      }
+      source.textContent = customText || `${meta?.symbol || "--"} ${meta?.timeframe || ""} · ${String(mode).replace(/_/g, " ")} · ${count} bars`;
+      source.title = fullText;
+    }
+
+    _setCrosshairTime(time){
+      const target = this.toolbarEl.querySelector("[data-crosshair-time]");
+      if(!target) return;
+      if(time == null){
+        target.textContent = "";
+        return;
+      }
+      target.textContent = formatChartTime(time, this.options.timeZone || "UTC", true, this.options.locale || "en-US");
     }
 
     _refreshOverlay(){

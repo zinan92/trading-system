@@ -15,11 +15,11 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
 .moment{display:flex;align-items:center;gap:12px;margin:22px 0 10px}.moment .no{width:22px;height:22px;border-radius:50%;border:1px solid var(--rule-strong);display:grid;place-items:center;font-size:11px;color:var(--muted);font-family:var(--mono)}.moment .t{font-size:12px;letter-spacing:.1em;color:var(--muted);font-weight:600}.moment .s{font-size:11px;color:var(--faint)}.moment .rule{flex:1;height:1px;background:var(--rule)}
 .panel{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);min-width:0}.panel-h{display:flex;align-items:baseline;gap:10px;padding:11px 16px;border-bottom:1px solid var(--rule)}.panel-h .t{font-size:12px;letter-spacing:.08em;color:var(--muted);font-weight:600}.panel-h .right{margin-left:auto;font-size:11px;color:var(--faint);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .blind-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:14px;align-items:start}.track-h{display:flex;align-items:center;gap:8px;padding:11px 16px;border-bottom:1px solid var(--rule);font-size:12px;font-weight:600}.tdot{width:8px;height:8px;border-radius:50%;display:inline-block}.tdot.human{background:var(--human)}.tdot.ai{background:var(--machine)}.tdot.live{background:var(--run);animation:pulse 1.6s infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-.q-body{padding:14px 16px;display:grid;gap:12px}.q-row{display:grid;grid-template-columns:94px 1fr;gap:10px;align-items:center;font-size:12px}.q-row .k{color:var(--faint);font-size:11px;letter-spacing:.06em}.seg{display:inline-flex;border:1px solid var(--rule-strong);border-radius:var(--r);overflow:hidden}.seg button,.seg span{padding:6px 14px;font-size:12px;color:var(--muted);border:0;border-right:1px solid var(--rule);background:transparent;cursor:pointer}.seg button:last-child,.seg span:last-child{border-right:none}.seg .on{background:color-mix(in srgb, var(--human) 14%, transparent);color:var(--human);font-weight:600}.inp{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}.box,input,select,textarea{background:var(--panel2);border:1px solid var(--rule-strong);border-radius:var(--r);padding:7px 10px;color:var(--ink);font:12px/1.2 var(--mono);min-width:86px}textarea{width:100%;min-height:44px;resize:vertical}.conf{display:flex;align-items:center;gap:8px}.conf input{accent-color:var(--human);width:min(260px,100%)}.lock-row{display:flex;align-items:center;gap:12px;border-top:1px dashed var(--rule);padding-top:12px}.btn{font-size:12px;border-radius:var(--r);padding:8px 14px;cursor:pointer;border:1px solid var(--rule-strong);background:var(--panel2);color:var(--ink)}.btn.primary{border-color:color-mix(in srgb, var(--human) 55%, transparent);background:color-mix(in srgb, var(--human) 12%, transparent);color:var(--human);font-weight:600}.btn.buy{border-color:color-mix(in srgb, var(--run) 50%, transparent);background:color-mix(in srgb, var(--run) 10%, transparent);color:var(--run);font-weight:600}.btn.sell{border-color:color-mix(in srgb, var(--block) 48%, transparent);background:color-mix(in srgb, var(--block) 9%, transparent);color:var(--block);font-weight:600}.btn[disabled]{opacity:.45;cursor:not-allowed}.blind-note{font-size:11px;color:var(--faint)}.blind-note b{color:var(--warn);font-weight:600}
+.q-body{padding:14px 16px;display:grid;gap:12px}.q-body.locked{opacity:.58;filter:saturate(.65)}.q-body.locked input,.q-body.locked select,.q-body.locked textarea,.q-body.locked button{cursor:not-allowed}.q-row{display:grid;grid-template-columns:94px 1fr;gap:10px;align-items:center;font-size:12px}.q-row .k{color:var(--faint);font-size:11px;letter-spacing:.06em}.seg{display:inline-flex;border:1px solid var(--rule-strong);border-radius:var(--r);overflow:hidden}.seg button,.seg span{padding:6px 14px;font-size:12px;color:var(--muted);border:0;border-right:1px solid var(--rule);background:transparent;cursor:pointer}.seg button:last-child,.seg span:last-child{border-right:none}.seg .on{background:color-mix(in srgb, var(--human) 14%, transparent);color:var(--human);font-weight:600}.inp{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}.box,input,select,textarea{background:var(--panel2);border:1px solid var(--rule-strong);border-radius:var(--r);padding:7px 10px;color:var(--ink);font:12px/1.2 var(--mono);min-width:86px}textarea{width:100%;min-height:44px;resize:vertical}.conf{display:flex;align-items:center;gap:8px}.conf input{accent-color:var(--human);width:min(260px,100%)}.lock-row{display:flex;align-items:center;gap:12px;border-top:1px dashed var(--rule);padding-top:12px}.btn{font-size:12px;border-radius:var(--r);padding:8px 14px;cursor:pointer;border:1px solid var(--rule-strong);background:var(--panel2);color:var(--ink)}.btn.primary{border-color:color-mix(in srgb, var(--human) 55%, transparent);background:color-mix(in srgb, var(--human) 12%, transparent);color:var(--human);font-weight:600}.btn.buy{border-color:color-mix(in srgb, var(--run) 50%, transparent);background:color-mix(in srgb, var(--run) 10%, transparent);color:var(--run);font-weight:600}.btn.sell{border-color:color-mix(in srgb, var(--block) 48%, transparent);background:color-mix(in srgb, var(--block) 9%, transparent);color:var(--block);font-weight:600}.btn[disabled]{opacity:.45;cursor:not-allowed}.blind-note{font-size:11px;color:var(--faint)}.blind-note b{color:var(--warn);font-weight:600}
 .ai-blur{position:relative;min-height:230px;overflow:hidden}.ai-blur .fake{padding:16px;filter:blur(7px);opacity:.55;user-select:none}.fake .ln{height:11px;border-radius:3px;background:var(--panel2);margin:12px 0}.ai-blur .veil{position:absolute;inset:0;display:grid;place-items:center}.veil .msg{text-align:center;color:var(--muted);font-size:12px}
 .plan-strip{display:grid;grid-template-columns:1.15fr 1.15fr .9fr 1.2fr;gap:14px;margin-bottom:14px}.plan-card{border-radius:var(--r);border:1px solid var(--rule);background:var(--panel);padding:16px;position:relative}.plan-card.human{border-left:3px solid var(--human)}.plan-card.ai{border-left:3px solid var(--machine)}.plan-card .hd{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--faint);letter-spacing:.07em;margin-bottom:10px}.plan-card .live-badge{margin-left:auto;font-size:10px;color:var(--run);border:1px solid color-mix(in srgb, var(--run) 40%, transparent);border-radius:var(--r);padding:1px 7px;background:color-mix(in srgb, var(--run) 7%, transparent)}.plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.plan-grid .wide{grid-column:1 / -1}.plan-metric{border:1px solid var(--rule);background:var(--panel2);border-radius:var(--r);padding:10px 14px;min-width:0}.plan-metric .lab{color:var(--faint);font-size:10px;display:block;letter-spacing:.07em;margin-bottom:5px}.plan-metric b{display:block;font-family:var(--mono);font-weight:600;color:var(--ink);font-size:12px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}.plan-metric b.neg{color:var(--block)}.kv{color:var(--muted)}.kv b{font-family:var(--mono);font-weight:600;color:var(--ink)}.kv .lab{color:var(--faint);font-size:11px;display:block;letter-spacing:.06em}.diff{color:var(--warn);font-size:11px;margin-top:8px;line-height:1.35}.scoreboard{border-radius:var(--r);border:1px solid var(--rule);background:var(--panel);padding:12px 16px}.scoreboard .big{font-size:24px;font-weight:700;font-family:var(--mono)}.scoreboard .sub{font-size:11px;color:var(--faint);margin-top:3px}.gate-ok{display:inline-block;font-size:11px;color:var(--run);border:1px solid color-mix(in srgb, var(--run) 40%, transparent);border-radius:var(--r);padding:1px 7px;background:color-mix(in srgb, var(--run) 7%, transparent);margin-left:8px;vertical-align:3px}.status-card{border-left:3px solid var(--warn)}.status-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);padding:3px 0}.status-row b{margin-left:auto;font-family:var(--mono);font-weight:600}.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.status-dot.ok{background:var(--run)}.status-dot.warn{background:var(--warn)}.status-dot.blocked{background:var(--block)}
 .mid-grid{display:grid;grid-template-columns:minmax(0,2.1fr) minmax(0,1fr);gap:14px;align-items:start}.chart-wrap{display:flex;flex-direction:column;gap:14px;min-width:0;margin-bottom:24px}.chart-stage{position:relative;min-height:380px}.chart-stage.macd-on{min-height:520px}.chart-svg,.chart-kline{width:100%;display:block;min-height:380px}.chart-kline{height:380px}.chart-stage.macd-on .chart-kline{height:520px}.synthetic-warning{position:absolute;left:18px;right:18px;top:44%;transform:translateY(-50%);display:grid;gap:5px;place-items:center;padding:14px 18px;border:1px solid color-mix(in srgb, var(--block) 62%, transparent);background:color-mix(in srgb, var(--block) 28%, var(--panel));color:var(--block);font-weight:700;text-align:center;pointer-events:none;z-index:5}.synthetic-warning b{font-size:22px;letter-spacing:0}.synthetic-warning span{font-size:12px;color:var(--block);font-weight:600}.chart-foot{display:flex;gap:14px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--rule);font-size:12px;color:var(--muted)}.chart-foot b{font-family:var(--mono);color:var(--ink);font-weight:600}.tf-seg{display:inline-flex;border:1px solid var(--rule);border-radius:var(--r);overflow:hidden;font-size:11px}.tf-seg button{padding:3px 10px;color:var(--faint);background:transparent;border:0;border-right:1px solid var(--rule);cursor:pointer}.tf-seg button:last-child{border-right:0}.tf-seg .on{background:var(--panel2);color:var(--ink)}
-.context-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.context-grid details{overflow:hidden}.context-grid summary{list-style:none;cursor:pointer}.context-body{height:240px;display:block}.context-body .standard-kline-root{min-height:240px}.context-body .standard-kline-toolbar{min-height:24px;padding:4px 6px}.context-body .standard-kline-source{max-width:50%}.context-tf-seg{margin-left:auto}.rail{display:flex;flex-direction:column;gap:14px;min-width:0}.machine-card{border:1px solid color-mix(in srgb, var(--machine) 30%, transparent)}.machine-card .track-h{color:var(--machine)}.blind-badge{margin-left:auto;font-size:10px;color:var(--machine);border:1px solid color-mix(in srgb, var(--machine) 40%, transparent);border-radius:var(--r);padding:1px 7px;background:color-mix(in srgb, var(--machine) 7%, transparent)}.pnl-wrap{padding:14px 16px;display:flex;align-items:baseline;gap:16px}.pnl-wrap .total{font-size:30px;font-weight:700;font-family:var(--mono)}.pnl-split{font-size:12px;color:var(--muted);line-height:1.7}.layer{display:flex;align-items:center;gap:8px;padding:8px 16px;border-top:1px dashed var(--rule);font-size:12px}.layer .st{margin-left:auto;font-size:11px;font-family:var(--mono)}.machine-note{padding:9px 16px;border-top:1px solid var(--rule);font-size:11px;color:var(--faint)}.human-card{border:1px solid color-mix(in srgb, var(--human) 30%, transparent)}.human-card .track-h{color:var(--human)}.ticket{padding:12px 16px;display:grid;gap:10px}.ticket .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.amt{display:inline-flex;border:1px solid var(--rule-strong);border-radius:var(--r);overflow:hidden;font-size:12px;font-family:var(--mono)}.amt button{padding:5px 12px;color:var(--muted);border:0;border-right:1px solid var(--rule);background:transparent;cursor:pointer}.amt button:last-child{border-right:none}.amt .on{background:color-mix(in srgb, var(--human) 14%, transparent);color:var(--human)}.pos-line{padding:10px 16px;border-top:1px dashed var(--rule);font-size:12px;color:var(--muted)}.pos-line b{font-family:var(--mono);font-weight:600}.disc{padding:8px 16px;border-top:1px solid var(--rule);font-size:11px;color:var(--faint);display:flex;gap:14px;flex-wrap:wrap}.disc .ok{color:var(--run)}.risk-card .kv{display:flex;justify-content:space-between;gap:14px;padding:8px 16px;border-bottom:1px dashed var(--rule);font-size:12px;color:var(--muted)}.risk-card .kv:last-child{border-bottom:none}
+.context-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.context-grid details{overflow:hidden}.context-grid summary{list-style:none;cursor:pointer}.context-body{height:240px;display:block}.context-body .standard-kline-root{min-height:240px}.context-body .standard-kline-toolbar{min-height:24px;padding:4px 6px}.context-body .standard-kline-source{max-width:50%}.context-tf-seg{margin-left:auto}.ema-config{display:inline-flex;align-items:center;gap:6px;min-width:0}.ema-config label{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--rule);border-radius:var(--r);padding:2px 6px;color:var(--muted);font-size:11px}.ema-config i{width:8px;height:8px;border-radius:50%;display:inline-block}.ema-config input{width:48px;min-width:0;padding:2px 4px;font-size:11px}.ema-config[data-disabled="true"]{opacity:.45}.rail{display:flex;flex-direction:column;gap:14px;min-width:0}.machine-card{border:1px solid color-mix(in srgb, var(--machine) 30%, transparent)}.machine-card .track-h{color:var(--machine)}.blind-badge{margin-left:auto;font-size:10px;color:var(--machine);border:1px solid color-mix(in srgb, var(--machine) 40%, transparent);border-radius:var(--r);padding:1px 7px;background:color-mix(in srgb, var(--machine) 7%, transparent)}.pnl-wrap{padding:14px 16px;display:flex;align-items:baseline;gap:16px}.pnl-wrap .total{font-size:30px;font-weight:700;font-family:var(--mono)}.pnl-split{font-size:12px;color:var(--muted);line-height:1.7}.layer{display:flex;align-items:center;gap:8px;padding:8px 16px;border-top:1px dashed var(--rule);font-size:12px}.layer .st{margin-left:auto;font-size:11px;font-family:var(--mono)}.machine-note{padding:9px 16px;border-top:1px solid var(--rule);font-size:11px;color:var(--faint)}.human-card{border:1px solid color-mix(in srgb, var(--human) 30%, transparent)}.human-card .track-h{color:var(--human)}.ticket{padding:12px 16px;display:grid;gap:10px}.ticket .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.amt{display:inline-flex;border:1px solid var(--rule-strong);border-radius:var(--r);overflow:hidden;font-size:12px;font-family:var(--mono)}.amt button{padding:5px 12px;color:var(--muted);border:0;border-right:1px solid var(--rule);background:transparent;cursor:pointer}.amt button:last-child{border-right:none}.amt .on{background:color-mix(in srgb, var(--human) 14%, transparent);color:var(--human)}.pos-line{padding:10px 16px;border-top:1px dashed var(--rule);font-size:12px;color:var(--muted)}.pos-line b{font-family:var(--mono);font-weight:600}.disc{padding:8px 16px;border-top:1px solid var(--rule);font-size:11px;color:var(--faint);display:flex;gap:14px;flex-wrap:wrap}.disc .ok{color:var(--run)}.risk-card .kv{display:flex;justify-content:space-between;gap:14px;padding:8px 16px;border-bottom:1px dashed var(--rule);font-size:12px;color:var(--muted)}.risk-card .kv:last-child{border-bottom:none}
 .attr-grid{display:grid;grid-template-columns:1.1fr 1.6fr 1fr;gap:14px;align-items:stretch}.cash-card{padding:16px}.cash-big{font-size:34px;font-weight:700;font-family:var(--mono)}.cash-sub{font-size:11px;color:var(--faint);margin-top:2px}.target-bar{height:7px;border-radius:var(--r);background:var(--panel2);margin:12px 0 6px;position:relative;overflow:hidden}.target-bar i{position:absolute;left:0;top:0;bottom:0;width:24%;background:linear-gradient(90deg,var(--run),color-mix(in srgb, var(--run) 50%, transparent));border-radius:var(--r)}.calib{font-size:11px;color:var(--faint);line-height:1.8}.calib b{color:var(--muted);font-weight:600;font-family:var(--mono)}table{width:100%;border-collapse:collapse}th{font-size:10px;letter-spacing:.09em;color:var(--faint);text-align:right;font-weight:600;padding:8px 12px;border-bottom:1px solid var(--rule);white-space:nowrap}th:first-child{text-align:left}td{font-size:12px;padding:8px 12px;border-bottom:1px solid var(--rule);white-space:nowrap;text-align:right;font-family:var(--mono)}td:first-child{text-align:left;font-family:inherit}tr:last-child td{border-bottom:none}.viol{color:var(--block);font-weight:600}.judge{padding:12px 16px;display:grid;gap:10px;font-size:12px}.judge .row{display:grid;grid-template-columns:74px minmax(0,1fr) minmax(92px,auto);gap:10px;align-items:center}.judge .row>:last-child{text-align:right;justify-self:end}.judge .who{font-size:11px;color:var(--faint)}.j-ok{color:var(--run);font-family:var(--mono)}.j-bad{color:var(--block);font-family:var(--mono)}.verdict-in{margin:0 16px 14px;border:1px dashed var(--rule-strong);border-radius:var(--r);padding:9px 12px;font-size:12px;color:var(--faint);display:flex;gap:10px;align-items:center}.btn.disabled{opacity:.48;cursor:not-allowed;color:var(--faint);border-color:var(--rule);background:var(--panel2)}.foot{margin-top:18px;font-size:11px;color:var(--faint);display:flex;gap:18px;flex-wrap:wrap;padding:0 4px}.foot b{color:var(--muted);font-weight:600}.status-line{min-height:18px;font-size:11px;color:var(--faint)}.hidden{display:none!important}
 @media(max-width:1100px){.blind-grid,.plan-strip,.mid-grid,.attr-grid{grid-template-columns:1fr}.context-grid{grid-template-columns:1fr}.tabs{margin-left:0}.q-row{grid-template-columns:1fr}.shell{padding:14px 12px 32px}}
 </style>
@@ -74,7 +74,7 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
   <div class="mid-grid">
     <div class="chart-wrap">
       <div class="panel">
-        <div class="panel-h"><span class="t">GOLD · XAU/USD</span><span class="tf-seg"><button class="on" data-tf="1m">1m</button><button data-tf="5m">5m</button></span><span class="tf-seg indicator-seg"><button class="on" data-indicator="ema">EMA</button><button data-indicator="macd">MACD</button></span><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--run)"><span class="tdot live"></span>BACKEND · 只读 K 线</span><span class="right" id="mainChartMeta">你的标记 · 机器收盘揭示</span></div>
+        <div class="panel-h"><span class="t">GOLD · XAU/USD</span><span class="tf-seg"><button class="on" data-tf="1m">1m</button><button data-tf="5m">5m</button></span><span class="tf-seg indicator-seg"><button class="on" data-indicator="ema">EMA</button><button data-indicator="macd">MACD</button></span><span class="ema-config" data-ema-config><label><i style="background:var(--gold)"></i><span data-ema-label="0">EMA 20</span><input type="number" min="2" max="400" step="1" value="20" data-ema-period="0"></label><label><i style="background:var(--human)"></i><span data-ema-label="1">EMA 50</span><input type="number" min="2" max="400" step="1" value="50" data-ema-period="1"></label></span><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--run)"><span class="tdot live"></span>BACKEND · 只读 K 线</span><span class="right" id="mainChartMeta">你的标记 · 机器收盘揭示</span></div>
         <div class="chart-stage" id="mainChartStage">
           <div id="mainChart" class="chart-kline" role="img" aria-label="GOLD live standard kline" data-standard-kline-host></div>
           <div id="chartSyntheticWarning" class="synthetic-warning hidden" role="alert" aria-hidden="true" data-synthetic-market-warning>
@@ -152,6 +152,9 @@ const invalidationText = plan => (plan.invalidation || [])
 const css = getComputedStyle(document.documentElement);
 const token = name => css.getPropertyValue(name).trim();
 const LAYER_LABELS = {"grid:pending":"网格 · 等待","grid:armed":"网格 · 已激活","grid:traded":"网格 · 已成交","grid:stand_down":"网格 · 站下","trend:pending":"趋势 · 等待","trend:standby":"趋势 · 待命","trend:armed":"趋势 · 已激活","trend:traded":"趋势 · 已成交","trend:frozen":"趋势 · 冻结","trend:stand_down":"趋势 · 站下","bracket:target":"括号单 · 止盈","bracket:stop":"括号单 · 止损"};
+const BEIJING_TZ = "Asia/Shanghai";
+const MARKET_BAR_LIMIT = 240;
+const DEFAULT_EMA_PERIODS = [20, 50];
 const CONTEXT_TIMEFRAMES = ["15m", "30m", "1h", "4h"];
 const CONTEXT_SLOTS = [
   {id:"ctx15", titleId:"ctx15Title", metaId:"ctx15Meta", defaultTf:"15m", storageKey:"dualtrack.context.ctx15.tf"},
@@ -179,12 +182,33 @@ function indicatorSettings(){
     macd:storageGet("dualtrack.main.indicators.macd", "0") === "1",
   };
 }
+function emaPeriods(){
+  const parsed = storageGet("dualtrack.main.indicators.ema.periods", DEFAULT_EMA_PERIODS.join(","))
+    .split(",")
+    .map(value => Math.round(Number(value)))
+    .filter(value => Number.isFinite(value) && value >= 2 && value <= 400)
+    .slice(0, 2);
+  return parsed.length === 2 ? parsed : DEFAULT_EMA_PERIODS.slice();
+}
 function mainIndicators(){
   const settings = indicatorSettings();
-  const enabled = {ema:[{period:20},{period:50}], macd:{fast:12, slow:26, signal:9}};
+  const enabled = {ema:emaPeriods().map(period => ({period})), macd:{fast:12, slow:26, signal:9}};
   if(!settings.ema) enabled.ema = [];
   if(!settings.macd) delete enabled.macd;
   return enabled;
+}
+function syncEmaControls(){
+  const periods = emaPeriods();
+  const enabled = indicatorSettings().ema;
+  const root = document.querySelector("[data-ema-config]");
+  if(root) root.dataset.disabled = enabled ? "false" : "true";
+  periods.forEach((period, index) => {
+    const input = document.querySelector(`[data-ema-period="${index}"]`);
+    const label = document.querySelector(`[data-ema-label="${index}"]`);
+    if(input) input.value = String(period);
+    if(input) input.disabled = !enabled;
+    if(label) label.textContent = `EMA ${period}`;
+  });
 }
 
 function setSegment(rootId, key){
@@ -212,6 +236,7 @@ function syncIndicatorButtons(){
   const settings = indicatorSettings();
   document.querySelector('[data-indicator="ema"]')?.classList.toggle("on", settings.ema);
   document.querySelector('[data-indicator="macd"]')?.classList.toggle("on", settings.macd);
+  syncEmaControls();
 }
 function bindIndicatorToggles(){
   syncIndicatorButtons();
@@ -223,6 +248,19 @@ function bindIndicatorToggles(){
     const next = button.classList.contains("on") ? "0" : "1";
     localStorage.setItem(key, next);
     syncIndicatorButtons();
+    renderMainKline();
+  });
+}
+function bindEmaPeriodControls(){
+  document.querySelector("[data-ema-config]")?.addEventListener("change", (event) => {
+    const input = event.target.closest("input[data-ema-period]");
+    if(!input) return;
+    const periods = emaPeriods();
+    const index = Number(input.dataset.emaPeriod);
+    const next = Math.min(400, Math.max(2, Math.round(Number(input.value) || periods[index] || DEFAULT_EMA_PERIODS[index] || 20)));
+    periods[index] = next;
+    storageSet("dualtrack.main.indicators.ema.periods", periods.join(","));
+    syncEmaControls();
     renderMainKline();
   });
 }
@@ -251,6 +289,7 @@ function bindContextTimeframeSegments(){
 setSegment("directionSeg", "direction"); setSegment("orderSide", "orderSide"); setSegment("orderType", "orderType"); setSegment("orderNotional", "orderNotional");
 bindTimeframeSegment();
 bindIndicatorToggles();
+bindEmaPeriodControls();
 bindContextTimeframeSegments();
 $("confidence").addEventListener("input", () => $("confidenceText").textContent = `${$("confidence").value}/10`);
 $("addInvalid").addEventListener("click", () => {
@@ -266,7 +305,7 @@ async function api(path, options={}){
   return response.json();
 }
 async function loadMainMarket(){
-  const market = await api(`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=96`).catch(() => null);
+  const market = await api(`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`).catch(() => null);
   state.market = market;
   const marketCandles = marketBarsToCandles(market);
   if(marketCandles.length) state.candles = marketCandles;
@@ -284,8 +323,8 @@ async function loadAll(){
       api(`/api/dualtrack/human/${cycleId}`).catch(() => null),
       api("/api/dualtrack/ledger").catch(() => null),
       loadMainMarket(),
-      api(`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context15Tf)}&limit=96`).catch(() => null),
-      api(`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context1hTf)}&limit=96`).catch(() => null),
+      api(`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context15Tf)}&limit=${MARKET_BAR_LIMIT}`).catch(() => null),
+      api(`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context1hTf)}&limit=${MARKET_BAR_LIMIT}`).catch(() => null),
       api("/api/dualtrack/runtime/status").catch(() => null)
     ]);
     state.plan = plan; state.machine = machine; state.human = human; state.ledger = ledger; state.market = market; state.context15 = context15; state.context1h = context1h; state.runtimeStatus = runtimeStatus;
@@ -307,18 +346,47 @@ function renderAll(){
 function renderTopbar(){
   const cycle = state.cycle || {};
   $("cycleChip").innerHTML = `<b>${esc(cycle.kind || "周期")}</b><span class="num">${esc(cycle.cycle_id || "--")}</span><b class="num">剩 ${seconds(cycle.countdown_seconds)}</b>`;
-  $("clockText").textContent = new Date().toLocaleString("zh-CN", {timeZone:"Asia/Shanghai", hour12:false});
-  $("lockCountdown").textContent = cycle.start_cst ? `开始 ${cycle.start_cst.slice(11,16)} CST` : "--";
+  $("clockText").textContent = `${formatBeijingDateTime(new Date())} 北京时间`;
+  $("lockCountdown").textContent = cycle.start ? `开始 北京 ${formatBeijingTime(cycle.start)}` : "--";
 }
 function renderInvalidation(){
   $("invalidList").innerHTML = state.invalidation.map((row, i) => `<span class="box">${row.side === "below" ? "跌破" : "升破"} ${fmt(row.price)} · ${row.confirm === "touch" ? "触及" : "1m收盘"} <button type="button" class="btn" style="padding:2px 6px" onclick="removeInvalid(${i})">x</button></span>`).join(" ");
 }
 window.removeInvalid = (i) => { state.invalidation.splice(i, 1); renderInvalidation(); };
+function syncPlanDirectionButtons(direction){
+  const target = direction === "short" ? "short" : direction === "flat" ? "flat" : "long";
+  document.querySelectorAll("#directionSeg button[data-value]").forEach(button => button.classList.toggle("on", button.dataset.value === target));
+  state.direction = target;
+}
+function applyLockedPlanToForm(plan){
+  if(!plan) return;
+  syncPlanDirectionButtons(plan.direction);
+  const range = plan.range || {};
+  $("rangeLow").value = hasPrice(range.low) ? Number(range.low).toFixed(1) : "";
+  $("rangeHigh").value = hasPrice(range.high) ? Number(range.high).toFixed(1) : "";
+  $("rangeHigh").placeholder = hasPrice(range.high) ? "" : "open upside";
+  $("keyLevels").value = (plan.key_levels || []).map(value => fmt(value,0)).join(", ");
+  state.invalidation = Array.isArray(plan.invalidation) ? plan.invalidation.map(row => ({...row})) : [];
+  $("confidence").value = Number(plan.confidence || 0);
+  $("confidenceText").textContent = `${$("confidence").value}/10`;
+  renderInvalidation();
+}
+function syncPlanFormLock(locked){
+  const form = $("planForm");
+  form.classList.toggle("locked", locked);
+  form.setAttribute("aria-disabled", locked ? "true" : "false");
+  [...form.querySelectorAll("input,select,textarea,button")].forEach(control => {
+    control.disabled = locked;
+  });
+}
 function renderBlind(){
   const human = state.plan?.human_plan;
   const ai = state.plan?.ai_plan;
-  $("blindTitle").textContent = human?.status === "locked" ? `你的作战单 · 已锁定 ${shortTime(human.locked_at)}` : "你的作战单 · 盲答中";
-  $("lockPlanBtn").disabled = human?.status === "locked";
+  const locked = human?.status === "locked";
+  $("blindTitle").textContent = locked ? `你的作战单 · 已锁定 北京 ${formatBeijingTime(human.locked_at)}` : "你的作战单 · 盲答中";
+  $("blindTitle").title = locked ? formatBeijingDateTime(human.locked_at) + " 北京时间" : "";
+  if(locked) applyLockedPlanToForm(human);
+  syncPlanFormLock(locked);
   if(state.plan?.ai_plan_revealed && ai){
     $("aiBlindPanel").classList.remove("ai-blur");
     $("aiPanelBody").innerHTML = planBody(ai, "ai");
@@ -373,7 +441,7 @@ function renderHuman(){
   $("disciplineLine").innerHTML = bad ? `<span class="viol">${bad} 笔计划外</span><span class="dim">违规单照常执行，对账标红</span>` : `<span class="ok">Range 内</span><span class="ok">与作战单方向一致</span><span class="dim">违规单照常执行，对账标红</span>`;
 }
 function renderRisk(){
-  $("riskCard").innerHTML = `<div class="track-h" style="color:var(--muted)"><span class="tdot" style="background:var(--warn)"></span>风险 · 10x 杠杆</div><div class="kv"><span>单轨纸面资金</span><b>$10,000</b></div><div class="kv"><span>机器轨动作</span><b>失效全平 + re-arm 一次</b></div><div class="kv"><span>人工轨纪律</span><b>只标记，不阻断</b></div><div class="kv"><span>NIGHT 周期</span><b class="warn">横跨 NY17:00 swap 时点</b></div>`;
+  $("riskCard").innerHTML = `<div class="track-h" style="color:var(--muted)"><span class="tdot" style="background:var(--warn)"></span>风险 · 10x 杠杆</div><div class="kv"><span>单轨纸面资金</span><b>$10,000</b></div><div class="kv"><span>机器轨动作</span><b>失效全平 + re-arm 一次</b></div><div class="kv"><span>人工轨纪律</span><b>只标记，不阻断</b></div><div class="kv"><span>NIGHT 周期</span><b class="warn">横跨 北京 05:00 swap 时点</b></div>`;
 }
 function renderAttribution(){
   const attr = state.attribution;
@@ -407,6 +475,7 @@ function judgeRow(label, row={}){
 }
 async function lockPlan(event){
   event.preventDefault();
+  if(state.plan?.human_plan?.status === "locked") return;
   const cycleId = state.cycle?.cycle_id;
   if(!cycleId) return;
   const payload = {cycle_id:cycleId, direction:state.direction, range:{low:Number($("rangeLow").value), high:Number($("rangeHigh").value)}, key_levels:$("keyLevels").value.split(/[,\n]/).map(v => Number(v.trim())).filter(Boolean), invalidation:state.invalidation, confidence:Number($("confidence").value), source:"console"};
@@ -471,7 +540,7 @@ function renderMainKline(){
 }
 function ensureMainKline(){
   if(!state.mainKline){
-    state.mainKline = new StandardKline.StandardKlineChart($("mainChart"), {height:380, showVolume:true, syntheticFlags:DUALTRACK_SYNTHETIC_FLAGS});
+    state.mainKline = new StandardKline.StandardKlineChart($("mainChart"), {height:380, showVolume:true, timeZone:"Asia/Shanghai", locale:"zh-CN", sourceFormatter:dashboardKlineSourceLabel, syntheticFlags:DUALTRACK_SYNTHETIC_FLAGS});
   }
   return state.mainKline;
 }
@@ -483,7 +552,7 @@ function renderContextKline(id, market, candles, label){
 }
 function ensureContextKline(id){
   if(!state.contextKlines[id]){
-    state.contextKlines[id] = new StandardKline.StandardKlineChart($(id), {height:240, showVolume:false, compact:true, syntheticFlags:DUALTRACK_SYNTHETIC_FLAGS});
+    state.contextKlines[id] = new StandardKline.StandardKlineChart($(id), {height:240, showVolume:false, compact:true, timeZone:"Asia/Shanghai", locale:"zh-CN", sourceFormatter:dashboardKlineSourceLabel, syntheticFlags:DUALTRACK_SYNTHETIC_FLAGS});
   }
   return state.contextKlines[id];
 }
@@ -625,28 +694,42 @@ function renderSyntheticWarning(){
   warning.classList.toggle("hidden", !synthetic);
   warning.setAttribute("aria-hidden", synthetic ? "false" : "true");
 }
+function sourceModeLabel(mode){
+  return {
+    tiger_openapi:"原生K线",
+    requested_symbol:"原生K线",
+    binance_usdm_fallback:"本地缓存",
+    derived_from_1m:"由1m聚合",
+    derived_from_5m:"由5m聚合",
+    synthetic_fallback:"模拟",
+    missing:"缺失",
+  }[mode] || mode || "--";
+}
+function dashboardKlineSourceLabel(meta){
+  const count = meta?.bar_count || 0;
+  return `${meta?.symbol || "--"} ${meta?.timeframe || ""} · ${sourceModeLabel(meta?.source_mode)} · ${count}根`;
+}
 function marketSourceText(){
   const market = state.market;
   if(!market) return "行情 · 后端读取中";
   if(isSyntheticMarket(market)) return `行情 · 模拟数据 · 非真实价格 · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
-  const mode = {tiger_openapi:"Tiger/COMEX", binance_usdm_fallback:"本地 Binance 缓存", requested_symbol:"指定本地序列", synthetic_fallback:"展示种子数据"}[market.source_mode] || market.source_mode;
-  return `行情 · ${mode} · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
+  const mode = sourceModeLabel(market.source_mode);
+  const fallback = market.source_mode === "binance_usdm_fallback" ? "（fallback：主源不可用或不新鲜）" : "";
+  return `行情 · ${mode}${fallback} · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
 }
 function marketHeaderMeta(market){
   if(!market) return "后端读取中";
-  const mode = {tiger_openapi:"Tiger", binance_usdm_fallback:"缓存", requested_symbol:"本地", synthetic_fallback:"模拟"}[market.source_mode] || market.source_mode || "--";
   const fresh = market.fresh === false ? "stale" : "fresh";
-  return `${market.timeframe || "--"} · ${mode} · ${fresh}`;
+  return `${market.timeframe || "--"} · ${sourceModeLabel(market.source_mode)} · ${fresh}`;
 }
 function contextMeta(market, candles){
   if(!market || !candles.length) return "无真实 context";
-  const mode = {derived_from_1m:"1m聚合", derived_from_5m:"5m聚合", requested_symbol:"原生", binance_usdm_fallback:"缓存", tiger_openapi:"Tiger"}[market.source_mode] || market.source_mode || "--";
   const fresh = market.fresh === false ? "stale" : "fresh";
-  return `${market.timeframe || "--"} · ${mode} · ${fresh}`;
+  return `${market.timeframe || "--"} · ${sourceModeLabel(market.source_mode)} · ${fresh}`;
 }
 function contextFullMeta(market, candles){
   if(!market || !candles.length) return "无真实 context";
-  const mode = {derived_from_1m:"1m聚合", derived_from_5m:"5m聚合", requested_symbol:"原生序列", binance_usdm_fallback:"Binance缓存", tiger_openapi:"Tiger/COMEX"}[market.source_mode] || market.source_mode || "--";
+  const mode = sourceModeLabel(market.source_mode);
   const first = candles[0].close, last = candles[candles.length - 1].close;
   const change = first ? (last - first) / first * 100 : 0;
   const floor = state.plan?.human_plan?.range?.low;
@@ -719,7 +802,17 @@ function replayLink(url, label, disabledLabel){
 }
 function dirText(direction){ return ({long:"做多", short:"做空", flat:"观望", absent:"缺失"})[direction] || "--"; }
 function seconds(value){ const s = Math.max(0, Number(value || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return `${h}h${String(m).padStart(2,"0")}m`; }
-function shortTime(value){ return value ? String(value).slice(11,16) : "--"; }
+function formatBeijingTime(value){
+  const date = value instanceof Date ? value : new Date(value || "");
+  if(Number.isNaN(date.getTime())) return "--";
+  return new Intl.DateTimeFormat("zh-CN", {timeZone:BEIJING_TZ, hour:"2-digit", minute:"2-digit", hour12:false}).format(date);
+}
+function formatBeijingDateTime(value){
+  const date = value instanceof Date ? value : new Date(value || "");
+  if(Number.isNaN(date.getTime())) return "--";
+  return new Intl.DateTimeFormat("zh-CN", {timeZone:BEIJING_TZ, year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false}).format(date);
+}
+function shortTime(value){ return formatBeijingTime(value); }
 function shortPath(value){ if(!value) return "--"; const parts = String(value).split("/").filter(Boolean); return parts.slice(-3).join("/") || value; }
 function cycleClosed(cycle){ return Boolean(cycle?.end && Date.now() >= Date.parse(cycle.end)); }
 loadAll(); setInterval(loadAll, 30000);

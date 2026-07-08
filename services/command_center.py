@@ -179,6 +179,8 @@ def _next_action(system: dict[str, Any], cycle: dict[str, Any] | None) -> dict[s
 
 
 def _parse_time(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
     try:
         return parse_utc(value)
     except (TypeError, ValueError):

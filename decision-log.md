@@ -2157,3 +2157,46 @@ Date: 2026-07-08
 - Red phase: new package tests initially failed because `computeEma` / `computeMacd` were undefined; new dashboard static tests initially failed on missing merge, selectors, composition, and indicators.
 - Green phase: `node --test packages/standard-kline/standard-kline.test.js`, `python3 -m pytest -q tests/test_dashboard_dualtrack_static.py tests/test_design_tokens_static.py tests/test_standard_kline_adapter.py`, and full `python3 -m pytest -q` passed.
 - Browser phase: `http://127.0.0.1:8875/dashboard-dualtrack-v5.html` loaded without JS errors; main/context canvases were nonblank; MACD pane/toggle and context timeframe persistence worked.
+
+## 2026-07-08 Browser Comment Fixes for Task 08
+
+### Decisions
+
+- Display all DualTrack console times as Beijing time.
+  - Rationale: raw UTC slices made `locked_at=2026-07-08T01:00:04+00:00` appear as `01:00`, while the user mental model is Beijing `09:00`.
+  - Evidence: the blind title now renders `你的作战单 · 已锁定 北京 09:00`; cycle start renders `开始 北京 21:00`; top clock includes `北京时间`.
+
+- Make a locked blind plan visibly read-only.
+  - Rationale: after lock, the form is not a draft surface. It now syncs to the locked plan snapshot, disables all form controls, and applies a grey locked style.
+  - Evidence: browser validation confirmed `#planForm.locked` and all plan inputs/buttons disabled.
+
+- Keep the chart toolbar short and push full market-source detail into `title`.
+  - Rationale: the standard-kline toolbar was overflowing into the right rail. The visible label now uses a short source formatter such as `GOLD 1m · 本地缓存 · 240根`, while the full `binance_usdm_fallback` technical string stays in the title.
+  - Boundary: `fallback` is not hidden; chart-foot/source title explains it as `fallback：主源不可用或不新鲜`.
+
+- Load more bars for interactive zoom-out.
+  - Rationale: 96 bars made the left side feel artificially capped. Main and context market requests now use `MARKET_BAR_LIMIT = 240`.
+
+- Add standard-kline time affordances.
+  - Rationale: TradingView-style use needs visible time context. The package now formats time axis labels through configurable `timeZone`/`locale` and shows crosshair time in the toolbar on hover.
+
+- Make EMA visible and editable.
+  - Rationale: a bare `EMA` toggle did not explain which periods were active. The dashboard now shows editable `EMA 20` / `EMA 50` controls with color dots, persisted through localStorage.
+
+- State context source truthfully.
+  - Rationale: the 15m/30m/1h/4h panels are not guaranteed native exchange timeframe bars. The UI now says `由1m聚合` when that is the backend source mode and `原生K线` only for native/requested series.
+
+### Gotchas
+
+- Do not label UTC-derived fields by slicing the ISO string. Always format through the Beijing helper when the page is user-facing.
+
+- Do not remove `binance_usdm_fallback` from the full source title; the short label can be readable, but provenance must remain inspectable.
+
+- `services.command_center._parse_time(None)` must return `None`, not `parse_utc(None)`, because the latter resolves to real current time and makes fixed phase tests date-sensitive after the fixture cycle end.
+
+### Evidence
+
+- Static/browser-comment regression: `python3 -m pytest -q tests/test_command_center_api.py tests/test_dashboard_dualtrack_static.py tests/test_design_tokens_static.py tests/test_standard_kline_adapter.py` passed.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed.
+- Full regression: `python3 -m pytest -q` passed with `1244 passed`.
+- Browser phase: `http://127.0.0.1:8765/dashboard-dualtrack-v5.html` loaded with no JS errors; screenshot saved at `outputs/codex_browser_comments_fix.png`.
