@@ -2117,3 +2117,43 @@ Date: 2026-07-08
 - `packages/standard-kline/standard-kline.js` must remain standalone, so its default K-line color literals are allowed; page overlays should pull identity/state colors from CSS tokens where practical.
 
 - OPS dark conversion can make old low-alpha light-paper layers invisible if `rgba(255,250,241,...)` or `rgba(38,31,18,...)` returns. The static test blocks the old `#f6efe4` / `#fffaf1` / `#17130c` anchors, but visual review still matters for contrast.
+
+## 2026-07-08 Task 08 Chart Indicators and Composition
+
+### Decisions
+
+- Promote `packages/standard-kline` to v0.2 with provider-agnostic EMA/MACD support.
+  - Rationale: indicator math belongs in the reusable chart package, while business overlays stay in the calling dashboard.
+  - Evidence: `computeEma`, `computeMacd`, `setAdaptedData(..., {indicators})`, package version `0.2.0`, and the Node fixture tests.
+
+- Use the vendored Lightweight Charts 5.2 pane API for MACD.
+  - Rationale: the bundled library exposes `addPane`, `removePane`, `paneIndex`, and pane-local `addSeries`, so MACD can render in a real lower pane instead of a fake overlay.
+  - Evidence: browser validation created a MACD pane and series without page errors.
+
+- Merge same-band main-chart price lines before rendering.
+  - Rationale: range, level, fill, target, and invalidation lines can land within 0.05%; grouping keeps the chart readable while preserving all titles.
+  - Priority: invalid > range > fill/target > level.
+
+- Keep context charts bars-only with optional EMA50.
+  - Rationale: context panels are for higher-timeframe direction, not intraday execution evidence; no markers or price lines are passed into context charts.
+  - Blind-protocol guard: `renderContextKline` still passes no `markers` and no `priceLines`, and `renderMainKline` reads only `state.human?.fills`.
+
+- Persist user-facing chart controls in localStorage.
+  - Rationale: EMA defaults on, MACD defaults off, and the two context slots default to 15m/1h but can be independently changed to 15m/30m/1h/4h.
+  - Evidence: browser validation toggled MACD on and changed `ctx15` to 30m with persisted storage and updated title.
+
+### Gotchas
+
+- `packages/standard-kline` must stay free of DualTrack and human/machine business vocabulary; the package test encodes forbidden terms so the test file itself does not pollute direct text searches.
+
+- MACD depends on the vendored Lightweight Charts 5.2 pane API. If the vendor bundle is replaced, re-check `addPane`, `removePane`, `paneIndex`, and pane-local `addSeries` before changing chart code.
+
+- Context charts must remain fill-free. Adding markers or price lines there would create a blind-answer leak surface even if the source data is otherwise safe.
+
+- `mockups/design-tokens-proposal.html` remains immutable; Task 08 only consumes the approved tokens and keeps the token color whitelist green.
+
+### Evidence
+
+- Red phase: new package tests initially failed because `computeEma` / `computeMacd` were undefined; new dashboard static tests initially failed on missing merge, selectors, composition, and indicators.
+- Green phase: `node --test packages/standard-kline/standard-kline.test.js`, `python3 -m pytest -q tests/test_dashboard_dualtrack_static.py tests/test_design_tokens_static.py tests/test_standard_kline_adapter.py`, and full `python3 -m pytest -q` passed.
+- Browser phase: `http://127.0.0.1:8875/dashboard-dualtrack-v5.html` loaded without JS errors; main/context canvases were nonblank; MACD pane/toggle and context timeframe persistence worked.

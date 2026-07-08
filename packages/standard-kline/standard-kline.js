@@ -31,6 +31,11 @@
     red:"#ef5f5f",
     amber:"#e8a33d",
     panel:"rgba(10,11,12,.82)",
+    ema:["#d8aa3f", "#7aa2ff", "#b894ff"],
+    macd:"rgba(53,208,127,.5)",
+    macdNegative:"rgba(239,95,95,.5)",
+    macdLine:"#9aa3ad",
+    macdSignal:"#e8eaed",
   };
 
   function normalizeQualityFlags(value){
@@ -180,6 +185,49 @@
     return Number(value || 0).toLocaleString("en-US", {minimumFractionDigits:digits, maximumFractionDigits:digits});
   }
 
+  function normalizePeriod(value, fallback){
+    const parsed = Math.floor(Number(value ?? fallback));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : Math.floor(Number(fallback));
+  }
+
+  function computeEmaValues(points, period){
+    const safePeriod = normalizePeriod(period, 1);
+    const multiplier = 2 / (safePeriod + 1);
+    let previous = null;
+    return (points || []).map(point => {
+      const value = numberOrNull(point.value);
+      if(value == null) return null;
+      previous = previous == null ? value : value * multiplier + previous * (1 - multiplier);
+      return {time:point.time, value:previous};
+    }).filter(Boolean);
+  }
+
+  function computeEma(candles, period){
+    const points = (candles || []).map(candle => ({time:candle.time, value:candle.close}));
+    return computeEmaValues(points, period);
+  }
+
+  function computeMacd(candles, options){
+    const fast = normalizePeriod(options?.fast, 12);
+    const slow = normalizePeriod(options?.slow, 26);
+    const signalPeriod = normalizePeriod(options?.signal, 9);
+    const fastEma = computeEma(candles, fast);
+    const slowEma = computeEma(candles, slow);
+    const slowByTime = new Map(slowEma.map(point => [point.time, point.value]));
+    const macd = fastEma.map(point => {
+      const slowValue = slowByTime.get(point.time);
+      if(!Number.isFinite(slowValue)) return null;
+      return {time:point.time, value:point.value - slowValue};
+    }).filter(Boolean);
+    const signal = computeEmaValues(macd, signalPeriod);
+    const signalByTime = new Map(signal.map(point => [point.time, point.value]));
+    const histogram = macd.map(point => {
+      const signalValue = signalByTime.get(point.time);
+      return {time:point.time, value:point.value - (Number.isFinite(signalValue) ? signalValue : 0)};
+    });
+    return {macd, signal, histogram};
+  }
+
   function lineStyleValue(style){
     const lwc = root.LightweightCharts || {};
     if(style === "solid") return lwc.LineStyle?.Solid ?? 0;
@@ -219,6 +267,11 @@
       this.candleSeries = null;
       this.volumeSeries = null;
       this.markerApi = null;
+      this.emaSeries = [];
+      this.macdPane = null;
+      this.macdSeries = null;
+      this.macdSignalSeries = null;
+      this.macdHistogramSeries = null;
       this.priceLines = [];
       this.current = adaptBarPayload(null);
       this.resizeObserver = null;
@@ -366,6 +419,7 @@
       if(this.volumeSeries) this.volumeSeries.setData(this.current.volumes || []);
       this._setPriceLines(overlays?.priceLines || []);
       this._setMarkers(overlays?.markers || []);
+      this._setIndicators(overlays?.indicators || null);
       this._setSourceText(this.current.meta);
       this._refreshOverlay();
       if(candles.length && overlays?.fit !== false) this.fit();
@@ -395,6 +449,74 @@
           title:line.title || "",
         }));
       });
+    }
+
+    _removeSeries(series){
+      if(!series || !this.chart?.removeSeries) return;
+      try{ this.chart.removeSeries(series); }catch(_error){}
+    }
+
+    _clearIndicators(){
+      this.emaSeries.forEach(series => this._removeSeries(series));
+      this.emaSeries = [];
+      [this.macdHistogramSeries, this.macdSeries, this.macdSignalSeries].forEach(series => this._removeSeries(series));
+      this.macdHistogramSeries = null;
+      this.macdSeries = null;
+      this.macdSignalSeries = null;
+      if(this.macdPane && this.chart?.removePane){
+        try{ this.chart.removePane(this.macdPane.paneIndex()); }catch(_error){}
+      }
+      this.macdPane = null;
+    }
+
+    _setIndicators(indicators){
+      this._clearIndicators();
+      if(!this.chart || !this.current?.candles?.length || !indicators) return;
+      const lwc = root.LightweightCharts || {};
+      const candles = this.current.candles || [];
+      const emaConfigs = Array.isArray(indicators.ema) ? indicators.ema.slice(0, 3) : [];
+      emaConfigs.forEach((config, index) => {
+        if(!lwc.LineSeries) return;
+        const period = normalizePeriod(config?.period, 20);
+        const series = this.chart.addSeries(lwc.LineSeries, {
+          color:config?.color || COLORS.ema[index] || COLORS.gold,
+          lineWidth:config?.lineWidth || 1,
+          priceLineVisible:false,
+          lastValueVisible:false,
+        });
+        series.setData(computeEma(candles, period));
+        this.emaSeries.push(series);
+      });
+      if(indicators.macd && lwc.HistogramSeries && lwc.LineSeries && this.chart.addPane){
+        const macdConfig = indicators.macd || {};
+        this.macdPane = this.chart.addPane();
+        this.macdPane.setHeight?.(Math.max(110, Number(this.options.macdPaneHeight || 128)));
+        this.macdHistogramSeries = this.macdPane.addSeries(lwc.HistogramSeries, {
+          priceFormat:{type:"price", precision:3, minMove:.001},
+          priceLineVisible:false,
+          lastValueVisible:false,
+        });
+        this.macdSeries = this.macdPane.addSeries(lwc.LineSeries, {
+          color:macdConfig.macdColor || COLORS.macdLine,
+          lineWidth:1,
+          priceLineVisible:false,
+          lastValueVisible:false,
+        });
+        this.macdSignalSeries = this.macdPane.addSeries(lwc.LineSeries, {
+          color:macdConfig.signalColor || COLORS.macdSignal,
+          lineWidth:1,
+          priceLineVisible:false,
+          lastValueVisible:false,
+        });
+        const macd = computeMacd(candles, macdConfig);
+        this.macdHistogramSeries.setData(macd.histogram.map(point => ({
+          time:point.time,
+          value:point.value,
+          color:point.value >= 0 ? COLORS.macd : COLORS.macdNegative,
+        })));
+        this.macdSeries.setData(macd.macd);
+        this.macdSignalSeries.setData(macd.signal);
+      }
     }
 
     _setSourceText(meta){
@@ -509,6 +631,8 @@
     StandardKlineChart,
     adaptBarPayload,
     clampLogicalRange,
+    computeEma,
+    computeMacd,
     isSyntheticMeta,
     nearestTime,
     normalizeQualityFlags,

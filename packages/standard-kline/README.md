@@ -15,7 +15,7 @@
 
 ```text
 in  OHLCV bars + provider/source metadata + optional overlay arrays
-out candlestick chart + volume histogram + price lines + markers + synthetic-data watermark
+out candlestick chart + volume histogram + price lines + markers + optional indicators + synthetic-data watermark
 
 fail missing LightweightCharts → visible "chart library missing" overlay
 fail invalid/missing OHLC rows  → drop bad rows instead of crashing
@@ -61,6 +61,8 @@ npm install lightweight-charts
 const {
   StandardKlineChart,
   adaptBarPayload,
+  computeEma,
+  computeMacd,
   nearestTime,
 } = require("standard-kline");
 ```
@@ -124,6 +126,10 @@ chart.setPayload(payload, {
       text: "entry 4180.0",
     },
   ],
+  indicators: {
+    ema: [{ period: 20 }, { period: 50 }],
+    macd: { fast: 12, slow: 26, signal: 9 },
+  },
   fit: true,
 });
 
@@ -138,14 +144,37 @@ chart.fit();      // show the full safe data window
 
 - `priceLines`: `{ price, title, color, lineStyle, lineWidth }[]`
 - `markers`: Lightweight Charts marker objects
+- `indicators`: optional EMA/MACD config derived only from the candle bars
 
-它不会内置 trade plan、fill、human/machine track、strategy signal 等业务模型。调用方应该在自己的应用层把业务对象转成 `priceLines` 和 `markers`，再传给图表。
+它不会内置 trade plan、fill、strategy signal 等业务模型。调用方应该在自己的应用层把业务对象转成 `priceLines` 和 `markers`，再传给图表。
 
 如果 marker 的时间戳不一定刚好落在 candle 上，可以先用 `nearestTime`：
 
 ```js
 const markerTime = StandardKline.nearestTime(adapted.candles, fill.timestamp);
 ```
+
+## Indicators
+
+`standard-kline` v0.2 提供两个纯计算 helper，并允许 `setPayload` / `setAdaptedData` 同步渲染指标：
+
+```js
+const ema20 = computeEma(adapted.candles, 20);
+const macd = computeMacd(adapted.candles, { fast: 12, slow: 26, signal: 9 });
+
+chart.setAdaptedData(adapted, {
+  indicators: {
+    ema: [
+      { period: 20 },
+      { period: 50 },
+      { period: 200, color: "#e8eaed" },
+    ],
+    macd: { fast: 12, slow: 26, signal: 9 },
+  },
+});
+```
+
+EMA 最多渲染三条主图线，默认颜色依次为 `#d8aa3f`、`#7aa2ff`、`#b894ff`，调用方可以在每条 EMA config 上覆盖 `color`。MACD 使用独立 pane；histogram 正值/负值默认是 `rgba(53,208,127,.5)` / `rgba(239,95,95,.5)`，MACD/signal 线默认是 `#9aa3ad` / `#e8eaed`。
 
 ## Synthetic / Demo 数据
 
@@ -198,6 +227,8 @@ const adapted = StandardKline.adaptBarPayload(payload, { syntheticFlags });
 ### Pure helpers
 
 - `adaptBarPayload(payload, options?)`
+- `computeEma(candles, period)`
+- `computeMacd(candles, options?)`
 - `isSyntheticMeta(meta, syntheticFlags?)`
 - `clampLogicalRange(range, barCount, options?)`
 - `nearestTime(candles, timestamp)`
@@ -226,11 +257,11 @@ npm test
 node --test standard-kline.test.js
 ```
 
-当前测试覆盖 adapter、timestamp conversion、synthetic detection、range clamp、nearest candle snapping。`StandardKlineChart` 需要真实 DOM 和 `lightweight-charts`，建议在接入应用里用 Playwright 做浏览器级验证。
+当前测试覆盖 adapter、timestamp conversion、synthetic detection、range clamp、nearest candle snapping、EMA 和 MACD fixture。`StandardKlineChart` 需要真实 DOM 和 `lightweight-charts`，建议在接入应用里用 Playwright 做浏览器级验证。
 
 ## 发布状态
 
-- 当前版本：`0.1.0`
+- 当前版本：`0.2.0`
 - 模块格式：UMD + CommonJS
 - peer dependency：`lightweight-charts ^5.2.0`
 - license：MIT

@@ -53,8 +53,12 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     assert "function cycleClosed(cycle)" in html
     assert 'api("/api/dualtrack/ledger")' in html
     assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=96`" in html
-    assert 'api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=15m&limit=64")' in html
-    assert 'api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=1h&limit=64")' in html
+    assert "const context15Tf = contextTimeframe(CONTEXT_SLOTS[0])" in html
+    assert "const context1hTf = contextTimeframe(CONTEXT_SLOTS[1])" in html
+    assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context15Tf)}&limit=96`" in html
+    assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context1hTf)}&limit=96`" in html
+    assert 'api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=15m&limit=64")' not in html
+    assert 'api("/api/dualtrack/market/bars?symbol=GOLD&timeframe=1h&limit=64")' not in html
     assert 'api("/api/dualtrack/runtime/status")' in html
     assert 'api("/api/dualtrack/verdict"' in html
     assert "data/vendor/lightweight-charts.standalone.production.js" in html
@@ -124,12 +128,12 @@ def test_dualtrack_v5_removes_ops_connector_panels_from_decision_page():
 def test_dualtrack_v5_p2_uses_readable_context_charts_and_grouped_plan_cards():
     html = read_html()
 
-    assert ".context-body{height:150px;display:block}" in html
-    assert '<div id="ctx15" class="context-body" data-standard-kline-context="15m"></div>' in html
-    assert '<div id="ctx1h" class="context-body" data-standard-kline-context="1h"></div>' in html
+    assert ".context-body{height:240px;display:block}" in html
+    assert '<div id="ctx15" class="context-body" data-standard-kline-context></div>' in html
+    assert '<div id="ctx1h" class="context-body" data-standard-kline-context></div>' in html
     assert "function renderContextKline(" in html
     assert "ensureContextKline(" in html
-    assert "height:150" in html
+    assert "height:240" in html
     assert "function drawMini" not in html
     assert "plan-grid" in html
     assert "plan-metric" in html
@@ -235,8 +239,8 @@ def test_dualtrack_v5_task06_main_timeframe_switch_is_wired() -> None:
 def test_dualtrack_v5_task06_context_charts_use_standard_kline_not_svg_drawmini() -> None:
     html = read_html()
 
-    assert '<div id="ctx15" class="context-body" data-standard-kline-context="15m"></div>' in html
-    assert '<div id="ctx1h" class="context-body" data-standard-kline-context="1h"></div>' in html
+    assert '<div id="ctx15" class="context-body" data-standard-kline-context></div>' in html
+    assert '<div id="ctx1h" class="context-body" data-standard-kline-context></div>' in html
     assert "function renderContextKline(" in html
     assert "ensureContextKline(" in html
     assert "state.contextKlines" in html
@@ -288,6 +292,62 @@ def test_dualtrack_v5_task06_blind_protocol_does_not_feed_machine_points_to_intr
     assert "state.machine?.fills" not in context
     assert "markers:" not in context
     assert "priceLines:" not in context
+
+
+def test_dualtrack_v5_task08_merges_same_price_human_plan_lines() -> None:
+    html = read_html()
+    main = extract_function(html, "renderMainKline")
+
+    assert "function mergeSamePriceLines(lines, thresholdPct=0.0005)" in html
+    assert "mergeSamePriceLines(buildHumanPlanPriceLines(plan).concat(buildTrackFillPriceLines(fills, color)))" in main
+    assert "kind:\"invalid\"" in html
+    assert "kind:\"range\"" in html
+    assert "kind:\"level\"" in html
+    assert "invalid" in extract_function(html, "mergeSamePriceLines")
+
+
+def test_dualtrack_v5_task08_context_timeframes_are_selectable_and_persistent() -> None:
+    html = read_html()
+
+    assert 'data-context-slot="ctx15"' in html
+    assert 'data-context-slot="ctx1h"' in html
+    for timeframe in ["15m", "30m", "1h", "4h"]:
+        assert f'data-context-tf="{timeframe}"' in html
+    assert "function contextTimeframe(slot)" in html
+    assert "function bindContextTimeframeSegments()" in html
+    assert "localStorage.setItem(slot.storageKey, button.dataset.contextTf)" in html
+    assert "dualtrack.context.ctx15.tf" in html
+    assert "dualtrack.context.ctx1h.tf" in html
+
+
+def test_dualtrack_v5_task08_chart_composition_uses_token_spacing_and_ellipsis() -> None:
+    html = read_html()
+
+    assert ".panel-h .right{margin-left:auto;font-size:11px;color:var(--faint);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" in html
+    assert ".blind-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:14px;align-items:start}" in html
+    assert ".plan-card{border-radius:var(--r);border:1px solid var(--rule);background:var(--panel);padding:16px;position:relative}" in html
+    assert ".plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}" in html
+    assert ".plan-metric{border:1px solid var(--rule);background:var(--panel2);border-radius:var(--r);padding:10px 14px;min-width:0}" in html
+    assert ".plan-metric{border:1px solid var(--rule);background:var(--rule)" not in html
+
+
+def test_dualtrack_v5_task08_indicators_are_bars_only_and_toggleable() -> None:
+    html = read_html()
+    main = extract_function(html, "renderMainKline")
+    context = extract_function(html, "renderContextKline")
+
+    assert 'data-indicator="ema"' in html
+    assert 'data-indicator="macd"' in html
+    assert "function indicatorSettings()" in html
+    assert "function bindIndicatorToggles()" in html
+    assert "dualtrack.main.indicators.ema" in html
+    assert "dualtrack.main.indicators.macd" in html
+    assert "indicators: mainIndicators()" in main
+    assert "ema:[{period:20},{period:50}]" in html
+    assert "macd:{fast:12, slow:26, signal:9}" in html
+    assert "indicators:{ema:[{period:50,color:token(\"--muted\")}]" in context
+    assert "state.machine" not in main
+    assert "state.machine" not in context
 
 
 def test_dashboard_server_runtime_status_hides_machine_fills_until_close(tmp_path, monkeypatch):
