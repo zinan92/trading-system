@@ -2070,3 +2070,50 @@ Date: 2026-07-08
 - `dashboard-dualtrack-v5.html` currently has no separate machine K-line card; the machine overlay helpers are intentionally not attached to the intraday main chart.
 
 - Context charts must remain fill-free. Adding markers there would create a new blind-protocol leak surface even if the data came from the human track.
+
+## 2026-07-08 Phase D Design Tokens Rollout
+
+### Decisions
+
+- Make `assets/tokens.css` the only visual token source for the active command, DualTrack, OPS, and replay pages.
+  - Rationale: page-local `:root` color/type definitions drifted across rooms; all target pages now link `assets/tokens.css` before inline styles and consume token variables.
+  - Evidence: `assets/tokens.css`, `tests/test_design_tokens_static.py`.
+
+- Keep the approved mockup immutable.
+  - Rationale: `mockups/design-tokens-proposal.html` is the owner-approved visual spec; implementation changes must adapt to it, not rewrite it.
+  - Evidence: `git diff -- mockups/design-tokens-proposal.html` is empty.
+
+- Apply the three owner Q decisions as implementation rules.
+  - Q1: `ops-dashboard.html` moved from the old light paper palette to the shared dark token palette.
+  - Q2: K-line up/down defaults and replay candlestick config now use run/block literals `#35d07f` / `#ef5f5f`; track markers keep human/machine identity colors.
+  - Q3: external IBM/Hanken font links were removed from replay-v4; pages use the system `--sans` / `--mono` stacks.
+
+- Lock color drift with an explicit style-literal whitelist.
+  - Rationale: future style edits should not introduce ad hoc colors. The new static test extracts HTML `<style>` blocks and allows only token literal values from `assets/tokens.css`; `assets/shell.css` must use `var(--*)` and no color literals.
+  - Boundary: JS chart configuration can still hold required K-line literal values, because Q2 explicitly requires those defaults.
+
+- Use this old-variable to token mapping:
+  - `--surface`, page-local `--panel` -> `--panel`; `--surface2`, `--surface3`, page-local `--panel2` -> `--panel2`.
+  - `--text` -> `--ink`; `--line` -> `--rule`; `--line2` -> `--rule-strong`.
+  - brand amber/gold -> `--gold`; status amber -> `--warn`.
+  - `--teal` / `--up` -> `--run`; `--red` / `--down` -> `--block`.
+  - `--blue` / `--cyan` -> `--human`; `--violet` -> `--machine`.
+  - `--gray` -> `--unknown`; `--dim` -> `--faint`; old dark/light OPS palette -> shared dark tokens.
+
+- Replace visual emphasis shadows with borders or token backgrounds.
+  - Rationale: Phase D forbids box-shadow and standardizes shape through `--r`; track identity accents now use border-left instead of inset shadow.
+
+- Update only the obsolete color assertions in `tests/test_dashboard_dualtrack_static.py`.
+  - Rationale: the old test asserted inline `--bg:#08090b` and `--gold:#d8aa3f`, which conflicts with the new token-source rule. Blind-answer assertions were left intact and stayed green.
+
+### Gotchas
+
+- Do not reintroduce page-local `:root` color variables in the five target HTML files; add new shared visual values to `assets/tokens.css` and extend the whitelist intentionally.
+
+- `color-mix(in srgb, var(--token) ...)` is the preferred way to express subtle tinted backgrounds in page styles without adding new color literals.
+
+- `dashboard-dualtrack-replay.html` needs a closed cycle query parameter for full visual validation. `?layout=dualtrack` without `cycle` correctly renders the closed-only refusal state.
+
+- `packages/standard-kline/standard-kline.js` must remain standalone, so its default K-line color literals are allowed; page overlays should pull identity/state colors from CSS tokens where practical.
+
+- OPS dark conversion can make old low-alpha light-paper layers invisible if `rgba(255,250,241,...)` or `rgba(38,31,18,...)` returns. The static test blocks the old `#f6efe4` / `#fffaf1` / `#17130c` anchors, but visual review still matters for contrast.

@@ -5,22 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>黄金交易后台监控</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/tokens.css">
 <link rel="stylesheet" href="assets/shell.css">
-<style>
-:root {
-  --bg: #f6efe4;
-  --panel: #fffaf1;
-  --ink: #17130c;
-  --muted: #675f51;
-  --line: rgba(38,31,18,.16);
-  --gold: #b78322;
-  --green: #1f7a55;
-  --red: #b64232;
-  --blue: #2f5f9f;
-  --mono: "SFMono-Regular", Consolas, Menlo, monospace;
-  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-}
-* { box-sizing: border-box; }
+<style>* { box-sizing: border-box; }
 html { max-width: 100%; overflow-x: hidden; }
 body {
   margin: 0;
@@ -37,8 +24,8 @@ body {
   gap: 16px;
   align-items: center;
   padding: 14px 18px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(255,250,241,.9);
+  border-bottom: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
   position: sticky;
   top: 0;
   z-index: 5;
@@ -57,7 +44,7 @@ h1 { margin: 0; font-size: 20px; }
 }
 input, button {
   font: inherit;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   background: var(--panel);
   color: var(--ink);
   padding: 7px 9px;
@@ -68,7 +55,7 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
 .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 12px; }
 .panel {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   padding: 14px;
   min-height: 180px;
   min-width: 0;
@@ -87,7 +74,7 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   font-weight: 400;
 }
 .metrics { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 8px; }
-.metric { border: 1px solid var(--line); padding: 10px; min-height: 74px; }
+.metric { border: 1px solid var(--rule); padding: 10px; min-height: 74px; }
 .metric small { display: block; font-family: var(--mono); color: var(--muted); font-size: 10px; }
 .metric strong { display: block; margin-top: 8px; font-size: 22px; }
 .ops-action-head {
@@ -107,8 +94,8 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   margin: 0 0 12px;
 }
 .ops-shift-card {
-  border: 1px solid var(--line);
-  background: rgba(255,255,255,.34);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
   padding: 11px;
   min-width: 0;
   min-height: 116px;
@@ -116,24 +103,24 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   gap: 7px;
   align-content: start;
 }
-.ops-shift-card.buy { background: rgba(31,122,85,.06); }
-.ops-shift-card.watch { background: rgba(47,95,159,.06); }
-.ops-shift-card.sell { background: rgba(182,66,50,.06); }
+.ops-shift-card.buy { background: color-mix(in srgb, var(--run) 6%, transparent); }
+.ops-shift-card.watch { background: color-mix(in srgb, var(--human) 6%, transparent); }
+.ops-shift-card.sell { background: color-mix(in srgb, var(--block) 6%, transparent); }
 .ops-shift-card small { color: var(--muted); font-family: var(--mono); font-size: 10px; }
 .ops-shift-card strong { font-size: 17px; line-height: 1.2; overflow-wrap: anywhere; }
 .ops-shift-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
 .ops-shift-card a {
   justify-self: start;
   padding: 6px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   background: var(--ink);
   color: var(--panel);
   text-decoration: none;
   font-size: 12px;
 }
 .ops-runbook-strip {
-  border: 1px solid var(--line);
-  background: rgba(255,255,255,.35);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
   padding: 12px;
   margin: 0 0 12px;
   display: grid;
@@ -141,9 +128,9 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   gap: 12px;
   align-items: stretch;
 }
-.ops-runbook-strip.buy { background: rgba(31,122,85,.06); }
-.ops-runbook-strip.watch { background: rgba(47,95,159,.06); }
-.ops-runbook-strip.sell { background: rgba(182,66,50,.06); }
+.ops-runbook-strip.buy { background: color-mix(in srgb, var(--run) 6%, transparent); }
+.ops-runbook-strip.watch { background: color-mix(in srgb, var(--human) 6%, transparent); }
+.ops-runbook-strip.sell { background: color-mix(in srgb, var(--block) 6%, transparent); }
 .ops-runbook-primary { display: grid; gap: 6px; min-width: 0; }
 .ops-runbook-primary small,
 .ops-runbook-command small { color: var(--muted); font-family: var(--mono); font-size: 10px; }
@@ -151,7 +138,7 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
 .ops-runbook-primary p { margin: 0; color: var(--muted); line-height: 1.35; overflow-wrap: anywhere; }
 .ops-runbook-meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .ops-runbook-command {
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--rule);
   padding-left: 12px;
   display: grid;
   gap: 8px;
@@ -161,15 +148,15 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
 .ops-runbook-command code {
   display: block;
   font-family: var(--mono);
-  border: 1px solid rgba(38,31,18,.12);
-  background: rgba(255,250,241,.72);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
   padding: 7px 8px;
   overflow-wrap: anywhere;
 }
 .ops-runbook-command a {
   justify-self: start;
   padding: 7px 9px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   background: var(--ink);
   color: var(--panel);
   text-decoration: none;
@@ -181,15 +168,15 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   flex-wrap: wrap;
 }
 .ops-copy-command {
-  border: 1px solid var(--line);
-  background: rgba(255,250,241,.78);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
   color: var(--ink);
   padding: 6px 8px;
   font-size: 12px;
   cursor: pointer;
 }
-.ops-copy-command:hover { background: rgba(38,31,18,.08); }
-.ops-copy-command:focus-visible { outline: 2px solid rgba(47,95,159,.45); outline-offset: 2px; }
+.ops-copy-command:hover { background: var(--rule); }
+.ops-copy-command:focus-visible { outline: 2px solid color-mix(in srgb, var(--human) 45%, transparent); outline-offset: 2px; }
 .ops-copy-status {
   color: var(--muted);
   font-family: var(--mono);
@@ -201,8 +188,8 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   min-width: 0;
 }
 .ops-incident-queue {
-  border: 1px solid var(--line);
-  background: rgba(255,255,255,.28);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
   padding: 12px;
   margin: 0 0 12px;
   display: grid;
@@ -230,8 +217,8 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
 }
 .ops-incident-list { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
 .ops-incident-item {
-  border: 1px solid var(--line);
-  background: rgba(255,250,241,.62);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
   padding: 10px;
   min-width: 0;
   min-height: 190px;
@@ -239,9 +226,9 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   gap: 7px;
   align-content: start;
 }
-.ops-incident-item.sell { background: rgba(182,66,50,.06); }
-.ops-incident-item.watch { background: rgba(47,95,159,.06); }
-.ops-incident-item.buy { background: rgba(31,122,85,.06); }
+.ops-incident-item.sell { background: color-mix(in srgb, var(--block) 6%, transparent); }
+.ops-incident-item.watch { background: color-mix(in srgb, var(--human) 6%, transparent); }
+.ops-incident-item.buy { background: color-mix(in srgb, var(--run) 6%, transparent); }
 .ops-incident-meta { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
 .ops-incident-meta span:first-child,
 .ops-incident-item small,
@@ -251,21 +238,21 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
 .ops-incident-step {
   display: grid;
   gap: 5px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--rule);
   padding-top: 7px;
 }
 .ops-incident-step code {
   font-family: var(--mono);
   color: var(--ink);
-  border: 1px solid rgba(38,31,18,.12);
-  background: rgba(255,250,241,.72);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
   padding: 5px 6px;
   overflow-wrap: anywhere;
 }
 .ops-incident-item a {
   justify-self: start;
   padding: 6px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   background: var(--ink);
   color: var(--panel);
   text-decoration: none;
@@ -273,8 +260,8 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
 }
 .ops-action-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
 .ops-action-card {
-  border: 1px solid var(--line);
-  background: rgba(255,255,255,.35);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
   min-width: 0;
   min-height: 168px;
   padding: 11px;
@@ -282,24 +269,24 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   gap: 8px;
   align-content: start;
 }
-.ops-action-card.buy { background: rgba(31,122,85,.06); }
-.ops-action-card.watch { background: rgba(47,95,159,.06); }
-.ops-action-card.sell { background: rgba(182,66,50,.06); }
+.ops-action-card.buy { background: color-mix(in srgb, var(--run) 6%, transparent); }
+.ops-action-card.watch { background: color-mix(in srgb, var(--human) 6%, transparent); }
+.ops-action-card.sell { background: color-mix(in srgb, var(--block) 6%, transparent); }
 .ops-action-card small { color: var(--muted); font-family: var(--mono); font-size: 10px; }
 .ops-action-card strong { font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
 .ops-action-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
 .ops-action-card code {
   font-family: var(--mono);
   color: var(--ink);
-  border: 1px solid rgba(38,31,18,.12);
-  background: rgba(255,250,241,.72);
+  border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
   padding: 5px 6px;
   overflow-wrap: anywhere;
 }
 .ops-action-card a {
   justify-self: start;
   padding: 6px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   background: var(--ink);
   color: var(--panel);
   text-decoration: none;
@@ -311,28 +298,28 @@ button { cursor: pointer; background: var(--ink); color: var(--panel); }
   gap: 10px;
   align-items: center;
   padding: 8px 0;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--rule);
   font-family: var(--mono);
   font-size: 12px;
 }
 .row span:first-child, .row b { min-width: 0; overflow-wrap: anywhere; }
 .row:first-of-type { border-top: 0; }
-.pill { border: 1px solid var(--line); padding: 2px 6px; color: var(--muted); max-width: 100%; overflow-wrap: anywhere; }
-.buy { color: var(--green); border-color: rgba(31,122,85,.3); }
-.sell { color: var(--red); border-color: rgba(182,66,50,.3); }
-.watch { color: var(--blue); border-color: rgba(47,95,159,.3); }
+.pill { border: 1px solid var(--rule); padding: 2px 6px; color: var(--muted); max-width: 100%; overflow-wrap: anywhere; }
+.buy { color: var(--run); border-color: color-mix(in srgb, var(--run) 30%, transparent); }
+.sell { color: var(--block); border-color: color-mix(in srgb, var(--block) 30%, transparent); }
+.watch { color: var(--human); border-color: color-mix(in srgb, var(--human) 30%, transparent); }
 .chart {
   height: 180px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rule);
   margin-bottom: 10px;
   background:
-    linear-gradient(180deg, transparent 24%, rgba(38,31,18,.08) 25%, transparent 26%, transparent 49%, rgba(38,31,18,.08) 50%, transparent 51%, transparent 74%, rgba(38,31,18,.08) 75%, transparent 76%),
-    #fbf6ed;
+    linear-gradient(180deg, transparent 24%, var(--rule) 25%, transparent 26%, transparent 49%, var(--rule) 50%, transparent 51%, transparent 74%, var(--rule) 75%, transparent 76%),
+    var(--panel2);
 }
 svg { width: 100%; height: 100%; display: block; }
 .wide { grid-column: 1 / -1; }
 .empty { color: var(--muted); font-family: var(--mono); font-size: 12px; }
-.error { color: var(--red); font-family: var(--mono); font-size: 12px; margin-top: 10px; }
+.error { color: var(--block); font-family: var(--mono); font-size: 12px; margin-top: 10px; }
 @media (max-width: 900px) {
   .grid, .metrics, .ops-action-grid, .ops-incident-list, .ops-shift-brief { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
@@ -341,7 +328,7 @@ svg { width: 100%; height: 100%; display: block; }
   .ops-action-head { flex-direction: column; }
   .ops-incident-head { flex-direction: column; }
   .ops-runbook-strip { grid-template-columns: 1fr; }
-  .ops-runbook-command { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; padding-top: 10px; }
+  .ops-runbook-command { border-left: 0; border-top: 1px solid var(--rule); padding-left: 0; padding-top: 10px; }
   .row { grid-template-columns: minmax(0, 1fr); }
   .pill { justify-self: start; }
 }
@@ -356,7 +343,7 @@ if (window.location.protocol === 'file:') {
 <div class="topbar">
   <h1 id="ops-title">OPS Console / 黄金交易后台监控</h1>
   <div class="controls">
-    <a id="trader-link" href="dashboard-v4.html" style="color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 7px 9px; background: var(--panel);">Trader Console / 交易看板</a>
+    <a id="trader-link" href="dashboard-v4.html" style="color: var(--ink); text-decoration: none; border: 1px solid var(--rule); padding: 7px 9px; background: var(--panel);">Trader Console / 交易看板</a>
     <div id="ops-lang-toggle" class="lang-toggle" aria-label="Language / 语言">
       <button type="button" data-ops-lang="zh">中文</button>
       <button type="button" data-ops-lang="en">EN</button>
@@ -2216,7 +2203,7 @@ function drawChart(bars) {
     const y = 170 - ((value - min) / span) * 150;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
-  svg.innerHTML = `<polyline points="${points}" fill="none" stroke="#b78322" stroke-width="4"/>`;
+  svg.innerHTML = `<polyline points="${points}" fill="none" stroke="var(--gold)" stroke-width="4"/>`;
 }
 
 function renderQuality(manifest, bars) {

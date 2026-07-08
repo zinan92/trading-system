@@ -21,16 +21,16 @@
   "use strict";
 
   const COLORS = {
-    up:"#2dd4bf",
-    down:"#ff6b6b",
-    text:"#a4acb8",
-    faint:"#788391",
-    grid:"rgba(255,255,255,.07)",
-    line:"rgba(255,255,255,.14)",
+    up:"#35d07f",
+    down:"#ef5f5f",
+    text:"#9aa3ad",
+    faint:"#5d666f",
+    grid:"rgba(255,255,255,.08)",
+    line:"rgba(255,255,255,.16)",
     gold:"#d8aa3f",
-    red:"#ff6b6b",
-    amber:"#f5b84b",
-    panel:"rgba(8,9,11,.82)",
+    red:"#ef5f5f",
+    amber:"#e8a33d",
+    panel:"rgba(10,11,12,.82)",
   };
 
   function normalizeQualityFlags(value){
@@ -121,7 +121,7 @@
         time,
         sourceIndex:index,
         candle:{time, open, high, low, close},
-        volume:{time, value:volume, color:close >= open ? "rgba(45,212,191,.42)" : "rgba(255,107,107,.38)"},
+        volume:{time, value:volume, color:close >= open ? "rgba(53,208,127,.42)" : "rgba(239,95,95,.38)"},
         meta:{
           symbol:row.symbol ?? payload?.symbol ?? "",
           timeframe:row.timeframe ?? payload?.timeframe ?? "",
@@ -201,9 +201,9 @@
 .standard-kline-canvas{position:relative;min-width:0;min-height:0;height:100%}
 .standard-kline-overlay{position:absolute;inset:32px 14px 14px 14px;display:none;place-items:center;text-align:center;pointer-events:none;z-index:4}
 .standard-kline-overlay.is-visible{display:grid}
-.standard-kline-message{max-width:min(520px,94%);border:1px solid rgba(255,255,255,.15);background:${COLORS.panel};box-shadow:0 16px 48px rgba(0,0,0,.34);padding:14px 18px;color:${COLORS.text};font:12px/1.45 var(--mono,"SFMono-Regular",ui-monospace,monospace)}
+.standard-kline-message{max-width:min(520px,94%);border:1px solid rgba(255,255,255,.15);background:${COLORS.panel};padding:14px 18px;color:${COLORS.text};font:12px/1.45 var(--mono,"SFMono-Regular",ui-monospace,monospace)}
 .standard-kline-message b{display:block;font-size:18px;color:${COLORS.red};margin-bottom:4px;letter-spacing:0}
-.standard-kline-message span{color:#ffb3b3}
+.standard-kline-message span{color:${COLORS.red}}
 .standard-kline-empty .standard-kline-message b{color:${COLORS.amber}}
 `;
     root.document.head.appendChild(style);
@@ -282,12 +282,12 @@
       });
       this._patchTimeScale();
       this.candleSeries = this.chart.addSeries(lwc.CandlestickSeries, {
-        upColor:"rgba(45,212,191,.74)",
-        downColor:"rgba(255,107,107,.72)",
+        upColor:COLORS.up,
+        downColor:COLORS.down,
         borderUpColor:COLORS.up,
         borderDownColor:COLORS.down,
-        wickUpColor:"rgba(45,212,191,.58)",
-        wickDownColor:"rgba(255,107,107,.50)",
+        wickUpColor:COLORS.up,
+        wickDownColor:COLORS.down,
         priceLineVisible:false,
         lastValueVisible:true,
         priceFormat:{type:"price", precision:2, minMove:.01},

@@ -26,8 +26,9 @@ def test_dualtrack_v5_matches_locked_visual_contract_sections():
     html = read_html()
 
     assert "<title>人机双轨作战台 - Trading Orchestrator</title>" in html
-    assert "--bg:#08090b" in html
-    assert "--gold:#d8aa3f" in html
+    assert '<link rel="stylesheet" href="assets/tokens.css">' in html
+    assert "var(--bg)" in html
+    assert "var(--gold)" in html
     assert "周期开始前 · 盲答协议" in html
     assert "盘中 · 双轨执行" in html
     assert "周期结束 · 对账复盘" in html

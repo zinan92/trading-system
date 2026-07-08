@@ -1,0 +1,21 @@
+:root{
+  /* surfaces */
+  --bg:#0a0b0c; --panel:#101216; --panel2:#15181e;
+  /* ink */
+  --ink:#e8eaed; --muted:#9aa3ad; --faint:#5d666f;
+  /* brand (the ONLY decorative color) */
+  --gold:#d8aa3f;
+  /* semantic states (color == state, nothing else) */
+  --run:#35d07f; --warn:#e8a33d; --block:#ef5f5f; --unknown:#7d8590;
+  /* track identity */
+  --human:#7aa2ff; --machine:#b894ff;
+  /* hairlines & shape */
+  --rule:rgba(255,255,255,.08); --rule-strong:rgba(255,255,255,.16); --r:6px;
+  /* type */
+  --mono:"SFMono-Regular","Roboto Mono",Menlo,Consolas,ui-monospace,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+  /* type scale (integer only) */
+  --fs-0:10px; --fs-1:11px; --fs-2:12px; --fs-3:13px; --fs-4:16px; --fs-5:22px; --fs-6:34px;
+  /* spacing scale */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px;
+}
