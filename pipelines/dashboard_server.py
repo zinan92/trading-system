@@ -17,6 +17,7 @@ from services.run_date import utc_run_date
 
 from services.code_reload import CodeReloadGuard
 from services.config_loader import ROOT, load_pipeline_config
+from services.command_center import build_command_center_state
 from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_config_apply import ConnectorConfigApply
 from services.connector_onboarding import ConnectorOnboardingDryRun
@@ -103,6 +104,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/dashboard-v3.html",
             "/dashboard.html",
             "/dashboard-v4.html",
+            "/command-center.html",
             "/dashboard-dualtrack-v5.html",
             "/dashboard-dualtrack-replay.html",
             "/dashboard-replay.html",
@@ -116,6 +118,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/":
+            self._redirect("command-center.html")
+            return
+        if parsed.path == "/api/command-center-state":
+            self._handle_command_center_state_api()
+            return
         if parsed.path == "/api/dashboard":
             self._handle_dashboard_api(parsed.query)
             return
@@ -479,6 +487,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_system_state_api(self) -> None:
         self._write_json(200, build_system_state_response())
 
+    def _handle_command_center_state_api(self) -> None:
+        self._write_json(200, build_command_center_state())
+
     def _handle_trader_overview_api(self, query: str) -> None:
         self._handle_contract_api(query, build_trader_overview_contract)
 
@@ -549,6 +560,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
         except BrokenPipeError:
             return
+
+    def _redirect(self, target: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", target)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
 
 def dashboard_output_root() -> Path:

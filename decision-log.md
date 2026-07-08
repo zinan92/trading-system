@@ -2006,3 +2006,32 @@ Date: 2026-07-08
 - The public `goldbot.park-ai-intel.com/api/dashboard?view=trader` endpoint can return `403 Forbidden`; use the local `127.0.0.1:8765` endpoint for operator freshness checks unless public access is intentionally enabled.
 - The portal repo only owns the link to Goldbot. Dashboard data, trading API, strategy state, and freshness are owned by `/Users/wendy/trading-orchestrator`.
 
+## 2026-07-08 Command Center for DualTrack Focus Mode
+
+### Decisions
+
+- Build `command-center.html` as the default landing page and route `/` to it.
+  - Rationale: the owner now needs one 10-second command surface for system health, current DualTrack cycle, human-vs-machine PnL, bias calibration, and the next safe action.
+  - Evidence: `command-center.html`, `pipelines/dashboard_server.py`, `tests/test_command_center_static.py`.
+
+- Add `GET /api/command-center-state` as a read-only composition endpoint over existing system-state, cycle, ledger, bias-ledger summary, and DualTrack cycle heartbeat surfaces.
+  - Rationale: Command Center should not create a new judgment engine; it should display the current state from already-owned sources and fail closed to `UNKNOWN` when a source is unreadable.
+  - Evidence: `services/command_center.py`, `tests/test_command_center_api.py`.
+
+- Drop the old `docs/command-center-brief.md` fleet concepts for this phase: no decision funnel, no GateWaterfall, no 21-strategy table, and no new review-marker API.
+  - Rationale: those concepts were written for the parked strategy fleet. Focus mode needs DualTrack health and next-action clarity, not another fleet operations dashboard.
+  - Evidence: `codex-task-05-command-center.md`, `services/command_center.py`, `command-center.html`.
+
+- Keep `dashboard-v4.html` reachable by URL but remove the old "驾驶舱" link from the primary shell navigation.
+  - Rationale: `dashboard-v4.html` still has legacy value and replay links, but it is no longer the main room in DualTrack focus mode. The primary nav should start with "指挥台", then "作战台", then "运维".
+  - Evidence: `assets/shell.js`, `tests/test_frontend_shell_static.py`.
+
+### Gotchas
+
+- `cycle_window()` always chooses the active 12-hour window for a timestamp, so Command Center treats `revealed` as a phase derived from the cycle payload and heartbeat evidence, not by inventing another cycle selector.
+
+- Bias-ledger `summary.json` may not exist yet. That is a normal empty calibration state and must render as "尚未有人轨方向分裁决记录", not as an error.
+
+- The page must never default to green when the command-center API fetch fails. The fallback state is `UNKNOWN` with "数据不可读".
+
+- The shell still retains the `cockpit -> dashboard-v4.html` URL mapping for deep links and replay returns even though cockpit is no longer in the primary nav.

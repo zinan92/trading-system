@@ -9,6 +9,7 @@
     UNKNOWN: { label: "未知", tone: "unknown" },
   };
   const ROOM_URLS = {
+    command: "command-center.html",
     ops: "ops-dashboard.html",
     trader: "dashboard-v4.html",
     cockpit: "dashboard-v4.html",
@@ -19,7 +20,7 @@
 
   function filename() {
     const name = window.location.pathname.split("/").pop();
-    return name || "dashboard-v4.html";
+    return name || "command-center.html";
   }
 
   function apiBase() {
@@ -45,8 +46,8 @@
       return `<a class="gb-shell-return" href="${ROOM_URLS[room]}">${label}</a>`;
     }
     const items = [
+      ["command", "指挥台", "command-center.html"],
       ["dualtrack", "作战台", "dashboard-dualtrack-v5.html"],
-      ["cockpit", "驾驶舱", "dashboard-v4.html"],
       ["ops", "运维", "ops-dashboard.html"],
     ];
     return `<nav class="gb-shell-nav" aria-label="全局房间导航">${items.map(([id, label, href]) => {
@@ -76,6 +77,7 @@
   function roomHref(room) {
     return ROOM_URLS[String(room || "ops").toLowerCase()] || ROOM_URLS.ops;
   }
+  window.GoldbotShell = Object.assign({}, window.GoldbotShell || {}, { roomHref });
 
   function minutesAgo(iso) {
     const ts = Date.parse(iso || "");

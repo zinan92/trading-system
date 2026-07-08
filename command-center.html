@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Goldbot 指挥台</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="assets/shell.css" />
+  <style>
+    :root{
+      --bg:#07080a;--panel:#101216;--panel2:#151820;--line:rgba(255,255,255,.11);--line2:rgba(216,170,63,.26);
+      --text:#f4f0e7;--muted:#9ca3af;--faint:#697181;--amber:#d8aa3f;--teal:#2dd4bf;--red:#ff5d5d;--gray:#7a8494;--blue:#7aa2ff;
+      --mono:"SFMono-Regular","Menlo","Consolas",monospace;--sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at 20% 0%,rgba(216,170,63,.08),transparent 28%),var(--bg);color:var(--text);font-family:var(--sans);letter-spacing:0}
+    a{color:inherit;text-decoration:none}
+    .page{max-width:1440px;margin:0 auto;padding:24px 24px 18px;min-height:calc(100vh - 48px);display:grid;grid-template-rows:auto 1fr auto;gap:16px}
+    .verdict{border:1px solid var(--line2);background:linear-gradient(180deg,rgba(216,170,63,.10),rgba(255,255,255,.025));border-radius:8px;padding:22px 24px;display:grid;gap:10px}
+    .verdict-main{display:flex;align-items:center;gap:14px;min-width:0}
+    .dot{width:15px;height:15px;border-radius:50%;background:var(--gray);box-shadow:0 0 0 5px rgba(122,132,148,.13);flex:0 0 auto}
+    .run .dot,.tone-run{background:var(--teal);box-shadow:0 0 0 5px rgba(45,212,191,.12)}
+    .degraded .dot,.tone-degraded{background:var(--amber);box-shadow:0 0 0 5px rgba(216,170,63,.13)}
+    .blocked .dot,.tone-blocked{background:var(--red);box-shadow:0 0 0 5px rgba(255,93,93,.13)}
+    .unknown .dot,.tone-unknown{background:var(--gray);box-shadow:0 0 0 5px rgba(122,132,148,.13)}
+    .word{font:800 44px/1 var(--mono);letter-spacing:0}
+    .subline{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:14px;min-width:0}
+    .btn{display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:0 12px;border:1px solid rgba(216,170,63,.46);border-radius:6px;background:rgba(216,170,63,.09);color:#ffe6a6;font-weight:760;white-space:nowrap}
+    .layout{display:grid;grid-template-columns:minmax(320px,1fr) minmax(520px,2fr);gap:16px;min-height:0}
+    .panel{border:1px solid var(--line);background:rgba(16,18,22,.86);border-radius:8px;min-width:0;overflow:hidden}
+    .hd{height:42px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);color:#ffe6a6;font-size:12px;font-weight:820;text-transform:uppercase}
+    .body{padding:14px}
+    .blockers .body{display:grid;gap:10px}
+    .blocker{display:grid;gap:9px;padding:12px;border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.025)}
+    .blocker-top{display:flex;align-items:center;gap:8px;color:var(--text);font-size:13px;line-height:1.45}
+    .badge{display:inline-flex;align-items:center;min-height:22px;padding:0 8px;border:1px solid var(--line);border-radius:5px;color:var(--muted);font:700 11px/1 var(--mono)}
+    .blocker-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--faint);font-size:11px}
+    .right{display:grid;grid-template-rows:auto auto 1fr;gap:16px;min-width:0}
+    .cycle-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}
+    .metric{border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.026);padding:11px 12px;display:grid;gap:7px;min-width:0}
+    .label{font-size:11px;color:var(--faint);text-transform:uppercase;font-weight:760}
+    .value{font:760 18px/1.15 var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .countdown{font-size:34px;color:#ffe6a6}
+    .score-grid{display:grid;grid-template-columns:1fr 1fr .9fr .8fr;gap:12px}
+    .money{font:800 28px/1 var(--mono)}
+    .pos{color:var(--teal)}.neg{color:var(--red)}.zero{color:var(--muted)}
+    .cal-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .strips{display:flex;gap:5px;align-items:center;min-height:24px;flex-wrap:wrap}
+    .strip{width:18px;height:8px;border-radius:2px;background:var(--gray)}
+    .strip.correct{background:var(--teal)}.strip.wrong{background:var(--red)}.strip.undecidable{background:var(--gray)}
+    .empty{border:1px dashed rgba(255,255,255,.16);border-radius:7px;padding:16px;color:var(--muted);background:rgba(255,255,255,.018);font-size:13px}
+    .liveness{border:1px solid var(--line);background:rgba(16,18,22,.78);border-radius:8px;min-height:38px;padding:9px 14px;display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px}
+    .liveness b{color:var(--text);font-family:var(--mono)}
+    @media (max-width:900px){.page{padding:14px}.layout,.cycle-grid,.score-grid,.cal-grid{grid-template-columns:1fr}.word{font-size:34px}.countdown{font-size:28px}.subline{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="verdict unknown" id="verdictBand">
+      <div class="verdict-main"><span class="dot"></span><span class="word" id="verdictWord">UNKNOWN</span></div>
+      <div class="subline"><span id="nextActionLabel">数据不可读</span><a class="btn" id="nextActionBtn" hidden href="ops-dashboard.html">查看</a></div>
+    </section>
+
+    <section class="layout">
+      <aside class="panel blockers">
+        <div class="hd"><span>Blocker Stack</span><span id="blockerCount">--</span></div>
+        <div class="body" id="blockerList"><div class="empty">数据不可读</div></div>
+      </aside>
+
+      <section class="right">
+        <article class="panel">
+          <div class="hd"><span>Cycle</span><span id="cyclePhaseBadge" class="badge">UNKNOWN</span></div>
+          <div class="body cycle-grid">
+            <div class="metric"><span class="label">Cycle ID</span><span class="value" id="cycleId">--</span></div>
+            <div class="metric"><span class="label">Kind</span><span class="value" id="cycleKind">--</span></div>
+            <div class="metric"><span class="label">Countdown</span><span class="value countdown" id="cycleCountdown">--:--:--</span></div>
+            <div class="metric"><span class="label">Effective Plan</span><span class="value" id="effectivePlan">未知</span></div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="hd"><span>Scoreboard</span><span id="cyclesScored">--</span></div>
+          <div class="body" id="scoreboardBody">
+            <div class="empty">暂无已收盘周期</div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="hd"><span>Calibration</span><span id="calibrationTotal">--</span></div>
+          <div class="body" id="calibrationBody">
+            <div class="empty">尚未有人轨方向分裁决记录</div>
+          </div>
+        </article>
+      </section>
+    </section>
+
+    <div class="liveness unknown" id="cycleLiveness"><span class="dot"></span><span><b>UNKNOWN</b> 数据不可读</span></div>
+  </main>
+  <script src="assets/shell.js"></script>
+  <script>
+    const POLL_MS = 60000;
+    const STATUS_META = {
+      RUN: { tone: "run" },
+      DEGRADED: { tone: "degraded" },
+      BLOCKED: { tone: "blocked" },
+      UNKNOWN: { tone: "unknown" }
+    };
+    const BLOCKER_ORDER = { BLOCKED: 0, UNKNOWN: 1, DEGRADED: 2 };
+    let countdownRemaining = null;
+
+    function apiBase(){
+      if(window.GOLDBOT_API_BASE) return String(window.GOLDBOT_API_BASE).replace(/\/$/, "");
+      if(window.location.protocol === "file:") return ["http:", "//127.0.0.1:8765"].join("");
+      return "";
+    }
+    function roomHref(room){
+      return window.GoldbotShell?.roomHref?.(room) || { ops:"ops-dashboard.html", dualtrack:"dashboard-dualtrack-v5.html", command:"command-center.html" }[String(room || "ops").toLowerCase()] || "ops-dashboard.html";
+    }
+    function esc(value){
+      return String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+    function money(value){
+      const num = Number(value);
+      if(!Number.isFinite(num)) return "--";
+      const sign = num > 0 ? "+" : "";
+      return `${sign}$${num.toFixed(2)}`;
+    }
+    function toneClass(status){
+      return STATUS_META[status]?.tone || "unknown";
+    }
+    function formatCountdown(value){
+      const seconds = Math.max(0, Number.isFinite(Number(value)) ? Math.floor(Number(value)) : 0);
+      const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
+      const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+      const s = String(seconds % 60).padStart(2, "0");
+      return `${h}:${m}:${s}`;
+    }
+    function pnlClass(value){
+      const num = Number(value);
+      if(num > 0) return "pos";
+      if(num < 0) return "neg";
+      return "zero";
+    }
+    function unknownState(){
+      return {
+        system:{ overall:"UNKNOWN", checks:[] },
+        cycle:null,
+        scoreboard:{ total_machine_pnl:0, total_human_pnl:0, delta:0, cycles_scored:0, last_cycle:null },
+        calibration:{ available:false, total:0, hit_rate:null, mean_brier:null, last_10:[] },
+        cycle_liveness:{ status:"stale", reason:"数据不可读" },
+        next_action:{ kind:"none", label:"数据不可读", target:"" }
+      };
+    }
+    function render(payload){
+      const state = payload && typeof payload === "object" ? payload : unknownState();
+      renderVerdict(state);
+      renderBlockers(state.system?.checks || []);
+      renderCycle(state.cycle);
+      renderScoreboard(state.scoreboard || {});
+      renderCalibration(state.calibration || {});
+      renderLiveness(state.cycle_liveness || {});
+    }
+    function renderVerdict(state){
+      const overall = STATUS_META[state.system?.overall] ? state.system.overall : "UNKNOWN";
+      const band = document.getElementById("verdictBand");
+      band.className = `verdict ${toneClass(overall)}`;
+      document.getElementById("verdictWord").textContent = overall;
+      document.getElementById("nextActionLabel").textContent = state.next_action?.label || "数据不可读";
+      const btn = document.getElementById("nextActionBtn");
+      if(state.next_action?.kind && state.next_action.kind !== "none"){
+        btn.hidden = false;
+        btn.href = roomHref(state.next_action.target);
+        btn.textContent = state.next_action.kind === "blind_answer" ? "去作战台" : "去处理";
+      }else{
+        btn.hidden = true;
+      }
+    }
+    function renderBlockers(checks){
+      const blockers = checks
+        .filter(item => item && item.status && item.status !== "RUN")
+        .sort((a,b) => (BLOCKER_ORDER[a.status] ?? 9) - (BLOCKER_ORDER[b.status] ?? 9));
+      document.getElementById("blockerCount").textContent = blockers.length ? `${blockers.length} items` : "clear";
+      const list = document.getElementById("blockerList");
+      if(!blockers.length){
+        list.innerHTML = `<div class="empty">当前无阻塞</div>`;
+        return;
+      }
+      list.innerHTML = blockers.map(item => `
+        <div class="blocker">
+          <div class="blocker-top"><span class="dot tone-${toneClass(item.status)}"></span><span>${esc(item.reason || item.status)}</span></div>
+          <div class="blocker-actions"><span class="badge">${esc(item.room || "ops")}</span><a class="btn" href="${esc(roomHref(item.room))}">${esc(item.cta || "查看")}</a></div>
+        </div>
+      `).join("");
+    }
+    function renderCycle(cycle){
+      countdownRemaining = Number.isFinite(Number(cycle?.countdown_seconds)) ? Number(cycle.countdown_seconds) : null;
+      document.getElementById("cycleId").textContent = cycle?.cycle_id || "--";
+      document.getElementById("cycleKind").textContent = cycle?.kind || "--";
+      document.getElementById("cyclePhaseBadge").textContent = cycle?.phase || "UNKNOWN";
+      document.getElementById("cycleCountdown").textContent = countdownRemaining === null ? "--:--:--" : formatCountdown(countdownRemaining);
+      const status = cycle?.effective_plan_status || null;
+      if(!status){
+        document.getElementById("effectivePlan").textContent = "未知";
+      }else if(status.has_effective_plan){
+        document.getElementById("effectivePlan").textContent = `${status.author || "unknown"} 生效`;
+      }else if(status.machine_stands_down){
+        document.getElementById("effectivePlan").textContent = "无计划 · 机器站下";
+      }else{
+        document.getElementById("effectivePlan").textContent = "无计划";
+      }
+    }
+    function renderScoreboard(scoreboard){
+      const cycles = Number(scoreboard.cycles_scored || 0);
+      document.getElementById("cyclesScored").textContent = cycles ? `${cycles} cycles` : "0 cycles";
+      const body = document.getElementById("scoreboardBody");
+      if(!cycles){
+        body.innerHTML = `<div class="empty">暂无已收盘周期</div>`;
+        return;
+      }
+      body.innerHTML = `
+        <div class="score-grid">
+          <div class="metric"><span class="label">Machine</span><span class="money ${pnlClass(scoreboard.total_machine_pnl)}">${money(scoreboard.total_machine_pnl)}</span></div>
+          <div class="metric"><span class="label">Human</span><span class="money ${pnlClass(scoreboard.total_human_pnl)}">${money(scoreboard.total_human_pnl)}</span></div>
+          <div class="metric"><span class="label">Delta M-H</span><span class="money ${pnlClass(scoreboard.delta)}">${money(scoreboard.delta)}</span></div>
+          <div class="metric"><span class="label">Last Cycle</span><span class="value">${esc(scoreboard.last_cycle?.cycle_id || "--")}</span></div>
+        </div>`;
+    }
+    function renderCalibration(calibration){
+      document.getElementById("calibrationTotal").textContent = `${Number(calibration.total || 0)} records`;
+      const body = document.getElementById("calibrationBody");
+      if(!calibration.available){
+        body.innerHTML = `<div class="empty">尚未有人轨方向分裁决记录</div>`;
+        return;
+      }
+      const hit = calibration.hit_rate === null || calibration.hit_rate === undefined ? "--" : `${(Number(calibration.hit_rate) * 100).toFixed(1)}%`;
+      const brier = calibration.mean_brier === null || calibration.mean_brier === undefined ? "--" : Number(calibration.mean_brier).toFixed(4);
+      const strips = (calibration.last_10 || []).map(row => `<span class="strip ${esc(row.verdict || "undecidable")}"></span>`).join("");
+      body.innerHTML = `
+        <div class="cal-grid">
+          <div class="metric"><span class="label">Hit Rate</span><span class="value">${hit}</span></div>
+          <div class="metric"><span class="label">Mean Brier</span><span class="value">${brier}</span></div>
+        </div>
+        <div class="metric" style="margin-top:12px"><span class="label">Last 10</span><div class="strips">${strips || '<span class="value">--</span>'}</div></div>`;
+    }
+    function renderLiveness(liveness){
+      const status = String(liveness.status || "stale");
+      const tone = status === "fresh" ? "run" : status === "not_scheduled" ? "unknown" : "degraded";
+      const row = document.getElementById("cycleLiveness");
+      row.className = `liveness ${tone}`;
+      row.innerHTML = `<span class="dot"></span><span><b>${esc(status)}</b> ${esc(liveness.reason || "cycle liveness unknown")}</span>`;
+    }
+    async function load(){
+      try{
+        const response = await fetch(`${apiBase()}/api/command-center-state`, { cache:"no-store" });
+        if(!response.ok){ render(unknownState()); return; }
+        render(await response.json());
+      }catch{
+        render(unknownState());
+      }
+    }
+    setInterval(() => {
+      if(countdownRemaining === null) return;
+      countdownRemaining = Math.max(0, countdownRemaining - 1);
+      document.getElementById("cycleCountdown").textContent = formatCountdown(countdownRemaining);
+    }, 1000);
+    load();
+    setInterval(load, POLL_MS);
+  </script>
+</body>
+</html>

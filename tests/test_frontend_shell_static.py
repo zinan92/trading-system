@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 ACTIVE_PAGES = [
+    "command-center.html",
     "ops-dashboard.html",
     "dashboard-v4.html",
     "dashboard-replay-v4.html",
@@ -52,3 +53,12 @@ def test_shell_js_has_no_external_network_dependency() -> None:
 
     assert "https://" not in shell
     assert "http://" not in shell
+
+
+def test_shell_primary_nav_starts_with_command_center_and_hides_legacy_cockpit() -> None:
+    shell = _read("assets/shell.js")
+
+    assert '["command", "指挥台", "command-center.html"]' in shell
+    assert '["command", "指挥台", "command-center.html"]' in shell.split("const items = [", 1)[1].split("];", 1)[0]
+    assert '["cockpit", "驾驶舱", "dashboard-v4.html"]' not in shell
+    assert 'cockpit: "dashboard-v4.html"' in shell
