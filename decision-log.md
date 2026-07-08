@@ -1988,3 +1988,21 @@ Date: 2026-07-08
 - `data_source_preflight/current.json` may remain stale even when the market DB is fresh; system-state must look at the DB for this focus-mode feed heartbeat.
 - Rollback of a newly created launchd job has no old plist backup; rollback must remove the created plist rather than block on a missing backup.
 
+
+## 2026-07-08 Goldbot Dashboard Freshness Triage
+
+### Decisions
+
+- Do not change `dashboard-v4.html` for the park-ai-intel site maintenance pass.
+  - Rationale: the local dashboard HTML at `/Users/wendy/trading-orchestrator/dashboard-v4.html` is byte-identical to `https://goldbot.park-ai-intel.com/dashboard-v4.html`; the dashboard shell itself is not stale.
+  - Evidence: byte comparison returned equal on 2026-07-08.
+
+- Treat the local dashboard API as fresh in this check.
+  - Rationale: `http://127.0.0.1:8765/api/dashboard?view=trader` returned `run_date=2026-07-08`, latest 5m bar `2026-07-08T03:00:00+00:00`, latest quote `2026-07-08T03:04:00Z`, and performance generated at `2026-07-08T03:04:31+00:00`.
+  - Evidence: dashboard API response from the local service.
+
+### Gotchas
+
+- The public `goldbot.park-ai-intel.com/api/dashboard?view=trader` endpoint can return `403 Forbidden`; use the local `127.0.0.1:8765` endpoint for operator freshness checks unless public access is intentionally enabled.
+- The portal repo only owns the link to Goldbot. Dashboard data, trading API, strategy state, and freshness are owned by `/Users/wendy/trading-orchestrator`.
+
