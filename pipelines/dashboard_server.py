@@ -11,7 +11,7 @@ import time
 from datetime import date, datetime, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 from services.run_date import utc_run_date
@@ -28,7 +28,12 @@ from services.dualtrack_config import dualtrack_config
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
-from services.dualtrack_scoring import DualTrackScorer, _trades_from_fills, apply_unrealized
+from services.dualtrack_scoring import (
+    DualTrackScorer,
+    _trades_from_fills,
+    apply_unrealized,
+    filter_invalid_machine_fills,
+)
 from services.dualtrack_store import DualTrackPlanStore
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
@@ -163,7 +168,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._handle_dualtrack_machine_get(parsed.path, parsed.query)
             return
         if parsed.path.startswith("/api/dualtrack/human/"):
-            self._handle_dualtrack_human_get(parsed.path)
+            self._handle_dualtrack_human_get(parsed.path, parsed.query)
             return
         if parsed.path.startswith("/api/dualtrack/attribution/"):
             self._handle_dualtrack_attribution_get(parsed.path)
@@ -242,8 +247,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         params = parse_qs(query)
         track = (params.get("track") or ["human"])[0]
+        mark_price = _first_query_value(params, "mark_price")
+        mark_source = _first_query_value(params, "mark_source")
         try:
-            self._write_json(200, build_dualtrack_trades_response(cycle_id, track=track))
+            self._write_json(200, build_dualtrack_trades_response(cycle_id, track=track, mark_price=mark_price, mark_source=mark_source))
         except PermissionError as exc:
             self._write_error(403, "dualtrack_trades_hidden", str(exc))
         except ValueError as exc:
@@ -256,12 +263,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         self._write_json(200, build_dualtrack_machine_response(cycle_id))
 
-    def _handle_dualtrack_human_get(self, path: str) -> None:
+    def _handle_dualtrack_human_get(self, path: str, query: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
         if not _CYCLE_ID_PATTERN.match(cycle_id):
             self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
             return
-        self._write_json(200, build_dualtrack_human_response(cycle_id))
+        params = parse_qs(query)
+        self._write_json(200, build_dualtrack_human_response(
+            cycle_id,
+            mark_price=_first_query_value(params, "mark_price"),
+            mark_source=_first_query_value(params, "mark_source"),
+        ))
 
     def _handle_dualtrack_attribution_get(self, path: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -710,10 +722,22 @@ def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | No
     return {"status": "filled", "fill": fill}
 
 
-def build_dualtrack_human_response(cycle_id: str, *, output_root: Path | None = None) -> dict:
+def build_dualtrack_human_response(
+    cycle_id: str,
+    *,
+    output_root: Path | None = None,
+    mark_price: float | str | None = None,
+    mark_source: str | None = None,
+) -> dict:
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
-    return DualTrackHumanEngine(output_root).human_payload(cycle_id)
+    output = _dualtrack_output_root(output_root)
+    closed = _dualtrack_cycle_closed(cycle_id)
+    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, override_price=mark_price, override_source=mark_source)
+    sweep = _dualtrack_sweep_human_protective_exits(output, cycle_id, mark)
+    payload = DualTrackHumanEngine(output).human_payload(cycle_id)
+    payload["protective_sweep"] = sweep
+    return payload
 
 
 def build_dualtrack_trades_response(
@@ -722,6 +746,8 @@ def build_dualtrack_trades_response(
     track: str = "human",
     output_root: Path | None = None,
     as_of: str | None = None,
+    mark_price: float | str | None = None,
+    mark_source: str | None = None,
 ) -> dict:
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
@@ -729,27 +755,42 @@ def build_dualtrack_trades_response(
     if normalized_track not in {"human", "machine"}:
         raise ValueError("track must be human or machine")
     closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
-    if normalized_track == "machine" and not closed:
-        raise PermissionError("machine trades are hidden until cycle close")
     output = _dualtrack_output_root(output_root)
-    fills = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_{normalized_track}.json")
-    trades = _trades_from_fills(fills, track=normalized_track)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
-    enriched = apply_unrealized(trades, mark["price"], mark_fresh=mark["fresh"])
+    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of, override_price=mark_price, override_source=mark_source)
+    sweep = _dualtrack_sweep_human_protective_exits(output, cycle_id, mark) if normalized_track == "human" else {"status": "skipped", "reason": "machine_track"}
+    rows = _dualtrack_trade_rows_for_cycle(output, cycle_id, normalized_track, mark)
+    enriched = rows["trades"]
+    summary = _trade_summary(enriched)
+    display = _dualtrack_display_trade_rows(
+        output,
+        cycle_id,
+        normalized_track,
+        mark,
+        current_trades=enriched,
+        current_summary=summary,
+        current_safety=rows["safety"],
+    )
     return {
         "schema_version": "dualtrack-trades-v1",
         "cycle_id": cycle_id,
         "track": normalized_track,
         "status": "closed" if closed else "mid",
-        "blind": normalized_track == "machine" and not closed,
+        "blind": False,
         "mark_price": mark["price"],
         "mark_fresh": mark["fresh"],
         "mark_source": mark["source"],
         "trades": enriched,
-        "summary": _trade_summary(enriched),
+        "summary": summary,
+        "display_cycle_id": display["cycle_id"],
+        "display_reason": display["reason"],
+        "display_trades": display["trades"],
+        "display_summary": display["summary"],
+        "display_safety": display["safety"],
+        "protective_sweep": sweep,
         "safety": {
             "read_only": True,
-            "machine_mid_order_rows_hidden": normalized_track == "machine" and not closed,
+            "machine_mid_order_rows_hidden": False,
+            **rows["safety"],
         },
     }
 
@@ -798,7 +839,26 @@ def _finite_float(value) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def _dualtrack_mark_price(output_root: Path, cycle_id: str, *, closed: bool, as_of: str | None = None) -> dict:
+def _first_query_value(params: dict, key: str) -> str | None:
+    values = params.get(key) or []
+    if not values:
+        return None
+    value = values[0]
+    return None if value in (None, "") else str(value)
+
+
+def _dualtrack_mark_price(
+    output_root: Path,
+    cycle_id: str,
+    *,
+    closed: bool,
+    as_of: str | None = None,
+    override_price: float | str | None = None,
+    override_source: str | None = None,
+) -> dict:
+    override = _finite_float(override_price)
+    if override is not None:
+        return {"price": override, "fresh": True, "source": str(override_source or "client_mark_price")}
     if closed:
         cycle_rows = load_json(output_root / "dualtrack" / "cycles" / f"{cycle_id}.json")
         cycle = cycle_rows[-1] if cycle_rows else {}
@@ -817,10 +877,74 @@ def _dualtrack_mark_price(output_root: Path, cycle_id: str, *, closed: bool, as_
     }
 
 
+def _dualtrack_sweep_human_protective_exits(output_root: Path, cycle_id: str, mark: dict) -> dict:
+    if not mark.get("fresh"):
+        return {"status": "skipped", "reason": "stale_mark_price", "triggered": []}
+    return DualTrackHumanEngine(output_root).sweep_protective_exits(
+        cycle_id,
+        mark_price=mark.get("price"),
+        source=f"dualtrack_protective_sweep:{mark.get('source') or 'market'}",
+    )
+
+
+def _dualtrack_trade_rows_for_cycle(output_root: Path, cycle_id: str, track: str, mark: dict) -> dict:
+    fills = load_json(output_root / "dualtrack" / "fills" / f"{cycle_id}_{track}.json")
+    safety: dict[str, Any] = {}
+    if track == "machine":
+        fills, safety = filter_invalid_machine_fills(fills)
+    trades = _trades_from_fills(fills, track=track)
+    enriched = apply_unrealized(trades, mark["price"], mark_fresh=mark["fresh"])
+    return {"cycle_id": cycle_id, "trades": enriched, "safety": safety}
+
+
+def _dualtrack_display_trade_rows(
+    output_root: Path,
+    cycle_id: str,
+    track: str,
+    mark: dict,
+    *,
+    current_trades: list[dict],
+    current_summary: dict,
+    current_safety: dict,
+) -> dict:
+    if current_trades:
+        return {
+            "cycle_id": cycle_id,
+            "reason": "current_cycle",
+            "trades": current_trades,
+            "summary": current_summary,
+            "safety": current_safety,
+        }
+    for previous_cycle_id in _same_day_previous_cycles(cycle_id):
+        rows = _dualtrack_trade_rows_for_cycle(output_root, previous_cycle_id, track, mark)
+        if rows["trades"]:
+            return {
+                "cycle_id": previous_cycle_id,
+                "reason": "latest_same_day",
+                "trades": rows["trades"],
+                "summary": _trade_summary(rows["trades"]),
+                "safety": rows["safety"],
+            }
+    return {
+        "cycle_id": cycle_id,
+        "reason": "current_cycle_empty",
+        "trades": [],
+        "summary": current_summary,
+        "safety": current_safety,
+    }
+
+
+def _same_day_previous_cycles(cycle_id: str) -> list[str]:
+    date_part, kind = cycle_id.rsplit("_", 1)
+    if kind == "NIGHT":
+        return [f"{date_part}_DAY"]
+    return []
+
+
 def _trade_summary(trades: list[dict]) -> dict:
     open_trades = [trade for trade in trades if trade.get("status") == "open"]
     closed_trades = [trade for trade in trades if trade.get("status") == "closed"]
-    realized = sum(float(trade.get("realized_pnl") or 0.0) for trade in closed_trades)
+    realized = sum(float(trade.get("realized_pnl") or 0.0) for trade in trades)
     unrealized_values = [trade.get("unrealized_pnl") for trade in open_trades]
     unrealized_known = all(value is not None for value in unrealized_values)
     unrealized = sum(float(value or 0.0) for value in unrealized_values) if unrealized_known else None

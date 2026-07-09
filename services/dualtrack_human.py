@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,7 @@ class DualTrackHumanEngine:
                 contracts=contracts,
                 position_id=position_id,
                 symbol=symbol,
+                trade_id=str(payload.get("trade_id") or ""),
             )
         order_cost = dualtrack_order_cost(
             config=self.config,
@@ -112,6 +114,9 @@ class DualTrackHumanEngine:
             "root_symbol",
             "currency",
             "imported_at",
+            "trigger_price",
+            "trigger_mark_price",
+            "trigger_source",
         ):
             if payload.get(key) not in (None, ""):
                 fill[key] = payload[key]
@@ -140,6 +145,61 @@ class DualTrackHumanEngine:
             "realized_pnl": round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8),
         }
 
+    def sweep_protective_exits(
+        self,
+        cycle_id: str,
+        *,
+        mark_price: float | int | str | None,
+        ts: str | datetime | None = None,
+        source: str = "dualtrack_protective_sweep",
+    ) -> dict[str, Any]:
+        mark = _finite_float(mark_price)
+        if mark is None:
+            return {"status": "skipped", "reason": "missing_mark_price", "triggered": []}
+        rows = load_json(self._fills_path(cycle_id))
+        entries = {
+            str(row.get("trade_id") or row.get("fill_id") or ""): row
+            for row in rows
+            if str(row.get("event") or "entry") == "entry"
+        }
+        triggered: list[dict[str, Any]] = []
+        for trade in _build_trades(rows):
+            if str(trade.get("status") or "open") != "open":
+                continue
+            if float(trade.get("remaining_units") or 0.0) <= _EPSILON:
+                continue
+            trigger = _protective_trigger(trade, mark)
+            if not trigger:
+                continue
+            trade_id = str(trade.get("trade_id") or "")
+            entry = entries.get(trade_id) or {}
+            fill = self.submit_order({
+                "cycle_id": cycle_id,
+                "ts": ts,
+                "side": trigger["exit_side"],
+                "event": trigger["event"],
+                "order_type": "market",
+                "price": trigger["price"],
+                "trade_id": trade_id,
+                "position_id": trade.get("position_id") or entry.get("position_id") or "manual",
+                "symbol": trade.get("symbol") or entry.get("symbol") or "",
+                "source": source,
+                "source_fill_id": _protective_source_fill_id(cycle_id, trade_id, trigger["event"], trigger["price"]),
+                "trigger_price": trigger["price"],
+                "trigger_mark_price": mark,
+                "trigger_source": source,
+            })
+            triggered.append({
+                "trade_id": trade_id,
+                "event": trigger["event"],
+                "price": trigger["price"],
+                "mark_price": mark,
+                "fill_id": fill.get("fill_id"),
+                "realized_pnl": fill.get("realized_pnl"),
+            })
+            rows = load_json(self._fills_path(cycle_id))
+        return {"status": "triggered" if triggered else "ok", "mark_price": mark, "triggered": triggered}
+
     def _fills_path(self, cycle_id: str) -> Path:
         return self.root / "fills" / f"{cycle_id}_human.json"
 
@@ -159,10 +219,11 @@ class DualTrackHumanEngine:
         contracts: float | None,
         position_id: str,
         symbol: str,
+        trade_id: str,
     ) -> tuple[float | None, float | None]:
         if notional is not None or contracts is not None:
             return notional, contracts
-        lots = _matching_open_lots(rows, side=side, position_id=position_id, symbol=symbol)
+        lots = _matching_open_lots(rows, side=side, position_id=position_id, symbol=symbol, trade_id=trade_id)
         if not lots:
             return notional, contracts
         if self._uses_venue_cost_model():
@@ -176,6 +237,7 @@ class DualTrackHumanEngine:
             side=str(fill["side"]),
             position_id=str(fill.get("position_id") or ""),
             symbol=str(fill.get("symbol") or ""),
+            trade_id=str(fill.get("trade_id") or ""),
         )
         remaining = float(fill.get("pnl_units") or 0.0)
         if remaining <= 0:
@@ -291,6 +353,7 @@ def _matching_open_lots(
     side: str,
     position_id: str,
     symbol: str,
+    trade_id: str = "",
 ) -> list[dict[str, Any]]:
     wanted_entry_side = "sell" if side == "buy" else "buy"
     lots = []
@@ -298,6 +361,8 @@ def _matching_open_lots(
         if str(row.get("event") or "entry") not in {"entry"}:
             continue
         if row.get("side") != wanted_entry_side:
+            continue
+        if trade_id and str(row.get("trade_id") or row.get("fill_id") or "") != trade_id:
             continue
         if position_id and str(row.get("position_id") or "manual") != position_id:
             continue
@@ -350,11 +415,14 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
             trades[trade_id] = {
                 "trade_id": trade_id,
                 "position_id": str(fill.get("position_id") or "manual"),
+                "symbol": str(fill.get("symbol") or ""),
                 "track": "human",
                 "side": "long" if fill.get("side") == "buy" else "short",
                 "entry_fill_id": fill.get("fill_id", ""),
                 "entry_ts": fill.get("ts", ""),
                 "entry_price": fill.get("price"),
+                "sl": fill.get("sl"),
+                "tp": fill.get("tp"),
                 "units": fill.get("pnl_units", 0.0),
                 "remaining_units": fill.get("remaining_units", fill.get("pnl_units", 0.0)),
                 "entry_cost": fill.get("cost", 0.0),
@@ -375,7 +443,7 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "ts": fill.get("ts", ""),
                 "price": fill.get("price"),
                 "units": match.get("units"),
-                "realized_pnl": fill.get("realized_pnl", 0.0),
+                "realized_pnl": match.get("realized_pnl", fill.get("realized_pnl", 0.0)),
             })
             trade["gross_pnl"] = round(float(trade.get("gross_pnl", 0.0)) + float(match.get("gross_pnl", fill.get("gross_pnl", 0.0))), 8)
             trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + float(match.get("realized_pnl", fill.get("realized_pnl", 0.0))), 8)
@@ -383,6 +451,35 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
             trade["exit_price"] = fill.get("price")
             trade["status"] = "closed" if float(trade.get("remaining_units", 0.0) or 0.0) <= _EPSILON else "open"
     return list(trades.values())
+
+
+def _protective_trigger(trade: dict[str, Any], mark_price: float) -> dict[str, Any] | None:
+    side = str(trade.get("side") or "").lower()
+    sl = _finite_float(trade.get("sl"))
+    tp = _finite_float(trade.get("tp"))
+    if side == "long":
+        if sl is not None and mark_price <= sl:
+            return {"event": "stop", "exit_side": "sell", "price": sl}
+        if tp is not None and mark_price >= tp:
+            return {"event": "target", "exit_side": "sell", "price": tp}
+    if side == "short":
+        if sl is not None and mark_price >= sl:
+            return {"event": "stop", "exit_side": "buy", "price": sl}
+        if tp is not None and mark_price <= tp:
+            return {"event": "target", "exit_side": "buy", "price": tp}
+    return None
+
+
+def _protective_source_fill_id(cycle_id: str, trade_id: str, event: str, price: float) -> str:
+    return f"dualtrack-protective:{cycle_id}:{trade_id}:{event}:{float(price):.4f}"
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _required_float(value: Any, field: str) -> float:

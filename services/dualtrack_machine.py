@@ -10,6 +10,7 @@ from services.dualtrack_clock import cycle_window_from_id, parse_utc
 from services.dualtrack_config import base_rung_notional, dualtrack_config
 from services.dualtrack_costs import dualtrack_cost_descriptor, dualtrack_order_cost
 from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
+from services.dualtrack_scoring import filter_invalid_machine_fills
 from services.dualtrack_store import DualTrackPlanStore
 from services.journal_store import load_json, write_json
 
@@ -67,6 +68,10 @@ class DualTrackMachineRunner:
         bracket = _plan_bracket(plan)
         if bracket:
             fills, layers, stop_hit = self._simulate_bracket(cycle_id, plan, bracket, rows)
+            fills, fill_quality = filter_invalid_machine_fills(fills)
+            if fill_quality.get("invalid_machine_fill_count"):
+                layers = [*layers, f"invalid_fills:{fill_quality['invalid_machine_fill_count']}"]
+                stop_hit = False
             write_json(self._fills_path(cycle_id), fills)
             self._write_account(cycle_id, "machine", fills)
             state = self._cycle_state(
@@ -126,7 +131,7 @@ class DualTrackMachineRunner:
                 **grid_cost_kwargs,
             )
             fills.extend(self._annotate_fill(fill) for fill in trend.fills)
-        # Intraday/auto recomputes must replace the per-cycle machine fills, never append.
+        fills, fill_quality = filter_invalid_machine_fills(fills)
         write_json(self._fills_path(cycle_id), fills)
         self._write_account(cycle_id, "machine", fills)
         state = self._cycle_state(
@@ -138,6 +143,7 @@ class DualTrackMachineRunner:
             layers=[
                 f"grid:{'traded' if base.traded else 'armed_no_fill'}",
                 f"trend:{'armed' if gate_armed else 'standby'}",
+                *([f"invalid_fills:{fill_quality['invalid_machine_fill_count']}"] if fill_quality.get("invalid_machine_fill_count") else []),
             ],
             trend_gate_armed=gate_armed,
             stop_hit=base.stop_hit or bool(trend and trend.stop_hit),

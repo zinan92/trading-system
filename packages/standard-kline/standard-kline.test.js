@@ -94,6 +94,76 @@ test("package files stay provider-agnostic and free of app business terms", () =
   });
 });
 
+test("sanitizeElementIds rewrites repeated injected ids per chart instance", () => {
+  assert.equal(typeof kline.sanitizeElementIds, "function");
+  const nodes = ["tv-attr-logo", "a"].map(id => ({
+    id,
+    classes: [],
+    classList: {
+      add(value){
+        this.owner.classes.push(value);
+      },
+    },
+  }));
+  nodes.forEach(node => {
+    node.classList.owner = node;
+  });
+  const root = {
+    querySelectorAll(selector){
+      assert.equal(selector, "[id]");
+      return nodes;
+    },
+  };
+
+  const first = kline.sanitizeElementIds(root, "one");
+  const second = kline.sanitizeElementIds(root, "one");
+
+  assert.deepEqual(first.map(change => change.from), ["tv-attr-logo", "a"]);
+  assert.deepEqual(first.map(change => change.to), ["tv-attr-logo-one-0", "a-one-1"]);
+  assert.deepEqual(second, []);
+  assert.deepEqual(nodes.map(node => node.id), ["tv-attr-logo-one-0", "a-one-1"]);
+  assert.deepEqual(nodes.map(node => node.classes[0]), ["tv-attr-logo", "a"]);
+});
+
+test("chart wrapper exposes provider-agnostic price coordinate methods", () => {
+  const source = fs.readFileSync(path.join(__dirname, "standard-kline.js"), "utf8");
+
+  assert.match(source, /priceToY\(price\)/);
+  assert.match(source, /yToPrice\(y\)/);
+  assert.match(source, /priceToCoordinate/);
+  assert.match(source, /coordinateToPrice/);
+});
+
+test("chart wrapper emits a provider-agnostic view change event", () => {
+  const source = fs.readFileSync(path.join(__dirname, "standard-kline.js"), "utf8");
+
+  assert.match(source, /standard-kline:viewchange/);
+  assert.match(source, /subscribeVisibleLogicalRangeChange/);
+  assert.match(source, /_emitViewChange\(reason, range\)/);
+  assert.match(source, /_isNearLiveEdge\(range, barCount\)/);
+  assert.match(source, /live-update/);
+});
+
+test("chart wrapper surfaces TradingView-style OHLC and scale controls", () => {
+  const source = fs.readFileSync(path.join(__dirname, "standard-kline.js"), "utf8");
+
+  assert.match(source, /data-ohlc/);
+  assert.match(source, /O \$\{formatPrice\(candle\.open,2\)\} H \$\{formatPrice\(candle\.high,2\)\} L \$\{formatPrice\(candle\.low,2\)\} C \$\{formatPrice\(candle\.close,2\)\}/);
+  assert.match(source, /data-action="auto-fit"/);
+  assert.doesNotMatch(source, /data-action="toggle-log"/);
+  assert.doesNotMatch(source, /toggleLogScale/);
+  assert.doesNotMatch(source, /PriceScaleMode\?\.Logarithmic/);
+});
+
+test("chart wrapper keeps time axis visible and suppresses injected attribution text", () => {
+  const source = fs.readFileSync(path.join(__dirname, "standard-kline.js"), "utf8");
+
+  assert.match(source, /attributionLogo:false/);
+  assert.match(source, /timeScale:\{visible:true, borderVisible:true, timeVisible:true/);
+  assert.match(source, /NO LIVE KLINE DATA/);
+  assert.match(source, /access_issues/);
+});
+
 test("adaptBarPayload converts timestamps to epoch seconds and preserves provider metadata", () => {
   const payload = {
     schema_version: "ohlcv-v1",

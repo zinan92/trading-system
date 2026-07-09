@@ -2286,3 +2286,471 @@ Date: 2026-07-08
 - Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `16` tests.
 - Full regression: `python3 -m pytest -q` passed with `1259 passed`.
 - Browser phase: `http://127.0.0.1:8876/dashboard-dualtrack-split.html` loaded with 0 page-load console errors; config returned `max_leverage=10` with no secret text; human trades returned 200; machine trades manual mid-cycle probe returned 403; blind veil remained visible.
+
+## 2026-07-09 Task 10a Split Canvas Frontend Polish
+
+### Decisions
+
+- Keep Task 10a strictly frontend and defer the real trading chain to Task 10b.
+  - Rationale: 10a needed to establish trustworthy layout, phase gating, and copy semantics before wiring real POST payloads and TP/SL interaction.
+  - Boundary: the three POST handlers remain stubs except for removing the internal task suffix from their `source` string; no backend API behavior changed.
+
+- Replace the old 7/3 chart row with a vertical composition: main K-line full width, two context charts below in a two-column row.
+  - Rationale: two side-by-side canvases make the old 70/30 same-row ratio mathematically unusable; browser measurement now shows the main chart at roughly 96% of its canvas width at 1280/1440/1600.
+
+- Move human buy/sell buttons below the standard-kline toolbar instead of overlaying the toolbar row.
+  - Rationale: the real chart toolbar exists and must remain clickable; browser DOM validation measured zero intersection area between `.inbtns` and every toolbar button.
+
+- Drive default tabs and action disabled states from the real cycle phase.
+  - Rationale: viewing non-current phases is useful, but actions there must fail closed. Non-current phase buttons now get disabled with a `非当前阶段` title.
+
+- Shrink the machine mid-cycle K-line into a 120px blind PnL strip.
+  - Rationale: mid-cycle machine detail must remain blind, and a 500px empty chart frame was wasting attention. The strip shows only allowed aggregate PnL.
+
+- Make status, empty position, risk, and review copy operator-facing.
+  - Rationale: raw runtime keys and empty `--` matrices looked like debug output. Runtime `warn/run/block/unknown` now maps to Chinese states, empty position/risk renders `无持仓`, and unclosed review renders one pending sentence.
+
+- Add provider-agnostic `standard-kline` support for compact toolbar controls and duplicate-id sanitization.
+  - Rationale: small context charts only need fit plus timeframe controls, and multi-instance vendor DOM ids must not repeat. Package version moved to `0.2.1`.
+
+### Gotchas
+
+- Do not bring back `09a`/`09b` labels in `dashboard-dualtrack-split.html`; the static test now treats internal milestone labels as UI leakage.
+
+- `machine_fills_hidden` should not be rendered or even used as page copy. Use the derived cycle phase for the user-facing machine detail state.
+
+- The split page breakpoint must keep two canvases at 1280px. The single-column breakpoint is now below that, so future layout edits need browser proof at 1280.
+
+- `standard-kline` id sanitization must stay idempotent; it runs after chart setup and resize, so repeated resize must not append suffixes repeatedly.
+
+- Task 10b still owns true order payloads, fresh-price fail-closed behavior, TP/SL drag lines, and visible POST errors. Do not claim this 10a pass makes the page trade-ready.
+
+### Evidence
+
+- Static/token regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_design_tokens_static.py` passed with `19 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `17` tests.
+- Browser phase: `http://127.0.0.1:8877/dashboard-dualtrack-split.html` loaded with 0 console errors at 1280/1440/1600; toolbar/button intersection area was 0; canvases stayed two-column; main chart width ratio was ~0.96; machine blind stage was 120px; duplicate ids were 0; screenshots saved to `outputs/codex-task10a-split-1280.png`, `outputs/codex-task10a-split-1440.png`, and `outputs/codex-task10a-split-1600.png`.
+- Full regression: `python3 -m pytest -q` passed with `1263 passed`.
+- Protected files: zero diff for `dashboard-dualtrack-v5.html`, `tests/test_dashboard_dualtrack_static.py`, `pipelines/lab_run.py`, `services/lab_registry.py`, and `services/lab_r4_promotion.py`.
+
+## 2026-07-09 Task 10b Split Canvas Trading Chain
+
+### Decisions
+
+- Replace the split page's placeholder POSTs with real plan, order, and verdict payloads.
+  - Plan lock now submits `cycle_id`, `direction`, `range`, `key_levels`, `invalidation`, `confidence`, and `source`.
+  - Order submit now sends `cycle_id`, `ts`, `side`, `order_type`, `price`, `notional`, `sl`, `tp`, and `source`.
+  - Verdict submit now sends `cycle_id` and the operator note.
+
+- Fail closed when the human market is not fresh.
+  - Rationale: stale prices must not remain clickable on a trading surface. When `fresh:false` or no last close exists, buy/sell and confirm are disabled, button prices show `--`, and the status reads `行情不新鲜 · 禁止下单`.
+
+- Keep TP/SL explicitly as recorded metadata, not an execution promise.
+  - Rationale: the backend records `sl`/`tp` on fills, but there is no automatic executor in this task. The UI therefore labels `TP/SL 仅记录 · 不自动执行` next to confirmation and on chart price lines.
+
+- Implement TP/SL suggestion and manual drag as chart-coordinate behavior in `standard-kline`.
+  - The split page suggests TP/SL from recent highs/lows, lets the user drag the displayed lines, and switches to manual mode after a drag.
+  - `standard-kline` exposes provider-agnostic `priceToY()` and `yToPrice()` methods so the app does not reach into chart internals.
+
+- Show backend failures instead of swallowing them.
+  - Rationale: a rejected order is an operator-facing event. The split page no longer uses `.catch(() => null)` for these POST paths, and rejected POST messages are written into visible status lines.
+
+### Gotchas
+
+- A drag ending over an order-side button can generate a follow-up click at the pointer release location. The split page suppresses that synthetic click for 250ms so moving a TP/SL line cannot flip `buy` to `sell`.
+
+- The successful order message is now shown after `loadAll()` completes. Showing success before the trade table refresh made browser validation observe a successful status with stale rows.
+
+- Browser validation uses mocked API routes against the real page and real Chrome. This proves DOM behavior and POST payloads without creating persistent paper-account writes.
+
+- The order-rejection browser case intentionally returns HTTP 400. Chrome emits a resource error for that expected request, so the validation report separates `expectedHttpErrors` from page console errors.
+
+- Task 10b does not implement an automatic TP/SL executor. Any future work that makes TP/SL executable must remove or rewrite the `仅记录 · 不自动执行` copy and add backend execution/reconciliation tests.
+
+### Evidence
+
+- Static/token regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_design_tokens_static.py` passed with `21 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `18` tests.
+- Static bans: no `.catch(() => null)`, `split_canvas_09a`, `09a`, `09b`, `machine_fills_hidden`, inline `style=`, or inline `<svg` remains in `dashboard-dualtrack-split.html`.
+- Browser phase: `http://127.0.0.1:8878/dashboard-dualtrack-split.html` passed positive order, stale-market, rejected-order, plan-lock, and verdict-submit cases with real Chrome. Report saved to `outputs/codex-task10b-browser-validation.json`; screenshots saved to `outputs/codex-task10b-order-positive.png`, `outputs/codex-task10b-stale-market.png`, and `outputs/codex-task10b-plan-lock.png`.
+- Browser payload proof: positive order posted `side:"buy"`, `notional:5000`, and numeric `price`/`sl`/`tp`; stale market posted `0` orders; plan lock posted range/key-level/invalidation/confidence fields; verdict posted the note.
+- Full regression: `python3 -m pytest -q` passed with `1265 passed`.
+- Protected files: zero diff for `dashboard-dualtrack-v5.html`, `tests/test_dashboard_dualtrack_static.py`, `pipelines/lab_run.py`, `services/lab_registry.py`, and `services/lab_r4_promotion.py`.
+
+## 2026-07-09 Task 10c Split Canvas Order Affordance
+
+### Decisions
+
+- Split the order confirm bar into parameter and action rows.
+  - Rationale: the one-row layout was overloaded by preview text, three 88px inputs, the TP/SL note, and the confirm button. The confirm button now has `flex-shrink:0` and the action row owns the disclaimer plus cancel/confirm buttons.
+
+- Keep the existing mobile breakpoint, but explicitly reconcile it with the new two-row structure.
+  - Desktop keeps cancel/confirm side by side.
+  - At `max-width:760px`, confirm bar rows stack vertically and the button group switches to column so full-width buttons do not overflow horizontally.
+
+- Bind plan direction buttons to the same locked state as the rest of the plan form.
+  - Rationale: the click guard already prevented mutation, but the buttons looked active. `[data-plan-direction]` now receives `disabled` from `humanPlanLocked()` / `state.planPending`, and `.seg button[disabled]` gives the same visible gray state.
+
+- Bind chart buy/sell buttons directly to `orderBlockReason()` during trading-control rendering.
+  - Rationale: `updateActionGates()` already gated actions, but render-only forced states such as stale market must also update the visible `.inbtn` disabled state without waiting for another gate pass.
+
+### Gotchas
+
+- DOM width checks alone can miss mobile layout overflow. The first 375px pass measured the confirm button as wide enough, but the screenshot showed cancel/confirm still arranged horizontally with two 100%-width buttons. The final CSS sets `.confirmbar-buttons` to column under `760px`, and the browser report records `overflow: []`.
+
+- The non-current phase branch can disable the chart buttons even when the lower order status line still says the neutral "选择做多/做空后确认参数" copy, because changing phase calls `updateActionGates()` but not a full trading-control render. The operator-facing affordance is the disabled button state and title `非当前阶段`.
+
+- The cancel button is frontend-only state reset. It clears the selected side and chart price lines; it does not call any API.
+
+### Evidence
+
+- Static/token regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_design_tokens_static.py` passed with `22 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `18` tests.
+- Browser phase: real Chrome against `http://127.0.0.1:8879/dashboard-dualtrack-split.html`; report saved to `outputs/codex-task10c-browser-validation.json`.
+- C1 browser proof: at 1280/1440/1600, `.confirmbar .go` measured `48px` wide with `scrollWidth == clientWidth == 46`; at 375px, confirm width was `265px`, `.confirmbar-buttons` direction was `column`, and overflow list was empty.
+- C2 browser proof: locked plan direction buttons all had `disabled:true`, `opacity:"0.45"`, and clicking short kept the selected direction on `做多`.
+- C3 browser proof: stale market, wrong phase, and non-current phase all set buy/sell buttons to `disabled:true` with `opacity:"0.45"` and branch-specific titles.
+- Full regression: `python3 -m pytest -q` passed with `1266 passed`.
+- Protected files: zero diff for `dashboard-dualtrack-v5.html`, `tests/test_dashboard_dualtrack_static.py`, `pipelines/lab_run.py`, `services/lab_registry.py`, and `services/lab_r4_promotion.py`.
+
+## 2026-07-09 Split Canvas Trade Visibility Hotfix
+
+### Decisions
+
+- Stop hiding machine-track order rows during the active cycle.
+  - Rationale: owner explicitly changed the product rule: machine and human tracks should show the same class of information, with no blind protocol in this split page.
+  - Backend `build_dualtrack_trades_response()` now returns machine trades mid-cycle with `blind:false` and `machine_mid_order_rows_hidden:false`.
+
+- Derive machine trade rows from fills even when machine fills omit `trade_id` and `pnl_units`.
+  - Rationale: machine fills often carry `layer`, `rung`, `notional`, and `price` rather than human-style matched entry metadata.
+  - The trade builder now infers units from `notional / price` and matches exits by layer/rung/side when explicit `matched_entries` are absent.
+
+- Show trade lifecycle time columns in both human and machine fills tables.
+  - Added `成交时间`, `持仓时长`, and `平仓时间` columns.
+  - Open rows show live holding duration and no close time/close price. Closed rows show close time and close price.
+
+- Make open-position detection more tolerant than `status === "open"`.
+  - Rationale: the page should not miss a real position if backend status strings drift but `remaining_units` is still positive.
+
+### Gotchas
+
+- The owner's real human trade did exist in `outputs/dualtrack/fills/2026-07-09_DAY_human.json`, but by the time of inspection it had a later sell/exit fill, so the correct current position was `无持仓`. The missing product affordance was that the fills table did not show the lifecycle clearly enough.
+
+- `rung:0` must not be treated as an empty value. The first machine matching attempt failed because a truthy check collapsed rung zero; the final matcher compares zero explicitly.
+
+- Open partial positions can have previous exit fills. The UI intentionally shows `平仓时间` only for fully closed rows; still-open rows keep `平仓时间` and `平仓` as `--` while showing realized/unrealized PnL separately.
+
+### Evidence
+
+- Real data check: `outputs/dualtrack/fills/2026-07-09_DAY_human.json` contained entry fill `2026-07-09_DAY_human_0001` and exit fill `2026-07-09_DAY_human_0002`; the browser report shows human position as `无持仓` and the fills row as `已平仓` with entry/exit times.
+- Browser phase: real Chrome against `http://127.0.0.1:8880/dashboard-dualtrack-split.html`; report saved to `outputs/codex-split-trades-reveal-validation.json`, screenshots saved to `outputs/codex-split-trades-reveal-real.png` and `outputs/codex-split-trades-reveal-mocked-open.png`.
+- Mocked order proof: after a mocked successful order POST, status was `paper fill recorded`, human position rendered `多 0.4900`, and human fills rendered `持仓中` with `成交时间` and `持仓时长`.
+- Machine reveal proof: browser report had `blindTextCount:0`, machine K-line visible, machine position populated, and machine fills headers included `成交时间`, `持仓时长`, and `平仓时间`.
+- Focused regression: `python3 -m pytest -q tests/test_dualtrack_09b_api_contracts.py tests/test_dashboard_dualtrack_split_static.py tests/test_design_tokens_static.py tests/test_dualtrack_09b_unrealized.py` passed with `29 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `18` tests.
+- Full regression: `python3 -m pytest -q` passed with `1266 passed`.
+- Protected files: zero diff for `dashboard-dualtrack-v5.html`, `tests/test_dashboard_dualtrack_static.py`, `pipelines/lab_run.py`, `services/lab_registry.py`, and `services/lab_r4_promotion.py`.
+
+## 2026-07-09 Split Canvas Browser Comment Fixes
+
+### Decisions
+
+- Replace operator-facing `未知` copy with explicit status language.
+  - The global shell now starts at `读取状态` and falls back to `未连接`; split runtime status also maps unknown runtime to `未连接`.
+
+- Keep machine-track logic truthful instead of inventing nonexistent technical signals.
+  - The machine signal widget now says the actual rule: no MACD divergence, top/bottom fractal, or small-candle trigger exists in the machine runner today.
+  - It separately describes grid status and trend-leg eligibility from layer keys such as `grid:traded` and `trend:armed`.
+
+- Restore main-chart operator controls in split canvas.
+  - Main charts now support shared `1m` / `5m` switching.
+  - EMA/MACD controls and editable EMA periods are wired into the existing `standard-kline` indicator surface.
+
+- Treat chart buy/sell buttons as entry buttons.
+  - Split-canvas buy/sell payloads now include `event:"entry"` so `做空` does not get guessed by the backend as a close-long order.
+  - Close/flatten needs an explicit future UI, not hidden side-effect semantics.
+
+- Recompute TP/SL every time the selected side changes while in suggested mode.
+  - `做多`: TP = recent high, SL = recent low.
+  - `做空`: TP = recent low, SL = recent high.
+
+- Make the order confirm bar translucent rather than opaque over volume.
+  - The confirm bar uses a token-derived background with alpha `0.72` and a small backdrop blur, keeping controls legible while chart volume remains visible behind it.
+
+### Gotchas
+
+- Playwright's CSS computed value for `color-mix(... transparent)` came back as `color(srgb ... / 0.72)`, not `rgba(...)`. The first transparency check falsely failed until the validation parsed the alpha from the CSS color string.
+
+- Hidden phased DOM nodes return `0x0` rectangles. The first overflow pass counted hidden option/read nodes as outside the signal card. The final browser check filters to visible nonzero rectangles and reports no pre-phase signal overflow.
+
+- The first browser attempt with Python Playwright hung during `greenlet` import in system Python. The bundled Node runtime plus `NODE_PATH` could load Playwright, but launching system Chrome headless was killed by the OS. The final validation used Playwright's bundled Chromium.
+
+- A forced HTTP 400 remains in the browser validation to prove English backend errors are translated. Chromium reports that expected 400 as a console resource error, so the report separates it under `expectedHttpErrors`.
+
+### Evidence
+
+- Static/token regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_frontend_shell_static.py tests/test_design_tokens_static.py` passed with `30 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `18` tests.
+- API/trade focused regression: `python3 -m pytest -q tests/test_dualtrack_09b_api_contracts.py tests/test_dualtrack_09b_unrealized.py` passed with `7 passed`.
+- Browser validation: real Playwright Chromium against `http://127.0.0.1:8881/dashboard-dualtrack-split.html`; report saved to `outputs/codex-browser-comments-fix-validation.json`.
+- Browser screenshots: `outputs/codex-browser-comments-fix-1561.png` and `outputs/codex-browser-comments-fix-prephase.png`.
+- Browser proof points: no `未知`, machine signal explains actual rule, `1m` to `5m` switch updates the chart label, MACD turns on a second pane, EMA period changes to `EMA 10`, short order has `SL 4111.5` and `TP 4099.1`, order payload includes `event:"entry"`, confirm bar alpha is `0.72`, pre-phase signal overflow list is empty, and page horizontal overflow is `1561 / 1561`.
+
+## 2026-07-09 Split Canvas Risk/TP Display Fixes
+
+### Decisions
+
+- Position cards now prefer the open trade's own TP/SL over the plan fallback.
+  - Rationale: the operator needs to see the protection recorded on the actual fill, not the broader plan invalidation level.
+  - The API trade rows now carry entry-fill `sl` and `tp`; the browser also falls back to the matching entry fill when older trade rows are missing those fields.
+
+- Risk cards calculate max loss in dollars, not raw price points.
+  - Rationale: a 0.4868-unit position with a 3.1-point stop is about `$1.51` of risk, not `3.10` or `46.20`.
+  - The display uses remaining open units, so partial exits reduce the displayed max loss.
+
+- Replace `强平距离` with `估算强平价`.
+  - Rationale: the previous `4,519.7` number was the estimated liquidation price for a short position at 10x, not the distance.
+  - The row now shows the estimated liquidation price plus directional distance from the current mark, for example `4,519.7 · 上方 407.9`.
+
+### Gotchas
+
+- The user's visible `4,155.0` was the plan invalidation fallback, not the SL recorded on the latest human fill. The latest open short fill has `tp:4104.1` and `sl:4111.9`.
+
+- Human trade files can lag field shape because older `_build_trades()` rows did not include TP/SL. The split page should not rely only on persisted trade rows; it now uses the entry fill as a fallback source.
+
+- `最大可亏` must be a money value: `(SL - entry) * remaining_units` for shorts and `(entry - SL) * remaining_units` for longs. Showing only the price distance is misleading for small notional positions.
+
+### Evidence
+
+- API check: `build_dualtrack_trades_response("2026-07-09_DAY", track="human")` returned the open short with `entry_price:4108.8`, `remaining_units:0.4867601246`, `sl:4111.9`, and `tp:4104.1`.
+- Browser validation: real Playwright Chromium against `http://127.0.0.1:8882/dashboard-dualtrack-split.html`; report saved to `outputs/codex-risk-tpsl-fix-validation.json`.
+- Browser proof points: human position rendered `TP / SL 4,104.1 / 4,111.9`; risk rendered `最大可亏(按SL) $-1.51`; liquidation rendered `估算强平价 4,519.7 · 上方 407.9`; page horizontal overflow was `1395 / 1395`.
+- Focused regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_dualtrack_09b_api_contracts.py tests/test_dualtrack_09b_unrealized.py` passed with `25 passed`.
+- Shell/token regression: `python3 -m pytest -q tests/test_frontend_shell_static.py tests/test_design_tokens_static.py` passed with `13 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `18` tests.
+- Full regression: `python3 -m pytest -q` passed with `1270 passed`.
+
+## 2026-07-09 Split Canvas Remove Liquidation Price
+
+### Decisions
+
+- Remove liquidation-price display from the split-canvas risk card.
+  - Rationale: the operator already controls risk through SL; showing estimated liquidation price adds a distracting broker/margin concept to a panel whose job is "how much do I lose if SL is hit?"
+  - The risk card now shows only `杠杆`, `保证金占用`, `最大可亏(按SL)`, and `SL 状态`.
+
+- Keep `最大可亏(按SL)` as the primary risk number.
+  - Rationale: this is the operator-facing decision number for the current position and respects remaining open units.
+
+### Gotchas
+
+- The earlier `4,519.7` value was mathematically explainable as a rough short-position liquidation price, but the fact that it needed explanation proved it did not belong in this UI.
+
+- Do not reintroduce liquidation math into `dashboard-dualtrack-split.html` unless the page gets a separate broker-margin diagnostics area.
+
+### Evidence
+
+- Static regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_frontend_shell_static.py tests/test_design_tokens_static.py tests/test_dualtrack_09b_api_contracts.py tests/test_dualtrack_09b_unrealized.py` passed with `38 passed`.
+- Browser validation: real Playwright Chromium against `http://127.0.0.1:8883/dashboard-dualtrack-split.html`; report saved to `outputs/codex-risk-remove-liquidation-validation.json`.
+- Browser proof points: human position rendered `空 0.4868` and `TP / SL 4,104.1 / 4,111.9`; human risk rendered `最大可亏(按SL) $-1.51`; `hasLiquidationCopy:false`; risk row count is `4`.
+
+## 2026-07-09 Split Canvas Live Kline Strictness
+
+### Decisions
+
+- Make the split-canvas chart feed fail closed instead of using local cached or generated bars.
+  - Rationale: the owner compared the 5m chart against Binance and found extra lower wicks; investigation showed local 5m bars were stale while Binance public Futures REST had fresh `XAUUSDT` bars.
+  - Boundary: this applies to `dashboard-dualtrack-split.html`. The protected v5 page is left untouched.
+
+- Use browser-direct Binance Futures REST for initial bars and Binance WebSocket klines for realtime updates.
+  - Rationale: browser fetch to `https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=5m` succeeded in Chromium, so the page can match the execution venue feed without a local fallback layer.
+  - The data card now exposes provider, exchange symbol, feed status, stream status, latest bar time, and access issues.
+
+- Add explicit manual close for human open positions.
+  - Rationale: a visible `持仓中` row needs a direct operator affordance to close it, not an implicit opposite-side interpretation.
+  - The close button sends `event:"exit"` with `order_type:"market"` and no notional; backend lot matching remains responsible for the actual open size.
+
+- Suppress Lightweight Charts attribution text in the generic K-line wrapper and keep the time axis explicitly visible.
+  - Rationale: the owner selected leaked `tv-attr-logo` CSS text in the chart area, and the visible chart still lacked obvious time ticks.
+
+### Gotchas
+
+- The local backend market feed can still return stale real bars and has historical fallback behavior for older pages; do not treat that backend contract as the split page's chart truth source.
+
+- Browser WebSocket failure must be visible, but it should not erase already fetched real REST bars. The page disables trading on stale/blocked market status while keeping provenance visible.
+
+- Manual close is a write action. Browser validation should verify the button and mocked payload shape, not click a real close against the owner's live paper fills unless explicitly asked.
+
+### Evidence
+
+- Static/API regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_frontend_shell_static.py tests/test_design_tokens_static.py tests/test_dualtrack_09b_api_contracts.py tests/test_dualtrack_09b_unrealized.py tests/test_standard_kline_adapter.py` passed with `43 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `19` tests.
+- Browser validation: real Playwright Chromium against `http://127.0.0.1:8884/dashboard-dualtrack-split.html`; report saved to `outputs/codex-live-kline-strict-validation.json`, screenshot saved to `outputs/codex-live-kline-strict-validation.png`.
+- Browser proof points: 5m main chart reported `source_mode=binance_usdm_live`, `provider=binance_usdm`, `exchange_symbol=XAUUSDT`, `bar_count=240`, `fresh=true`, and WebSocket `readyState=1`; body text had no fallback/synthetic copy and no `tv-attr-logo` leak; the human open position row showed a `平仓` button; console/page errors were empty.
+
+## 2026-07-09 Split Canvas Order Risk Sizing and TP/SL Sync
+
+### Decisions
+
+- Treat order amount buttons as nominal notional, not margin.
+  - Rationale: `$1k/$2k` was ambiguous and too small if interpreted as nominal. The split page now offers `$10k/$20k/$50k/$100k` and labels the row as `按钮=名义本金`.
+  - The order preview now shows nominal, required margin, estimated units, added actual leverage, post-order nominal exposure, and post-order actual leverage.
+
+- Separate max trading leverage from actual portfolio leverage.
+  - Rationale: `10x` is the margin multiplier allowed by config; actual risk is `nominal exposure / track AUM`. A `$2k` nominal position on `$10k` AUM is `0.20x`, not `10x`.
+  - The risk widget now shows `交易杠杆上限`, `本轨 AUM`, `名义持仓`, `实际杠杆率`, `保证金占用`, `最大可亏(按SL)`, and `SL 状态`.
+
+- Make `standard-kline` emit a generic `standard-kline:viewchange` event, and make the split page listen to it for TP/SL overlay sync.
+  - Rationale: TP/SL editable DOM lines are outside the chart engine, so they must recalculate against `priceToY` whenever the chart view changes.
+  - Mouse, wheel, touch, toolbar clicks, and standard-kline view-change events all feed the same sync scheduler.
+
+### Gotchas
+
+- `10x` should never be displayed as the user's actual portfolio leverage. It is only the conversion from nominal notional to required margin.
+
+- DOM TP/SL overlays and native Lightweight Charts price lines are two different layers. Native price lines move with the chart automatically; editable DOM overlays need explicit view-change synchronization.
+
+- Long chart drags can outlive a short animation loop. New sync requests now extend the remaining sync frames instead of being ignored while a previous loop is running.
+
+### Evidence
+
+- Static/API regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_frontend_shell_static.py tests/test_design_tokens_static.py tests/test_dualtrack_09b_api_contracts.py tests/test_dualtrack_09b_unrealized.py tests/test_standard_kline_adapter.py` passed with `43 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `20` tests.
+- Syntax/diff checks: split page inline scripts compiled with `new Function`, and `git diff --check` passed for touched files.
+- Browser validation: real in-app browser against `http://127.0.0.1:8765/dashboard-dualtrack-split.html`; report saved to `outputs/codex-order-risk-tpsl-sync-validation.json`, screenshot saved to `outputs/codex-order-risk-tpsl-sync-validation.png`.
+- Browser proof points: `$20k` preview rendered `保证金 $2,000.00`, `预估仓位 4.8715`, `新增实际杠杆 2.00x`, and `下单后本轨杠杆 2.20x`; human risk rendered `名义持仓 $1,999.60`, `实际杠杆率 0.20x`, and `保证金占用 $199.96`; SL overlay moved by `69.140625px` after zoom and then recalculated again after pan.
+
+## 2026-07-09 Split Canvas R and TradingView Parity Controls
+
+### Decisions
+
+- Rename order preview leverage labels to reduce ambiguity.
+  - `新增实际杠杆` becomes `本单实际杠杆`, calculated as `order notional / track AUM`.
+  - `下单后名义持仓` becomes `成交后名义敞口`, calculated as `current open nominal exposure + order notional`.
+
+- Add a large order preview `R` badge in the split page, not inside `standard-kline`.
+  - Rationale: R depends on order-side, entry, TP, and SL, so it is a DualTrack trading overlay rather than generic chart behavior.
+  - Formula: buy uses `(TP - entry) / (entry - SL)`; sell uses `(entry - TP) / (SL - entry)`.
+
+- Add TradingView-like chart affordances to `standard-kline`.
+  - The toolbar now shows OHLC plus movement from the first candle of that chart day.
+  - The chart now exposes bottom-right `A` for auto-fit and `L` for log-scale toggle.
+
+### Gotchas
+
+- The top OHLC movement is chart-day movement from the visible payload, not an exchange-provided official daily previous close. This keeps `standard-kline` provider-neutral until a caller passes an explicit session reference.
+
+- A bad R value is a real signal. In browser validation the automatic TP/SL suggestion produced `R 0.05`, meaning the suggested reward distance was tiny relative to the stop distance.
+
+- `standard-kline` must remain domain-neutral: R, order lines, and fill semantics stay in the calling page.
+
+### Evidence
+
+- Static/API regression: `python3 -m pytest -q tests/test_dashboard_dualtrack_split_static.py tests/test_frontend_shell_static.py tests/test_design_tokens_static.py tests/test_dualtrack_09b_api_contracts.py tests/test_dualtrack_09b_unrealized.py tests/test_standard_kline_adapter.py` passed with `43 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `21` tests.
+- Syntax/diff checks: split page inline scripts compiled with `new Function`, and `git diff --check` passed for touched files.
+- Browser validation: real in-app browser against `http://127.0.0.1:8765/dashboard-dualtrack-split.html`; report saved to `outputs/codex-rr-ohlc-scale-validation.json`, screenshot saved to `outputs/codex-rr-ohlc-scale-validation.png`.
+- Browser proof points: `$50k` preview rendered `保证金 $5,000.00`, `本单实际杠杆 5.00x`, `成交后名义敞口 $100,093.81`, and `成交后本轨杠杆 10.01x`; K-line rendered `O/H/L/C` plus `+0.76 (+0.02%)`; `A` and `L` buttons were visible; `L` toggled active and was reset off after validation; order preview rendered `R 0.05`.
+
+## 2026-07-09 Split Canvas Protective Exit and Live Tick Refresh
+
+### Decisions
+
+- Move SL/TP trigger semantics into the human paper ledger backend.
+  - Rationale: once the UI says an SL has triggered, the owner expects it to be executed in the local paper ledger. The backend now appends a stop/target exit fill when a fresh mark reaches the stored SL/TP.
+  - Trigger fills use the configured SL/TP price as the paper execution price, not the already-overrun mark, because this ledger models "到价成交" and does not model slippage yet.
+
+- Keep protective exits local to paper accounting.
+  - Rationale: the owner asked to change backend behavior, not to submit broker orders. The sweep writes DualTrack human fills/accounts/trades only and does not open broker clients.
+
+- Let the split page pass its fresh Binance WebSocket mark into the trades API refresh.
+  - Rationale: the page currently sees newer Binance ticks than the backend market database. Passing `mark_price` lets the backend make the SL/TP decision immediately while keeping the decision and PnL calculation server-side.
+
+- Make `standard-kline` follow live ticks only when the user is already near the right edge.
+  - Rationale: TradingView-style live behavior should keep the latest candle visible, but should not yank the chart away when the user intentionally pans back in history.
+
+### Gotchas
+
+- `position_id=manual` is not unique enough for protective exits. Exit matching now honors `trade_id` when present so one triggered trade cannot accidentally close another manual trade sharing the same position id.
+
+- A stale or missing mark must not trigger protective exits. The sweep only runs when the mark is finite and fresh; otherwise the API returns a skipped sweep.
+
+- Frontend text must not say `TP/SL 仅记录 · 不自动执行` after this change. That wording is now materially false for the split canvas paper ledger.
+
+### Evidence
+
+- Backend/API/static regression: `python3 -m pytest -q tests/test_dualtrack_dt3_human_track.py tests/test_dualtrack_09b_api_contracts.py tests/test_dashboard_dualtrack_split_static.py tests/test_dualtrack_09b_unrealized.py tests/test_standard_kline_adapter.py` passed with `40 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `21` tests.
+- Syntax/diff checks: split page inline script compiled with `node --check`, and `git diff --check` passed for touched files.
+- Live ledger validation: `outputs/dualtrack/fills/2026-07-09_DAY_human.json` now contains stop fill `2026-07-09_DAY_human_0009` for `trade_0005`, exit side `buy`, execution price `4108.6`, trigger mark `4109.05`, gross PnL `-118.32442851`, exit-fill realized PnL `-120.83034473`, and the trade is closed with `remaining_units=0.0`.
+- API validation: `http://127.0.0.1:8765/api/dualtrack/trades/2026-07-09_DAY?track=human&mark_price=4109.88&mark_source=codex_validation` returned `mark_fresh=true` and no duplicate protective trigger after the trade was already closed.
+- Browser validation note: in-app browser refresh was blocked by the browser URL policy, so no browser screenshot was produced in this turn.
+
+## 2026-07-09 Engine Adapter Direction and QuantDinger Review
+
+### Decisions
+
+- Do not start with a large engine migration.
+  - Rationale: the immediate product value is stable paper accounting behind a fixed `orders/fills/positions/pnl` schema, not replacing the whole trading stack at once.
+  - The next architecture step should be an `ExecutionEngineAdapter` boundary where adapter 1 wraps the current local paper ledger and adapter 2 spikes an external engine.
+
+- Treat NautilusTrader as the stronger candidate for an execution-engine spike.
+  - Rationale: its native shape is order lifecycle, execution, risk, position state, portfolio/accounting, and reconciliation, which maps directly to the split canvas failures seen today.
+
+- Treat vectorbt as a research/backtest companion, not the live/paper execution adapter.
+  - Rationale: vectorized portfolio simulation is excellent for parameter sweeps and strategy research, but it is not the natural owner for real-time order state, partial fills, manual close reconciliation, and broker-like position lifecycle.
+
+- Treat QuantDinger as an implementation reference and possible integration surface, not as the first embedded adapter.
+  - Rationale: QuantDinger is a full self-hosted trading OS with Flask, PostgreSQL, Redis, workers, UI, exchange adapters, agent gateway, and billing/ops surfaces. Useful ideas include order intent contracts, fill persistence, close-size retry, and ledger-vs-exchange reconciliation, but embedding it whole would be a second platform inside this repo.
+
+### Gotchas
+
+- QuantDinger's valuable parts are mostly product/runtime patterns, not a small reusable math library. Importing it wholesale would add deployment, DB, worker, auth, and UI coupling before proving accounting equivalence.
+
+- The adapter contract must be ours. External engines should conform to the split canvas `orders/fills/positions/pnl` schema; the frontend widgets must not leak Nautilus-, QuantDinger-, or vectorbt-specific fields.
+
+- Do not confuse strategy-signal standards with execution-accounting standards. QuantDinger's four-way signal contract is useful, but the current pain is fill matching, manual close, SL/TP trigger execution, and position/PnL reconciliation.
+
+### Evidence
+
+- QuantDinger root README describes a self-hosted trading OS spanning AI research, strategy code, backtest, paper/live execution, and monitoring.
+- QuantDinger backend docs explicitly separate routes, services, live-trading adapters, grid reconciliation, and data-source boundaries.
+- QuantDinger source includes `OrderIntent`, `FillSnapshot`, `PositionSnapshot`, and `ExchangeOrderAdapter` contracts, plus fill persistence and phantom-ledger reconciliation helpers.
+- NautilusTrader docs describe `ExecutionEngine`, `RiskEngine`, positions/accounting/portfolio/reports, backtest/sandbox/live contexts, and ports-and-adapters architecture.
+- vectorbt docs position it as pandas/NumPy/Numba/Rust vectorized analysis and high-scale parameter/backtest tooling.
+
+## 2026-07-09 Split Canvas Fills Persistence and Machine Fill Sanity
+
+### Decisions
+
+- Add `display_trades` / `display_summary` to the DualTrack trades API.
+  - Rationale: when the page rolls from `DAY` to `NIGHT`, the just-completed human fills still exist in the DAY cycle but the current NIGHT cycle may be empty. The UI should show the latest same-day cycle with trades instead of making recent fills and realized PnL appear to disappear after refresh.
+
+- Keep raw cycle trades separate from display trades.
+  - Rationale: widgets need stable current-cycle data for actions, but the reader-facing fills/PnL panels need a non-surprising display fallback. The API now exposes `display_cycle_id` and `display_reason` so the frontend can state when it is showing the previous same-day cycle.
+
+- Filter invalid machine fills before building display trades and summaries.
+  - Rationale: machine fills are simulated and can be recomputed. A long entry whose SL is not below entry, or a short entry whose SL is not above entry, is invalid execution geometry and must not become a real-looking order row or PnL contribution.
+
+- Count realized PnL from partially open trades in trade summaries.
+  - Rationale: a position can be partly closed and still have real realized PnL. Showing realized only for fully closed trades hid machine partial exits.
+
+- Rename fills table headers from `开仓` / `平仓` to `开仓价` / `平仓价`.
+  - Rationale: the owner explicitly read the fills table as missing entry price; the column label needs to say price, not imply an action.
+
+### Gotchas
+
+- Current-cycle emptiness is not the same as no recent fills. A refresh right after 21:00 Beijing can legitimately switch the page to `NIGHT` while the user's just-recorded fills are still in `DAY`.
+
+- Do not trust generated machine fills blindly. If the simulated entry and protective levels are geometrically impossible, fail closed in the display/API layer even if a stale artifact already exists on disk.
+
+- Raw ledger files can remain polluted by historical bad machine fills. Reader-facing widgets must use sanitized API summaries until a deliberate ledger repair/migration is approved.
+
+- Realized PnL and closed-trade PnL are different concepts. Partial exits should contribute to realized PnL even when the trade row remains `open`.
+
+### Evidence
+
+- Regression tests: `python3 -m pytest -q tests/test_dualtrack_09b_api_contracts.py tests/test_dashboard_dualtrack_split_static.py tests/test_dualtrack_dt3_human_track.py tests/test_dualtrack_09b_unrealized.py` passed with `40 passed`.
+- Syntax/diff checks: split page inline script passed `node --check`, and `git diff --check` passed for the touched files.
+- API validation: `http://127.0.0.1:8765/api/dualtrack/trades/2026-07-09_NIGHT?track=human` returns `display_cycle_id=2026-07-09_DAY`, `display_reason=latest_same_day`, `display_summary.realized_pnl=112.8825787`, and 6 display trades.
+- API validation: `http://127.0.0.1:8765/api/dualtrack/trades/2026-07-09_NIGHT?track=machine` returns `display_cycle_id=2026-07-09_DAY`, filters 4 invalid machine fills from display safety, and reports `display_summary.realized_pnl=72.79008591`.
+- Browser DOM validation: real Playwright tab against `http://127.0.0.1:8765/dashboard-dualtrack-split.html` showed `显示 2026-07-09 日盘 最近成交`, human PnL `+$112.88`, machine PnL `+$72.79`, `开仓价` / `平仓价` headers, and no machine fills containing `4,155.0` or `4,121.3`.

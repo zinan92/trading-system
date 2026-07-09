@@ -368,6 +368,144 @@ def _pnl(fills: list[dict[str, Any]]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
 
 
+def filter_invalid_machine_fills(fills: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Remove machine fills that violate basic execution geometry.
+
+    Machine fills are simulated and can be recomputed. If an entry is already
+    on the wrong side of its protective stop, treating it as a real trade makes
+    the UI and PnL lie. Drop that entry and the paired immediate exit.
+    """
+    kept: list[dict[str, Any]] = []
+    invalid_entries: dict[tuple[str, str, str], int] = {}
+    reasons: list[dict[str, Any]] = []
+
+    for fill in fills:
+        event = str(fill.get("event") or "")
+        if event == "entry":
+            reason = _invalid_machine_entry_reason(fill)
+            if reason:
+                exit_key = _machine_exit_pair_key(fill)
+                invalid_entries[exit_key] = invalid_entries.get(exit_key, 0) + 1
+                reasons.append({
+                    "fill_id": fill.get("fill_id", ""),
+                    "reason": reason,
+                    "price": fill.get("price"),
+                    "sl": fill.get("sl"),
+                    "tp": fill.get("tp"),
+                })
+                continue
+            kept.append(fill)
+            continue
+
+        pair_key = _machine_exit_key(fill)
+        if pair_key in invalid_entries and invalid_entries[pair_key] > 0:
+            invalid_entries[pair_key] -= 1
+            reasons.append({
+                "fill_id": fill.get("fill_id", ""),
+                "reason": "paired_exit_for_invalid_entry",
+                "price": fill.get("price"),
+                "sl": fill.get("sl"),
+                "tp": fill.get("tp"),
+            })
+            continue
+        kept.append(fill)
+
+    return kept, {
+        "invalid_machine_fill_count": len(fills) - len(kept),
+        "invalid_machine_fill_reasons": reasons,
+    }
+
+
+def _invalid_machine_entry_reason(fill: dict[str, Any]) -> str:
+    side = "long" if str(fill.get("side") or "").lower() == "buy" else "short"
+    price = _finite_float(fill.get("price"))
+    sl = _finite_float(fill.get("sl"))
+    tp = _finite_float(fill.get("tp"))
+    if price is None:
+        return "missing_entry_price"
+    if side == "long":
+        if sl is not None and sl >= price:
+            return "long_stop_not_below_entry"
+        if tp is not None and tp <= price:
+            return "long_target_not_above_entry"
+    else:
+        if sl is not None and sl <= price:
+            return "short_stop_not_above_entry"
+        if tp is not None and tp >= price:
+            return "short_target_not_below_entry"
+    return ""
+
+
+def _machine_exit_pair_key(fill: dict[str, Any]) -> tuple[str, str, str]:
+    exit_side = "sell" if str(fill.get("side") or "").lower() == "buy" else "buy"
+    return (_fill_position_id(fill), str(fill.get("rung", "")), exit_side)
+
+
+def _machine_exit_key(fill: dict[str, Any]) -> tuple[str, str, str]:
+    return (_fill_position_id(fill), str(fill.get("rung", "")), str(fill.get("side") or "").lower())
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _fill_units(fill: dict[str, Any]) -> float:
+    try:
+        if fill.get("pnl_units") not in (None, ""):
+            units = float(fill.get("pnl_units") or 0.0)
+            if math.isfinite(units) and units > 0:
+                return units
+        if fill.get("units") not in (None, ""):
+            units = float(fill.get("units") or 0.0)
+            if math.isfinite(units) and units > 0:
+                return units
+        price = float(fill.get("price") or 0.0)
+        notional = float(fill.get("notional") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(price) or not math.isfinite(notional) or price <= 0 or notional <= 0:
+        return 0.0
+    return notional / price
+
+
+def _fill_position_id(fill: dict[str, Any]) -> str:
+    return str(fill.get("position_id") or fill.get("layer") or "")
+
+
+def _trade_matches_exit(trade: dict[str, Any], fill: dict[str, Any]) -> bool:
+    if trade.get("status") == "closed":
+        return False
+    exit_side = str(fill.get("side") or "").lower()
+    wanted_trade_side = "long" if exit_side == "sell" else "short" if exit_side == "buy" else ""
+    if wanted_trade_side and str(trade.get("side") or "").lower() != wanted_trade_side:
+        return False
+    fill_position = _fill_position_id(fill)
+    if fill_position and str(trade.get("position_id") or "") != fill_position:
+        return False
+    fill_rung = fill.get("rung")
+    if fill_rung not in (None, ""):
+        trade_rung = trade.get("rung")
+        if trade_rung in (None, "") or str(trade_rung) != str(fill_rung):
+            return False
+    remaining = trade.get("remaining_units", trade.get("units", 0.0))
+    try:
+        return float(remaining or 0.0) > 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def _fallback_exit_matches(trades: dict[str, dict[str, Any]], fill: dict[str, Any]) -> list[dict[str, Any]]:
+    matches = [trade for trade in trades.values() if _trade_matches_exit(trade, fill)]
+    matches.sort(key=lambda trade: str(trade.get("entry_ts") or ""), reverse=True)
+    if str(fill.get("event") or "") == "flatten":
+        return matches
+    return matches[:1]
+
+
 def apply_unrealized(trades: list[dict[str, Any]], mark_price: Any, *, mark_fresh: bool = True) -> list[dict[str, Any]]:
     try:
         mark = float(mark_price)
@@ -407,16 +545,21 @@ def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[
         event = str(fill.get("event") or "")
         if event == "entry":
             trade_id = str(fill.get("trade_id") or fill.get("fill_id") or "")
+            units = _fill_units(fill)
             trades[trade_id] = {
                 "trade_id": trade_id,
                 "track": track,
-                "position_id": str(fill.get("position_id") or fill.get("layer") or ""),
+                "position_id": _fill_position_id(fill),
+                "layer": fill.get("layer", ""),
+                "rung": fill.get("rung", ""),
                 "side": "long" if fill.get("side") == "buy" else "short",
                 "entry_fill_id": fill.get("fill_id", ""),
                 "entry_ts": fill.get("ts", ""),
                 "entry_price": fill.get("price"),
-                "units": fill.get("pnl_units", 0.0),
-                "remaining_units": fill.get("remaining_units", fill.get("pnl_units", 0.0)),
+                "sl": fill.get("sl"),
+                "tp": fill.get("tp"),
+                "units": units,
+                "remaining_units": fill.get("remaining_units", units),
                 "entry_cost": fill.get("cost", 0.0),
                 "exit_fills": [],
                 "gross_pnl": 0.0,
@@ -428,12 +571,25 @@ def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[
             continue
         matches = fill.get("matched_entries") or []
         if not matches:
-            matches = [{"trade_id": str(fill.get("trade_id") or ""), "units": fill.get("pnl_units", 0.0), "gross_pnl": fill.get("gross_pnl", 0.0), "realized_pnl": fill.get("realized_pnl", 0.0)}]
+            matches = []
+            fallback_trades = _fallback_exit_matches(trades, fill)
+            fallback_units = _fill_units(fill)
+            for fallback_trade in fallback_trades:
+                remaining = float(fallback_trade.get("remaining_units", fallback_trade.get("units", 0.0)) or 0.0)
+                units = fallback_units if fallback_units > 0 else remaining
+                matches.append({
+                    "trade_id": str(fallback_trade.get("trade_id") or ""),
+                    "units": min(units, remaining) if remaining > 0 else units,
+                    "gross_pnl": fill.get("gross_pnl", 0.0),
+                    "realized_pnl": fill.get("realized_pnl", 0.0),
+                })
         for match in matches:
             trade_id = str(match.get("trade_id") or fill.get("trade_id") or "")
             trade = trades.get(trade_id)
             if not trade:
                 continue
+            current_remaining = float(trade.get("remaining_units", trade.get("units", 0.0)) or 0.0)
+            closed_units = float(match.get("units", 0.0) or 0.0)
             trade["exit_fills"].append({
                 "fill_id": fill.get("fill_id", ""),
                 "event": event,
@@ -444,10 +600,10 @@ def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[
             })
             trade["gross_pnl"] = round(float(trade.get("gross_pnl", 0.0)) + float(match.get("gross_pnl", fill.get("gross_pnl", 0.0)) or 0.0), 8)
             trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + float(match.get("realized_pnl", fill.get("realized_pnl", 0.0)) or 0.0), 8)
-            trade["remaining_units"] = 0.0
+            trade["remaining_units"] = max(0.0, round(current_remaining - closed_units, 10))
             trade["exit_ts"] = fill.get("ts", "")
             trade["exit_price"] = fill.get("price")
-            trade["status"] = "closed"
+            trade["status"] = "closed" if float(trade.get("remaining_units", 0.0) or 0.0) <= 1e-9 else "open"
     return list(trades.values())
 
 

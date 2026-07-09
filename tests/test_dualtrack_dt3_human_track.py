@@ -152,6 +152,86 @@ def test_human_entry_exit_pair_realizes_price_pnl_and_writes_trade(tmp_path: Pat
     assert trades[0]["realized_pnl"] == pytest.approx(4.89975)
 
 
+def test_human_protective_sweep_executes_short_stop_once_at_sl_price(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+
+    entry = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "sell",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+        "position_id": "manual-short",
+    })
+    sweep = human.sweep_protective_exits(
+        cycle_id,
+        mark_price=106.0,
+        ts="2026-07-05T01:05:00+00:00",
+        source="test_websocket",
+    )
+    repeat = human.sweep_protective_exits(
+        cycle_id,
+        mark_price=106.0,
+        ts="2026-07-05T01:06:00+00:00",
+        source="test_websocket",
+    )
+
+    fills = load_json(tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json")
+    trades = load_json(tmp_path / "outputs" / "dualtrack" / "trades" / f"{cycle_id}_human.json")
+
+    assert entry["trade_id"]
+    assert sweep["status"] == "triggered"
+    assert sweep["triggered"][0]["event"] == "stop"
+    assert repeat["triggered"] == []
+    assert len(fills) == 2
+    assert fills[-1]["event"] == "stop"
+    assert fills[-1]["side"] == "buy"
+    assert fills[-1]["price"] == 105.0
+    assert fills[-1]["trigger_mark_price"] == 106.0
+    assert trades[0]["status"] == "closed"
+    assert trades[0]["remaining_units"] == 0.0
+    assert trades[0]["realized_pnl"] == pytest.approx(-50.1025)
+
+
+def test_human_protective_sweep_filters_by_trade_id_when_position_id_is_shared(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+
+    first = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "sell",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+        "position_id": "manual",
+    })
+    second = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:03:00+00:00",
+        "side": "sell",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 120.0,
+        "tp": 90.0,
+        "position_id": "manual",
+    })
+
+    human.sweep_protective_exits(cycle_id, mark_price=106.0, ts="2026-07-05T01:05:00+00:00")
+    trades = {row["trade_id"]: row for row in load_json(tmp_path / "outputs" / "dualtrack" / "trades" / f"{cycle_id}_human.json")}
+
+    assert trades[first["trade_id"]]["status"] == "closed"
+    assert trades[second["trade_id"]]["status"] == "open"
+    assert trades[second["trade_id"]]["remaining_units"] > 0
+
+
 def test_human_tiger_mgc_mode_records_contracts_and_fixed_side_cost(tmp_path: Path) -> None:
     cycle_id = "2026-07-05_DAY"
     human = DualTrackHumanEngine(tmp_path / "outputs", config=_mgc_config())

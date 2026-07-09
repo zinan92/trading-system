@@ -37,6 +37,7 @@
     macdLine:"#9aa3ad",
     macdSignal:"#e8eaed",
   };
+  let instanceSequence = 0;
 
   function normalizeQualityFlags(value){
     if(Array.isArray(value)) return value.map(item => String(item || "").trim()).filter(Boolean);
@@ -185,6 +186,24 @@
     return Number(value || 0).toLocaleString("en-US", {minimumFractionDigits:digits, maximumFractionDigits:digits});
   }
 
+  function formatSigned(value, digits){
+    const number = Number(value);
+    if(!Number.isFinite(number)) return "";
+    const sign = number > 0 ? "+" : number < 0 ? "-" : "";
+    return `${sign}${formatPrice(Math.abs(number), digits)}`;
+  }
+
+  function formatDayKey(value, timeZone){
+    const seconds = toEpochSeconds(value);
+    if(seconds == null) return "";
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone:timeZone || "UTC",
+      year:"numeric",
+      month:"2-digit",
+      day:"2-digit",
+    }).format(new Date(seconds * 1000));
+  }
+
   function formatChartTime(value, timeZone, includeDate, locale){
     const zone = timeZone || "UTC";
     const lang = locale || "en-US";
@@ -254,19 +273,51 @@
     return lwc.LineStyle?.Dashed ?? 2;
   }
 
+  function safeClassName(value){
+    return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "-");
+  }
+
+  function sanitizeElementIds(container, suffix){
+    if(!container?.querySelectorAll) return [];
+    const safeSuffix = safeClassName(suffix || "instance");
+    const marker = `-${safeSuffix}-`;
+    return Array.from(container.querySelectorAll("[id]")).map((element, index) => {
+      const original = String(element.id || "");
+      if(!original) return null;
+      if(original.includes(marker)) return null;
+      element.classList?.add?.(safeClassName(original));
+      element.id = `${original}-${safeSuffix}-${index}`;
+      return {from:original, to:element.id};
+    }).filter(Boolean);
+  }
+
+  function toolbarHtml(options){
+    const showZoom = options?.toolbar?.zoom !== false;
+    const zoomButtons = showZoom
+      ? `<button type="button" data-action="zoom-in" title="Zoom in">+</button><button type="button" data-action="zoom-out" title="Zoom out">-</button><button type="button" data-action="pan-left" title="Pan left">&lt;</button><button type="button" data-action="pan-right" title="Pan right">&gt;</button>`
+      : "";
+    return `${zoomButtons}<button type="button" data-action="fit" title="Fit">fit</button><span class="standard-kline-crosshair" data-crosshair-time></span><span class="standard-kline-ohlc" data-ohlc></span><span class="standard-kline-source" data-source></span>`;
+  }
+
   function injectStyles(){
     if(!root.document || root.document.getElementById("standard-kline-styles")) return;
     const style = root.document.createElement("style");
     style.id = "standard-kline-styles";
     style.textContent = `
 .standard-kline-root{position:relative;width:100%;height:100%;min-height:320px;display:grid;grid-template-rows:auto minmax(0,1fr);background:transparent;overflow:hidden}
-.standard-kline-root.compact{min-height:220px}
+.standard-kline-root.compact{min-height:160px}
 .standard-kline-toolbar{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;min-height:30px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.08);font:11px/1.2 var(--mono,"SFMono-Regular",ui-monospace,monospace);color:${COLORS.faint};background:rgba(255,255,255,.018)}
 .standard-kline-toolbar button{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:${COLORS.text};border-radius:5px;padding:3px 8px;cursor:pointer;font:inherit}
 .standard-kline-toolbar button:hover{border-color:rgba(216,170,63,.45);color:${COLORS.gold}}
 .standard-kline-crosshair{flex:0 0 auto;color:${COLORS.text};min-width:92px}
-.standard-kline-source{margin-left:auto;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:58%;color:${COLORS.faint};text-align:right}
+.standard-kline-ohlc{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${COLORS.text}}
+.standard-kline-ohlc.up{color:${COLORS.up}}
+.standard-kline-ohlc.down{color:${COLORS.down}}
+.standard-kline-source{margin-left:auto;min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:36%;color:${COLORS.faint};text-align:right}
 .standard-kline-canvas{position:relative;min-width:0;min-height:0;height:100%}
+.standard-kline-scale-controls{position:absolute;right:8px;bottom:8px;z-index:5;display:flex;gap:4px}
+.standard-kline-scale-controls button{width:24px;height:22px;border:1px solid rgba(255,255,255,.2);border-radius:4px;background:rgba(10,11,12,.82);color:${COLORS.text};font:700 11px/1 var(--mono,"SFMono-Regular",ui-monospace,monospace);cursor:pointer}
+.standard-kline-scale-controls button.is-active{border-color:${COLORS.gold};color:${COLORS.gold}}
 .standard-kline-overlay{position:absolute;inset:32px 14px 14px 14px;display:none;place-items:center;text-align:center;pointer-events:none;z-index:4}
 .standard-kline-overlay.is-visible{display:grid}
 .standard-kline-message{max-width:min(520px,94%);border:1px solid rgba(255,255,255,.15);background:${COLORS.panel};padding:14px 18px;color:${COLORS.text};font:12px/1.45 var(--mono,"SFMono-Regular",ui-monospace,monospace)}
@@ -283,6 +334,7 @@
       this.container = typeof container === "string" ? root.document.querySelector(container) : container;
       if(!this.container) throw new Error("StandardKlineChart container not found");
       this.options = {...options};
+      this.instanceId = `sk${++instanceSequence}`;
       this.chart = null;
       this.candleSeries = null;
       this.volumeSeries = null;
@@ -294,6 +346,8 @@
       this.macdHistogramSeries = null;
       this.priceLines = [];
       this.current = adaptBarPayload(null);
+      this.candleByTime = new Map();
+      this.dayOpenByKey = new Map();
       this.resizeObserver = null;
       this.loading = false;
       this.destroyed = false;
@@ -310,17 +364,22 @@
       this.rootEl = root.document.createElement("div");
       this.rootEl.className = `standard-kline-root${this.options.compact ? " compact" : ""}`;
       this.rootEl.dataset.standardKline = "true";
+      this.rootEl.dataset.standardKlineInstance = this.instanceId;
       this.toolbarEl = root.document.createElement("div");
       this.toolbarEl.className = "standard-kline-toolbar";
-      this.toolbarEl.innerHTML = `<button type="button" data-action="zoom-in" title="Zoom in">+</button><button type="button" data-action="zoom-out" title="Zoom out">-</button><button type="button" data-action="pan-left" title="Pan left">&lt;</button><button type="button" data-action="pan-right" title="Pan right">&gt;</button><button type="button" data-action="fit" title="Fit">fit</button><span class="standard-kline-crosshair" data-crosshair-time></span><span class="standard-kline-source" data-source></span>`;
+      this.toolbarEl.innerHTML = toolbarHtml(this.options);
       this.chartEl = root.document.createElement("div");
       this.chartEl.className = "standard-kline-canvas";
+      this.scaleControlsEl = root.document.createElement("div");
+      this.scaleControlsEl.className = "standard-kline-scale-controls";
+      this.scaleControlsEl.innerHTML = `<button type="button" data-action="auto-fit" title="Auto fit visible data">A</button>`;
       this.overlayEl = root.document.createElement("div");
       this.overlayEl.className = "standard-kline-overlay";
       this.overlayEl.dataset.standardKlineOverlay = "true";
       this.overlayEl.innerHTML = `<div class="standard-kline-message"><b></b><span></span></div>`;
       this.rootEl.appendChild(this.toolbarEl);
       this.rootEl.appendChild(this.chartEl);
+      this.rootEl.appendChild(this.scaleControlsEl);
       this.rootEl.appendChild(this.overlayEl);
       this.container.appendChild(this.rootEl);
       this.toolbarEl.addEventListener("click", event => {
@@ -331,6 +390,10 @@
         if(action === "pan-left") this.pan(-12);
         if(action === "pan-right") this.pan(12);
         if(action === "fit") this.fit();
+      });
+      this.scaleControlsEl.addEventListener("click", event => {
+        const action = event.target?.closest?.("button[data-action]")?.dataset?.action;
+        if(action === "auto-fit") this.autoFit();
       });
     }
 
@@ -346,17 +409,18 @@
       this.chart = lwc.createChart(this.chartEl, {
         width:size.width,
         height:size.height,
-        layout:{background:{type:"solid", color:"transparent"}, textColor:this.options.textColor || COLORS.text, fontSize:11},
+        layout:{background:{type:"solid", color:"transparent"}, textColor:this.options.textColor || COLORS.text, fontSize:11, attributionLogo:false},
         grid:{vertLines:{color:this.options.gridColor || "rgba(255,255,255,.045)"}, horzLines:{color:this.options.gridColor || COLORS.grid}},
         crosshair:{mode:lwc.CrosshairMode?.Normal ?? 1},
         rightPriceScale:{borderVisible:false, minimumWidth:1, scaleMargins:{top:.08,bottom:this.options.showVolume === false ? .10 : .28}},
-        timeScale:{borderVisible:true, timeVisible:true, secondsVisible:false, rightOffset:8, barSpacing:this.options.compact ? 5 : 7, minBarSpacing:.5, rightBarStaysOnScroll:true, tickMarkFormatter:time => formatChartTime(time, timeZone, false, locale)},
+        timeScale:{visible:true, borderVisible:true, timeVisible:true, secondsVisible:false, rightOffset:8, barSpacing:this.options.compact ? 5 : 7, minBarSpacing:.5, rightBarStaysOnScroll:true, tickMarkFormatter:time => formatChartTime(time, timeZone, false, locale)},
         handleScroll:{mouseWheel:true, pressedMouseMove:true, horzTouchDrag:true, vertTouchDrag:true},
         handleScale:{axisPressedMouseMove:true, mouseWheel:true, pinch:true},
         localization:{priceFormatter:price => formatPrice(price,2), timeFormatter:time => formatChartTime(time, timeZone, true, locale)},
       });
       this.chart.subscribeCrosshairMove?.(param => this._setCrosshairTime(param?.time));
       this._patchTimeScale();
+      this._timeScale?.subscribeVisibleLogicalRangeChange?.(range => this._emitViewChange("visible-logical-range", range));
       this.candleSeries = this.chart.addSeries(lwc.CandlestickSeries, {
         upColor:COLORS.up,
         downColor:COLORS.down,
@@ -382,6 +446,12 @@
       this.resizeObserver = new ResizeObserver(() => this.resize());
       this.resizeObserver.observe(this.container);
       this.resize();
+      this._sanitizeDomIds();
+      root.setTimeout?.(() => this._sanitizeDomIds(), 0);
+    }
+
+    _sanitizeDomIds(){
+      return sanitizeElementIds(this.rootEl, this.instanceId);
     }
 
     _patchTimeScale(){
@@ -408,7 +478,9 @@
     _size(){
       const rect = this.container.getBoundingClientRect();
       const width = Math.max(260, Math.floor(rect.width || this.options.width || 640));
-      const height = Math.max(this.options.compact ? 220 : 320, Math.floor(rect.height || this.options.height || 380));
+      const defaultMinHeight = this.options.compact ? 160 : 320;
+      const minHeight = Math.max(120, numberOrNull(this.options.minHeight) ?? defaultMinHeight);
+      const height = Math.max(minHeight, Math.floor(rect.height || this.options.height || 380));
       return {width, height};
     }
 
@@ -416,6 +488,8 @@
       if(!this.chart || this.destroyed) return;
       const size = this._size();
       this.chart.applyOptions({width:size.width, height:size.height});
+      this._sanitizeDomIds();
+      this._emitViewChange("resize", this._readLogicalRange());
     }
 
     setLoading(loading, message){
@@ -436,16 +510,22 @@
     }
 
     setAdaptedData(adapted, overlays){
+      const previousCount = this._barCount();
+      const previousRange = this._readLogicalRange();
+      const shouldFollowLive = overlays?.fit === false && overlays?.followLive !== false && this._isNearLiveEdge(previousRange, previousCount);
       this.current = adapted || adaptBarPayload(null);
       const candles = this.current.candles || [];
+      this._indexCandles(candles);
       if(this.candleSeries) this.candleSeries.setData(candles);
       if(this.volumeSeries) this.volumeSeries.setData(this.current.volumes || []);
       this._setPriceLines(overlays?.priceLines || []);
       this._setMarkers(overlays?.markers || []);
       this._setIndicators(overlays?.indicators || null);
       this._setSourceText(this.current.meta);
+      this._setOhlcText();
       this._refreshOverlay();
       if(candles.length && overlays?.fit !== false) this.fit();
+      else if(candles.length && shouldFollowLive) this._scrollToLive(previousRange);
       return this.current;
     }
 
@@ -563,16 +643,51 @@
       if(!target) return;
       if(time == null){
         target.textContent = "";
+        this._setOhlcText();
         return;
       }
       target.textContent = formatChartTime(time, this.options.timeZone || "UTC", true, this.options.locale || "en-US");
+      this._setOhlcText(time);
+    }
+
+    _indexCandles(candles){
+      this.candleByTime = new Map();
+      this.dayOpenByKey = new Map();
+      const timeZone = this.options.timeZone || "UTC";
+      (candles || []).forEach(candle => {
+        this.candleByTime.set(Number(candle.time), candle);
+        const key = formatDayKey(candle.time, timeZone);
+        if(key && !this.dayOpenByKey.has(key)) this.dayOpenByKey.set(key, candle.open);
+      });
+    }
+
+    _setOhlcText(time){
+      const target = this.toolbarEl.querySelector("[data-ohlc]");
+      if(!target) return;
+      const candles = this.current.candles || [];
+      const candle = time != null ? this.candleByTime.get(toEpochSeconds(time)) : candles.at(-1);
+      if(!candle){
+        target.textContent = "";
+        target.classList.remove("up", "down");
+        return;
+      }
+      const key = formatDayKey(candle.time, this.options.timeZone || "UTC");
+      const referenceOpen = numberOrNull(this.dayOpenByKey.get(key)) ?? numberOrNull(candles[0]?.open);
+      const change = Number(candle.close) - Number(referenceOpen);
+      const pct = referenceOpen ? (change / referenceOpen) * 100 : null;
+      const movement = Number.isFinite(pct) ? ` ${formatSigned(change, 2)} (${formatSigned(pct, 2)}%)` : "";
+      target.textContent = `O ${formatPrice(candle.open,2)} H ${formatPrice(candle.high,2)} L ${formatPrice(candle.low,2)} C ${formatPrice(candle.close,2)}${movement}`;
+      target.classList.toggle("up", change > 0);
+      target.classList.toggle("down", change < 0);
     }
 
     _refreshOverlay(){
       if(this.loading) return;
       const candles = this.current.candles || [];
       if(!candles.length){
-        this._setOverlay("empty", "NO KLINE DATA", "No valid OHLCV bars were provided to the standard adapter.");
+        const issues = Array.isArray(this.current.meta?.access_issues) ? this.current.meta.access_issues.filter(Boolean).join(" / ") : "";
+        const status = this.current.meta?.status || "missing";
+        this._setOverlay("empty", "NO LIVE KLINE DATA", issues || `status=${status}; no valid OHLCV bars were provided to the standard adapter.`);
         return;
       }
       if(this.current.meta?.is_synthetic){
@@ -615,6 +730,26 @@
       return this._nativeGetVisibleLogicalRange?.() || this._timeScale?.getVisibleLogicalRange?.() || null;
     }
 
+    _isNearLiveEdge(range, barCount){
+      if(!range || !Number.isFinite(Number(barCount)) || Number(barCount) <= 0) return true;
+      return Number(range.to) >= Number(barCount) - 2;
+    }
+
+    _scrollToLive(previousRange){
+      if(this._timeScale?.scrollToRealTime){
+        this._timeScale.scrollToRealTime();
+        this._emitViewChange("live-update", this._readLogicalRange());
+        return;
+      }
+      const count = this._barCount();
+      if(!count) return;
+      const width = previousRange && Number.isFinite(Number(previousRange.to - previousRange.from))
+        ? Math.max(6, Number(previousRange.to - previousRange.from))
+        : Math.min(96, count);
+      const target = this._setVisibleLogicalRange({from:count - width, to:count - 1 + this._rightOffset()});
+      this._emitViewChange("live-update", target);
+    }
+
     _setVisibleLogicalRange(range){
       const target = this._clampLogicalRange(range);
       if(!target || !this._timeScale) return null;
@@ -627,7 +762,17 @@
       const barSpacing = clampNumber(scaleWidth / width, minSpacing, maxSpacing);
       this._timeScale.applyOptions?.({barSpacing});
       this._timeScale.scrollToPosition?.(target.to - (this._barCount() - 1), false);
+      this._emitViewChange("set-visible-logical-range", target);
       return target;
+    }
+
+    _emitViewChange(reason, range){
+      const target = this.rootEl || this.container;
+      if(!target?.dispatchEvent || !root.CustomEvent) return;
+      target.dispatchEvent(new root.CustomEvent("standard-kline:viewchange", {
+        bubbles:true,
+        detail:{reason, range:range || null},
+      }));
     }
 
     fit(){
@@ -635,6 +780,13 @@
       const count = this._barCount();
       if(!count) return null;
       return this._setVisibleLogicalRange({from:-1, to:count - 1 + this._rightOffset()});
+    }
+
+    autoFit(){
+      this.candleSeries?.priceScale?.()?.applyOptions?.({autoScale:true});
+      const range = this.fit();
+      this._emitViewChange("auto-fit", range);
+      return range;
     }
 
     zoom(factor){
@@ -658,6 +810,20 @@
       return scale.setVisibleLogicalRange({from:range.from + step, to:range.to + step});
     }
 
+    priceToY(price){
+      const value = numberOrNull(price);
+      if(value == null || !this.candleSeries?.priceToCoordinate) return null;
+      const coordinate = this.candleSeries.priceToCoordinate(value);
+      return Number.isFinite(Number(coordinate)) ? Number(coordinate) : null;
+    }
+
+    yToPrice(y){
+      const coordinate = numberOrNull(y);
+      if(coordinate == null || !this.candleSeries?.coordinateToPrice) return null;
+      const price = this.candleSeries.coordinateToPrice(coordinate);
+      return Number.isFinite(Number(price)) ? Number(price) : null;
+    }
+
     destroy(){
       this.destroyed = true;
       this.resizeObserver?.disconnect?.();
@@ -675,6 +841,7 @@
     isSyntheticMeta,
     nearestTime,
     normalizeQualityFlags,
+    sanitizeElementIds,
     toEpochSeconds,
   };
 });

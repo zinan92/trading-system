@@ -18,6 +18,8 @@ def _entry_fill(*, cycle_id: str, track: str, side: str = "buy", price: float = 
         "ts": "2026-07-05T01:10:00+00:00",
         "side": side,
         "price": price,
+        "sl": 95.0 if side == "buy" else 105.0,
+        "tp": 110.0 if side == "buy" else 90.0,
         "pnl_units": units,
         "remaining_units": units,
         "realized_pnl": -0.1,
@@ -80,38 +82,285 @@ def test_human_trades_endpoint_returns_order_rows_with_unrealized_when_mark_fres
     assert len(payload["trades"]) == 1
     assert payload["trades"][0]["status"] == "open"
     assert payload["trades"][0]["unrealized_pnl"] == 10.0
+    assert payload["trades"][0]["sl"] == 95.0
+    assert payload["trades"][0]["tp"] == 110.0
 
 
-def test_machine_trades_endpoint_rejects_mid_cycle_order_level_leak(tmp_path: Path) -> None:
+def test_human_manual_close_payload_can_exit_open_position_without_notional(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"
-    write_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json", [_entry_fill(cycle_id=cycle_id, track="machine")])
-
-    with pytest.raises(PermissionError, match="machine trades are hidden"):
-        dashboard_server.build_dualtrack_trades_response(
-            cycle_id,
-            track="machine",
-            output_root=output,
-            as_of="2026-07-05T02:00:00+00:00",
-        )
-
-
-def test_trades_handler_maps_machine_mid_leak_to_403(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    output = tmp_path / "outputs"
-    cycle_id = "2026-07-05_DAY"
-    write_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json", [_entry_fill(cycle_id=cycle_id, track="machine")])
-    monkeypatch.setattr(
-        dashboard_server,
-        "build_dualtrack_trades_response",
-        lambda requested_cycle_id, **kwargs: (_ for _ in ()).throw(PermissionError("machine trades are hidden until cycle close")),
+    entry = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:10:00+00:00",
+            "side": "sell",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 4108.8,
+            "notional": 2000.0,
+            "sl": 4111.9,
+            "tp": 4104.1,
+            "position_id": "manual-short",
+            "source": "split_canvas",
+        },
+        output_root=output,
     )
 
-    handler = object.__new__(dashboard_server.DashboardHandler)
-    captured = {}
-    handler._write_json = lambda status, payload: captured.update({"status": status, "payload": payload})
-    handler._write_error = lambda status, code, message: captured.update({"status": status, "error": code, "message": message})
+    exit_fill = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:20:00+00:00",
+            "side": "buy",
+            "event": "exit",
+            "order_type": "market",
+            "price": 4107.8,
+            "trade_id": entry["fill"]["trade_id"],
+            "position_id": "manual-short",
+            "source": "split_canvas_manual_close",
+        },
+        output_root=output,
+    )
 
-    handler._handle_dualtrack_trades_get(f"/api/dualtrack/trades/{cycle_id}", "track=machine")
+    assert exit_fill["status"] == "filled"
+    assert exit_fill["fill"]["event"] == "exit"
+    assert exit_fill["fill"]["notional"] > 0
+    assert exit_fill["fill"]["source"] == "split_canvas_manual_close"
+    trades = dashboard_server.build_dualtrack_trades_response(cycle_id, track="human", output_root=output)
+    assert trades["trades"][0]["status"] == "closed"
+    assert trades["trades"][0]["remaining_units"] == 0.0
 
-    assert captured["status"] == 403
-    assert captured["error"] == "dualtrack_trades_hidden"
+
+def test_human_trades_endpoint_sweeps_stop_from_live_mark_price(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    entry = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:10:00+00:00",
+            "side": "sell",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 100.0,
+            "notional": 1000.0,
+            "sl": 105.0,
+            "tp": 90.0,
+            "position_id": "manual-short",
+            "source": "split_canvas",
+        },
+        output_root=output,
+    )
+
+    payload = dashboard_server.build_dualtrack_trades_response(
+        cycle_id,
+        track="human",
+        output_root=output,
+        mark_price=106.0,
+        mark_source="binance_websocket:test",
+    )
+
+    assert entry["fill"]["trade_id"]
+    assert payload["mark_price"] == 106.0
+    assert payload["mark_source"] == "binance_websocket:test"
+    assert payload["protective_sweep"]["status"] == "triggered"
+    assert payload["trades"][0]["status"] == "closed"
+    assert payload["trades"][0]["exit_price"] == 105.0
+    assert payload["summary"]["open_trade_count"] == 0
+
+
+def test_machine_trades_endpoint_returns_mid_cycle_order_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    write_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json", [_entry_fill(cycle_id=cycle_id, track="machine")])
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
+    payload = dashboard_server.build_dualtrack_trades_response(
+        cycle_id,
+        track="machine",
+        output_root=output,
+        as_of="2026-07-05T02:00:00+00:00",
+    )
+
+    assert payload["track"] == "machine"
+    assert payload["blind"] is False
+    assert payload["safety"]["machine_mid_order_rows_hidden"] is False
+    assert payload["trades"][0]["status"] == "open"
+    assert payload["trades"][0]["unrealized_pnl"] == 10.0
+
+
+def test_machine_trade_rows_infer_units_and_match_layer_rung_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    write_json(
+        output / "dualtrack" / "fills" / f"{cycle_id}_machine.json",
+        [
+            {
+                "fill_id": "grid_entry",
+                "event": "entry",
+                "track": "machine",
+                "ts": "2026-07-05T01:10:00+00:00",
+                "side": "buy",
+                "price": 100.0,
+                "notional": 1000.0,
+                "layer": "grid",
+                "rung": 0,
+                "realized_pnl": -0.1,
+            },
+            {
+                "fill_id": "grid_exit",
+                "event": "target",
+                "track": "machine",
+                "ts": "2026-07-05T01:20:00+00:00",
+                "side": "sell",
+                "price": 105.0,
+                "notional": 1050.0,
+                "layer": "grid",
+                "rung": 0,
+                "realized_pnl": 49.9,
+            },
+        ],
+    )
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
+    payload = dashboard_server.build_dualtrack_trades_response(
+        cycle_id,
+        track="machine",
+        output_root=output,
+        as_of="2026-07-05T02:00:00+00:00",
+    )
+
+    trade = payload["trades"][0]
+    assert trade["units"] == 10.0
+    assert trade["remaining_units"] == 0.0
+    assert trade["status"] == "closed"
+    assert trade["exit_ts"] == "2026-07-05T01:20:00+00:00"
+    assert trade["realized_pnl"] == 49.8
+    assert payload["summary"]["realized_pnl"] == 49.8
+
+
+def test_trade_summary_counts_realized_on_partially_open_trade(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    write_json(
+        output / "dualtrack" / "fills" / f"{cycle_id}_machine.json",
+        [
+            {
+                "fill_id": "grid_entry",
+                "event": "entry",
+                "track": "machine",
+                "ts": "2026-07-05T01:10:00+00:00",
+                "side": "buy",
+                "price": 100.0,
+                "notional": 1000.0,
+                "layer": "grid",
+                "rung": 0,
+                "remaining_units": 10.0,
+                "realized_pnl": -0.1,
+            },
+            {
+                "fill_id": "grid_exit",
+                "event": "target",
+                "track": "machine",
+                "ts": "2026-07-05T01:20:00+00:00",
+                "side": "sell",
+                "price": 105.0,
+                "notional": 945.0,
+                "layer": "grid",
+                "rung": 0,
+                "matched_entries": [{
+                    "trade_id": "grid_entry",
+                    "units": 9.0,
+                    "gross_pnl": 45.0,
+                    "realized_pnl": 44.5,
+                }],
+                "realized_pnl": 44.5,
+            },
+        ],
+    )
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
+    payload = dashboard_server.build_dualtrack_trades_response(
+        cycle_id,
+        track="machine",
+        output_root=output,
+        as_of="2026-07-05T02:00:00+00:00",
+    )
+
+    assert payload["trades"][0]["status"] == "open"
+    assert payload["summary"]["realized_pnl"] == 44.4
+
+
+def test_trades_endpoint_uses_same_day_previous_cycle_for_display_when_current_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    day_cycle = "2026-07-05_DAY"
+    night_cycle = "2026-07-05_NIGHT"
+    write_json(
+        output / "dualtrack" / "fills" / f"{day_cycle}_human.json",
+        [_entry_fill(cycle_id=day_cycle, track="human")],
+    )
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
+    payload = dashboard_server.build_dualtrack_trades_response(
+        night_cycle,
+        track="human",
+        output_root=output,
+        as_of="2026-07-05T14:00:00+00:00",
+    )
+
+    assert payload["cycle_id"] == night_cycle
+    assert payload["trades"] == []
+    assert payload["display_cycle_id"] == day_cycle
+    assert payload["display_reason"] == "latest_same_day"
+    assert payload["display_summary"]["trade_count"] == 1
+
+
+def test_machine_trade_rows_filter_invalid_stop_geometry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_NIGHT"
+    write_json(
+        output / "dualtrack" / "fills" / f"{cycle_id}_machine.json",
+        [
+            {
+                "fill_id": "bad_grid_entry",
+                "event": "entry",
+                "track": "machine",
+                "ts": "2026-07-05T13:00:00+00:00",
+                "side": "buy",
+                "price": 4155.0,
+                "sl": 4155.0,
+                "tp": 4163.0,
+                "notional": 10000.0,
+                "layer": "grid",
+                "rung": 0,
+                "realized_pnl": -0.5,
+            },
+            {
+                "fill_id": "bad_grid_stop",
+                "event": "stop",
+                "track": "machine",
+                "ts": "2026-07-05T13:00:00+00:00",
+                "side": "sell",
+                "price": 4121.3,
+                "sl": 4155.0,
+                "notional": 10000.0,
+                "layer": "grid",
+                "rung": 0,
+                "realized_pnl": -81.7,
+            },
+        ],
+    )
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
+    payload = dashboard_server.build_dualtrack_trades_response(
+        cycle_id,
+        track="machine",
+        output_root=output,
+        as_of="2026-07-05T14:00:00+00:00",
+    )
+
+    assert payload["trades"] == []
+    assert payload["summary"]["realized_pnl"] == 0
+    assert payload["safety"]["invalid_machine_fill_count"] == 2
+    assert payload["display_safety"]["invalid_machine_fill_count"] == 2

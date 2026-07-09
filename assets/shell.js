@@ -6,7 +6,7 @@
     RUN: { label: "运行", tone: "run" },
     DEGRADED: { label: "降级", tone: "degraded" },
     BLOCKED: { label: "阻断", tone: "blocked" },
-    UNKNOWN: { label: "未知", tone: "unknown" },
+    UNKNOWN: { label: "未连接", tone: "unknown" },
   };
   const ROOM_URLS = {
     command: "command-center.html",
@@ -68,7 +68,7 @@
       <div class="gb-shell-bar">
         <div class="gb-shell-left">${navHtml()}</div>
         <a class="gb-shell-status unknown" id="gbShellStatus" href="ops-dashboard.html" aria-label="全局系统状态">
-          <span class="gb-shell-dot"></span><span id="gbShellStatusText">未知</span>
+          <span class="gb-shell-dot"></span><span id="gbShellStatusText">读取状态</span>
         </a>
         <div class="gb-shell-right" id="gbShellFreshness">--</div>
       </div>

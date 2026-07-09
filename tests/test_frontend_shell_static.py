@@ -62,3 +62,11 @@ def test_shell_primary_nav_starts_with_command_center_and_hides_legacy_cockpit()
     assert '["command", "指挥台", "command-center.html"]' in shell.split("const items = [", 1)[1].split("];", 1)[0]
     assert '["cockpit", "驾驶舱", "dashboard-v4.html"]' not in shell
     assert 'cockpit: "dashboard-v4.html"' in shell
+
+
+def test_shell_status_copy_never_renders_unknown_to_operator() -> None:
+    shell = _read("assets/shell.js")
+
+    assert 'UNKNOWN: { label: "未连接", tone: "unknown" }' in shell
+    assert '<span id="gbShellStatusText">读取状态</span>' in shell
+    assert "未知" not in shell
