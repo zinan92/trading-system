@@ -2243,3 +2243,46 @@ Date: 2026-07-08
 - Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `16` tests.
 - Full regression: `python3 -m pytest -q` passed with `1251 passed`.
 - Browser phase: `http://127.0.0.1:8765/dashboard-dualtrack-split.html` loaded with 0 console errors, no horizontal overflow at `1451x1324`, six K-line canvas hosts, and machine `mid`/`post` phase toggling correctly hid/restored the blind veil.
+
+## 2026-07-09 Task 09b Split Canvas Data Wiring
+
+### Decisions
+
+- Add `apply_unrealized(trades, mark_price, *, mark_fresh=True)` as a pure function.
+  - Rationale: open trade unrealized PnL needs one shared calculation for close-cycle attribution and live trades endpoints.
+  - Fail-closed behavior: missing, non-finite, or stale marks set `unrealized_pnl` to `null`; closed trades are not given an unrealized value.
+
+- Add two read-only API surfaces: `/api/dualtrack/trades/<cycle_id>?track=human|machine` and `/api/dualtrack/config`.
+  - Rationale: split widgets need order rows and leverage/config without coupling to broker/write paths.
+  - Safety: config only exposes display-safe fields such as `max_leverage`; no credential or secret fields are included.
+
+- Reject machine order rows during mid-cycle with HTTP 403.
+  - Rationale: returning a visually masked machine order table would still leak through DOM/network. A 403 is a cleaner blind-protocol boundary than sending hidden data.
+  - Browser evidence: the page itself does not call machine trades in mid; a manual probe returned 403.
+
+- Wire split widgets to real 09b data while keeping v5 untouched.
+  - `fills`: human mid uses order rows; machine mid uses blind aggregate copy; machine post can render rows.
+  - `pnl`: uses trades summary plus ledger realized base.
+  - `risk`: reads `state.config?.max_leverage`; liquidation remains labeled `简化估算`.
+  - `review`: keeps direction-only grading and leaves key-level/signal rows as `未建立评分口径`.
+
+### Gotchas
+
+- `null` must render as `--`, not `$0.00`. The split page money/number helpers now treat `null` and empty string as missing before coercing to `Number`.
+
+- Do not let request query params force a machine reveal. Handler-level trades requests ignore attacker-provided `as_of`; deterministic tests call the builder directly with `as_of`.
+
+- A 403 network probe will appear as a browser console resource error if manually fetched from DevTools/Playwright. Page-load console still needs to be checked separately; the page itself avoids that request in mid.
+
+- `apply_unrealized()` must not mutate input trade rows. Several existing stores cache trade JSON, so mutating rows in place would make stale mark data look fresh later.
+
+- Risk values are display-only. The new risk widget math must not feed back into order submission, risk monitor, broker state, or the machine runner.
+
+### Evidence
+
+- Red phase: `tests/test_dualtrack_09b_unrealized.py` failed on missing `apply_unrealized`; API/static tests then failed until trades/config/page wiring existed.
+- Green phase: `python3 -m pytest -q tests/test_dualtrack_09b_unrealized.py tests/test_dualtrack_09b_api_contracts.py tests/test_dashboard_dualtrack_split_static.py` passed with `15 passed`.
+- Focused regression: `python3 -m pytest -q tests/test_dualtrack_09b_unrealized.py tests/test_dualtrack_09b_api_contracts.py tests/test_dualtrack_api_contracts.py tests/test_dualtrack_dt4_scoring_ledger.py tests/test_dashboard_dualtrack_static.py tests/test_dashboard_dualtrack_split_static.py tests/test_design_tokens_static.py tests/test_standard_kline_adapter.py` passed with `72 passed`.
+- Package regression: `node --test packages/standard-kline/standard-kline.test.js` passed with `16` tests.
+- Full regression: `python3 -m pytest -q` passed with `1259 passed`.
+- Browser phase: `http://127.0.0.1:8876/dashboard-dualtrack-split.html` loaded with 0 page-load console errors; config returned `max_leverage=10` with no secret text; human trades returned 200; machine trades manual mid-cycle probe returned 403; blind veil remained visible.

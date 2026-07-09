@@ -62,7 +62,7 @@ def test_split_page_declares_two_canvases_and_exact_widget_registry():
         assert len(re.findall(r'class="[^"]*\brv-sec\b[^"]*"', body)) == 3
 
 
-def test_split_page_uses_standard_kline_and_existing_read_contracts_only_for_09a():
+def test_split_page_uses_standard_kline_and_09b_read_contracts():
     html = read_split_html()
 
     assert "data/vendor/lightweight-charts.standalone.production.js" in html
@@ -82,9 +82,11 @@ def test_split_page_uses_standard_kline_and_existing_read_contracts_only_for_09a
     assert 'api("/api/dualtrack/plan"' in html
     assert 'api("/api/dualtrack/orders"' in html
     assert 'api("/api/dualtrack/verdict"' in html
-
-    assert "/api/dualtrack/trades/" not in html
-    assert '"/api/dualtrack/config"' not in html
+    assert 'api("/api/dualtrack/config")' in html
+    assert 'api(`/api/dualtrack/trades/${cycleId}?track=human`)' in html
+    assert 'api(`/api/dualtrack/trades/${cycleId}?track=machine`)' in html
+    assert "loadTradeData" in html
+    assert "loadMachineTradesAfterClose" in html
 
 
 def test_split_page_keeps_machine_mid_blind_in_source_and_render_path():
@@ -94,7 +96,9 @@ def test_split_page_keeps_machine_mid_blind_in_source_and_render_path():
     assert "盲测中 · 仅显示 PnL" in html
     assert "网格点位收盘后揭示" in html
     assert "renderMachineFillsBlind" in html
-    assert "renderMachineOrderRows" not in html
+    assert "renderMachineOrderRows" in html
+    assert "cycleClosed(state.cycle)" in html
+    assert "machineTrades = cycleClosed(state.cycle)" in html
     for leaked_mockup_price in ("4,062.1", "4,066.3", "4,098.4"):
         assert leaked_mockup_price not in html
 
@@ -121,11 +125,23 @@ def test_split_page_risk_copy_keeps_simplified_liquidation_and_directional_loss_
 
     assert "简化估算" in html
     assert "function renderRiskLossLabel" in html
+    assert "function renderRiskWidget" in html
+    assert "state.config?.max_leverage" in html
     assert "最大可亏(距SL)" in html
     assert "距失效价" in html
     assert "loss-side" in html
     assert "neutral-side" in html
     assert "Math.abs" not in html
+
+
+def test_split_page_trade_rows_keep_realized_and_unrealized_mutually_exclusive():
+    html = read_split_html()
+
+    assert "function renderTradeRows" in html
+    assert 'trade.status === "closed" ? money(trade.realized_pnl) : "--"' in html
+    assert 'trade.status === "open" ? money(trade.unrealized_pnl) : "--"' in html
+    assert 'class="fst open"' in html
+    assert 'class="fst closed"' in html
 
 
 def test_split_page_is_registered_in_shell_and_static_cache_exemptions():

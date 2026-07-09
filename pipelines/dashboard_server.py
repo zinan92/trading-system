@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -22,12 +23,12 @@ from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_config_apply import ConnectorConfigApply
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
-from services.dualtrack_clock import cycle_window, parse_utc, seconds_until_end
+from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
-from services.dualtrack_scoring import DualTrackScorer
+from services.dualtrack_scoring import DualTrackScorer, _trades_from_fills, apply_unrealized
 from services.dualtrack_store import DualTrackPlanStore
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
@@ -149,6 +150,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/dualtrack/cycle/current":
             self._handle_dualtrack_current(parsed.query)
             return
+        if parsed.path == "/api/dualtrack/config":
+            self._handle_dualtrack_config_get()
+            return
+        if parsed.path.startswith("/api/dualtrack/trades/"):
+            self._handle_dualtrack_trades_get(parsed.path, parsed.query)
+            return
         if parsed.path.startswith("/api/dualtrack/plan/"):
             self._handle_dualtrack_plan_get(parsed.path, parsed.query)
             return
@@ -224,6 +231,23 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
             return
         self._write_json(200, build_dualtrack_plan_response(cycle_id))
+
+    def _handle_dualtrack_config_get(self) -> None:
+        self._write_json(200, build_dualtrack_config_response())
+
+    def _handle_dualtrack_trades_get(self, path: str, query: str) -> None:
+        cycle_id = path.rsplit("/", 1)[-1]
+        if not _CYCLE_ID_PATTERN.match(cycle_id):
+            self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+            return
+        params = parse_qs(query)
+        track = (params.get("track") or ["human"])[0]
+        try:
+            self._write_json(200, build_dualtrack_trades_response(cycle_id, track=track))
+        except PermissionError as exc:
+            self._write_error(403, "dualtrack_trades_hidden", str(exc))
+        except ValueError as exc:
+            self._write_error(400, "dualtrack_trades_invalid", str(exc))
 
     def _handle_dualtrack_machine_get(self, path: str, query: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -662,6 +686,19 @@ def build_dualtrack_plan_post_response(payload: dict, *, output_root: Path | Non
     return {"status": "locked" if lock else "draft", "plan": plan}
 
 
+def build_dualtrack_config_response() -> dict:
+    cfg = dualtrack_config()
+    return {
+        "schema_version": "dualtrack-config-v1",
+        "max_leverage": cfg.get("max_leverage"),
+        "capital_per_track_usd": cfg.get("capital_per_track_usd"),
+        "safety": {
+            "read_only": True,
+            "credentials_exposed": False,
+        },
+    }
+
+
 def build_dualtrack_machine_response(cycle_id: str, *, output_root: Path | None = None, as_of: str | None = None) -> dict:
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
@@ -677,6 +714,44 @@ def build_dualtrack_human_response(cycle_id: str, *, output_root: Path | None = 
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
     return DualTrackHumanEngine(output_root).human_payload(cycle_id)
+
+
+def build_dualtrack_trades_response(
+    cycle_id: str,
+    *,
+    track: str = "human",
+    output_root: Path | None = None,
+    as_of: str | None = None,
+) -> dict:
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    normalized_track = str(track or "human").lower()
+    if normalized_track not in {"human", "machine"}:
+        raise ValueError("track must be human or machine")
+    closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
+    if normalized_track == "machine" and not closed:
+        raise PermissionError("machine trades are hidden until cycle close")
+    output = _dualtrack_output_root(output_root)
+    fills = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_{normalized_track}.json")
+    trades = _trades_from_fills(fills, track=normalized_track)
+    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
+    enriched = apply_unrealized(trades, mark["price"], mark_fresh=mark["fresh"])
+    return {
+        "schema_version": "dualtrack-trades-v1",
+        "cycle_id": cycle_id,
+        "track": normalized_track,
+        "status": "closed" if closed else "mid",
+        "blind": normalized_track == "machine" and not closed,
+        "mark_price": mark["price"],
+        "mark_fresh": mark["fresh"],
+        "mark_source": mark["source"],
+        "trades": enriched,
+        "summary": _trade_summary(enriched),
+        "safety": {
+            "read_only": True,
+            "machine_mid_order_rows_hidden": normalized_track == "machine" and not closed,
+        },
+    }
 
 
 def build_dualtrack_attribution_response(cycle_id: str, *, output_root: Path | None = None) -> dict:
@@ -704,6 +779,58 @@ def build_dualtrack_market_bars_response(
         limit=limit,
         as_of=as_of,
     )
+
+
+def _dualtrack_output_root(output_root: Path | None = None) -> Path:
+    return Path(output_root) if output_root else ROOT / load_pipeline_config().get("output_root", "outputs")
+
+
+def _dualtrack_cycle_closed(cycle_id: str, *, as_of: str | None = None) -> bool:
+    window = cycle_window_from_id(cycle_id)
+    return parse_utc(as_of) >= window.end
+
+
+def _finite_float(value) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _dualtrack_mark_price(output_root: Path, cycle_id: str, *, closed: bool, as_of: str | None = None) -> dict:
+    if closed:
+        cycle_rows = load_json(output_root / "dualtrack" / "cycles" / f"{cycle_id}.json")
+        cycle = cycle_rows[-1] if cycle_rows else {}
+        close_price = _finite_float(cycle.get("close_price"))
+        if close_price is not None:
+            return {"price": close_price, "fresh": True, "source": "cycle_close"}
+    market = DualTrackMarketFeed().snapshot(symbol="GOLD", timeframe="1m", limit=1, as_of=as_of)
+    latest_bar = (market.get("bars") or [{}])[-1] if isinstance(market.get("bars"), list) else {}
+    price = _finite_float(market.get("latest_close"))
+    if price is None:
+        price = _finite_float(latest_bar.get("close"))
+    return {
+        "price": price,
+        "fresh": bool(market.get("fresh")) and price is not None,
+        "source": str(market.get("source_mode") or market.get("provider") or "market"),
+    }
+
+
+def _trade_summary(trades: list[dict]) -> dict:
+    open_trades = [trade for trade in trades if trade.get("status") == "open"]
+    closed_trades = [trade for trade in trades if trade.get("status") == "closed"]
+    realized = sum(float(trade.get("realized_pnl") or 0.0) for trade in closed_trades)
+    unrealized_values = [trade.get("unrealized_pnl") for trade in open_trades]
+    unrealized_known = all(value is not None for value in unrealized_values)
+    unrealized = sum(float(value or 0.0) for value in unrealized_values) if unrealized_known else None
+    return {
+        "trade_count": len(trades),
+        "open_trade_count": len(open_trades),
+        "closed_trade_count": len(closed_trades),
+        "realized_pnl": round(realized, 8),
+        "unrealized_pnl": None if unrealized is None else round(unrealized, 8),
+    }
 
 
 def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, as_of: str | None = None) -> dict:

@@ -256,8 +256,8 @@ const css = () => getComputedStyle(document.documentElement);
 const token = name => css().getPropertyValue(name).trim();
 
 function esc(value){return String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
-function fmt(value, digits=1){const number = Number(value); return Number.isFinite(number) ? number.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}) : "--";}
-function money(value){const number = Number(value); if(!Number.isFinite(number)) return "--"; const sign = number > 0 ? "+" : ""; return `${sign}$${fmt(number,2)}`;}
+function fmt(value, digits=1){if(value == null || value === "") return "--"; const number = Number(value); return Number.isFinite(number) ? number.toLocaleString("en-US",{minimumFractionDigits:digits,maximumFractionDigits:digits}) : "--";}
+function money(value){if(value == null || value === "") return "--"; const number = Number(value); if(!Number.isFinite(number)) return "--"; const sign = number > 0 ? "+" : ""; return `${sign}$${fmt(number,2)}`;}
 function signedClass(value){const number = Number(value); return number < 0 ? "neg" : number > 0 ? "pos" : "";}
 function hasPrice(value){return Number.isFinite(Number(value)) && Number(value) !== 0;}
 function directionLabel(value){return {long:"做多",short:"做空",flat:"观望",range:"区间"}[String(value || "").toLowerCase()] || value || "--";}
@@ -280,12 +280,14 @@ async function loadAll(){
   try{
     state.cycle = await api("/api/dualtrack/cycle/current");
     const cycleId = state.cycle?.cycle_id;
-    const [plan, machine, human, ledger, runtime, humanMarket, machineMarket, humanCtxA, humanCtxB, machineCtxA, machineCtxB] = await Promise.all([
+    const [plan, machine, human, ledger, runtime, config, humanTrades, humanMarket, machineMarket, humanCtxA, humanCtxB, machineCtxA, machineCtxB] = await Promise.all([
       api(`/api/dualtrack/plan/${cycleId}`).catch(() => null),
       api(`/api/dualtrack/machine/${cycleId}`).catch(() => null),
       api(`/api/dualtrack/human/${cycleId}`).catch(() => null),
       api("/api/dualtrack/ledger").catch(() => null),
       api("/api/dualtrack/runtime/status").catch(() => null),
+      api("/api/dualtrack/config").catch(() => null),
+      loadTradeData(cycleId, "human"),
       fetchBars("1m"),
       fetchBars("1m"),
       fetchBars(contextTf("humanCtxA","15m")),
@@ -293,7 +295,8 @@ async function loadAll(){
       fetchBars(contextTf("machineCtxA","15m")),
       fetchBars(contextTf("machineCtxB","1h")),
     ]);
-    Object.assign(state, {plan, machine, human, ledger, runtime});
+    const machineTrades = await loadMachineTradesAfterClose(cycleId);
+    Object.assign(state, {plan, machine, human, ledger, runtime, config, humanTrades, machineTrades});
     state.market = {human:humanMarket, machine:machineMarket};
     state.context = {humanCtxA, humanCtxB, machineCtxA, machineCtxB};
     if(cycleClosed(state.cycle)){
@@ -305,6 +308,16 @@ async function loadAll(){
     $("#cycleMeta").textContent = `API ${error.message}`;
   }
   renderAll();
+}
+
+async function loadTradeData(cycleId, track){
+  if(track === "human") return api(`/api/dualtrack/trades/${cycleId}?track=human`).catch(() => null);
+  return api(`/api/dualtrack/trades/${cycleId}?track=${track}`).catch(() => null);
+}
+
+async function loadMachineTradesAfterClose(cycleId){
+  const machineTrades = cycleClosed(state.cycle) ? await api(`/api/dualtrack/trades/${cycleId}?track=machine`).catch(() => null) : null;
+  return machineTrades;
 }
 
 function contextTf(id, fallback){
@@ -323,6 +336,9 @@ function renderAll(){
   renderCycle();
   renderPlans();
   renderRuntime();
+  renderTrades();
+  renderPositions();
+  renderRiskWidget();
   renderPnl();
   renderDataWidgets();
   renderCharts();
@@ -380,21 +396,102 @@ function renderMachineFillsBlind(){
   if(target) target.textContent = `盲测中 · 仅显示聚合笔数 ${count} · 明细收盘揭示`;
 }
 
-function renderPnl(){
-  renderPnlBox("[data-human-pnl]", state.human || {});
-  renderPnlBox("[data-machine-pnl]", state.machine || {});
+function renderTrades(){
+  renderTradeRows("[data-human-fills] tbody", state.humanTrades?.trades || []);
+  if(cycleClosed(state.cycle)){
+    renderMachineOrderRows();
+  }else{
+    renderMachineFillsBlind();
+  }
 }
-function renderPnlBox(selector, payload){
-  const realized = payload.realized_pnl ?? payload.realized ?? null;
-  const unrealized = payload.unrealized_pnl ?? payload.unrealized ?? null;
-  const total = Number(realized || 0) + Number(unrealized || 0);
+function renderMachineOrderRows(){
+  renderTradeRows("[data-machine-fills] tbody", state.machineTrades?.trades || []);
+}
+function renderTradeRows(selector, trades){
+  const rows = (trades || []).slice(0, 50);
+  const target = $(selector);
+  if(!target) return;
+  if(!rows.length){
+    target.innerHTML = `<tr><td colspan="7" class="muted">暂无逐单成交</td></tr>`;
+    return;
+  }
+  target.innerHTML = rows.map(trade => {
+    const status = trade.status === "closed" ? "closed" : "open";
+    const statusLabel = status === "closed" ? "已平仓" : "持仓中";
+    const side = trade.side === "short" ? "空" : "多";
+    const realized = trade.status === "closed" ? money(trade.realized_pnl) : "--";
+    const unrealized = trade.status === "open" ? money(trade.unrealized_pnl) : "--";
+    return `<tr><td><span class="fst ${status}"><span class="dot"></span>${statusLabel}</span></td><td class="${trade.side === "short" ? "neg" : "pos"}">${side}</td><td>${fmt(trade.remaining_units ?? trade.units,4)}</td><td>${fmt(trade.entry_price,1)}</td><td>${fmt(trade.exit_price,1)}</td><td class="${signedClass(trade.realized_pnl)}">${realized}</td><td class="${signedClass(trade.unrealized_pnl)}">${unrealized}</td></tr>`;
+  }).join("");
+}
+
+function openTrade(track){
+  const payload = track === "machine" ? state.machineTrades : state.humanTrades;
+  return (payload?.trades || []).find(trade => trade.status === "open") || null;
+}
+function renderPositions(){
+  renderPositionBox("[data-human-position]", openTrade("human"), humanPlan());
+  renderPositionBox("[data-machine-position]", cycleClosed(state.cycle) ? openTrade("machine") : null, machinePlan());
+}
+function renderPositionBox(selector, trade, plan){
+  const direction = trade?.side === "short" ? "空" : trade?.side === "long" ? "多" : directionLabel(plan?.direction);
+  const qty = trade ? fmt(trade.remaining_units ?? trade.units,4) : "--";
+  const entry = trade ? fmt(trade.entry_price,1) : "--";
+  const stop = stopPrice(plan);
+  $(selector).innerHTML = `<div class="kv"><span>方向/数量</span><b>${esc(direction)} ${qty}</b></div><div class="kv"><span>均价</span><b>${entry}</b></div><div class="kv"><span>TP / SL</span><b>${fmt(plan?.tp ?? plan?.target,1)} / ${fmt(stop,1)}</b></div>`;
+}
+
+function stopPrice(plan){
+  const invalid = Array.isArray(plan?.invalidation) ? plan.invalidation.find(row => hasPrice(row?.price)) : null;
+  return plan?.sl ?? plan?.stop_loss ?? plan?.stop ?? invalid?.price ?? null;
+}
+function renderRiskWidget(){
+  renderRiskBox("[data-human-risk]", openTrade("human"), humanPlan());
+  renderRiskBox("[data-machine-risk]", cycleClosed(state.cycle) ? openTrade("machine") : null, machinePlan());
+}
+function renderRiskBox(selector, trade, plan){
+  const leverage = Number(state.config?.max_leverage);
+  const safeLeverage = Number.isFinite(leverage) && leverage > 0 ? leverage : null;
+  const entry = Number(trade?.entry_price);
+  const qty = Number(trade?.remaining_units ?? trade?.units);
+  const stop = Number(stopPrice(plan));
+  const side = trade?.side || plan?.direction || "long";
+  const loss = renderRiskLossLabel(side, entry, stop);
+  const margin = safeLeverage && Number.isFinite(qty) && Number.isFinite(entry) ? qty * entry / safeLeverage : null;
+  const liquidation = safeLeverage && Number.isFinite(entry)
+    ? (side === "short" ? entry * (1 + 1 / safeLeverage) : entry * (1 - 1 / safeLeverage))
+    : null;
+  const slStatus = hasPrice(stop) ? "有效" : "未设置";
+  $(selector).innerHTML = `<div class="kv"><span>杠杆</span><b>${safeLeverage ? `${fmt(safeLeverage,0)}x` : "--"}</b></div><div class="kv"><span>保证金占用</span><b>${money(margin)}</b></div><div class="kv"><span class="${loss.tone}">${loss.label}</span><b class="${loss.tone}">${loss.value}</b></div><div class="kv"><span>强平距离</span><b>简化估算 · ${fmt(liquidation,1)}</b></div><div class="kv"><span>SL 状态</span><b>${slStatus}</b></div>`;
+}
+
+function renderPnl(){
+  renderPnlBox("[data-human-pnl]", "human", state.human || {}, state.humanTrades);
+  renderPnlBox("[data-machine-pnl]", "machine", state.machine || {}, state.machineTrades);
+}
+function renderPnlBox(selector, track, payload, tradesPayload){
+  const summary = tradesPayload?.summary || {};
+  const realized = summary.realized_pnl ?? payload.realized_pnl ?? payload.realized ?? null;
+  const openCount = Number(summary.open_trade_count || 0);
+  const unrealized = summary.unrealized_pnl ?? (openCount ? null : 0);
+  const currentTotal = Number(realized || 0) + Number(unrealized || 0);
+  const todayBase = ledgerTrackRealized(track, "daily");
+  const weekBase = ledgerTrackRealized(track, "weekly");
   const cells = [
     ["已实现", realized],
     ["未实现", unrealized],
-    ["今日", Number.isFinite(total) ? total : null],
-    ["一周", null],
+    ["今日", Number.isFinite(todayBase) ? todayBase + currentTotal : currentTotal],
+    ["一周", Number.isFinite(weekBase) ? weekBase + currentTotal : null],
   ];
   $(selector).innerHTML = cells.map(([label, value]) => `<div class="sc"><div class="k">${label}</div><div class="v ${signedClass(value)}">${money(value)}</div></div>`).join("");
+}
+function ledgerTrackRealized(track, period){
+  const attrLedger = state.attribution?.ledger?.[period]?.tracks?.[track]?.realized_pnl;
+  if(Number.isFinite(Number(attrLedger))) return Number(attrLedger);
+  const dailyRows = Array.isArray(state.ledger?.daily) ? state.ledger.daily : [];
+  const latest = dailyRows.at(-1);
+  const value = latest?.tracks?.[track]?.realized_pnl;
+  return Number.isFinite(Number(value)) ? Number(value) : NaN;
 }
 
 function renderDataWidgets(){

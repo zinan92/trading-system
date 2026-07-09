@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -34,6 +35,12 @@ class DualTrackScorer:
         human_fills = load_json(self._fills_path(cycle_id, "human"))
         machine_trades = self._trade_rows(cycle_id, "machine", machine_fills)
         human_trades = self._trade_rows(cycle_id, "human", human_fills)
+        machine_trades = apply_unrealized(machine_trades, close_price, mark_fresh=math.isfinite(close_price))
+        human_trades = apply_unrealized(human_trades, close_price, mark_fresh=math.isfinite(close_price))
+        if machine_trades:
+            write_json(self._trades_path(cycle_id, "machine"), machine_trades)
+        if human_trades:
+            write_json(self._trades_path(cycle_id, "human"), human_trades)
         opportunities = census_opportunities(
             rows,
             reversal_bp=float(self.config["census"]["reversal_bp"]),
@@ -359,6 +366,39 @@ def _direction(open_price: float, close_price: float) -> str:
 
 def _pnl(fills: list[dict[str, Any]]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
+
+
+def apply_unrealized(trades: list[dict[str, Any]], mark_price: Any, *, mark_fresh: bool = True) -> list[dict[str, Any]]:
+    try:
+        mark = float(mark_price)
+    except (TypeError, ValueError):
+        mark = math.nan
+    usable_mark = bool(mark_fresh) and math.isfinite(mark)
+    rows: list[dict[str, Any]] = []
+    for trade in trades:
+        row = dict(trade)
+        if row.get("status") != "open":
+            rows.append(row)
+            continue
+        if not usable_mark:
+            row["unrealized_pnl"] = None
+            rows.append(row)
+            continue
+        try:
+            entry = float(row.get("entry_price"))
+            units = float(row.get("remaining_units", row.get("units", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            row["unrealized_pnl"] = None
+            rows.append(row)
+            continue
+        if not math.isfinite(entry) or not math.isfinite(units):
+            row["unrealized_pnl"] = None
+            rows.append(row)
+            continue
+        direction = -1.0 if str(row.get("side")).lower() == "short" else 1.0
+        row["unrealized_pnl"] = round((mark - entry) * units * direction, 8)
+        rows.append(row)
+    return rows
 
 
 def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[str, Any]]:
