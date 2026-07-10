@@ -1,7 +1,7 @@
 # DualTrack Execution Engine Adapter Spec
 
 Status: compatibility adapter and 1m OHLC replay implemented; isolated Nautilus
-fixture passed; Nautilus adapter not enabled
+fixture plus live GOLD instrument construction passed; adapter not enabled
 Date: 2026-07-10
 
 ## Objective
@@ -117,9 +117,10 @@ Nautilus a production dependency before parity is proven.
 
 The isolated 1.230.0 bracket fixture is recorded in
 `docs/dualtrack-nautilus-spike-result.md`. It proves market entry, stop fill,
-fees, position closure, and realized PnL. It intentionally uses a packaged test
-instrument because datafeed does not yet expose a canonical instrument
-definition. This result is evidence for the engine model, not an enabled GOLD
+fees, position closure, and realized PnL. A second shadow check constructs a
+commodity perpetual from datafeed's live `instrument-definition-v1`, preserving
+tick size, quantity step, multiplier provenance, margins, and currencies. These
+results are evidence for the engine and instrument model, not an enabled GOLD
 adapter.
 
 ### Input

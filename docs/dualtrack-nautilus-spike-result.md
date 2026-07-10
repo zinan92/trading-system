@@ -2,7 +2,7 @@
 
 Date: 2026-07-10
 NautilusTrader: 1.230.0
-Status: execution fixture passed; GOLD adapter not enabled
+Status: execution fixture and live GOLD instrument construction passed; adapter not enabled
 
 ## Result
 
@@ -24,6 +24,22 @@ Run the fixture in an isolated environment containing NautilusTrader:
 ```bash
 python spikes/dualtrack_nautilus_fixture.py
 ```
+
+## Live GOLD Instrument Construction
+
+The shadow builder consumes datafeed `instrument-definition-v1` and rejects
+cache, synthetic, non-execution, non-trading, and unexplained-multiplier
+definitions. A live upstream response constructed:
+
+- instrument: `XAUUSDT-PERP.BINANCE`;
+- Nautilus asset class: commodity perpetual;
+- price increment: `0.01`;
+- size increment: `0.001`;
+- contract multiplier: `1`, with USD-M derivation provenance;
+- notional check: `1.000 XAU @ 4,100.00 = 4,100.00000000 USDT`.
+
+Binance's public definition does not contain account maker/taker fee rates. The
+builder therefore requires both rates explicitly; it has no fee default.
 
 ## Why This Is Not Yet The Adapter
 

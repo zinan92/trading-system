@@ -2960,3 +2960,34 @@ Date: 2026-07-08
   position, and fee-inclusive realized PnL.
 - `docs/dualtrack-nautilus-spike-result.md` records the missing datafeed contract
   and cutover gates.
+
+## 2026-07-10 - Nautilus GOLD instrument bridge
+
+### Decisions
+
+- Added a lazy Nautilus instrument builder that accepts only
+  `instrument-definition-v1` and does not add NautilusTrader to the production
+  dependency set.
+- The builder rejects synthetic, cached, non-execution, non-trading, inverse,
+  incomplete, and unexplained-multiplier definitions.
+- Public Binance instrument metadata does not include account maker/taker fee
+  rates. Both rates must be supplied explicitly; the builder has no fallback
+  fee.
+- The builder is shadow-only. `legacy_paper` remains authoritative and the
+  adapter factory still refuses to enable Nautilus.
+
+### Gotchas
+
+- XAUUSDT must use Nautilus `PerpetualContract` with commodity asset class, not
+  a crypto perpetual merely because the venue API is Binance.
+- Building a valid instrument proves contract semantics, not fill/accounting
+  parity, restart persistence, or safe production cutover.
+- Concurrent canonical-event and shadow-reconciliation work was left intact
+  and excluded from this commit.
+
+### Evidence
+
+- A live datafeed response built `XAUUSDT-PERP.BINANCE` with tick `0.01`, size
+  step `0.001`, multiplier `1`, and `1 XAU @ 4100 = 4100 USDT`.
+- Instrument trust-gate plus execution-control focused regression passed with
+  `25 passed`.
