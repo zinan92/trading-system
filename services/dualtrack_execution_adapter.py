@@ -52,6 +52,10 @@ class LegacyPaperExecutionAdapter:
         return self.engine.sweep_protective_exits(
             str(event.get("cycle_id") or ""),
             mark_price=event.get("price"),
+            mark_open=event.get("open"),
+            mark_high=event.get("high"),
+            mark_low=event.get("low"),
+            event_started_at=event.get("event_started_at"),
             ts=event.get("ts_event"),
             source=source,
         )

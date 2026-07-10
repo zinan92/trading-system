@@ -170,7 +170,7 @@ class ScheduleManager:
             label,
             [self.python, "-m", "pipelines.dualtrack_cycle_runner", "--event", "live-tick"],
             log_dir,
-            extra={"StartInterval": 300, "RunAtLoad": True},
+            extra={"StartInterval": 60, "RunAtLoad": True},
         )
 
     def _dashboard_job(self, log_dir: Path, port: int) -> dict:

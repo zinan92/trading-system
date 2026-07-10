@@ -1,6 +1,6 @@
 # DualTrack Execution Engine Adapter Spec
 
-Status: compatibility adapter implemented; Nautilus spike not enabled
+Status: compatibility adapter and 1m OHLC replay implemented; Nautilus spike not enabled
 Date: 2026-07-10
 
 ## Objective
@@ -58,6 +58,8 @@ Accepts a canonical, trusted market event. Required fields:
 | `cycle_id` | Target DualTrack cycle |
 | `ts_event` | UTC event timestamp |
 | `price` | Canonical execution mark |
+| `event_started_at` | Bar start for OHLC events; omitted for point-price events |
+| `open` / `high` / `low` | Optional trusted bar range used for protective triggers |
 | `fresh` | Must be exactly `true` |
 | `is_synthetic` | Must be exactly `false` |
 | `source` | Non-empty data lineage |
@@ -98,9 +100,11 @@ protective-exit path used by `dualtrack-live-tick`.
 Known capability limits are explicit:
 
 - no native order lifecycle (`orders` is empty);
-- protective orders use a compatibility sweep;
+- protective orders replay every trusted 1m OHLC bar since the earliest open
+  trade and use high/low for trigger detection;
 - restart reconciliation is local-ledger-only;
-- no exchange queue, partial-fill, or intrabar path model.
+- no exchange queue, partial-fill, tick path, or same-minute pre/post-entry path
+  model. If one bar touches both stop and target, stop wins conservatively.
 
 No additional features should be added to this engine beyond safety and
 reconciliation fixes needed for migration.
@@ -159,7 +163,11 @@ tolerance changes or frontend formatting.
 ## Gotchas
 
 - OHLC bars do not reveal the intrabar path. If both TP and SL are touched, the
-  fill rule must be explicit or the input must move to trade/quote data.
+  compatibility engine executes the stop first. Exact path semantics require
+  the standardized datafeed trade/quote stream.
+- Replaying all stored 1m bars prevents a recovered close from hiding an
+  earlier wick. It does not make execution tick-real-time; the installed
+  scheduler must also use the generated 60-second live-tick definition.
 - A fresh browser WebSocket does not make the server ledger fresh. Orders block
   when the canonical server feed is stale.
 - Historical legacy fills can contain incorrect exit notional. Preserve the raw

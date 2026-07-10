@@ -2883,42 +2883,46 @@ Date: 2026-07-08
 - The live runtime endpoint reported all four checks `ok`, runtime status `ok`,
   `machine_fill_count=12`, and `machine_fills_hidden=false`.
 
-## 2026-07-10 - 黄金飞书自动化切到双轨机器轨
+## 2026-07-10 - DualTrack protective OHLC replay
 
 ### Decisions
 
-- 飞书交易记录只接机器轨/机器鬼网格。
-  - 新增 `dualtrack_machine_brief`：每个 12 小时周期输出机器方向、关键位、失效条件、网格观察位、趋势腿状态。
-  - 新增 `dualtrack_trade_record`：只发送机器轨 entry / target / stop / final flatten 事件。
-  - 继续使用 report/trade Feishu sender；健康告警不再作为交易记录内容。
-
-- 早晚盘复盘只复盘机器鬼网格。
-  - 当 `schedule.profile=dualtrack_focus` 且存在 dualtrack artifact 时，`pm_portfolio_report` 不再读取旧 active strategy 的 performance/paper_orders。
-  - 复盘口径改成：黄金 12 小时行情、机器轨开仓数、平仓数、TP/SL、已实现 PnL、open 估算未实现 PnL、下一周期机器方向。
-
-- 交易记录发送必须防重复和防历史补发。
-  - 发送账本为 `outputs/dualtrack_trade_notifications/<date>.json`。
-  - 去重键为 `cycle_id + fill_id`。
-  - 首次接入某个 cycle 时默认只建立 baseline，不补发已有 fills；只有 `--backfill-existing` 才显式补发历史。
-
-- Intraday flatten 不是实际平仓。
-  - 当前周期运行中，machine simulation 会用 `flatten` 对最后一根 bar 做临时结算。
-  - Feishu 交易记录现在过滤掉周期未结束前的 `flatten`，避免把 mark-to-close 误报成真实平仓。
+- Human protective execution no longer evaluates only the newest close. The
+  live tick replays every trusted 1m bar from the earliest open human trade and
+  passes canonical open/high/low/close values through `ExecutionEngineAdapter`.
+- Long stops use bar low and short stops use bar high. Targets use the opposite
+  range edge. If one OHLC bar touches both TP and SL, the compatibility engine
+  executes the stop first as the conservative deterministic rule.
+- A bar that started before a trade entry may use only its current/closing mark,
+  not its full high/low range. This prevents pre-entry price movement from
+  closing a newly created trade retroactively.
+- A real gap through a stop fills at the bar open only when a trusted OHLC event
+  explicitly supplies that open. Point-price events preserve the existing stop
+  price fill rule.
+- The generated `dualtrack-live-tick` schedule now runs every 60 seconds instead
+  of every 300 seconds, matching the GOLD 1m feed cadence.
 
 ### Gotchas
 
-- 本机 `dualtrack-cycle` launchd 每分钟运行。第一次把通知钩子接进 runner 后，后台 runner 立即扫描了当前周期已有 fills，并发出了 18 条交易记录；其中部分是 intraday flatten，语义上不应作为真实平仓。后续已改成首次 baseline + 过滤 intraday flatten，防止再次发生。
-
-- `outputs/feishu_reports/<date>.json` 是发送回执，不代表交易语义一定正确；需要结合 `dualtrack_trade_notifications` 的 `suppressed` / `delivered` / `event` 字段判断。
-
-- `trade_ticket_notifications` 仍是旧 ticket 审查链路；新的机器轨开/平仓不依赖旧 ticket。
+- OHLC replay fixes missed completed-bar wicks but does not reveal tick order
+  inside a bar. The stop-first rule is intentionally pessimistic; it must not be
+  described as exact exchange execution.
+- The standardized datafeed service starts and its health endpoint passes, but
+  its WebSocket upstream currently fails on this machine because `websockets`
+  detects the configured SOCKS proxy and `python-socks` is not installed. This
+  remains an explicit blocker to tick-level server streaming; no fallback or
+  synthetic stream was substituted.
+- The generated schedule is current, but the installed live-tick plist is still
+  the old 300-second definition. `schedule_status` now reports exactly one
+  mismatch instead of stale/unknown status. Replacing a loaded launchd job is
+  separately acknowledgement-gated by the installer.
 
 ### Evidence
 
-- `tests/test_dualtrack_feishu.py` 覆盖机器轨作战单、entry/exit 交易记录、首次 baseline、intraday flatten 过滤。
-- Focused regression passed:
-  `python3 -m pytest tests/test_dualtrack_feishu.py tests/test_pm_portfolio_report.py tests/test_feishu_report_sender.py tests/test_dualtrack_dt8_cycle_runner.py`
-  returned `42 passed`.
-- Real current-cycle dry run after the flatten fix:
-  `python3 -m pipelines.dualtrack_trade_notifications --cycle-id 2026-07-10_DAY --json`
-  returned `sent=0 skipped=14 failed=0`.
+- Red-first tests prove an intermediate short-stop wick is executed after the
+  final close recovers, same-bar TP/SL resolves to stop, and a pre-entry wick
+  cannot close a new trade.
+- Human engine, execution adapter, and cycle runner regression passed with
+  `48 passed`.
+- Generated schedule status on 2026-07-10 reports four of five jobs current and
+  only `com.wendy.trading-orchestrator.dualtrack-live-tick` mismatched.

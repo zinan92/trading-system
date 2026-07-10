@@ -156,7 +156,7 @@ def test_schedule_manager_generates_full_launch_agent_artifacts(tmp_path: Path):
     dualtrack_live_tick_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.dualtrack-live-tick.plist"
     with dualtrack_live_tick_plist.open("rb") as handle:
         dualtrack_live_tick = plistlib.load(handle)
-    assert dualtrack_live_tick["StartInterval"] == 300
+    assert dualtrack_live_tick["StartInterval"] == 60
     assert dualtrack_live_tick["RunAtLoad"] is True
     assert dualtrack_live_tick["ProgramArguments"] == ["python3", "-m", "pipelines.dualtrack_cycle_runner", "--event", "live-tick"]
     assert dualtrack_live_tick["EnvironmentVariables"]["TRADING_ORCHESTRATOR_MARKET_DB"].endswith("data/market_data.db")

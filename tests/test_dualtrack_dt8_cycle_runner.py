@@ -292,6 +292,144 @@ def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: 
     assert fills[-1]["price"] == 105.0
 
 
+def test_live_tick_replays_intermediate_bar_wick_after_close_recovers(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    store = MarketStore(db)
+    store.upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:01:00+00:00",
+            open=100.0,
+            high=106.0,
+            low=99.0,
+            close=100.0,
+            volume=1.0,
+            provider="test",
+        ),
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:02:00+00:00",
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.0,
+            volume=1.0,
+            provider="test",
+        ),
+    ])
+    DualTrackHumanEngine(output, config=TEST_CONFIG).submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+    })
+
+    result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
+        as_of="2026-07-05T01:02:30+00:00"
+    )
+
+    fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
+    assert result["protective_sweep"]["status"] == "triggered"
+    assert result["protective_sweep"]["processed_events"] == 2
+    assert fills[-1]["event"] == "stop"
+    assert fills[-1]["price"] == 105.0
+    assert fills[-1]["trigger_mark_price"] == 100.0
+
+
+def test_live_tick_same_bar_stop_and_target_uses_conservative_stop_first(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    MarketStore(db).upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:01:00+00:00",
+            open=100.0,
+            high=111.0,
+            low=89.0,
+            close=100.0,
+            volume=1.0,
+            provider="test",
+        )
+    ])
+    DualTrackHumanEngine(output, config=TEST_CONFIG).submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+
+    DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
+        as_of="2026-07-05T01:01:30+00:00"
+    )
+
+    fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
+    assert fills[-1]["event"] == "stop"
+    assert fills[-1]["price"] == 95.0
+
+
+def test_live_tick_does_not_apply_pre_entry_bar_wick_to_new_trade(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    store = MarketStore(db)
+    store.upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:01:00+00:00",
+            open=100.0,
+            high=106.0,
+            low=99.0,
+            close=100.0,
+            volume=1.0,
+            provider="test",
+        ),
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:03:00+00:00",
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.0,
+            volume=1.0,
+            provider="test",
+        ),
+    ])
+    DualTrackHumanEngine(output, config=TEST_CONFIG).submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:02:30+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+    })
+
+    result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
+        as_of="2026-07-05T01:03:30+00:00"
+    )
+
+    fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
+    assert result["protective_sweep"]["status"] == "ok"
+    assert len(fills) == 1
+
+
 def test_live_tick_refuses_synthetic_bar_for_human_protective_exit(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     output = tmp_path / "outputs"

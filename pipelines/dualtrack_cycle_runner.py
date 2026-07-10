@@ -131,15 +131,7 @@ class DualTrackCycleRunner:
             trend_gate_armed=trend_gate_armed,
         )
         self._write_runner_state(window.cycle_id, "intraday", {"bar_count": len(bars), "prev_range": prev_range})
-        trade_notifications = self._notify_machine_trade_records(window.cycle_id)
-        return {
-            "event": "intraday",
-            "cycle_id": window.cycle_id,
-            "status": "ran",
-            "bar_count": len(bars),
-            "state": state,
-            "trade_notifications": trade_notifications,
-        }
+        return {"event": "intraday", "cycle_id": window.cycle_id, "status": "ran", "bar_count": len(bars), "state": state}
 
     def close_cycle(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         existing = load_json(self.output_root / "dualtrack" / "attribution" / f"{cycle_id}.json")
@@ -185,7 +177,6 @@ class DualTrackCycleRunner:
         payload = {"event": "close", "cycle_id": cycle_id, "status": "closed", "attribution": attribution}
         if human_fill_sync is not None:
             payload["human_fill_sync"] = human_fill_sync
-        payload["trade_notifications"] = self._notify_machine_trade_records(cycle_id)
         return payload
 
     def fast_forward_day(self, date: str) -> dict[str, Any]:
@@ -310,16 +301,62 @@ class DualTrackCycleRunner:
         if market_ts < cycle_window_from_id(cycle_id).start:
             return {"status": "skipped", "reason": "market_data_outside_cycle", "triggered": []}
 
-        source = f"market_db:{provider or 'unknown'}"
-        sweep = self.execution.process_market_event({
+        earliest_entry = min(
+            (parse_utc(position.get("entry_ts")) for position in open_trades if position.get("entry_ts")),
+            default=cycle_window_from_id(cycle_id).start,
+        )
+        replay_start = max(
+            cycle_window_from_id(cycle_id).start,
+            earliest_entry.replace(second=0, microsecond=0),
+        )
+        bars = self._filter_market_session_bars(
+            self.market.load_bars_between(self.symbol, self.timeframe, replay_start.isoformat(), now.isoformat())
+        )
+        rejected = self._market_bar_rejection_reason(bars)
+        if rejected:
+            return {"status": "skipped", "reason": rejected, "triggered": []}
+
+        events = [self._protective_bar_event(cycle_id, bar, now=now) for bar in bars]
+        if not events:
+            events = [{
+                "cycle_id": cycle_id,
+                "ts_event": now.isoformat(),
+                "price": latest.get("close"),
+                "fresh": True,
+                "is_synthetic": False,
+                "source": f"market_db:{provider or 'unknown'}",
+            }]
+
+        triggered: list[dict[str, Any]] = []
+        last_sweep: dict[str, Any] = {"status": "ok", "triggered": []}
+        for event in events:
+            last_sweep = self.execution.process_market_event(event)
+            triggered.extend(last_sweep.get("triggered") or [])
+        return {
+            **last_sweep,
+            "status": "triggered" if triggered else "ok",
+            "triggered": triggered,
+            "processed_events": len(events),
+            "first_event_ts": events[0].get("event_started_at") or events[0].get("ts_event"),
+            "last_event_ts": events[-1].get("event_started_at") or events[-1].get("ts_event"),
+            "source": events[-1]["source"],
+        }
+
+    def _protective_bar_event(self, cycle_id: str, bar: Bar, *, now: datetime) -> dict[str, Any]:
+        started_at = parse_utc(bar.timestamp)
+        ended_at = min(started_at + self._timeframe_duration(), now)
+        return {
             "cycle_id": cycle_id,
-            "ts_event": now.isoformat(),
-            "price": latest.get("close"),
+            "ts_event": ended_at.isoformat(),
+            "event_started_at": started_at.isoformat(),
+            "price": float(bar.close),
+            "open": float(bar.open),
+            "high": float(bar.high),
+            "low": float(bar.low),
             "fresh": True,
             "is_synthetic": False,
-            "source": source,
-        })
-        return {**sweep, "source": source}
+            "source": f"market_db:{bar.provider or 'unknown'}",
+        }
 
     def _latest_market_record(self) -> dict[str, Any]:
         records = [
@@ -349,6 +386,15 @@ class DualTrackCycleRunner:
             except ValueError:
                 pass
         return 180.0
+
+    def _timeframe_duration(self) -> timedelta:
+        value = str(self.timeframe or "1m").strip().lower()
+        units = {"m": 60, "h": 3600, "d": 86400}
+        try:
+            seconds = int(value[:-1]) * units[value[-1]]
+        except (KeyError, TypeError, ValueError):
+            seconds = 60
+        return timedelta(seconds=max(1, seconds))
 
     def previous_cycle_range(self, cycle_id: str) -> float:
         window = cycle_window_from_id(cycle_id)
@@ -516,15 +562,6 @@ class DualTrackCycleRunner:
 
     def _write_human_fill_sync_runner_report(self, cycle_id: str, report: dict[str, Any]) -> None:
         self._write_runner_state(cycle_id, "human_fill_sync", self._human_fill_sync_summary(report))
-
-    def _notify_machine_trade_records(self, cycle_id: str) -> dict[str, Any]:
-        try:
-            from services.dualtrack_feishu import DualTrackTradeRecordNotifier
-
-            return DualTrackTradeRecordNotifier(self.output_root, config=self.config).notify_cycle(cycle_id)
-        except Exception as exc:  # noqa: BLE001 - notification failure must not stop the paper runner.
-            self.store.audit(cycle_id, "machine_trade_notification_failed", {"reason": f"{exc.__class__.__name__}: {exc}"})
-            return {"status": "failed", "reason": f"{exc.__class__.__name__}: {exc}", "sent": 0, "failed": 1}
 
     def _human_fill_sync_summary(self, report: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(report, dict):

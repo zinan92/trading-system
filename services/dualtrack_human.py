@@ -123,6 +123,10 @@ class DualTrackHumanEngine:
             "trigger_price",
             "trigger_mark_price",
             "trigger_source",
+            "trigger_open",
+            "trigger_high",
+            "trigger_low",
+            "trigger_event_started_at",
         ):
             if payload.get(key) not in (None, ""):
                 fill[key] = payload[key]
@@ -156,12 +160,20 @@ class DualTrackHumanEngine:
         cycle_id: str,
         *,
         mark_price: float | int | str | None,
+        mark_open: float | int | str | None = None,
+        mark_high: float | int | str | None = None,
+        mark_low: float | int | str | None = None,
+        event_started_at: str | datetime | None = None,
         ts: str | datetime | None = None,
         source: str = "dualtrack_protective_sweep",
     ) -> dict[str, Any]:
         mark = _finite_float(mark_price)
         if mark is None:
             return {"status": "skipped", "reason": "missing_mark_price", "triggered": []}
+        event_open = _finite_float(mark_open)
+        event_high = _finite_float(mark_high)
+        event_low = _finite_float(mark_low)
+        event_start = parse_utc(event_started_at) if event_started_at is not None else None
         rows = load_json(self._fills_path(cycle_id))
         entries = {
             str(row.get("trade_id") or row.get("fill_id") or ""): row
@@ -174,7 +186,15 @@ class DualTrackHumanEngine:
                 continue
             if float(trade.get("remaining_units") or 0.0) <= _EPSILON:
                 continue
-            trigger = _protective_trigger(trade, mark)
+            entry_ts = parse_utc(trade.get("entry_ts"))
+            range_is_post_entry = event_start is not None and event_start >= entry_ts
+            trigger = _protective_trigger(
+                trade,
+                mark,
+                mark_open=event_open if range_is_post_entry else None,
+                mark_high=event_high if range_is_post_entry else None,
+                mark_low=event_low if range_is_post_entry else None,
+            )
             if not trigger:
                 continue
             trade_id = str(trade.get("trade_id") or "")
@@ -194,6 +214,10 @@ class DualTrackHumanEngine:
                 "trigger_price": trigger["price"],
                 "trigger_mark_price": mark,
                 "trigger_source": source,
+                "trigger_open": event_open,
+                "trigger_high": event_high,
+                "trigger_low": event_low,
+                "trigger_event_started_at": event_start.isoformat() if event_start is not None else "",
             })
             triggered.append({
                 "trade_id": trade_id,
@@ -459,19 +483,28 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(trades.values())
 
 
-def _protective_trigger(trade: dict[str, Any], mark_price: float) -> dict[str, Any] | None:
+def _protective_trigger(
+    trade: dict[str, Any],
+    mark_price: float,
+    *,
+    mark_open: float | None = None,
+    mark_high: float | None = None,
+    mark_low: float | None = None,
+) -> dict[str, Any] | None:
     side = str(trade.get("side") or "").lower()
     sl = _finite_float(trade.get("sl"))
     tp = _finite_float(trade.get("tp"))
+    event_high = mark_price if mark_high is None else mark_high
+    event_low = mark_price if mark_low is None else mark_low
     if side == "long":
-        if sl is not None and mark_price <= sl:
-            return {"event": "stop", "exit_side": "sell", "price": sl}
-        if tp is not None and mark_price >= tp:
+        if sl is not None and event_low <= sl:
+            return {"event": "stop", "exit_side": "sell", "price": mark_open if mark_open is not None and mark_open <= sl else sl}
+        if tp is not None and event_high >= tp:
             return {"event": "target", "exit_side": "sell", "price": tp}
     if side == "short":
-        if sl is not None and mark_price >= sl:
-            return {"event": "stop", "exit_side": "buy", "price": sl}
-        if tp is not None and mark_price <= tp:
+        if sl is not None and event_high >= sl:
+            return {"event": "stop", "exit_side": "buy", "price": mark_open if mark_open is not None and mark_open >= sl else sl}
+        if tp is not None and event_low <= tp:
             return {"event": "target", "exit_side": "buy", "price": tp}
     return None
 
