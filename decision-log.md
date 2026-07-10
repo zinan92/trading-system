@@ -2883,6 +2883,46 @@ Date: 2026-07-08
 - The live runtime endpoint reported all four checks `ok`, runtime status `ok`,
   `machine_fill_count=12`, and `machine_fills_hidden=false`.
 
+## 2026-07-10 - 黄金飞书自动化切到双轨机器轨
+
+### Decisions
+
+- 飞书交易记录只接机器轨网格。
+  - 新增 `dualtrack_machine_brief`：每个 12 小时周期输出机器方向、关键位、失效条件、网格观察位、趋势腿状态。
+  - 新增 `dualtrack_trade_record`：只发送机器轨 entry / target / stop / final flatten 事件。
+  - 继续使用 report/trade Feishu sender；健康告警不再作为交易记录内容。
+
+- 早晚盘复盘只复盘机器轨网格。
+  - 当 `schedule.profile=dualtrack_focus` 且存在 dualtrack artifact 时，`pm_portfolio_report` 不再读取旧 active strategy 的 performance/paper_orders。
+  - 复盘口径改成：黄金 12 小时行情、机器轨开仓数、平仓数、TP/SL、已实现 PnL、open 估算未实现 PnL、下一周期机器方向。
+
+- 交易记录发送必须防重复和防历史补发。
+  - 发送账本为 `outputs/dualtrack_trade_notifications/<date>.json`。
+  - 去重键为 `cycle_id + fill_id`。
+  - 首次接入某个 cycle 时默认只建立 baseline，不补发已有 fills；只有 `--backfill-existing` 才显式补发历史。
+
+- Intraday flatten 不是实际平仓。
+  - 当前周期运行中，machine simulation 会用 `flatten` 对最后一根 bar 做临时结算。
+  - Feishu 交易记录现在过滤掉周期未结束前的 `flatten`，避免把 mark-to-close 误报成真实平仓。
+
+### Gotchas
+
+- 本机 `dualtrack-cycle` launchd 每分钟运行。第一次把通知钩子接进 runner 后，后台 runner 立即扫描了当前周期已有 fills，并发出了 18 条交易记录；其中部分是 intraday flatten，语义上不应作为真实平仓。后续已改成首次 baseline + 过滤 intraday flatten，防止再次发生。
+
+- `outputs/feishu_reports/<date>.json` 是发送回执，不代表交易语义一定正确；需要结合 `dualtrack_trade_notifications` 的 `suppressed` / `delivered` / `event` 字段判断。
+
+- `trade_ticket_notifications` 仍是旧 ticket 审查链路；新的机器轨开/平仓不依赖旧 ticket。
+
+### Evidence
+
+- `tests/test_dualtrack_feishu.py` 覆盖机器轨作战单、entry/exit 交易记录、首次 baseline、intraday flatten 过滤。
+- Focused regression passed:
+  `python3 -m pytest tests/test_dualtrack_feishu.py tests/test_pm_portfolio_report.py tests/test_feishu_report_sender.py tests/test_dualtrack_dt8_cycle_runner.py`
+  returned `42 passed`.
+- Real current-cycle dry run after the flatten fix:
+  `python3 -m pipelines.dualtrack_trade_notifications --cycle-id 2026-07-10_DAY --json`
+  returned `sent=0 skipped=14 failed=0`.
+
 ## 2026-07-10 - DualTrack protective OHLC replay
 
 ### Decisions
@@ -2961,6 +3001,46 @@ Date: 2026-07-08
 - `docs/dualtrack-nautilus-spike-result.md` records the missing datafeed contract
   and cutover gates.
 
+## 2026-07-10 - 机器轨开单记录改成截图式卡片
+
+### Decisions
+
+- 机器轨 entry 事件在 Feishu 里单独使用“黄金开单 · 自动成交”格式；target / stop / final flatten 继续走“黄金交易记录”格式。
+- 策略中文名统一为“机器轨网格”；不再使用此前的误写名称。
+- 开单卡展示用户真正需要确认的信息：作战单方向、人工/机器过滤、风险闭环、仓位/保证金、入场、TP、SL、证据路径。
+- entry 自动通知使用绿色 Feishu interactive card；纯文字只作为发送审计和兼容性正文。
+- 旧 ticket 体系里的 strength、quality gate、backtest win-rate/sample 不再硬塞进机器轨开单卡；机器轨只展示原生存在或可由 fill/plan/account 换算的字段。
+
+### Gotchas
+
+- “自动成交”在当前机器轨里表示 dualtrack simulation fill 已写入，不代表已经进入 demo/live 或券商实盘。
+- 机器轨的 TP/SL 和盈亏比来自网格层级与作战单失效位，不能用旧 ticket 审查卡的 Rational Trigger / 回测样本口径解释。
+
+### Evidence
+
+- 本地渲染预览使用 `2026-07-10_DAY` 第一条 entry fill，展示出入场价、TP/SL、估算保证金、止损预估、止盈预估和 artifact 路径。
+- 仅发送一条标题为“黄金开单 · 样本预览”的受控样本，回执 `delivered=true`、`code=0`；样本未写入自动交易通知去重账本。
+- Focused regression passed:
+  `python3 -m pytest tests/test_dualtrack_feishu.py tests/test_trade_ticket_card.py tests/test_pm_portfolio_report.py tests/test_feishu_report_sender.py tests/test_dualtrack_dt8_cycle_runner.py`
+  returned `55 passed`.
+
+## 2026-07-10 - DualTrack canonical execution boundary and shadow parity
+
+### Decisions
+
+- 所有将进入执行器的行情事件统一为 `dualtrack-market-event-v1`：必须具备 UTC 时间、正数价格、可信来源、`fresh=true`、`is_synthetic=false`，且 OHLC 如存在必须完整且自洽。
+- 事件 ID 由规范化字段稳定生成；同一输入重放得到同一 ID，供未来双引擎对账和幂等排查使用。
+- 双引擎对账采用精确比较，不允许先用 tolerance 掩盖差异；候选引擎缺失时产出 `blocked` 报告，而不是空报告或误报通过。
+- Nautilus 仍然只处于影子接入准备阶段：没有 upstream、execution-venue 的 instrument definition 与候选 snapshot，不能启用。
+
+### Gotchas
+
+- 图表可展示的行情 payload 不等于执行级行情事件；后者必须同时满足来源、新鲜度和合成数据闸门。
+- 只比较 PnL 会漏掉残余仓位或重复成交；对账还必须比较 fills、positions 和 open units。
+- `blocked` 是安全状态，不是失败修复后的成功状态；它表示外部候选引擎尚未产生可审计的规范化结果。
+
+- `pipelines.dualtrack_execution_reconcile` 只读 legacy snapshot 与候选 JSON，再原子写入 reconciliation artifact；它不初始化网络 client、不开新订单，也不改变 ledger。
+
 ## 2026-07-10 - Nautilus GOLD instrument bridge
 
 ### Decisions
@@ -2991,3 +3071,333 @@ Date: 2026-07-08
   step `0.001`, multiplier `1`, and `1 XAU @ 4100 = 4100 USDT`.
 - Instrument trust-gate plus execution-control focused regression passed with
   `25 passed`.
+
+- `datafeed` 的 `instrument-definition-v1` 已通过真实本地 HTTP 调用验证。交易系统只接受 `require_execution_venue=true`、`served_from=upstream`、非合成定义；公开 instrument metadata 缺少 maker/taker fee 时，preflight 会保留 blocker，不能自行假设费用。
+
+- `cost_per_side_bp=0.5` 是现有纸面成本假设，不等同于交易所 maker/taker fee 的外部证据；preflight 不可把它自动转换为 Nautilus 费率。注意 0.5 bp 的小数是 `0.00005`，不是 `0.000005`。
+
+- 机器轨会过滤无法通过基本止损/止盈几何校验的模拟成交；过滤后的 ledger 可以保持干净，但 runtime 不能继续报 `ok`。此类事件现在会明确输出 `warn` 且 `valid_now=false`，阻止它被拿作切换样本。
+
+- 同一根 OHLC bar 同时触及硬失效位和网格入场位时，无法从 OHLC 恢复真实先后顺序。为避免乐观开仓，硬失效优先：该 bar 不允许新开仓；人机模型与未来 Nautilus 对账都必须采用此保守语义。
+
+- 纸面影子对账可使用已存在的 0.5bp/side 成本假设，但必须显式标记为 `paper_assumption` 与 `real_money_eligible=false`。这消除了 paper-shadow 的费率缺口，同时保留真实经纪商费率为单独授权和证据门槛。
+
+- 第一条 Nautilus 对账场景固定为 long market entry 100、同一 1m bar low=94 的 stop 95。legacy 与 Nautilus 都使用同一份 upstream XAUUSDT instrument definition 和 paper-only 费率；先以精确 PnL、fill count、open units 对账，再扩展到其余九类场景。
+
+## 2026-07-10 - Nautilus XAU first parity artifact and stricter comparison
+
+### Decisions
+
+- 首个真实 XAUUSDT shadow fixture 的结果写入
+  `outputs/dualtrack/nautilus/parity/2026-07-10-xau-stop-loss.json`；它是
+  纸面影子证据，不是 live-cycle candidate snapshot，也不能被拿来解除运行中
+  reconciliation 的 `candidate_snapshot_missing` blocker。
+- 对账不再只比较 PnL、成交数量和总残余单位；逐笔 `side/event/price/quantity`、
+  仓位 `status/side/remaining_units`、标准账户金额和 reconciliation status 都
+  必须精确一致。
+- 当前情景仍限制在长期/short stop/target 的第一条固定情景；其余九类情景未完成前，
+  Nautilus 不会被配置为 paper execution engine。
+
+### Gotchas
+
+- 两边的 `orders=[]` 不能被解读为订单生命周期也已对账；legacy compatibility
+  engine 明确没有原生 order lifecycle。这是一个尚未解决的迁移能力缺口，不是通过。
+- fixture 以临时 output root 构建 legacy ledger，避免任何测试成交写入真实 human
+  fills。候选 snapshot 因此只能证明固定场景语义，不能替代真实 cycle 的 shadow
+  execution artifact。
+- 当前 Nautilus 版本会发出 Pandas4 的 `Timestamp.utcnow` deprecation warning；
+  它不改变本次执行或对账结果，但升级运行时前应复核该警告。
+
+### Evidence
+
+- 使用真实 upstream XAUUSDT preflight、`paper_assumption` 的双边
+  `0.00005` fee 和隔离 Nautilus 1.230.0 runtime，long 100 / stop 95 的结果为
+  legacy 与 Nautilus 都 `realized=-5.00975`、2 fills、flat，精确对账 `pass`。
+- Full repository regression: `1338 passed in 395.20s`。
+- Focused boundary regression after strengthening comparison:
+  `23 passed`。
+
+## 2026-07-10 - Shadow cutover evidence gate
+
+### Decisions
+
+- 增加只读 `dualtrack_shadow_cutover_status` gate：必须连续 7 个按 cycle
+  落盘的 `pass` reconciliation，才会显示
+  `ready_for_attended_paper_switch`。
+- gate 只写 operator status artifact；它永远不改变 configured engine、不开订单，且
+  `real_money_eligible=false`。即使满足 7 次也只代表可进行人工批准的 paper switch。
+
+### Gotchas
+
+- `current.json` 不能作为连续性证据；它会被覆盖。gate 只读取每个 cycle 的独立
+  reconciliation artifact。
+- 一条 `blocked`、`drift` 或缺失候选 snapshot 都会把 trailing pass count 归零；
+  不能用旧的通过记录跨越最近失败来凑够七次。
+
+### Evidence
+
+- 真实当前 gate 输出 `blocked`，`candidate_snapshot_missing`，
+  `observed_consecutive_passes=0`；没有把首个固定 fixture 误当运行 cycle 通过。
+- Gate 与 execution boundary focused regression: `15 passed`。
+- Browser check against a disposable local server rendered `正常`、`执行对账 · 等待候选引擎`、
+  `影子切换 · 未满足连续验证` and `人工交易窗口 · 开放`; all required API reads returned
+  HTTP 200 and no execution-control endpoint was invoked.
+
+## 2026-07-10 - Second real Nautilus parity direction
+
+### Decisions
+
+- 将 XAUUSDT fixture 参数化为 `long_stop` 与 `short_stop` 两个实际运行的固定情景；
+  它们都使用同一份 upstream instrument preflight 和 paper-only fee model。
+- 固定情景的单根 OHLC wick 均以 stop 为保守优先级：long 的 `low=94 < 95`，short
+  的 `high=106 > 105`。这只验证单边 stop 行为，不宣称已覆盖同 bar TP/SL 冲突。
+
+### Gotchas
+
+- 这两个证据文件使用临时 legacy ledger，不能拼接到 live-cycle reconciliation
+  history，也不能增加 seven-cycle gate 的 through count。
+- `Pandas4Warning` 是 Nautilus runtime 的上游 deprecation warning；未改变双边
+  fill、Pnl 或 flat result，但它不是可以静默忽略的长期依赖状态。
+
+### Evidence
+
+- `outputs/dualtrack/nautilus/parity/2026-07-10-xau-long_stop.json`:
+  exact parity `pass`，双方 realized PnL `-5.00975`。
+- `outputs/dualtrack/nautilus/parity/2026-07-10-xau-short_stop.json`:
+  exact parity `pass`，双方 realized PnL `-5.01025`。
+- Fixture declaration plus boundary regression: `14 passed`。
+
+## 2026-07-10 - Target and same-bar priority Nautilus parity
+
+### Decisions
+
+- 扩展并实际运行 XAUUSDT fixture：long/short 的 target、以及 long 的
+  `O=100 H=106 L=94 C=100` same-bar 双触及情景。
+- Nautilus venue 显式使用 `bar_adaptive_high_low_ordering=true`。对 Open
+  到 High/Low 等距的 same-bar fixture，该运行时顺序为 Open → Low → High，
+  因而与 legacy 的保守 stop-first 语义一致。
+- 候选 fill event 从 Nautilus 的实际成交价推导（SL=stop、TP=target），而不是
+  从 fixture 的预期标签抄写，避免用期望值掩盖撮合顺序错误。
+
+### Gotchas
+
+- `bar_adaptive_high_low_ordering` 是一个针对 OHLC 模拟路径的显式模型选择，
+  不是对真实 tick 路径的宣称；真实 shadow 仍需同一条 immutable event stream。
+- 相同的 equality fixture 对优先级最敏感；若未来升级 Nautilus 改变该 tie-break，
+  该 parity fixture 必须 drift，而不能静默重标记为 pass。
+
+### Evidence
+
+- 5 个隔离的真实 XAUUSDT fixture 都 exact `pass`：
+  `long_stop=-5.00975`，`short_stop=-5.01025`，
+  `long_target=4.98975`，`short_target=4.99025`，
+  `long_same_bar_stop_first=-5.00975`（双方皆为 stop）。
+- Fixture-level focused regression: `3 passed`。
+- Final full repository regression after the five-scenario fixture expansion:
+  `1346 passed in 400.05s`。
+
+## 2026-07-10 - Immutable actual-cycle Nautilus shadow chain
+
+### Decisions
+
+- 每个 shadow cycle 必须先生成 `dualtrack-shadow-input-v1`：其中包含规范化的
+  1m market events、legacy snapshot 的 immutable fill evidence、以及独立的
+  accepted-command journal。候选运行时不得直接读取 legacy fills 文件。
+- `GOLD`（存储/图表符号）到 `XAUUSDT`（Nautilus 执行合约）的映射显式写入配置；
+  bundle 缺 provider、instrument ID、ready instrument preflight 或映射不一致时
+  fail closed。
+- `LegacyPaperExecutionAdapter` 仅在订单被成功接受后记录 command journal，按
+  legacy fill ID 幂等。重试相同 source fill 不会制造第二条影子命令。
+- 空订单 cycle 的 Nautilus market replay 可作为事件摄取证据，但
+  `qualifies_for_cutover=false`，绝不能推进 seven-cycle execution-parity gate。
+
+### Gotchas
+
+- 过去的 fills 没有倒推成伪造的原始命令；历史命令不存在时，未来 candidate
+  replay 必须明确 blocked，而不是把已知成交结果回灌给候选引擎。
+- 当前设置中 data store symbol 为 `GOLD`，instrument definition 为 `XAUUSDT`；
+  这个映射若被隐式处理，会重新引入 split-brain execution identity。
+- 一个 `pass` reconciliation 不一定是切换证据。没有命令的 pass 只说明同一
+  market stream 可被消费，不能说明订单、仓位或 PnL 语义已对齐。
+
+### Evidence
+
+- 真实 `2026-07-10_DAY` bundle:
+  `input_id=shadow-fc7211e35547aa6ff797`，470 条 `binance_usdm` events，
+  execution instrument `XAUUSDT`，legacy command count 0。
+- 隔离 Nautilus runtime 成功消费该 bundle；reconciliation `pass`，但 cutover gate
+  保持 `blocked/candidate_activity_insufficient/0`。
+- Command-journal, bundle, replay, reconciliation and cutover focused tests:
+  `15 passed`。
+
+## 2026-07-10 - Legacy limit lifecycle parity repair
+
+### Decisions
+
+- Human-track `limit + entry` 不再由 compatibility engine 在提交时直接写 fill。
+  它先写 `accepted` order artifact，只有可信 canonical event 的 high/low 真正触及
+  限价后才生成 fill。
+- 为避免 OHLC 内路径未知带来的乐观结果，已有仓位先处理本 bar 的 protective sweep，
+  随后才接受新触及的 limit entry；新入场不能借同一根 bar 立即触发 TP/SL。
+- 执行快照的 legacy `orders` 不再永远为空：已成交订单从 fill ledger 派生，挂单从
+  order artifact 读取，capability 仍明确是 `derived_from_fill_ledger` 而非 native OMS。
+- Dashboard POST 现在区分 `accepted` 与 `filled`；页面向用户显示“限价单已挂起 ·
+  等待可信行情触及”。
+
+### Gotchas
+
+- 历史 `DualTrackHumanEngine` 直接调用仍保留为导入/同步路径；新的 pending lifecycle
+  只在 execution adapter 边界生效，不能把外部 broker 已成交 fill 改写成挂单。
+- Limit 的数量以提交时 `notional / limit price` 固定，实际触及后按该数量写入 fill；
+  不能在触及时重新用 market price 反算数量。
+- 同一根 OHLC bar 没有可验证的入场后路径。若需要 intrabar TP/SL，必须使用 quote/trade
+  stream，而不是把 1m range 当 tick 序列。
+
+### Evidence
+
+- `limit_entry_waits_for_touch` 真实 Nautilus/XAUUSDT fixture 已 exact `pass`：双方都
+  是 `accepted`、0 fills、0 positions，数量为 `100 / 95`。
+- 固定 fixture gate 当前通过 market entry、limit wait、stop/target 和 same-bar priority；
+  仍因 6 个未完成类而 blocked。
+- Full repository regression: `1360 passed in 428.04s`。
+
+## 2026-07-10 - Fixed parity suite complete; real-cycle qualification remains
+
+### Decisions
+
+- 固定 Nautilus parity gate 现在要求并验证十个明确类别，任何 `drift`、`missing`
+  或 `not_run` 都会阻止 cutover，而不是仅凭少量 happy-path fixture 放行。
+- 历史 `2026-07-09_DAY` machine fills 作为 raw evidence 保持不变；derived trade rebuild
+  对无显式数量的同 rung machine stop/target 使用全部剩余 units，消除 exit-price
+  反推数量造成的 phantom residual。
+- Seven-cycle gate 还要求候选 snapshot 的 `qualifies_for_cutover=true`。一个真实
+  market replay 但 command count 为 0 的 pass 仅证明摄取通路，不能计为执行 parity。
+
+### Gotchas
+
+- Legacy compatibility order lifecycle 是由 fills/order artifacts 派生的，不是 native
+  OMS；它足以进行精确迁移对账，但不能被营销为 exchange queue / partial-fill model。
+- Restart fixture 的模式是 `immutable_replay`：从 persisted input/output artifact
+  重启后语义一致。它不是一个对 Nautilus 内存状态做未验证序列化的声明。
+- 固定 suite 全绿并不授权 paper engine switch；仍须积累 7 个连续、实际含命令的
+  paper cycles，且其中不得有 unexplained drift。
+
+### Evidence
+
+- `dualtrack_nautilus_parity_gate` 实际输出 `pass`，十类全部通过。
+- 当前真实 `2026-07-10_DAY` 再次 replay：493 个 market events、0 accepted commands、
+  reconciliation `pass`；cutover status 明确为
+  `blocked/candidate_activity_insufficient/observed_consecutive_passes=0`。
+- Historical residual check: 14 raw fills、7 rebuilt trades、0 residuals、
+  `raw_fills_immutable=true`。
+- Final full repository regression after lifecycle, accounting, fixture-gate and
+  historical-rebuild changes: `1363 passed in 433.24s`。
+
+## 2026-07-10 - M6 one-cycle shadow operation entrypoint
+
+### Decisions
+
+- `dualtrack_shadow_cycle` 把一个 cycle 的 prepare → isolated replay → exact
+  reconciliation → cutover gate 串成一个无订单操作入口。它的成功状态为 `replayed`，
+  不使用 `pass` 这个容易被误解为切换批准的词。
+- 该入口即使 replay 成功也会保留 cutover gate 的独立状态；`candidate_activity_insufficient`
+  仍返回为清晰的安全阻塞，而不改变 execution engine 或 real-money eligibility。
+
+### Gotchas
+
+- 目前 `2026-07-10_DAY` 没有已接受订单命令。它证明 531 条不可变 market events 的
+  入库、Nautilus replay 和对账通路，但仍不代表订单执行语义已在生产 cycle 上发生。
+- M6 的七次计数必须来自未来按 cycle 落盘的、命令非空的 replay artifacts，不能用
+  同一日期反复运行无订单 cycle 累加。
+
+### Evidence
+
+- 实际 `dualtrack_shadow_cycle` 输出 `replayed`，prepare/replay exit code 均为 0；
+  candidate evidence 为 `replayed_market_events=531`、`authoritative_command_count=0`、
+  `qualifies_for_cutover=false`。
+- Orchestration focused regression: `14 passed`。
+
+## 2026-07-10 - Command-bearing shadow replay enabled
+
+### Decisions
+
+- Isolated Nautilus replay now consumes the immutable accepted-command journal,
+  rather than refusing every nonempty command cycle. It supports market/limit
+  entry, optional bracket TP/SL, and reduce-only exits; malformed, missing-time,
+  invalid-side, invalid-quantity or unsupported order-type commands still fail
+  closed.
+- Candidate fill event labels are inferred from actual execution price against
+  the command SL/TP, and a closed Nautilus net position is normalized back to
+  the originating long/short side instead of leaking `flat` into the common
+  contract.
+
+### Gotchas
+
+- The command journal records only successfully accepted legacy commands. It
+  does not fabricate missing historical commands from fills.
+- This is a paper-shadow path only; command replay neither routes to a broker
+  nor changes the authoritative legacy ledger.
+
+### Evidence
+
+- Isolated command smoke: one market long at 100 with SL 95 replayed to two
+  Nautilus fills, flat long position and realized PnL `-5.00975`; evidence
+  records `authoritative_command_count=1` and `qualifies_for_cutover=true`.
+- Replay/orchestration focused regression: `6 passed`.
+
+## 2026-07-10 - Live API console evidence for cutover guard
+
+### Decisions
+
+- Cutover UI evidence must be captured through `pipelines.dashboard_server`, not
+  a static-file server: the page depends on `/api/dashboard` to present the
+  current shadow-gate state.
+- The visual surface continues to expose the blocked state rather than implying
+  readiness: `执行对账 · 已通过` is intentionally separate from `影子切换 · 需要真实订单样本`.
+
+### Gotchas
+
+- A static render showed `NO LIVE KLINE DATA`; it is a shell-only render and
+  must not be retained as evidence of a working runtime console.
+- The current dashboard also surfaces an unrelated `stale_installed` launchd
+  warning. It does not change the M6 candidate-activity blocker, but it should
+  not be concealed by the cutover display.
+
+### Evidence
+
+- Browser screenshot via local API server: `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-cutover-gate-live-2026-07-10.png`.
+- Browser accessibility snapshot confirms `2026-07-10_DAY`, `执行对账 · 已通过`, and
+  `影子切换 · 需要真实订单样本` in the live console.
+
+## 2026-07-10 - Paper scheduler drift repaired
+
+### Decisions
+
+- Replaced the local `dualtrack-live-tick` LaunchAgent using the attended
+  schedule installer after its generated 60-second cadence was found to differ
+  from the installed 300-second cadence.
+- The operation used a same-day, 15-minute takeover package plus the install
+  acknowledgement. It changed local paper scheduling only; it did not open a
+  broker client or submit an order.
+
+### Gotchas
+
+- An arbitrary package id and an expired package were correctly rejected. The
+  installer requires a fresh package tied to the current run date before it
+  will replace a loaded agent.
+- The installer can take longer than a shell's initial output window because
+  it sequentially backs up, bootouts, bootstraps, kickstarts, and verifies each
+  generated agent. Completion must be read from `install_current.json` and the
+  post-install verifier, not from an early empty stdout window.
+
+### Evidence
+
+- `pipelines.schedule_status`: `active`, with 5/5 generated agents installed,
+  matching, and loaded; `dualtrack-live-tick` interval is now 60 seconds.
+- `pipelines.schedule_post_install_verify`: `pass`; successful receipt at
+  `2026-07-10T10:11:16+00:00`, five backups, and all five rollback entries
+  restorable at `outputs/schedules/launch_agent_backups/20260710T101025Z/`.
+- Before/after console proof is saved at
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-cutover-gate-live-2026-07-10.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-after-scheduler-repair-2026-07-10.png`.

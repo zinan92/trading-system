@@ -357,6 +357,7 @@ const state = {
   mainTf:MAIN_TIMEFRAMES.includes(storageGet("dualtrack.split.main.tf", "1m")) ? storageGet("dualtrack.split.main.tf", "1m") : "1m",
   phase:{human:"mid", machine:"mid"},
   realPhase:"mid",
+  execution:null,
   planDraft:null,
   planDraftSource:"",
   planDraftDirty:false,
@@ -639,10 +640,11 @@ async function loadAll(){
     state.cycle = await api("/api/dualtrack/cycle/current");
     const cycleId = state.cycle?.cycle_id;
     const mainTimeframe = mainTf();
-    const [plan, machine, human, ledger, runtime, config, humanTrades, machineTrades, humanMarket, machineMarket, humanCtxA, humanCtxB, machineCtxA, machineCtxB] = await Promise.all([
+    const [plan, machine, human, execution, ledger, runtime, config, humanTrades, machineTrades, humanMarket, machineMarket, humanCtxA, humanCtxB, machineCtxA, machineCtxB] = await Promise.all([
       optionalApi(`/api/dualtrack/plan/${cycleId}`),
       optionalApi(`/api/dualtrack/machine/${cycleId}`),
       optionalApi(`/api/dualtrack/human/${cycleId}`),
+      optionalApi(`/api/dualtrack/execution/${cycleId}`),
       optionalApi("/api/dualtrack/ledger"),
       optionalApi("/api/dualtrack/runtime/status"),
       optionalApi("/api/dualtrack/config"),
@@ -655,7 +657,7 @@ async function loadAll(){
       fetchBars(contextTf("machineCtxA","15m")),
       fetchBars(contextTf("machineCtxB","1h")),
     ]);
-    Object.assign(state, {plan, machine, human, ledger, runtime, config, humanTrades, machineTrades});
+    Object.assign(state, {plan, machine, human, execution, ledger, runtime, config, humanTrades, machineTrades});
     state.market = {human:humanMarket, machine:machineMarket};
     state.context = {humanCtxA, humanCtxB, machineCtxA, machineCtxB};
     syncRealPhase(true);
@@ -688,12 +690,14 @@ function scheduleLiveTradeRefresh(){
 async function refreshTradeStateFromLiveMarket(){
   const cycleId = state.cycle?.cycle_id;
   if(!cycleId) return;
-  const [human, humanTrades, machineTrades] = await Promise.all([
+  const [human, execution, humanTrades, machineTrades] = await Promise.all([
     optionalApi(`/api/dualtrack/human/${cycleId}`),
+    optionalApi(`/api/dualtrack/execution/${cycleId}`),
     loadTradeData(cycleId, "human"),
     loadTradeData(cycleId, "machine"),
   ]);
   if(human) state.human = human;
+  if(execution) state.execution = execution;
   if(humanTrades) state.humanTrades = humanTrades;
   if(machineTrades) state.machineTrades = machineTrades;
   renderTrades();
@@ -965,8 +969,10 @@ function renderRuntime(){
   const runtime = state.runtime || {};
   const sample = runtime.current_sample || runtime.previous_closeout || {};
   const meta = runtimeStatusMeta(runtime.status || runtime.overall);
+  const reconciliation = executionReconciliationMeta(state.execution?.reconciliation);
+  const cutover = shadowCutoverMeta(state.execution?.shadow_cutover);
   const detailStatus = "成交明细 · 实时显示";
-  $("[data-human-status]").innerHTML = `<div class="statusrow"><span class="dot ${meta.tone}"></span>${meta.label}</div><div class="statusrow"><span class="dot ${state.realPhase === "mid" ? "" : "unknown"}"></span>人工交易窗口 · ${state.realPhase === "mid" ? "开放" : "关闭"}</div>`;
+  $("[data-human-status]").innerHTML = `<div class="statusrow"><span class="dot ${meta.tone}"></span>${meta.label}</div><div class="statusrow"><span class="dot ${reconciliation.tone}"></span>执行对账 · ${reconciliation.label}</div><div class="statusrow"><span class="dot ${cutover.tone}"></span>影子切换 · ${cutover.label}</div><div class="statusrow"><span class="dot ${state.realPhase === "mid" ? "" : "unknown"}"></span>人工交易窗口 · ${state.realPhase === "mid" ? "开放" : "关闭"}</div>`;
   $("[data-machine-status]").innerHTML = `<div class="statusrow"><span class="dot ${sample.machine_stood_down ? "warn" : ""}"></span>机器轨 · ${sample.machine_stood_down ? "站下" : "运行"}</div><div class="statusrow"><span class="dot ${cycleClosed(state.cycle) ? "" : "warn"}"></span>${detailStatus}</div>`;
 }
 
@@ -976,6 +982,25 @@ function runtimeStatusMeta(value){
   if(text.includes("warn") || text.includes("stale")) return {tone:"warn", label:"注意"};
   if(text.includes("run") || text.includes("ok") || text.includes("ready") || text.includes("healthy")) return {tone:"", label:"正常"};
   return {tone:"unknown", label:"未连接"};
+}
+function executionReconciliationMeta(value){
+  const status = String(value?.status || "missing").toLowerCase();
+  if(status === "pass") return {tone:"", label:"已通过"};
+  if(status === "drift") return {tone:"block", label:"发现漂移"};
+  if(status === "blocked") return {tone:"warn", label:"等待候选引擎"};
+  return {tone:"unknown", label:"尚未运行"};
+}
+function shadowCutoverMeta(value){
+  const status = String(value?.status || "missing").toLowerCase();
+  if(status === "ready_for_attended_paper_switch") return {tone:"", label:"可人工批准纸面切换"};
+  if(status === "blocked"){
+    const blocker = String(value?.blocker || "");
+    if(blocker === "fixed_parity_fixtures_not_passed") return {tone:"warn", label:"固定对账未完成"};
+    if(blocker === "candidate_activity_insufficient") return {tone:"warn", label:"需要真实订单样本"};
+    if(blocker.includes("candidate_snapshot")) return {tone:"warn", label:"等待候选引擎"};
+    return {tone:"warn", label:"未满足连续验证"};
+  }
+  return {tone:"unknown", label:"尚未评估"};
 }
 
 function renderTrades(){
@@ -1754,10 +1779,10 @@ async function submitOrder(event){
   updateActionGates();
   try{
     const payload = buildOrderPayload();
-    await api("/api/dualtrack/orders", {method:"POST", body:JSON.stringify(payload)});
+    const receipt = await api("/api/dualtrack/orders", {method:"POST", body:JSON.stringify(payload)});
     state.order.side = null;
     await loadAll();
-    setOrderStatus("成交已记录", "ok");
+    setOrderStatus(receipt?.status === "accepted" ? "限价单已挂起 · 等待可信行情触及" : "成交已记录", "ok");
   }catch(error){
     setOrderStatus(friendlyErrorMessage(error.message), "error");
   }finally{

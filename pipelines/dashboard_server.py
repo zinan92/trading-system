@@ -165,6 +165,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/dualtrack/trades/"):
             self._handle_dualtrack_trades_get(parsed.path, parsed.query)
             return
+        if parsed.path.startswith("/api/dualtrack/execution/"):
+            self._handle_dualtrack_execution_get(parsed.path, parsed.query)
+            return
         if parsed.path.startswith("/api/dualtrack/plan/"):
             self._handle_dualtrack_plan_get(parsed.path, parsed.query)
             return
@@ -263,6 +266,23 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_error(403, "dualtrack_trades_hidden", str(exc))
         except ValueError as exc:
             self._write_error(400, "dualtrack_trades_invalid", str(exc))
+
+    def _handle_dualtrack_execution_get(self, path: str, query: str) -> None:
+        cycle_id = path.rsplit("/", 1)[-1]
+        if not _CYCLE_ID_PATTERN.match(cycle_id):
+            self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+            return
+        params = parse_qs(query)
+        try:
+            self._write_json(
+                200,
+                build_dualtrack_execution_response(
+                    cycle_id,
+                    as_of=(params.get("as_of") or [None])[0],
+                ),
+            )
+        except ValueError as exc:
+            self._write_error(400, "dualtrack_execution_invalid", str(exc))
 
     def _handle_dualtrack_machine_get(self, path: str, query: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -736,8 +756,10 @@ def build_dualtrack_machine_response(cycle_id: str, *, output_root: Path | None 
 
 
 def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
-    fill = build_execution_engine_adapter(_dualtrack_output_root(output_root)).submit_order(payload)
-    return {"status": "filled", "fill": fill}
+    receipt = build_execution_engine_adapter(_dualtrack_output_root(output_root)).submit_order(payload)
+    if receipt.get("state") == "accepted" or receipt.get("status") == "accepted":
+        return {"status": "accepted", "order": receipt}
+    return {"status": "filled", "fill": receipt}
 
 
 def _dualtrack_mutation_request_allowed(host: str, origin: str) -> bool:
@@ -866,6 +888,52 @@ def build_dualtrack_trades_response(
             "read_only": True,
             "machine_mid_order_rows_hidden": False,
             **rows["safety"],
+        },
+    }
+
+
+def build_dualtrack_execution_response(
+    cycle_id: str,
+    *,
+    output_root: Path | None = None,
+    as_of: str | None = None,
+) -> dict:
+    """Read-only execution/accounting view for the human paper track.
+
+    The machine track intentionally stays on its blind-safe endpoint during an
+    open cycle.  This surface is for operational accounting, not a new machine
+    intervention or disclosure channel.
+    """
+
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    output = _dualtrack_output_root(output_root)
+    closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
+    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
+    snapshot = build_execution_engine_adapter(output).snapshot(
+        cycle_id,
+        mark_price=mark["price"],
+        mark_fresh=mark["fresh"],
+        mark_source=mark["source"],
+    )
+    reconciliation_rows = load_json(output / "dualtrack" / "reconciliation" / f"{cycle_id}.json")
+    latest_reconciliation = reconciliation_rows[-1] if reconciliation_rows else {
+        "status": "missing",
+        "reason": "shadow_reconciliation_not_run",
+    }
+    cutover_rows = load_json(output / "dualtrack" / "cutover" / "shadow_gate_current.json")
+    latest_cutover = cutover_rows[-1] if cutover_rows else {
+        "status": "missing",
+        "blocker": "shadow_cutover_gate_not_run",
+    }
+    return {
+        **snapshot,
+        "reconciliation": latest_reconciliation,
+        "shadow_cutover": latest_cutover,
+        "safety": {
+            "read_only": True,
+            "execution_control": False,
+            "machine_track_disclosed": False,
         },
     }
 
@@ -1052,7 +1120,9 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
         and (not market_config.get("provider") or market.get("provider") == market_config.get("provider"))
     )
     stood_down = bool(cycle_state.get("machine_stood_down", effective is None))
-    sample_ok = bool(effective) and market_ok and runner_ok and not stood_down
+    machine_layers = list(machine.get("layers") or cycle_state.get("layers") or [])
+    invalid_machine_fill_count = _machine_invalid_fill_count(machine_layers)
+    sample_ok = bool(effective) and market_ok and runner_ok and not stood_down and invalid_machine_fill_count == 0
     checks = [
         _runtime_check("market", market_ok, "行情新鲜", "行情过期或展示种子", {
             "source_mode": market.get("source_mode"),
@@ -1071,15 +1141,22 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
             "reveal_allowed": reveal_allowed,
         }),
         _runtime_check("machine", not stood_down, "机器轨未站下", "机器轨站下", {
-            "layers": list(machine.get("layers") or cycle_state.get("layers") or []),
+            "layers": machine_layers,
         }),
+        _runtime_quality_check(
+            "machine_fill_quality",
+            invalid_machine_fill_count == 0,
+            "机器轨成交几何正常",
+            "机器轨模拟出现已过滤的无效成交，禁止作为切换样本",
+            {"invalid_machine_fill_count": invalid_machine_fill_count, "layers": machine_layers},
+        ),
     ]
     if closed:
         checks.append(_runtime_check("close", bool(attribution_rows), "收盘归因已生成", "收盘归因缺失", {
             "attribution_available": bool(attribution_rows),
             "ledger_available": bool(ledger_rows),
         }))
-    status = "blocked" if any(item["status"] == "blocked" for item in checks) else "ok"
+    status = "blocked" if any(item["status"] == "blocked" for item in checks) else "warn" if any(item["status"] == "warn" for item in checks) else "ok"
     next_tick_due_at = None
     if runner_ts:
         next_tick_due_at = (parse_utc(runner_ts) + timedelta(seconds=300)).isoformat()
@@ -1116,6 +1193,7 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
             "machine_pnl": round(float(machine.get("realized_pnl", 0.0)) + float(machine.get("unrealized_pnl", 0.0)), 8),
             "human_fill_count": len(human_fills),
             "machine_fill_count": len(machine_fills),
+            "invalid_machine_fill_count": invalid_machine_fill_count,
             "machine_fills_hidden": False,
         },
         "closeout": {
@@ -3130,6 +3208,29 @@ def _runtime_check(name: str, ok: bool, ok_message: str, blocked_message: str, e
         "message": ok_message if ok else blocked_message,
         "evidence": evidence,
     }
+
+
+def _runtime_quality_check(name: str, clean: bool, ok_message: str, warning_message: str, evidence: dict) -> dict:
+    return {
+        "name": name,
+        "status": "ok" if clean else "warn",
+        "message": ok_message if clean else warning_message,
+        "evidence": evidence,
+    }
+
+
+def _machine_invalid_fill_count(layers: list[Any]) -> int:
+    total = 0
+    for layer in layers:
+        text = str(layer or "")
+        if not text.startswith("invalid_fills:"):
+            continue
+        try:
+            count = int(text.rsplit(":", 1)[-1])
+        except ValueError:
+            continue
+        total += max(0, count)
+    return total
 
 
 def main() -> None:

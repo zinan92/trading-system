@@ -75,6 +75,7 @@ def test_split_page_uses_standard_kline_and_split_read_contracts():
     assert 'optionalApi(`/api/dualtrack/plan/${cycleId}`)' in html
     assert 'optionalApi(`/api/dualtrack/machine/${cycleId}`)' in html
     assert 'optionalApi(`/api/dualtrack/human/${cycleId}`)' in html
+    assert 'optionalApi(`/api/dualtrack/execution/${cycleId}`)' in html
     assert 'optionalApi("/api/dualtrack/ledger")' in html
     assert 'optionalApi("/api/dualtrack/runtime/status")' in html
     assert 'BINANCE_MARKET_SYMBOL = "XAUUSDT"' in html
@@ -88,6 +89,7 @@ def test_split_page_uses_standard_kline_and_split_read_contracts():
     assert "synthetic_fallback" not in html
     assert 'api("/api/dualtrack/plan"' in html
     assert 'api("/api/dualtrack/orders"' in html
+    assert "限价单已挂起 · 等待可信行情触及" in html
     assert 'api("/api/dualtrack/verdict"' in html
     assert 'optionalApi("/api/dualtrack/config")' in html
     assert 'optionalApi(`/api/dualtrack/trades/${cycleId}?track=${track}`)' in html
@@ -188,6 +190,12 @@ def test_split_page_removes_internal_task_labels_and_raw_runtime_keys():
     assert "machine_fills_hidden" not in html
     assert "成交明细 · 实时显示" in html
     assert "runtimeStatusMeta" in html
+    assert "executionReconciliationMeta" in html
+    assert "shadowCutoverMeta" in html
+    assert "执行对账 ·" in html
+    assert "影子切换 ·" in html
+    assert "固定对账未完成" in html
+    assert "需要真实订单样本" in html
     assert "正常" in html
     assert "注意" in html
     assert "阻塞" in html

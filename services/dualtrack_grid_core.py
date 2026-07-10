@@ -84,6 +84,48 @@ def simulate_conditional_grid(
     for i, bar in enumerate(rows):
         low, high = float(bar.low), float(bar.high)
         breached = _breached(bar, active_stop)
+        # OHLC does not tell us the intrabar path.  When a bar touches a hard
+        # stop and one or more entry levels, resolve the ambiguity
+        # conservatively: the hard invalidation wins, so no new position may
+        # be opened on an already-invalid bar.
+        if breached and plan_stop is not None:
+            exit_price = _stop_exit_price(bar, active_stop)
+            for rung in list(holding):
+                entry = holding[rung]
+                exit_notional = _matched_exit_notional(entry, entry_price=levels[rung], exit_price=exit_price)
+                exit_cost = dualtrack_order_cost(
+                    config=cost_config,
+                    price=exit_price,
+                    notional=exit_notional,
+                    contracts=entry.get("contracts"),
+                    cost_rules=cost_rules,
+                )
+                pnl = sign * (exit_price - levels[rung]) * _units(levels[rung], float(entry["notional"]))
+                gross_pnl += pnl
+                sides += 1
+                side_notional += exit_cost.notional
+                total_cost += exit_cost.cost
+                exit_fill = _fill(
+                    cycle_id, fills, bar, side="sell" if sign > 0 else "buy",
+                    price=exit_price, order_cost=exit_cost, layer=layer,
+                    rung=rung, event="stop", realized_pnl=pnl - exit_cost.cost,
+                    sl=active_stop.price, tp=None,
+                )
+                exit_fill["matched_entries"] = [_matched_entry(entry, levels[rung], pnl, exit_cost.cost)]
+                fills.append(exit_fill)
+            holding.clear()
+            stop_hit = True
+            # A plan invalidation is terminal for the cycle.  Only synthetic
+            # range stops may re-arm, and only from the next bar.
+            if plan_stop is not None:
+                break
+            if rearms < int(re_arm_max):
+                rearms += 1
+                re_anchor = float(bar.close)
+                active_stop = GridStop(side="below" if sign > 0 else "above", price=re_anchor - sign * half_width)
+                levels = _levels(re_anchor, sign, spacing, n_rungs)
+                continue
+            break
         for rung, level in enumerate(levels):
             if rung in holding:
                 continue
@@ -144,11 +186,7 @@ def simulate_conditional_grid(
                 rearms += 1
                 re_anchor = float(bar.close)
                 active_stop = GridStop(side="below" if sign > 0 else "above", price=re_anchor - sign * half_width)
-                levels = (
-                    _levels_to_stop(re_anchor, sign, spacing, n_rungs, active_stop.price)
-                    if plan_stop
-                    else _levels(re_anchor, sign, spacing, n_rungs)
-                )
+                levels = _levels(re_anchor, sign, spacing, n_rungs)
                 continue
             break
         for rung in list(holding):

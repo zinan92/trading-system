@@ -58,11 +58,25 @@ canonical instrument definition from datafeed with at least:
 Hard-coding these fields inside trading-orchestrator would recreate the same
 split-brain data model the adapter is meant to remove.
 
-## Next Gate
+## Current Integration Gate
 
-1. Add a versioned instrument-definition endpoint to datafeed.
-2. Build the Nautilus instrument only from that response and preserve source
-   lineage in every event.
-3. Run the ten parity scenarios in the execution adapter spec.
-4. Keep the local ledger authoritative for seven clean paper cycles.
-5. Enable Nautilus for paper only after unexplained parity drift is zero.
+1. The versioned datafeed endpoint now exists:
+   `GET /api/instruments/commodity/XAUUSDT?source=binance_usdm_futures&require_execution_venue=true`.
+   The `dualtrack_nautilus_shadow_prepare` pipeline validates and persists the
+   returned definition. It rejects cache, synthetic, or non-execution-venue
+   payloads.
+2. For paper-shadow parity only, use the explicit `paper_assumption` fee model
+   in `configs/dualtrack.yaml`; it is derived from the existing 0.5bp-side
+   simulation contract and is marked `real_money_eligible=false`. Binance
+   public `exchangeInfo` does not contain account-specific fee rates, so this
+   may never be represented as a real broker fee or reused for real money.
+3. Install the pinned NautilusTrader runtime in the execution environment and
+   build the Nautilus instrument only from the preflight artifact.
+4. The ten parity categories in the execution adapter spec now pass through
+   `dualtrack_nautilus_parity_gate`, including limit lifecycle, scale-in,
+   partial reduction, duplicate replay, immutable-replay restart, fee/margin/
+   exposure accounting, and the historical 2026-07-09 machine-residual repair.
+   Exact paper-shadow artifacts are under `outputs/dualtrack/nautilus/parity/`.
+   This does not itself satisfy the seven real command-bearing paper-cycle gate.
+5. Keep the local ledger authoritative for seven clean paper cycles.
+6. Enable Nautilus for paper only after unexplained parity drift is zero.

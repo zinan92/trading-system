@@ -576,7 +576,20 @@ def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[
             fallback_units = _fill_units(fill)
             for fallback_trade in fallback_trades:
                 remaining = float(fallback_trade.get("remaining_units", fallback_trade.get("units", 0.0)) or 0.0)
-                units = fallback_units if fallback_units > 0 else remaining
+                # Historical machine grid fills recorded entry notional on the
+                # paired target/stop. Recomputing quantity at the exit price
+                # leaves a phantom residual whenever the price differs. For a
+                # rung-level machine protective exit without an explicit
+                # quantity, the only safe reconstruction is to close the
+                # entire matched remaining lot. Raw fills remain untouched.
+                if (
+                    track == "machine"
+                    and event in {"stop", "target"}
+                    and not _fill_has_explicit_units(fill)
+                ):
+                    units = remaining
+                else:
+                    units = fallback_units if fallback_units > 0 else remaining
                 matches.append({
                     "trade_id": str(fallback_trade.get("trade_id") or ""),
                     "units": min(units, remaining) if remaining > 0 else units,
@@ -605,6 +618,10 @@ def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[
             trade["exit_price"] = fill.get("price")
             trade["status"] = "closed" if float(trade.get("remaining_units", 0.0) or 0.0) <= 1e-9 else "open"
     return list(trades.values())
+
+
+def _fill_has_explicit_units(fill: dict[str, Any]) -> bool:
+    return any(fill.get(key) not in (None, "") for key in ("pnl_units", "units", "quantity", "contracts"))
 
 
 def _iso_week(date: str) -> str:

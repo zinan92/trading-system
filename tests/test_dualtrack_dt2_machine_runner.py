@@ -9,7 +9,7 @@ import pytest
 
 from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
-from services.dualtrack_grid_core import simulate_conditional_grid
+from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_scoring import _trades_from_fills
 from services.dualtrack_store import DualTrackPlanStore
@@ -83,7 +83,6 @@ def test_acceptance_7_5_runner_matches_frozen_golden_on_three_cycles(tmp_path: P
     fixture = json.loads((Path(__file__).parent / "fixtures" / "dualtrack_machine_golden.json").read_text(encoding="utf-8"))
 
     saw_stop = False
-    saw_rearm = False
     for cycle, plan in cycles:
         state = runner.run_plan(
             cycle.cycle_id,
@@ -110,9 +109,8 @@ def test_acceptance_7_5_runner_matches_frozen_golden_on_three_cycles(tmp_path: P
         assert state["stop_hit"] is expected["stop_hit"]
         assert state["rearms"] == expected["rearms"]
         saw_stop = saw_stop or state["stop_hit"]
-        saw_rearm = saw_rearm or state["rearms"] == 1
     assert saw_stop is True
-    assert saw_rearm is True
+    assert all(expected["rearms"] == 0 for expected in fixture.values())
 
 
 def test_machine_target_closes_the_same_units_opened_by_grid_entry(tmp_path: Path) -> None:
@@ -161,11 +159,33 @@ def test_dt8_grid_does_not_open_a_new_rung_at_the_plan_stop(tmp_path: Path) -> N
     assert all(float(fill["realized_pnl"]) <= 0 for fill in stops)
 
 
+def test_hard_invalidation_wins_over_same_bar_grid_entry() -> None:
+    cycle = _cycle("same_bar_hard_stop_DAY", [4000.0, 3940.0], prev_range=100.0)
+
+    result = simulate_conditional_grid(
+        cycle_id=cycle.cycle_id,
+        bars=cycle.bars,
+        direction=1,
+        prev_range=cycle.prev_range,
+        spacing_bp=20.0,
+        range_k=1.0,
+        rung_notional=1000.0,
+        max_rungs=10,
+        cost_per_side_bp=0.5,
+        re_arm_max=1,
+        stop=GridStop(side="below", price=3950.0),
+    )
+
+    assert result.stop_hit is True
+    assert result.rearms == 0
+    assert result.fills == []
+
+
 def test_dt8_machine_fixed_per_rung_sizing_tight_floor_deploys_less(tmp_path: Path) -> None:
     runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
     base = base_rung_notional(TEST_CONFIG)
-    tight = _cycle("2026-07-05_DAY", [4000.0, 3970.0], prev_range=100.0)
-    wide = _cycle("2026-07-05_NIGHT", [4000.0, 3910.0], prev_range=100.0)
+    tight = _cycle("2026-07-05_DAY", [4000.0, 3981.0], prev_range=100.0)
+    wide = _cycle("2026-07-05_NIGHT", [4000.0, 3921.0], prev_range=100.0)
 
     runner.run_plan(
         tight.cycle_id,
@@ -242,6 +262,27 @@ def test_lab_stop_none_path_still_uses_range_k_prev_range_geometry() -> None:
         3928.0,
         3920.0,
     ]
+
+
+def test_synthetic_range_stop_can_rearm_after_a_stop() -> None:
+    cycle = _cycle("range_stop_rearm_DAY", [4000.0, 3920.0, 4000.0], prev_range=80.0)
+
+    result = simulate_conditional_grid(
+        cycle_id=cycle.cycle_id,
+        bars=cycle.bars,
+        direction=1,
+        prev_range=cycle.prev_range,
+        spacing_bp=20.0,
+        range_k=1.0,
+        rung_notional=1000.0,
+        max_rungs=10,
+        cost_per_side_bp=0.5,
+        re_arm_max=1,
+        stop=None,
+    )
+
+    assert result.stop_hit is True
+    assert result.rearms == 1
 
 
 def test_machine_runner_tiger_mgc_mode_uses_integer_contracts_and_fixed_side_cost(tmp_path: Path) -> None:

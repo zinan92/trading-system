@@ -9,6 +9,7 @@ from services.dualtrack_execution_adapter import (
     LegacyPaperExecutionAdapter,
     build_execution_engine_adapter,
 )
+from services.journal_store import load_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
@@ -30,7 +31,7 @@ def _entry() -> dict:
 def test_legacy_adapter_exposes_canonical_execution_snapshot(tmp_path: Path) -> None:
     adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
 
-    fill = adapter.submit_order(_entry())
+    order = adapter.submit_order(_entry())
     snapshot = adapter.snapshot(
         "2026-07-05_DAY",
         mark_price=105.0,
@@ -39,18 +40,39 @@ def test_legacy_adapter_exposes_canonical_execution_snapshot(tmp_path: Path) -> 
     )
 
     assert isinstance(adapter, ExecutionEngineAdapter)
-    assert fill["event"] == "entry"
+    assert order["state"] == "accepted"
     assert snapshot["schema_version"] == "dualtrack-execution-v1"
     assert snapshot["engine"] == "legacy_paper"
     assert snapshot["cycle_id"] == "2026-07-05_DAY"
-    assert snapshot["orders"] == []
-    assert len(snapshot["fills"]) == 1
-    assert len(snapshot["positions"]) == 1
-    assert snapshot["positions"][0]["status"] == "open"
-    assert snapshot["positions"][0]["unrealized_pnl"] == 50.0
-    assert snapshot["pnl"]["realized"] == pytest.approx(-0.05)
-    assert snapshot["pnl"]["unrealized"] == 50.0
+    assert snapshot["orders"] == [{
+        "order_id": order["order_id"],
+        "state": "accepted",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 10.0,
+    }]
+    assert snapshot["fills"] == []
+    assert snapshot["positions"] == []
+    assert snapshot["pnl"] == {"realized": 0, "unrealized": 0}
     assert snapshot["capabilities"]["native_order_lifecycle"] is False
+    assert snapshot["capabilities"]["order_lifecycle"] == "derived_from_fill_ledger"
+    command_rows = load_json(tmp_path / "outputs" / "dualtrack" / "shadow_commands" / "2026-07-05_DAY.json")
+    assert command_rows[0]["command_id"] == order["order_id"]
+    assert command_rows[0]["command"]["order_type"] == "limit"
+
+
+def test_legacy_adapter_command_journal_is_idempotent_for_retried_fill(tmp_path: Path) -> None:
+    adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
+    command = {**_entry(), "source_fill_id": "shadow-command-retry"}
+
+    first = adapter.submit_order(command)
+    second = adapter.submit_order(command)
+
+    assert first["order_id"] == second["order_id"]
+    rows = load_json(tmp_path / "outputs" / "dualtrack" / "shadow_commands" / "2026-07-05_DAY.json")
+    assert len(rows) == 1
 
 
 def test_legacy_adapter_market_event_executes_protection_and_reconciles(tmp_path: Path) -> None:
@@ -60,6 +82,15 @@ def test_legacy_adapter_market_event_executes_protection_and_reconciles(tmp_path
     event = adapter.process_market_event({
         "cycle_id": "2026-07-05_DAY",
         "ts_event": "2026-07-05T01:03:00+00:00",
+        "price": 99.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "canonical_test_feed",
+    })
+    assert event["accepted_limit_fill_count"] == 1
+    event = adapter.process_market_event({
+        "cycle_id": "2026-07-05_DAY",
+        "ts_event": "2026-07-05T01:04:00+00:00",
         "price": 94.0,
         "fresh": True,
         "is_synthetic": False,
@@ -74,6 +105,17 @@ def test_legacy_adapter_market_event_executes_protection_and_reconciles(tmp_path
     assert snapshot["positions"][0]["remaining_units"] == 0.0
     assert reconciliation["status"] == "ok"
     assert reconciliation["issues"] == []
+
+
+def test_legacy_adapter_snapshot_exposes_margin_exposure_and_explicit_zero_slippage(tmp_path: Path) -> None:
+    adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
+    adapter.submit_order({**_entry(), "order_type": "market", "notional": 100.0})
+
+    snapshot = adapter.snapshot("2026-07-05_DAY", mark_price=100.0, mark_fresh=True)
+
+    assert snapshot["account"]["exposure"] == pytest.approx(100.0)
+    assert snapshot["account"]["margin"] == pytest.approx(100.0)
+    assert snapshot["account"]["slippage"] == 0.0
 
 
 def test_legacy_adapter_rejects_untrusted_market_event(tmp_path: Path) -> None:

@@ -442,6 +442,30 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
         event = str(fill.get("event") or "entry")
         if event == "entry":
             trade_id = str(fill.get("trade_id") or fill.get("fill_id") or "")
+            existing = trades.get(trade_id)
+            if existing:
+                if existing.get("side") != ("long" if fill.get("side") == "buy" else "short"):
+                    raise ValueError("cannot scale a trade with the opposite entry side")
+                prior_units = float(existing.get("units", 0.0) or 0.0)
+                added_units = float(fill.get("pnl_units", 0.0) or 0.0)
+                total_units = prior_units + added_units
+                if total_units <= _EPSILON:
+                    raise ValueError("scaled entry units must be positive")
+                existing["entry_price"] = round(
+                    ((float(existing.get("entry_price", 0.0) or 0.0) * prior_units) + (float(fill.get("price", 0.0) or 0.0) * added_units)) / total_units,
+                    10,
+                )
+                existing["units"] = round(total_units, 10)
+                existing["remaining_units"] = round(float(existing.get("remaining_units", 0.0) or 0.0) + added_units, 10)
+                existing["entry_cost"] = round(float(existing.get("entry_cost", 0.0) or 0.0) + float(fill.get("cost", 0.0) or 0.0), 8)
+                existing["realized_pnl"] = round(float(existing.get("realized_pnl", 0.0) or 0.0) + float(fill.get("realized_pnl", 0.0) or 0.0), 8)
+                existing.setdefault("entry_fills", []).append({
+                    "fill_id": fill.get("fill_id", ""),
+                    "ts": fill.get("ts", ""),
+                    "price": fill.get("price"),
+                    "units": added_units,
+                })
+                continue
             trades[trade_id] = {
                 "trade_id": trade_id,
                 "position_id": str(fill.get("position_id") or "manual"),
@@ -449,6 +473,12 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "track": "human",
                 "side": "long" if fill.get("side") == "buy" else "short",
                 "entry_fill_id": fill.get("fill_id", ""),
+                "entry_fills": [{
+                    "fill_id": fill.get("fill_id", ""),
+                    "ts": fill.get("ts", ""),
+                    "price": fill.get("price"),
+                    "units": fill.get("pnl_units", 0.0),
+                }],
                 "entry_ts": fill.get("ts", ""),
                 "entry_price": fill.get("price"),
                 "sl": fill.get("sl"),

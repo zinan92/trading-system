@@ -131,7 +131,15 @@ class DualTrackCycleRunner:
             trend_gate_armed=trend_gate_armed,
         )
         self._write_runner_state(window.cycle_id, "intraday", {"bar_count": len(bars), "prev_range": prev_range})
-        return {"event": "intraday", "cycle_id": window.cycle_id, "status": "ran", "bar_count": len(bars), "state": state}
+        trade_notifications = self._notify_machine_trade_records(window.cycle_id)
+        return {
+            "event": "intraday",
+            "cycle_id": window.cycle_id,
+            "status": "ran",
+            "bar_count": len(bars),
+            "state": state,
+            "trade_notifications": trade_notifications,
+        }
 
     def close_cycle(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         existing = load_json(self.output_root / "dualtrack" / "attribution" / f"{cycle_id}.json")
@@ -177,6 +185,7 @@ class DualTrackCycleRunner:
         payload = {"event": "close", "cycle_id": cycle_id, "status": "closed", "attribution": attribution}
         if human_fill_sync is not None:
             payload["human_fill_sync"] = human_fill_sync
+        payload["trade_notifications"] = self._notify_machine_trade_records(cycle_id)
         return payload
 
     def fast_forward_day(self, date: str) -> dict[str, Any]:
@@ -562,6 +571,15 @@ class DualTrackCycleRunner:
 
     def _write_human_fill_sync_runner_report(self, cycle_id: str, report: dict[str, Any]) -> None:
         self._write_runner_state(cycle_id, "human_fill_sync", self._human_fill_sync_summary(report))
+
+    def _notify_machine_trade_records(self, cycle_id: str) -> dict[str, Any]:
+        try:
+            from services.dualtrack_feishu import DualTrackTradeRecordNotifier
+
+            return DualTrackTradeRecordNotifier(self.output_root, config=self.config).notify_cycle(cycle_id)
+        except Exception as exc:  # noqa: BLE001 - notification failure must not stop the paper runner.
+            self.store.audit(cycle_id, "machine_trade_notification_failed", {"reason": f"{exc.__class__.__name__}: {exc}"})
+            return {"status": "failed", "reason": f"{exc.__class__.__name__}: {exc}", "sent": 0, "failed": 1}
 
     def _human_fill_sync_summary(self, report: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(report, dict):

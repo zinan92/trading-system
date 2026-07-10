@@ -38,6 +38,23 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "trend_leg_budget_pct": 20.0,
     },
     "cost_per_side_bp": 0.5,
+    "execution_shadow": {
+        "nautilus": {
+            "instrument_endpoint": "http://127.0.0.1:8100/api/instruments/commodity/XAUUSDT",
+            "instrument_source": "binance_usdm_futures",
+            # Chart/storage symbol and venue execution symbol are intentionally
+            # distinct. The shadow runner must record this mapping explicitly.
+            "source_symbol": "GOLD",
+            "execution_instrument_id": "XAUUSDT",
+            "fee_model": {
+                "mode": "paper_assumption",
+                "maker_fee_rate": "0.00005",
+                "taker_fee_rate": "0.00005",
+                "source": "dualtrack.cost_per_side_bp",
+                "real_money_eligible": False,
+            },
+        },
+    },
     "scoreboard": {"gate_threshold": 0.60, "window_cycles": 30},
     "census": {"reversal_bp": 10.0, "min_run_pct": 0.3},
     "weekly_target_usd": [1000, 1500],

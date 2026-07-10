@@ -193,6 +193,8 @@ def _kind_label(kind: str) -> str:
         "strategy_research": "策略研究",
         "health_check": "系统检查",
         "trade_ticket_open": "开单审查卡",
+        "dualtrack_machine_brief": "机器轨作战单",
+        "dualtrack_trade_record": "黄金交易记录",
         "market_analysis_prompt": "市场分析提醒",
     }.get(kind, kind)
 

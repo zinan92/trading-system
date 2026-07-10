@@ -476,6 +476,39 @@ def test_dashboard_server_runtime_status_exposes_machine_fills_during_cycle(tmp_
     assert response["market"]["provider"] == "binance_usdm"
 
 
+def test_dashboard_server_runtime_status_warns_when_simulation_filtered_invalid_machine_fills(tmp_path, monkeypatch):
+    from pipelines import dashboard_server
+
+    class FakeMarketFeed:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def snapshot(self, **kwargs):
+            return {
+                "status": "ready", "source_mode": "requested_symbol", "symbol": "GOLD", "timeframe": "1m",
+                "provider": "binance_usdm", "fresh": True, "latest_timestamp": "2026-07-05T02:04:00+00:00", "age_minutes": 1.0,
+            }
+
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeMarketFeed)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    DualTrackPlanStore(output).save_ai_plan({
+        "cycle_id": cycle_id, "author": "ai", "direction": "long", "range": {"low": 3960.0, "high": None},
+        "key_levels": [3992.0], "invalidation": [{"side": "below", "price": 3960.0, "confirm": "touch"}],
+        "confidence": 7, "source": "obsidian", "status": "fallback_active",
+    }, now="2026-07-05T01:00:00+00:00")
+    write_json(output / "dualtrack" / "runner" / f"{cycle_id}.json", [{"ts": "2026-07-05T02:04:00+00:00", "event": "intraday"}])
+    write_json(output / "dualtrack" / "cycles" / f"{cycle_id}.json", [{"machine_stood_down": False, "layers": ["grid:traded", "invalid_fills:4"]}])
+
+    response = dashboard_server.build_dualtrack_runtime_status_response(output_root=output, as_of="2026-07-05T02:05:00+00:00")
+
+    quality = next(check for check in response["checks"] if check["name"] == "machine_fill_quality")
+    assert response["status"] == "warn"
+    assert response["sample"]["valid_now"] is False
+    assert response["sample"]["invalid_machine_fill_count"] == 4
+    assert quality["status"] == "warn"
+
+
 def test_dashboard_server_runtime_status_exposes_previous_closed_cycle_summary(tmp_path, monkeypatch):
     from pipelines import dashboard_server
 
