@@ -1,6 +1,7 @@
 # DualTrack Execution Engine Adapter Spec
 
-Status: compatibility adapter and 1m OHLC replay implemented; Nautilus spike not enabled
+Status: compatibility adapter and 1m OHLC replay implemented; isolated Nautilus
+fixture passed; Nautilus adapter not enabled
 Date: 2026-07-10
 
 ## Objective
@@ -113,6 +114,13 @@ reconciliation fixes needed for migration.
 
 The spike stays isolated until it passes the same adapter contract. Do not make
 Nautilus a production dependency before parity is proven.
+
+The isolated 1.230.0 bracket fixture is recorded in
+`docs/dualtrack-nautilus-spike-result.md`. It proves market entry, stop fill,
+fees, position closure, and realized PnL. It intentionally uses a packaged test
+instrument because datafeed does not yet expose a canonical instrument
+definition. This result is evidence for the engine model, not an enabled GOLD
+adapter.
 
 ### Input
 

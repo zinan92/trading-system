@@ -2926,3 +2926,37 @@ Date: 2026-07-08
   `48 passed`.
 - Generated schedule status on 2026-07-10 reports four of five jobs current and
   only `com.wendy.trading-orchestrator.dualtrack-live-tick` mismatched.
+
+## 2026-07-10 - NautilusTrader isolated execution spike
+
+### Decisions
+
+- Installed NautilusTrader 1.230.0 only in `/tmp/dualtrack-nautilus-spike`; it is
+  not a production dependency of trading-orchestrator.
+- Ran a durable bracket fixture: market BUY 1 at 100, SL 95, TP 105, followed by
+  a 1m bar with `O=100 H=101 L=94 C=100`. Nautilus filled the stop at 95,
+  flattened the position, and reported `-5.03510000 USDT` realized PnL including
+  fees.
+- Did not implement or enable `NautilusExecutionAdapter`. datafeed currently
+  lacks the instrument-definition fields needed to build an exchange-valid
+  Nautilus instrument without hard-coded precision, multiplier, margin, and fee
+  assumptions.
+
+### Gotchas
+
+- Passing one engine fixture proves matching/accounting semantics, not parity
+  across scale-in, partial reduction, restart, duplicate replay, or the existing
+  machine-fill fixture.
+- Nautilus supports adaptive bar high/low ordering, while the compatibility
+  ledger deliberately uses stop-first when both levels are touched. The parity
+  suite must configure and document one rule rather than accepting unexplained
+  differences.
+- A BTCUSDT packaged test instrument was used only to exercise engine behavior.
+  It must never appear in DualTrack GOLD snapshots or frontend widgets.
+
+### Evidence
+
+- `spikes/dualtrack_nautilus_fixture.py` asserts the two fills, prices, flat
+  position, and fee-inclusive realized PnL.
+- `docs/dualtrack-nautilus-spike-result.md` records the missing datafeed contract
+  and cutover gates.
