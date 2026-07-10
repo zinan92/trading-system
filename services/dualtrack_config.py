@@ -29,6 +29,12 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "require_success_before_close": True,
     },
     "plan_lock_deadline_min_before_cycle": 0,
+    "machine_planner": {
+        "command": "codex",
+        "model": "gpt-5.4",
+        "timeout_seconds": 240,
+        "newsletter_root": "/Users/wendy/park-io/007_finance daily newsletter",
+    },
     "grid": {
         "spacing_bp": 20.0,
         "range_k": 1.0,

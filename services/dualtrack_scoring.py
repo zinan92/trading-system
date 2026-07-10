@@ -49,6 +49,14 @@ class DualTrackScorer:
         machine_captured = captured_count(opportunities, machine_fills)
         human_captured = captured_count(opportunities, human_fills)
         plan_grades = self._grade_plans(cycle_id, realized_direction)
+        machine_review = self._machine_review(
+            cycle_id,
+            rows,
+            machine_fills,
+            machine_trades,
+            realized_direction=realized_direction,
+        )
+        write_json(self.root / "reviews" / f"{cycle_id}_machine.json", [machine_review])
         existing_cycle = _existing_cycle(cycle_id, self.root)
         scoreboard = self._update_scoreboard(cycle_id, plan_grades)
         cycle = {
@@ -85,6 +93,7 @@ class DualTrackScorer:
             scoreboard,
             daily,
             weekly,
+            machine_review,
         )
         write_json(self.root / "attribution" / f"{cycle_id}.json", [attribution])
         return attribution
@@ -206,6 +215,7 @@ class DualTrackScorer:
         scoreboard: dict[str, Any],
         daily: dict[str, Any],
         weekly: dict[str, Any],
+        machine_review: dict[str, Any],
     ) -> dict[str, Any]:
         return {
             "cycle_id": cycle["cycle_id"],
@@ -225,8 +235,89 @@ class DualTrackScorer:
             },
             "opportunities": opportunities,
             "plan_grades": cycle["plan_grades"],
+            "machine_review": machine_review,
             "scoreboard": scoreboard,
             "ledger": {"daily": daily, "weekly": weekly},
+        }
+
+    def _machine_review(
+        self,
+        cycle_id: str,
+        bars: tuple[Bar, ...],
+        fills: list[dict[str, Any]],
+        trades: list[dict[str, Any]],
+        *,
+        realized_direction: str,
+    ) -> dict[str, Any]:
+        plan = self.store.machine_plan(cycle_id) or {}
+        decision = str(plan.get("direction") or "absent")
+        actual_low = min(float(bar.low) for bar in bars)
+        actual_high = max(float(bar.high) for bar in bars)
+        predicted = plan.get("range") if isinstance(plan.get("range"), dict) else {}
+        predicted_low = _optional_number(predicted.get("low"))
+        predicted_high = _optional_number(predicted.get("high"))
+        low_breach = predicted_low is not None and actual_low < predicted_low
+        high_breach = predicted_high is not None and actual_high > predicted_high
+        if low_breach and high_breach:
+            range_result = "both_sides_breached"
+        elif low_breach:
+            range_result = "low_breached"
+        elif high_breach:
+            range_result = "high_breached"
+        elif predicted_low is not None and predicted_high is not None:
+            range_result = "inside_range"
+        else:
+            range_result = "range_missing"
+        grid_rows = []
+        for index, order in enumerate(plan.get("grid_orders") or []):
+            entry = float(order["entry"])
+            touched = any(float(bar.low) <= entry <= float(bar.high) for bar in bars)
+            grid_rows.append({
+                "rung": index,
+                "entry": entry,
+                "take_profit": float(order["take_profit"]),
+                "touched": touched,
+                "filled": any(fill.get("event") == "entry" and int(fill.get("rung", -1)) == index for fill in fills),
+            })
+        if decision in {"neutral", "flat"}:
+            no_trade_reason = "neutral_decision"
+        elif not fills and grid_rows and not any(row["touched"] for row in grid_rows):
+            no_trade_reason = "planned_levels_not_touched"
+        elif not fills:
+            no_trade_reason = "no_valid_fill"
+        else:
+            no_trade_reason = ""
+        direction_graded = decision in {"long", "short", "neutral", "flat"}
+        direction_hit = (
+            decision == realized_direction
+            if decision in {"long", "short"}
+            else realized_direction == "flat"
+        )
+        if no_trade_reason == "neutral_decision":
+            summary = f"本周期选择中立，未下单；实际区间 {actual_low:.1f}-{actual_high:.1f}，复盘已完成。"
+        elif no_trade_reason:
+            summary = f"本周期方向为 {decision}，但没有有效成交（{no_trade_reason}）；复盘已完成。"
+        else:
+            summary = f"本周期方向为 {decision}，共 {len(fills)} 笔成交，已实现 {_pnl(fills):+.2f} 美元。"
+        return {
+            "schema_version": "dualtrack-machine-review-v1",
+            "cycle_id": cycle_id,
+            "completed": True,
+            "decision": decision,
+            "decision_mode": plan.get("decision_mode", ""),
+            "realized_direction": realized_direction,
+            "direction_graded": direction_graded,
+            "direction_hit": direction_hit,
+            "predicted_range": {"low": predicted_low, "high": predicted_high},
+            "actual_range": {"low": actual_low, "high": actual_high},
+            "range_result": range_result,
+            "grid_orders": grid_rows,
+            "fill_count": len(fills),
+            "trade_count": len(trades),
+            "realized_pnl": _pnl(fills),
+            "no_trade_reason": no_trade_reason,
+            "planning_error": plan.get("planning_error", ""),
+            "summary": summary,
         }
 
     def _fills_path(self, cycle_id: str, track: str) -> Path:
@@ -366,6 +457,16 @@ def _direction(open_price: float, close_price: float) -> str:
 
 def _pnl(fills: list[dict[str, Any]]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
+
+
+def _optional_number(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def filter_invalid_machine_fills(fills: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:

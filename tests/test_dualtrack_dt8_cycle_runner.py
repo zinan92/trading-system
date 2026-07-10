@@ -192,6 +192,8 @@ def test_d8_1_prefix_replay_matches_batch_runner_on_same_prefix(tmp_path: Path) 
     expected_output = tmp_path / "expected_outputs"
     DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
     DualTrackPlanStore(expected_output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_ai_plan(_plan(cycle_id) | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
+    DualTrackPlanStore(expected_output, config=TEST_CONFIG).save_ai_plan(_plan(cycle_id) | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
 
     runner.intraday_tick(cycle_id, as_of="2026-07-05T01:04:00+00:00")
@@ -209,7 +211,7 @@ def test_d8_1_prefix_replay_matches_batch_runner_on_same_prefix(tmp_path: Path) 
     assert actual == expected
 
 
-def test_d8_2_missing_market_view_fails_closed_and_machine_stands_down(tmp_path: Path) -> None:
+def test_d8_2_missing_machine_research_records_error_neutral_and_stands_down(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
     output = tmp_path / "outputs"
@@ -218,11 +220,11 @@ def test_d8_2_missing_market_view_fails_closed_and_machine_stands_down(tmp_path:
     pre = runner.pre_cycle("2026-07-05_DAY", as_of="2026-07-05T01:00:00+00:00")
     tick = runner.intraday_tick("2026-07-05_DAY", as_of="2026-07-05T01:04:00+00:00")
 
-    assert pre["status"] == "fail_closed_no_ai_plan"
+    assert pre["status"] == "ai_plan_error_neutral"
     assert tick["state"]["machine_stood_down"] is True
     assert load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_machine.json") == []
     audit_events = [row["event"] for row in load_json(output / "dualtrack" / "audit" / "2026-07-05_DAY.json")]
-    assert "ai_plan_absent" in audit_events
+    assert "machine_plan_decision_error" in audit_events
 
 
 def test_obsidian_plan_sync_imports_current_draft_and_next_locked(tmp_path: Path) -> None:
@@ -593,6 +595,7 @@ def test_d8_3_intraday_tick_is_idempotent_for_same_bar_set(tmp_path: Path) -> No
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"
     DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_ai_plan(_plan(cycle_id) | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
 
     runner.intraday_tick(cycle_id, as_of="2026-07-05T01:04:00+00:00")
@@ -611,6 +614,7 @@ def test_d8_3_auto_event_replaces_machine_fills_for_same_bar_set(tmp_path: Path,
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"
     DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_ai_plan(_plan(cycle_id) | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
     monkeypatch.setattr(cycle_runner_module, "dualtrack_config", lambda: TEST_CONFIG)
     argv = [
         "--event", "auto",
@@ -636,6 +640,7 @@ def test_d8_3_run_close_run_keeps_frozen_trend_gate_and_fills(tmp_path: Path) ->
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"
     DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_ai_plan(_plan(cycle_id) | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
 
     pre = runner.pre_cycle(cycle_id, as_of="2026-07-05T01:00:00+00:00")
@@ -669,6 +674,7 @@ def test_d8_3_frozen_armed_gate_runs_trend_leg_on_first_pass(tmp_path: Path) -> 
         "trend_leg_gate": {"threshold": 0.60, "armed": True, "basis": {"hit_rate": 1.0}},
     }])
     DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_ai_plan(_plan(cycle_id) | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
 
     pre = runner.pre_cycle(cycle_id, as_of="2026-07-05T01:00:00+00:00")
@@ -748,6 +754,10 @@ def test_mgc_dualtrack_close_scores_machine_and_human_with_same_tiger_contract_c
         _plan(cycle_id),
         now="2026-07-06T00:59:00+00:00",
     )
+    DualTrackPlanStore(output, config=config).save_ai_plan(
+        _plan(cycle_id) | {"author": "ai"},
+        now="2026-07-06T00:58:00+00:00",
+    )
     _write_tiger_order_sync(output, [_tiger_fill(average_fill_price=4182.0, filled_at="2026-07-06T01:02:03+00:00")])
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
 
@@ -794,6 +804,10 @@ def test_cycle_runner_uses_configured_market_data_symbol_by_default(tmp_path: Pa
     _write_market_view(output)
     config = deepcopy(TEST_CONFIG)
     config["market_data"] = {"symbol": "MGCmain", "timeframe": "1m", "provider": "tiger_openapi:COMEX"}
+    DualTrackPlanStore(output, config=config).save_ai_plan(
+        _plan("2026-07-05_DAY") | {"author": "ai"},
+        now="2026-07-05T00:58:00+00:00",
+    )
 
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
     result = runner.pre_cycle("2026-07-05_DAY", as_of="2026-07-05T01:00:00+00:00")
@@ -897,7 +911,7 @@ def test_d8_6_open_ended_directional_schema_and_flat_stand_down(tmp_path: Path) 
     )["state"]
 
     assert state["machine_stood_down"] is True
-    assert state["layers"] == ["grid:stand_down:flat_plan", "trend:stand_down:flat_plan"]
+    assert state["layers"] == ["grid:stand_down:no_effective_plan", "trend:stand_down:no_effective_plan"]
 
 
 def test_dt8_acceptance_fast_forward_day_produces_two_unattended_cycles(tmp_path: Path) -> None:
@@ -907,6 +921,9 @@ def test_dt8_acceptance_fast_forward_day_produces_two_unattended_cycles(tmp_path
     output = tmp_path / "outputs"
     tight_floor = 3980.0
     _write_market_view(output, expire_below=tight_floor)
+    plan_store = DualTrackPlanStore(output, config=TEST_CONFIG)
+    plan_store.save_ai_plan(_plan("2026-07-05_DAY") | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
+    plan_store.save_ai_plan(_plan("2026-07-05_NIGHT") | {"author": "ai"}, now="2026-07-05T12:58:00+00:00")
 
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
     result = runner.fast_forward_day("2026-07-05")

@@ -708,13 +708,12 @@ def build_dualtrack_cycle_current_response(*, output_root: Path | None = None, a
     deadline = int(cfg.get("plan_lock_deadline_min_before_cycle", 0))
     window = cycle_window(as_of, lock_deadline_min_before_cycle=deadline)
     store = DualTrackPlanStore(output_root, config=cfg)
-    reveal_allowed = store.reveal_allowed(window.cycle_id, as_of=as_of)
-    effective = store.effective_plan(window.cycle_id, as_of=as_of) if reveal_allowed else None
+    effective = store.machine_plan(window.cycle_id)
     effective_status = {
         "has_effective_plan": effective is not None,
         "machine_stands_down": effective is None,
     }
-    if reveal_allowed and effective is not None:
+    if effective is not None:
         effective_status["author"] = effective.get("effective_author", "")
     return {
         **window.to_dict(),
@@ -1109,8 +1108,7 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     previous_ledger_rows = _json_rows(output / "dualtrack" / "ledger" / "daily" / f"{previous_window.cycle_id.split('_', 1)[0]}.json")
     previous_human_fills = _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_human.json")
     previous_machine_fills = _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_machine.json")
-    effective = store.effective_plan(window.cycle_id, as_of=now)
-    reveal_allowed = store.reveal_allowed(window.cycle_id, as_of=now)
+    effective = store.machine_plan(window.cycle_id)
     closed = now >= window.end
     market_ok = (
         market.get("status") == "ready"
@@ -1136,9 +1134,10 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
             "max_age_seconds": runner_max_age,
             "event": latest_runner.get("event"),
         }),
-        _runtime_check("effective_plan", bool(effective), "有效作战单存在", "无有效作战单，机器轨应站下", {
-            "author": (effective or {}).get("effective_author") if reveal_allowed else "",
-            "reveal_allowed": reveal_allowed,
+        _runtime_check("effective_plan", bool(effective), "机器 AI 作战单存在", "机器 AI 作战单缺失，机器轨应站下", {
+            "author": (effective or {}).get("effective_author", ""),
+            "decision_mode": (effective or {}).get("decision_mode", ""),
+            "degraded": bool((effective or {}).get("degraded")),
         }),
         _runtime_check("machine", not stood_down, "机器轨未站下", "机器轨站下", {
             "layers": machine_layers,
@@ -1159,7 +1158,7 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     status = "blocked" if any(item["status"] == "blocked" for item in checks) else "warn" if any(item["status"] == "warn" for item in checks) else "ok"
     next_tick_due_at = None
     if runner_ts:
-        next_tick_due_at = (parse_utc(runner_ts) + timedelta(seconds=300)).isoformat()
+        next_tick_due_at = (parse_utc(runner_ts) + timedelta(seconds=60)).isoformat()
     return {
         "schema_version": "dualtrack-runtime-status-v1",
         "status": status,
@@ -1188,7 +1187,7 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
         "sample": {
             "valid_now": sample_ok,
             "has_effective_plan": effective is not None,
-            "effective_author": (effective or {}).get("effective_author") if reveal_allowed else "",
+            "effective_author": (effective or {}).get("effective_author", ""),
             "machine_stood_down": stood_down,
             "machine_pnl": round(float(machine.get("realized_pnl", 0.0)) + float(machine.get("unrealized_pnl", 0.0)), 8),
             "human_fill_count": len(human_fills),

@@ -386,7 +386,7 @@ def test_invariant_4_intraday_machine_payload_is_pnl_only(tmp_path: Path) -> Non
     assert forbidden.isdisjoint(payload)
 
 
-def test_machine_runner_uses_effective_human_plan_when_locked_before_deadline(tmp_path: Path) -> None:
+def test_machine_runner_never_uses_human_plan_when_ai_plan_is_missing(tmp_path: Path) -> None:
     store = DualTrackPlanStore(tmp_path / "outputs", config=TEST_CONFIG)
     cycle = _cycle("2026-07-05_DAY", [4000.0] + [3990.0, 4001.0] * 2)
     store.save_human_plan(_plan(cycle.cycle_id), now="2026-07-05T00:59:00+00:00")
@@ -394,5 +394,6 @@ def test_machine_runner_uses_effective_human_plan_when_locked_before_deadline(tm
 
     state = runner.run_effective_plan(cycle.cycle_id, cycle.bars, prev_range=cycle.prev_range, as_of="2026-07-05T01:00:00+00:00")
 
-    assert state["machine_stood_down"] is False
-    assert state["effective_plan_author"] == "human"
+    assert state["machine_stood_down"] is True
+    assert state["effective_plan_author"] == ""
+    assert state["layers"] == ["grid:stand_down:no_effective_plan", "trend:stand_down:no_effective_plan"]

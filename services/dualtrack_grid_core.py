@@ -263,6 +263,306 @@ def simulate_conditional_grid(
     )
 
 
+def simulate_explicit_grid(
+    *,
+    cycle_id: str,
+    bars: Iterable[Bar],
+    direction: int,
+    orders: list[dict[str, Any]],
+    stop: GridStop,
+    rung_notional: float,
+    cost_per_side_bp: float,
+    finalize: bool,
+    layer: str = "ai_grid",
+    execution_cost_model: dict[str, Any] | None = None,
+    cost_rules: dict[str, Any] | None = None,
+) -> GridResult:
+    """Replay exact AI-authored grid orders without deriving hidden levels."""
+    rows = tuple(bars)
+    sign = 1 if direction > 0 else -1 if direction < 0 else 0
+    if not rows or sign == 0 or not orders:
+        return _idle()
+    active_stop = _normalize_plan_stop(stop, sign)
+    if active_stop is None:
+        raise ValueError("explicit grid requires a directionally valid stop")
+    cost_config: dict[str, Any] = {"cost_per_side_bp": cost_per_side_bp}
+    if execution_cost_model:
+        cost_config["execution_cost_model"] = execution_cost_model
+
+    holdings: dict[int, dict[str, Any]] = {}
+    entered: set[int] = set()
+    fills: list[dict[str, Any]] = []
+    gross_pnl = 0.0
+    total_cost = 0.0
+    side_notional = 0.0
+    sides = 0
+    round_trips = 0
+    stop_hit = False
+    max_inventory = 0
+
+    for bar_index, bar in enumerate(rows):
+        if _breached(bar, active_stop):
+            stop_hit = True
+            exit_price = _stop_exit_price(bar, active_stop)
+            for rung, holding in list(holdings.items()):
+                exit_fill, pnl, exit_cost = _close_explicit_holding(
+                    cycle_id,
+                    fills,
+                    bar,
+                    sign=sign,
+                    rung=rung,
+                    order=orders[rung],
+                    holding=holding,
+                    price=exit_price,
+                    event="stop",
+                    stop=active_stop,
+                    layer=layer,
+                    cost_config=cost_config,
+                    cost_rules=cost_rules,
+                )
+                fills.append(exit_fill)
+                _mark_entry_closed(fills, holding, exit_fill)
+                gross_pnl += pnl
+                total_cost += exit_cost.cost
+                side_notional += exit_cost.notional
+                sides += 1
+            holdings.clear()
+            break
+
+        low, high = float(bar.low), float(bar.high)
+        for rung, order in enumerate(orders):
+            if rung in entered:
+                continue
+            entry = float(order["entry"])
+            touched = low <= entry if sign > 0 else high >= entry
+            if not touched:
+                continue
+            weight = float(order.get("weight", 1.0))
+            requested_notional = float(order.get("notional") or (float(rung_notional) * weight))
+            contracts = _weighted_contracts(execution_cost_model, weight)
+            entry_cost = dualtrack_order_cost(
+                config=cost_config,
+                price=entry,
+                notional=requested_notional,
+                contracts=contracts,
+                cost_rules=cost_rules,
+            )
+            entry_fill = _explicit_fill(
+                cycle_id,
+                fills,
+                bar,
+                side="buy" if sign > 0 else "sell",
+                price=entry,
+                order_cost=entry_cost,
+                layer=layer,
+                rung=rung,
+                event="entry",
+                realized_pnl=-entry_cost.cost,
+                sl=active_stop.price,
+                tp=float(order["take_profit"]),
+            )
+            holdings[rung] = {
+                "bar_index": bar_index,
+                "notional": entry_cost.notional,
+                "contracts": entry_cost.contracts,
+                "trade_id": entry_fill["trade_id"],
+                "fill_id": entry_fill["fill_id"],
+                "units": _units(entry, entry_cost.notional) if entry_cost.contracts is None else None,
+            }
+            entered.add(rung)
+            fills.append(entry_fill)
+            total_cost += entry_cost.cost
+            side_notional += entry_cost.notional
+            sides += 1
+            max_inventory = max(max_inventory, len(holdings))
+
+        for rung, holding in list(holdings.items()):
+            if int(holding["bar_index"]) >= bar_index:
+                continue
+            target = float(orders[rung]["take_profit"])
+            touched = high >= target if sign > 0 else low <= target
+            if not touched:
+                continue
+            exit_fill, pnl, exit_cost = _close_explicit_holding(
+                cycle_id,
+                fills,
+                bar,
+                sign=sign,
+                rung=rung,
+                order=orders[rung],
+                holding=holding,
+                price=target,
+                event="target",
+                stop=active_stop,
+                layer=layer,
+                cost_config=cost_config,
+                cost_rules=cost_rules,
+            )
+            fills.append(exit_fill)
+            _mark_entry_closed(fills, holding, exit_fill)
+            gross_pnl += pnl
+            total_cost += exit_cost.cost
+            side_notional += exit_cost.notional
+            sides += 1
+            round_trips += 1
+            del holdings[rung]
+
+    if finalize and holdings:
+        last = rows[-1]
+        for rung, holding in list(holdings.items()):
+            exit_fill, pnl, exit_cost = _close_explicit_holding(
+                cycle_id,
+                fills,
+                last,
+                sign=sign,
+                rung=rung,
+                order=orders[rung],
+                holding=holding,
+                price=float(last.close),
+                event="flatten",
+                stop=active_stop,
+                layer=layer,
+                cost_config=cost_config,
+                cost_rules=cost_rules,
+            )
+            fills.append(exit_fill)
+            _mark_entry_closed(fills, holding, exit_fill)
+            gross_pnl += pnl
+            total_cost += exit_cost.cost
+            side_notional += exit_cost.notional
+            sides += 1
+        holdings.clear()
+
+    return GridResult(
+        armed=True,
+        traded=bool(fills),
+        fills=fills,
+        gross_pnl=round(gross_pnl, 8),
+        net_pnl=round(gross_pnl - total_cost, 8),
+        side_notional=round(side_notional, 8),
+        sides=sides,
+        round_trips=round_trips,
+        stop_hit=stop_hit,
+        rearms=0,
+        max_inventory=max_inventory,
+    )
+
+
+def _close_explicit_holding(
+    cycle_id: str,
+    fills: list[dict[str, Any]],
+    bar: Bar,
+    *,
+    sign: int,
+    rung: int,
+    order: dict[str, Any],
+    holding: dict[str, Any],
+    price: float,
+    event: str,
+    stop: GridStop,
+    layer: str,
+    cost_config: dict[str, Any],
+    cost_rules: dict[str, Any] | None,
+) -> tuple[dict[str, Any], float, Any]:
+    entry = float(order["entry"])
+    exit_notional = _matched_exit_notional(holding, entry_price=entry, exit_price=price)
+    exit_cost = dualtrack_order_cost(
+        config=cost_config,
+        price=price,
+        notional=exit_notional,
+        contracts=holding.get("contracts"),
+        cost_rules=cost_rules,
+    )
+    units = _units(entry, float(holding["notional"]))
+    pnl = sign * (float(price) - entry) * units
+    fill = _explicit_fill(
+        cycle_id,
+        fills,
+        bar,
+        side="sell" if sign > 0 else "buy",
+        price=price,
+        order_cost=exit_cost,
+        layer=layer,
+        rung=rung,
+        event=event,
+        realized_pnl=pnl - exit_cost.cost,
+        sl=stop.price,
+        tp=float(order["take_profit"]) if event != "stop" else None,
+        gross_pnl=pnl,
+    )
+    fill["matched_entries"] = [{
+        "fill_id": holding["fill_id"],
+        "trade_id": holding["trade_id"],
+        "units": units,
+        "entry_price": entry,
+        "gross_pnl": round(pnl, 8),
+        "realized_pnl": round(pnl - exit_cost.cost, 8),
+    }]
+    return fill, pnl, exit_cost
+
+
+def _explicit_fill(
+    cycle_id: str,
+    fills: list[dict[str, Any]],
+    bar: Bar,
+    *,
+    side: str,
+    price: float,
+    order_cost: Any,
+    layer: str,
+    rung: int,
+    event: str,
+    realized_pnl: float,
+    sl: float | None,
+    tp: float | None,
+    gross_pnl: float = 0.0,
+) -> dict[str, Any]:
+    trade_id = f"{cycle_id}_{layer}_trade_{rung + 1:04d}"
+    units = _units(float(price), float(order_cost.notional))
+    return {
+        "fill_id": f"{cycle_id}_{layer}_{len(fills) + 1:04d}",
+        "trade_id": trade_id,
+        "ts": bar.timestamp,
+        "side": side,
+        "price": round(float(price), 8),
+        "sl": None if sl is None else round(float(sl), 8),
+        "tp": None if tp is None else round(float(tp), 8),
+        "layer": layer,
+        "position_id": f"{layer}_{rung}",
+        "order_type": "limit" if event in {"entry", "target"} else "market",
+        "out_of_plan": False,
+        "gross_pnl": round(float(gross_pnl), 8),
+        "realized_pnl": round(float(realized_pnl), 8),
+        "event": event,
+        "rung": rung,
+        "pnl_units": round(units, 10),
+        "remaining_units": round(units, 10) if event == "entry" else 0.0,
+        "position_status": "open" if event == "entry" else "closed",
+        **order_cost.fill_fields(),
+    }
+
+
+def _mark_entry_closed(fills: list[dict[str, Any]], holding: dict[str, Any], exit_fill: dict[str, Any]) -> None:
+    units = float((exit_fill.get("matched_entries") or [{}])[0].get("units") or 0.0)
+    for fill in fills:
+        if fill.get("fill_id") != holding.get("fill_id"):
+            continue
+        fill["remaining_units"] = 0.0
+        fill["closed_units"] = round(units, 10)
+        fill["position_status"] = "closed"
+        return
+
+
+def _weighted_contracts(execution_cost_model: dict[str, Any] | None, weight: float) -> float | None:
+    base = _contracts_per_rung(execution_cost_model)
+    if base is None:
+        return None
+    contracts = float(base) * float(weight)
+    if contracts <= 0 or not contracts.is_integer():
+        raise ValueError("explicit grid contract weights must produce a positive whole contract count")
+    return contracts
+
+
 def _fill(
     cycle_id: str,
     fills: list[dict[str, Any]],

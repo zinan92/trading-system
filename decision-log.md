@@ -3465,3 +3465,70 @@ Date: 2026-07-08
   The second screenshot shows reconciliation passed while the paper switch
   remains blocked for missing real order samples; browser warning/error log is
   empty.
+
+## 2026-07-10 - Independent 12-hour machine decisions and explicit grid execution
+
+### Decisions
+
+- The machine track now has a dedicated AI-only plan accessor. Machine
+  execution, runtime readiness, command center status, Feishu briefs, and the
+  split dashboard must not inherit or fall back to a locked human plan.
+- Every machine plan is immutable for one 12-hour cycle and records a complete
+  direction (`long`, `short`, or `neutral`), expected range, explicit grid
+  entry/target pairs, invalidation, rationale, and source provenance.
+- The first production planner source is the dated finance daily newsletter's
+  gold section plus trusted Binance bars. The planner may later add disclosed
+  web sources, but it may not fabricate a source or use human-plan artifacts.
+- Planner failure is represented as `decision_error`: persist a degraded,
+  neutral, zero-order plan with the exact error. This is a fail-closed state,
+  not a substitute forecast or synthetic market-data fallback.
+- Explicit grid replay does not derive hidden bp-spaced levels. Intraday replay
+  preserves open positions; only TP, SL, or the 12-hour cycle close can close
+  them. OHLC ambiguity remains conservative: a touched stop wins before entry.
+- Every closed cycle writes a machine review, including neutral and zero-fill
+  cycles. The review records actual versus predicted range, touched/filled
+  grid levels, PnL, and a concrete no-trade reason.
+- The split dashboard exposes machine decisions without the former blind-state
+  human fallback. It shows the AI range, explicit grid pairs, rationale, and
+  machine review while keeping machine order controls read-only.
+
+### Gotchas
+
+- The installed Codex CLI inherited `gpt-5.6-terra` from user config and
+  rejected the first planner call because the CLI version was too old. The
+  planner now runs ephemerally with ignored user config and an explicit
+  `gpt-5.4` model; the failed attempt remains in the audit trail.
+- Existing cycle tests used human-only fixtures while asserting machine fills.
+  Those fixtures had to seed AI plans explicitly; otherwise the new, correct
+  behavior is machine stand-down.
+- Legacy fixed-spacing AI plans remain readable for historical replay, but new
+  autonomous plans are required to carry `grid_orders`. Keeping legacy replay
+  compatibility does not authorize creating new implicit grids.
+- The current DAY plan predates this contract and was not rewritten mid-cycle.
+  The first new-format production plan is `2026-07-10_NIGHT`.
+- The first NIGHT tick initially arrived before a cycle bar was available and
+  correctly skipped with `cycle_bars_missing`. Once the first trusted bar was
+  present, the next run armed both explicit levels. A missing first-minute bar
+  is not permission to synthesize one.
+
+### Evidence
+
+- Full repository regression: 1385 passed. Follow-up sizing and dashboard
+  checks passed in focused suites after clarifying that grid weights allocate
+  the machine track's full nominal budget and may total at most 1.0.
+- Production machine plan:
+  `outputs/dualtrack/plans/2026-07-10_NIGHT_ai.json` (short, range 4092-4116,
+  explicit levels 4108 and 4113, newsletter provenance).
+- Planner trace:
+  `outputs/dualtrack/planning/2026-07-10_NIGHT_machine.json`.
+- Live runtime at 21:04 Beijing: all five checks `ok`; 60-second scheduler had
+  processed four NIGHT bars, machine author was `ai`, layers were
+  `decision:ai_independent` and `grid:ai_levels_armed_no_fill`, and fills were
+  empty because neither planned entry had traded.
+- Browser proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-independent-machine-plan-2026-07-10-night.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-independent-machine-full-2026-07-10-night.png`.
+  The live page shows human long versus machine short, the 4092-4116 range,
+  explicit 4108/4113 entries, and $55k/$45k nominal allocation. Browser
+  warning/error log was empty; machine top-card DOM intersections were zero.

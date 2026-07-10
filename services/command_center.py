@@ -64,13 +64,12 @@ def _build_cycle_payload(root: Path, now: datetime) -> dict[str, Any] | None:
         deadline = int(cfg.get("plan_lock_deadline_min_before_cycle", 0))
         window = cycle_window(now, lock_deadline_min_before_cycle=deadline)
         store = DualTrackPlanStore(root, config=cfg)
-        reveal_allowed = store.reveal_allowed(window.cycle_id, as_of=now)
-        effective = store.effective_plan(window.cycle_id, as_of=now) if reveal_allowed else None
+        effective = store.machine_plan(window.cycle_id)
         effective_status: dict[str, Any] = {
             "has_effective_plan": effective is not None,
             "machine_stands_down": effective is None,
         }
-        if reveal_allowed and effective is not None:
+        if effective is not None:
             effective_status["author"] = str(effective.get("effective_author") or "")
         return {
             **window.to_dict(),

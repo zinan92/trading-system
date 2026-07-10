@@ -7,7 +7,7 @@ from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_clock import BJ_TZ, cycle_window, cycle_window_from_id, parse_utc
-from services.dualtrack_config import base_rung_notional, dualtrack_config
+from services.dualtrack_config import dualtrack_config, track_notional_budget
 from services.dualtrack_scoring import _trades_from_fills
 from services.dualtrack_store import DualTrackPlanStore
 from services.feishu_report_sender import FeishuReportSender, resolve_trade_sender
@@ -66,8 +66,8 @@ class DualTrackMachineBriefSender:
             "window": window.to_dict(),
             "strategy_id": MACHINE_STRATEGY_ID,
             "strategy_name": MACHINE_STRATEGY_NAME,
-            "status": "ready" if ai_plan else "blocked",
-            "reason": "" if ai_plan else "AI 作战单缺失，机器轨不能定义方向",
+            "status": "decision_error" if (ai_plan or {}).get("degraded") else "ready" if ai_plan else "blocked",
+            "reason": (ai_plan or {}).get("planning_error", "") if (ai_plan or {}).get("degraded") else "" if ai_plan else "AI 作战单缺失，机器轨不能定义方向",
             "ai_plan": ai_plan or {},
             "human_plan_present": bool(human_plan),
             "market": market,
@@ -134,27 +134,15 @@ class DualTrackMachineBriefSender:
         }
 
     def _grid_payload(self, plan: dict[str, Any], *, anchor: float | None, trend_gate_armed: bool) -> dict[str, Any]:
-        grid = self.config.get("grid", {}) if isinstance(self.config.get("grid"), dict) else {}
-        spacing_bp = float(grid.get("spacing_bp") or 0.0)
-        max_rungs = int(grid.get("max_rungs") or 10)
-        base_notional = base_rung_notional(self.config, max_rungs=max_rungs)
+        total_budget = track_notional_budget(self.config)
         direction = str(plan.get("direction") or "absent")
-        spacing_price = (float(anchor) * spacing_bp / 10_000.0) if anchor else None
-        levels: list[float] = []
-        if anchor and spacing_price and direction in {"long", "short"}:
-            sign = 1 if direction == "long" else -1
-            for index in range(max_rungs):
-                level = float(anchor) - sign * spacing_price * (index + 1)
-                levels.append(round(level, 4))
+        orders = plan.get("grid_orders") if isinstance(plan.get("grid_orders"), list) else []
         invalidation = plan.get("invalidation") if isinstance(plan.get("invalidation"), list) else []
         return {
             "direction": direction,
-            "spacing_bp": spacing_bp,
-            "spacing_price": None if spacing_price is None else round(spacing_price, 4),
-            "base_rung_notional": round(base_notional, 2),
-            "trend_rung_notional": round(base_notional * float(grid.get("trend_leg_budget_pct") or 0.0) / 100.0, 2),
-            "trend_gate_armed": trend_gate_armed,
-            "entry_levels_preview": levels[:5],
+            "total_notional_budget": round(total_budget, 2),
+            "orders": orders,
+            "entry_levels_preview": [float(order["entry"]) for order in orders],
             "invalidation": invalidation,
         }
 
@@ -188,20 +176,27 @@ class DualTrackMachineBriefSender:
         if payload.get("status") != "ready":
             lines.append(f"- 状态：不可执行。原因：{payload.get('reason')}")
             return "\n".join(lines)
+        range_payload = plan.get("range") if isinstance(plan.get("range"), dict) else {}
+        orders = grid.get("orders") if isinstance(grid.get("orders"), list) else []
+        order_lines = [
+            f"  {index + 1}. 入场 {_fmt_price(order.get('entry'))} -> 止盈 {_fmt_price(order.get('take_profit'))}，权重 {order.get('weight', 1)}，名义 {_money(float(grid.get('total_notional_budget') or 0) * float(order.get('weight', 1)))}"
+            for index, order in enumerate(orders)
+        ]
         lines.extend(
             [
-                f"- 最新价：{_fmt_price(latest)}；锚定价：{_fmt_price(payload.get('anchor_price'))}。",
+                f"- 最新价：{_fmt_price(latest)}。",
+                f"- 预期区间：{_fmt_price(range_payload.get('low'))}-{_fmt_price(range_payload.get('high'))}。",
                 f"- 关键位：{key_levels or '缺失'}。",
                 f"- 失效条件：{invalidation or '缺失'}。",
+                f"- 判断：{plan.get('rationale') or '缺失'}",
                 "",
-                "机器轨信号",
-                f"- 基础网格：每层名义 ${grid.get('base_rung_notional')}，间距 {grid.get('spacing_bp')}bp（约 {grid.get('spacing_price')} 点）。",
-                f"- 入场观察位：{entry_levels or '等待行情形成后计算'}。",
-                f"- 趋势腿：{'开启' if grid.get('trend_gate_armed') else '关闭'}；开启时每层名义 ${grid.get('trend_rung_notional')}。",
+                "机器轨明确网格",
+                *(order_lines or ["  本周期中立，不挂入场单。"]),
+                f"- 机器轨最大名义预算：{_money(grid.get('total_notional_budget'))}。",
                 "",
                 "你需要看什么",
-                "- 只看机器轨网格策略；其他旧策略不参与这条复盘。",
-                "- 开仓和平仓会单独以“黄金交易记录”发送；这条消息只定义本 12 小时机器轨方向、关键位和网格信号。",
+                "- 这份计划由机器轨独立生成，不读取或继承人工计划。",
+                "- 开仓和平仓会单独发送；即使中立或零成交，收盘后也会生成复盘。",
             ]
         )
         return "\n".join(lines)

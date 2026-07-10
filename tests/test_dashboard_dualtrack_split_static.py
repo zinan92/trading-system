@@ -230,11 +230,13 @@ def test_split_page_machine_signal_explains_actual_rule_not_layer_keys():
     html = read_split_html()
 
     assert "function machineSignalHtml" in html
+    assert "function shortMachineRationale" in html
     assert "function layerSignalText" in html
-    assert "没有 MACD 背离、顶底分或小阳线触发器" in html
-    assert "到关键位按网格规则补仓" in html
-    assert "网格：关键位触发，已有机器成交。" in html
-    assert "趋势腿：资格已开，允许顺势加仓。" in html
+    assert "不会继承人工计划" in html
+    assert "到明确网格价位直接执行" in html
+    assert "机器 AI 每 12 小时独立决策" in html
+    assert "明确网格：本周期已有成交。" in html
+    assert "明确网格已锁定：等待本周期首次行情 tick。" in html
     assert "grid:traded / trend:armed" not in html
 
 

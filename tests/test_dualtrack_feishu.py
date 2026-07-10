@@ -29,8 +29,10 @@ def test_machine_brief_sends_chinese_plan_to_trade_channel(tmp_path: Path):
             "direction": "long",
             "range": {"low": 4155.0, "high": None},
             "key_levels": [4155.0, 4198.0, 4210.0],
+            "grid_orders": [{"entry": 4198.0, "take_profit": 4210.0, "weight": 1.0}],
             "invalidation": [{"side": "below", "price": 4155.0, "confirm": "touch"}],
             "confidence": 6,
+            "rationale": "没有额外技术触发器，到 4198 直接补仓。",
             "status": "fallback_active",
         }],
     )
@@ -49,7 +51,9 @@ def test_machine_brief_sends_chinese_plan_to_trade_channel(tmp_path: Path):
     assert "结论：只做多" in text
     assert "关键位：4155.00、4198.00、4210.00" in text
     assert "失效条件：跌破 4155.00" in text
-    assert "趋势腿：开启" in text
+    assert "机器轨明确网格" in text
+    assert "入场 4198.00 -> 止盈 4210.00" in text
+    assert "不读取或继承人工计划" in text
     assert load_json(output_root / "dualtrack" / "machine_briefs" / f"{cycle_id}.json")[0]["status"] == "ready"
 
 

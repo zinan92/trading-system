@@ -7,9 +7,9 @@ from typing import Any, Iterable
 from schemas.market_data import Bar
 from services.config_loader import ROOT, load_pipeline_config, load_risk_rules
 from services.dualtrack_clock import cycle_window_from_id, parse_utc
-from services.dualtrack_config import base_rung_notional, dualtrack_config
+from services.dualtrack_config import base_rung_notional, dualtrack_config, track_notional_budget
 from services.dualtrack_costs import dualtrack_cost_descriptor, dualtrack_order_cost
-from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
+from services.dualtrack_grid_core import GridStop, simulate_conditional_grid, simulate_explicit_grid
 from services.dualtrack_scoring import filter_invalid_machine_fills
 from services.dualtrack_store import DualTrackPlanStore
 from services.journal_store import load_json, write_json
@@ -32,12 +32,17 @@ class DualTrackMachineRunner:
         prev_range: float,
         as_of: str | datetime | None = None,
         trend_gate_armed: bool | None = None,
+        finalize: bool = True,
     ) -> dict[str, Any]:
-        plan = self.store.effective_plan(cycle_id, as_of=as_of)
-        ai_plan = self.store.load_plan(cycle_id, "ai")
-        if ai_plan and _plan_bracket(ai_plan):
-            plan = {**ai_plan, "effective_author": "ai"}
-        return self.run_plan(cycle_id, plan, bars, prev_range=prev_range, trend_gate_armed=trend_gate_armed)
+        plan = self.store.machine_plan(cycle_id)
+        return self.run_plan(
+            cycle_id,
+            plan,
+            bars,
+            prev_range=prev_range,
+            trend_gate_armed=trend_gate_armed,
+            finalize=finalize,
+        )
 
     def run_plan(
         self,
@@ -47,6 +52,7 @@ class DualTrackMachineRunner:
         *,
         prev_range: float,
         trend_gate_armed: bool | None = None,
+        finalize: bool = True,
     ) -> dict[str, Any]:
         rows = tuple(bars)
         if not rows:
@@ -56,18 +62,67 @@ class DualTrackMachineRunner:
             return self._stand_down(cycle_id, rows, reason="no_effective_plan", trend_gate_armed=gate_armed)
         direction = _direction_to_int(plan.get("direction"))
         if direction == 0:
-            return self._stand_down(
+            return self._neutral_decision(
                 cycle_id,
                 rows,
-                reason="flat_plan",
+                reason="decision_error" if plan.get("degraded") else "neutral_decision",
                 effective_plan_author=plan.get("effective_author") or plan.get("author"),
                 trend_gate_armed=gate_armed,
+                stood_down=bool(plan.get("degraded")),
             )
 
         existing_cycle = self._existing_cycle_state(cycle_id)
+        explicit_orders = plan.get("grid_orders") if isinstance(plan.get("grid_orders"), list) else []
+        if explicit_orders:
+            stop = _hard_stop(plan, direction)
+            if stop is None:
+                return self._stand_down(
+                    cycle_id,
+                    rows,
+                    reason="machine_plan_stop_missing",
+                    effective_plan_author="ai",
+                    trend_gate_armed=False,
+                )
+            result = simulate_explicit_grid(
+                cycle_id=cycle_id,
+                bars=rows,
+                direction=direction,
+                orders=explicit_orders,
+                stop=stop,
+                rung_notional=track_notional_budget(self.config),
+                cost_per_side_bp=float(self.config["cost_per_side_bp"]),
+                finalize=finalize,
+                layer="ai_grid",
+                **self._grid_cost_kwargs(),
+            )
+            fills = [self._annotate_fill(fill) for fill in result.fills]
+            fills, fill_quality = filter_invalid_machine_fills(fills)
+            open_inventory = any(fill.get("event") == "entry" and fill.get("position_status") == "open" for fill in fills)
+            grid_status = "open" if open_inventory else "traded" if result.traded else "armed_no_fill"
+            layers = [
+                "decision:ai_independent",
+                f"grid:ai_levels_{grid_status}",
+                *([f"invalid_fills:{fill_quality['invalid_machine_fill_count']}"] if fill_quality.get("invalid_machine_fill_count") else []),
+            ]
+            write_json(self._fills_path(cycle_id), fills)
+            self._write_account(cycle_id, "machine", fills)
+            state = self._cycle_state(
+                cycle_id,
+                rows,
+                fills,
+                machine_stood_down=False,
+                effective_plan_author="ai",
+                layers=layers,
+                trend_gate_armed=False,
+                stop_hit=result.stop_hit,
+                rearms=0,
+            )
+            _preserve_gate_snapshot(state, existing_cycle)
+            write_json(self._cycle_path(cycle_id), [state])
+            return state
         bracket = _plan_bracket(plan)
         if bracket:
-            fills, layers, stop_hit = self._simulate_bracket(cycle_id, plan, bracket, rows)
+            fills, layers, stop_hit = self._simulate_bracket(cycle_id, plan, bracket, rows, finalize=finalize)
             fills, fill_quality = filter_invalid_machine_fills(fills)
             if fill_quality.get("invalid_machine_fill_count"):
                 layers = [*layers, f"invalid_fills:{fill_quality['invalid_machine_fill_count']}"]
@@ -205,6 +260,34 @@ class DualTrackMachineRunner:
         write_json(self._cycle_path(cycle_id), [state])
         return state
 
+    def _neutral_decision(
+        self,
+        cycle_id: str,
+        bars: tuple[Bar, ...],
+        *,
+        reason: str,
+        effective_plan_author: str,
+        trend_gate_armed: bool,
+        stood_down: bool,
+    ) -> dict[str, Any]:
+        existing_cycle = self._existing_cycle_state(cycle_id)
+        write_json(self._fills_path(cycle_id), [])
+        self._write_account(cycle_id, "machine", [])
+        state = self._cycle_state(
+            cycle_id,
+            bars,
+            [],
+            machine_stood_down=stood_down,
+            effective_plan_author=effective_plan_author,
+            layers=[f"decision:{reason}", "grid:neutral_no_orders"],
+            trend_gate_armed=trend_gate_armed,
+            stop_hit=False,
+            rearms=0,
+        )
+        _preserve_gate_snapshot(state, existing_cycle)
+        write_json(self._cycle_path(cycle_id), [state])
+        return state
+
     def _cycle_state(
         self,
         cycle_id: str,
@@ -319,6 +402,8 @@ class DualTrackMachineRunner:
         plan: dict[str, Any],
         bracket: dict[str, Any],
         rows: tuple[Bar, ...],
+        *,
+        finalize: bool,
     ) -> tuple[list[dict[str, Any]], list[str], bool]:
         direction = _direction_to_int(plan.get("direction"))
         entry_price = float(bracket["entry"])
@@ -364,6 +449,8 @@ class DualTrackMachineRunner:
                 exit_event, exit_price = "stop", stop_loss
             exit_bar = bar
             break
+        if not exit_event and not finalize:
+            return fills, ["bracket:open"], False
         if not exit_event:
             exit_event = "flatten"
             exit_price = float(rows[-1].close)

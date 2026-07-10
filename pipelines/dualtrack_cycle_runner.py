@@ -19,6 +19,7 @@ from services.dualtrack_clock import (
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_execution_adapter import build_execution_engine_adapter
 from services.dualtrack_machine import DualTrackMachineRunner
+from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
 from services.dualtrack_tiger_human_sync import DualTrackTigerHumanSync
@@ -54,6 +55,7 @@ class DualTrackCycleRunner:
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
         self.execution = build_execution_engine_adapter(self.output_root, config=self.config)
         self.machine = DualTrackMachineRunner(self.output_root, config=self.config)
+        self.machine_planner = DualTrackMachinePlanner(self.output_root, config=self.config)
         self.scorer = DualTrackScorer(self.output_root, config=self.config)
         self.market = MarketStore(self.market_db)
 
@@ -78,17 +80,17 @@ class DualTrackCycleRunner:
             prev_cycle_range=prev_range,
             now=as_of or cycle_window_from_id(cycle_id).start,
         )
-        plan = self.store.ensure_ai_plan(
+        plan = self.machine_planner.ensure_plan(
             cycle_id,
-            cycle_open=float(bars[0].open),
+            bars=bars,
             prev_cycle_range=prev_range,
-            now=as_of or cycle_window_from_id(cycle_id).start,
+            as_of=as_of or cycle_window_from_id(cycle_id).start,
         )
         trend_gate_armed = self._freeze_trend_gate(cycle_id, as_of=as_of or cycle_window_from_id(cycle_id).start)
         return {
             "event": "pre_cycle",
             "cycle_id": cycle_id,
-            "status": "ai_plan_ready" if plan else "fail_closed_no_ai_plan",
+            "status": "ai_plan_error_neutral" if plan.get("degraded") else "ai_plan_ready",
             "human_plan_present": human_plan is not None,
             "ai_plan_present": plan is not None,
             "prev_range": prev_range,
@@ -129,6 +131,7 @@ class DualTrackCycleRunner:
             prev_range=prev_range,
             as_of=as_of,
             trend_gate_armed=trend_gate_armed,
+            finalize=False,
         )
         self._write_runner_state(window.cycle_id, "intraday", {"bar_count": len(bars), "prev_range": prev_range})
         trade_notifications = self._notify_machine_trade_records(window.cycle_id)
@@ -176,6 +179,7 @@ class DualTrackCycleRunner:
             prev_range=prev_range,
             as_of=as_of or cycle_window_from_id(cycle_id).end,
             trend_gate_armed=trend_gate_armed,
+            finalize=True,
         )
         attribution = self.scorer.close_cycle(cycle_id, bars)
         detail = {"bar_count": len(bars), "prev_range": prev_range}

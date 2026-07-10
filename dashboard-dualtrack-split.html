@@ -277,12 +277,12 @@ h1{font-size:var(--fs-4);line-height:1.2;margin:0}
   </div>
   <div class="c-body">
     <div class="trio">
-      <div class="w" data-widget="direction"><div class="wh"><span class="nm">方向</span><span class="slug">direction</span></div><div class="wb"><span class="val-dir" data-machine-direction>--</span><div class="sub">来自生效作战单</div></div></div>
+      <div class="w" data-widget="direction"><div class="wh"><span class="nm">方向</span><span class="slug">direction</span></div><div class="wb"><span class="val-dir" data-machine-direction>--</span><div class="sub">机器 AI 每 12 小时独立决策</div></div></div>
       <div class="w" data-widget="levels"><div class="wh"><span class="nm">关键位</span><span class="slug">levels</span></div><div class="wb"><div class="chips" data-machine-levels><span class="chip">--</span></div></div></div>
       <div class="w" data-widget="signal"><div class="wh"><span class="nm">信号</span><span class="slug">signal</span></div><div class="wb sub" data-machine-signal>等待机器参数</div></div>
     </div>
 
-    <div class="w ph-pre phased" data-widget="prelock"><div class="wb sub">盘前:机器轨等待生效作战单;两者皆无 = 机器轨站下</div></div>
+    <div class="w ph-pre phased" data-widget="prelock"><div class="wb sub">盘前：机器 AI 独立生成方向、区间和明确网格；决策失败时公开报错并停止下单</div></div>
 
     <div class="chartrow ph-mid ph-post phased">
       <div class="w" data-widget="kline"><div class="wh"><span class="nm">K线图</span><span class="slug">kline</span><span class="main-controls"><span class="mini-seg" data-main-timeframe-controls><button type="button" data-main-tf="1m" class="on">1m</button><button type="button" data-main-tf="5m">5m</button></span><span class="mini-seg" data-indicator-controls><button type="button" data-indicator="ema" class="on">EMA</button><button type="button" data-indicator="macd">MACD</button></span><span class="ema-config" data-ema-config><label><span data-ema-label="0">EMA 20</span><input type="number" min="2" max="400" step="1" value="20" data-ema-period="0"></label><label><span data-ema-label="1">EMA 50</span><input type="number" min="2" max="400" step="1" value="50" data-ema-period="1"></label></span></span><span class="r" data-main-chart-label="machine">GOLD 1m · 机器轨</span></div>
@@ -316,7 +316,7 @@ h1{font-size:var(--fs-4);line-height:1.2;margin:0}
       <div class="review-pending hidden" data-review-pending>本周期未收盘 · 复盘数据收盘后生成</div>
       <div data-review-content>
       <div class="rv-sec"><div class="rv-h">归因</div><div class="kv"><span>笔数</span><b data-review-machine-trades>--</b></div><div class="kv"><span>胜率</span><b>--</b></div><div class="kv"><span>已实现</span><b>--</b></div><div class="kv"><span>捕获比</span><b>--</b></div><div class="kv"><span>纪律违规</span><b>--</b></div></div>
-      <div class="rv-sec"><div class="rv-h">判卷 · direction-only · 自评</div><div class="gr-row" data-grade-field="direction"><span>方向</span><span class="gpass" data-machine-direction-grade>等待收盘</span></div><div class="gr-row" data-grade-field="levels"><span>关键位</span><span class="gpending">未建立评分口径</span></div><div class="gr-row" data-grade-field="signal"><span>信号</span><span class="gpending">未建立评分口径</span></div><div class="gr-row"><span>回放</span><a class="replay-link" data-replay-link href="dashboard-dualtrack-replay.html?layout=dualtrack">查看本周期回放</a></div></div>
+      <div class="rv-sec"><div class="rv-h">机器决策复盘</div><div class="gr-row" data-grade-field="direction"><span>方向</span><span class="gpass" data-machine-direction-grade>等待收盘</span></div><div class="gr-row"><span>区间</span><span class="gpending" data-machine-range-review>等待收盘</span></div><div class="gr-row"><span>网格</span><span class="gpending" data-machine-grid-review>等待收盘</span></div><div class="gr-row"><span>结论</span><span class="gpending" data-machine-review-summary>等待收盘</span></div><div class="gr-row"><span>回放</span><a class="replay-link" data-replay-link href="dashboard-dualtrack-replay.html?layout=dualtrack">查看本周期回放</a></div></div>
       <div class="rv-sec"><div class="rv-h">台账 · 最近周期 · 本轨</div><table class="fill-tbl"><thead><tr><th>周期</th><th>结果</th><th>已实现</th><th>裁决</th></tr></thead><tbody data-machine-ledger><tr><td>--</td><td>--</td><td>--</td><td>等待台账</td></tr></tbody></table></div>
       </div>
     </div></div>
@@ -385,7 +385,7 @@ function usd(value){if(value == null || value === "") return "--"; const number 
 function compactUsd(value){if(value == null || value === "") return "--"; const number = Number(value); if(!Number.isFinite(number)) return "--"; const abs = Math.abs(number); const sign = number < 0 ? "-" : ""; if(abs >= 1000 && abs % 1000 === 0) return `${sign}$${fmt(abs / 1000,0)}k`; if(abs >= 1000) return `${sign}$${fmt(abs / 1000,1)}k`; return `${sign}$${fmt(abs,0)}`;}
 function signedClass(value){const number = Number(value); return number < 0 ? "neg" : number > 0 ? "pos" : "";}
 function hasPrice(value){return Number.isFinite(Number(value)) && Number(value) !== 0;}
-function directionLabel(value){return {long:"做多",short:"做空",flat:"观望",range:"区间"}[String(value || "").toLowerCase()] || value || "--";}
+function directionLabel(value){return {long:"做多",short:"做空",flat:"观望",neutral:"中立",range:"区间"}[String(value || "").toLowerCase()] || value || "--";}
 function cycleClosed(cycle){ return Boolean(cycle?.end && Date.now() >= Date.parse(cycle.end)); }
 function deriveRealPhase(cycle){
   const now = Date.now();
@@ -797,7 +797,7 @@ function humanPlan(){
   return state.plan?.human_plan || state.plan?.plan || {};
 }
 function machinePlan(){
-  return state.machine || state.plan?.machine_plan || {};
+  return state.plan?.machine_plan || {};
 }
 
 function renderPlans(){
@@ -810,34 +810,60 @@ function renderPlans(){
   $("[data-human-signal]").innerHTML = esc(plan.notes || plan.signal || "等待作战单");
   renderPlanForm(plan);
 
-  $("[data-machine-direction]").textContent = directionLabel(machine.direction || machine.side || plan.direction);
-  $("[data-machine-direction]").className = `val-dir ${(machine.direction || plan.direction) === "short" ? "neg" : "pos"}`;
-  renderChips("[data-machine-levels]", machine.key_levels || plan.key_levels || [plan.range?.low, plan.range?.high].filter(Boolean));
-  $("[data-machine-signal]").innerHTML = machineSignalHtml(machine, plan);
+  const machineDirection = machine.direction || "";
+  $("[data-machine-direction]").textContent = directionLabel(machineDirection);
+  $("[data-machine-direction]").className = `val-dir ${machineDirection === "short" ? "neg" : ["neutral","flat",""] .includes(machineDirection) ? "muted" : "pos"}`;
+  const machineOrders = Array.isArray(machine.grid_orders) ? machine.grid_orders : [];
+  const machineLevels = machineOrders.map(order => order.entry);
+  renderChips("[data-machine-levels]", machineLevels.length ? machineLevels : machine.key_levels || [machine.range?.low, machine.range?.high].filter(Boolean));
+  const machineSignal = $("[data-machine-signal]");
+  machineSignal.innerHTML = machineSignalHtml(machine);
+  machineSignal.title = machine.rationale || machine.planning_error || "";
+  const orderRoot = $("[data-machine-order]");
+  if(orderRoot){
+    if(machineOrders.length){
+      const machineBudget = Number(state.config?.capital_per_track_usd || 0) * Number(state.config?.max_leverage || 0);
+      orderRoot.innerHTML = machineOrders.map((order, index) => `<span class="pill">第 ${index + 1} 层 ${fmt(order.entry,1)} → TP ${fmt(order.take_profit,1)} · 名义 ${usd(machineBudget * Number(order.weight ?? 1))}</span>`).join("");
+    }else if(["neutral","flat"].includes(machineDirection)){
+      orderRoot.innerHTML = `<span class="pill">本周期中立 · 不挂入场单</span>`;
+    }else{
+      orderRoot.innerHTML = `<span class="pill">机器 AI 计划不可用</span>`;
+    }
+  }
 }
 
-function machineSignalHtml(machine, plan){
-  if(machine?.notes || machine?.signal) return `<div class="signal-lines"><div>${esc(machine.notes || machine.signal)}</div></div>`;
-  const layers = Array.isArray(machine?.layers) ? machine.layers : [];
+function machineSignalHtml(machine){
+  const layers = Array.isArray(state.machine?.layers) ? state.machine.layers : [];
   const lines = [];
-  const direction = directionLabel(machine?.direction || machine?.side || plan?.direction);
-  if(machine?.machine_stood_down){
-    lines.push("机器轨站下：没有可执行作战单。");
-  }else{
-    lines.push(`${direction}逻辑：没有 MACD 背离、顶底分或小阳线触发器；到关键位按网格规则补仓。`);
-  }
+  if(!machine?.direction) return `<div class="signal-lines"><div>机器 AI 计划缺失；不会继承人工计划。</div></div>`;
+  if(machine?.degraded) lines.push(`机器决策失败：${machine.planning_error || "原因未记录"}`);
+  lines.push(shortMachineRationale(machine.rationale) || `${directionLabel(machine.direction)}：到明确网格价位直接执行。`);
+  if(machine.range?.low != null && machine.range?.high != null) lines.push(`预期区间：${fmt(machine.range.low,1)} - ${fmt(machine.range.high,1)}。`);
+  const orders = Array.isArray(machine.grid_orders) ? machine.grid_orders : [];
+  if(orders.length) lines.push(`明确网格：${orders.map(order => `${fmt(order.entry,1)} → ${fmt(order.take_profit,1)}`).join("；")}。`);
+  const invalidation = Array.isArray(machine.invalidation) ? machine.invalidation[0] : null;
+  if(invalidation?.price != null) lines.push(`失效：${invalidation.side === "above" ? "触及上方" : "触及下方"} ${fmt(invalidation.price,1)}。`);
   const grid = layers.find(layer => String(layer).startsWith("grid:"));
-  const trend = layers.find(layer => String(layer).startsWith("trend:"));
   if(grid) lines.push(layerSignalText(grid));
-  if(trend) lines.push(layerSignalText(trend));
-  if(!grid && !trend && !machine?.machine_stood_down) lines.push("等待机器参数。");
+  if(!grid) lines.push("等待本周期执行状态。");
   return `<div class="signal-lines">${lines.map(line => `<div>${esc(line)}</div>`).join("")}</div>`;
+}
+function shortMachineRationale(value){
+  const text = String(value || "").trim();
+  if(!text) return "";
+  const sentences = text.split("。").map(item => item.trim()).filter(Boolean).slice(0,2).join("。");
+  const summary = sentences || text;
+  return `${summary.length > 120 ? `${summary.slice(0,120)}…` : summary}。`;
 }
 function layerSignalText(layer){
   const text = String(layer || "");
+  if(text === "grid:ai_levels_open") return "明确网格：已有开放仓位，等待 TP、SL 或周期结束。";
+  if(text === "grid:ai_levels_traded") return "明确网格：本周期已有成交。";
+  if(text === "grid:ai_levels_armed_no_fill") return "明确网格：已挂规则，价位尚未触及。";
+  if(text === "grid:neutral_no_orders") return "机器决策中立：本周期不挂入场单。";
   if(text === "grid:traded") return "网格：关键位触发，已有机器成交。";
   if(text === "grid:armed_no_fill") return "网格：已挂规则，关键位尚未成交。";
-  if(text === "grid:pending") return "网格：等待有效作战单。";
+  if(text === "grid:pending") return "明确网格已锁定：等待本周期首次行情 tick。";
   if(text.startsWith("grid:stand_down")) return "网格：已站下，不补仓。";
   if(text === "trend:armed") return "趋势腿：资格已开，允许顺势加仓。";
   if(text === "trend:standby") return "趋势腿：资格未开，只跑基础网格。";
@@ -1664,6 +1690,15 @@ function fillReview(track, payload){
   if(target && grade?.graded){
     target.className = grade.hit ? "gpass" : "gblock";
     target.textContent = grade.hit ? "通过" : "未通过";
+  }
+  if(track === "machine"){
+    const review = state.attribution?.machine_review || {};
+    const rangeTarget = root.querySelector("[data-machine-range-review]");
+    const gridTarget = root.querySelector("[data-machine-grid-review]");
+    const summaryTarget = root.querySelector("[data-machine-review-summary]");
+    if(rangeTarget) rangeTarget.textContent = review.range_result ? `${review.range_result} · 实际 ${fmt(review.actual_range?.low,1)}-${fmt(review.actual_range?.high,1)}` : "无复盘";
+    if(gridTarget) gridTarget.textContent = Array.isArray(review.grid_orders) ? `${review.grid_orders.filter(row => row.filled).length}/${review.grid_orders.length} 层成交` : "无复盘";
+    if(summaryTarget) summaryTarget.textContent = review.summary || "无复盘";
   }
 }
 
