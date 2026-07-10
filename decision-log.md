@@ -3401,3 +3401,67 @@ Date: 2026-07-08
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-cutover-gate-live-2026-07-10.png`
   and
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-after-scheduler-repair-2026-07-10.png`.
+
+## 2026-07-10 - Persistent Nautilus paper adapter and account-cost parity
+
+### Decisions
+
+- Implement `NautilusExecutionAdapter` as a paper-only, event-sourced adapter.
+  It durably stores accepted commands, trusted market events, replay inputs and
+  outputs, normalized orders/fills/positions/accounts, and snapshots under an
+  isolated `nautilus_paper` ledger.
+- Persist market-event ingestion separately from replay acknowledgement. A
+  process failure after event storage must retry replay on restart; it must not
+  silently classify an unprocessed event as idempotent.
+- Keep adapter construction behind attended approval, an explicit isolated
+  runtime path, and `ready_for_attended_paper_switch`. The current `0/7`
+  command-bearing cycle result cannot select Nautilus.
+- Observe Binance maker/taker rates through the authenticated read-only account
+  endpoint and funding through the public funding endpoint. Persist the exact
+  environment and keep `real_money_eligible=false`.
+- Apply the same observed fee model to both engines in parity fixtures. Market
+  entry and stop are taker events; take-profit is a maker limit event. Exact
+  parity remains required, with no tolerance widening.
+- Move the conflicting TokenPulse share port to 8767 so the trading dashboard
+  is the only listener on 8765. Keep the unrelated goldbot gateway on 8766.
+
+### Gotchas
+
+- The observed Binance rates are from the configured demo account. They are
+  real account observations for paper modeling, not evidence of mainnet fees.
+- A funding-rate sample is not a funding settlement. Do not alter realized PnL
+  until a position is proven open at a real funding timestamp with the correct
+  sign and notional.
+- A replay with hundreds of market events but zero accepted commands proves
+  ingestion only. It must remain `qualifies_for_cutover=false` and must not be
+  rerun seven times to manufacture cycle evidence.
+- Accepted orders submitted after an existing snapshot must be merged into the
+  durable normalized order view immediately; waiting for the next market event
+  would make the operator-facing order state temporarily false.
+- The live Binance WebSocket host completes a handshake on this machine but
+  sends no frames, while the demo host emits frames. Do not substitute demo,
+  REST cache, fallback, or synthetic bars into the live path; report the live
+  stream failure explicitly.
+- TokenPulse port 8767 is a local untracked operator setting; it is not part of
+  this repository commit.
+
+### Evidence
+
+- Fixed parity gate: all 10 classes exact `pass` using the account-observed demo
+  maker/taker model.
+- Persistent-adapter smoke: one command and one trusted market event persisted
+  one order, one fill, one open position, exposure and margin across ten durable
+  JSON projections including processed-event acknowledgement; restart
+  reconciliation returned `ok`.
+- Runtime status: schedule `active`, 5/5 jobs generated/installed/loaded and
+  matching; `dualtrack-live-tick` interval 60 seconds; only the dashboard owns
+  127.0.0.1:8765.
+- Cutover gate: `blocked/candidate_activity_insufficient`, fixture gate `pass`,
+  observed command-bearing cycles `0/7`, configured engine unchanged.
+- Full repository regression after the persisted-event retry repair:
+  `1378 passed in 401.21s`.
+- Live browser proof: `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-persistent-adapter-gate-2026-07-10.png`
+  and `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-cutover-status-0-of-7-2026-07-10.png`.
+  The second screenshot shows reconciliation passed while the paper switch
+  remains blocked for missing real order samples; browser warning/error log is
+  empty.

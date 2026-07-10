@@ -73,6 +73,7 @@ class DualTrackHumanEngine:
             contracts=contracts,
             cost_rules=self.cost_rules,
             require_contracts=self._uses_venue_cost_model(),
+            liquidity=_order_liquidity(payload, order_type=order_type),
         )
         cost_override = _optional_float(_first_present(payload, ["cost", "commission"]), "cost")
         realized_cost = cost_override if cost_override is not None else order_cost.cost
@@ -127,6 +128,7 @@ class DualTrackHumanEngine:
             "trigger_high",
             "trigger_low",
             "trigger_event_started_at",
+            "liquidity",
         ):
             if payload.get(key) not in (None, ""):
                 fill[key] = payload[key]
@@ -204,7 +206,8 @@ class DualTrackHumanEngine:
                 "ts": ts,
                 "side": trigger["exit_side"],
                 "event": trigger["event"],
-                "order_type": "market",
+                "order_type": "limit" if trigger["event"] == "target" else "market",
+                "liquidity": "maker" if trigger["event"] == "target" else "taker",
                 "price": trigger["price"],
                 "trade_id": trade_id,
                 "position_id": trade.get("position_id") or entry.get("position_id") or "manual",
@@ -589,3 +592,12 @@ def _first_present(payload: dict[str, Any], keys: list[str]) -> Any:
 
 def _cost(notional: float, cost_per_side_bp: float) -> float:
     return float(notional) * float(cost_per_side_bp) / 10_000.0
+
+
+def _order_liquidity(payload: dict[str, Any], *, order_type: str) -> str:
+    explicit = str(payload.get("liquidity") or "").lower()
+    if explicit:
+        if explicit not in {"maker", "taker"}:
+            raise ValueError("liquidity must be maker or taker")
+        return explicit
+    return "maker" if order_type == "limit" else "taker"

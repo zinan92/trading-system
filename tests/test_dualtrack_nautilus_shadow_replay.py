@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import pipelines.dualtrack_nautilus_shadow_replay as replay_pipeline
-from spikes.dualtrack_nautilus_shadow_replay import _latest, run_replay
+from spikes.dualtrack_nautilus_shadow_replay import _account, _latest, run_replay
 
 
 def test_shadow_replay_loader_requires_nonempty_artifact_array(tmp_path: Path) -> None:
@@ -50,3 +50,14 @@ def test_shadow_replay_refuses_command_without_immutable_payload(tmp_path: Path,
     monkeypatch.setattr("spikes.dualtrack_nautilus_shadow_replay.build_nautilus_instrument", lambda *_args, **_kwargs: object())
     with pytest.raises(ValueError, match="missing command payload"):
         run_replay(preflight, input_path)
+
+
+def test_shadow_account_uses_open_units_and_trusted_mark() -> None:
+    account = _account(
+        [{"status": "open", "remaining_units": 2.0, "entry_price": 98.0}],
+        -0.01,
+        mark_price=100.0,
+    )
+
+    assert account["exposure"] == 200.0
+    assert account["margin"] == 20.0

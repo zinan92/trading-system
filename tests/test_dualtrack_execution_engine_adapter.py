@@ -132,8 +132,19 @@ def test_legacy_adapter_rejects_untrusted_market_event(tmp_path: Path) -> None:
         })
 
 
-def test_adapter_factory_fails_closed_for_unimplemented_nautilus_engine(tmp_path: Path) -> None:
+def test_adapter_factory_fails_closed_without_attended_nautilus_approval(tmp_path: Path) -> None:
     assert build_execution_engine_adapter(tmp_path / "outputs", engine="legacy_paper").name == "legacy_paper"
 
-    with pytest.raises(RuntimeError, match="Nautilus adapter spike is not enabled"):
+    with pytest.raises(RuntimeError, match="attended approval"):
         build_execution_engine_adapter(tmp_path / "outputs", engine="nautilus")
+
+
+def test_adapter_factory_requires_passed_gate_before_nautilus_switch(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    with pytest.raises(RuntimeError, match="evidence gate is not ready"):
+        build_execution_engine_adapter(
+            output,
+            engine="nautilus_paper",
+            nautilus_python=tmp_path / "python",
+            allow_paper_switch=True,
+        )

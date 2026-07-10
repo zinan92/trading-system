@@ -31,6 +31,15 @@ def dualtrack_cost_descriptor(config: dict[str, Any], cost_rules: dict[str, Any]
     model = _execution_cost_model(config)
     venue = str(model.get("venue") or "")
     if not venue:
+        paper_fee_model = _paper_fee_model(config)
+        if paper_fee_model:
+            return {
+                "model_type": "maker_taker_notional",
+                "maker_fee_rate": _fee_rate(paper_fee_model, "maker"),
+                "taker_fee_rate": _fee_rate(paper_fee_model, "taker"),
+                "source": str(paper_fee_model.get("source") or "explicit_paper_fee_model"),
+                "real_money_eligible": False,
+            }
         return {"cost_per_side_bp": float(config["cost_per_side_bp"])}
     resolved = resolve_venue_cost_model(cost_rules or {}, venue)
     return {
@@ -52,12 +61,30 @@ def dualtrack_order_cost(
     contracts: float | None = None,
     cost_rules: dict[str, Any] | None = None,
     require_contracts: bool = False,
+    liquidity: str | None = None,
 ) -> DualTrackOrderCost:
     model = _execution_cost_model(config)
     venue = str(model.get("venue") or "")
     if not venue:
         if notional is None:
             raise ValueError("notional is required for bp dualtrack cost model")
+        paper_fee_model = _paper_fee_model(config)
+        if paper_fee_model:
+            liquidity_value = str(liquidity or "").lower()
+            if liquidity_value not in {"maker", "taker"}:
+                raise ValueError("liquidity must be maker or taker for explicit paper fee model")
+            rate = _fee_rate(paper_fee_model, liquidity_value)
+            return DualTrackOrderCost(
+                notional=float(notional),
+                cost=float(notional) * rate,
+                cost_model={
+                    "model_type": "maker_taker_notional",
+                    "liquidity": liquidity_value,
+                    "fee_rate": rate,
+                    "source": str(paper_fee_model.get("source") or "explicit_paper_fee_model"),
+                    "real_money_eligible": False,
+                },
+            )
         bp = float(config["cost_per_side_bp"])
         cost = float(notional) * bp / 10_000.0
         return DualTrackOrderCost(
@@ -104,6 +131,21 @@ def dualtrack_order_cost(
 def _execution_cost_model(config: dict[str, Any]) -> dict[str, Any]:
     model = config.get("execution_cost_model")
     return model if isinstance(model, dict) else {}
+
+
+def _paper_fee_model(config: dict[str, Any]) -> dict[str, Any]:
+    model = config.get("paper_fee_model")
+    return model if isinstance(model, dict) else {}
+
+
+def _fee_rate(model: dict[str, Any], liquidity: str) -> float:
+    value = model.get(f"{liquidity}_fee_rate")
+    if value in (None, ""):
+        raise ValueError(f"explicit paper fee model is missing {liquidity}_fee_rate")
+    rate = float(value)
+    if rate < 0:
+        raise ValueError(f"{liquidity}_fee_rate must not be negative")
+    return rate
 
 
 def _contracts_per_rung(model: dict[str, Any]) -> float:

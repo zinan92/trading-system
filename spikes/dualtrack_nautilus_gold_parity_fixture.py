@@ -15,6 +15,7 @@ from typing import Any
 
 from services.dualtrack_execution_adapter import LegacyPaperExecutionAdapter
 from services.dualtrack_execution_contract import compare_execution_snapshots
+from services.dualtrack_config import dualtrack_config
 from services.dualtrack_nautilus_instrument import build_nautilus_instrument
 from services.journal_store import write_json
 
@@ -135,11 +136,11 @@ def run_fixture(preflight_path: str | Path, *, scenario_name: str = "long_stop")
         taker_fee_rate=taker_fee,
     )
     candidate = _nautilus_snapshot(instrument, cycle_id=cycle_id, scenario=scenario)
-    legacy = _legacy_snapshot(cycle_id=cycle_id, scenario=scenario)
+    legacy = _legacy_snapshot(cycle_id=cycle_id, scenario=scenario, fee_model=fee_model)
     parity = compare_execution_snapshots(legacy, candidate, cycle_id=cycle_id)
     restart_evidence = None
     if scenario.get("restart_check"):
-        restarted_legacy = _legacy_snapshot(cycle_id=cycle_id, scenario=scenario)
+        restarted_legacy = _legacy_snapshot(cycle_id=cycle_id, scenario=scenario, fee_model=fee_model)
         restarted_candidate = _nautilus_snapshot(instrument, cycle_id=cycle_id, scenario=scenario)
         restart_evidence = {
             "mode": "immutable_replay",
@@ -275,11 +276,19 @@ def _nautilus_snapshot(instrument, *, cycle_id: str, scenario: dict[str, Any]) -
     }
 
 
-def _legacy_snapshot(*, cycle_id: str, scenario: dict[str, Any]) -> dict[str, Any]:
+def _legacy_snapshot(
+    *,
+    cycle_id: str,
+    scenario: dict[str, Any],
+    fee_model: dict[str, Any],
+) -> dict[str, Any]:
     if scenario.get("kind") in {"scale_in", "partial_reduce", "duplicate"}:
-        return _legacy_sequence_snapshot(cycle_id=cycle_id, scenario=scenario)
+        return _legacy_sequence_snapshot(cycle_id=cycle_id, scenario=scenario, fee_model=fee_model)
     with tempfile.TemporaryDirectory() as directory:
-        adapter = LegacyPaperExecutionAdapter(Path(directory) / "outputs")
+        adapter = LegacyPaperExecutionAdapter(
+            Path(directory) / "outputs",
+            config=_legacy_fee_config(fee_model),
+        )
         adapter.submit_order({
             "cycle_id": cycle_id,
             "ts": "2026-07-10T01:00:00+00:00",
@@ -409,9 +418,17 @@ def _nautilus_sequence_snapshot(instrument, *, cycle_id: str, scenario: dict[str
     }
 
 
-def _legacy_sequence_snapshot(*, cycle_id: str, scenario: dict[str, Any]) -> dict[str, Any]:
+def _legacy_sequence_snapshot(
+    *,
+    cycle_id: str,
+    scenario: dict[str, Any],
+    fee_model: dict[str, Any],
+) -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as directory:
-        adapter = LegacyPaperExecutionAdapter(Path(directory) / "outputs")
+        adapter = LegacyPaperExecutionAdapter(
+            Path(directory) / "outputs",
+            config=_legacy_fee_config(fee_model),
+        )
         trade_id = f"{cycle_id}_sequence"
         for index, command in enumerate(scenario["commands"]):
             price = float(command["price"])
@@ -430,6 +447,19 @@ def _legacy_sequence_snapshot(*, cycle_id: str, scenario: dict[str, Any]) -> dic
         snapshot = adapter.snapshot(cycle_id, mark_price=scenario["bars"][-1], mark_fresh=True, mark_source="fixture")
         snapshot["reconciliation"] = adapter.reconcile(cycle_id)
         return snapshot
+
+
+def _legacy_fee_config(fee_model: dict[str, Any]) -> dict[str, Any]:
+    """Apply the candidate's market-order fee to the compatibility ledger."""
+
+    taker_fee_rate = str(fee_model.get("taker_fee_rate") or "").strip()
+    if not taker_fee_rate:
+        raise ValueError("parity fixture requires taker_fee_rate")
+    config = dualtrack_config()
+    config.pop("execution_cost_model", None)
+    config["cost_per_side_bp"] = float(Decimal(taker_fee_rate) * Decimal(10_000))
+    config["paper_fee_model"] = dict(fee_model)
+    return config
 
 
 def _artifact(path_value: str | Path) -> dict[str, Any]:
@@ -471,7 +501,7 @@ def _candidate_orders(fills: list[dict[str, Any]], scenario: dict[str, Any]) -> 
             "state": "filled",
             "side": fill["side"],
             "event": fill["event"],
-            "order_type": "market",
+            "order_type": "limit" if fill["event"] == "target" else "market",
             "price": fill["price"],
             "quantity": fill["quantity"],
         }

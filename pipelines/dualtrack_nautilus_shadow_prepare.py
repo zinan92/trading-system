@@ -9,7 +9,7 @@ from pathlib import Path
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_instrument_source import DEFAULT_INSTRUMENT_ENDPOINT, fetch_execution_instrument_definition
-from services.journal_store import write_json
+from services.journal_store import load_json, write_json
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,6 +33,21 @@ def main(argv: list[str] | None = None) -> int:
             "maker_fee_rate": definition["maker_fee_rate"],
             "taker_fee_rate": definition["taker_fee_rate"],
             "source": "instrument-definition-v1",
+            "real_money_eligible": False,
+        }
+    account_cost_rows = load_json(output_root / "dualtrack" / "nautilus" / "account_costs" / "current.json")
+    account_costs = account_cost_rows[-1] if account_cost_rows else {}
+    if account_costs.get("status") == "ok" and account_costs.get("symbol") == definition.get("symbol"):
+        fee_model = {
+            "mode": "account_observed",
+            "maker_fee_rate": account_costs["maker_fee_rate"],
+            "taker_fee_rate": account_costs["taker_fee_rate"],
+            "source": account_costs["fee_source"],
+            "environment": account_costs.get("environment"),
+            "observed_at": account_costs.get("observed_at"),
+            "funding_rate": account_costs.get("funding_rate"),
+            "funding_time": account_costs.get("funding_time"),
+            "funding_source": account_costs.get("funding_source"),
             "real_money_eligible": False,
         }
     blockers = []

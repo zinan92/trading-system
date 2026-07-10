@@ -244,6 +244,49 @@ def test_human_protective_sweep_executes_short_stop_once_at_sl_price(tmp_path: P
     assert trades[0]["realized_pnl"] == pytest.approx(-50.1025)
 
 
+def test_human_paper_fee_model_charges_taker_entry_and_maker_target(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    config = {
+        **TEST_CONFIG,
+        "paper_fee_model": {
+            "maker_fee_rate": "0",
+            "taker_fee_rate": "0.0004",
+            "source": "account_observed_test",
+            "real_money_eligible": False,
+        },
+    }
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=config)
+
+    entry = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "market",
+        "price": 100.0,
+        "notional": 100.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+    human.sweep_protective_exits(
+        cycle_id,
+        mark_price=106.0,
+        mark_open=100.0,
+        mark_high=106.0,
+        mark_low=99.0,
+        event_started_at="2026-07-05T01:03:00+00:00",
+        ts="2026-07-05T01:03:00+00:00",
+    )
+    target = load_json(tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json")[-1]
+
+    assert entry["cost"] == pytest.approx(0.04)
+    assert entry["cost_model"]["liquidity"] == "taker"
+    assert target["event"] == "target"
+    assert target["order_type"] == "limit"
+    assert target["cost"] == 0.0
+    assert target["cost_model"]["liquidity"] == "maker"
+    assert target["realized_pnl"] == pytest.approx(5.0)
+
+
 def test_human_protective_sweep_filters_by_trade_id_when_position_id_is_shared(tmp_path: Path) -> None:
     cycle_id = "2026-07-05_DAY"
     human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)

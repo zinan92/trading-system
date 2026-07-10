@@ -50,7 +50,7 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
         "orders": _orders_from_fills(fills),
         "fills": fills,
         "positions": positions,
-        "account": _account(positions, realized),
+        "account": _account(positions, realized, mark_price=float(last_event["price"])),
         "pnl": {"realized": realized, "unrealized": unrealized},
         "mark": {"price": last_event["price"], "fresh": True, "source": last_event["source"]},
         "capabilities": {"native_order_lifecycle": True, "paper_shadow": True, "market_replay": True},
@@ -197,7 +197,8 @@ def _snapshot_reports(engine, commands: list[dict[str, Any]]) -> tuple[list[dict
     fills = []
     for index, row in enumerate(fill_rows):
         price = float(row["avg_px"])
-        command = commands[min(index, len(commands) - 1)]["command"] if commands else {}
+        command_row = commands[min(index, len(commands) - 1)] if commands else {}
+        command = command_row.get("command") or {}
         event = str(command.get("event") or "entry").lower()
         if index and command.get("sl") is not None and price == float(command["sl"]):
             event = "stop"
@@ -206,6 +207,7 @@ def _snapshot_reports(engine, commands: list[dict[str, Any]]) -> tuple[list[dict
         fills.append({
             "fill_id": f"nautilus-{index + 1}", "side": str(row["side"]).lower(), "price": price,
             "quantity": _command_quantity(command) if command else 0.0, "event": event,
+            "command_id": str(command_row.get("command_id") or ""),
         })
     if not position_rows:
         return fills, [], 0.0, 0.0
@@ -217,18 +219,54 @@ def _snapshot_reports(engine, commands: list[dict[str, Any]]) -> tuple[list[dict
     side = str(last.get("side") or "").lower()
     if side == "flat" and fills:
         side = "long" if fills[0]["side"] == "buy" else "short"
-    return fills, [{"status": "closed" if closed else "open", "side": side, "remaining_units": 0.0 if closed else quantity}], realized, unrealized
+    return fills, [{
+        "status": "closed" if closed else "open",
+        "side": side,
+        "remaining_units": 0.0 if closed else quantity,
+        "entry_price": float(last.get("avg_px_open") or 0.0),
+        "exit_price": float(last.get("avg_px_close") or 0.0) if closed else None,
+    }], realized, unrealized
 
 
 def _orders_from_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{"order_id": row["fill_id"], "state": "filled", "side": row["side"], "event": row["event"], "order_type": "market", "price": row["price"], "quantity": row["quantity"]} for row in fills]
+    orders = []
+    for index, row in enumerate(fills):
+        command_id = str(row.get("command_id") or row["fill_id"])
+        event = str(row.get("event") or "entry")
+        order_id = command_id if event == "entry" else f"{command_id}:{event}:{index + 1}"
+        orders.append({
+            "order_id": order_id,
+            "state": "filled",
+            "side": row["side"],
+            "event": event,
+            "order_type": "limit" if event == "target" else "market",
+            "price": row["price"],
+            "quantity": row["quantity"],
+        })
+    return orders
 
 
-def _account(positions: list[dict[str, Any]], realized: float) -> dict[str, Any]:
-    exposure = 0.0
+def _account(
+    positions: list[dict[str, Any]],
+    realized: float,
+    *,
+    mark_price: float,
+) -> dict[str, Any]:
+    exposure = round(sum(
+        float(position.get("remaining_units") or 0.0) * mark_price
+        for position in positions
+        if position.get("status") == "open"
+    ), 8)
     if not positions and realized == 0.0:
         return {"margin": 0.0, "exposure": 0.0, "slippage": 0.0}
-    return {"starting_cash": 10_000.0, "realized_pnl": realized, "ending_cash": round(10_000.0 + realized, 8), "margin": exposure / 10.0, "exposure": exposure, "slippage": 0.0}
+    return {
+        "starting_cash": 10_000.0,
+        "realized_pnl": realized,
+        "ending_cash": round(10_000.0 + realized, 8),
+        "margin": round(exposure / 10.0, 8),
+        "exposure": exposure,
+        "slippage": 0.0,
+    }
 
 
 def _money_number(value: Any) -> float:

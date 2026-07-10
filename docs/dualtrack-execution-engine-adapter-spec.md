@@ -1,7 +1,8 @@
 # DualTrack Execution Engine Adapter Spec
 
-Status: compatibility adapter and 1m OHLC replay implemented; isolated Nautilus
-fixture plus live GOLD instrument construction passed; adapter not enabled
+Status: compatibility and persistent Nautilus paper adapters implemented;
+fixed parity suite passed; Nautilus paper adapter not selected because the
+seven command-bearing cycle gate is incomplete
 Date: 2026-07-10
 
 ## Objective
@@ -110,10 +111,25 @@ Known capability limits are explicit:
 No additional features should be added to this engine beyond safety and
 reconciliation fixes needed for migration.
 
-## Adapter 2: Nautilus spike
+## Adapter 2: `nautilus_paper`
 
-The spike stays isolated until it passes the same adapter contract. Do not make
-Nautilus a production dependency before parity is proven.
+`services/dualtrack_nautilus_execution_adapter.py` implements the same adapter
+contract through an isolated Nautilus runtime. It persists immutable commands
+and market events plus normalized orders, fills, positions, accounts, replay
+inputs, replay outputs, and snapshots under
+`outputs/dualtrack/nautilus_paper/`. A separate processed-event acknowledgement
+journal makes a persisted event retryable after a replay failure. Restart
+reconciliation compares the durable projections against the latest normalized
+snapshot.
+
+The factory still fails closed. Creating this adapter requires all three:
+
+- explicit attended paper-switch approval;
+- `shadow_gate_current.status=ready_for_attended_paper_switch`;
+- an explicit isolated Nautilus Python path.
+
+The current real gate is blocked at `0/7`, so `legacy_paper` remains
+authoritative and no configured engine has changed.
 
 The isolated 1.230.0 bracket fixture is recorded in
 `docs/dualtrack-nautilus-spike-result.md`. It proves market entry, stop fill,
@@ -129,7 +145,9 @@ adapter.
   price precision, quantity precision, or contract multiplier.
 - Canonical bars or trade/quote events with source lineage.
 - No fallback or synthetic events.
-- Explicit fee, slippage, and matching configuration.
+- Explicit fee, funding observation, slippage, and matching configuration.
+- Account-observed maker/taker rates must come from a signed read-only broker
+  endpoint. Public instrument metadata is not accepted as account fee proof.
 
 ### Fixed scenarios
 
@@ -183,3 +201,9 @@ tolerance changes or frontend formatting.
   events and regenerate normalized positions instead of editing history.
 - `legacy_paper` is a migration adapter, not the mathematical framework to keep
   extending.
+- The currently observed Binance account costs are from the configured demo
+  environment. They are valid inputs for paper parity but are explicitly
+  `real_money_eligible=false`; they do not prove mainnet account costs.
+- Funding rate and timestamp are now observed and persisted, but a rate sample
+  is not itself a funding cash-flow. Settlement must only be booked from a
+  timestamped position exposure at an actual funding boundary.

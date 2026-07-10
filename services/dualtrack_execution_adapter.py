@@ -298,12 +298,27 @@ def build_execution_engine_adapter(
     *,
     engine: str = "legacy_paper",
     config: dict[str, Any] | None = None,
+    nautilus_python: str | Path | None = None,
+    allow_paper_switch: bool = False,
 ) -> ExecutionEngineAdapter:
     normalized = str(engine or "legacy_paper").strip().lower()
     if normalized == "legacy_paper":
         return LegacyPaperExecutionAdapter(output_root, config=config)
-    if normalized == "nautilus":
-        raise RuntimeError("Nautilus adapter spike is not enabled")
+    if normalized in {"nautilus", "nautilus_paper"}:
+        if not allow_paper_switch:
+            raise RuntimeError("Nautilus paper switch requires attended approval")
+        gate_rows = load_json(Path(output_root) / "dualtrack" / "cutover" / "shadow_gate_current.json")
+        gate = gate_rows[-1] if gate_rows else {}
+        if gate.get("status") != "ready_for_attended_paper_switch":
+            raise RuntimeError("Nautilus paper switch evidence gate is not ready")
+        if nautilus_python in (None, ""):
+            raise RuntimeError("Nautilus paper switch requires an isolated runtime path")
+        from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+
+        return NautilusExecutionAdapter(
+            output_root,
+            nautilus_python=nautilus_python,
+        )
     raise ValueError(f"unknown execution engine: {engine}")
 
 

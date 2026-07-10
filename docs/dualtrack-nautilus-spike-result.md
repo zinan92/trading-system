@@ -2,7 +2,8 @@
 
 Date: 2026-07-10
 NautilusTrader: 1.230.0
-Status: execution fixture and live GOLD instrument construction passed; adapter not enabled
+Status: persistent paper adapter and ten-class parity gate passed; adapter not
+selected because the seven command-bearing cycle gate remains incomplete
 
 ## Result
 
@@ -41,11 +42,18 @@ definitions. A live upstream response constructed:
 Binance's public definition does not contain account maker/taker fee rates. The
 builder therefore requires both rates explicitly; it has no fee default.
 
-## Why This Is Not Yet The Adapter
+## Persistent Paper Adapter
 
-The fixture deliberately uses NautilusTrader's packaged test perpetual. It must
-not be relabeled as GOLD. A production `NautilusExecutionAdapter` needs a
-canonical instrument definition from datafeed with at least:
+The fixture deliberately uses NautilusTrader's packaged test perpetual and is
+not relabeled as GOLD. The persistent `NautilusExecutionAdapter` now builds the
+real paper instrument from the canonical datafeed preflight and persists:
+
+- accepted order commands and trusted market events;
+- normalized orders, fills, positions, account and PnL snapshots;
+- immutable replay inputs and outputs;
+- restart reconciliation evidence.
+
+The instrument contract still requires:
 
 - venue and canonical instrument ID;
 - price precision and tick size;
@@ -65,11 +73,11 @@ split-brain data model the adapter is meant to remove.
    The `dualtrack_nautilus_shadow_prepare` pipeline validates and persists the
    returned definition. It rejects cache, synthetic, or non-execution-venue
    payloads.
-2. For paper-shadow parity only, use the explicit `paper_assumption` fee model
-   in `configs/dualtrack.yaml`; it is derived from the existing 0.5bp-side
-   simulation contract and is marked `real_money_eligible=false`. Binance
-   public `exchangeInfo` does not contain account-specific fee rates, so this
-   may never be represented as a real broker fee or reused for real money.
+2. The read-only account-cost observer now obtains maker/taker rates from the
+   authenticated Binance `commissionRate` endpoint and the latest funding rate
+   from the public funding endpoint. The currently configured environment is
+   demo; the artifact is therefore valid for paper parity only and remains
+   `real_money_eligible=false`. There is no fee default and no mainnet claim.
 3. Install the pinned NautilusTrader runtime in the execution environment and
    build the Nautilus instrument only from the preflight artifact.
 4. The ten parity categories in the execution adapter spec now pass through
@@ -78,5 +86,8 @@ split-brain data model the adapter is meant to remove.
    exposure accounting, and the historical 2026-07-09 machine-residual repair.
    Exact paper-shadow artifacts are under `outputs/dualtrack/nautilus/parity/`.
    This does not itself satisfy the seven real command-bearing paper-cycle gate.
-5. Keep the local ledger authoritative for seven clean paper cycles.
-6. Enable Nautilus for paper only after unexplained parity drift is zero.
+5. Keep the local ledger authoritative for seven clean, command-bearing paper
+   cycles. The current evidence is `0/7`; the latest cycle had market events but
+   no accepted order command and cannot count.
+6. Enable Nautilus for paper only after unexplained parity drift is zero and an
+   operator explicitly approves the attended paper switch.

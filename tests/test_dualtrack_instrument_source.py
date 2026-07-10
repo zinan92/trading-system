@@ -7,7 +7,7 @@ import pytest
 
 import pipelines.dualtrack_nautilus_shadow_prepare as prepare_pipeline
 from services.dualtrack_instrument_source import fetch_execution_instrument_definition
-from services.journal_store import load_json
+from services.journal_store import load_json, write_json
 from tests.test_dualtrack_nautilus_instrument import _definition
 
 
@@ -73,3 +73,32 @@ def test_preflight_blocks_when_paper_fee_model_is_not_explicit(tmp_path: Path, m
     artifact = load_json(tmp_path / "outputs" / "dualtrack" / "nautilus" / "instrument_preflight.json")[-1]
     assert artifact["status"] == "blocked"
     assert artifact["blockers"] == ["shadow fee model is missing maker_fee_rate or taker_fee_rate", "shadow fee model must explicitly be paper-only"]
+
+
+def test_preflight_prefers_matching_account_observation_over_instrument_fee(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "outputs"
+    definition = _definition()
+    definition["maker_fee_rate"] = "0.009"
+    definition["taker_fee_rate"] = "0.010"
+    write_json(output / "dualtrack" / "nautilus" / "account_costs" / "current.json", [{
+        "status": "ok",
+        "symbol": "XAUUSDT",
+        "maker_fee_rate": "0.000020",
+        "taker_fee_rate": "0.000400",
+        "fee_source": "authenticated_account_commissionRate",
+        "environment": "demo",
+        "observed_at": "2026-07-10T10:00:00+00:00",
+        "funding_rate": "0.000100",
+        "funding_time": 1234,
+        "funding_source": "public_fundingRate",
+    }])
+    monkeypatch.setattr(prepare_pipeline, "fetch_execution_instrument_definition", lambda **kwargs: definition)
+
+    assert prepare_pipeline.main(["--output-root", str(output)]) == 0
+
+    fee_model = load_json(output / "dualtrack" / "nautilus" / "instrument_preflight.json")[-1]["fee_model"]
+    assert fee_model["mode"] == "account_observed"
+    assert fee_model["maker_fee_rate"] == "0.000020"
+    assert fee_model["taker_fee_rate"] == "0.000400"
+    assert fee_model["environment"] == "demo"
+    assert fee_model["funding_rate"] == "0.000100"
