@@ -11,6 +11,7 @@ from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
 from services.dualtrack_grid_core import simulate_conditional_grid
 from services.dualtrack_machine import DualTrackMachineRunner
+from services.dualtrack_scoring import _trades_from_fills
 from services.dualtrack_store import DualTrackPlanStore
 from services.lab_r5_grid import Cycle
 
@@ -114,7 +115,28 @@ def test_acceptance_7_5_runner_matches_frozen_golden_on_three_cycles(tmp_path: P
     assert saw_rearm is True
 
 
-def test_dt8_grid_floor_uses_plan_stop_as_bottom_and_stop_pnl_is_non_positive(tmp_path: Path) -> None:
+def test_machine_target_closes_the_same_units_opened_by_grid_entry(tmp_path: Path) -> None:
+    cycle = _cycle("2026-07-05_DAY", [4000.0, 3990.0, 4001.0])
+    output = tmp_path / "outputs"
+
+    DualTrackMachineRunner(output, config=TEST_CONFIG).run_plan(
+        cycle.cycle_id,
+        _plan(cycle.cycle_id),
+        cycle.bars,
+        prev_range=cycle.prev_range,
+        trend_gate_armed=False,
+    )
+
+    fills = json.loads((output / "dualtrack" / "fills" / f"{cycle.cycle_id}_machine.json").read_text(encoding="utf-8"))
+    trades = _trades_from_fills(fills, track="machine")
+    target = next(fill for fill in fills if fill["event"] == "target")
+
+    assert target["matched_entries"]
+    assert all(trade["remaining_units"] == 0.0 for trade in trades)
+    assert all(trade["status"] == "closed" for trade in trades)
+
+
+def test_dt8_grid_does_not_open_a_new_rung_at_the_plan_stop(tmp_path: Path) -> None:
     runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
     cycle = _cycle("2026-07-05_DAY", [4000.0, 3990.0, 3970.0], prev_range=100.0)
     floor = 3976.0
@@ -134,8 +156,8 @@ def test_dt8_grid_floor_uses_plan_stop_as_bottom_and_stop_pnl_is_non_positive(tm
     assert state["stop_hit"] is True
     assert entries
     assert stops
-    assert min(float(fill["price"]) for fill in entries) >= floor
-    assert any(float(fill["price"]) == floor for fill in entries)
+    assert min(float(fill["price"]) for fill in entries) > floor
+    assert not any(float(fill["price"]) == floor for fill in entries)
     assert all(float(fill["realized_pnl"]) <= 0 for fill in stops)
 
 

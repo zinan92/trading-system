@@ -190,7 +190,9 @@ def test_dualtrack_market_bars_endpoint_is_read_only_get_surface(tmp_path: Path)
     )
 
     assert response["schema_version"] == "dualtrack-market-bars-v1"
-    assert response["status"] == "seeded"
+    assert response["status"] == "blocked"
+    assert response["bar_count"] == 0
+    assert response["is_synthetic"] is False
     assert response["safety"]["read_only"] is True
     assert response["safety"]["writes_market_db"] is False
     assert response["safety"]["opens_order_clients"] is False

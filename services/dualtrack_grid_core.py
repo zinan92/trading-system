@@ -96,29 +96,32 @@ def simulate_conditional_grid(
                     contracts=_contracts_per_rung(execution_cost_model),
                     cost_rules=cost_rules,
                 )
+                entry_fill = _fill(
+                    cycle_id, fills, bar, side="buy" if sign > 0 else "sell",
+                    price=level, order_cost=entry_cost, layer=layer,
+                    rung=rung, event="entry", realized_pnl=-entry_cost.cost,
+                    sl=active_stop.price, tp=level + sign * spacing * tp_mult,
+                )
                 holding[rung] = {
                     "bar_index": i,
                     "notional": entry_cost.notional,
                     "contracts": entry_cost.contracts,
+                    "trade_id": entry_fill["fill_id"],
                 }
                 sides += 1
                 side_notional += entry_cost.notional
                 total_cost += entry_cost.cost
                 max_inventory = max(max_inventory, len(holding))
-                fills.append(_fill(
-                    cycle_id, fills, bar, side="buy" if sign > 0 else "sell",
-                    price=level, order_cost=entry_cost, layer=layer,
-                    rung=rung, event="entry", realized_pnl=-entry_cost.cost,
-                    sl=active_stop.price, tp=level + sign * spacing * tp_mult,
-                ))
+                fills.append(entry_fill)
         if breached:
             exit_price = _stop_exit_price(bar, active_stop)
             for rung in list(holding):
                 entry = holding[rung]
+                exit_notional = _matched_exit_notional(entry, entry_price=levels[rung], exit_price=exit_price)
                 exit_cost = dualtrack_order_cost(
                     config=cost_config,
                     price=exit_price,
-                    notional=float(entry["notional"]),
+                    notional=exit_notional,
                     contracts=entry.get("contracts"),
                     cost_rules=cost_rules,
                 )
@@ -127,12 +130,14 @@ def simulate_conditional_grid(
                 sides += 1
                 side_notional += exit_cost.notional
                 total_cost += exit_cost.cost
-                fills.append(_fill(
+                exit_fill = _fill(
                     cycle_id, fills, bar, side="sell" if sign > 0 else "buy",
                     price=exit_price, order_cost=exit_cost, layer=layer,
                     rung=rung, event="stop", realized_pnl=pnl - exit_cost.cost,
                     sl=active_stop.price, tp=None,
-                ))
+                )
+                exit_fill["matched_entries"] = [_matched_entry(entry, levels[rung], pnl, exit_cost.cost)]
+                fills.append(exit_fill)
             holding.clear()
             stop_hit = True
             if rearms < int(re_arm_max):
@@ -153,10 +158,11 @@ def simulate_conditional_grid(
             done = high >= target if sign > 0 else low <= target
             if done:
                 entry = holding[rung]
+                exit_notional = _matched_exit_notional(entry, entry_price=levels[rung], exit_price=target)
                 exit_cost = dualtrack_order_cost(
                     config=cost_config,
                     price=target,
-                    notional=float(entry["notional"]),
+                    notional=exit_notional,
                     contracts=entry.get("contracts"),
                     cost_rules=cost_rules,
                 )
@@ -166,12 +172,14 @@ def simulate_conditional_grid(
                 side_notional += exit_cost.notional
                 total_cost += exit_cost.cost
                 round_trips += 1
-                fills.append(_fill(
+                exit_fill = _fill(
                     cycle_id, fills, bar, side="sell" if sign > 0 else "buy",
                     price=target, order_cost=exit_cost, layer=layer,
                     rung=rung, event="target", realized_pnl=pnl - exit_cost.cost,
                     sl=active_stop.price, tp=target,
-                ))
+                )
+                exit_fill["matched_entries"] = [_matched_entry(entry, levels[rung], pnl, exit_cost.cost)]
+                fills.append(exit_fill)
                 del holding[rung]
 
     if holding:
@@ -179,10 +187,11 @@ def simulate_conditional_grid(
         last_close = float(last.close)
         for rung in list(holding):
             entry = holding[rung]
+            exit_notional = _matched_exit_notional(entry, entry_price=levels[rung], exit_price=last_close)
             exit_cost = dualtrack_order_cost(
                 config=cost_config,
                 price=last_close,
-                notional=float(entry["notional"]),
+                notional=exit_notional,
                 contracts=entry.get("contracts"),
                 cost_rules=cost_rules,
             )
@@ -191,12 +200,14 @@ def simulate_conditional_grid(
             sides += 1
             side_notional += exit_cost.notional
             total_cost += exit_cost.cost
-            fills.append(_fill(
+            exit_fill = _fill(
                 cycle_id, fills, last, side="sell" if sign > 0 else "buy",
                 price=last_close, order_cost=exit_cost, layer=layer,
                 rung=rung, event="flatten", realized_pnl=pnl - exit_cost.cost,
                 sl=active_stop.price, tp=None,
-            ))
+            )
+            exit_fill["matched_entries"] = [_matched_entry(entry, levels[rung], pnl, exit_cost.cost)]
+            fills.append(exit_fill)
         holding.clear()
 
     return GridResult(
@@ -284,6 +295,21 @@ def _stop_exit_price(bar: Bar, stop: GridStop) -> float:
 
 def _units(level: float, notional: float) -> float:
     return notional / level if level > 0 else 0.0
+
+
+def _matched_exit_notional(entry: dict[str, Any], *, entry_price: float, exit_price: float) -> float:
+    if entry.get("contracts") is not None:
+        return float(entry["notional"])
+    return _units(entry_price, float(entry["notional"])) * float(exit_price)
+
+
+def _matched_entry(entry: dict[str, Any], entry_price: float, gross_pnl: float, exit_cost: float) -> dict[str, Any]:
+    return {
+        "trade_id": str(entry["trade_id"]),
+        "units": _units(entry_price, float(entry["notional"])),
+        "gross_pnl": round(float(gross_pnl), 8),
+        "realized_pnl": round(float(gross_pnl) - float(exit_cost), 8),
+    }
 
 
 def _contracts_per_rung(execution_cost_model: dict[str, Any] | None) -> float | None:

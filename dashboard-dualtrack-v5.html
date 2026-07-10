@@ -78,8 +78,8 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
         <div class="chart-stage" id="mainChartStage">
           <div id="mainChart" class="chart-kline" role="img" aria-label="GOLD live standard kline" data-standard-kline-host></div>
           <div id="chartSyntheticWarning" class="synthetic-warning hidden" role="alert" aria-hidden="true" data-synthetic-market-warning>
-            <b>模拟数据 · 非真实价格</b>
-            <span>仅用于占位展示，不可用于交易信号或手动下单判断</span>
+            <b>非标准行情 · 已阻断</b>
+            <span>行情缺失、陈旧、替代源或模拟源均不会保留旧图；请先修复数据源</span>
           </div>
         </div>
         <div class="chart-foot" id="chartFoot"></div>
@@ -120,7 +120,7 @@ a{color:inherit;text-decoration:none}.mono,.num{font-family:var(--mono);font-var
   <div class="foot">
     <span><b>口径</b> 双轨各 $10,000 纸面 · 默认 10x · 机器轨盘中仅披露 realized/unrealized PnL</span>
     <span><b>协议</b> 盲答->锁定->揭示 · 无输入=AI 兜底 · 皆无=站下（fail-closed）</span>
-    <span><b>行情</b> 后端只读接口 `/api/dualtrack/market/bars`；优先 Tiger/COMEX，本地无数据时才降级到已缓存 feed</span>
+    <span><b>行情</b> 后端只读接口 `/api/dualtrack/market/bars`；固定 GOLD 数据源，不 fallback，不生成模拟价格</span>
     <span class="mono dim">dashboard-dualtrack-v5 · 2026-07-05</span>
   </div>
 </div>
@@ -132,7 +132,7 @@ const state = {
   cycle:null, plan:null, machine:null, human:null, attribution:null, ledger:null, market:null, context15:null, context1h:null, runtimeStatus:null,
   direction:"long", orderSide:"buy", orderType:"limit", orderNotional:4000,
   invalidation:[{side:"below", price:4150, confirm:"close_1m"}],
-  candles: seedCandles(), context15Candles:[], context1hCandles:[], mainKline:null, contextKlines:{}, mainTf:"1m"
+  candles:[], context15Candles:[], context1hCandles:[], mainKline:null, contextKlines:{}, mainTf:"1m"
 };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -305,10 +305,9 @@ async function api(path, options={}){
   return response.json();
 }
 async function loadMainMarket(){
-  const market = await api(`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`).catch(() => null);
+  const market = await api(`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`).catch(() => null);
   state.market = market;
-  const marketCandles = marketBarsToCandles(market);
-  if(marketCandles.length) state.candles = marketCandles;
+  state.candles = marketUsable(market) ? marketBarsToCandles(market) : [];
   return market;
 }
 async function loadAll(){
@@ -330,10 +329,9 @@ async function loadAll(){
     state.plan = plan; state.machine = machine; state.human = human; state.ledger = ledger; state.market = market; state.context15 = context15; state.context1h = context1h; state.runtimeStatus = runtimeStatus;
     state.context15Tf = context15Tf;
     state.context1hTf = context1hTf;
-    const marketCandles = marketBarsToCandles(market);
-    if(marketCandles.length) state.candles = marketCandles;
-    state.context15Candles = marketBarsToCandles(context15);
-    state.context1hCandles = marketBarsToCandles(context1h);
+    state.candles = marketUsable(market) ? marketBarsToCandles(market) : [];
+    state.context15Candles = marketUsable(context15) ? marketBarsToCandles(context15) : [];
+    state.context1hCandles = marketUsable(context1h) ? marketBarsToCandles(context1h) : [];
     state.attribution = cycleClosed(state.cycle) ? await api(`/api/dualtrack/attribution/${cycleId}`).catch(() => null) : null;
   }catch(error){
     $("planStatus").textContent = `API: ${error.message}`;
@@ -523,7 +521,7 @@ function renderChartFoot(){
 const DUALTRACK_SYNTHETIC_FLAGS = ["synthetic_seed", "display_only", "not_for_trading_signal"];
 function renderMainKline(){
   const chart = ensureMainKline();
-  const payload = state.market || seedMarketPayload(state.candles);
+  const payload = chartMarketPayload(state.market, state.mainTf);
   const adapted = StandardKline.adaptBarPayload(payload, {syntheticFlags:DUALTRACK_SYNTHETIC_FLAGS});
   const plan = state.plan?.human_plan;
   const fills = state.human?.fills || [];
@@ -546,7 +544,7 @@ function ensureMainKline(){
 }
 function renderContextKline(id, market, candles, label){
   const chart = ensureContextKline(id);
-  const payload = market || {schema_version:"dualtrack-market-bars-v1", status:"missing", source_mode:"missing", symbol:"GOLD", timeframe:label, provider:"none", quality_flags:["missing_context"], is_synthetic:false, bars:candles || []};
+  const payload = chartMarketPayload(market, label);
   const adapted = StandardKline.adaptBarPayload(payload, {syntheticFlags:DUALTRACK_SYNTHETIC_FLAGS});
   chart.setAdaptedData(adapted, {fit:false, indicators:{ema:[{period:50,color:token("--muted")}]}});
 }
@@ -660,14 +658,6 @@ function bucketFillMarkersByTime(markers){
   });
   return Array.from(byTime.values()).map(({baseText, count, ...marker}) => marker);
 }
-function seedCandles(){
-  const rows = []; let price = 4172; const start = Date.now() - 63 * 60000;
-  for(let i=0;i<64;i++){ const drift = Math.sin(i/5)*2 + (i-30)*.18; const close = price + drift + (i%7===0 ? -8 : 1.8); rows.push({timestamp:new Date(start + i * 60000).toISOString(), open:price, high:Math.max(price,close)+3, low:Math.min(price,close)-3, close, volume:0, provider:"frontend_synthetic_seed", quality_flags:["synthetic_seed","display_only","not_for_trading_signal"]}); price = close; }
-  return rows;
-}
-function seedMarketPayload(candles){
-  return {schema_version:"dualtrack-market-bars-v1", status:"seeded", source_mode:"synthetic_fallback", symbol:"GOLD", timeframe:"1m", provider:"frontend_synthetic_seed", quality_flags:["synthetic_seed","display_only","not_for_trading_signal"], is_synthetic:true, bars:candles || []};
-}
 function marketBarsToCandles(payload){
   return (payload?.bars || []).map(row => ({
     open:Number(row.open),
@@ -681,27 +671,52 @@ function marketBarsToCandles(payload){
   })).filter(row => Number.isFinite(row.close));
 }
 function isSyntheticMarket(payload){
-  if(!payload) return true;
+  if(!payload) return false;
   const provider = String(payload.provider || "").toLowerCase();
   const mode = String(payload.source_mode || "").toLowerCase();
   const flags = (payload.quality_flags || []).map(flag => String(flag).toLowerCase()).join(" ");
   return payload.is_synthetic === true || provider.includes("synthetic_seed") || mode.includes("synthetic") || flags.includes("synthetic_seed");
 }
+function marketUsable(payload){
+  if(!payload) return false;
+  const status = String(payload.status || "").toLowerCase();
+  const mode = String(payload.source_mode || "").toLowerCase();
+  return ["ready", "derived"].includes(status)
+    && payload.fresh === true
+    && !isSyntheticMarket(payload)
+    && !mode.includes("fallback");
+}
+function chartMarketPayload(payload, timeframe){
+  if(marketUsable(payload)) return payload;
+  return {
+    schema_version:"dualtrack-market-bars-v1",
+    status:"blocked",
+    source_mode:payload?.source_mode || "unavailable",
+    symbol:payload?.symbol || "GOLD",
+    timeframe:payload?.timeframe || timeframe || "1m",
+    provider:payload?.provider || "none",
+    quality_flags:[...(payload?.quality_flags || []), "market_unavailable"],
+    is_synthetic:payload?.is_synthetic === true,
+    access_issues:payload?.access_issues || ["market_unavailable"],
+    bars:[],
+  };
+}
 function renderSyntheticWarning(){
   const warning = $("chartSyntheticWarning");
   if(!warning) return;
-  const synthetic = isSyntheticMarket(state.market);
-  warning.classList.toggle("hidden", !synthetic);
-  warning.setAttribute("aria-hidden", synthetic ? "false" : "true");
+  const blocked = Boolean(state.market) && !marketUsable(state.market);
+  warning.classList.toggle("hidden", !blocked);
+  warning.setAttribute("aria-hidden", blocked ? "false" : "true");
 }
 function sourceModeLabel(mode){
   return {
     tiger_openapi:"原生K线",
     requested_symbol:"原生K线",
-    binance_usdm_fallback:"本地缓存",
+    binance_usdm_fallback:"已拒绝替代源",
     derived_from_1m:"由1m聚合",
     derived_from_5m:"由5m聚合",
-    synthetic_fallback:"模拟",
+    synthetic_fallback:"已拒绝模拟源",
+    unavailable:"行情不可用",
     missing:"缺失",
   }[mode] || mode || "--";
 }
@@ -712,10 +727,9 @@ function dashboardKlineSourceLabel(meta){
 function marketSourceText(){
   const market = state.market;
   if(!market) return "行情 · 后端读取中";
-  if(isSyntheticMarket(market)) return `行情 · 模拟数据 · 非真实价格 · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
+  if(!marketUsable(market)) return `行情 · 已阻断 · ${sourceModeLabel(market.source_mode)} · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
   const mode = sourceModeLabel(market.source_mode);
-  const fallback = market.source_mode === "binance_usdm_fallback" ? "（fallback：主源不可用或不新鲜）" : "";
-  return `行情 · ${mode}${fallback} · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
+  return `行情 · ${mode} · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
 }
 function marketHeaderMeta(market){
   if(!market) return "后端读取中";

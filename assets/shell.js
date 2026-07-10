@@ -6,7 +6,14 @@
     RUN: { label: "运行", tone: "run" },
     DEGRADED: { label: "降级", tone: "degraded" },
     BLOCKED: { label: "阻断", tone: "blocked" },
-    UNKNOWN: { label: "未连接", tone: "unknown" },
+    UNKNOWN: { label: "状态待确认", tone: "unknown" },
+  };
+  const UNKNOWN_CHECK_META = {
+    schedule: { label: "调度待确认", detail: "调度状态已过期，请检查调度" },
+    naked_position: { label: "对账待确认", detail: "持仓对账状态不完整，请检查运维" },
+    dualtrack_heartbeat: { label: "周期待确认", detail: "双轨周期状态不完整，请检查双轨任务" },
+    data_freshness: { label: "行情待确认", detail: "行情新鲜度无法确认，请检查数据源" },
+    system_state: { label: "系统待确认", detail: "系统状态读取失败，请检查运维" },
   };
   const ROOM_URLS = {
     command: "command-center.html",
@@ -95,9 +102,17 @@
     return (payload.checks || []).find(check => check.status === status) || null;
   }
 
+  function unknownStatusMeta(check) {
+    return UNKNOWN_CHECK_META[String(check?.id || "")] || {
+      label: STATUS_META.UNKNOWN.label,
+      detail: "全局状态信息不完整，请检查运维",
+    };
+  }
+
   function render(payload) {
     const overall = STATUS_META[payload.overall] ? payload.overall : "UNKNOWN";
     const meta = STATUS_META[overall];
+    const displayMeta = overall === "UNKNOWN" ? unknownStatusMeta(firstCheck(payload, "UNKNOWN")) : meta;
     const status = document.getElementById("gbShellStatus");
     const text = document.getElementById("gbShellStatusText");
     const freshness = document.getElementById("gbShellFreshness");
@@ -105,7 +120,9 @@
     if (!status || !text || !freshness || !banner) return;
 
     status.className = `gb-shell-status ${meta.tone}`;
-    text.textContent = meta.label;
+    status.title = displayMeta.detail || displayMeta.label;
+    status.setAttribute("aria-label", `全局系统状态：${displayMeta.label}。${displayMeta.detail || ""}`);
+    text.textContent = displayMeta.label;
     freshness.textContent = minutesAgo(payload.generated_at);
 
     const blocked = firstCheck(payload, "BLOCKED");

@@ -30,6 +30,8 @@ class DualTrackHumanEngine:
     def submit_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         ts = parse_utc(payload.get("ts"))
         cycle_id = str(payload.get("cycle_id") or cycle_window(ts).cycle_id)
+        if cycle_window(ts).cycle_id != cycle_id:
+            raise ValueError("order timestamp does not belong to cycle")
         side = str(payload.get("side") or "").lower()
         order_type = str(payload.get("order_type") or "market").lower()
         if side not in ORDER_SIDES:
@@ -47,6 +49,10 @@ class DualTrackHumanEngine:
         position_id = str(payload.get("position_id") or payload.get("trade_id") or "manual")
         symbol = str(payload.get("symbol") or "")
         event = _resolve_event(payload, rows, side=side, position_id=position_id, symbol=symbol)
+        sl = _optional_float(payload.get("sl"), "sl")
+        tp = _optional_float(payload.get("tp"), "tp")
+        if event == "entry":
+            _validate_protective_geometry(side=side, entry=price, sl=sl, tp=tp)
         notional = _optional_float(payload.get("notional"), "notional")
         contracts = _optional_float(payload.get("contracts", payload.get("quantity")), "contracts")
         if event in {"exit", "stop", "target", "flatten"}:
@@ -79,8 +85,8 @@ class DualTrackHumanEngine:
             "ts": ts.isoformat(),
             "side": side,
             "price": price,
-            "sl": _optional_float(payload.get("sl")),
-            "tp": _optional_float(payload.get("tp")),
+            "sl": sl,
+            "tp": tp,
             "layer": "manual",
             "event": event,
             "order_type": order_type,
@@ -474,6 +480,19 @@ def _protective_source_fill_id(cycle_id: str, trade_id: str, event: str, price: 
     return f"dualtrack-protective:{cycle_id}:{trade_id}:{event}:{float(price):.4f}"
 
 
+def _validate_protective_geometry(*, side: str, entry: float, sl: float | None, tp: float | None) -> None:
+    if side == "buy":
+        if sl is not None and sl >= entry:
+            raise ValueError("long stop must be below entry")
+        if tp is not None and tp <= entry:
+            raise ValueError("long target must be above entry")
+        return
+    if sl is not None and sl <= entry:
+        raise ValueError("short stop must be above entry")
+    if tp is not None and tp >= entry:
+        raise ValueError("short target must be below entry")
+
+
 def _finite_float(value: Any) -> float | None:
     try:
         parsed = float(value)
@@ -484,9 +503,12 @@ def _finite_float(value: Any) -> float | None:
 
 def _required_float(value: Any, field: str) -> float:
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be a number") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{field} must be finite")
+    return parsed
 
 
 def _optional_float(value: Any, field: str = "optional price") -> float | None:

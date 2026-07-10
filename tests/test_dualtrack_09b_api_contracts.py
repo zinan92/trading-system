@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import pipelines.dashboard_server as dashboard_server
-from services.journal_store import write_json
+from services.journal_store import load_json, write_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
@@ -46,6 +46,137 @@ class FakeFreshMarketFeed:
         }
 
 
+def test_dualtrack_mutations_require_same_local_origin() -> None:
+    allowed = dashboard_server._dualtrack_mutation_request_allowed
+
+    assert allowed("127.0.0.1:8765", "http://127.0.0.1:8765") is True
+    assert allowed("localhost:8765", "http://localhost:8765") is True
+    assert allowed("127.0.0.1:8765", "") is True
+    assert allowed("127.0.0.1:8765", "https://evil.example") is False
+    assert allowed("127.0.0.1:8765", "null") is False
+    assert allowed("trading.example:8765", "http://trading.example:8765") is False
+
+
+def test_network_order_gate_uses_server_clock_and_server_mark_for_market_exit() -> None:
+    payload = dashboard_server._prepare_dualtrack_network_order(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "ts": "1999-01-01T00:00:00+00:00",
+            "side": "sell",
+            "event": "exit",
+            "order_type": "market",
+            "price": 9999.0,
+        },
+        market={
+            "status": "ready",
+            "source_mode": "requested_symbol",
+            "fresh": True,
+            "is_synthetic": False,
+            "provider": "binance_usdm",
+            "latest_timestamp": "2026-07-05T01:59:00+00:00",
+            "latest_close": 105.0,
+        },
+        received_at="2026-07-05T02:00:00+00:00",
+        expected_provider="binance_usdm",
+    )
+
+    assert payload["ts"] == "2026-07-05T02:00:00+00:00"
+    assert payload["price"] == 105.0
+
+
+@pytest.mark.parametrize(
+    ("market", "message"),
+    [
+        ({"status": "stale", "fresh": False, "is_synthetic": False}, "server market data is stale"),
+        ({"status": "seeded", "fresh": False, "is_synthetic": True}, "synthetic market data is forbidden"),
+        ({"status": "ready", "fresh": True, "is_synthetic": False, "source_mode": "fallback"}, "server market source is not canonical"),
+    ],
+)
+def test_network_order_gate_fails_closed_on_untrusted_market(market: dict, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        dashboard_server._prepare_dualtrack_network_order(
+            {
+                "cycle_id": "2026-07-05_DAY",
+                "side": "buy",
+                "event": "entry",
+                "order_type": "limit",
+                "price": 100.0,
+                "notional": 1000.0,
+                "sl": 95.0,
+                "tp": 110.0,
+            },
+            market=market,
+            received_at="2026-07-05T02:00:00+00:00",
+        )
+
+
+@pytest.mark.parametrize(
+    ("market", "expected_provider", "message"),
+    [
+        (
+            {
+                "status": "ready",
+                "fresh": True,
+                "is_synthetic": False,
+                "source_mode": "requested_symbol",
+                "provider": "wrong_provider",
+                "latest_timestamp": "2026-07-05T01:59:00+00:00",
+                "latest_close": 105.0,
+            },
+            "binance_usdm",
+            "server market provider is not canonical",
+        ),
+        (
+            {
+                "status": "ready",
+                "fresh": True,
+                "is_synthetic": False,
+                "source_mode": "requested_symbol",
+                "provider": "binance_usdm",
+                "latest_timestamp": "2026-07-05T02:02:00+00:00",
+                "latest_close": 105.0,
+            },
+            "binance_usdm",
+            "server market timestamp is in the future",
+        ),
+        (
+            {
+                "status": "ready",
+                "fresh": True,
+                "is_synthetic": False,
+                "source_mode": "requested_symbol",
+                "provider": "binance_usdm",
+                "latest_timestamp": "2026-07-05T00:59:59+00:00",
+                "latest_close": 105.0,
+            },
+            "binance_usdm",
+            "server market timestamp is outside the current cycle",
+        ),
+    ],
+)
+def test_network_order_gate_rejects_wrong_provider_or_timestamp(
+    market: dict,
+    expected_provider: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        dashboard_server._prepare_dualtrack_network_order(
+            {
+                "cycle_id": "2026-07-05_DAY",
+                "side": "buy",
+                "event": "entry",
+                "order_type": "limit",
+                "price": 100.0,
+                "notional": 1000.0,
+                "sl": 95.0,
+                "tp": 110.0,
+            },
+            market=market,
+            received_at="2026-07-05T02:00:00+00:00",
+            expected_provider=expected_provider,
+        )
+
+
 def test_dualtrack_config_endpoint_exposes_display_config_without_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dashboard_server, "dualtrack_config", lambda: {**TEST_CONFIG, "broker_secret": "do-not-leak"})
 
@@ -56,6 +187,28 @@ def test_dualtrack_config_endpoint_exposes_display_config_without_secrets(monkey
     assert payload["safety"]["read_only"] is True
     assert "broker_secret" not in payload
     assert "secret" not in str(payload).lower()
+
+
+def test_order_post_response_routes_through_execution_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = {}
+
+    class FakeAdapter:
+        def submit_order(self, payload: dict) -> dict:
+            captured.update(payload)
+            return {"fill_id": "adapter-fill", "event": "entry"}
+
+    monkeypatch.setattr(dashboard_server, "build_execution_engine_adapter", lambda output_root: FakeAdapter())
+
+    response = dashboard_server.build_dualtrack_order_post_response(
+        {"cycle_id": "2026-07-05_DAY", "side": "buy"},
+        output_root=tmp_path / "outputs",
+    )
+
+    assert captured["side"] == "buy"
+    assert response == {"status": "filled", "fill": {"fill_id": "adapter-fill", "event": "entry"}}
 
 
 def test_human_trades_endpoint_returns_order_rows_with_unrealized_when_mark_fresh(
@@ -130,7 +283,10 @@ def test_human_manual_close_payload_can_exit_open_position_without_notional(tmp_
     assert trades["trades"][0]["remaining_units"] == 0.0
 
 
-def test_human_trades_endpoint_sweeps_stop_from_live_mark_price(tmp_path: Path) -> None:
+def test_human_trades_endpoint_is_read_only_and_ignores_client_mark(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"
     entry = dashboard_server.build_dualtrack_order_post_response(
@@ -150,6 +306,10 @@ def test_human_trades_endpoint_sweeps_stop_from_live_mark_price(tmp_path: Path) 
         output_root=output,
     )
 
+    fills_path = output / "dualtrack" / "fills" / f"{cycle_id}_human.json"
+    before = load_json(fills_path)
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
     payload = dashboard_server.build_dualtrack_trades_response(
         cycle_id,
         track="human",
@@ -159,12 +319,44 @@ def test_human_trades_endpoint_sweeps_stop_from_live_mark_price(tmp_path: Path) 
     )
 
     assert entry["fill"]["trade_id"]
-    assert payload["mark_price"] == 106.0
-    assert payload["mark_source"] == "binance_websocket:test"
-    assert payload["protective_sweep"]["status"] == "triggered"
-    assert payload["trades"][0]["status"] == "closed"
-    assert payload["trades"][0]["exit_price"] == 105.0
-    assert payload["summary"]["open_trade_count"] == 0
+    assert payload["mark_price"] == 105.0
+    assert payload["mark_source"] == "requested_symbol"
+    assert "protective_sweep" not in payload
+    assert payload["trades"][0]["status"] == "open"
+    assert payload["summary"]["open_trade_count"] == 1
+    assert load_json(fills_path) == before
+
+
+def test_human_payload_endpoint_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:10:00+00:00",
+            "side": "sell",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 100.0,
+            "notional": 1000.0,
+            "sl": 105.0,
+            "tp": 90.0,
+        },
+        output_root=output,
+    )
+    fills_path = output / "dualtrack" / "fills" / f"{cycle_id}_human.json"
+    before = load_json(fills_path)
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
+    payload = dashboard_server.build_dualtrack_human_response(
+        cycle_id,
+        output_root=output,
+        mark_price=106.0,
+        mark_source="browser_supplied",
+    )
+
+    assert "protective_sweep" not in payload
+    assert load_json(fills_path) == before
 
 
 def test_machine_trades_endpoint_returns_mid_cycle_order_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -17,6 +17,7 @@ from services.dualtrack_clock import (
     parse_utc,
 )
 from services.dualtrack_config import dualtrack_config
+from services.dualtrack_execution_adapter import build_execution_engine_adapter
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
@@ -51,6 +52,7 @@ class DualTrackCycleRunner:
         self.symbol = symbol or str(market_data.get("symbol") or "GOLD")
         self.timeframe = timeframe or str(market_data.get("timeframe") or "1m")
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
+        self.execution = build_execution_engine_adapter(self.output_root, config=self.config)
         self.machine = DualTrackMachineRunner(self.output_root, config=self.config)
         self.scorer = DualTrackScorer(self.output_root, config=self.config)
         self.market = MarketStore(self.market_db)
@@ -60,7 +62,16 @@ class DualTrackCycleRunner:
         if not bars:
             self.store.audit(cycle_id, "cycle_runner_pre_cycle_skipped", {"reason": "cycle_bars_missing"})
             return {"event": "pre_cycle", "cycle_id": cycle_id, "status": "skipped", "reason": "cycle_bars_missing"}
-        prev_range = self.previous_cycle_range(cycle_id)
+        rejected = self._market_bar_rejection_reason(bars)
+        if rejected:
+            self.store.audit(cycle_id, "cycle_runner_pre_cycle_skipped", {"reason": rejected})
+            return {"event": "pre_cycle", "cycle_id": cycle_id, "status": "skipped", "reason": rejected}
+        try:
+            prev_range = self.previous_cycle_range(cycle_id)
+        except ValueError as exc:
+            reason = str(exc)
+            self.store.audit(cycle_id, "cycle_runner_pre_cycle_skipped", {"reason": reason})
+            return {"event": "pre_cycle", "cycle_id": cycle_id, "status": "skipped", "reason": reason}
         human_plan = self.store.ensure_human_plan_from_market_view(
             cycle_id,
             cycle_open=float(bars[0].open),
@@ -101,7 +112,16 @@ class DualTrackCycleRunner:
         if not bars:
             self.store.audit(window.cycle_id, "cycle_runner_intraday_skipped", {"reason": "cycle_bars_missing"})
             return {"event": "intraday", "cycle_id": window.cycle_id, "status": "skipped", "reason": "cycle_bars_missing"}
-        prev_range = self.previous_cycle_range(window.cycle_id)
+        rejected = self._market_bar_rejection_reason(bars)
+        if rejected:
+            self.store.audit(window.cycle_id, "cycle_runner_intraday_skipped", {"reason": rejected})
+            return {"event": "intraday", "cycle_id": window.cycle_id, "status": "skipped", "reason": rejected}
+        try:
+            prev_range = self.previous_cycle_range(window.cycle_id)
+        except ValueError as exc:
+            reason = str(exc)
+            self.store.audit(window.cycle_id, "cycle_runner_intraday_skipped", {"reason": reason})
+            return {"event": "intraday", "cycle_id": window.cycle_id, "status": "skipped", "reason": reason}
         trend_gate_armed = self._frozen_or_freeze_trend_gate(window.cycle_id, as_of=window.start)
         state = self.machine.run_effective_plan(
             window.cycle_id,
@@ -111,7 +131,15 @@ class DualTrackCycleRunner:
             trend_gate_armed=trend_gate_armed,
         )
         self._write_runner_state(window.cycle_id, "intraday", {"bar_count": len(bars), "prev_range": prev_range})
-        return {"event": "intraday", "cycle_id": window.cycle_id, "status": "ran", "bar_count": len(bars), "state": state}
+        trade_notifications = self._notify_machine_trade_records(window.cycle_id)
+        return {
+            "event": "intraday",
+            "cycle_id": window.cycle_id,
+            "status": "ran",
+            "bar_count": len(bars),
+            "state": state,
+            "trade_notifications": trade_notifications,
+        }
 
     def close_cycle(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         existing = load_json(self.output_root / "dualtrack" / "attribution" / f"{cycle_id}.json")
@@ -121,6 +149,10 @@ class DualTrackCycleRunner:
         if not bars:
             self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": "cycle_bars_missing"})
             return {"event": "close", "cycle_id": cycle_id, "status": "skipped", "reason": "cycle_bars_missing"}
+        rejected = self._market_bar_rejection_reason(bars)
+        if rejected:
+            self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": rejected})
+            return {"event": "close", "cycle_id": cycle_id, "status": "skipped", "reason": rejected}
         human_fill_sync = self._sync_human_fills_before_close(cycle_id, as_of=as_of or cycle_window_from_id(cycle_id).end)
         if self._human_fill_sync_blocks_close(human_fill_sync):
             self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": "human_fill_sync_blocked", "human_fill_sync": human_fill_sync})
@@ -131,7 +163,12 @@ class DualTrackCycleRunner:
                 "reason": "human_fill_sync_blocked",
                 "human_fill_sync": human_fill_sync,
             }
-        prev_range = self.previous_cycle_range(cycle_id)
+        try:
+            prev_range = self.previous_cycle_range(cycle_id)
+        except ValueError as exc:
+            reason = str(exc)
+            self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": reason})
+            return {"event": "close", "cycle_id": cycle_id, "status": "skipped", "reason": reason}
         trend_gate_armed = self._frozen_or_freeze_trend_gate(cycle_id, as_of=cycle_window_from_id(cycle_id).start)
         self.machine.run_effective_plan(
             cycle_id,
@@ -148,6 +185,7 @@ class DualTrackCycleRunner:
         payload = {"event": "close", "cycle_id": cycle_id, "status": "closed", "attribution": attribution}
         if human_fill_sync is not None:
             payload["human_fill_sync"] = human_fill_sync
+        payload["trade_notifications"] = self._notify_machine_trade_records(cycle_id)
         return payload
 
     def fast_forward_day(self, date: str) -> dict[str, Any]:
@@ -200,14 +238,20 @@ class DualTrackCycleRunner:
 
     def sync_obsidian_human_plan(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         now = parse_utc(as_of)
-        reference_open = self._reference_open_for_plan(cycle_id, as_of=now)
+        try:
+            reference_open = self._reference_open_for_plan(cycle_id, as_of=now)
+            prev_cycle_range = self.previous_cycle_range(cycle_id)
+        except ValueError as exc:
+            reason = str(exc)
+            self.store.audit(cycle_id, "human_plan_import_skipped", {"reason": reason, "source": "obsidian"})
+            return {"cycle_id": cycle_id, "status": "skipped", "reason": reason}
         if reference_open is None:
             self.store.audit(cycle_id, "human_plan_import_skipped", {"reason": "reference_price_missing", "source": "obsidian"})
             return {"cycle_id": cycle_id, "status": "skipped", "reason": "reference_price_missing"}
         plan = self.store.ensure_human_plan_from_market_view(
             cycle_id,
             cycle_open=reference_open,
-            prev_cycle_range=self.previous_cycle_range(cycle_id),
+            prev_cycle_range=prev_cycle_range,
             now=now,
         )
         if not plan:
@@ -222,12 +266,89 @@ class DualTrackCycleRunner:
 
     def live_tick(self, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         now = parse_utc(as_of)
+        window = cycle_window(now)
         return {
             "event": "live_tick",
             "as_of": now.isoformat(),
+            "protective_sweep": self._sweep_human_protective_exits(window.cycle_id, now=now),
             "sync": self.sync_obsidian_human_plans(as_of=now, include_next=True),
             "intraday": self.intraday_tick(as_of=now),
         }
+
+    def _sweep_human_protective_exits(self, cycle_id: str, *, now: datetime) -> dict[str, Any]:
+        open_trades = [
+            position
+            for position in self.execution.snapshot(cycle_id).get("positions", [])
+            if str(position.get("status") or "open") == "open"
+            and float(position.get("remaining_units") or 0.0) > 0
+        ]
+        if not open_trades:
+            return {"status": "ok", "reason": "no_open_positions", "triggered": []}
+
+        latest = self._latest_market_record()
+        if not latest:
+            return {"status": "skipped", "reason": "market_data_missing", "triggered": []}
+        provider = str(latest.get("provider") or "")
+        flags = {str(item).lower() for item in latest.get("quality_flags") or []}
+        if "synthetic" in provider.lower() or "mock" in provider.lower() or any(
+            "synthetic" in flag or "mock" in flag for flag in flags
+        ):
+            return {"status": "skipped", "reason": "synthetic_market_data", "triggered": []}
+
+        expected_provider = str((self.config.get("market_data") or {}).get("provider") or "")
+        if expected_provider and provider != expected_provider:
+            return {"status": "skipped", "reason": "market_provider_mismatch", "triggered": []}
+        try:
+            market_ts = parse_utc(latest.get("timestamp"))
+        except (TypeError, ValueError):
+            return {"status": "skipped", "reason": "market_timestamp_invalid", "triggered": []}
+        age_seconds = (now - market_ts).total_seconds()
+        if age_seconds < -60:
+            return {"status": "skipped", "reason": "market_timestamp_in_future", "triggered": []}
+        if age_seconds > self._market_max_age_seconds():
+            return {"status": "skipped", "reason": "market_data_stale", "triggered": []}
+        if market_ts < cycle_window_from_id(cycle_id).start:
+            return {"status": "skipped", "reason": "market_data_outside_cycle", "triggered": []}
+
+        source = f"market_db:{provider or 'unknown'}"
+        sweep = self.execution.process_market_event({
+            "cycle_id": cycle_id,
+            "ts_event": now.isoformat(),
+            "price": latest.get("close"),
+            "fresh": True,
+            "is_synthetic": False,
+            "source": source,
+        })
+        return {**sweep, "source": source}
+
+    def _latest_market_record(self) -> dict[str, Any]:
+        records = [
+            self.market.load_latest_bar(self.symbol, self.timeframe),
+            self.market.load_latest_quote(self.symbol),
+        ]
+        valid = []
+        for record in records:
+            if not record or not record.get("timestamp"):
+                continue
+            try:
+                timestamp = parse_utc(record["timestamp"])
+            except (TypeError, ValueError):
+                continue
+            valid.append((timestamp, record))
+        return max(valid, key=lambda item: item[0])[1] if valid else {}
+
+    def _market_max_age_seconds(self) -> float:
+        market_data = self.config.get("market_data") if isinstance(self.config.get("market_data"), dict) else {}
+        configured = market_data.get("max_age_seconds")
+        if configured not in (None, ""):
+            return max(1.0, float(configured))
+        value = str(self.timeframe or "1m").lower()
+        if value.endswith("m"):
+            try:
+                return max(180.0, float(value[:-1]) * 180.0)
+            except ValueError:
+                pass
+        return 180.0
 
     def previous_cycle_range(self, cycle_id: str) -> float:
         window = cycle_window_from_id(cycle_id)
@@ -238,7 +359,24 @@ class DualTrackCycleRunner:
         )
         if not bars:
             return 0.0
+        rejected = self._market_bar_rejection_reason(bars)
+        if rejected:
+            raise ValueError(rejected)
         return round(max(float(bar.high) for bar in bars) - min(float(bar.low) for bar in bars), 8)
+
+    def _market_bar_rejection_reason(self, bars: Sequence[Bar]) -> str:
+        expected_provider = str((self.config.get("market_data") or {}).get("provider") or "")
+        for bar in bars:
+            provider = str(bar.provider or "")
+            flags = {str(item).lower() for item in bar.quality_flags or []}
+            provider_key = provider.lower()
+            if any(token in provider_key for token in ("synthetic", "mock", "fallback")) or any(
+                any(token in flag for token in ("synthetic", "mock", "fallback")) for flag in flags
+            ):
+                return "synthetic_market_data"
+            if expected_provider and provider != expected_provider:
+                return "market_provider_mismatch"
+        return ""
 
     def _cycle_bars(self, cycle_id: str, *, as_of: str | datetime | None = None) -> list[Bar]:
         window = cycle_window_from_id(cycle_id)
@@ -254,14 +392,39 @@ class DualTrackCycleRunner:
     def _reference_open_for_plan(self, cycle_id: str, *, as_of: str | datetime | None = None) -> float | None:
         bars = self._cycle_bars(cycle_id, as_of=as_of)
         if bars:
+            rejected = self._market_bar_rejection_reason(bars)
+            if rejected:
+                raise ValueError(rejected)
             return float(bars[0].open)
         latest = self.market.load_latest_bar(self.symbol, self.timeframe)
         if latest:
+            rejected = self._market_record_rejection_reason(latest)
+            if rejected:
+                raise ValueError(rejected)
             return float(latest["close"])
         quote = self.market.load_latest_quote(self.symbol)
         if quote:
+            rejected = self._market_record_rejection_reason(quote)
+            if rejected:
+                raise ValueError(rejected)
             return float(quote["close"])
         return None
+
+    def _market_record_rejection_reason(self, record: dict[str, Any]) -> str:
+        return self._market_bar_rejection_reason([
+            Bar(
+                symbol=str(record.get("symbol") or self.symbol),
+                timeframe=str(record.get("timeframe") or self.timeframe),
+                timestamp=str(record.get("timestamp") or ""),
+                open=float(record.get("open") or record.get("close") or 0.0),
+                high=float(record.get("high") or record.get("close") or 0.0),
+                low=float(record.get("low") or record.get("close") or 0.0),
+                close=float(record.get("close") or 0.0),
+                volume=float(record.get("volume") or 0.0),
+                provider=str(record.get("provider") or ""),
+                quality_flags=list(record.get("quality_flags") or []),
+            )
+        ])
 
     def _write_runner_state(self, cycle_id: str, event: str, detail: dict[str, Any]) -> None:
         path = self.output_root / "dualtrack" / "runner" / f"{cycle_id}.json"
@@ -353,6 +516,15 @@ class DualTrackCycleRunner:
 
     def _write_human_fill_sync_runner_report(self, cycle_id: str, report: dict[str, Any]) -> None:
         self._write_runner_state(cycle_id, "human_fill_sync", self._human_fill_sync_summary(report))
+
+    def _notify_machine_trade_records(self, cycle_id: str) -> dict[str, Any]:
+        try:
+            from services.dualtrack_feishu import DualTrackTradeRecordNotifier
+
+            return DualTrackTradeRecordNotifier(self.output_root, config=self.config).notify_cycle(cycle_id)
+        except Exception as exc:  # noqa: BLE001 - notification failure must not stop the paper runner.
+            self.store.audit(cycle_id, "machine_trade_notification_failed", {"reason": f"{exc.__class__.__name__}: {exc}"})
+            return {"status": "failed", "reason": f"{exc.__class__.__name__}: {exc}", "sent": 0, "failed": 1}
 
     def _human_fill_sync_summary(self, report: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(report, dict):

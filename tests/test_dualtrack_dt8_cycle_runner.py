@@ -4,11 +4,14 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 import pipelines.dualtrack_cycle_runner as cycle_runner_module
 from pipelines.dualtrack_cycle_runner import DualTrackCycleRunner
 from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
 from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
+from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_store import DualTrackPlanStore, validate_plan
 from services.journal_store import load_json, write_json
@@ -16,7 +19,14 @@ from services.market_store import MarketStore
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
-def _bar(ts: datetime, open_: float, close: float, *, symbol: str = "GOLD") -> Bar:
+def _bar(
+    ts: datetime,
+    open_: float,
+    close: float,
+    *,
+    symbol: str = "GOLD",
+    provider: str = "test",
+) -> Bar:
     return Bar(
         symbol=symbol,
         timeframe="1m",
@@ -26,15 +36,22 @@ def _bar(ts: datetime, open_: float, close: float, *, symbol: str = "GOLD") -> B
         low=min(open_, close),
         close=close,
         volume=1,
-        provider="test",
+        provider=provider,
     )
 
 
-def _seed_bars(store: MarketStore, start: datetime, closes: list[float], *, symbol: str = "GOLD") -> list[Bar]:
+def _seed_bars(
+    store: MarketStore,
+    start: datetime,
+    closes: list[float],
+    *,
+    symbol: str = "GOLD",
+    provider: str = "test",
+) -> list[Bar]:
     rows = []
     previous = closes[0]
     for index, close in enumerate(closes):
-        rows.append(_bar(start + timedelta(minutes=index), previous, close, symbol=symbol))
+        rows.append(_bar(start + timedelta(minutes=index), previous, close, symbol=symbol, provider=provider))
         previous = close
     store.upsert_bars(rows)
     return rows
@@ -245,6 +262,193 @@ def test_live_tick_syncs_obsidian_plan_and_runs_intraday(tmp_path: Path) -> None
     assert load_json(output / "dualtrack" / "runner" / "2026-07-05_DAY.json")[-1]["event"] == "intraday"
 
 
+def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    store = MarketStore(db)
+    start = datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc)
+    _seed_bars(store, start, [100.0, 106.0])
+    human = DualTrackHumanEngine(output, config=TEST_CONFIG)
+    human.submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+    })
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+
+    result = runner.live_tick(as_of="2026-07-05T01:01:30+00:00")
+
+    fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
+    assert result["protective_sweep"]["status"] == "triggered"
+    assert result["protective_sweep"]["source"] == "market_db:test"
+    assert len(fills) == 2
+    assert fills[-1]["event"] == "stop"
+    assert fills[-1]["price"] == 105.0
+
+
+def test_live_tick_refuses_synthetic_bar_for_human_protective_exit(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    store = MarketStore(db)
+    store.upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:01:00+00:00",
+            open=100.0,
+            high=106.0,
+            low=99.0,
+            close=106.0,
+            volume=0.0,
+            provider="local_synthetic_seed",
+            quality_flags=["synthetic_seed"],
+        )
+    ])
+    DualTrackHumanEngine(output, config=TEST_CONFIG).submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+    })
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+
+    result = runner.live_tick(as_of="2026-07-05T01:01:30+00:00")
+
+    fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
+    assert result["protective_sweep"] == {
+        "status": "skipped",
+        "reason": "synthetic_market_data",
+        "triggered": [],
+    }
+    assert len(fills) == 1
+
+
+def test_intraday_tick_refuses_synthetic_bars_for_machine_execution(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    MarketStore(db).upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:01:00+00:00",
+            open=4000.0,
+            high=4002.0,
+            low=3990.0,
+            close=3992.0,
+            volume=0.0,
+            provider="local_synthetic_seed",
+            quality_flags=["synthetic_seed"],
+        )
+    ])
+    DualTrackPlanStore(output, config=TEST_CONFIG).save_human_plan(
+        _plan(cycle_id),
+        now="2026-07-05T00:59:00+00:00",
+    )
+
+    result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).intraday_tick(
+        cycle_id,
+        as_of="2026-07-05T01:01:30+00:00",
+    )
+
+    assert result == {
+        "event": "intraday",
+        "cycle_id": cycle_id,
+        "status": "skipped",
+        "reason": "synthetic_market_data",
+    }
+    assert load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json") == []
+
+
+def test_previous_cycle_range_refuses_synthetic_input(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    store = MarketStore(db)
+    store.upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-04T13:01:00+00:00",
+            open=4000.0,
+            high=4010.0,
+            low=3990.0,
+            close=4005.0,
+            volume=0.0,
+            provider="local_synthetic_seed",
+            quality_flags=["synthetic_seed"],
+        )
+    ])
+    runner = DualTrackCycleRunner(output_root=tmp_path / "outputs", market_db=db, config=TEST_CONFIG)
+
+    with pytest.raises(ValueError, match="synthetic_market_data"):
+        runner.previous_cycle_range("2026-07-05_DAY")
+
+
+def test_live_tick_routes_trusted_market_event_through_execution_adapter(tmp_path: Path, monkeypatch) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    _seed_bars(MarketStore(db), datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [100.0, 106.0])
+    captured = {}
+
+    class FakeExecutionAdapter:
+        name = "fake"
+
+        def snapshot(self, cycle_id: str, **kwargs) -> dict:
+            return {"positions": [{"status": "open", "remaining_units": 1.0}]}
+
+        def process_market_event(self, event: dict) -> dict:
+            captured.update(event)
+            return {"status": "triggered", "triggered": [{"event": "stop"}]}
+
+    monkeypatch.setattr(cycle_runner_module, "build_execution_engine_adapter", lambda *args, **kwargs: FakeExecutionAdapter())
+
+    result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
+        as_of="2026-07-05T01:01:30+00:00"
+    )
+
+    assert result["protective_sweep"]["status"] == "triggered"
+    assert captured["cycle_id"] == "2026-07-05_DAY"
+    assert captured["price"] == 106.0
+    assert captured["source"] == "market_db:test"
+
+
+def test_live_tick_rejects_one_minute_protective_mark_older_than_three_minutes(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    _seed_bars(MarketStore(db), datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [100.0, 106.0])
+    DualTrackHumanEngine(output, config=TEST_CONFIG).submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+    })
+
+    result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
+        as_of="2026-07-05T01:04:01+00:00"
+    )
+
+    assert result["protective_sweep"] == {
+        "status": "skipped",
+        "reason": "market_data_stale",
+        "triggered": [],
+    }
+
+
 def test_d8_3_intraday_tick_is_idempotent_for_same_bar_set(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
@@ -385,12 +589,19 @@ def test_tiger_human_fill_sync_runs_before_close_and_scoring(tmp_path: Path) -> 
 def test_mgc_dualtrack_close_scores_machine_and_human_with_same_tiger_contract_cost_model(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     store = MarketStore(db)
-    _seed_bars(store, datetime(2026, 7, 5, 22, 0, tzinfo=timezone.utc), [4185.0, 4170.0, 4190.0], symbol="MGCmain")
+    _seed_bars(
+        store,
+        datetime(2026, 7, 5, 22, 0, tzinfo=timezone.utc),
+        [4185.0, 4170.0, 4190.0],
+        symbol="MGCmain",
+        provider="tiger_openapi:COMEX",
+    )
     _seed_bars(
         store,
         datetime(2026, 7, 6, 1, 0, tzinfo=timezone.utc),
         [4183.0, 4180.0, 4183.5, 4180.5, 4183.5],
         symbol="MGCmain",
+        provider="tiger_openapi:COMEX",
     )
     output = tmp_path / "outputs"
     cycle_id = "2026-07-06_DAY"
@@ -428,8 +639,20 @@ def test_cycle_runner_uses_configured_market_data_symbol_by_default(tmp_path: Pa
     output = tmp_path / "outputs"
     db = tmp_path / "market.db"
     store = MarketStore(db)
-    _seed_bars(store, datetime(2026, 7, 4, 13, 0, tzinfo=timezone.utc), [4180.0, 4175.0, 4185.0], symbol="MGCmain")
-    _seed_bars(store, datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [4183.0, 4182.0, 4184.0], symbol="MGCmain")
+    _seed_bars(
+        store,
+        datetime(2026, 7, 4, 13, 0, tzinfo=timezone.utc),
+        [4180.0, 4175.0, 4185.0],
+        symbol="MGCmain",
+        provider="tiger_openapi:COMEX",
+    )
+    _seed_bars(
+        store,
+        datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc),
+        [4183.0, 4182.0, 4184.0],
+        symbol="MGCmain",
+        provider="tiger_openapi:COMEX",
+    )
     _write_market_view(output)
     config = deepcopy(TEST_CONFIG)
     config["market_data"] = {"symbol": "MGCmain", "timeframe": "1m", "provider": "tiger_openapi:COMEX"}

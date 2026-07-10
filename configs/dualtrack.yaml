@@ -8,7 +8,7 @@
   "market_data": {
     "symbol": "GOLD",
     "timeframe": "1m",
-    "provider": ""
+    "provider": "binance_usdm"
   },
   "market_session": {
     "enabled": false,

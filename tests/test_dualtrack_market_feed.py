@@ -78,7 +78,7 @@ def test_dualtrack_market_feed_prefers_tiger_bars_over_binance_cache(tmp_path: P
     }
 
 
-def test_dualtrack_market_feed_falls_back_to_cached_binance_when_tiger_absent(tmp_path: Path) -> None:
+def test_dualtrack_market_feed_does_not_switch_source_when_primary_is_absent(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     MarketStore(db).upsert_bars(_bars("GOLD", "binance_usdm", 4000))
 
@@ -87,14 +87,24 @@ def test_dualtrack_market_feed_falls_back_to_cached_binance_when_tiger_absent(tm
         as_of="2026-07-05T01:03:00+00:00",
     )
 
-    assert payload["status"] == "fallback"
-    assert payload["source_mode"] == "binance_usdm_fallback"
-    assert payload["symbol"] == "GOLD"
-    assert payload["bar_count"] == 2
+    assert payload["status"] == "blocked"
+    assert payload["source_mode"] == "unavailable"
+    assert payload["bar_count"] == 0
     assert payload["is_synthetic"] is False
 
 
-def test_dualtrack_market_feed_skips_stale_tiger_and_uses_fresh_binance(tmp_path: Path) -> None:
+def test_dualtrack_market_feed_has_one_configured_default_source_not_a_fallback_chain(tmp_path: Path) -> None:
+    feed = DualTrackMarketFeed(market_db=tmp_path / "market_data.db", config=_config())
+
+    assert feed._candidates(symbol=None, timeframe=None) == [{
+        "symbol": "MGCmain",
+        "timeframe": "1m",
+        "provider": "tiger_openapi:COMEX",
+        "source_mode": "tiger_openapi",
+    }]
+
+
+def test_dualtrack_market_feed_surfaces_stale_primary_without_switching_source(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     store = MarketStore(db)
     store.upsert_bars(_bars("MGCmain", "tiger_openapi:COMEX", 4100))
@@ -105,13 +115,12 @@ def test_dualtrack_market_feed_skips_stale_tiger_and_uses_fresh_binance(tmp_path
         as_of="2026-07-06T03:30:00+00:00",
     )
 
-    assert payload["status"] == "fallback"
-    assert payload["source_mode"] == "binance_usdm_fallback"
-    assert payload["symbol"] == "GOLD"
-    assert payload["provider"] == "binance_usdm"
-    assert payload["fresh"] is True
+    assert payload["status"] == "stale"
+    assert payload["source_mode"] == "tiger_openapi"
+    assert payload["symbol"] == "MGCmain"
+    assert payload["provider"] == "tiger_openapi:COMEX"
+    assert payload["fresh"] is False
     assert payload["is_synthetic"] is False
-    assert any("stale_source:MGCmain:1m" in item for item in payload["access_issues"])
 
 
 def test_dualtrack_market_feed_requested_gold_one_minute_returns_real_rows(tmp_path: Path) -> None:
@@ -135,6 +144,24 @@ def test_dualtrack_market_feed_requested_gold_one_minute_returns_real_rows(tmp_p
     assert payload["fresh"] is True
     assert payload["is_synthetic"] is False
     assert payload["requested"] == {"symbol": "GOLD", "timeframe": "1m", "limit": 2}
+
+
+def test_dualtrack_market_feed_marks_one_minute_data_stale_after_three_minutes(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    MarketStore(db).upsert_bars(_bars("GOLD", "binance_usdm", 4000))
+
+    payload = DualTrackMarketFeed(market_db=db, config=_config()).snapshot(
+        symbol="GOLD",
+        timeframe="1m",
+        limit=2,
+        as_of="2026-07-05T01:06:00+00:00",
+    )
+
+    assert payload["latest_timestamp"] == "2026-07-05T01:02:00+00:00"
+    assert payload["age_minutes"] == 4.0
+    assert payload["max_age_minutes"] == 3.0
+    assert payload["status"] == "stale"
+    assert payload["fresh"] is False
 
 
 def test_dualtrack_market_feed_resolves_relative_config_db_from_repo_root(tmp_path: Path, monkeypatch) -> None:
@@ -245,7 +272,7 @@ def test_dualtrack_market_feed_keeps_stale_explicit_derived_symbol_instead_of_se
     assert "derived_source:GOLD:1m->15m" in payload["access_issues"]
 
 
-def test_dualtrack_market_feed_derives_requested_default_timeframe_from_fallback_symbol(tmp_path: Path) -> None:
+def test_dualtrack_market_feed_does_not_derive_from_a_fallback_symbol(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     rows = []
     start = datetime(2026, 7, 6, 3, 0, tzinfo=timezone.utc)
@@ -273,15 +300,13 @@ def test_dualtrack_market_feed_derives_requested_default_timeframe_from_fallback
         as_of="2026-07-06T03:10:00+00:00",
     )
 
-    assert payload["status"] == "derived"
-    assert payload["source_mode"] == "derived_from_1m"
-    assert payload["symbol"] == "GOLD"
-    assert payload["timeframe"] == "5m"
-    assert payload["bar_count"] == 2
+    assert payload["status"] == "blocked"
+    assert payload["source_mode"] == "unavailable"
+    assert payload["bar_count"] == 0
     assert payload["requested"] == {"symbol": "", "timeframe": "5m", "limit": 2}
 
 
-def test_dualtrack_market_feed_missing_db_uses_seed_without_creating_db(tmp_path: Path) -> None:
+def test_dualtrack_market_feed_missing_db_blocks_without_creating_data(tmp_path: Path) -> None:
     db = tmp_path / "missing" / "market_data.db"
 
     payload = DualTrackMarketFeed(market_db=db, config=_config()).snapshot(
@@ -289,11 +314,12 @@ def test_dualtrack_market_feed_missing_db_uses_seed_without_creating_db(tmp_path
         as_of="2026-07-05T01:03:59+00:00",
     )
 
-    assert payload["status"] == "seeded"
-    assert payload["source_mode"] == "synthetic_fallback"
-    assert payload["is_synthetic"] is True
-    assert "synthetic_seed" in payload["quality_flags"]
-    assert payload["bar_count"] == 4
-    assert payload["latest_timestamp"] == "2026-07-05T01:03:00+00:00"
+    assert payload["status"] == "blocked"
+    assert payload["source_mode"] == "unavailable"
+    assert payload["is_synthetic"] is False
+    assert payload["quality_flags"] == ["market_unavailable"]
+    assert payload["bar_count"] == 0
+    assert payload["latest_timestamp"] == ""
+    assert "market_db_missing" in payload["access_issues"]
     assert payload["safety"]["writes_market_db"] is False
     assert not db.exists()

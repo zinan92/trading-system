@@ -1236,6 +1236,9 @@ def test_dashboard_handler_disables_cache_for_dashboard_html():
         "/dashboard-replay.html",
         "/dashboard-replay-v4.html",
         "/ops-dashboard.html?v=123",
+        "/assets/shell.js",
+        "/assets/shell.css?v=20260710",
+        "/packages/standard-kline/standard-kline.js",
     ]:
         handler.path = path
         assert handler._should_disable_static_cache() is True

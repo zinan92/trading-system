@@ -2754,3 +2754,171 @@ Date: 2026-07-08
 - API validation: `http://127.0.0.1:8765/api/dualtrack/trades/2026-07-09_NIGHT?track=human` returns `display_cycle_id=2026-07-09_DAY`, `display_reason=latest_same_day`, `display_summary.realized_pnl=112.8825787`, and 6 display trades.
 - API validation: `http://127.0.0.1:8765/api/dualtrack/trades/2026-07-09_NIGHT?track=machine` returns `display_cycle_id=2026-07-09_DAY`, filters 4 invalid machine fills from display safety, and reports `display_summary.realized_pnl=72.79008591`.
 - Browser DOM validation: real Playwright tab against `http://127.0.0.1:8765/dashboard-dualtrack-split.html` showed `显示 2026-07-09 日盘 最近成交`, human PnL `+$112.88`, machine PnL `+$72.79`, `开仓价` / `平仓价` headers, and no machine fills containing `4,155.0` or `4,121.3`.
+
+## 2026-07-10 DualTrack P0 Trust Boundary and Execution Adapter
+
+### Decisions
+
+- Supersede the 2026-07-09 decision that let the split page pass its WebSocket
+  mark into a GET endpoint.
+  - All DualTrack GET endpoints are now pure reads.
+  - Client `mark_price` and `mark_source` values are ignored and no longer sent
+    by the split page.
+  - Human protective exits run from the scheduled `dualtrack-live-tick` path.
+
+- Fail closed at the network order boundary.
+  - DualTrack writes require the same local HTTP origin.
+  - The server replaces client timestamps with its receive time.
+  - Market exits use the canonical server mark.
+  - Stale, synthetic, fallback, and non-canonical server market snapshots block
+    order submission.
+
+- Enforce order geometry in the backend, not only in the UI.
+  - Long: `SL < entry < TP`.
+  - Short: `TP < entry < SL`.
+  - Order timestamps must belong to the requested cycle.
+  - The split confirm button is disabled when R cannot be computed or geometry
+    is invalid.
+
+- Correct machine exit sizing by quantity.
+  - Grid target, stop, and flatten fills now carry `matched_entries`.
+  - Exit notional is `entry units * exit price`, so price changes do not leave
+    residual positions.
+  - A grid rung at exactly the stop price is invalid and is excluded from the
+    frozen golden contract.
+
+- Remove generated and automatic substitute market data.
+  - `DualTrackMarketFeed` returns `blocked/unavailable` when its requested source
+    is missing.
+  - It no longer switches to a second provider or generates synthetic seed bars.
+  - The v5 browser no longer generates local synthetic candles.
+  - Old synthetic/mock/fallback rows are rejected by pre-cycle, intraday,
+    close-cycle, plan-import, and previous-range inputs.
+
+- Make the canonical market identity and clock explicit.
+  - The default DualTrack market identity is now
+    `GOLD / 1m / binance_usdm`.
+  - Network orders reject provider mismatch, invalid/future timestamps, and
+    market events from outside the current cycle.
+  - One-minute data becomes stale after three minutes, not fifteen.
+
+- Keep failure visible in both dashboard entry points.
+  - The v5 chart clears old candles when data is missing, stale, fallback, or
+    synthetic instead of leaving the previous chart on screen.
+  - Closed fill rows display original trade units; position and risk widgets
+    continue to use remaining units.
+  - At narrow chart widths, duplicate source text is hidden so all OHLC values
+    remain visible; full provenance remains in the chart title and data widget.
+  - Static shell and standard-kline assets are `no-store`, so a normal refresh
+    loads the current code.
+  - Global `UNKNOWN` now names the failed check, such as `调度待确认`, instead
+    of incorrectly saying the whole server is disconnected.
+  - A healthy open cycle now reports runtime `ok` instead of an unconditional
+    `warn`; machine fill count remains visible during the cycle and
+    `machine_fills_hidden=false`.
+
+- Introduce `ExecutionEngineAdapter` as the engine boundary.
+  - `legacy_paper` wraps the existing human ledger and is now used by dashboard
+    order submission and live-tick protective events.
+  - `nautilus` remains fail-closed until the isolated parity spike passes.
+  - The full contract and cutover gates live in
+    `docs/dualtrack-execution-engine-adapter-spec.md`.
+
+### Gotchas
+
+- `legacy_paper` still has no native order lifecycle; its canonical snapshot
+  therefore returns `orders=[]` and declares that capability explicitly.
+
+- Protective execution currently receives the latest canonical server mark at
+  the five-minute live-tick cadence. A brief wick that crosses SL and recovers
+  before the sampled mark can still be missed. The Nautilus spike must define a
+  bar high/low or trade-tick matching rule before cutover.
+
+- A fresh Binance WebSocket in the browser no longer overrides a stale local
+  server feed. The order will be blocked until the canonical server feed is
+  repaired; this is intentional fail-closed behavior.
+
+- Existing historical machine fill files are not rewritten. New grid runs close
+  equal units; historical derived positions need a separate, auditable rebuild.
+
+- Removing fallback changes the v5 main-chart behavior when Tiger is absent.
+  The caller now requests `symbol=GOLD` explicitly; missing GOLD data produces an
+  empty blocked chart rather than silently showing another source.
+
+- The current `/api/system-state` result is `UNKNOWN` because
+  `outputs/schedules/status_current.json` is stale, while DualTrack heartbeat
+  and GOLD data freshness are both RUN. The shell now says `调度待确认`; this
+  operational artifact still needs its scheduler owner to refresh it.
+
+- The standard-kline source label is hidden below a 720px chart-container
+  width to preserve complete OHLC text. Full source lineage remains available
+  in the title attribute and the dashboard data widget.
+
+### Evidence
+
+- Tests were written red-first for GET purity, client-mark rejection, order
+  geometry, cycle timestamps, scheduled protective exits, synthetic rejection,
+  same-local-origin writes, canonical server marks, machine unit conservation,
+  and adapter routing.
+- `tests/test_dualtrack_execution_engine_adapter.py` covers the compatibility
+  adapter snapshot, protective market event, reconciliation, and fail-closed
+  Nautilus factory behavior.
+- The machine golden fixture was intentionally updated after exit quantity and
+  stop-rung semantics changed.
+- Focused backend/frontend regression passed with `301 passed`; the standalone
+  standard-kline suite passed `21/21`.
+- Final full repository regression passed with `1307 passed in 410.11s`.
+- Real browser DOM measurement passed at 1600, 1440, 1280, and 390px: horizontal
+  overflow was zero, order-button/toolbar intersection area was zero, desktop
+  confirm height was 34px, and the mobile layout stayed single-column.
+- Browser request capture after a normal reload observed nine DualTrack API
+  requests and zero `mark_price` / `mark_source` query parameters. Console
+  warnings and errors were empty.
+- Browser-visible machine fill quantities were `2.4259`, `2.4308`, and `0.4852`
+  instead of zero; the main OHLC row fit its container without truncation; the
+  Binance WebSocket reached `已连接`.
+- The live market endpoint reported `provider=binance_usdm`,
+  `source_mode=requested_symbol`, `fresh=true`, and
+  `max_age_minutes=3.0`.
+- The live runtime endpoint reported all four checks `ok`, runtime status `ok`,
+  `machine_fill_count=12`, and `machine_fills_hidden=false`.
+
+## 2026-07-10 - 黄金飞书自动化切到双轨机器轨
+
+### Decisions
+
+- 飞书交易记录只接机器轨/机器鬼网格。
+  - 新增 `dualtrack_machine_brief`：每个 12 小时周期输出机器方向、关键位、失效条件、网格观察位、趋势腿状态。
+  - 新增 `dualtrack_trade_record`：只发送机器轨 entry / target / stop / final flatten 事件。
+  - 继续使用 report/trade Feishu sender；健康告警不再作为交易记录内容。
+
+- 早晚盘复盘只复盘机器鬼网格。
+  - 当 `schedule.profile=dualtrack_focus` 且存在 dualtrack artifact 时，`pm_portfolio_report` 不再读取旧 active strategy 的 performance/paper_orders。
+  - 复盘口径改成：黄金 12 小时行情、机器轨开仓数、平仓数、TP/SL、已实现 PnL、open 估算未实现 PnL、下一周期机器方向。
+
+- 交易记录发送必须防重复和防历史补发。
+  - 发送账本为 `outputs/dualtrack_trade_notifications/<date>.json`。
+  - 去重键为 `cycle_id + fill_id`。
+  - 首次接入某个 cycle 时默认只建立 baseline，不补发已有 fills；只有 `--backfill-existing` 才显式补发历史。
+
+- Intraday flatten 不是实际平仓。
+  - 当前周期运行中，machine simulation 会用 `flatten` 对最后一根 bar 做临时结算。
+  - Feishu 交易记录现在过滤掉周期未结束前的 `flatten`，避免把 mark-to-close 误报成真实平仓。
+
+### Gotchas
+
+- 本机 `dualtrack-cycle` launchd 每分钟运行。第一次把通知钩子接进 runner 后，后台 runner 立即扫描了当前周期已有 fills，并发出了 18 条交易记录；其中部分是 intraday flatten，语义上不应作为真实平仓。后续已改成首次 baseline + 过滤 intraday flatten，防止再次发生。
+
+- `outputs/feishu_reports/<date>.json` 是发送回执，不代表交易语义一定正确；需要结合 `dualtrack_trade_notifications` 的 `suppressed` / `delivered` / `event` 字段判断。
+
+- `trade_ticket_notifications` 仍是旧 ticket 审查链路；新的机器轨开/平仓不依赖旧 ticket。
+
+### Evidence
+
+- `tests/test_dualtrack_feishu.py` 覆盖机器轨作战单、entry/exit 交易记录、首次 baseline、intraday flatten 过滤。
+- Focused regression passed:
+  `python3 -m pytest tests/test_dualtrack_feishu.py tests/test_pm_portfolio_report.py tests/test_feishu_report_sender.py tests/test_dualtrack_dt8_cycle_runner.py`
+  returned `42 passed`.
+- Real current-cycle dry run after the flatten fix:
+  `python3 -m pipelines.dualtrack_trade_notifications --cycle-id 2026-07-10_DAY --json`
+  returned `sent=0 skipped=14 failed=0`.

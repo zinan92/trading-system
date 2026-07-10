@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
-from math import sin
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,8 +14,8 @@ class DualTrackMarketFeed:
 
     The dual-track dashboard should not open browser-side exchange sockets or
     initialize writer-capable feed clients. This reader uses SQLite read-only
-    mode and falls back in an explicit order: Tiger/COMEX bars, Binance USD-M
-    bars already present in the local DB, then display-only synthetic seed bars.
+    mode and reads exactly one requested or configured source. Missing or stale
+    data is surfaced as such; it never switches provider or creates seed bars.
     """
 
     def __init__(self, market_db: Path | None = None, config: dict | None = None) -> None:
@@ -54,15 +53,7 @@ class DualTrackMarketFeed:
                     bars = []
                 if bars:
                     freshness = self._freshness(bars[-1], checked_at=checked_at)
-                    if not freshness["fresh"] and candidate["source_mode"] != "requested_symbol":
-                        access_issues.append(
-                            f"stale_source:{candidate['symbol']}:{candidate['timeframe']}:"
-                            f"{bars[-1].get('timestamp', '')}"
-                        )
-                        continue
-                    status = "ready" if candidate["source_mode"] in {"tiger_openapi", "requested_symbol"} else "fallback"
-                    if not freshness["fresh"]:
-                        status = "stale"
+                    status = "ready" if freshness["fresh"] else "stale"
                     return self._payload(status, candidate, bars, requested, access_issues, freshness=freshness)
             for derived in self._derived_candidates(candidates, symbol=symbol, timeframe=timeframe, limit=resolved_limit):
                 freshness = self._freshness(derived["bars"][-1], checked_at=checked_at)
@@ -83,20 +74,23 @@ class DualTrackMarketFeed:
         else:
             access_issues.append("market_db_missing")
 
-        synthetic = self._seed_bars(resolved_limit, as_of=checked_at.isoformat())
-        candidate = {
-            "symbol": symbol or self._fallback_symbol(),
+        primary = candidates[0] if candidates else {}
+        access_issues.append(
+            f"market_source_unavailable:{primary.get('symbol') or symbol or ''}:{primary.get('timeframe') or timeframe or ''}"
+        )
+        unavailable = {
+            "symbol": primary.get("symbol") or symbol or "",
             "timeframe": timeframe or "1m",
-            "provider": "synthetic_seed:dualtrack_dashboard",
-            "source_mode": "synthetic_fallback",
+            "provider": primary.get("provider") or "",
+            "source_mode": "unavailable",
         }
         return self._payload(
-            "seeded",
-            candidate,
-            synthetic,
+            "blocked",
+            unavailable,
+            [],
             requested,
             access_issues,
-            freshness={"fresh": False, "age_minutes": 0.0, "max_age_minutes": 0.0},
+            freshness={"fresh": False, "age_minutes": None, "max_age_minutes": self._max_age_minutes(timeframe)},
         )
 
     def _candidates(self, *, symbol: str | None, timeframe: str | None) -> list[dict]:
@@ -109,7 +103,6 @@ class DualTrackMarketFeed:
             }]
 
         tiger = self.config.get("tiger_futures_feed", {}) or {}
-        binance = self.config.get("binance_usdm_1m_feed", {}) or {}
         requested_timeframe = timeframe or ""
         return [
             {
@@ -117,12 +110,6 @@ class DualTrackMarketFeed:
                 "timeframe": requested_timeframe or str(tiger.get("timeframe") or tiger.get("period") or "1m"),
                 "provider": str(tiger.get("provider") or "tiger_openapi:COMEX"),
                 "source_mode": "tiger_openapi",
-            },
-            {
-                "symbol": str(binance.get("output_symbol") or "GOLD"),
-                "timeframe": requested_timeframe or str(binance.get("timeframe") or binance.get("interval") or "1m"),
-                "provider": "binance_usdm",
-                "source_mode": "binance_usdm_fallback",
             },
         ]
 
@@ -249,6 +236,8 @@ class DualTrackMarketFeed:
     ) -> dict:
         latest = bars[-1] if bars else {}
         quality_flags = list(latest.get("quality_flags") or [])
+        if status == "blocked" and not bars:
+            quality_flags = ["market_unavailable"]
         provider = latest.get("provider") or source["provider"]
         is_synthetic = self._is_synthetic_source({**source, "provider": provider}, quality_flags=quality_flags)
         return {
@@ -291,31 +280,6 @@ class DualTrackMarketFeed:
         flags = " ".join(str(item).lower() for item in quality_flags)
         return "synthetic" in provider or "synthetic" in mode or "synthetic_seed" in flags
 
-    def _seed_bars(self, limit: int, *, as_of: str | None) -> list[dict]:
-        end = self._parse_as_of(as_of)
-        start = end - timedelta(minutes=limit - 1)
-        rows = []
-        price = 4172.0
-        for i in range(limit):
-            drift = sin(i / 5) * 2 + (i - 30) * 0.18
-            close = price + drift + (-8 if i % 7 == 0 else 1.8)
-            rows.append(
-                {
-                    "symbol": self._fallback_symbol(),
-                    "timeframe": "1m",
-                    "timestamp": (start + timedelta(minutes=i)).isoformat(),
-                    "open": price,
-                    "high": max(price, close) + 3,
-                    "low": min(price, close) - 3,
-                    "close": close,
-                    "volume": 0.0,
-                    "provider": "synthetic_seed:dualtrack_dashboard",
-                    "quality_flags": ["synthetic_seed", "display_only", "not_for_trading_signal"],
-                }
-            )
-            price = close
-        return rows
-
     def _parse_as_of(self, as_of: str | None) -> datetime:
         if as_of:
             parsed = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
@@ -340,15 +304,15 @@ class DualTrackMarketFeed:
         value = str(timeframe or "").strip().lower()
         if value.endswith("m"):
             try:
-                return max(15.0, float(value[:-1]) * 3.0)
+                return max(3.0, float(value[:-1]) * 3.0)
             except ValueError:
-                return 15.0
+                return 3.0
         if value.endswith("h"):
             try:
                 return max(120.0, float(value[:-1]) * 180.0)
             except ValueError:
                 return 120.0
-        return 15.0
+        return 3.0
 
     def _timeframe_seconds(self, timeframe: str | None) -> int | None:
         value = str(timeframe or "").strip().lower()

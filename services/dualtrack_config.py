@@ -14,7 +14,7 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
     "market_data": {
         "symbol": "GOLD",
         "timeframe": "1m",
-        "provider": "",
+        "provider": "binance_usdm",
     },
     "market_session": {
         "enabled": False,

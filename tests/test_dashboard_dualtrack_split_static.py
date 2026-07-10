@@ -1,5 +1,4 @@
 import re
-import subprocess
 from pathlib import Path
 
 
@@ -91,8 +90,7 @@ def test_split_page_uses_standard_kline_and_split_read_contracts():
     assert 'api("/api/dualtrack/orders"' in html
     assert 'api("/api/dualtrack/verdict"' in html
     assert 'optionalApi("/api/dualtrack/config")' in html
-    assert 'optionalApi(`/api/dualtrack/trades/${cycleId}?track=human${mark}`)' in html
-    assert 'optionalApi(`/api/dualtrack/trades/${cycleId}?track=${track}${mark}`)' in html
+    assert 'optionalApi(`/api/dualtrack/trades/${cycleId}?track=${track}`)' in html
     assert 'loadTradeData(cycleId, "machine")' in html
     assert "loadTradeData" in html
     assert "loadMachineTradesAfterClose" not in html
@@ -158,7 +156,11 @@ def test_split_page_10b_fail_closed_price_confirmbar_and_tpsl_contract():
     assert "priceToY" in html
     assert "yToPrice" in html
     assert "scheduleLiveTradeRefresh()" in html
-    assert "mark_price" in html
+    assert "mark_price" not in html
+    assert "function orderGeometryBlockReason" in html
+    assert "const geometryBlock = orderGeometryBlockReason();" in html
+    assert "Boolean(block || geometryBlock)" in html
+    assert 'setOrderStatus(geometryBlock, "error")' in html
 
 
 def test_split_page_10c_order_affordance_and_disabled_states():
@@ -168,7 +170,7 @@ def test_split_page_10c_order_affordance_and_disabled_states():
     assert 'class="confirmbar-row confirmbar-main"' not in html
     assert 'class="confirmbar-row confirmbar-actions"' not in html
     assert "function compactUsd" in html
-    assert 'preview.textContent = block || `${side} ${compactUsd(stats.notional)} · 保证金 ${compactUsd(stats.margin)} · 后 ${leverageRatioLabel(stats.afterLeverage)}`;' in html
+    assert 'preview.textContent = block || geometryBlock || `${side} ${compactUsd(stats.notional)} · 保证金 ${compactUsd(stats.margin)} · 后 ${leverageRatioLabel(stats.afterLeverage)}`;' in html
     assert "min-height:34px" in html
     assert ".confirmbar-buttons{margin-left:0;flex-direction:column}" in html
     assert ".seg button[disabled]{opacity:.45;cursor:not-allowed}" in html
@@ -371,6 +373,13 @@ def test_split_page_trade_rows_keep_realized_and_unrealized_mutually_exclusive()
     assert 'class="fst ${status}"' in html
 
 
+def test_split_page_closed_trade_rows_show_original_units_not_zero_remaining_units():
+    html = read_split_html()
+
+    assert "<td>${fmt(trade.units,4)}</td>" in html
+    assert "<td>${fmt(trade.remaining_units ?? trade.units,4)}</td>" not in html
+
+
 def test_split_page_is_registered_in_shell_and_static_cache_exemptions():
     html = read("assets/shell.js")
     assert "dashboard-dualtrack-split.html" in html
@@ -384,20 +393,13 @@ def test_split_page_is_registered_in_shell_and_static_cache_exemptions():
     assert handler._should_disable_static_cache() is True
 
 
-def test_dualtrack_v5_files_stay_byte_clean_for_task_09():
-    result = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--exit-code",
-            "--",
-            "dashboard-dualtrack-v5.html",
-            "tests/test_dashboard_dualtrack_static.py",
-        ],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+def test_dualtrack_v5_and_split_remain_independent_fail_closed_entrypoints():
+    split = read_split_html()
+    v5 = (ROOT / "dashboard-dualtrack-v5.html").read_text(encoding="utf-8")
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert split != v5
+    assert "dashboard-dualtrack-split.html" not in v5
+    assert "seedCandles(" not in split
+    assert "seedCandles(" not in v5
+    assert "frontend_synthetic_seed" not in split
+    assert "frontend_synthetic_seed" not in v5

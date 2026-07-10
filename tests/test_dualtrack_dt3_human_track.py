@@ -114,6 +114,53 @@ def test_in_plan_human_order_is_not_flagged(tmp_path: Path) -> None:
     assert fill["out_of_plan"] is False
 
 
+@pytest.mark.parametrize(
+    ("side", "sl", "tp", "message"),
+    [
+        ("buy", 4000.0, 4020.0, "long stop must be below entry"),
+        ("buy", 3980.0, 4000.0, "long target must be above entry"),
+        ("sell", 4000.0, 3980.0, "short stop must be above entry"),
+        ("sell", 4020.0, 4000.0, "short target must be below entry"),
+    ],
+)
+def test_human_entry_rejects_invalid_protective_geometry(
+    tmp_path: Path,
+    side: str,
+    sl: float,
+    tp: float,
+    message: str,
+) -> None:
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+
+    with pytest.raises(ValueError, match=message):
+        human.submit_order({
+            "cycle_id": "2026-07-05_DAY",
+            "ts": "2026-07-05T01:02:00+00:00",
+            "side": side,
+            "event": "entry",
+            "order_type": "limit",
+            "price": 4000.0,
+            "notional": 1000.0,
+            "sl": sl,
+            "tp": tp,
+        })
+
+
+def test_human_order_rejects_timestamp_outside_requested_cycle(tmp_path: Path) -> None:
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+
+    with pytest.raises(ValueError, match="order timestamp does not belong to cycle"):
+        human.submit_order({
+            "cycle_id": "2026-07-05_DAY",
+            "ts": "2026-07-05T13:02:00+00:00",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "market",
+            "price": 4000.0,
+            "notional": 1000.0,
+        })
+
+
 def test_human_entry_exit_pair_realizes_price_pnl_and_writes_trade(tmp_path: Path) -> None:
     cycle_id = "2026-07-05_DAY"
     store = DualTrackPlanStore(tmp_path / "outputs", config=TEST_CONFIG)

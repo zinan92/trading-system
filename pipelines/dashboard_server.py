@@ -25,6 +25,7 @@ from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
+from services.dualtrack_execution_adapter import build_execution_engine_adapter
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
@@ -117,6 +118,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/dashboard-replay.html",
             "/dashboard-replay-v4.html",
             "/ops-dashboard.html",
+            "/assets/shell.js",
+            "/assets/shell.css",
+            "/packages/standard-kline/standard-kline.js",
         }
 
     def do_OPTIONS(self) -> None:
@@ -220,6 +224,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._handle_connector_config_rollback()
             return
         if parsed.path in _DUALTRACK_POST_ENDPOINTS:
+            if not _dualtrack_mutation_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+            ):
+                self._write_error(403, "dualtrack_origin_blocked", "dualtrack writes require the same local origin")
+                return
             self._handle_dualtrack_post(parsed.path)
             return
         self._write_error(404, "not_found", "unknown POST endpoint")
@@ -247,10 +257,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         params = parse_qs(query)
         track = (params.get("track") or ["human"])[0]
-        mark_price = _first_query_value(params, "mark_price")
-        mark_source = _first_query_value(params, "mark_source")
         try:
-            self._write_json(200, build_dualtrack_trades_response(cycle_id, track=track, mark_price=mark_price, mark_source=mark_source))
+            self._write_json(200, build_dualtrack_trades_response(cycle_id, track=track))
         except PermissionError as exc:
             self._write_error(403, "dualtrack_trades_hidden", str(exc))
         except ValueError as exc:
@@ -268,12 +276,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if not _CYCLE_ID_PATTERN.match(cycle_id):
             self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
             return
-        params = parse_qs(query)
-        self._write_json(200, build_dualtrack_human_response(
-            cycle_id,
-            mark_price=_first_query_value(params, "mark_price"),
-            mark_source=_first_query_value(params, "mark_source"),
-        ))
+        self._write_json(200, build_dualtrack_human_response(cycle_id))
 
     def _handle_dualtrack_attribution_get(self, path: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -369,6 +372,21 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if path == "/api/dualtrack/plan":
                 result = build_dualtrack_plan_post_response(payload)
             elif path == "/api/dualtrack/orders":
+                received_at = parse_utc(None)
+                cfg = dualtrack_config()
+                market_data = cfg.get("market_data") if isinstance(cfg.get("market_data"), dict) else {}
+                market = DualTrackMarketFeed().snapshot(
+                    symbol=str(market_data.get("symbol") or "GOLD"),
+                    timeframe=str(market_data.get("timeframe") or "1m"),
+                    limit=1,
+                    as_of=received_at.isoformat(),
+                )
+                payload = _prepare_dualtrack_network_order(
+                    payload,
+                    market=market,
+                    received_at=received_at,
+                    expected_provider=str(market_data.get("provider") or ""),
+                )
                 result = build_dualtrack_order_post_response(payload)
             else:
                 result = build_dualtrack_verdict_post_response(payload)
@@ -718,8 +736,70 @@ def build_dualtrack_machine_response(cycle_id: str, *, output_root: Path | None 
 
 
 def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
-    fill = DualTrackHumanEngine(output_root).submit_order(payload)
+    fill = build_execution_engine_adapter(_dualtrack_output_root(output_root)).submit_order(payload)
     return {"status": "filled", "fill": fill}
+
+
+def _dualtrack_mutation_request_allowed(host: str, origin: str) -> bool:
+    host_value = str(host or "").strip()
+    try:
+        target = urlparse(f"http://{host_value}")
+    except ValueError:
+        return False
+    if target.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return False
+    origin_value = str(origin or "").strip()
+    if not origin_value:
+        return True
+    try:
+        source = urlparse(origin_value)
+        source_port = source.port or (80 if source.scheme == "http" else None)
+        target_port = target.port or 80
+    except ValueError:
+        return False
+    return (
+        source.scheme == "http"
+        and source.hostname == target.hostname
+        and source_port == target_port
+    )
+
+
+def _prepare_dualtrack_network_order(
+    payload: dict,
+    *,
+    market: dict,
+    received_at: str | datetime,
+    expected_provider: str = "",
+) -> dict:
+    if bool(market.get("is_synthetic")):
+        raise ValueError("synthetic market data is forbidden")
+    if market.get("status") != "ready" or market.get("fresh") is not True:
+        raise ValueError("server market data is stale")
+    if market.get("source_mode") != "requested_symbol":
+        raise ValueError("server market source is not canonical")
+    provider = str(market.get("provider") or "")
+    if expected_provider and provider != expected_provider:
+        raise ValueError("server market provider is not canonical")
+    mark = _finite_float(market.get("latest_close"))
+    if mark is None:
+        raise ValueError("server market price is missing")
+    now = parse_utc(received_at)
+    try:
+        market_ts = parse_utc(market.get("latest_timestamp"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("server market timestamp is invalid") from exc
+    if market_ts > now + timedelta(seconds=60):
+        raise ValueError("server market timestamp is in the future")
+    cycle_id = str(payload.get("cycle_id") or "")
+    current_window = cycle_window(now)
+    if current_window.cycle_id != cycle_id:
+        raise ValueError("order cycle is not current")
+    if market_ts < current_window.start:
+        raise ValueError("server market timestamp is outside the current cycle")
+    prepared = {**payload, "ts": now.isoformat()}
+    if str(payload.get("order_type") or "market").lower() == "market":
+        prepared["price"] = mark
+    return prepared
 
 
 def build_dualtrack_human_response(
@@ -729,15 +809,11 @@ def build_dualtrack_human_response(
     mark_price: float | str | None = None,
     mark_source: str | None = None,
 ) -> dict:
+    del mark_price, mark_source
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
     output = _dualtrack_output_root(output_root)
-    closed = _dualtrack_cycle_closed(cycle_id)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, override_price=mark_price, override_source=mark_source)
-    sweep = _dualtrack_sweep_human_protective_exits(output, cycle_id, mark)
-    payload = DualTrackHumanEngine(output).human_payload(cycle_id)
-    payload["protective_sweep"] = sweep
-    return payload
+    return DualTrackHumanEngine(output).human_payload(cycle_id)
 
 
 def build_dualtrack_trades_response(
@@ -749,6 +825,7 @@ def build_dualtrack_trades_response(
     mark_price: float | str | None = None,
     mark_source: str | None = None,
 ) -> dict:
+    del mark_price, mark_source
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
     normalized_track = str(track or "human").lower()
@@ -756,8 +833,7 @@ def build_dualtrack_trades_response(
         raise ValueError("track must be human or machine")
     closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
     output = _dualtrack_output_root(output_root)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of, override_price=mark_price, override_source=mark_source)
-    sweep = _dualtrack_sweep_human_protective_exits(output, cycle_id, mark) if normalized_track == "human" else {"status": "skipped", "reason": "machine_track"}
+    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
     rows = _dualtrack_trade_rows_for_cycle(output, cycle_id, normalized_track, mark)
     enriched = rows["trades"]
     summary = _trade_summary(enriched)
@@ -786,7 +862,6 @@ def build_dualtrack_trades_response(
         "display_trades": display["trades"],
         "display_summary": display["summary"],
         "display_safety": display["safety"],
-        "protective_sweep": sweep,
         "safety": {
             "read_only": True,
             "machine_mid_order_rows_hidden": False,
@@ -839,26 +914,13 @@ def _finite_float(value) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def _first_query_value(params: dict, key: str) -> str | None:
-    values = params.get(key) or []
-    if not values:
-        return None
-    value = values[0]
-    return None if value in (None, "") else str(value)
-
-
 def _dualtrack_mark_price(
     output_root: Path,
     cycle_id: str,
     *,
     closed: bool,
     as_of: str | None = None,
-    override_price: float | str | None = None,
-    override_source: str | None = None,
 ) -> dict:
-    override = _finite_float(override_price)
-    if override is not None:
-        return {"price": override, "fresh": True, "source": str(override_source or "client_mark_price")}
     if closed:
         cycle_rows = load_json(output_root / "dualtrack" / "cycles" / f"{cycle_id}.json")
         cycle = cycle_rows[-1] if cycle_rows else {}
@@ -875,16 +937,6 @@ def _dualtrack_mark_price(
         "fresh": bool(market.get("fresh")) and price is not None,
         "source": str(market.get("source_mode") or market.get("provider") or "market"),
     }
-
-
-def _dualtrack_sweep_human_protective_exits(output_root: Path, cycle_id: str, mark: dict) -> dict:
-    if not mark.get("fresh"):
-        return {"status": "skipped", "reason": "stale_mark_price", "triggered": []}
-    return DualTrackHumanEngine(output_root).sweep_protective_exits(
-        cycle_id,
-        mark_price=mark.get("price"),
-        source=f"dualtrack_protective_sweep:{mark.get('source') or 'market'}",
-    )
 
 
 def _dualtrack_trade_rows_for_cycle(output_root: Path, cycle_id: str, track: str, mark: dict) -> dict:
@@ -965,7 +1017,13 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     output = Path(output_root) if output_root else ROOT / load_pipeline_config().get("output_root", "outputs")
     store = DualTrackPlanStore(output, config=cfg)
     machine = DualTrackMachineRunner(output, config=cfg).machine_payload(window.cycle_id, as_of=now)
-    market = DualTrackMarketFeed().snapshot(limit=5, as_of=now.isoformat())
+    market_config = cfg.get("market_data") if isinstance(cfg.get("market_data"), dict) else {}
+    market = DualTrackMarketFeed().snapshot(
+        symbol=str(market_config.get("symbol") or "GOLD"),
+        timeframe=str(market_config.get("timeframe") or "1m"),
+        limit=5,
+        as_of=now.isoformat(),
+    )
     runner_rows = _json_rows(output / "dualtrack" / "runner" / f"{window.cycle_id}.json")
     latest_runner = runner_rows[-1] if runner_rows else {}
     runner_ts = latest_runner.get("ts")
@@ -986,7 +1044,13 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     effective = store.effective_plan(window.cycle_id, as_of=now)
     reveal_allowed = store.reveal_allowed(window.cycle_id, as_of=now)
     closed = now >= window.end
-    market_ok = bool(market.get("fresh")) and market.get("source_mode") != "synthetic_fallback"
+    market_ok = (
+        market.get("status") == "ready"
+        and market.get("fresh") is True
+        and market.get("source_mode") == "requested_symbol"
+        and market.get("is_synthetic") is not True
+        and (not market_config.get("provider") or market.get("provider") == market_config.get("provider"))
+    )
     stood_down = bool(cycle_state.get("machine_stood_down", effective is None))
     sample_ok = bool(effective) and market_ok and runner_ok and not stood_down
     checks = [
@@ -1015,7 +1079,7 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
             "attribution_available": bool(attribution_rows),
             "ledger_available": bool(ledger_rows),
         }))
-    status = "blocked" if any(item["status"] == "blocked" for item in checks) else "warn" if not closed else "ok"
+    status = "blocked" if any(item["status"] == "blocked" for item in checks) else "ok"
     next_tick_due_at = None
     if runner_ts:
         next_tick_due_at = (parse_utc(runner_ts) + timedelta(seconds=300)).isoformat()
@@ -1051,8 +1115,8 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
             "machine_stood_down": stood_down,
             "machine_pnl": round(float(machine.get("realized_pnl", 0.0)) + float(machine.get("unrealized_pnl", 0.0)), 8),
             "human_fill_count": len(human_fills),
-            "machine_fill_count": len(machine_fills) if closed else None,
-            "machine_fills_hidden": not closed,
+            "machine_fill_count": len(machine_fills),
+            "machine_fills_hidden": False,
         },
         "closeout": {
             "attribution_available": bool(attribution_rows),

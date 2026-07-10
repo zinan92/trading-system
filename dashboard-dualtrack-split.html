@@ -670,18 +670,7 @@ async function loadAll(){
 }
 
 async function loadTradeData(cycleId, track){
-  const mark = liveMarkQuery(track, "&");
-  if(track === "human") return optionalApi(`/api/dualtrack/trades/${cycleId}?track=human${mark}`);
-  return optionalApi(`/api/dualtrack/trades/${cycleId}?track=${track}${mark}`);
-}
-
-function liveMarkQuery(track, prefix="?"){
-  const market = track === "machine" ? state.market.machine : state.market.human;
-  const price = markPriceForTrack(track);
-  if(!Number.isFinite(price) || !market || market.fresh === false || market.is_synthetic === true) return "";
-  const source = state.marketStream.status === "已连接" ? `binance_websocket:${market.timeframe || mainTf()}` : (market.source_mode || market.provider || "client_market");
-  const params = new URLSearchParams({mark_price:String(price), mark_source:source});
-  return `${prefix}${params.toString()}`;
+  return optionalApi(`/api/dualtrack/trades/${cycleId}?track=${track}`);
 }
 
 function scheduleLiveTradeRefresh(){
@@ -700,7 +689,7 @@ async function refreshTradeStateFromLiveMarket(){
   const cycleId = state.cycle?.cycle_id;
   if(!cycleId) return;
   const [human, humanTrades, machineTrades] = await Promise.all([
-    optionalApi(`/api/dualtrack/human/${cycleId}${liveMarkQuery("human", "?")}`),
+    optionalApi(`/api/dualtrack/human/${cycleId}`),
     loadTradeData(cycleId, "human"),
     loadTradeData(cycleId, "machine"),
   ]);
@@ -1026,7 +1015,7 @@ function renderTradeRows(selector, trades, options={}){
     const canClose = options.track === "human" && status === "open" && actionId;
     const pending = state.closePendingTradeId && state.closePendingTradeId === actionId;
     const action = canClose ? `<button type="button" class="mini-close" data-close-trade="${esc(actionId)}" ${state.closePendingTradeId ? "disabled" : ""}>${pending ? "平仓中" : "平仓"}</button>` : "--";
-    return `<tr><td><span class="fst ${status}"><span class="dot"></span>${statusLabel}</span></td><td class="${trade.side === "short" ? "neg" : "pos"}">${side}</td><td>${fmt(trade.remaining_units ?? trade.units,4)}</td><td>${formatTradeTime(trade.entry_ts)}</td><td>${holdingDuration(trade)}</td><td>${fmt(trade.entry_price,1)}</td><td>${closeTime}</td><td>${closePrice}</td><td class="${signedClass(trade.realized_pnl)}">${realized}</td><td class="${signedClass(trade.unrealized_pnl)}">${unrealized}</td><td>${action}</td></tr>`;
+    return `<tr><td><span class="fst ${status}"><span class="dot"></span>${statusLabel}</span></td><td class="${trade.side === "short" ? "neg" : "pos"}">${side}</td><td>${fmt(trade.units,4)}</td><td>${formatTradeTime(trade.entry_ts)}</td><td>${holdingDuration(trade)}</td><td>${fmt(trade.entry_price,1)}</td><td>${closeTime}</td><td>${closePrice}</td><td class="${signedClass(trade.realized_pnl)}">${realized}</td><td class="${signedClass(trade.unrealized_pnl)}">${unrealized}</td><td>${action}</td></tr>`;
   }).join("");
 }
 
@@ -1370,13 +1359,14 @@ function renderTradingControls(){
   if(state.order.side && state.order.tpslMode === "suggested") applySuggestedTpSl();
   renderSuggestionCopy();
   const block = orderBlockReason();
+  const geometryBlock = orderGeometryBlockReason();
   const confirmbar = $("[data-confirmbar]");
   const status = $("[data-order-status]");
   const submit = $("[data-submit-order]");
   const preview = $("[data-human-order-preview]");
   const visible = Boolean(state.order.side);
   confirmbar?.classList.toggle("hidden", !visible);
-  const disabled = Boolean(block) || !visible || state.order.pending;
+  const disabled = Boolean(block || geometryBlock) || !visible || state.order.pending;
   $$("[data-order-side]").forEach(button => {
     button.disabled = Boolean(block) || state.order.pending;
     button.title = button.disabled ? (block || "当前阶段不可下单") : "";
@@ -1385,7 +1375,7 @@ function renderTradingControls(){
   if(preview){
     const side = state.order.side === "sell" ? "空" : state.order.side === "buy" ? "多" : "等待";
     const stats = orderPreviewStats();
-    preview.textContent = block || `${side} ${compactUsd(stats.notional)} · 保证金 ${compactUsd(stats.margin)} · 后 ${leverageRatioLabel(stats.afterLeverage)}`;
+    preview.textContent = block || geometryBlock || `${side} ${compactUsd(stats.notional)} · 保证金 ${compactUsd(stats.margin)} · 后 ${leverageRatioLabel(stats.afterLeverage)}`;
   }
   const orderPrice = $("[data-order-price]");
   const orderSl = $("[data-order-sl]");
@@ -1395,8 +1385,8 @@ function renderTradingControls(){
   if(orderTp && document.activeElement !== orderTp) orderTp.value = state.order.tp != null ? Number(state.order.tp).toFixed(1) : "";
   [orderPrice, orderSl, orderTp].forEach(input => { if(input) input.disabled = disabled && !state.order.side; });
   if(status){
-    const text = state.order.pending ? "提交中..." : (block || state.order.message || (state.order.side ? "等待确认 · TP/SL 到价本地平仓" : "选择做多/做空后确认参数"));
-    const kind = block ? "error" : state.order.messageKind;
+    const text = state.order.pending ? "提交中..." : (block || geometryBlock || state.order.message || (state.order.side ? "等待确认 · TP/SL 到价本地平仓" : "选择做多/做空后确认参数"));
+    const kind = block || geometryBlock ? "error" : state.order.messageKind;
     status.textContent = text;
     status.className = `status-line ${kind || ""}`;
   }
@@ -1420,6 +1410,13 @@ function orderRiskReward(){
   const risk = side === "sell" ? sl - entry : entry - sl;
   if(!Number.isFinite(reward) || !Number.isFinite(risk) || risk <= 0 || reward <= 0) return {valid:false, value:null};
   return {valid:true, value:reward / risk};
+}
+function orderGeometryBlockReason(){
+  if(!state.order.side) return "";
+  const ratio = orderRiskReward();
+  if(!ratio) return "请设置有效的入场价、SL 和 TP";
+  if(!ratio.valid) return "TP/SL 方向无效";
+  return "";
 }
 function renderRiskRewardBadge(){
   const badge = $("[data-risk-reward-r]");
@@ -1515,6 +1512,17 @@ function friendlyErrorMessage(message){
   if(text.includes("price must be a number")) return "入场价缺失或不是数字。";
   if(text.includes("sl must be a number")) return "SL 缺失或不是数字。";
   if(text.includes("tp must be a number")) return "TP 缺失或不是数字。";
+  if(text.includes("long stop must be below entry")) return "做多时，SL 必须低于入场价。";
+  if(text.includes("long target must be above entry")) return "做多时，TP 必须高于入场价。";
+  if(text.includes("short stop must be above entry")) return "做空时，SL 必须高于入场价。";
+  if(text.includes("short target must be below entry")) return "做空时，TP 必须低于入场价。";
+  if(text.includes("server market data is stale")) return "服务端行情不新鲜，已禁止下单。";
+  if(text.includes("synthetic market data is forbidden")) return "服务端检测到模拟行情，已禁止下单。";
+  if(text.includes("server market source is not canonical")) return "服务端行情来源不可信，已禁止下单。";
+  if(text.includes("server market provider is not canonical")) return "服务端行情提供方不符合配置，已禁止下单。";
+  if(text.includes("server market timestamp is in the future")) return "服务端行情时间异常，已禁止下单。";
+  if(text.includes("server market timestamp is outside the current cycle")) return "服务端行情不属于当前周期，已禁止下单。";
+  if(text.includes("server market timestamp is invalid")) return "服务端行情缺少有效时间，已禁止下单。";
   return text || "操作失败。";
 }
 function selectOrderSide(side){
@@ -1672,9 +1680,10 @@ function updateActionGates(){
     });
     root.querySelectorAll("[data-order-side], [data-submit-order]").forEach(button => {
       const block = orderBlockReason();
-      const disabled = track !== "human" || Boolean(block) || state.order.pending || (button.matches("[data-submit-order]") && !state.order.side);
+      const geometryBlock = button.matches("[data-submit-order]") ? orderGeometryBlockReason() : "";
+      const disabled = track !== "human" || Boolean(block || geometryBlock) || state.order.pending || (button.matches("[data-submit-order]") && !state.order.side);
       button.disabled = disabled;
-      button.title = disabled ? (block || disabledReason || "当前阶段不可下单") : "";
+      button.title = disabled ? (block || geometryBlock || disabledReason || "当前阶段不可下单") : "";
     });
     root.querySelectorAll("[data-submit-verdict]").forEach(button => {
       const disabled = track !== "human" || state.verdictPending || state.realPhase !== "post" || !viewingRealPhase;
@@ -1727,6 +1736,12 @@ async function submitOrder(event){
   const block = orderBlockReason();
   if(block){
     setOrderStatus(block, "error");
+    renderTradingControls();
+    return;
+  }
+  const geometryBlock = orderGeometryBlockReason();
+  if(geometryBlock){
+    setOrderStatus(geometryBlock, "error");
     renderTradingControls();
     return;
   }
