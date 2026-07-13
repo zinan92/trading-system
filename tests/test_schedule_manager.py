@@ -680,7 +680,40 @@ def test_schedule_status_detects_installed_and_loaded_jobs(tmp_path: Path):
     assert result["loaded_count"] == 9
     assert result["matching_generated_count"] == 9
     assert result["active_current_count"] == 9
+    assert result["healthy_current_count"] == 9
     assert all(job["matches_generated"] for job in result["jobs"])
+
+
+def test_schedule_status_rejects_loaded_job_with_failed_last_execution(tmp_path: Path):
+    root = tmp_path / "outputs"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    schedule = _full_schedule_manager(root, repo).build(review_hour=22, review_minute=30, dashboard_port=9876)
+    launch_agents = tmp_path / "LaunchAgents"
+    launch_agents.mkdir()
+    for job in schedule["jobs"]:
+        source = Path(job["plist"])
+        (launch_agents / source.name).write_bytes(source.read_bytes())
+
+    failed_label = "com.wendy.trading-orchestrator.dualtrack-live-tick"
+
+    def fake_runner(command: list[str]) -> subprocess.CompletedProcess:
+        if command[-1].endswith(failed_label):
+            stdout = "state = not running\nruns = 296\nlast exit code = 78: EX_CONFIG\n"
+        else:
+            stdout = "state = not running\nruns = 10\nlast exit code = 0\n"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    result = ScheduleStatus(root, launch_agents_dir=launch_agents, command_runner=fake_runner).run("2026-07-13")
+
+    assert result["status"] == "runtime_failed"
+    assert result["active_current_count"] == 9
+    assert result["healthy_current_count"] == 8
+    assert result["runtime_failed_jobs"] == [failed_label]
+    failed_job = next(job for job in result["jobs"] if job["label"] == failed_label)
+    assert failed_job["loaded"] is True
+    assert failed_job["runtime_healthy"] is False
+    assert failed_job["last_exit_code"] == 78
 
 
 def test_schedule_installer_copies_plists_and_records_receipt(tmp_path: Path):

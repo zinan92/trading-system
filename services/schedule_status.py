@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,18 +40,31 @@ class ScheduleStatus:
         loaded_count = sum(1 for job in jobs if job.get("installed") and job.get("loaded"))
         matching_generated_count = sum(1 for job in jobs if job.get("installed") and job.get("matches_generated"))
         active_current_count = sum(1 for job in jobs if job.get("installed") and job.get("matches_generated") and job.get("loaded"))
+        healthy_current_count = sum(
+            1
+            for job in jobs
+            if job.get("installed") and job.get("matches_generated") and job.get("loaded") and job.get("runtime_healthy")
+        )
         missing_installed_jobs = sorted(str(job.get("label") or "") for job in jobs if not job.get("installed"))
         mismatched_jobs = sorted(str(job.get("label") or "") for job in jobs if job.get("installed") and not job.get("matches_generated"))
         unloaded_jobs = sorted(str(job.get("label") or "") for job in jobs if job.get("installed") and job.get("matches_generated") and not job.get("loaded"))
+        runtime_failed_jobs = sorted(
+            str(job.get("label") or "")
+            for job in jobs
+            if job.get("installed") and job.get("matches_generated") and job.get("loaded") and not job.get("runtime_healthy")
+        )
         if not schedule:
             status = "missing"
             message = "schedule artifacts have not been generated"
         elif missing_generated:
             status = "fail"
             message = "generated schedule is missing required jobs"
-        elif active_current_count == len(required) and not orphan_jobs:
+        elif runtime_failed_jobs:
+            status = "runtime_failed"
+            message = "launchd jobs are loaded but at least one last execution failed"
+        elif healthy_current_count == len(required) and not orphan_jobs:
             status = "active"
-            message = "all launchd jobs match the generated schedule and are loaded"
+            message = "all launchd jobs match the generated schedule, are loaded, and have no failed last execution"
         elif matching_generated_count == len(required) and not orphan_jobs:
             status = "installed"
             message = "all launchd jobs match the generated schedule, but at least one is not loaded"
@@ -80,9 +94,11 @@ class ScheduleStatus:
             "loaded_count": loaded_count,
             "matching_generated_count": matching_generated_count,
             "active_current_count": active_current_count,
+            "healthy_current_count": healthy_current_count,
             "missing_installed_jobs": missing_installed_jobs,
             "mismatched_jobs": mismatched_jobs,
             "unloaded_jobs": unloaded_jobs,
+            "runtime_failed_jobs": runtime_failed_jobs,
             "orphan_jobs": orphan_jobs,
             "orphan_count": len(orphan_jobs),
             "required_count": len(required),
@@ -99,15 +115,18 @@ class ScheduleStatus:
         installed = self.launch_agents_dir / f"{label}.plist"
         installed_exists = installed.exists()
         matches_generated = self._plist_matches(generated, installed) if installed_exists and generated.exists() else False
-        loaded, load_message = self._loaded(label)
+        launchd = self._launchd_status(label)
         return {
             "label": label,
             "generated_plist": str(generated),
             "installed_plist": str(installed),
             "installed": installed_exists,
             "matches_generated": matches_generated,
-            "loaded": loaded,
-            "load_message": load_message,
+            "loaded": launchd["loaded"],
+            "load_message": launchd["message"],
+            "launchd_state": launchd["state"],
+            "last_exit_code": launchd["last_exit_code"],
+            "runtime_healthy": launchd["runtime_healthy"],
             "start_interval": job.get("start_interval"),
             "start_calendar_interval": job.get("start_calendar_interval"),
             "keep_alive": job.get("keep_alive", False),
@@ -124,16 +143,51 @@ class ScheduleStatus:
         return generated_payload == installed_payload
 
     def _loaded(self, label: str) -> tuple[bool, str]:
+        status = self._launchd_status(label)
+        return bool(status["loaded"]), str(status["message"])
+
+    def _launchd_status(self, label: str) -> dict:
         if not label:
-            return False, "missing label"
+            return {
+                "loaded": False,
+                "message": "missing label",
+                "state": "",
+                "last_exit_code": None,
+                "runtime_healthy": False,
+            }
         try:
             result = self.command_runner(["launchctl", "print", f"gui/{os.getuid()}/{label}"])
         except (OSError, subprocess.SubprocessError) as exc:
-            return False, str(exc)
+            return {
+                "loaded": False,
+                "message": str(exc),
+                "state": "",
+                "last_exit_code": None,
+                "runtime_healthy": False,
+            }
         if result.returncode == 0:
-            return True, "loaded"
+            stdout = result.stdout if isinstance(result.stdout, str) else ""
+            state_match = re.search(r"^\s*state\s*=\s*([^\n]+)", stdout, flags=re.MULTILINE)
+            exit_match = re.search(r"^\s*last exit code\s*=\s*(-?\d+)", stdout, flags=re.MULTILINE)
+            state = state_match.group(1).strip() if state_match else ""
+            last_exit_code = int(exit_match.group(1)) if exit_match else None
+            runtime_healthy = state == "running" or last_exit_code in {None, 0}
+            message = "loaded" if runtime_healthy else f"loaded but last exit code is {last_exit_code}"
+            return {
+                "loaded": True,
+                "message": message,
+                "state": state,
+                "last_exit_code": last_exit_code,
+                "runtime_healthy": runtime_healthy,
+            }
         stderr = (result.stderr or "").strip() if isinstance(result.stderr, str) else ""
-        return False, stderr or "not loaded"
+        return {
+            "loaded": False,
+            "message": stderr or "not loaded",
+            "state": "",
+            "last_exit_code": None,
+            "runtime_healthy": False,
+        }
 
     def _orphan_jobs(self, generated: set[str]) -> list[dict]:
         jobs: list[dict] = []

@@ -20,8 +20,14 @@ def main() -> None:
         return
     print(f"schedule_status: {result['status']} date={result['run_date']}")
     print(f"installed={result['installed_count']}/{result['required_count']} loaded={result['loaded_count']}/{result['required_count']}")
-    print(f"matches_current={result.get('matching_generated_count', 0)}/{result['required_count']} active_current={result.get('active_current_count', 0)}/{result['required_count']}")
+    print(
+        f"matches_current={result.get('matching_generated_count', 0)}/{result['required_count']} "
+        f"active_current={result.get('active_current_count', 0)}/{result['required_count']} "
+        f"healthy_current={result.get('healthy_current_count', 0)}/{result['required_count']}"
+    )
     print(result["message"])
+    if result.get("runtime_failed_jobs"):
+        print(f"runtime_failed_jobs={','.join(result['runtime_failed_jobs'])}")
     if result.get("install_commands"):
         print("install commands are recorded in outputs/schedules/README.md")
 
