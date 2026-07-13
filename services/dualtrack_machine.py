@@ -33,6 +33,7 @@ class DualTrackMachineRunner:
         as_of: str | datetime | None = None,
         trend_gate_armed: bool | None = None,
         finalize: bool = True,
+        execution_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         plan = self.store.machine_plan(cycle_id)
         return self.run_plan(
@@ -42,6 +43,7 @@ class DualTrackMachineRunner:
             prev_range=prev_range,
             trend_gate_armed=trend_gate_armed,
             finalize=finalize,
+            execution_provenance=execution_provenance,
         )
 
     def run_plan(
@@ -53,6 +55,7 @@ class DualTrackMachineRunner:
         prev_range: float,
         trend_gate_armed: bool | None = None,
         finalize: bool = True,
+        execution_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         rows = tuple(bars)
         if not rows:
@@ -95,7 +98,7 @@ class DualTrackMachineRunner:
                 layer="ai_grid",
                 **self._grid_cost_kwargs(),
             )
-            fills = [self._annotate_fill(fill) for fill in result.fills]
+            fills = [self._annotate_fill(fill, execution_provenance) for fill in result.fills]
             fills, fill_quality = filter_invalid_machine_fills(fills)
             open_inventory = any(fill.get("event") == "entry" and fill.get("position_status") == "open" for fill in fills)
             grid_status = "open" if open_inventory else "traded" if result.traded else "armed_no_fill"
@@ -122,7 +125,14 @@ class DualTrackMachineRunner:
             return state
         bracket = _plan_bracket(plan)
         if bracket:
-            fills, layers, stop_hit = self._simulate_bracket(cycle_id, plan, bracket, rows, finalize=finalize)
+            fills, layers, stop_hit = self._simulate_bracket(
+                cycle_id,
+                plan,
+                bracket,
+                rows,
+                finalize=finalize,
+                execution_provenance=execution_provenance,
+            )
             fills, fill_quality = filter_invalid_machine_fills(fills)
             if fill_quality.get("invalid_machine_fill_count"):
                 layers = [*layers, f"invalid_fills:{fill_quality['invalid_machine_fill_count']}"]
@@ -164,7 +174,7 @@ class DualTrackMachineRunner:
             stop=stop,
             **grid_cost_kwargs,
         )
-        fills = [self._annotate_fill(fill) for fill in base.fills]
+        fills = [self._annotate_fill(fill, execution_provenance) for fill in base.fills]
         trend = None
         if gate_armed:
             trend_budget_pct = float(grid["trend_leg_budget_pct"]) / 100.0
@@ -185,7 +195,7 @@ class DualTrackMachineRunner:
                 stop=stop,
                 **grid_cost_kwargs,
             )
-            fills.extend(self._annotate_fill(fill) for fill in trend.fills)
+            fills.extend(self._annotate_fill(fill, execution_provenance) for fill in trend.fills)
         fills, fill_quality = filter_invalid_machine_fills(fills)
         write_json(self._fills_path(cycle_id), fills)
         self._write_account(cycle_id, "machine", fills)
@@ -212,9 +222,11 @@ class DualTrackMachineRunner:
         now = parse_utc(as_of)
         window = cycle_window_from_id(cycle_id)
         fills = load_json(self._fills_path(cycle_id))
+        live_fills = [fill for fill in fills if fill.get("execution_origin") != "recovery_replay"]
+        replay_fills = [fill for fill in fills if fill.get("execution_origin") == "recovery_replay"]
         state_rows = load_json(self._cycle_path(cycle_id))
         state = state_rows[-1] if state_rows else {}
-        visible_fills = [fill for fill in fills if parse_utc(fill["ts"]) <= now]
+        visible_fills = [fill for fill in live_fills if parse_utc(fill["ts"]) <= now]
         realized = round(sum(float(fill.get("realized_pnl", 0.0)) for fill in visible_fills), 8)
         if now < window.end:
             return {
@@ -225,13 +237,25 @@ class DualTrackMachineRunner:
         return {
             "cycle_id": cycle_id,
             "status": "closed",
-            "realized_pnl": round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8),
+            "realized_pnl": round(sum(float(fill.get("realized_pnl", 0.0)) for fill in live_fills), 8),
             "unrealized_pnl": 0.0,
             "layers": list(state.get("layers") or []),
-            "fills": fills,
+            "fills": live_fills,
+            "recovery_replay": {
+                "fill_count": len(replay_fills),
+                "realized_pnl": round(sum(float(fill.get("realized_pnl", 0.0)) for fill in replay_fills), 8),
+                "fills": replay_fills,
+            },
             "machine_stood_down": bool(state.get("machine_stood_down", False)),
             "effective_plan_author": state.get("effective_plan_author", ""),
         }
+
+    def reclassify_execution_provenance(self, cycle_id: str, provenance: dict[str, Any]) -> list[dict[str, Any]]:
+        fills = load_json(self._fills_path(cycle_id))
+        classified = [self._annotate_fill(fill, provenance) for fill in fills]
+        write_json(self._fills_path(cycle_id), classified)
+        self._write_account(cycle_id, "machine", classified)
+        return classified
 
     def _stand_down(
         self,
@@ -356,22 +380,42 @@ class DualTrackMachineRunner:
     def _account_path(self, cycle_id: str, track: str) -> Path:
         return self.root / "accounts" / f"{cycle_id}_{track}.json"
 
-    def _annotate_fill(self, fill: dict[str, Any]) -> dict[str, Any]:
-        return {
+    def _annotate_fill(self, fill: dict[str, Any], provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+        provenance = provenance or {"origin": "live_observed", "reason": "direct_machine_run"}
+        origin = str(provenance.get("origin") or "live_observed")
+        observed_until = provenance.get("live_observed_until")
+        if origin == "recovery_replay" and observed_until and str(fill.get("ts") or "") <= str(observed_until):
+            origin = "live_observed"
+        annotated = {
             **fill,
             "track": "machine",
             "cost_model": fill.get("cost_model") or self._cost_model_descriptor(),
+            "execution_origin": origin,
         }
+        if origin == "recovery_replay":
+            annotated["execution_provenance"] = {
+                "classified_at": provenance.get("classified_at"),
+                "live_observed_until": observed_until,
+                "reason": provenance.get("reason", ""),
+            }
+        else:
+            annotated.pop("execution_provenance", None)
+        return annotated
 
     def _write_account(self, cycle_id: str, track: str, fills: list[dict[str, Any]]) -> None:
         starting = float(self.config["capital_per_track_usd"])
-        realized = sum(float(fill.get("realized_pnl", 0.0)) for fill in fills)
+        eligible = [fill for fill in fills if fill.get("execution_origin") != "recovery_replay"]
+        replay = [fill for fill in fills if fill.get("execution_origin") == "recovery_replay"]
+        realized = sum(float(fill.get("realized_pnl", 0.0)) for fill in eligible)
+        replay_realized = sum(float(fill.get("realized_pnl", 0.0)) for fill in replay)
         write_json(self._account_path(cycle_id, track), [{
             "cycle_id": cycle_id,
             "track": track,
             "starting_cash": starting,
             "realized_pnl": round(realized, 8),
             "ending_cash": round(starting + realized, 8),
+            "recovery_replay_realized_pnl": round(replay_realized, 8),
+            "recovery_replay_fill_count": len(replay),
             "cost_model": self._cost_model_descriptor(),
         }])
 
@@ -404,6 +448,7 @@ class DualTrackMachineRunner:
         rows: tuple[Bar, ...],
         *,
         finalize: bool,
+        execution_provenance: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], list[str], bool]:
         direction = _direction_to_int(plan.get("direction"))
         entry_price = float(bracket["entry"])
@@ -432,7 +477,7 @@ class DualTrackMachineRunner:
             sl=stop_loss,
             tp=take_profit,
         )
-        fills = [self._annotate_fill(entry_fill)]
+        fills = [self._annotate_fill(entry_fill, execution_provenance)]
         exit_event = ""
         exit_price = 0.0
         exit_bar = rows[-1]
@@ -486,7 +531,7 @@ class DualTrackMachineRunner:
         fills[0]["remaining_units"] = 0.0
         fills[0]["closed_units"] = round(_cost_units(entry_cost, entry_price), 10)
         fills[0]["position_status"] = "closed"
-        fills.append(self._annotate_fill(exit_fill))
+        fills.append(self._annotate_fill(exit_fill, execution_provenance))
         return fills, [f"bracket:{exit_event}"], exit_event == "stop"
 
 

@@ -21,9 +21,9 @@ class DualTrackScorer:
         self.config = config or dualtrack_config()
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
 
-    def close_cycle(self, cycle_id: str, bars: Iterable[Bar]) -> dict[str, Any]:
+    def close_cycle(self, cycle_id: str, bars: Iterable[Bar], *, force: bool = False) -> dict[str, Any]:
         existing_attribution = load_json(self.root / "attribution" / f"{cycle_id}.json")
-        if existing_attribution:
+        if existing_attribution and not force:
             return existing_attribution[-1]
         rows = tuple(bars)
         if not rows:
@@ -31,9 +31,13 @@ class DualTrackScorer:
         open_price = float(rows[0].open)
         close_price = float(rows[-1].close)
         realized_direction = _direction(open_price, close_price)
-        machine_fills = load_json(self._fills_path(cycle_id, "machine"))
+        machine_all_fills = load_json(self._fills_path(cycle_id, "machine"))
+        machine_fills = _live_execution_fills(machine_all_fills)
+        recovery_replay_fills = _recovery_replay_fills(machine_all_fills)
         human_fills = load_json(self._fills_path(cycle_id, "human"))
-        machine_trades = self._trade_rows(cycle_id, "machine", machine_fills)
+        machine_trades = self._trade_rows(cycle_id, "machine", machine_fills, force_rebuild=True)
+        recovery_replay_trades = _trades_from_fills(recovery_replay_fills, track="machine")
+        write_json(self._recovery_replay_trades_path(cycle_id), recovery_replay_trades)
         human_trades = self._trade_rows(cycle_id, "human", human_fills)
         machine_trades = apply_unrealized(machine_trades, close_price, mark_fresh=math.isfinite(close_price))
         human_trades = apply_unrealized(human_trades, close_price, mark_fresh=math.isfinite(close_price))
@@ -54,6 +58,8 @@ class DualTrackScorer:
             rows,
             machine_fills,
             machine_trades,
+            recovery_replay_fills,
+            recovery_replay_trades,
             realized_direction=realized_direction,
         )
         write_json(self.root / "reviews" / f"{cycle_id}_machine.json", [machine_review])
@@ -73,6 +79,8 @@ class DualTrackScorer:
             "machine_captured": machine_captured,
             "human_captured": human_captured,
             "machine_realized_pnl": _pnl(machine_fills),
+            "machine_recovery_replay_pnl": _pnl(recovery_replay_fills),
+            "machine_recovery_replay_fill_count": len(recovery_replay_fills),
             "human_realized_pnl": _pnl(human_fills),
             "pnl_delta_machine_minus_human": round(_pnl(machine_fills) - _pnl(human_fills), 8),
             "machine_trade_count": len(machine_trades),
@@ -81,7 +89,7 @@ class DualTrackScorer:
         }
         _preserve_machine_state(cycle, existing_cycle)
         write_json(self.root / "cycles" / f"{cycle_id}.json", [cycle])
-        daily = self._write_daily_ledger(cycle_id, machine_fills, human_fills)
+        daily = self._write_daily_ledger(cycle_id, machine_fills, human_fills, recovery_replay_fills)
         weekly = self._write_weekly_ledger(daily["date"])
         attribution = self._attribution(
             cycle,
@@ -94,6 +102,8 @@ class DualTrackScorer:
             daily,
             weekly,
             machine_review,
+            recovery_replay_fills,
+            recovery_replay_trades,
         )
         write_json(self.root / "attribution" / f"{cycle_id}.json", [attribution])
         return attribution
@@ -158,7 +168,13 @@ class DualTrackScorer:
         write_json(self.root / "scoreboard.json", [board])
         return board
 
-    def _write_daily_ledger(self, cycle_id: str, machine_fills: list[dict[str, Any]], human_fills: list[dict[str, Any]]) -> dict[str, Any]:
+    def _write_daily_ledger(
+        self,
+        cycle_id: str,
+        machine_fills: list[dict[str, Any]],
+        human_fills: list[dict[str, Any]],
+        recovery_replay_fills: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         date = cycle_id.split("_", 1)[0]
         path = self.root / "ledger" / "daily" / f"{date}.json"
         existing = load_json(path)
@@ -170,6 +186,11 @@ class DualTrackScorer:
             "human": human,
             "delta_machine_minus_human": round(machine - human, 8),
             "total": round(machine + human, 8),
+            "recovery_replay": {
+                "machine": _pnl(recovery_replay_fills),
+                "fill_count": len(recovery_replay_fills),
+                "eligible_for_paper_pnl": False,
+            },
         }
         row["tracks"] = {
             "machine": {"realized_pnl": round(sum(item["machine"] for item in row["cycles"].values()), 8)},
@@ -200,6 +221,17 @@ class DualTrackScorer:
             "delta_machine_minus_human": round(machine - human, 8),
             "total_pnl": round(machine + human, 8),
             "target_usd": list(self.config["weekly_target_usd"]),
+            "recovery_replay": {
+                "machine_realized_pnl": round(
+                    sum(
+                        float((cycle.get("recovery_replay") or {}).get("machine") or 0.0)
+                        for row in daily_rows
+                        for cycle in (row.get("cycles") or {}).values()
+                    ),
+                    8,
+                ),
+                "eligible_for_paper_pnl": False,
+            },
         }
         write_json(self.root / "ledger" / "weekly" / f"{week}.json", [payload])
         return payload
@@ -216,6 +248,8 @@ class DualTrackScorer:
         daily: dict[str, Any],
         weekly: dict[str, Any],
         machine_review: dict[str, Any],
+        recovery_replay_fills: list[dict[str, Any]],
+        recovery_replay_trades: list[dict[str, Any]],
     ) -> dict[str, Any]:
         return {
             "cycle_id": cycle["cycle_id"],
@@ -238,6 +272,15 @@ class DualTrackScorer:
             "machine_review": machine_review,
             "scoreboard": scoreboard,
             "ledger": {"daily": daily, "weekly": weekly},
+            "recovery_replay": {
+                "status": "present" if recovery_replay_fills else "none",
+                "eligible_for_paper_pnl": False,
+                "fill_count": len(recovery_replay_fills),
+                "trade_count": len(recovery_replay_trades),
+                "realized_pnl": _pnl(recovery_replay_fills),
+                "fills": recovery_replay_fills,
+                "trades": recovery_replay_trades,
+            },
         }
 
     def _machine_review(
@@ -246,6 +289,8 @@ class DualTrackScorer:
         bars: tuple[Bar, ...],
         fills: list[dict[str, Any]],
         trades: list[dict[str, Any]],
+        recovery_replay_fills: list[dict[str, Any]],
+        recovery_replay_trades: list[dict[str, Any]],
         *,
         realized_direction: str,
     ) -> dict[str, Any]:
@@ -283,6 +328,8 @@ class DualTrackScorer:
             no_trade_reason = "neutral_decision"
         elif not fills and grid_rows and not any(row["touched"] for row in grid_rows):
             no_trade_reason = "planned_levels_not_touched"
+        elif not fills and recovery_replay_fills:
+            no_trade_reason = "recovery_replay_only"
         elif not fills:
             no_trade_reason = "no_valid_fill"
         else:
@@ -295,6 +342,11 @@ class DualTrackScorer:
         )
         if no_trade_reason == "neutral_decision":
             summary = f"本周期选择中立，未下单；实际区间 {actual_low:.1f}-{actual_high:.1f}，复盘已完成。"
+        elif no_trade_reason == "recovery_replay_only":
+            summary = (
+                f"本周期只有恢复回放成交 {len(recovery_replay_fills)} 笔，"
+                f"回放盈亏 {_pnl(recovery_replay_fills):+.2f} 美元；不计入实时 paper 收益。"
+            )
         elif no_trade_reason:
             summary = f"本周期方向为 {decision}，但没有有效成交（{no_trade_reason}）；复盘已完成。"
         else:
@@ -315,6 +367,10 @@ class DualTrackScorer:
             "fill_count": len(fills),
             "trade_count": len(trades),
             "realized_pnl": _pnl(fills),
+            "execution_evidence_status": "recovery_replay_only" if recovery_replay_fills and not fills else "live_observed",
+            "recovery_replay_fill_count": len(recovery_replay_fills),
+            "recovery_replay_trade_count": len(recovery_replay_trades),
+            "recovery_replay_realized_pnl": _pnl(recovery_replay_fills),
             "no_trade_reason": no_trade_reason,
             "planning_error": plan.get("planning_error", ""),
             "summary": summary,
@@ -326,13 +382,22 @@ class DualTrackScorer:
     def _trades_path(self, cycle_id: str, track: str) -> Path:
         return self.root / "trades" / f"{cycle_id}_{track}.json"
 
-    def _trade_rows(self, cycle_id: str, track: str, fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _recovery_replay_trades_path(self, cycle_id: str) -> Path:
+        return self.root / "recovery_replay" / "trades" / f"{cycle_id}_machine.json"
+
+    def _trade_rows(
+        self,
+        cycle_id: str,
+        track: str,
+        fills: list[dict[str, Any]],
+        *,
+        force_rebuild: bool = False,
+    ) -> list[dict[str, Any]]:
         existing = load_json(self._trades_path(cycle_id, track))
-        if existing:
+        if existing and not force_rebuild:
             return existing
         trades = _trades_from_fills(fills, track=track)
-        if trades:
-            write_json(self._trades_path(cycle_id, track), trades)
+        write_json(self._trades_path(cycle_id, track), trades)
         return trades
 
 
@@ -457,6 +522,14 @@ def _direction(open_price: float, close_price: float) -> str:
 
 def _pnl(fills: list[dict[str, Any]]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
+
+
+def _live_execution_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [fill for fill in fills if fill.get("execution_origin") != "recovery_replay"]
+
+
+def _recovery_replay_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [fill for fill in fills if fill.get("execution_origin") == "recovery_replay"]
 
 
 def _optional_number(value: Any) -> float | None:
@@ -666,6 +739,7 @@ def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[
                 "gross_pnl": 0.0,
                 "realized_pnl": round(float(fill.get("realized_pnl", 0.0) or 0.0), 8),
                 "status": fill.get("position_status", "open"),
+                "execution_origin": fill.get("execution_origin", "legacy_unclassified"),
             }
             continue
         if event not in {"exit", "stop", "target", "flatten"}:
@@ -711,6 +785,7 @@ def _trades_from_fills(fills: list[dict[str, Any]], *, track: str) -> list[dict[
                 "price": fill.get("price"),
                 "units": match.get("units"),
                 "realized_pnl": match.get("realized_pnl", fill.get("realized_pnl", 0.0)),
+                "execution_origin": fill.get("execution_origin", "legacy_unclassified"),
             })
             trade["gross_pnl"] = round(float(trade.get("gross_pnl", 0.0)) + float(match.get("gross_pnl", fill.get("gross_pnl", 0.0)) or 0.0), 8)
             trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + float(match.get("realized_pnl", fill.get("realized_pnl", 0.0)) or 0.0), 8)

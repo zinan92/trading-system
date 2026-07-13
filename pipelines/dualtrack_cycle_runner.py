@@ -132,8 +132,19 @@ class DualTrackCycleRunner:
             as_of=as_of,
             trend_gate_armed=trend_gate_armed,
             finalize=False,
+            execution_provenance={
+                "origin": "live_observed",
+                "classified_at": parse_utc(as_of).isoformat(),
+                "live_observed_until": parse_utc(as_of).isoformat(),
+                "reason": "intraday_tick_observed",
+            },
         )
-        self._write_runner_state(window.cycle_id, "intraday", {"bar_count": len(bars), "prev_range": prev_range})
+        self._write_runner_state(
+            window.cycle_id,
+            "intraday",
+            {"bar_count": len(bars), "prev_range": prev_range},
+            observed_at=as_of,
+        )
         trade_notifications = self._notify_machine_trade_records(window.cycle_id)
         return {
             "event": "intraday",
@@ -173,6 +184,7 @@ class DualTrackCycleRunner:
             self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": reason})
             return {"event": "close", "cycle_id": cycle_id, "status": "skipped", "reason": reason}
         trend_gate_armed = self._frozen_or_freeze_trend_gate(cycle_id, as_of=cycle_window_from_id(cycle_id).start)
+        execution_provenance = self._close_execution_provenance(cycle_id, classified_at=parse_utc(as_of))
         self.machine.run_effective_plan(
             cycle_id,
             bars,
@@ -180,13 +192,20 @@ class DualTrackCycleRunner:
             as_of=as_of or cycle_window_from_id(cycle_id).end,
             trend_gate_armed=trend_gate_armed,
             finalize=True,
+            execution_provenance=execution_provenance,
         )
         attribution = self.scorer.close_cycle(cycle_id, bars)
         detail = {"bar_count": len(bars), "prev_range": prev_range}
         if human_fill_sync is not None:
             detail["human_fill_sync"] = self._human_fill_sync_summary(human_fill_sync)
         self._write_runner_state(cycle_id, "close", detail)
-        payload = {"event": "close", "cycle_id": cycle_id, "status": "closed", "attribution": attribution}
+        payload = {
+            "event": "close",
+            "cycle_id": cycle_id,
+            "status": "closed",
+            "execution_provenance": execution_provenance,
+            "attribution": attribution,
+        }
         if human_fill_sync is not None:
             payload["human_fill_sync"] = human_fill_sync
         payload["trade_notifications"] = self._notify_machine_trade_records(cycle_id)
@@ -201,6 +220,22 @@ class DualTrackCycleRunner:
             results.append(self.intraday_tick(cycle_id, as_of=window.end))
             results.append(self.close_cycle(cycle_id, as_of=window.end))
         return {"event": "fast_forward_day", "date": date, "results": results}
+
+    def reclassify_closed_cycle(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
+        now = parse_utc(as_of)
+        provenance = self._close_execution_provenance(cycle_id, classified_at=now)
+        fills = self.machine.reclassify_execution_provenance(cycle_id, provenance)
+        bars = self._cycle_bars(cycle_id, as_of=cycle_window_from_id(cycle_id).end)
+        if not bars:
+            raise ValueError("cycle_bars_missing")
+        attribution = self.scorer.close_cycle(cycle_id, bars, force=True)
+        return {
+            "event": "reclassify_execution_provenance",
+            "cycle_id": cycle_id,
+            "execution_provenance": provenance,
+            "classified_fill_count": len(fills),
+            "attribution": attribution,
+        }
 
     def auto(self, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         now = parse_utc(as_of)
@@ -217,9 +252,7 @@ class DualTrackCycleRunner:
                 "results": [],
             }
         current = cycle_window(now)
-        previous = cycle_window(current.start - timedelta(minutes=1))
-        results = [self.close_cycle(previous.cycle_id, as_of=now)]
-        results.append(self.pre_cycle(current.cycle_id, as_of=now))
+        results = self._lifecycle_results(now)
         results.append(self.intraday_tick(current.cycle_id, as_of=now))
         return {"event": "auto", "as_of": now.isoformat(), "results": results}
 
@@ -274,9 +307,40 @@ class DualTrackCycleRunner:
         return {
             "event": "live_tick",
             "as_of": now.isoformat(),
+            "lifecycle": self._lifecycle_results(now),
             "protective_sweep": self._sweep_human_protective_exits(window.cycle_id, now=now),
             "sync": self.sync_obsidian_human_plans(as_of=now, include_next=True),
             "intraday": self.intraday_tick(as_of=now),
+        }
+
+    def _lifecycle_results(self, now: datetime) -> list[dict[str, Any]]:
+        current = cycle_window(now)
+        previous = cycle_window(current.start - timedelta(minutes=1))
+        return [
+            self.close_cycle(previous.cycle_id, as_of=now),
+            self.pre_cycle(current.cycle_id, as_of=now),
+        ]
+
+    def _close_execution_provenance(self, cycle_id: str, *, classified_at: datetime) -> dict[str, Any]:
+        window = cycle_window_from_id(cycle_id)
+        runner_rows = load_json(self.output_root / "dualtrack" / "runner" / f"{cycle_id}.json")
+        observed: list[datetime] = []
+        for row in runner_rows:
+            if row.get("event") != "intraday" or not row.get("ts"):
+                continue
+            try:
+                timestamp = parse_utc(row["ts"])
+            except (TypeError, ValueError):
+                continue
+            if window.start <= timestamp <= window.end:
+                observed.append(timestamp)
+        latest = max(observed, default=None)
+        complete = latest is not None and (window.end - latest).total_seconds() <= 600
+        return {
+            "origin": "live_observed" if complete else "recovery_replay",
+            "classified_at": classified_at.isoformat(),
+            "live_observed_until": latest.isoformat() if latest else None,
+            "reason": "live_coverage_reached_cycle_close" if complete else "cycle_closed_without_complete_live_runner_coverage",
         }
 
     def _sweep_human_protective_exits(self, cycle_id: str, *, now: datetime) -> dict[str, Any]:
@@ -485,10 +549,17 @@ class DualTrackCycleRunner:
             )
         ])
 
-    def _write_runner_state(self, cycle_id: str, event: str, detail: dict[str, Any]) -> None:
+    def _write_runner_state(
+        self,
+        cycle_id: str,
+        event: str,
+        detail: dict[str, Any],
+        *,
+        observed_at: str | datetime | None = None,
+    ) -> None:
         path = self.output_root / "dualtrack" / "runner" / f"{cycle_id}.json"
         rows = load_json(path)
-        rows.append({"ts": parse_utc(None).isoformat(), "cycle_id": cycle_id, "event": event, "detail": detail})
+        rows.append({"ts": parse_utc(observed_at).isoformat(), "cycle_id": cycle_id, "event": event, "detail": detail})
         write_json(path, rows)
 
     def _frozen_or_freeze_trend_gate(self, cycle_id: str, *, as_of: str | datetime | None = None) -> bool:

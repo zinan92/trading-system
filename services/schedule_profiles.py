@@ -14,13 +14,11 @@ FULL_SCHEDULE_LABELS = [
     "com.wendy.trading-orchestrator.daily-review",
     "com.wendy.trading-orchestrator.dashboard",
     "com.wendy.trading-orchestrator.strategies",
-    "com.wendy.trading-orchestrator.dualtrack-cycle",
     "com.wendy.trading-orchestrator.dualtrack-live-tick",
     "com.wendy.trading-orchestrator.deadman-ping",
 ]
 
 FOCUS_SCHEDULE_LABELS = [
-    "com.wendy.trading-orchestrator.dualtrack-cycle",
     "com.wendy.trading-orchestrator.gold-1m-feed",
     "com.wendy.trading-orchestrator.dualtrack-live-tick",
     "com.wendy.trading-orchestrator.dashboard",

@@ -92,6 +92,7 @@ def _build_cycle_liveness(root: Path, now: datetime) -> dict[str, Any]:
             "expected_boundary": payload.get("expected_boundary"),
             "latest_artifact_at": payload.get("latest_artifact_at"),
             "missed_boundaries": payload.get("missed_boundaries", []),
+            "evidence_gaps": payload.get("evidence_gaps", []),
         }
     except Exception as exc:  # noqa: BLE001
         return {"status": "stale", "reason": f"heartbeat_failed: {exc.__class__.__name__}"}

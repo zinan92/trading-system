@@ -1011,6 +1011,17 @@ def _dualtrack_trade_rows_for_cycle(output_root: Path, cycle_id: str, track: str
     safety: dict[str, Any] = {}
     if track == "machine":
         fills, safety = filter_invalid_machine_fills(fills)
+        replay_fills = [fill for fill in fills if fill.get("execution_origin") == "recovery_replay"]
+        fills = [fill for fill in fills if fill.get("execution_origin") != "recovery_replay"]
+        safety = {
+            **safety,
+            "recovery_replay_fill_count": len(replay_fills),
+            "recovery_replay_realized_pnl": round(
+                sum(float(fill.get("realized_pnl") or 0.0) for fill in replay_fills),
+                8,
+            ),
+            "recovery_replay_excluded_from_paper_pnl": True,
+        }
     trades = _trades_from_fills(fills, track=track)
     enriched = apply_unrealized(trades, mark["price"], mark_fresh=mark["fresh"])
     return {"cycle_id": cycle_id, "trades": enriched, "safety": safety}
@@ -1102,12 +1113,14 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     attribution_rows = _json_rows(output / "dualtrack" / "attribution" / f"{window.cycle_id}.json")
     ledger_rows = _json_rows(output / "dualtrack" / "ledger" / "daily" / f"{window.cycle_id.split('_', 1)[0]}.json")
     human_fills = _json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_human.json")
-    machine_fills = _json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_machine.json")
+    machine_fills = _paper_execution_fills(_json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_machine.json"))
     previous_window = cycle_window(window.start - timedelta(seconds=1), lock_deadline_min_before_cycle=deadline)
     previous_attribution_rows = _json_rows(output / "dualtrack" / "attribution" / f"{previous_window.cycle_id}.json")
     previous_ledger_rows = _json_rows(output / "dualtrack" / "ledger" / "daily" / f"{previous_window.cycle_id.split('_', 1)[0]}.json")
     previous_human_fills = _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_human.json")
-    previous_machine_fills = _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_machine.json")
+    previous_machine_fills = _paper_execution_fills(
+        _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_machine.json")
+    )
     effective = store.machine_plan(window.cycle_id)
     closed = now >= window.end
     market_ok = (
@@ -3194,6 +3207,10 @@ def _json_rows(path: Path) -> list[dict]:
     except (OSError, json.JSONDecodeError):
         return []
     return value if isinstance(value, list) else []
+
+
+def _paper_execution_fills(rows: list[dict]) -> list[dict]:
+    return [row for row in rows if row.get("execution_origin") != "recovery_replay"]
 
 
 def _age_seconds(ts: str, now) -> int:

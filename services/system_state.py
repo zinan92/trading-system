@@ -225,16 +225,18 @@ def _check_dualtrack_heartbeat(root: Path, now: datetime) -> SystemCheck:
         return _unknown("dualtrack_heartbeat", f"heartbeat_failed: {exc.__class__.__name__}", "检查双轨周期")
     status = str(result.get("status") or "unknown")
     if status == "stale":
+        reason_code = str(result.get("reason") or "dualtrack close-cycle stale")
         return SystemCheck(
             id="dualtrack_heartbeat",
             status="DEGRADED",
-            reason=str(result.get("reason") or "dualtrack close-cycle stale"),
+            reason="历史周期执行证据缺失" if reason_code == "declared_evidence_gap" else reason_code,
             room="ops",
             cta="修复双轨周期",
             evidence={
                 "expected_boundary": result.get("expected_boundary"),
                 "latest_artifact_at": result.get("latest_artifact_at"),
                 "missed_boundaries": result.get("missed_boundaries", []),
+                "evidence_gaps": result.get("evidence_gaps", []),
             },
         )
     if status in {"fresh", "not_scheduled"}:

@@ -21,13 +21,11 @@ FULL_SCHEDULE_LABELS = {
     "com.wendy.trading-orchestrator.daily-review",
     "com.wendy.trading-orchestrator.dashboard",
     "com.wendy.trading-orchestrator.strategies",
-    "com.wendy.trading-orchestrator.dualtrack-cycle",
     "com.wendy.trading-orchestrator.dualtrack-live-tick",
     "com.wendy.trading-orchestrator.deadman-ping",
 }
 
 FOCUS_SCHEDULE_LABELS = {
-    "com.wendy.trading-orchestrator.dualtrack-cycle",
     "com.wendy.trading-orchestrator.dualtrack-live-tick",
     "com.wendy.trading-orchestrator.dashboard",
     "com.wendy.trading-orchestrator.deadman-ping",
@@ -145,14 +143,6 @@ def test_schedule_manager_generates_full_launch_agent_artifacts(tmp_path: Path):
     assert "--paper-auto-approve" in strategies["ProgramArguments"]
     assert strategies["EnvironmentVariables"]["TZ"] == "UTC"
 
-    dualtrack_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.dualtrack-cycle.plist"
-    with dualtrack_plist.open("rb") as handle:
-        dualtrack = plistlib.load(handle)
-    assert dualtrack["StartInterval"] == 60
-    assert dualtrack["RunAtLoad"] is True
-    assert dualtrack["ProgramArguments"] == ["python3", "-m", "pipelines.dualtrack_cycle_runner", "--event", "auto"]
-    assert dualtrack["EnvironmentVariables"]["TRADING_ORCHESTRATOR_MARKET_DB"].endswith("data/market_data.db")
-
     dualtrack_live_tick_plist = Path(result["launch_agents_dir"]) / "com.wendy.trading-orchestrator.dualtrack-live-tick.plist"
     with dualtrack_live_tick_plist.open("rb") as handle:
         dualtrack_live_tick = plistlib.load(handle)
@@ -208,7 +198,6 @@ def test_strategies_job_uses_dedicated_python_others_unchanged(tmp_path: Path, m
         "com.wendy.trading-orchestrator.evening-review",
         "com.wendy.trading-orchestrator.daily-review",
         "com.wendy.trading-orchestrator.dashboard",
-        "com.wendy.trading-orchestrator.dualtrack-cycle",
         "com.wendy.trading-orchestrator.dualtrack-live-tick",
         "com.wendy.trading-orchestrator.deadman-ping",
     ):
@@ -328,10 +317,10 @@ def test_schedule_status_detects_stale_loaded_launch_agents(tmp_path: Path):
     ).run("2026-05-26")
 
     assert result["status"] == "stale_installed"
-    assert result["installed_count"] == 9
-    assert result["loaded_count"] == 9
-    assert result["matching_generated_count"] == 8
-    assert result["active_current_count"] == 8
+    assert result["installed_count"] == 8
+    assert result["loaded_count"] == 8
+    assert result["matching_generated_count"] == 7
+    assert result["active_current_count"] == 7
     assert result["mismatched_jobs"] == ["com.wendy.trading-orchestrator.dualtrack-live-tick"]
     assert result["jobs"][-2]["installed"] is True
     assert result["jobs"][-2]["loaded"] is True
@@ -470,13 +459,13 @@ def test_schedule_installer_removes_focus_orphans_and_rollback_restores_them(tmp
     assert {path.stem for path in launch_agents.glob("com.wendy.trading-orchestrator.*.plist")} == FOCUS_SCHEDULE_LABELS
     assert {item["label"] for item in result["orphans"]} == FULL_SCHEDULE_LABELS - FOCUS_SCHEDULE_LABELS
     assert all(item["status"] == "removed" for item in result["orphans"])
-    assert result["backup_count"] == 9
+    assert result["backup_count"] == 8
 
     rollback = installer.rollback("2026-05-26", acknowledgement=SCHEDULE_ROLLBACK_ACKNOWLEDGEMENT)
 
     assert rollback["status"] == "rolled_back"
     assert {path.stem for path in launch_agents.glob("com.wendy.trading-orchestrator.*.plist")} == FULL_SCHEDULE_LABELS
-    assert len(rollback["jobs"]) == 10
+    assert len(rollback["jobs"]) == 9
     gold_feed = next(job for job in rollback["jobs"] if job["label"] == "com.wendy.trading-orchestrator.gold-1m-feed")
     assert gold_feed["status"] == "removed"
 
@@ -676,11 +665,11 @@ def test_schedule_status_detects_installed_and_loaded_jobs(tmp_path: Path):
     ).run("2026-05-26")
 
     assert result["status"] == "active"
-    assert result["installed_count"] == 9
-    assert result["loaded_count"] == 9
-    assert result["matching_generated_count"] == 9
-    assert result["active_current_count"] == 9
-    assert result["healthy_current_count"] == 9
+    assert result["installed_count"] == 8
+    assert result["loaded_count"] == 8
+    assert result["matching_generated_count"] == 8
+    assert result["active_current_count"] == 8
+    assert result["healthy_current_count"] == 8
     assert all(job["matches_generated"] for job in result["jobs"])
 
 
@@ -707,8 +696,8 @@ def test_schedule_status_rejects_loaded_job_with_failed_last_execution(tmp_path:
     result = ScheduleStatus(root, launch_agents_dir=launch_agents, command_runner=fake_runner).run("2026-07-13")
 
     assert result["status"] == "runtime_failed"
-    assert result["active_current_count"] == 9
-    assert result["healthy_current_count"] == 8
+    assert result["active_current_count"] == 8
+    assert result["healthy_current_count"] == 7
     assert result["runtime_failed_jobs"] == [failed_label]
     failed_job = next(job for job in result["jobs"] if job["label"] == failed_label)
     assert failed_job["loaded"] is True
@@ -734,8 +723,8 @@ def test_schedule_installer_copies_plists_and_records_receipt(tmp_path: Path):
 
     assert result["status"] == "active"
     assert result["acknowledgement_ok"] is True
-    assert result["schedule_status"]["loaded_count"] == 9
-    assert len(list(launch_agents.glob("com.wendy.trading-orchestrator.*.plist"))) == 9
+    assert result["schedule_status"]["loaded_count"] == 8
+    assert len(list(launch_agents.glob("com.wendy.trading-orchestrator.*.plist"))) == 8
     assert load_json(root / "schedules" / "install_current.json")[0]["status"] == "active"
     assert all(job["status"] == "installed" for job in result["jobs"])
 
@@ -769,7 +758,7 @@ def test_schedule_installer_backs_up_existing_plists_before_replacing(tmp_path: 
     live_tick = next(job for job in result["jobs"] if job["label"] == "com.wendy.trading-orchestrator.dualtrack-live-tick")
 
     assert result["status"] == "active"
-    assert result["backup_count"] == 9
+    assert result["backup_count"] == 8
     assert Path(result["backup_dir"]).exists()
     assert live_tick["backup"].endswith("com.wendy.trading-orchestrator.dualtrack-live-tick.plist")
     with Path(live_tick["backup"]).open("rb") as handle:
@@ -1078,7 +1067,7 @@ def test_schedule_rollback_restores_backup_with_acknowledgement(tmp_path: Path):
 
     assert result["status"] == "rolled_back"
     assert result["acknowledgement_ok"] is True
-    assert result["pre_rollback_backup_count"] == 9
+    assert result["pre_rollback_backup_count"] == 8
     assert Path(result["pre_rollback_backup_dir"]).exists()
     assert live_tick["status"] == "restored"
     assert Path(live_tick["pre_rollback_backup"]).exists()
@@ -1162,7 +1151,7 @@ def test_schedule_post_install_verifier_passes_after_successful_install_with_fre
     assert checks["install_receipt"]["status"] == "pass"
     assert checks["rollback_ready"]["status"] == "pass"
     assert checks["runner_heartbeat"]["status"] == "pass"
-    assert result["rollback_plan"]["restorable_count"] == 9
+    assert result["rollback_plan"]["restorable_count"] == 8
     assert load_json(root / "schedules" / "post_install_verify_current.json")[0]["status"] == "pass"
 
 

@@ -261,7 +261,9 @@ def test_live_tick_syncs_obsidian_plan_and_runs_intraday(tmp_path: Path) -> None
     assert result["sync"]["results"][0]["plan_status"] == "draft"
     assert result["sync"]["results"][1]["plan_status"] == "locked"
     assert result["intraday"]["status"] == "ran"
-    assert load_json(output / "dualtrack" / "runner" / "2026-07-05_DAY.json")[-1]["event"] == "intraday"
+    runner_rows = load_json(output / "dualtrack" / "runner" / "2026-07-05_DAY.json")
+    assert runner_rows[-1]["event"] == "intraday"
+    assert [row["event"] for row in runner_rows].count("intraday") == 1
 
 
 def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: Path) -> None:
@@ -761,6 +763,7 @@ def test_mgc_dualtrack_close_scores_machine_and_human_with_same_tiger_contract_c
     _write_tiger_order_sync(output, [_tiger_fill(average_fill_price=4182.0, filled_at="2026-07-06T01:02:03+00:00")])
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
 
+    runner.intraday_tick(cycle_id, as_of="2026-07-06T12:59:00+00:00")
     result = runner.close_cycle(cycle_id, as_of="2026-07-06T13:00:00+00:00")
 
     assert result["status"] == "closed"

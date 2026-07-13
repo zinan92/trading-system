@@ -379,6 +379,29 @@ def test_machine_trades_endpoint_returns_mid_cycle_order_rows(tmp_path: Path, mo
     assert payload["trades"][0]["unrealized_pnl"] == 10.0
 
 
+def test_machine_trades_endpoint_excludes_recovery_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    replay_fill = _entry_fill(cycle_id=cycle_id, track="machine") | {
+        "execution_origin": "recovery_replay",
+        "realized_pnl": 12.5,
+    }
+    write_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json", [replay_fill])
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
+    payload = dashboard_server.build_dualtrack_trades_response(
+        cycle_id,
+        track="machine",
+        output_root=output,
+        as_of="2026-07-05T02:00:00+00:00",
+    )
+
+    assert payload["trades"] == []
+    assert payload["safety"]["recovery_replay_fill_count"] == 1
+    assert payload["safety"]["recovery_replay_realized_pnl"] == 12.5
+    assert payload["safety"]["recovery_replay_excluded_from_paper_pnl"] is True
+
+
 def test_machine_trade_rows_infer_units_and_match_layer_rung_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"

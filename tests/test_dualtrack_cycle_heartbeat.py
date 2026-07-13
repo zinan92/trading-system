@@ -7,7 +7,7 @@ from services.dualtrack_cycle_heartbeat import DualTrackCycleHeartbeat
 from services.journal_store import write_json
 
 
-DUALTRACK_LABEL = "com.wendy.trading-orchestrator.dualtrack-cycle"
+DUALTRACK_LABEL = "com.wendy.trading-orchestrator.dualtrack-live-tick"
 
 
 def _schedule(root: Path, *, include_dualtrack_cycle: bool = True) -> None:
@@ -64,6 +64,29 @@ def test_heartbeat_is_stale_when_recent_boundary_is_missing_after_grace(tmp_path
     assert result["missed_boundaries"] == ["2026-07-06T13:00:00+00:00"]
     assert audit["status"] == "fail"
     assert audit["evidence"]["missed_boundaries"]
+
+
+def test_heartbeat_reports_declared_evidence_gap_without_treating_it_as_closed(tmp_path: Path) -> None:
+    root = tmp_path / "outputs"
+    _schedule(root)
+    _closed_cycle(root, "2026-07-05_NIGHT")
+    write_json(root / "dualtrack" / "evidence_gaps" / "2026-07-06_DAY.json", [{
+        "cycle_id": "2026-07-06_DAY",
+        "status": "evidence_gap",
+        "reason": "runner_not_observed_during_cycle",
+        "counts_as_closed_loop": False,
+    }])
+
+    result = DualTrackCycleHeartbeat(root).run(as_of="2026-07-06T16:00:00+00:00")
+
+    assert result["status"] == "stale"
+    assert result["reason"] == "declared_evidence_gap"
+    assert result["missed_boundaries"] == ["2026-07-06T13:00:00+00:00"]
+    assert result["evidence_gaps"] == [{
+        "cycle_id": "2026-07-06_DAY",
+        "reason": "runner_not_observed_during_cycle",
+        "counts_as_closed_loop": False,
+    }]
 
 
 def test_heartbeat_does_not_mark_boundary_stale_inside_grace_period(tmp_path: Path) -> None:

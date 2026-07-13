@@ -194,7 +194,6 @@ def test_completion_audit_focus_profile_requires_only_focus_schedule_jobs(tmp_pa
     assert result["status"] == "warn"
     assert result["evidence"]["profile"] == "dualtrack_focus"
     assert result["evidence"]["required_labels"] == [
-        "com.wendy.trading-orchestrator.dualtrack-cycle",
         "com.wendy.trading-orchestrator.gold-1m-feed",
         "com.wendy.trading-orchestrator.dualtrack-live-tick",
         "com.wendy.trading-orchestrator.dashboard",
