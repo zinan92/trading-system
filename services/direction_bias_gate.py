@@ -73,7 +73,11 @@ class DirectionBiasGate:
             "reason": reason,
             "direction_score": int(score),
             "direction_bias": str(bias),
-            "market_view_source": str(self.output_root / "market_views" / "current.json") if market_view else "",
+            "market_view_source": (
+                str(self.output_root / "market_views" / f"{market_view.get('run_date')}.json")
+                if market_view
+                else ""
+            ),
             "market_view_summary": market_view.get("summary", "") if market_view else "",
             "market_view_expiry": effective_expiry,
             "filter_effect": self._filter_effect(action, effective_expiry, bool(market_view)),

@@ -270,10 +270,19 @@ class DualTrackCycleRunner:
             next_cycle = cycle_window(current.end).cycle_id
             if next_cycle not in cycle_ids:
                 cycle_ids.append(next_cycle)
-        results = [self.sync_obsidian_human_plan(item, as_of=now) for item in cycle_ids]
+        results = [
+            self.sync_obsidian_human_plan(item, as_of=now, allow_lock=index == 0)
+            for index, item in enumerate(cycle_ids)
+        ]
         return {"event": "sync_obsidian_plan", "as_of": now.isoformat(), "results": results}
 
-    def sync_obsidian_human_plan(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
+    def sync_obsidian_human_plan(
+        self,
+        cycle_id: str,
+        *,
+        as_of: str | datetime | None = None,
+        allow_lock: bool = True,
+    ) -> dict[str, Any]:
         now = parse_utc(as_of)
         try:
             reference_open = self._reference_open_for_plan(cycle_id, as_of=now)
@@ -290,6 +299,7 @@ class DualTrackCycleRunner:
             cycle_open=reference_open,
             prev_cycle_range=prev_cycle_range,
             now=now,
+            allow_lock=allow_lock,
         )
         if not plan:
             return {"cycle_id": cycle_id, "status": "skipped", "reason": "market_view_missing_or_not_directional"}
@@ -309,7 +319,7 @@ class DualTrackCycleRunner:
             "as_of": now.isoformat(),
             "lifecycle": self._lifecycle_results(now),
             "protective_sweep": self._sweep_human_protective_exits(window.cycle_id, now=now),
-            "sync": self.sync_obsidian_human_plans(as_of=now, include_next=True),
+            "sync": self.sync_obsidian_human_plans(as_of=now, include_next=False),
             "intraday": self.intraday_tick(as_of=now),
         }
 

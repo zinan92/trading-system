@@ -99,6 +99,8 @@ def test_ai_plan_from_market_view_keeps_long_target_out_of_invalidation(tmp_path
             "4210：当前上方目标位，回调后做多的目标。",
         ],
         "expiry": {
+            "status": "active",
+            "expires_at": "2026-07-06T01:00:00+00:00",
             "expire_below": 4155.0,
             "expire_above": 4210.0,
             "target_price": 4210.0,
@@ -127,7 +129,12 @@ def test_human_plan_import_from_market_view_is_draft_after_lock_deadline(tmp_pat
         "direction_bias": "long_bias",
         "direction_score": 65,
         "key_levels": ["4155-4160", "4210"],
-        "expiry": {"expire_below": 4155.0, "expire_above": 4210.0},
+        "expiry": {
+            "status": "active",
+            "expires_at": "2026-07-06T01:00:00+00:00",
+            "expire_below": 4155.0,
+            "expire_above": 4210.0,
+        },
     }])
     store = DualTrackPlanStore(output)
 
@@ -144,6 +151,55 @@ def test_human_plan_import_from_market_view_is_draft_after_lock_deadline(tmp_pat
     assert plan["status"] == "draft"
     assert plan["locked_at"] is None
     assert plan["range"] == {"low": 4155.0, "high": None}
+    assert plan["source_run_date"] == "2026-07-05"
+
+
+def test_human_plan_does_not_fall_back_to_stale_current_market_view(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    write_json(output / "market_views" / "current.json", [{
+        "run_date": "2026-07-04",
+        "direction_bias": "long_bias",
+        "direction_score": 65,
+        "key_levels": ["4155", "4210"],
+        "expiry": {"status": "active", "expires_at": "2026-07-06T01:00:00+00:00"},
+    }])
+    store = DualTrackPlanStore(output)
+
+    plan = store.ensure_human_plan_from_market_view(
+        "2026-07-05_DAY",
+        cycle_open=4182.93,
+        prev_cycle_range=12.26,
+        now="2026-07-05T01:00:00+00:00",
+    )
+
+    assert plan is None
+    assert not (output / "dualtrack" / "plans" / "2026-07-05_DAY_human.json").exists()
+    audit = load_json(output / "dualtrack" / "audit" / "2026-07-05_DAY.json")
+    assert audit[-1]["event"] == "human_plan_import_failed"
+    assert audit[-1]["detail"]["reason"] == "market_view_missing_for_date"
+
+
+def test_human_plan_rejects_expired_same_day_market_view(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    write_json(output / "market_views" / "2026-07-05.json", [{
+        "run_date": "2026-07-05",
+        "direction_bias": "long_bias",
+        "direction_score": 65,
+        "key_levels": ["4155", "4210"],
+        "expiry": {"status": "active", "expires_at": "2026-07-05T00:30:00+00:00"},
+    }])
+    store = DualTrackPlanStore(output)
+
+    plan = store.ensure_human_plan_from_market_view(
+        "2026-07-05_DAY",
+        cycle_open=4182.93,
+        prev_cycle_range=12.26,
+        now="2026-07-05T01:00:00+00:00",
+    )
+
+    assert plan is None
+    audit = load_json(output / "dualtrack" / "audit" / "2026-07-05_DAY.json")
+    assert audit[-1]["detail"]["reason"] == "market_view_expired"
 
 
 def test_invariant_8_structured_invalidation_only() -> None:

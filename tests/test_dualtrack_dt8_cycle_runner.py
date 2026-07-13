@@ -89,7 +89,11 @@ def _write_market_view(output: Path, date: str = "2026-07-05", *, expire_below: 
                 "direction_score": 80,
                 "direction_bias": "strong_long",
                 "key_levels": ["3992"],
-                "expiry": {"expire_below": expire_below},
+                "expiry": {
+                    "status": "active",
+                    "expires_at": "2026-07-06T01:00:00+00:00",
+                    "expire_below": expire_below,
+                },
             }
         ],
     )
@@ -227,7 +231,7 @@ def test_d8_2_missing_machine_research_records_error_neutral_and_stands_down(tmp
     assert "machine_plan_decision_error" in audit_events
 
 
-def test_obsidian_plan_sync_imports_current_draft_and_next_locked(tmp_path: Path) -> None:
+def test_explicit_obsidian_plan_sync_keeps_next_cycle_as_draft(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
     output = tmp_path / "outputs"
@@ -242,8 +246,8 @@ def test_obsidian_plan_sync_imports_current_draft_and_next_locked(tmp_path: Path
     assert [item["cycle_id"] for item in result["results"]] == ["2026-07-05_DAY", "2026-07-05_NIGHT"]
     assert day_plan["status"] == "draft"
     assert day_plan["locked_at"] is None
-    assert night_plan["status"] == "locked"
-    assert night_plan["locked_at"] == "2026-07-05T02:30:00+00:00"
+    assert night_plan["status"] == "draft"
+    assert night_plan["locked_at"] is None
     assert day_plan["source"] == night_plan["source"] == "obsidian"
     assert day_plan["range"] == night_plan["range"] == {"low": 3960.0, "high": None}
 
@@ -259,7 +263,8 @@ def test_live_tick_syncs_obsidian_plan_and_runs_intraday(tmp_path: Path) -> None
 
     assert result["event"] == "live_tick"
     assert result["sync"]["results"][0]["plan_status"] == "draft"
-    assert result["sync"]["results"][1]["plan_status"] == "locked"
+    assert len(result["sync"]["results"]) == 1
+    assert not (output / "dualtrack" / "plans" / "2026-07-05_NIGHT_human.json").exists()
     assert result["intraday"]["status"] == "ran"
     runner_rows = load_json(output / "dualtrack" / "runner" / "2026-07-05_DAY.json")
     assert runner_rows[-1]["event"] == "intraday"

@@ -59,6 +59,33 @@ def test_market_view_requires_summary_and_timeframe(tmp_path: Path):
         direction_bias_from_score(120)
 
 
+def test_latest_does_not_fall_back_to_current_for_a_missing_date(tmp_path: Path):
+    root = tmp_path / "outputs"
+    MarketViewStore(root).record(
+        run_date="2026-06-25",
+        score=65,
+        summary="同日观点。",
+        timeframes=["1D"],
+    )
+
+    assert MarketViewStore(root).latest("2026-06-26") == {}
+
+
+def test_load_active_rejects_expired_or_unverifiable_view(tmp_path: Path):
+    root = tmp_path / "outputs"
+    store = MarketViewStore(root)
+    store.record(
+        run_date="2026-06-25",
+        score=65,
+        summary="短时观点。",
+        timeframes=["1D"],
+        expires_at="2026-06-25T01:00:00+00:00",
+    )
+
+    with pytest.raises(ValueError, match="market_view_expired"):
+        store.load_active("2026-06-25", as_of="2026-06-25T01:00:00+00:00")
+
+
 def test_market_view_records_expiry_conditions(tmp_path: Path):
     root = tmp_path / "outputs"
 

@@ -76,7 +76,7 @@ class DualTrackPlanStore:
             return existing
         run_date = cycle_id.split("_", 1)[0]
         try:
-            view = MarketViewStore(self.output_root).latest(run_date)
+            view = MarketViewStore(self.output_root).load_active(run_date, as_of=now)
         except Exception as exc:  # noqa: BLE001 - unreadable AI source must fail closed.
             self.audit(cycle_id, "ai_plan_ingest_failed", {"reason": str(exc)})
             return None
@@ -104,15 +104,16 @@ class DualTrackPlanStore:
         cycle_open: float,
         prev_cycle_range: float,
         now: str | datetime | None = None,
+        allow_lock: bool = True,
     ) -> dict[str, Any] | None:
         existing = self.load_plan(cycle_id, "human")
         if existing and existing.get("status") == "locked":
             return existing
         window = self._window(cycle_id)
-        status = "locked" if parse_utc(now) <= window.lock_deadline else "draft"
+        status = "locked" if allow_lock and parse_utc(now) <= window.lock_deadline else "draft"
         run_date = cycle_id.split("_", 1)[0]
         try:
-            view = MarketViewStore(self.output_root).latest(run_date)
+            view = MarketViewStore(self.output_root).load_active(run_date, as_of=now)
         except Exception as exc:  # noqa: BLE001 - unreadable operator source must fail closed.
             self.audit(cycle_id, "human_plan_import_failed", {"reason": str(exc), "source": "obsidian"})
             return None
@@ -215,6 +216,8 @@ class DualTrackPlanStore:
             "confidence": confidence,
             "locked_at": parse_utc(now).isoformat() if status != "draft" else None,
             "source": "obsidian",
+            "source_run_date": str(view.get("run_date") or ""),
+            "source_generated_at": str(view.get("generated_at") or ""),
             "status": status,
         }
 
@@ -276,7 +279,7 @@ def validate_plan(
     )
     if grid_orders or "grid_orders" in payload:
         normalized["grid_orders"] = grid_orders
-    for key in ("rationale", "decision_mode", "planning_error"):
+    for key in ("rationale", "decision_mode", "planning_error", "source_run_date", "source_generated_at"):
         if payload.get(key) not in (None, ""):
             normalized[key] = str(payload[key]).strip()
     if "degraded" in payload:
