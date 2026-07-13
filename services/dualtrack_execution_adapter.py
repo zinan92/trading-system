@@ -42,6 +42,16 @@ class LegacyPaperExecutionAdapter:
 
     def submit_order(self, command: dict[str, Any]) -> dict[str, Any]:
         if _is_pending_limit_entry(command):
+            if _is_marketable_limit(command):
+                fill_command = {
+                    **command,
+                    "requested_price": float(command["price"]),
+                    "price": float(command["market_price"]),
+                    "liquidity": "taker",
+                }
+                fill = self.engine.submit_order(fill_command)
+                self._record_shadow_command(command, fill)
+                return fill
             receipt = self._accept_limit_entry(command)
             self._record_shadow_command(command, receipt)
             return receipt
@@ -267,6 +277,15 @@ class LegacyPaperExecutionAdapter:
             price = float(row["price"])
             low = float(event["low"] if event.get("low") is not None else event["price"])
             high = float(event["high"] if event.get("high") is not None else event["price"])
+            accepted_at = _parse_timestamp(row.get("ts"))
+            event_at = _parse_timestamp(event.get("ts_event"))
+            if accepted_at is not None and event_at is not None and event_at <= accepted_at:
+                continue
+            event_started_at = _parse_timestamp(event.get("event_started_at"))
+            if accepted_at is not None and event_started_at is not None and event_started_at < accepted_at:
+                # The accepted order did not exist for the whole OHLC interval.
+                # Only the observed event price is chronology-safe for that partial bar.
+                low = high = float(event["price"])
             touched = low <= price if row.get("side") == "buy" else high >= price
             if not touched:
                 continue
@@ -340,7 +359,7 @@ def _orders_from_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _order_row(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    order = {
         "order_id": str(row.get("order_id") or ""),
         "state": str(row.get("state") or ""),
         "side": str(row.get("side") or "").lower(),
@@ -349,6 +368,10 @@ def _order_row(row: dict[str, Any]) -> dict[str, Any]:
         "price": float(row.get("fill_price") or row.get("price") or 0.0),
         "quantity": float(row.get("fill_quantity") or row.get("quantity") or 0.0),
     }
+    for key in ("notional", "sl", "tp", "ts"):
+        if row.get(key) not in (None, ""):
+            order[key] = row[key]
+    return order
 
 
 def _is_pending_limit_entry(command: dict[str, Any]) -> bool:
@@ -356,3 +379,30 @@ def _is_pending_limit_entry(command: dict[str, Any]) -> bool:
         str(command.get("order_type") or "").lower() == "limit"
         and str(command.get("event") or "entry").lower() == "entry"
     )
+
+
+def _is_marketable_limit(command: dict[str, Any]) -> bool:
+    try:
+        limit_price = float(command.get("price"))
+        market_price = float(command.get("market_price"))
+    except (TypeError, ValueError):
+        return False
+    side = str(command.get("side") or "").lower()
+    if limit_price <= 0 or market_price <= 0:
+        return False
+    if side == "buy":
+        return market_price <= limit_price
+    if side == "sell":
+        return market_price >= limit_price
+    return False
+
+
+def _parse_timestamp(value: Any):
+    if value in (None, ""):
+        return None
+    try:
+        from services.dualtrack_clock import parse_utc
+
+        return parse_utc(value)
+    except (TypeError, ValueError):
+        return None

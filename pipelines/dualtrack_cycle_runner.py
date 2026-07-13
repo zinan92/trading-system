@@ -354,14 +354,22 @@ class DualTrackCycleRunner:
         }
 
     def _sweep_human_protective_exits(self, cycle_id: str, *, now: datetime) -> dict[str, Any]:
+        snapshot = self.execution.snapshot(cycle_id)
         open_trades = [
             position
-            for position in self.execution.snapshot(cycle_id).get("positions", [])
+            for position in snapshot.get("positions", [])
             if str(position.get("status") or "open") == "open"
             and float(position.get("remaining_units") or 0.0) > 0
         ]
-        if not open_trades:
-            return {"status": "ok", "reason": "no_open_positions", "triggered": []}
+        pending_limits = [
+            order
+            for order in snapshot.get("orders", [])
+            if str(order.get("state") or "") == "accepted"
+            and str(order.get("event") or "entry") == "entry"
+            and str(order.get("order_type") or "") == "limit"
+        ]
+        if not open_trades and not pending_limits:
+            return {"status": "ok", "reason": "no_open_positions_or_pending_orders", "triggered": []}
 
         latest = self._latest_market_record()
         if not latest:
@@ -388,13 +396,14 @@ class DualTrackCycleRunner:
         if market_ts < cycle_window_from_id(cycle_id).start:
             return {"status": "skipped", "reason": "market_data_outside_cycle", "triggered": []}
 
-        earliest_entry = min(
-            (parse_utc(position.get("entry_ts")) for position in open_trades if position.get("entry_ts")),
+        earliest_activity = min(
+            [parse_utc(position.get("entry_ts")) for position in open_trades if position.get("entry_ts")]
+            + [parse_utc(order.get("ts")) for order in pending_limits if order.get("ts")],
             default=cycle_window_from_id(cycle_id).start,
         )
         replay_start = max(
             cycle_window_from_id(cycle_id).start,
-            earliest_entry.replace(second=0, microsecond=0),
+            earliest_activity.replace(second=0, microsecond=0),
         )
         bars = self._filter_market_session_bars(
             self.market.load_bars_between(self.symbol, self.timeframe, replay_start.isoformat(), now.isoformat())

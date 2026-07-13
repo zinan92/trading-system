@@ -569,6 +569,41 @@ def test_live_tick_routes_trusted_market_event_through_execution_adapter(tmp_pat
     assert captured["source"] == "market_db:test"
 
 
+def test_live_tick_processes_pending_limit_without_an_open_position(tmp_path: Path, monkeypatch) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    _seed_bars(MarketStore(db), datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [100.0, 106.0])
+    captured = {}
+
+    class FakeExecutionAdapter:
+        name = "fake"
+
+        def snapshot(self, cycle_id: str, **kwargs) -> dict:
+            return {
+                "positions": [],
+                "orders": [{
+                    "state": "accepted",
+                    "event": "entry",
+                    "order_type": "limit",
+                    "ts": "2026-07-05T01:00:30+00:00",
+                }],
+            }
+
+        def process_market_event(self, event: dict) -> dict:
+            captured.update(event)
+            return {"status": "ok", "triggered": [], "accepted_limit_fill_count": 1}
+
+    monkeypatch.setattr(cycle_runner_module, "build_execution_engine_adapter", lambda *args, **kwargs: FakeExecutionAdapter())
+
+    result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
+        as_of="2026-07-05T01:01:30+00:00"
+    )
+
+    assert result["protective_sweep"]["processed_events"] > 0
+    assert captured["cycle_id"] == "2026-07-05_DAY"
+    assert captured["price"] == 106.0
+
+
 def test_live_tick_rejects_one_minute_protective_mark_older_than_three_minutes(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     output = tmp_path / "outputs"

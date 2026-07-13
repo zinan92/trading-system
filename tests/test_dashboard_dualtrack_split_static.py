@@ -182,6 +182,18 @@ def test_split_page_10c_order_affordance_and_disabled_states():
     assert "const block = orderBlockReason();" in html
 
 
+def test_split_page_keeps_pending_limit_orders_visible_after_refresh():
+    html = read_split_html()
+
+    assert "data-human-open-orders" in html
+    assert "当前委托" in html
+    assert "function renderOpenOrders" in html
+    assert 'order.state === "accepted"' in html
+    assert "挂单中" in html
+    for label in ("名义本金", "限价", "TP / SL", "挂单时间"):
+        assert label in html
+
+
 def test_split_page_removes_internal_task_labels_and_raw_runtime_keys():
     html = read_split_html()
 

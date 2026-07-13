@@ -3532,3 +3532,40 @@ Date: 2026-07-08
   The live page shows human long versus machine short, the 4092-4116 range,
   explicit 4108/4113 entries, and $55k/$45k nominal allocation. Browser
   warning/error log was empty; machine top-card DOM intersections were zero.
+
+## 2026-07-13 - Pending human limit orders stay visible and executable
+
+### Decisions
+
+- An accepted human limit order remains visible in the split canvas under
+  `Current orders` until it is filled, cancelled, or rejected. The row exposes
+  side, notional, quantity, limit price, TP/SL, and submission time.
+- A limit order that is already marketable against the trusted current mark is
+  filled immediately as taker liquidity while preserving its requested limit
+  price for audit.
+- Live-tick processing must continue when there are accepted entry orders even
+  if no position is open. Position-exit checks and pending-entry checks share
+  the same execution snapshot but have independent eligibility.
+- A partial OHLC bar that began before order acceptance may use only its current
+  trusted mark for post-order matching. Its earlier high and low cannot create
+  a look-back fill.
+
+### Gotchas
+
+- The execution API already returned accepted orders; the split canvas simply
+  never rendered them, so a persisted order looked lost to the user.
+- The old protective-exit sweep returned early whenever there was no open
+  position, which also skipped every pending entry order.
+- The affected short limit at 4,056.9 was persisted and marketable. After the
+  fix, the normal 60-second live tick filled it and the UI now shows the open
+  short position instead of an invisible pending state.
+
+### Evidence
+
+- Focused execution, cycle-runner, API, and split-canvas regression:
+  `83 passed`.
+- Full repository regression: `1414 passed in 428.85s`.
+- Live browser: `Current orders` shows `0` after the real fill; the position
+  shows short `12.3247`, entry `4,056.9`, TP `4,036.7`, and SL `4,070.1`.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-pending-order-lifecycle.png`.

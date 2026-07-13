@@ -129,6 +129,10 @@ class DualTrackHumanEngine:
             "trigger_low",
             "trigger_event_started_at",
             "liquidity",
+            "requested_price",
+            "market_price",
+            "market_timestamp",
+            "market_source",
         ):
             if payload.get(key) not in (None, ""):
                 fill[key] = payload[key]

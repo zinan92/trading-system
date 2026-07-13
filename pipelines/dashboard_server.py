@@ -818,6 +818,9 @@ def _prepare_dualtrack_network_order(
     if market_ts < current_window.start:
         raise ValueError("server market timestamp is outside the current cycle")
     prepared = {**payload, "ts": now.isoformat()}
+    prepared["market_price"] = mark
+    prepared["market_timestamp"] = market_ts.isoformat()
+    prepared["market_source"] = provider
     if str(payload.get("order_type") or "market").lower() == "market":
         prepared["price"] = mark
     return prepared

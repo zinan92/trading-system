@@ -82,6 +82,9 @@ def test_network_order_gate_uses_server_clock_and_server_mark_for_market_exit() 
 
     assert payload["ts"] == "2026-07-05T02:00:00+00:00"
     assert payload["price"] == 105.0
+    assert payload["market_price"] == 105.0
+    assert payload["market_timestamp"] == "2026-07-05T01:59:00+00:00"
+    assert payload["market_source"] == "binance_usdm"
 
 
 @pytest.mark.parametrize(

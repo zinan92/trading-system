@@ -129,6 +129,11 @@ h1{font-size:var(--fs-4);line-height:1.2;margin:0}
 .order-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--sp-1) var(--sp-3);margin-top:var(--sp-2);padding-top:var(--sp-2);border-top:1px dashed var(--rule)}
 .order-metrics .kv{font-size:var(--fs-1);padding:1px 0}
 .order-metrics .kv.wide{grid-column:1/-1}
+.open-orders{margin-top:var(--sp-2);padding-top:var(--sp-2);border-top:1px dashed var(--rule);overflow-x:auto}
+.open-orders-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-1);font-size:var(--fs-1);color:var(--muted)}
+.open-orders-h b{color:var(--text)}
+.open-orders-empty{padding:var(--sp-2) 0;color:var(--faint);font-size:var(--fs-1)}
+.open-orders .fill-tbl{min-width:620px}
 .fill-tbl{width:100%;border-collapse:collapse;font-size:var(--fs-1)}
 .fill-tbl th{text-align:left;color:var(--faint);font-weight:700;border-bottom:1px solid var(--rule);padding:var(--sp-1) var(--sp-2)}
 .fill-tbl td{border-bottom:1px dashed var(--rule);padding:var(--sp-2);font-family:var(--mono)}
@@ -238,7 +243,7 @@ h1{font-size:var(--fs-4);line-height:1.2;margin:0}
       </div>
     </div>
 
-    <div class="w ph-mid ph-post phased" data-widget="order"><div class="wh"><span class="nm">下单</span><span class="slug">order</span><span class="r">按钮=名义本金</span></div><div class="wb"><div class="pillrow"><button type="button" class="pill on" data-notional="10000">$10k</button><button type="button" class="pill" data-notional="20000">$20k</button><button type="button" class="pill" data-notional="50000">$50k</button><button type="button" class="pill" data-notional="100000">$100k</button><button type="button" class="pill on" data-tpsl-mode="suggested">前高 / 前低</button><button type="button" class="pill" data-tpsl-mode="manual">手动</button></div><div class="order-metrics" data-order-metrics><div class="kv"><span>名义本金</span><b>--</b></div><div class="kv"><span>占用保证金</span><b>--</b></div><div class="kv"><span>本单实际杠杆</span><b>--</b></div><div class="kv"><span>成交后本轨杠杆</span><b>--</b></div></div><span class="status-line" data-order-status></span></div></div>
+    <div class="w ph-mid ph-post phased" data-widget="order"><div class="wh"><span class="nm">下单</span><span class="slug">order</span><span class="r">按钮=名义本金</span></div><div class="wb"><div class="pillrow"><button type="button" class="pill on" data-notional="10000">$10k</button><button type="button" class="pill" data-notional="20000">$20k</button><button type="button" class="pill" data-notional="50000">$50k</button><button type="button" class="pill" data-notional="100000">$100k</button><button type="button" class="pill on" data-tpsl-mode="suggested">前高 / 前低</button><button type="button" class="pill" data-tpsl-mode="manual">手动</button></div><div class="order-metrics" data-order-metrics><div class="kv"><span>名义本金</span><b>--</b></div><div class="kv"><span>占用保证金</span><b>--</b></div><div class="kv"><span>本单实际杠杆</span><b>--</b></div><div class="kv"><span>成交后本轨杠杆</span><b>--</b></div></div><span class="status-line" data-order-status></span><div class="open-orders" data-human-open-orders><div class="open-orders-h"><b>当前委托</b><span data-open-order-count>0 笔</span></div><div class="open-orders-empty">当前无未成交委托</div></div></div></div>
 
     <div class="k2 ph-mid ph-post phased">
       <div class="w" data-widget="position"><div class="wh"><span class="nm">持仓</span><span class="slug">position</span></div><div class="wb" data-human-position><div class="kv"><span>方向/数量</span><b>--</b></div><div class="kv"><span>均价</span><b>--</b></div><div class="kv"><span>TP / SL</span><b>--</b></div></div></div>
@@ -701,6 +706,7 @@ async function refreshTradeStateFromLiveMarket(){
   if(humanTrades) state.humanTrades = humanTrades;
   if(machineTrades) state.machineTrades = machineTrades;
   renderTrades();
+  renderOpenOrders();
   renderPositions();
   renderRiskWidget();
   renderPnl();
@@ -776,6 +782,7 @@ function renderAll(){
   renderPlans();
   renderRuntime();
   renderTrades();
+  renderOpenOrders();
   renderPositions();
   renderRiskWidget();
   renderPnl();
@@ -1032,6 +1039,21 @@ function shadowCutoverMeta(value){
 function renderTrades(){
   renderTradeRows("[data-human-fills] tbody", displayTrades("human"), {track:"human", payload:state.humanTrades});
   renderMachineOrderRows();
+}
+function renderOpenOrders(){
+  const root = $("[data-human-open-orders]");
+  if(!root) return;
+  const orders = (Array.isArray(state.execution?.orders) ? state.execution.orders : [])
+    .filter(order => order.state === "accepted")
+    .sort((a,b) => String(b.ts || "").localeCompare(String(a.ts || "")));
+  const count = root.querySelector("[data-open-order-count]");
+  if(count) count.textContent = `${orders.length} 笔`;
+  root.querySelector("table, .open-orders-empty")?.remove();
+  if(!orders.length){
+    root.insertAdjacentHTML("beforeend", '<div class="open-orders-empty">当前无未成交委托</div>');
+    return;
+  }
+  root.insertAdjacentHTML("beforeend", `<table class="fill-tbl"><thead><tr><th>状态</th><th>方向</th><th>名义本金</th><th>数量</th><th>限价</th><th>TP / SL</th><th>挂单时间</th></tr></thead><tbody>${orders.map(order => `<tr><td><span class="fst open"><span class="dot"></span>挂单中</span></td><td class="${order.side === "sell" ? "neg" : "pos"}">${order.side === "sell" ? "空" : "多"}</td><td>${usd(order.notional)}</td><td>${fmt(order.quantity,4)}</td><td>${fmt(order.price,1)}</td><td>${fmt(order.tp,1)} / ${fmt(order.sl,1)}</td><td>${formatTradeTime(order.ts)}</td></tr>`).join("")}</tbody></table>`);
 }
 function renderMachineOrderRows(){
   renderTradeRows("[data-machine-fills] tbody", displayTrades("machine"), {track:"machine", payload:state.machineTrades});

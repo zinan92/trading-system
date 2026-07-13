@@ -52,6 +52,10 @@ def test_legacy_adapter_exposes_canonical_execution_snapshot(tmp_path: Path) -> 
         "order_type": "limit",
         "price": 100.0,
         "quantity": 10.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 110.0,
+        "ts": "2026-07-05T01:02:00+00:00",
     }]
     assert snapshot["fills"] == []
     assert snapshot["positions"] == []
@@ -73,6 +77,25 @@ def test_legacy_adapter_command_journal_is_idempotent_for_retried_fill(tmp_path:
     assert first["order_id"] == second["order_id"]
     rows = load_json(tmp_path / "outputs" / "dualtrack" / "shadow_commands" / "2026-07-05_DAY.json")
     assert len(rows) == 1
+
+
+def test_legacy_adapter_fills_marketable_limit_immediately_at_trusted_mark(tmp_path: Path) -> None:
+    adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
+
+    fill = adapter.submit_order({
+        **_entry(),
+        "market_price": 99.0,
+        "market_timestamp": "2026-07-05T01:01:59+00:00",
+        "market_source": "canonical_test_feed",
+    })
+    snapshot = adapter.snapshot("2026-07-05_DAY", mark_price=99.0, mark_fresh=True)
+
+    assert fill["fill_id"]
+    assert fill["price"] == 99.0
+    assert fill["requested_price"] == 100.0
+    assert fill["liquidity"] == "taker"
+    assert snapshot["orders"][0]["state"] == "filled"
+    assert snapshot["positions"][0]["status"] == "open"
 
 
 def test_legacy_adapter_market_event_executes_protection_and_reconciles(tmp_path: Path) -> None:
