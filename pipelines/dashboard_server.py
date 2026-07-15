@@ -284,9 +284,20 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _handle_strategy_console_control(self) -> None:
         try:
             payload = self._read_json_body(max_bytes=64_000)
-            self._write_json(200, build_strategy_console_control_response(payload))
+            self._write_json(200, build_strategy_console_control_response(payload, actor=self._control_actor()))
         except ValueError as exc:
             self._write_error(400, "invalid_strategy_console_control", str(exc))
+
+    def _control_actor(self) -> dict:
+        # The gateway asserts this header only after validating the Cloudflare
+        # Access JWT, and never forwards client-supplied headers. The server is
+        # loopback-bound, so a request without it is a local operator.
+        email = str(self.headers.get("X-Goldbot-Actor-Email") or "").strip().lower()
+        return {
+            "email": email or None,
+            "transport": "public_gateway" if email else "local",
+            "client": self.client_address[0] if self.client_address else None,
+        }
 
     def _handle_dualtrack_plan_get(self, path: str, query: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -861,6 +872,7 @@ def build_strategy_console_control_response(
     market: dict | None = None,
     account: dict | None = None,
     recommendation_provider=None,
+    actor: dict | None = None,
 ) -> dict:
     output = _dualtrack_output_root(output_root)
     cycle_id = str(payload.get("cycle_id") or cycle_window(payload.get("as_of")).cycle_id)
@@ -973,6 +985,7 @@ def build_strategy_console_control_response(
         market=trusted_market,
         account=trusted_account,
         now=payload.get("as_of"),
+        actor=actor,
     )
 
 

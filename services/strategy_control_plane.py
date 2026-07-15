@@ -17,6 +17,7 @@ from typing import Any
 from services.dualtrack_execution_adapter import build_execution_engine_adapter
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_store import DualTrackPlanStore
+from services.control_audit import append_control_event, build_control_event, read_last_control_event
 from services.grid_sizing import (
     GRID_STYLES,
     build_grid_preview,
@@ -180,6 +181,7 @@ class StrategyControlPlane:
                 "stale_cycle": True,
                 "previous_cycle_id": stored_cycle_id,
                 "previous_actual_state": str(row.get("actual_state") or row.get("desired_state") or "stopped"),
+                "last_control_event": self._last_control_event(),
             }
         return {
             "desired_state": str(row.get("desired_state") or "stopped"),
@@ -196,7 +198,14 @@ class StrategyControlPlane:
             "stale_cycle": False,
             "previous_cycle_id": None,
             "previous_actual_state": None,
+            "last_control_event": self._last_control_event(),
         }
+
+    def _last_control_event(self) -> dict[str, Any] | None:
+        try:
+            return read_last_control_event(self.output_root)
+        except OSError:
+            return None
 
     def runtime_configured(self) -> bool:
         return (self.root / "runtime.json").exists()
@@ -222,9 +231,51 @@ class StrategyControlPlane:
         market: dict[str, Any] | None = None,
         account: dict[str, Any] | None = None,
         now: str | None = None,
+        actor: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with _CONTROL_LOCK:
-            return self._control_locked(cycle_id, action, payload, market=market, account=account, now=now)
+            try:
+                result = self._control_locked(cycle_id, action, payload, market=market, account=account, now=now)
+            except ValueError as exc:
+                # A rejected mutation is still an operator action and must
+                # stay attributable; the original rejection is re-raised.
+                if str(action or "").lower() != "preview":
+                    self._audit_control(cycle_id, action, payload, actor=actor, result="rejected", error=str(exc), now=now)
+                raise
+            if str(action or "").lower() != "preview":
+                recorded = self._audit_control(cycle_id, action, payload, actor=actor, result="accepted", error=None, now=now)
+                if isinstance(result, dict):
+                    result = {**result, "audit_recorded": recorded}
+            return result
+
+    def _audit_control(
+        self,
+        cycle_id: str,
+        action: str,
+        payload: dict[str, Any] | None,
+        *,
+        actor: dict[str, Any] | None,
+        result: str,
+        error: str | None,
+        now: str | None,
+    ) -> bool:
+        # An audit failure must never block or alter the control outcome;
+        # callers surface it honestly via audit_recorded=false.
+        try:
+            event = build_control_event(
+                cycle_id=cycle_id,
+                action=action,
+                actor=actor,
+                payload=payload,
+                result=result,
+                error=error,
+                runtime=self.runtime_state(cycle_id),
+                now=_timestamp(now),
+            )
+            append_control_event(self.output_root, event)
+            return True
+        except OSError:
+            return False
 
     def _control_locked(
         self,
