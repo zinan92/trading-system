@@ -7,6 +7,10 @@ from zoneinfo import ZoneInfo
 
 BJ_TZ = timezone(timedelta(hours=8))
 NY_TZ = ZoneInfo("America/New_York")
+DAILY_CYCLE_CUTOVER_CST = datetime(2026, 7, 14, tzinfo=BJ_TZ)
+DAILY_CYCLE_CUTOVER_UTC = DAILY_CYCLE_CUTOVER_CST.astimezone(timezone.utc)
+TWELVE_HOUR_CYCLE_RESTORE_CST = datetime(2026, 7, 14, 21, tzinfo=BJ_TZ)
+TWELVE_HOUR_CYCLE_RESTORE_UTC = TWELVE_HOUR_CYCLE_RESTORE_CST.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,7 @@ class CycleWindow:
             "lock_deadline": self.lock_deadline.isoformat(),
             "start_cst": self.start.astimezone(BJ_TZ).isoformat(),
             "end_cst": self.end.astimezone(BJ_TZ).isoformat(),
+            "duration_hours": int((self.end - self.start).total_seconds() // 3600),
         }
 
 
@@ -43,17 +48,25 @@ def parse_utc(value: str | datetime | None = None) -> datetime:
 
 def cycle_window(ts: str | datetime | None = None, *, lock_deadline_min_before_cycle: int = 0) -> CycleWindow:
     utc = parse_utc(ts)
-    if 1 <= utc.hour < 13:
+    if DAILY_CYCLE_CUTOVER_UTC <= utc < TWELVE_HOUR_CYCLE_RESTORE_UTC:
+        bj = utc.astimezone(BJ_TZ)
+        bj_start = bj.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = bj_start.astimezone(timezone.utc)
+        kind = "DAY"
+        end = TWELVE_HOUR_CYCLE_RESTORE_UTC
+    elif 1 <= utc.hour < 13:
         start = utc.replace(hour=1, minute=0, second=0, microsecond=0)
         kind = "DAY"
+        end = start + timedelta(hours=12)
     elif utc.hour >= 13:
         start = utc.replace(hour=13, minute=0, second=0, microsecond=0)
         kind = "NIGHT"
+        end = min(start + timedelta(hours=12), DAILY_CYCLE_CUTOVER_UTC) if start < DAILY_CYCLE_CUTOVER_UTC else start + timedelta(hours=12)
     else:
         previous = utc - timedelta(days=1)
         start = previous.replace(hour=13, minute=0, second=0, microsecond=0)
         kind = "NIGHT"
-    end = start + timedelta(hours=12)
+        end = start + timedelta(hours=12)
     cycle_date = start.astimezone(BJ_TZ).strftime("%Y-%m-%d")
     return CycleWindow(
         cycle_id=f"{cycle_date}_{kind}",
@@ -152,10 +165,15 @@ def cycle_window_from_id(cycle_id: str, *, lock_deadline_min_before_cycle: int =
         raise ValueError("cycle_id must look like YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT") from exc
     if kind not in {"DAY", "NIGHT"}:
         raise ValueError("cycle kind must be DAY or NIGHT")
-    hour = 9 if kind == "DAY" else 21
-    bj_start = datetime.fromisoformat(f"{date_part}T{hour:02d}:00:00+08:00")
-    start = bj_start.astimezone(timezone.utc)
-    end = start + timedelta(hours=12)
+    if date_part == DAILY_CYCLE_CUTOVER_CST.date().isoformat() and kind == "DAY":
+        bj_start = datetime.fromisoformat(f"{date_part}T00:00:00+08:00")
+        start = bj_start.astimezone(timezone.utc)
+        end = TWELVE_HOUR_CYCLE_RESTORE_UTC
+    else:
+        hour = 9 if kind == "DAY" else 21
+        bj_start = datetime.fromisoformat(f"{date_part}T{hour:02d}:00:00+08:00")
+        start = bj_start.astimezone(timezone.utc)
+        end = min(start + timedelta(hours=12), DAILY_CYCLE_CUTOVER_UTC) if start < DAILY_CYCLE_CUTOVER_UTC else start + timedelta(hours=12)
     return CycleWindow(
         cycle_id=cycle_id,
         kind=kind,

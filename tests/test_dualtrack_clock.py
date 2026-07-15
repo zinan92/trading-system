@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from services.dualtrack_clock import (
     comex_futures_session_status,
+    cycle_window,
+    cycle_window_from_id,
     is_comex_futures_open,
     next_comex_futures_open,
 )
@@ -32,3 +34,43 @@ def test_comex_futures_session_status_reports_next_open_and_reason() -> None:
     assert weekend["is_open"] is False
     assert weekend["reason"] == "weekend_closed"
     assert weekend["next_open"] == "2026-07-12T22:00:00+00:00"
+
+
+def test_dualtrack_uses_one_transition_window_then_restores_twelve_hour_cycles() -> None:
+    legacy_night = cycle_window("2026-07-13T15:59:59+00:00")
+    transition = cycle_window("2026-07-13T16:00:00+00:00")
+    same_transition = cycle_window("2026-07-14T08:30:00+00:00")
+    restored_night = cycle_window("2026-07-14T13:00:00+00:00")
+    restored_day = cycle_window("2026-07-15T01:00:00+00:00")
+
+    assert legacy_night.cycle_id == "2026-07-13_NIGHT"
+    assert legacy_night.start.isoformat() == "2026-07-13T13:00:00+00:00"
+    assert legacy_night.end.isoformat() == "2026-07-13T16:00:00+00:00"
+    assert transition.cycle_id == "2026-07-14_DAY"
+    assert transition.start.isoformat() == "2026-07-13T16:00:00+00:00"
+    assert transition.end.isoformat() == "2026-07-14T13:00:00+00:00"
+    assert same_transition == transition
+    assert transition.to_dict()["duration_hours"] == 21
+    assert restored_night.cycle_id == "2026-07-14_NIGHT"
+    assert restored_night.start.isoformat() == "2026-07-14T13:00:00+00:00"
+    assert restored_night.end.isoformat() == "2026-07-15T01:00:00+00:00"
+    assert restored_night.to_dict()["duration_hours"] == 12
+    assert restored_day.cycle_id == "2026-07-15_DAY"
+    assert restored_day.start.isoformat() == "2026-07-15T01:00:00+00:00"
+    assert restored_day.end.isoformat() == "2026-07-15T13:00:00+00:00"
+
+
+def test_cycle_id_parser_preserves_legacy_history_and_transition_window() -> None:
+    legacy = cycle_window_from_id("2026-07-13_DAY")
+    transition = cycle_window_from_id("2026-07-14_DAY")
+    restored_night = cycle_window_from_id("2026-07-14_NIGHT")
+    restored_day = cycle_window_from_id("2026-07-15_DAY")
+
+    assert legacy.start.isoformat() == "2026-07-13T01:00:00+00:00"
+    assert legacy.end.isoformat() == "2026-07-13T13:00:00+00:00"
+    assert transition.start.isoformat() == "2026-07-13T16:00:00+00:00"
+    assert transition.end.isoformat() == "2026-07-14T13:00:00+00:00"
+    assert restored_night.start.isoformat() == "2026-07-14T13:00:00+00:00"
+    assert restored_night.end.isoformat() == "2026-07-15T01:00:00+00:00"
+    assert restored_day.start.isoformat() == "2026-07-15T01:00:00+00:00"
+    assert restored_day.end.isoformat() == "2026-07-15T13:00:00+00:00"

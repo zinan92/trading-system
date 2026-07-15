@@ -550,7 +550,7 @@
           color:line.color || COLORS.gold,
           lineWidth:line.lineWidth || 1,
           lineStyle:lineStyleValue(line.lineStyle),
-          axisLabelVisible:true,
+          axisLabelVisible:line.axisLabelVisible !== false,
           title:line.title || "",
         }));
       });

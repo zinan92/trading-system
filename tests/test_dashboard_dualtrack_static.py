@@ -455,6 +455,17 @@ def test_dashboard_server_runtime_status_exposes_machine_fills_during_cycle(tmp_
         "cycle_id": cycle_id,
         "machine_stood_down": False,
         "layers": ["grid:traded", "trend:armed"],
+        "range_observation": {
+            "status": "high_breached",
+            "eligible_sides": [],
+            "first_breaches": [{"side": "above", "boundary": 4010.0, "ts": "2026-07-05T02:02:00+00:00"}],
+        },
+    }])
+    write_json(output / "dualtrack" / "reassessment" / f"{cycle_id}.json", [{
+        "status": "awaiting_confirmation",
+        "plan_locked_at": "2026-07-05T01:00:00+00:00",
+        "touch": {"side": "above", "boundary": 4010.0, "touched_at": "2026-07-05T02:02:00+00:00"},
+        "entry_mode": "paused",
     }])
     write_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json", [{
         "fill_id": "m1",
@@ -474,6 +485,9 @@ def test_dashboard_server_runtime_status_exposes_machine_fills_during_cycle(tmp_
     assert response["sample"]["machine_fill_count"] == 1
     assert response["runner"]["bar_count"] == 64
     assert response["market"]["provider"] == "binance_usdm"
+    assert response["machine_range_observation"]["status"] == "high_breached"
+    assert response["machine_range_observation"]["eligible_sides"] == []
+    assert response["machine_range_reassessment"]["status"] == "awaiting_confirmation"
 
 
 def test_dashboard_server_runtime_status_warns_when_simulation_filtered_invalid_machine_fills(tmp_path, monkeypatch):

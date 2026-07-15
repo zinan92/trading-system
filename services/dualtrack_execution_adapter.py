@@ -104,6 +104,11 @@ class LegacyPaperExecutionAdapter:
             else None
         )
         account = dict(payload.get("account") or {})
+        starting_cash = float(self.engine.config.get("capital_per_track_usd") or 0.0)
+        realized = round(sum(float(fill.get("realized_pnl") or 0.0) for fill in fills), 8)
+        account.setdefault("starting_cash", starting_cash)
+        account.setdefault("realized_pnl", realized)
+        account.setdefault("ending_cash", round(starting_cash + realized, 8))
         exposure = round(sum(
             float(position.get("remaining_units") or 0.0) * float(position.get("entry_price") or 0.0)
             for position in positions
@@ -112,6 +117,7 @@ class LegacyPaperExecutionAdapter:
         account["exposure"] = exposure
         account["margin"] = round(exposure / float(self.engine.config.get("max_leverage") or 1.0), 8)
         account["slippage"] = round(sum(float(fill.get("slippage") or 0.0) for fill in fills), 8)
+        account["equity"] = round(float(account["ending_cash"]) + float(unrealized or 0.0), 8)
         return {
             "schema_version": "dualtrack-execution-v1",
             "engine": self.name,
@@ -121,7 +127,7 @@ class LegacyPaperExecutionAdapter:
             "positions": positions,
             "account": account,
             "pnl": {
-                "realized": round(sum(float(fill.get("realized_pnl") or 0.0) for fill in fills), 8),
+                "realized": realized,
                 "unrealized": None if unrealized is None else round(unrealized, 8),
             },
             "mark": {
@@ -260,6 +266,8 @@ class LegacyPaperExecutionAdapter:
             "ts": command.get("ts"),
             "source": command.get("source"),
             "source_id": source_id,
+            "strategy_plan_id": command.get("strategy_plan_id"),
+            "strategy_plan_version": command.get("strategy_plan_version"),
             "command": dict(command),
         }
         rows.append(row)
@@ -368,7 +376,10 @@ def _order_row(row: dict[str, Any]) -> dict[str, Any]:
         "price": float(row.get("fill_price") or row.get("price") or 0.0),
         "quantity": float(row.get("fill_quantity") or row.get("quantity") or 0.0),
     }
-    for key in ("notional", "sl", "tp", "ts"):
+    command = row.get("command") if isinstance(row.get("command"), dict) else {}
+    for key in ("notional", "sl", "tp", "ts", "source", "strategy_plan_id", "strategy_plan_version"):
+        if row.get(key) in (None, "") and command.get(key) not in (None, ""):
+            order[key] = command[key]
         if row.get(key) not in (None, ""):
             order[key] = row[key]
     return order

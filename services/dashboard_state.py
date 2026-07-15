@@ -11,7 +11,7 @@ from services.execution_accounting import (
     execution_record_status,
 )
 from services.journal_store import load_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository, uses_independent_datafeed
 from services.market_view import MarketViewStore, infer_market_view_reference_price, market_view_target_expiry_bounds
 from services.official_market_data_gate import execution_venue_rows, is_official_broker_ohlc_ready
 from services.paper_executor import PaperExecutor
@@ -47,7 +47,7 @@ class DashboardState:
         executor.mark_to_market(run_date)
         bars, bar_timeframe = self._load_primary_bars(run_date, strategy_id, strategy_config)
         latest = bars[-1] if bars else {}
-        latest_quote = MarketStore(self.market_db).load_latest_quote("GOLD") if self.market_db.exists() else {}
+        latest_quote = market_data_repository(self.market_db).load_latest_quote("GOLD")
         decisions = load_json(self.output_root / "journal_decisions" / f"{run_date}.json")
         pending = load_json(self.output_root / "journal_pending" / f"{run_date}.json")
         orders = load_json(self.output_root / "paper_orders" / f"{run_date}.json")
@@ -1552,7 +1552,7 @@ class DashboardState:
             reason="market_db_unavailable",
             trade_count=len(trades or []),
         )
-        if not trades or not self.market_db.exists():
+        if not trades or (not uses_independent_datafeed(self.market_db) and not self.market_db.exists()):
             return artifact_bars, fallback
         bounds = self._replay_time_bounds(trades, artifact_bars)
         if not bounds:
@@ -1562,7 +1562,7 @@ class DashboardState:
             return artifact_bars, {**fallback, "reason": "invalid_trade_time_bounds"}
 
         selected_timeframe = self._select_replay_timeframe(requested_timeframe, start_epoch, end_epoch)
-        store = MarketStore(self.market_db)
+        store = market_data_repository(self.market_db)
         rows = store.load_bars_between(
             "GOLD",
             selected_timeframe,
@@ -3612,17 +3612,19 @@ class DashboardState:
         }
 
     def _market_db_summary(self) -> dict:
-        if not self.market_db.exists():
+        independent = uses_independent_datafeed(self.market_db)
+        if not independent and not self.market_db.exists():
             return {"path": str(self.market_db), "exists": False, "bars": []}
-        coverage = MarketStore(self.market_db).coverage()
+        coverage = market_data_repository(self.market_db).coverage()
         source_config = self.config.get("market_data_sources", {}).get("gold_5m", {})
         official_providers = set(source_config.get("official_broker_providers", ["broker_csv", "mt5_csv", "ibkr", "oanda"]))
         public_providers = set(source_config.get("public_providers", ["gold-api.com", "yahoo_chart:GC=F"]))
         execution_venue_providers = set(source_config.get("execution_venue_providers", []))
         gold_5m = [item for item in coverage if item["symbol"] == "GOLD" and item["timeframe"] == "5m"]
         return {
-            "path": str(self.market_db),
+            "path": "datafeed" if independent else str(self.market_db),
             "exists": True,
+            "backend": "datafeed" if independent else "legacy_test_store",
             "bars": coverage,
             "official_providers": sorted(official_providers),
             "execution_venue_providers": sorted(execution_venue_providers),

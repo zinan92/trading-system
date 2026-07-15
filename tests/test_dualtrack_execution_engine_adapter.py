@@ -56,6 +56,7 @@ def test_legacy_adapter_exposes_canonical_execution_snapshot(tmp_path: Path) -> 
         "sl": 95.0,
         "tp": 110.0,
         "ts": "2026-07-05T01:02:00+00:00",
+        "source": "adapter_contract_test",
     }]
     assert snapshot["fills"] == []
     assert snapshot["positions"] == []
@@ -65,6 +66,51 @@ def test_legacy_adapter_exposes_canonical_execution_snapshot(tmp_path: Path) -> 
     command_rows = load_json(tmp_path / "outputs" / "dualtrack" / "shadow_commands" / "2026-07-05_DAY.json")
     assert command_rows[0]["command_id"] == order["order_id"]
     assert command_rows[0]["command"]["order_type"] == "limit"
+
+
+def test_empty_snapshot_keeps_configured_paper_account_equity(tmp_path: Path) -> None:
+    adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
+
+    snapshot = adapter.snapshot("2026-07-05_DAY")
+
+    assert snapshot["account"]["starting_cash"] == TEST_CONFIG["capital_per_track_usd"]
+    assert snapshot["account"]["ending_cash"] == TEST_CONFIG["capital_per_track_usd"]
+    assert snapshot["account"]["equity"] == TEST_CONFIG["capital_per_track_usd"]
+
+
+def test_protective_exit_inherits_strategy_plan_traceability(tmp_path: Path) -> None:
+    adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
+    command = {
+        **_entry(),
+        "order_type": "market",
+        "market_price": 100.0,
+        "strategy_plan_id": "strategy-plan-2026-07-05_DAY-2-test",
+        "strategy_plan_version": 2,
+    }
+    adapter.submit_order(command)
+
+    result = adapter.process_market_event({
+        "schema_version": "canonical-market-event-v1",
+        "event_id": "bar-1",
+        "cycle_id": "2026-07-05_DAY",
+        "ts_event": "2026-07-05T01:03:00+00:00",
+        "event_started_at": "2026-07-05T01:03:00+00:00",
+        "source": "canonical_test_feed",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "open": 100.0,
+        "high": 111.0,
+        "low": 99.0,
+        "close": 110.0,
+        "price": 110.0,
+        "is_synthetic": False,
+        "fresh": True,
+    })
+
+    assert result["triggered"][0]["fill_id"]
+    exit_fill = adapter.snapshot("2026-07-05_DAY")["fills"][-1]
+    assert exit_fill["strategy_plan_id"] == command["strategy_plan_id"]
+    assert exit_fill["strategy_plan_version"] == 2
 
 
 def test_legacy_adapter_command_journal_is_idempotent_for_retried_fill(tmp_path: Path) -> None:

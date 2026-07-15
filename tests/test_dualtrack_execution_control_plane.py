@@ -61,7 +61,15 @@ def test_reconciliation_pipeline_passes_exact_matching_candidate(tmp_path: Path)
         "pnl": {"realized": 0.0, "unrealized": 0.0},
         "fills": [],
         "positions": [],
-        "account": {"margin": 0.0, "exposure": 0.0, "slippage": 0.0},
+        "account": {
+            "starting_cash": 10_000.0,
+            "realized_pnl": 0.0,
+            "ending_cash": 10_000.0,
+            "equity": 10_000.0,
+            "margin": 0.0,
+            "exposure": 0.0,
+            "slippage": 0.0,
+        },
         "reconciliation": {"status": "ok"},
     }
     candidate_path = tmp_path / "candidate.json"

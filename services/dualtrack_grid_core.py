@@ -274,6 +274,7 @@ def simulate_explicit_grid(
     cost_per_side_bp: float,
     finalize: bool,
     layer: str = "ai_grid",
+    entry_cutoff_bar_index: int | None = None,
     execution_cost_model: dict[str, Any] | None = None,
     cost_rules: dict[str, Any] | None = None,
 ) -> GridResult:
@@ -330,51 +331,53 @@ def simulate_explicit_grid(
             break
 
         low, high = float(bar.low), float(bar.high)
-        for rung, order in enumerate(orders):
-            if rung in entered:
-                continue
-            entry = float(order["entry"])
-            touched = low <= entry if sign > 0 else high >= entry
-            if not touched:
-                continue
-            weight = float(order.get("weight", 1.0))
-            requested_notional = float(order.get("notional") or (float(rung_notional) * weight))
-            contracts = _weighted_contracts(execution_cost_model, weight)
-            entry_cost = dualtrack_order_cost(
-                config=cost_config,
-                price=entry,
-                notional=requested_notional,
-                contracts=contracts,
-                cost_rules=cost_rules,
-            )
-            entry_fill = _explicit_fill(
-                cycle_id,
-                fills,
-                bar,
-                side="buy" if sign > 0 else "sell",
-                price=entry,
-                order_cost=entry_cost,
-                layer=layer,
-                rung=rung,
-                event="entry",
-                realized_pnl=-entry_cost.cost,
-                sl=active_stop.price,
-                tp=float(order["take_profit"]),
-            )
-            holdings[rung] = {
-                "bar_index": bar_index,
-                "notional": entry_cost.notional,
-                "contracts": entry_cost.contracts,
-                "trade_id": entry_fill["trade_id"],
-                "fill_id": entry_fill["fill_id"],
-                "units": _units(entry, entry_cost.notional) if entry_cost.contracts is None else None,
-            }
-            entered.add(rung)
-            fills.append(entry_fill)
-            total_cost += entry_cost.cost
-            side_notional += entry_cost.notional
-            sides += 1
-            max_inventory = max(max_inventory, len(holdings))
+        entries_allowed = entry_cutoff_bar_index is None or bar_index < entry_cutoff_bar_index
+        if entries_allowed:
+            for rung, order in enumerate(orders):
+                if rung in entered:
+                    continue
+                entry = float(order["entry"])
+                touched = low <= entry if sign > 0 else high >= entry
+                if not touched:
+                    continue
+                weight = float(order.get("weight", 1.0))
+                requested_notional = float(order.get("notional") or (float(rung_notional) * weight))
+                contracts = _weighted_contracts(execution_cost_model, weight)
+                entry_cost = dualtrack_order_cost(
+                    config=cost_config,
+                    price=entry,
+                    notional=requested_notional,
+                    contracts=contracts,
+                    cost_rules=cost_rules,
+                )
+                entry_fill = _explicit_fill(
+                    cycle_id,
+                    fills,
+                    bar,
+                    side="buy" if sign > 0 else "sell",
+                    price=entry,
+                    order_cost=entry_cost,
+                    layer=layer,
+                    rung=_plan_rung(order, rung),
+                    event="entry",
+                    realized_pnl=-entry_cost.cost,
+                    sl=active_stop.price,
+                    tp=float(order["take_profit"]),
+                )
+                holdings[rung] = {
+                    "bar_index": bar_index,
+                    "notional": entry_cost.notional,
+                    "contracts": entry_cost.contracts,
+                    "trade_id": entry_fill["trade_id"],
+                    "fill_id": entry_fill["fill_id"],
+                    "units": _units(entry, entry_cost.notional) if entry_cost.contracts is None else None,
+                }
+                entered.add(rung)
+                fills.append(entry_fill)
+                total_cost += entry_cost.cost
+                side_notional += entry_cost.notional
+                sides += 1
+                max_inventory = max(max_inventory, len(holdings))
 
         for rung, holding in list(holdings.items()):
             if int(holding["bar_index"]) >= bar_index:
@@ -483,7 +486,7 @@ def _close_explicit_holding(
         price=price,
         order_cost=exit_cost,
         layer=layer,
-        rung=rung,
+        rung=_plan_rung(order, rung),
         event=event,
         realized_pnl=pnl - exit_cost.cost,
         sl=stop.price,
@@ -561,6 +564,10 @@ def _weighted_contracts(execution_cost_model: dict[str, Any] | None, weight: flo
     if contracts <= 0 or not contracts.is_integer():
         raise ValueError("explicit grid contract weights must produce a positive whole contract count")
     return contracts
+
+
+def _plan_rung(order: dict[str, Any], fallback: int) -> int:
+    return int(order.get("_plan_rung", fallback))
 
 
 def _fill(

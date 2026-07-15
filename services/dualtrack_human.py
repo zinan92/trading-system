@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config, load_risk_rules
-from services.dualtrack_clock import cycle_window, parse_utc
+from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_costs import dualtrack_cost_descriptor, dualtrack_order_cost
 from services.dualtrack_store import DualTrackPlanStore
@@ -30,7 +30,17 @@ class DualTrackHumanEngine:
     def submit_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         ts = parse_utc(payload.get("ts"))
         cycle_id = str(payload.get("cycle_id") or cycle_window(ts).cycle_id)
-        if cycle_window(ts).cycle_id != cycle_id:
+        timestamp_cycle_id = cycle_window(ts).cycle_id
+        requested_event = str(payload.get("event") or "").lower()
+        position_cycle_id = str(payload.get("position_cycle_id") or "")
+        request_cycle_id = str(payload.get("request_cycle_id") or "")
+        cross_cycle_exit = (
+            requested_event in {"exit", "stop", "target", "flatten"}
+            and position_cycle_id == cycle_id
+            and request_cycle_id == timestamp_cycle_id
+            and cycle_window_from_id(cycle_id).start <= cycle_window_from_id(request_cycle_id).start
+        )
+        if timestamp_cycle_id != cycle_id and not cross_cycle_exit:
             raise ValueError("order timestamp does not belong to cycle")
         side = str(payload.get("side") or "").lower()
         order_type = str(payload.get("order_type") or "market").lower()
@@ -83,6 +93,7 @@ class DualTrackHumanEngine:
         fill_id = f"{cycle_id}_human_{len(rows) + 1:04d}"
         fill = {
             "fill_id": fill_id,
+            "cycle_id": cycle_id,
             "ts": ts.isoformat(),
             "side": side,
             "price": price,
@@ -133,6 +144,10 @@ class DualTrackHumanEngine:
             "market_price",
             "market_timestamp",
             "market_source",
+            "request_cycle_id",
+            "position_cycle_id",
+            "strategy_plan_id",
+            "strategy_plan_version",
         ):
             if payload.get(key) not in (None, ""):
                 fill[key] = payload[key]
@@ -207,6 +222,8 @@ class DualTrackHumanEngine:
             entry = entries.get(trade_id) or {}
             fill = self.submit_order({
                 "cycle_id": cycle_id,
+                "position_cycle_id": cycle_id,
+                "request_cycle_id": cycle_window(ts).cycle_id,
                 "ts": ts,
                 "side": trigger["exit_side"],
                 "event": trigger["event"],
@@ -282,6 +299,8 @@ class DualTrackHumanEngine:
         if not lots:
             raise ValueError("exit order has no open human entry to close")
         matched = []
+        matched_plan_ids: set[str] = set()
+        matched_plan_versions: set[int] = set()
         gross = 0.0
         for lot in lots:
             if remaining <= _EPSILON:
@@ -300,19 +319,32 @@ class DualTrackHumanEngine:
             entry["position_status"] = "closed" if new_remaining <= _EPSILON else "open"
             if not fill.get("trade_id"):
                 fill["trade_id"] = str(entry.get("trade_id") or "")
-            matched.append({
+            match = {
                 "fill_id": entry.get("fill_id", ""),
                 "trade_id": entry.get("trade_id", ""),
                 "units": round(units, 10),
                 "entry_price": entry.get("price"),
                 "gross_pnl": round(match_gross, 8),
-            })
+            }
+            if entry.get("strategy_plan_id") not in (None, ""):
+                plan_id = str(entry["strategy_plan_id"])
+                match["strategy_plan_id"] = plan_id
+                matched_plan_ids.add(plan_id)
+            if entry.get("strategy_plan_version") not in (None, ""):
+                plan_version = int(entry["strategy_plan_version"])
+                match["strategy_plan_version"] = plan_version
+                matched_plan_versions.add(plan_version)
+            matched.append(match)
         if remaining > _EPSILON:
             raise ValueError("exit order size exceeds open human position")
         total_units = sum(float(item["units"]) for item in matched)
         for item in matched:
             cost_share = float(fill.get("cost", 0.0) or 0.0) * (float(item["units"]) / total_units if total_units else 0.0)
             item["realized_pnl"] = round(float(item.get("gross_pnl", 0.0)) - cost_share, 8)
+        if fill.get("strategy_plan_id") in (None, "") and len(matched_plan_ids) == 1:
+            fill["strategy_plan_id"] = next(iter(matched_plan_ids))
+        if fill.get("strategy_plan_version") in (None, "") and len(matched_plan_versions) == 1:
+            fill["strategy_plan_version"] = next(iter(matched_plan_versions))
         fill["matched_entries"] = matched
         fill["gross_pnl"] = round(gross, 8)
         fill["realized_pnl"] = round(gross - float(fill.get("cost", 0.0) or 0.0), 8)

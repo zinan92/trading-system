@@ -156,6 +156,11 @@ def test_recovery_replay_is_preserved_but_excluded_from_paper_pnl(tmp_path: Path
     assert daily["cycles"][cycle_id]["recovery_replay"]["machine"] == pytest.approx(
         sum(fill["realized_pnl"] for fill in raw_fills)
     )
+    assert daily["cycles"][cycle_id]["recovery_replay"]["eligible_for_recorded_pnl"] is True
+    assert daily["tracks"]["machine"]["live_observed_realized_pnl"] == 0.0
+    assert daily["tracks"]["machine"]["realized_pnl"] == pytest.approx(
+        sum(fill["realized_pnl"] for fill in raw_fills)
+    )
 
 
 def test_12h_cycle_closes_human_manual_trade_and_ai_bracket_pnl(tmp_path: Path) -> None:

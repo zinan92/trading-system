@@ -19,10 +19,12 @@ DUALTRACK_CYCLE_LABEL = "com.wendy.trading-orchestrator.dualtrack-live-tick"
 class CycleSchedule:
     day_start: int
     night_start: int
+    daily_start: int | None = None
+    cutover_at: datetime | None = None
 
     @property
     def hours(self) -> list[int]:
-        return sorted([self.day_start, self.night_start])
+        return sorted(set([self.day_start, self.night_start, *([] if self.daily_start is None else [self.daily_start])]))
 
     def kind_for_start_hour(self, hour: int) -> str:
         if hour == self.day_start:
@@ -93,7 +95,29 @@ class DualTrackCycleHeartbeat:
             return None, "config_cycle_hours_utc_invalid"
         if day_start == night_start or not all(0 <= hour <= 23 for hour in (day_start, night_start)):
             return None, "config_cycle_hours_utc_invalid"
-        return CycleSchedule(day_start=day_start, night_start=night_start), ""
+        cadence = self.config.get("cycle_cadence") if isinstance(self.config, dict) else None
+        if not isinstance(cadence, dict):
+            return CycleSchedule(day_start=day_start, night_start=night_start), ""
+        try:
+            cadence_hours = int(cadence["hours"])
+        except (KeyError, TypeError, ValueError):
+            return None, "config_cycle_cadence_invalid"
+        if cadence_hours == 12:
+            return CycleSchedule(day_start=day_start, night_start=night_start), ""
+        try:
+            daily_start = int(cadence["start_hour_utc"])
+            cutover_date = str(cadence["cutover_date_cst"])
+            cutover_at = datetime.fromisoformat(f"{cutover_date}T00:00:00+08:00").astimezone(timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            return None, "config_cycle_cadence_invalid"
+        if cadence_hours != 24 or not 0 <= daily_start <= 23:
+            return None, "config_cycle_cadence_invalid"
+        return CycleSchedule(
+            day_start=day_start,
+            night_start=night_start,
+            daily_start=daily_start,
+            cutover_at=cutover_at,
+        ), ""
 
     def _latest_required_boundary(self, checked_at: datetime, schedule: CycleSchedule) -> datetime | None:
         cutoff = checked_at - self.close_grace
@@ -153,9 +177,17 @@ class DualTrackCycleHeartbeat:
     def _boundary_from_cycle_id(self, cycle_id: str, schedule: CycleSchedule) -> datetime | None:
         try:
             date_part, kind = cycle_id.rsplit("_", 1)
-            utc_hour = schedule.start_hour_for_kind(kind)
             bj_date = datetime.fromisoformat(date_part).date()
         except (ValueError, TypeError):
+            return None
+        if schedule.cutover_at and bj_date >= schedule.cutover_at.astimezone(BJ_TZ).date():
+            if kind != "DAY":
+                return None
+            start = datetime.combine(bj_date, datetime.min.time(), tzinfo=BJ_TZ).astimezone(timezone.utc)
+            return start + timedelta(hours=24)
+        try:
+            utc_hour = schedule.start_hour_for_kind(kind)
+        except ValueError:
             return None
         bj_hour = (utc_hour + 8) % 24
         utc_date = bj_date - timedelta(days=1) if utc_hour + 8 >= 24 else bj_date
@@ -163,7 +195,7 @@ class DualTrackCycleHeartbeat:
         return self._next_boundary_after(start, schedule)
 
     def _cycle_id_for_start(self, start: datetime, schedule: CycleSchedule) -> str:
-        kind = schedule.kind_for_start_hour(start.hour)
+        kind = "DAY" if schedule.cutover_at and start >= schedule.cutover_at else schedule.kind_for_start_hour(start.hour)
         date_part = start.astimezone(BJ_TZ).date().isoformat()
         return f"{date_part}_{kind}"
 
@@ -198,6 +230,11 @@ class DualTrackCycleHeartbeat:
             day = first_day + timedelta(days=offset)
             for hour in schedule.hours:
                 boundary = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc).replace(hour=hour)
+                if schedule.cutover_at:
+                    if boundary >= schedule.cutover_at and hour != schedule.daily_start:
+                        continue
+                    if boundary < schedule.cutover_at and hour not in {schedule.day_start, schedule.night_start}:
+                        continue
                 if start <= boundary <= end:
                     boundaries.append(boundary)
         return sorted(boundaries)

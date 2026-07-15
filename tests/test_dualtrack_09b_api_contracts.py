@@ -87,6 +87,31 @@ def test_network_order_gate_uses_server_clock_and_server_mark_for_market_exit() 
     assert payload["market_source"] == "binance_usdm"
 
 
+def test_network_order_gate_accepts_configured_binance_source_mode() -> None:
+    prepared = dashboard_server._prepare_dualtrack_network_order(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "side": "sell",
+            "event": "exit",
+            "order_type": "market",
+        },
+        market={
+            "status": "ready",
+            "source_mode": "binance_usdm",
+            "fresh": True,
+            "is_synthetic": False,
+            "provider": "binance_usdm",
+            "latest_timestamp": "2026-07-05T01:59:00+00:00",
+            "latest_close": 105.0,
+        },
+        received_at="2026-07-05T02:00:00+00:00",
+        expected_provider="binance_usdm",
+    )
+
+    assert prepared["market_source"] == "binance_usdm"
+    assert prepared["price"] == 105.0
+
+
 @pytest.mark.parametrize(
     ("market", "message"),
     [
@@ -187,6 +212,12 @@ def test_dualtrack_config_endpoint_exposes_display_config_without_secrets(monkey
 
     assert payload["schema_version"] == "dualtrack-config-v1"
     assert payload["max_leverage"] == TEST_CONFIG["max_leverage"]
+    assert payload["cycle_cadence"]["decision_hours"] == 12
+    assert payload["cycle_cadence"]["windows_cst"] == ["09:00-21:00", "21:00-09:00"]
+    assert payload["cycle_cadence"]["accounting_day_hours"] == 24
+    assert payload["machine_rules"]["range_reassessment"]["confirm_closes"] == 3
+    assert payload["machine_rules"]["range_reassessment"]["confirmation_timeframe"] == "1m"
+    assert payload["machine_rules"]["untrusted_market_action"] == "stand_down"
     assert payload["safety"]["read_only"] is True
     assert "broker_secret" not in payload
     assert "secret" not in str(payload).lower()
@@ -284,6 +315,54 @@ def test_human_manual_close_payload_can_exit_open_position_without_notional(tmp_
     trades = dashboard_server.build_dualtrack_trades_response(cycle_id, track="human", output_root=output)
     assert trades["trades"][0]["status"] == "closed"
     assert trades["trades"][0]["remaining_units"] == 0.0
+    ledger = dashboard_server.build_dualtrack_ledger_response(output_root=output)
+    daily = next(row for row in ledger["daily"] if row["date"] == "2026-07-05")
+    recorded = sum(float(fill.get("realized_pnl") or 0.0) for fill in load_json(output / "dualtrack" / "fills" / f"{cycle_id}_human.json"))
+    assert daily["cycles"][cycle_id]["human"] == pytest.approx(recorded)
+
+
+def test_human_manual_close_targets_the_position_origin_cycle(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    day_cycle = "2026-07-05_DAY"
+    night_cycle = "2026-07-05_NIGHT"
+    entry = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": day_cycle,
+            "ts": "2026-07-05T12:50:00+00:00",
+            "side": "sell",
+            "event": "entry",
+            "order_type": "market",
+            "price": 100.0,
+            "notional": 1000.0,
+            "sl": 105.0,
+            "tp": 90.0,
+            "position_id": "carried-short",
+        },
+        output_root=output,
+    )
+
+    closed = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": night_cycle,
+            "position_cycle_id": day_cycle,
+            "ts": "2026-07-05T13:10:00+00:00",
+            "side": "buy",
+            "event": "exit",
+            "order_type": "market",
+            "price": 99.0,
+            "trade_id": entry["fill"]["trade_id"],
+            "position_id": "carried-short",
+        },
+        output_root=output,
+    )
+
+    assert closed["status"] == "filled"
+    assert closed["fill"]["cycle_id"] == day_cycle
+    assert closed["fill"]["request_cycle_id"] == night_cycle
+    assert closed["fill"]["event"] == "exit"
+    ledger = dashboard_server.build_dualtrack_ledger_response(output_root=output)
+    daily = next(row for row in ledger["daily"] if row["date"] == "2026-07-05")
+    assert daily["cycles"][day_cycle]["human"] > 0
 
 
 def test_human_trades_endpoint_is_read_only_and_ignores_client_mark(
@@ -400,6 +479,9 @@ def test_machine_trades_endpoint_excludes_recovery_replay(tmp_path: Path, monkey
     )
 
     assert payload["trades"] == []
+    assert len(payload["recovery_replay_trades"]) == 1
+    assert payload["recovery_replay_trades"][0]["execution_origin"] == "recovery_replay"
+    assert payload["recovery_replay_summary"]["trade_count"] == 1
     assert payload["safety"]["recovery_replay_fill_count"] == 1
     assert payload["safety"]["recovery_replay_realized_pnl"] == 12.5
     assert payload["safety"]["recovery_replay_excluded_from_paper_pnl"] is True
@@ -532,6 +614,54 @@ def test_trades_endpoint_uses_same_day_previous_cycle_for_display_when_current_e
     assert payload["display_cycle_id"] == day_cycle
     assert payload["display_reason"] == "latest_same_day"
     assert payload["display_summary"]["trade_count"] == 1
+    assert payload["display_trades"][0]["source_cycle_id"] == day_cycle
+
+
+def test_trades_endpoint_keeps_prior_open_position_when_current_cycle_has_activity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    day_cycle = "2026-07-05_DAY"
+    night_cycle = "2026-07-05_NIGHT"
+    write_json(
+        output / "dualtrack" / "fills" / f"{day_cycle}_human.json",
+        [_entry_fill(cycle_id=day_cycle, track="human")],
+    )
+    closed_entry = _entry_fill(cycle_id=night_cycle, track="human")
+    closed_entry["trade_id"] = "night_closed_trade"
+    closed_entry["position_id"] = "night_closed"
+    write_json(
+        output / "dualtrack" / "fills" / f"{night_cycle}_human.json",
+        [
+            closed_entry,
+            {
+                "fill_id": "night_exit",
+                "cycle_id": night_cycle,
+                "track": "human",
+                "event": "exit",
+                "side": "sell",
+                "price": 101.0,
+                "pnl_units": 2.0,
+                "realized_pnl": 1.0,
+                "matched_entries": [{"trade_id": "night_closed_trade", "units": 2.0, "realized_pnl": 1.0}],
+                "ts": "2026-07-05T13:10:00+00:00",
+            },
+        ],
+    )
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeFreshMarketFeed)
+
+    payload = dashboard_server.build_dualtrack_trades_response(
+        night_cycle,
+        track="human",
+        output_root=output,
+        as_of="2026-07-05T14:00:00+00:00",
+    )
+
+    open_rows = [row for row in payload["display_trades"] if row["status"] == "open"]
+    assert len(open_rows) == 1
+    assert open_rows[0]["source_cycle_id"] == day_cycle
+    assert payload["display_reason"] == "current_plus_carried_open"
 
 
 def test_machine_trade_rows_filter_invalid_stop_geometry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

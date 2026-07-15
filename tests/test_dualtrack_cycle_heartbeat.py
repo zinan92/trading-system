@@ -150,3 +150,16 @@ def test_heartbeat_derives_boundaries_from_config(tmp_path: Path) -> None:
     assert result["status"] == "stale"
     assert result["expected_boundary"] == "2026-07-06T14:00:00+00:00"
     assert result["missed_boundaries"] == ["2026-07-06T14:00:00+00:00"]
+
+
+def test_heartbeat_restores_day_and_night_boundaries_after_transition(tmp_path: Path) -> None:
+    root = tmp_path / "outputs"
+    _schedule(root)
+    _closed_cycle(root, "2026-07-14_DAY")
+
+    result = DualTrackCycleHeartbeat(root).run(as_of="2026-07-14T18:30:00+00:00")
+
+    assert result["status"] == "fresh"
+    assert result["expected_boundary"] == "2026-07-14T13:00:00+00:00"
+    assert result["latest_artifact_at"] == "2026-07-14T13:00:00+00:00"
+    assert result["missed_boundaries"] == []

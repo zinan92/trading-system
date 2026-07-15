@@ -10,9 +10,11 @@ import pipelines.dualtrack_cycle_runner as cycle_runner_module
 from pipelines.dualtrack_cycle_runner import DualTrackCycleRunner
 from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
+from services.dualtrack_clock import parse_utc
 from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
+from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_store import DualTrackPlanStore, validate_plan
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
@@ -76,6 +78,29 @@ def _plan(cycle_id: str, direction: str = "long") -> dict:
         "key_levels": [3992.0],
         "invalidation": [{"side": "below", "price": 3960.0, "confirm": "touch"}],
         "confidence": 7,
+    }
+
+
+def _neutral_machine_plan(cycle_id: str, *, low: float = 4090.0, high: float = 4130.0) -> dict:
+    return {
+        "cycle_id": cycle_id,
+        "direction": "neutral",
+        "range": {"low": low, "high": high},
+        "key_levels": [4100.0, 4120.0],
+        "grid_orders": [
+            {"side": "long", "entry": 4100.0, "take_profit": 4110.0, "weight": 0.5},
+            {"side": "short", "entry": 4120.0, "take_profit": 4110.0, "weight": 0.5},
+        ],
+        "invalidation": [
+            {"side": "below", "price": low, "confirm": "touch"},
+            {"side": "above", "price": high, "confirm": "touch"},
+        ],
+        "confidence": 5,
+        "rationale": "没有单边优势，在区间下沿做多、上沿做空。",
+        "sources": [{"kind": "newsletter", "path": "/tmp/newsletter.md", "title": "黄金"}],
+        "decision_mode": "ai_newsletter",
+        "source": "machine_ai_newsletter",
+        "status": "locked",
     }
 
 
@@ -215,6 +240,138 @@ def test_d8_1_prefix_replay_matches_batch_runner_on_same_prefix(tmp_path: Path) 
     assert actual == expected
 
 
+def test_confirmed_range_break_replans_full_grid_and_preserves_old_fills(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-10_NIGHT"
+    config = deepcopy(TEST_CONFIG)
+    config["machine_planner"] = {
+        "range_reassessment": {
+            "enabled": True,
+            "confirm_closes": 3,
+            "cooldown_minutes": 60,
+            "max_replans_per_cycle": 2,
+            "minimum_remaining_minutes": 30,
+        }
+    }
+    old_plan = _neutral_machine_plan(cycle_id)
+    DualTrackPlanStore(output, config=config).save_ai_plan(old_plan, now="2026-07-10T12:55:00+00:00")
+    newsletter_root = tmp_path / "newsletter"
+    newsletter_root.mkdir()
+    (newsletter_root / "2026-07-10-finance-daily-newsletter.md").write_text(
+        "## 黄金\n盘中突破后重新判断完整区间。\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, str] = {}
+
+    def decide(prompt: str) -> dict:
+        captured["prompt"] = prompt
+        return {
+            **_neutral_machine_plan(cycle_id, low=4125.0, high=4170.0),
+            "key_levels": [4134.0, 4160.0],
+            "grid_orders": [
+                {"side": "long", "entry": 4134.0, "take_profit": 4144.0, "weight": 0.5},
+                {"side": "short", "entry": 4160.0, "take_profit": 4150.0, "weight": 0.5},
+            ],
+            "rationale": "上破已确认，重新上移并扩展完整震荡区间。",
+        }
+
+    runner = DualTrackCycleRunner(
+        output_root=output,
+        market_db=tmp_path / "market.db",
+        config=config,
+    )
+    runner.machine_planner = DualTrackMachinePlanner(
+        output,
+        config=config,
+        newsletter_root=newsletter_root,
+        decision_provider=decide,
+    )
+    visible_bars = [
+        _bar(datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc), 4115.0, 4120.0, provider="binance_usdm"),
+        _bar(datetime(2026, 7, 10, 13, 1, tzinfo=timezone.utc), 4120.0, 4131.0, provider="binance_usdm"),
+        _bar(datetime(2026, 7, 10, 13, 2, tzinfo=timezone.utc), 4131.0, 4132.0, provider="binance_usdm"),
+        _bar(datetime(2026, 7, 10, 13, 3, tzinfo=timezone.utc), 4132.0, 4133.0, provider="binance_usdm"),
+    ]
+    runner._cycle_bars = lambda _cycle_id, as_of=None: visible_bars  # type: ignore[method-assign]
+    runner.previous_cycle_range = lambda _cycle_id: 40.0  # type: ignore[method-assign]
+    runner.planning_volatility_context = lambda _cycle_id: {"status": "insufficient_samples"}  # type: ignore[method-assign]
+
+    first = runner.intraday_tick(cycle_id, as_of="2026-07-10T13:03:00+00:00")
+    revised = DualTrackPlanStore(output, config=config).machine_plan(cycle_id)
+    revisions = load_json(output / "dualtrack" / "plan_revisions" / f"{cycle_id}_ai.json")
+
+    assert first["range_reassessment"]["status"] == "replanned"
+    assert revised is not None
+    assert revised["range"] == {"low": 4125.0, "high": 4170.0}
+    assert revised["execution_start"] == "2026-07-10T13:04:00+00:00"
+    assert revised["revision_reason"] == "confirmed_range_breach_above"
+    assert "旧 range 已失效" in captured["prompt"]
+    assert len(revisions) == 1
+    assert revisions[0]["previous_plan"]["range"] == {"low": 4090.0, "high": 4130.0}
+
+    visible_bars = [
+        *visible_bars,
+        _bar(datetime(2026, 7, 10, 13, 4, tzinfo=timezone.utc), 4133.0, 4135.0, provider="binance_usdm"),
+        _bar(datetime(2026, 7, 10, 13, 5, tzinfo=timezone.utc), 4135.0, 4145.0, provider="binance_usdm"),
+    ]
+    runner.intraday_tick(cycle_id, as_of="2026-07-10T13:05:00+00:00")
+    fills = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+
+    assert [(row["event"], row["side"], row["price"]) for row in fills] == [
+        ("entry", "sell", 4120.0),
+        ("stop", "buy", 4130.0),
+        ("entry", "buy", 4134.0),
+        ("target", "sell", 4144.0),
+    ]
+
+
+def test_confirmed_range_break_fails_closed_when_replanning_fails(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-10_NIGHT"
+    config = deepcopy(TEST_CONFIG)
+    old_plan = DualTrackPlanStore(output, config=config).save_ai_plan(
+        _neutral_machine_plan(cycle_id),
+        now="2026-07-10T12:55:00+00:00",
+    )
+    newsletter_root = tmp_path / "newsletter"
+    newsletter_root.mkdir()
+    (newsletter_root / "2026-07-10-finance-daily-newsletter.md").write_text(
+        "## 黄金\n盘中区间复核。\n",
+        encoding="utf-8",
+    )
+
+    def fail(_prompt: str) -> dict:
+        raise RuntimeError("planner unavailable")
+
+    runner = DualTrackCycleRunner(output_root=output, market_db=tmp_path / "market.db", config=config)
+    runner.machine_planner = DualTrackMachinePlanner(
+        output,
+        config=config,
+        newsletter_root=newsletter_root,
+        decision_provider=fail,
+    )
+    bars = [
+        _bar(datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc), 4110.0, 4131.0, provider="binance_usdm"),
+        _bar(datetime(2026, 7, 10, 13, 1, tzinfo=timezone.utc), 4131.0, 4132.0, provider="binance_usdm"),
+        _bar(datetime(2026, 7, 10, 13, 2, tzinfo=timezone.utc), 4132.0, 4133.0, provider="binance_usdm"),
+    ]
+    runner._cycle_bars = lambda _cycle_id, as_of=None: bars  # type: ignore[method-assign]
+    runner.previous_cycle_range = lambda _cycle_id: 40.0  # type: ignore[method-assign]
+    runner.planning_volatility_context = lambda _cycle_id: {"status": "insufficient_samples"}  # type: ignore[method-assign]
+
+    result = runner.intraday_tick(cycle_id, as_of="2026-07-10T13:02:00+00:00")
+    preserved = DualTrackPlanStore(output, config=config).machine_plan(cycle_id)
+    revisions = load_json(output / "dualtrack" / "plan_revisions" / f"{cycle_id}_ai.json")
+
+    assert result["range_reassessment"]["status"] == "failed"
+    assert "planner unavailable" in result["range_reassessment"]["planning_error"]
+    assert result["range_reassessment"]["retry_at"] == "2026-07-10T13:07:00+00:00"
+    assert result["state"]["machine_stood_down"] is True
+    assert preserved is not None
+    assert preserved["locked_at"] == old_plan["locked_at"]
+    assert revisions == []
+
+
 def test_d8_2_missing_machine_research_records_error_neutral_and_stands_down(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
@@ -271,6 +428,23 @@ def test_live_tick_syncs_obsidian_plan_and_runs_intraday(tmp_path: Path) -> None
     assert [row["event"] for row in runner_rows].count("intraday") == 1
 
 
+def test_midnight_cutover_closes_legacy_night_and_opens_daily_cycle(tmp_path: Path) -> None:
+    runner = DualTrackCycleRunner(
+        output_root=tmp_path / "outputs",
+        market_db=tmp_path / "market_data.db",
+        config=TEST_CONFIG,
+    )
+    runner.close_cycle = lambda cycle_id, as_of=None: {"event": "close", "cycle_id": cycle_id}
+    runner.pre_cycle = lambda cycle_id, as_of=None: {"event": "pre_cycle", "cycle_id": cycle_id}
+
+    results = runner._lifecycle_results(parse_utc("2026-07-13T16:00:00+00:00"))
+
+    assert results == [
+        {"event": "close", "cycle_id": "2026-07-13_NIGHT"},
+        {"event": "pre_cycle", "cycle_id": "2026-07-14_DAY"},
+    ]
+
+
 def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     output = tmp_path / "outputs"
@@ -299,6 +473,41 @@ def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: 
     assert len(fills) == 2
     assert fills[-1]["event"] == "stop"
     assert fills[-1]["price"] == 105.0
+
+
+def test_live_tick_keeps_prior_cycle_human_tp_sl_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    store = MarketStore(db)
+    start = datetime(2026, 7, 5, 13, 0, tzinfo=timezone.utc)
+    _seed_bars(store, start, [100.0, 89.0])
+    human = DualTrackHumanEngine(output, config=TEST_CONFIG)
+    human.submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T12:50:00+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+    })
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+    monkeypatch.setattr(runner, "_lifecycle_results", lambda _now: [])
+    monkeypatch.setattr(runner, "sync_obsidian_human_plans", lambda **_kwargs: {"status": "skipped"})
+    monkeypatch.setattr(runner, "intraday_tick", lambda **_kwargs: {"status": "skipped"})
+
+    result = runner.live_tick(as_of="2026-07-05T13:01:30+00:00")
+
+    fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
+    assert result["protective_sweep"]["status"] == "triggered"
+    assert result["protective_sweep"]["source_cycle_id"] == "2026-07-05_DAY"
+    assert fills[-1]["event"] == "target"
+    assert fills[-1]["price"] == 90.0
 
 
 def test_live_tick_replays_intermediate_bar_wick_after_close_recovers(tmp_path: Path) -> None:
@@ -922,6 +1131,35 @@ def test_d8_5_orchestrated_intraday_machine_payload_stays_pnl_only(tmp_path: Pat
 
     assert set(payload) == {"realized_pnl", "unrealized_pnl", "layers"}
     assert {"fills", "orders", "entries", "inventory", "rungs", "price", "notional", "sl", "tp"}.isdisjoint(payload)
+
+
+def test_planning_volatility_context_excludes_weekends_and_uses_active_cycle_median(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    store = MarketStore(db)
+    _seed_bars(store, datetime(2026, 7, 12, 13, 0, tzinfo=timezone.utc), [100.0, 102.0])
+    _seed_bars(store, datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc), [100.0, 130.0])
+    _seed_bars(store, datetime(2026, 7, 10, 1, 0, tzinfo=timezone.utc), [100.0, 140.0])
+    config = deepcopy(TEST_CONFIG)
+    config["machine_planner"] = {
+        "volatility_lookback_cycles": 2,
+        "minimum_active_cycle_samples": 2,
+        "minimum_sample_coverage_pct": 0.001,
+        "minimum_range_multiplier": 1.0,
+        "exclude_weekends_from_range_reference": True,
+    }
+
+    context = DualTrackCycleRunner(output_root=tmp_path / "outputs", market_db=db, config=config).planning_volatility_context(
+        "2026-07-13_DAY"
+    )
+
+    assert context["status"] == "ready"
+    assert context["reference_range"] == 35.0
+    assert context["minimum_plan_range"] == 35.0
+    assert [sample["range"] for sample in context["selected_samples"]] == [30.0, 40.0]
+    assert any(
+        sample["cycle_id"] == "2026-07-12_NIGHT" and sample["reason"] == "weekend_low_liquidity"
+        for sample in context["excluded_samples"]
+    )
 
 
 def test_d8_6_open_ended_directional_schema_and_flat_stand_down(tmp_path: Path) -> None:

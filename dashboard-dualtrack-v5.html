@@ -724,12 +724,16 @@ function dashboardKlineSourceLabel(meta){
   const count = meta?.bar_count || 0;
   return `${meta?.symbol || "--"} ${meta?.timeframe || ""} · ${sourceModeLabel(meta?.source_mode)} · ${count}根`;
 }
+function marketProviderLabel(market){
+  if(String(market?.provider || "").toLowerCase() === "binance_usdm") return "Binance Futures";
+  return market?.provider || "--";
+}
 function marketSourceText(){
   const market = state.market;
   if(!market) return "行情 · 后端读取中";
-  if(!marketUsable(market)) return `行情 · 已阻断 · ${sourceModeLabel(market.source_mode)} · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
+  if(!marketUsable(market)) return `行情 · 已阻断 · ${sourceModeLabel(market.source_mode)} · ${market.symbol || "--"} ${market.timeframe || ""} · ${marketProviderLabel(market)}`;
   const mode = sourceModeLabel(market.source_mode);
-  return `行情 · ${mode} · ${market.symbol || "--"} ${market.timeframe || ""} · ${market.provider || "--"}`;
+  return `行情 · ${mode} · ${market.symbol || "--"} ${market.timeframe || ""} · ${marketProviderLabel(market)}`;
 }
 function marketHeaderMeta(market){
   if(!market) return "后端读取中";
@@ -756,7 +760,7 @@ function contextFullMeta(market, candles){
     fresh,
     `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`,
     floorText,
-    market.provider || "--",
+    marketProviderLabel(market),
   ].filter(Boolean).join(" · ");
 }
 function trendLabel(candles){

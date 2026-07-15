@@ -36,6 +36,8 @@ from services.dualtrack_scoring import (
     filter_invalid_machine_fills,
 )
 from services.dualtrack_store import DualTrackPlanStore
+from services.strategy_control_plane import StrategyControlPlane
+from services.strategy_recommendation import StrategyRecommendationService
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
 from services.market_view_intake import MarketViewIntake
@@ -50,8 +52,8 @@ _SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9:_=-]+$")
 _TIMEFRAME_PATTERN = re.compile(r"^\d+[mhdMHD]$")
 _DASHBOARD_VIEWS = {"full", "trader", "ops"}
 _MAX_OPEN_TRADES_PER_STRATEGY = 3
-_PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v4.html"
-_LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v4.html"
+_PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v5.html"
+_LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v5.html"
 _CLOUDFLARED_LOG = Path("/Users/wendy/work/选题工作台/launchd-tunnel.log")
 _DUALTRACK_POST_ENDPOINTS = {"/api/dualtrack/plan", "/api/dualtrack/orders", "/api/dualtrack/verdict"}
 _CONNECTOR_PRICE_FEED_REFRESH_RUNBOOK_ENDPOINT_SAFETY = {
@@ -111,6 +113,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/dashboard-v3.html",
             "/dashboard.html",
             "/dashboard-v4.html",
+            "/dashboard-v5.html",
             "/command-center.html",
             "/dashboard-dualtrack-split.html",
             "/dashboard-dualtrack-v5.html",
@@ -131,6 +134,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self._redirect("command-center.html")
+            return
+        if parsed.path == "/dashboard-v5.html":
+            self._serve_static_alias("/dashboard-dualtrack-split.html")
             return
         if parsed.path == "/api/command-center-state":
             self._handle_command_center_state_api()
@@ -158,6 +164,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/dualtrack/cycle/current":
             self._handle_dualtrack_current(parsed.query)
+            return
+        if parsed.path == "/api/strategy-console/current":
+            self._handle_strategy_console_current(parsed.query)
             return
         if parsed.path == "/api/dualtrack/config":
             self._handle_dualtrack_config_get()
@@ -209,6 +218,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def _serve_static_alias(self, path: str) -> None:
+        original_path = self.path
+        try:
+            self.path = path
+            super().do_GET()
+        finally:
+            self.path = original_path
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/market-view/intake":
@@ -235,6 +252,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
             self._handle_dualtrack_post(parsed.path)
             return
+        if parsed.path == "/api/strategy-console/control":
+            if not _dualtrack_mutation_request_allowed(str(self.headers.get("Host") or ""), str(self.headers.get("Origin") or "")):
+                self._write_error(403, "strategy_console_origin_blocked", "strategy-console writes require the same local origin")
+                return
+            self._handle_strategy_console_control()
+            return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
     def _handle_dualtrack_current(self, query: str) -> None:
@@ -242,6 +265,20 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_json(200, build_dualtrack_cycle_current_response())
         except ValueError as exc:
             self._write_error(400, "invalid_dualtrack_cycle", str(exc))
+
+    def _handle_strategy_console_current(self, query: str) -> None:
+        params = parse_qs(query)
+        try:
+            self._write_json(200, build_strategy_console_current_response(as_of=(params.get("as_of") or [None])[0]))
+        except ValueError as exc:
+            self._write_error(400, "strategy_console_unavailable", str(exc))
+
+    def _handle_strategy_console_control(self) -> None:
+        try:
+            payload = self._read_json_body(max_bytes=64_000)
+            self._write_json(200, build_strategy_console_control_response(payload))
+        except ValueError as exc:
+            self._write_error(400, "invalid_strategy_console_control", str(exc))
 
     def _handle_dualtrack_plan_get(self, path: str, query: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -722,6 +759,317 @@ def build_dualtrack_cycle_current_response(*, output_root: Path | None = None, a
     }
 
 
+def build_strategy_console_current_response(*, output_root: Path | None = None, as_of: str | None = None) -> dict:
+    """Read model for the one-production-strategy console.
+
+    Legacy dual-track endpoints remain available for historical investigation;
+    execution-engine shadow status is deliberately not a strategy shadow.
+    """
+    output = _dualtrack_output_root(output_root)
+    cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
+    cycle_id = str(cycle["cycle_id"])
+    control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
+    market = build_dualtrack_market_bars_response(limit=240, as_of=as_of)
+    trades = build_dualtrack_trades_response(cycle_id, track="human", output_root=output, as_of=as_of)
+    execution = build_dualtrack_execution_response(cycle_id, output_root=output, as_of=as_of)
+    production_history = build_strategy_console_production_history(
+        output_root=output,
+        mark_price=market.get("latest_close"),
+        mark_fresh=bool(market.get("fresh")),
+    )
+    production_account = {
+        **production_history["account"],
+        "exposure": (execution.get("account") or {}).get("exposure", 0),
+        "margin": (execution.get("account") or {}).get("margin", 0),
+        "slippage": (execution.get("account") or {}).get("slippage", 0),
+    }
+    folder = output / "dualtrack" / "strategy_shadows"
+    shadows = [rows[-1] for path in sorted(folder.glob(f"{cycle_id}_*.json")) if (rows := load_json(path))] if folder.exists() else []
+    return {
+        "schema_version": "strategy-production-console-v1",
+        "cycle": cycle,
+        **control,
+        "market": market,
+        "production_execution": {
+            **execution,
+            "account": production_account,
+            "pnl": production_history["pnl"],
+            "trades": production_history["trades"],
+            "trade_summary": production_history["summary"],
+            "current_cycle_trades": trades.get("trades", []),
+            "history_contract": production_history["history_contract"],
+        },
+        "ledger": build_dualtrack_ledger_response(output_root=output),
+        "strategy_shadows": shadows,
+        "execution_shadow": execution.get("shadow_cutover", {}),
+        "safety": {
+            "one_production_strategy": True,
+            "strategy_shadow_separate_from_execution_shadow": True,
+            "new_entries_fail_closed": not bool(control.get("production_plan")),
+        },
+        "ui_capabilities": {
+            "manual_order": True,
+            "manual_close": True,
+            "market_timeframes": ["1m", "5m", "15m", "30m", "1h", "4h"],
+            "start_stop_production": True,
+            "parameter_mutation": True,
+            "cancel_order": True,
+            "reset_statistics": True,
+            "production_grid_orders": True,
+            "strategy_preview": True,
+            "runtime_actual_state": True,
+        },
+    }
+
+
+def build_strategy_console_production_history(
+    *,
+    output_root: Path | None = None,
+    mark_price: float | None = None,
+    mark_fresh: bool = False,
+    limit: int = 200,
+) -> dict:
+    """Aggregate only versioned StrategyPlan fills into the production ledger.
+
+    Legacy human/machine records remain available through their historical
+    endpoints, but are never silently mixed into production account totals.
+    """
+    output = _dualtrack_output_root(output_root)
+    fills_dir = output / "dualtrack" / "fills"
+    production_fills: list[dict[str, Any]] = []
+    production_trades: list[dict[str, Any]] = []
+    if fills_dir.exists():
+        for path in sorted(fills_dir.glob("*_human.json")):
+            cycle_id = path.name.removesuffix("_human.json")
+            rows = [row for row in load_json(path) if isinstance(row, dict)]
+            production_trade_ids = {
+                str(row.get("trade_id") or "")
+                for row in rows
+                if row.get("strategy_plan_id") not in (None, "") and row.get("trade_id") not in (None, "")
+            }
+            selected = [row for row in rows if str(row.get("trade_id") or "") in production_trade_ids]
+            if not selected:
+                continue
+            entries = {
+                str(row.get("trade_id") or ""): row
+                for row in selected
+                if str(row.get("event") or "") == "entry"
+            }
+            for row in selected:
+                entry = entries.get(str(row.get("trade_id") or ""), {})
+                production_fills.append({
+                    **row,
+                    "strategy_plan_id": row.get("strategy_plan_id") or entry.get("strategy_plan_id"),
+                    "strategy_plan_version": row.get("strategy_plan_version") or entry.get("strategy_plan_version"),
+                    "source_cycle_id": cycle_id,
+                })
+            for trade in _trades_from_fills(selected, track="production"):
+                entry = entries.get(str(trade.get("trade_id") or ""), {})
+                production_trades.append({
+                    **trade,
+                    "strategy_plan_id": entry.get("strategy_plan_id"),
+                    "strategy_plan_version": entry.get("strategy_plan_version"),
+                    "source_cycle_id": cycle_id,
+                })
+    enriched = apply_unrealized(production_trades, mark_price, mark_fresh=mark_fresh)
+    enriched.sort(key=lambda trade: str(trade.get("exit_ts") or trade.get("entry_ts") or ""))
+    production_fills.sort(key=lambda fill: str(fill.get("ts") or ""))
+    summary = _trade_summary(enriched)
+    summary["fill_count"] = len(production_fills)
+    summary["total_notional"] = round(sum(
+        float(fill.get("notional") or 0.0)
+        or float(fill.get("price") or 0.0) * float(fill.get("pnl_units") or fill.get("quantity") or 0.0)
+        for fill in production_fills
+    ), 8)
+    starting_cash = float(dualtrack_config().get("capital_per_track_usd") or 0.0)
+    realized = float(summary.get("realized_pnl") or 0.0)
+    unrealized = summary.get("unrealized_pnl")
+    ending_cash = round(starting_cash + realized, 8)
+    equity = None if unrealized is None else round(ending_cash + float(unrealized), 8)
+    return {
+        "schema_version": "strategy-production-history-v1",
+        "trades": enriched[-max(1, int(limit)):],
+        "fills": production_fills[-max(1, int(limit * 2)):],
+        "summary": summary,
+        "pnl": {"realized": round(realized, 8), "unrealized": unrealized},
+        "account": {
+            "starting_cash": starting_cash,
+            "realized_pnl": round(realized, 8),
+            "ending_cash": ending_cash,
+            "equity": equity,
+        },
+        "history_contract": {
+            "source": "versioned_strategy_plan_fills_only",
+            "legacy_dualtrack_history_preserved": True,
+            "legacy_dualtrack_totals_mixed_into_production": False,
+        },
+    }
+
+
+def build_strategy_console_control_response(
+    payload: dict,
+    *,
+    output_root: Path | None = None,
+    market: dict | None = None,
+    account: dict | None = None,
+    recommendation_provider=None,
+) -> dict:
+    output = _dualtrack_output_root(output_root)
+    cycle_id = str(payload.get("cycle_id") or cycle_window(payload.get("as_of")).cycle_id)
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    # The chart selector is display-only. Production planning always receives
+    # the fixed 1m execution tape plus D1/4H/1H/15m strategy contexts.
+    trusted_market = dict(market or build_dualtrack_market_bars_response(
+        timeframe="1m",
+        limit=240,
+        as_of=payload.get("as_of"),
+    ))
+    if not isinstance(trusted_market.get("strategy_timeframes"), dict):
+        trusted_market["strategy_timeframes"] = build_strategy_timeframes_response(as_of=payload.get("as_of"))
+    trusted_account = account
+    if trusted_account is None:
+        history = build_strategy_console_production_history(
+            output_root=output,
+            mark_price=trusted_market.get("latest_close"),
+            mark_fresh=bool(trusted_market.get("fresh")),
+        )
+        trusted_account = dict(history.get("account") or {})
+    plane = StrategyControlPlane(output)
+    action = str(payload.get("action") or "")
+    if action == "refresh_recommendation":
+        contexts = dict(trusted_market.get("strategy_timeframes") or {})
+        if not all(timeframe in contexts for timeframe in ("1d", "4h", "1h", "15m")):
+            contexts.update(build_strategy_timeframes_response(as_of=payload.get("as_of")))
+            trusted_market["strategy_timeframes"] = contexts
+        before = plane.active_plan(cycle_id) or plane.ensure_compatible_active_plan(cycle_id, as_of=payload.get("as_of"))
+        review_files = sorted((output / "dualtrack" / "reviews").glob("*_machine.json"))
+        review_rows = load_json(review_files[-1]) if review_files else []
+        review = review_rows[-1] if review_rows else {}
+        try:
+            recommendation_service = StrategyRecommendationService(
+                output,
+                decision_provider=recommendation_provider,
+            )
+            recommendation = recommendation_service.recommend(
+                cycle_id,
+                strategy_timeframes=contexts,
+                current_plan=before or {},
+                account=trusted_account or {},
+                review=review,
+                now=payload.get("as_of"),
+            )
+        except (OSError, RuntimeError) as exc:
+            # Return a structured fail-closed API error instead of dropping the
+            # browser connection. Production state remains untouched.
+            raise ValueError(f"AI recommendation unavailable: {exc}") from exc
+        preview = plane.preview(
+            cycle_id,
+            {"direction": recommendation["direction"], "style": recommendation["style"]},
+            market=trusted_market,
+            account=trusted_account,
+        )
+        proposal = plane.upsert_proposal({
+            "proposal_id": f"proposal-{recommendation['evaluation_receipt']['evaluation_id']}",
+            "cycle_id": cycle_id,
+            "source": "ai",
+            "created_at": recommendation["created_at"],
+            "direction": recommendation["direction"],
+            "style": recommendation["style"],
+            "range": preview["range"],
+            "key_levels": recommendation["key_levels"] or [preview["range"]["low"], preview["range"]["high"]],
+            "grid": {**preview["grid"], "orders": preview["orders"]},
+            "signal": recommendation["signal"],
+            "tp_sl": {
+                "mode": "per_grid",
+                "take_profit": "next_grid_level",
+                "stop_loss": "one_grid_beyond_range",
+                "r_multiple": 1.0,
+            },
+            "risk_budget": preview["risk"],
+            "intraday_rules": [
+                {"if": "1m closes outside range for 3 consecutive bars", "then": "exit_only_and_replan"},
+            ],
+            "rationale": recommendation["rationale"],
+            "evidence_used": recommendation["evidence_used"],
+            "analysis": recommendation["analysis"],
+            "prompt_contract": recommendation["prompt_contract"],
+            "evaluation_receipt": recommendation["evaluation_receipt"],
+            "preview_id": preview["preview_id"],
+        }, now=recommendation["created_at"])
+        after = plane.active_plan(cycle_id)
+        unchanged = (before or {}).get("strategy_plan_id") == (after or {}).get("strategy_plan_id")
+        finalized_receipt = recommendation_service.persist_receipt(
+            recommendation["evaluation_receipt"],
+            effects={
+                "proposal_id": proposal["proposal_id"],
+                "preview_id": preview["preview_id"],
+                "production_plan_unchanged": unchanged,
+                "orders_created": 0,
+            },
+        )
+        recommendation["evaluation_receipt"] = finalized_receipt
+        proposal["evaluation_receipt"] = finalized_receipt
+        proposal = plane.upsert_proposal(proposal, now=recommendation["created_at"])
+        return {
+            "action": action,
+            "recommendation": recommendation,
+            "proposal": proposal,
+            "preview": preview,
+            "production_plan_unchanged": unchanged,
+        }
+    return plane.control(
+        cycle_id,
+        action,
+        payload,
+        market=trusted_market,
+        account=trusted_account,
+        now=payload.get("as_of"),
+    )
+
+
+def build_strategy_timeframes_response(
+    *,
+    as_of: str | None = None,
+    market_db: Path | None = None,
+    config: dict | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build fixed, completed strategy bars; never follows the chart timeframe."""
+    checked_at = parse_utc(as_of)
+    feed = DualTrackMarketFeed(market_db=market_db, config=config)
+    specs = {"1d": 32, "4h": 64, "1h": 96, "15m": 160}
+    seconds = {"1d": 86_400, "4h": 14_400, "1h": 3_600, "15m": 900}
+    minimum = {"1d": 15, "4h": 15, "1h": 15, "15m": 50}
+    result: dict[str, dict[str, Any]] = {}
+    for timeframe, limit in specs.items():
+        snapshot = feed.snapshot(symbol="GOLD", timeframe=timeframe, limit=limit, as_of=as_of)
+        if snapshot.get("status") not in {"ready", "derived"} or snapshot.get("is_synthetic") is not False:
+            raise ValueError(f"strategy timeframe {timeframe} is unavailable or untrusted")
+        completed: list[dict[str, Any]] = []
+        for bar in snapshot.get("bars") or []:
+            started = parse_utc(str(bar.get("timestamp") or ""))
+            if started + timedelta(seconds=seconds[timeframe]) > checked_at:
+                continue
+            if timeframe == "1d" and started.weekday() >= 5:
+                continue
+            completed.append(dict(bar))
+        if len(completed) < minimum[timeframe]:
+            raise ValueError(f"strategy timeframe {timeframe} has insufficient completed bars")
+        result[timeframe] = {
+            "timeframe": timeframe,
+            "provider": snapshot.get("provider"),
+            "is_synthetic": False,
+            "status": snapshot.get("status"),
+            "fresh": snapshot.get("fresh"),
+            "bars": completed,
+            "bar_count": len(completed),
+            "latest_timestamp": completed[-1].get("timestamp"),
+            "completed_only": True,
+            "weekends_excluded": timeframe == "1d",
+        }
+    return result
+
+
 def build_dualtrack_plan_response(cycle_id: str, *, output_root: Path | None = None, as_of: str | None = None) -> dict:
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
@@ -737,10 +1085,34 @@ def build_dualtrack_plan_post_response(payload: dict, *, output_root: Path | Non
 
 def build_dualtrack_config_response() -> dict:
     cfg = dualtrack_config()
+    cadence = cfg.get("cycle_cadence") if isinstance(cfg.get("cycle_cadence"), dict) else {}
+    planner = cfg.get("machine_planner") if isinstance(cfg.get("machine_planner"), dict) else {}
+    reassessment = planner.get("range_reassessment") if isinstance(planner.get("range_reassessment"), dict) else {}
     return {
         "schema_version": "dualtrack-config-v1",
         "max_leverage": cfg.get("max_leverage"),
         "capital_per_track_usd": cfg.get("capital_per_track_usd"),
+        "cycle_cadence": {
+            "decision_hours": int(cadence.get("hours", 12)),
+            "windows_cst": ["09:00-21:00", "21:00-09:00"],
+            "accounting_day_hours": int(cadence.get("accounting_day_hours", 24)),
+            "restored_at_cst": cadence.get("restored_at_cst"),
+        },
+        "machine_rules": {
+            "range_reassessment": {
+                "enabled": bool(reassessment.get("enabled", True)),
+                "confirmation_timeframe": str(reassessment.get("confirmation_timeframe") or "1m"),
+                "confirm_closes": max(2, int(reassessment.get("confirm_closes", 3))),
+                "cooldown_minutes": max(0, int(reassessment.get("cooldown_minutes", 60))),
+                "failure_retry_minutes": max(1, int(reassessment.get("failure_retry_minutes", 5))),
+                "max_replans_per_window": max(1, int(reassessment.get("max_replans_per_cycle", 2))),
+                "minimum_remaining_minutes": max(0, int(reassessment.get("minimum_remaining_minutes", 30))),
+            },
+            "neutral_mode": "bilateral_grid",
+            "untrusted_market_action": "stand_down",
+            "missing_plan_action": "stand_down",
+            "open_position_on_breach_action": "exit_only_until_flat",
+        },
         "safety": {
             "read_only": True,
             "credentials_exposed": False,
@@ -755,9 +1127,35 @@ def build_dualtrack_machine_response(cycle_id: str, *, output_root: Path | None 
 
 
 def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
-    receipt = build_execution_engine_adapter(_dualtrack_output_root(output_root)).submit_order(payload)
+    root = _dualtrack_output_root(output_root)
+    command = dict(payload)
+    position_cycle_id = str(command.get("position_cycle_id") or "")
+    if position_cycle_id:
+        request_cycle_id = str(command.get("cycle_id") or "")
+        if not _CYCLE_ID_PATTERN.match(position_cycle_id):
+            raise ValueError("position_cycle_id must be YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+        if str(command.get("event") or "").lower() not in {"exit", "stop", "target", "flatten"}:
+            raise ValueError("position_cycle_id is only valid for closing an existing position")
+        if not command.get("trade_id"):
+            raise ValueError("cross-cycle position close requires trade_id")
+        if cycle_window_from_id(position_cycle_id).start > cycle_window_from_id(request_cycle_id).start:
+            raise ValueError("position_cycle_id cannot be later than the request cycle")
+        command["request_cycle_id"] = request_cycle_id
+        command["cycle_id"] = position_cycle_id
+    event = str(command.get("event") or "entry").lower()
+    production_plan = StrategyControlPlane(root).ensure_compatible_active_plan(str(command.get("cycle_id") or ""))
+    strict_production = str(command.get("source") or "") == "strategy_production_console"
+    if event == "entry" and strict_production and not production_plan:
+        raise ValueError("no valid StrategyPlan: new entries are fail-closed")
+    if event == "entry" and strict_production and StrategyControlPlane(root).runtime_state(str(command.get("cycle_id") or ""))["desired_state"] != "running":
+        raise ValueError("production strategy is stopped")
+    if production_plan:
+        command["strategy_plan_id"] = production_plan["strategy_plan_id"]
+        command["strategy_plan_version"] = production_plan["version"]
+    receipt = build_execution_engine_adapter(root).submit_order(command)
     if receipt.get("state") == "accepted" or receipt.get("status") == "accepted":
         return {"status": "accepted", "order": receipt}
+    DualTrackScorer(root).rebuild_ledgers()
     return {"status": "filled", "fill": receipt}
 
 
@@ -796,9 +1194,9 @@ def _prepare_dualtrack_network_order(
         raise ValueError("synthetic market data is forbidden")
     if market.get("status") != "ready" or market.get("fresh") is not True:
         raise ValueError("server market data is stale")
-    if market.get("source_mode") != "requested_symbol":
-        raise ValueError("server market source is not canonical")
     provider = str(market.get("provider") or "")
+    if market.get("source_mode") not in {"requested_symbol", provider}:
+        raise ValueError("server market source is not canonical")
     if expected_provider and provider != expected_provider:
         raise ValueError("server market provider is not canonical")
     mark = _finite_float(market.get("latest_close"))
@@ -881,6 +1279,8 @@ def build_dualtrack_trades_response(
         "mark_source": mark["source"],
         "trades": enriched,
         "summary": summary,
+        "recovery_replay_trades": rows["recovery_replay_trades"],
+        "recovery_replay_summary": _trade_summary(rows["recovery_replay_trades"]),
         "display_cycle_id": display["cycle_id"],
         "display_reason": display["reason"],
         "display_trades": display["trades"],
@@ -947,7 +1347,9 @@ def build_dualtrack_attribution_response(cycle_id: str, *, output_root: Path | N
 
 
 def build_dualtrack_ledger_response(*, output_root: Path | None = None, week: str | None = None) -> dict:
-    return DualTrackScorer(output_root).ledger_payload(week=week)
+    scorer = DualTrackScorer(output_root)
+    refreshed = scorer.rebuild_ledgers()
+    return scorer.ledger_payload(week=week) if week else refreshed
 
 
 def build_dualtrack_market_bars_response(
@@ -1012,10 +1414,17 @@ def _dualtrack_mark_price(
 def _dualtrack_trade_rows_for_cycle(output_root: Path, cycle_id: str, track: str, mark: dict) -> dict:
     fills = load_json(output_root / "dualtrack" / "fills" / f"{cycle_id}_{track}.json")
     safety: dict[str, Any] = {}
+    replay_trades: list[dict] = []
     if track == "machine":
         fills, safety = filter_invalid_machine_fills(fills)
         replay_fills = [fill for fill in fills if fill.get("execution_origin") == "recovery_replay"]
         fills = [fill for fill in fills if fill.get("execution_origin") != "recovery_replay"]
+        replay_trades = apply_unrealized(
+            _trades_from_fills(replay_fills, track=track),
+            mark["price"],
+            mark_fresh=mark["fresh"],
+        )
+        replay_trades = [{**trade, "source_cycle_id": cycle_id} for trade in replay_trades]
         safety = {
             **safety,
             "recovery_replay_fill_count": len(replay_fills),
@@ -1026,8 +1435,16 @@ def _dualtrack_trade_rows_for_cycle(output_root: Path, cycle_id: str, track: str
             "recovery_replay_excluded_from_paper_pnl": True,
         }
     trades = _trades_from_fills(fills, track=track)
-    enriched = apply_unrealized(trades, mark["price"], mark_fresh=mark["fresh"])
-    return {"cycle_id": cycle_id, "trades": enriched, "safety": safety}
+    enriched = [
+        {**trade, "source_cycle_id": cycle_id}
+        for trade in apply_unrealized(trades, mark["price"], mark_fresh=mark["fresh"])
+    ]
+    return {
+        "cycle_id": cycle_id,
+        "trades": enriched,
+        "recovery_replay_trades": replay_trades,
+        "safety": safety,
+    }
 
 
 def _dualtrack_display_trade_rows(
@@ -1040,24 +1457,39 @@ def _dualtrack_display_trade_rows(
     current_summary: dict,
     current_safety: dict,
 ) -> dict:
+    carried_open = _prior_open_trade_rows(output_root, cycle_id, track, mark)
     if current_trades:
+        existing_ids = {str(trade.get("trade_id") or "") for trade in current_trades}
+        carried_open = [trade for trade in carried_open if str(trade.get("trade_id") or "") not in existing_ids]
+        display_trades = [*current_trades, *carried_open]
         return {
             "cycle_id": cycle_id,
-            "reason": "current_cycle",
-            "trades": current_trades,
-            "summary": current_summary,
+            "reason": "current_plus_carried_open" if carried_open else "current_cycle",
+            "trades": display_trades,
+            "summary": _trade_summary(display_trades),
             "safety": current_safety,
         }
     for previous_cycle_id in _same_day_previous_cycles(cycle_id):
         rows = _dualtrack_trade_rows_for_cycle(output_root, previous_cycle_id, track, mark)
         if rows["trades"]:
+            existing_ids = {str(trade.get("trade_id") or "") for trade in rows["trades"]}
+            older_open = [trade for trade in carried_open if str(trade.get("trade_id") or "") not in existing_ids]
+            display_trades = [*rows["trades"], *older_open]
             return {
                 "cycle_id": previous_cycle_id,
-                "reason": "latest_same_day",
-                "trades": rows["trades"],
-                "summary": _trade_summary(rows["trades"]),
+                "reason": "latest_same_day_plus_carried_open" if older_open else "latest_same_day",
+                "trades": display_trades,
+                "summary": _trade_summary(display_trades),
                 "safety": rows["safety"],
             }
+    if carried_open:
+        return {
+            "cycle_id": str(carried_open[0].get("source_cycle_id") or cycle_id),
+            "reason": "carried_open_positions",
+            "trades": carried_open,
+            "summary": _trade_summary(carried_open),
+            "safety": current_safety,
+        }
     return {
         "cycle_id": cycle_id,
         "reason": "current_cycle_empty",
@@ -1065,6 +1497,27 @@ def _dualtrack_display_trade_rows(
         "summary": current_summary,
         "safety": current_safety,
     }
+
+
+def _prior_open_trade_rows(output_root: Path, cycle_id: str, track: str, mark: dict) -> list[dict]:
+    current_start = cycle_window_from_id(cycle_id).start
+    suffix = f"_{track}.json"
+    carried: list[dict] = []
+    fills_dir = output_root / "dualtrack" / "fills"
+    if not fills_dir.exists():
+        return carried
+    for path in sorted(fills_dir.glob(f"*{suffix}"), reverse=True):
+        prior_cycle_id = path.name.removesuffix(suffix)
+        if prior_cycle_id == cycle_id:
+            continue
+        try:
+            if cycle_window_from_id(prior_cycle_id).start >= current_start:
+                continue
+        except ValueError:
+            continue
+        rows = _dualtrack_trade_rows_for_cycle(output_root, prior_cycle_id, track, mark)
+        carried.extend(trade for trade in rows["trades"] if str(trade.get("status") or "open") == "open")
+    return carried
 
 
 def _same_day_previous_cycles(cycle_id: str) -> list[str]:
@@ -1113,6 +1566,8 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     runner_ok = runner_age is not None and runner_age <= runner_max_age
     cycle_rows = _json_rows(output / "dualtrack" / "cycles" / f"{window.cycle_id}.json")
     cycle_state = cycle_rows[-1] if cycle_rows else {}
+    reassessment_rows = _json_rows(output / "dualtrack" / "reassessment" / f"{window.cycle_id}.json")
+    range_reassessment = reassessment_rows[-1] if reassessment_rows else {}
     attribution_rows = _json_rows(output / "dualtrack" / "attribution" / f"{window.cycle_id}.json")
     ledger_rows = _json_rows(output / "dualtrack" / "ledger" / "daily" / f"{window.cycle_id.split('_', 1)[0]}.json")
     human_fills = _json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_human.json")
@@ -1200,6 +1655,8 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
             "next_tick_due_at": next_tick_due_at,
             "bar_count": (latest_runner.get("detail") or {}).get("bar_count"),
         },
+        "machine_range_observation": dict(cycle_state.get("range_observation") or {}),
+        "machine_range_reassessment": dict(range_reassessment),
         "sample": {
             "valid_now": sample_ok,
             "has_effective_plan": effective is not None,
@@ -2613,7 +3070,22 @@ def build_public_access_health(
 
 def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
     is_v4 = urlparse(public_url).path.endswith("/dashboard-v4.html")
-    if is_v4:
+    is_v5 = urlparse(public_url).path.endswith("/dashboard-v5.html")
+    if is_v5:
+        trader_checks = {
+            "dashboard_v5_title": "Extended 网格交易机器人",
+            "strategy_console_api": "/api/strategy-console/current",
+            "market_bars_api": "/api/dualtrack/market/bars",
+            "standard_kline": "StandardKline.StandardKlineChart",
+            "strategy_shadows": "Strategy Shadows",
+            "production_plan_traceability": "strategy_plan_version",
+            "runtime_actual_state": "actual_state",
+            "access_session_api": "/api/auth/session",
+            "authenticated_control_gate": "ACCESS_CONTROLLED",
+            "access_control_label": "已登录 · 可控制",
+            "tokens_css": "assets/tokens.css",
+        }
+    elif is_v4:
         trader_checks = {
             "dashboard_v4_title": "GoldBot Trader Console V4",
             "replay_v4_route": 'new URL("dashboard-replay-v4.html", window.location.href)',
@@ -2662,7 +3134,7 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         "ops_console_title": "GoldBot OPS Console",
         "ops_backend_signals": 'id="backend-signals"',
     }
-    if is_v4:
+    if is_v4 or is_v5:
         replay_checks = {
             "replay_v4_body": '<body class="replay-v4">',
             "replay_v4_backlink": 'new URL("dashboard-v4.html", window.location.href)',
@@ -2680,7 +3152,11 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
             "replay_trader_focus": "Trader Focus",
         }
     trader = _probe_html_features(public_url, timeout, trader_checks)
-    trader_vendor_url = _sibling_dashboard_url(public_url, "data/vendor/echarts.min.js") + "?v=20260627-gateway"
+    trader_vendor_filename = "packages/standard-kline/standard-kline.js" if is_v5 else "data/vendor/echarts.min.js"
+    trader_vendor_name = "trader_vendor_standard_kline" if is_v5 else "trader_vendor_echarts"
+    trader_vendor_url = _sibling_dashboard_url(public_url, trader_vendor_filename)
+    if not is_v5:
+        trader_vendor_url += "?v=20260627-gateway"
     trader_vendor = _probe_http(trader_vendor_url, timeout)
     replay_filename = "dashboard-replay-v4.html"
     replay_url = _sibling_dashboard_url(public_url, replay_filename)
@@ -2698,7 +3174,7 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
             {"surface": "trader", "name": item["name"], "ok": item["ok"]}
             for item in trader.get("checks", [])
         ],
-        {"surface": "trader", "name": "trader_vendor_echarts", "ok": _http_ok(trader_vendor)},
+        {"surface": "trader", "name": trader_vendor_name, "ok": _http_ok(trader_vendor)},
         *[
             {"surface": "replay", "name": item["name"], "ok": item["ok"]}
             for item in replay.get("checks", [])
@@ -2729,7 +3205,7 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         if (
             not item.get("ok")
             and not (reason == "trader_probe_failed" and item.get("surface") == "trader")
-            and not (reason == "trader_vendor_probe_failed" and item.get("name") == "trader_vendor_echarts")
+            and not (reason == "trader_vendor_probe_failed" and item.get("name") == trader_vendor_name)
             and not (reason == "replay_probe_failed" and item.get("surface") == "replay")
             and not (reason == "replay_vendor_probe_failed" and item.get("name") == "replay_vendor_lightweight_charts")
             and not (reason in {"ops_access_forbidden", "ops_probe_failed"} and item.get("surface") == "ops")
