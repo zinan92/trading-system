@@ -3533,6 +3533,241 @@ Date: 2026-07-08
   explicit 4108/4113 entries, and $55k/$45k nominal allocation. Browser
   warning/error log was empty; machine top-card DOM intersections were zero.
 
+## 2026-07-10 - 机器轨平仓与早晚复盘统一为 Feishu 卡片
+
+### Decisions
+
+- 机器轨 entry、target、stop、cycle flatten 和主动 exit 全部发送 Feishu interactive card；不再让平仓事件退回纯文字。
+- 平仓卡按结果使用固定颜色：止盈绿色、止损红色、周期结束蓝色、主动平仓灰色。
+- 平仓卡第一屏只展示交易闭环、开平仓价、TP/SL、净结果、R 倍数、名义金额和审计状态；原始文字仍保留为发送审计正文。
+- `pm_morning` 和 `pm_evening` 在统一 sender 内自动生成复盘卡，第一屏只保留黄金行情、窗口已实现盈亏、机器轨表现、原因和下一步。
+- 早盘复盘、晚盘复盘和 12 小时机器作战单三个 Codex automation 的中文策略名统一为“机器轨网格”，并明确不得额外补发纯文字副本。
+
+### Gotchas
+
+- `outputs/feishu_reports/2026-07-10.json` 和 `outputs/dualtrack_trade_notifications/2026-07-10.json` 中的旧名称属于历史回执，不应改写；新发送从代码和 automation prompt 两端统一使用“机器轨网格”。
+- Feishu interactive card 发送时不会展示兼容性 `text` 正文，但该正文仍用于 source hash 和回执审计。
+- 本次没有补发历史交易或复盘样本，避免再次刷屏；下一笔自然发生的平仓和下一次定时复盘才会在真实 Feishu 群中显示新卡片。
+- Missing visual proof: 尚无“修改后真实 Feishu 投递”的截图，因为本次刻意不发送额外样本。现有 `outputs/feishu_reports/2026-07-10.json` 仅作为历史发送 trace，不作为新样式 Evidence。
+
+### Evidence
+
+- 本地卡片视觉证据：`/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-10-feishu-trade-review-cards.png`。
+- 对应渲染 trace：`/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-10-feishu-trade-review-cards.html`。
+- 真实数据预览使用 `2026-07-10_NIGHT` 止盈 fill（净结果 `+$101.61`）和 `outputs/pm_reports/2026-07-10-evening.md`（窗口已实现 `-76.67 USD`）。
+- Focused regression：57 passed，覆盖止盈绿色、止损红色、盈利复盘绿色、亏损复盘红色、去重和 dualtrack runner 回归。
+
+## 2026-07-13 - Neutral means a bilateral grid, not no trade
+
+### Decisions
+
+- A healthy machine `neutral` decision must carry explicit long orders in the
+  lower half of the expected range and explicit short orders in the upper half.
+  Only a degraded planner failure may remain neutral with zero orders.
+- Neutral orders share the machine track's total notional budget. Their weights
+  across both sides must total at most 1.0, and each side has its own declared
+  range-boundary stop.
+- A mid-cycle plan repair records `execution_start`; only bars at or after that
+  timestamp are eligible for fills. Earlier touched levels remain missed
+  opportunities and must never be relabeled as live paper trades.
+- The live DAY plan was safely revised only because it had zero fills. The old
+  zero-order plan was quarantined before replacement.
+
+### Gotchas
+
+- The planner prompt, plan validator, runner, review language, and dashboard all
+  independently encoded `neutral = no orders`; changing only the UI would have
+  left the engine inactive.
+- A bilateral grid must preserve original plan rung indexes when long and short
+  orders are simulated separately, otherwise review rows can be matched to the
+  wrong fills.
+- The 2026-07-13 repair uses information available at 14:49 Beijing and is valid
+  only from that moment. It cannot be used to claim that the morning's large
+  move was actually traded.
+
+### Evidence
+
+- Full repository regression: `1403 passed in 382.58s`.
+- Live plan: `outputs/dualtrack/plans/2026-07-13_DAY_ai.json` with two long and
+  two short grid orders and `execution_start=2026-07-13T06:49:45+00:00`.
+- Quarantined legacy plan:
+  `outputs/dualtrack/quarantine/machine_plans/2026-07-13_DAY_ai.legacy-neutral-20260713T064945Z.json`.
+- Browser proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-neutral-bilateral-grid-2026-07-13.png`.
+
+## 2026-07-13 - Recorded PnL, durable history, and 12-hour review visibility
+
+### Decisions
+
+- Recovery replay remains distinguishable from live-observed execution, but it
+  is included in the operator-facing recorded PnL. Daily and weekly ledgers now
+  expose live, recovery, and recorded totals separately.
+- Historical daily ledgers are rebuilt only from durable fill evidence. Missing
+  fills remain zero rather than being inferred from a chart or plan.
+- The split canvas shows the full daily history for both tracks and keeps the
+  latest completed 12-hour review visible during the active cycle.
+- Every newly closed cycle writes human and machine review dimensions for
+  direction, key levels, entry signal, and TP/SL geometry. Missing structured
+  signal evidence is shown as missing and is not graded optimistically.
+- The next machine planning cycle receives the previous machine four-dimension
+  review and must persist a concrete `review_adjustment`; a plan that ignores an
+  available review fails closed instead of claiming a learning loop.
+
+### Gotchas
+
+- When the current cycle already exists in a rebuilt daily ledger, the frontend
+  must exclude that cycle before adding live API state. Falling back to the
+  daily total after the exclusion produced a temporary double count that was
+  caught in browser verification.
+- Recorded PnL and live-execution performance are different claims. Recovery
+  replay counts in the former but stays explicitly excluded from the latter.
+- Unrealized PnL is not treated as zero when the live mark is unavailable. The
+  UI now says that it is temporarily excluded from today and this week.
+- The already locked 2026-07-13 DAY plan was not rewritten. Review feedback
+  starts with the next naturally planned cycle, preserving plan immutability.
+
+### Evidence
+
+- Focused DualTrack regression: `247 passed`.
+- Browser DOM verification: 9 dated rows from 2026-07-05 through 2026-07-13,
+  no browser errors, and both review widgets visible in the mid-cycle phase.
+- Screenshots:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-ledger-12h-review.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-machine-12h-review.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-ledger-12h-review-full.png`.
+
+## 2026-07-13 - Weekend-safe range reference and independent chart timeframes
+
+### Decisions
+
+- A range boundary breach is recorded with its first timestamp and bar geometry.
+  For a neutral bilateral grid, the breached side stops while the other side
+  remains independently eligible; the UI states this policy instead of calling
+  every breach a whole-plan failure.
+- New machine plans use the median range of the latest 10 complete non-weekend
+  12-hour samples as a transparent minimum width. Weekend and incomplete
+  samples remain in `planning_context.excluded_samples` rather than silently
+  influencing the range.
+- An AI range below that floor is widened symmetrically and records the original
+  range, adjusted range, reference method, and excluded weekend count. Existing
+  locked plans and historical fills are never rewritten by this safeguard.
+- Human and machine main charts now keep separate timeframe state. Human remains
+  `1m/5m`; machine supports `1m/5m/15m/30m/1h/4h`. All four context charts keep
+  their existing independent selectors.
+
+### Gotchas
+
+- The 2026-07-13 DAY revision did not directly use weekend bars: it used 350
+  bars from that Monday before locking. The real weakness was the single
+  previous-cycle range input and lack of a robust minimum-width contract.
+- `4044-4078` is 34 price points, not less than one point. It was still narrower
+  than the current non-weekend 12-hour median of 54.75, so the new floor would
+  transparently widen the same candidate to `4033.625-4088.375`.
+- A shared `state.mainTf` also coupled WebSocket subscriptions and live-trade
+  refresh behavior. Splitting only the buttons would have left the data paths
+  coupled, so storage, REST loads, subscriptions, labels, and refresh gating all
+  had to become track-specific.
+
+### Evidence
+
+- Focused backend/frontend regression: `123 passed`.
+- Full repository regression: `1408 passed in 364.40s`.
+- Browser checks at 1565, 740, and 390 CSS pixels: no horizontal overflow or
+  timeframe-button intersection; human remained `1m` while machine rendered
+  `4h`, both with 240 Binance bars and zero console warnings.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-independent-timeframes-range-record.png`.
+
+## 2026-07-13 - Equal main-chart timeframes and daily context
+
+### Decisions
+
+- Human and machine main charts expose the same independent timeframe set:
+  `1m/5m/15m/30m/1h/4h`.
+- Every context chart adds `1d` while preserving its own saved selection.
+- Daily bars use the existing Binance USD-M native REST and WebSocket interval;
+  no derived, fallback, cached, or synthetic data path was added.
+
+### Gotchas
+
+- Equal available options do not mean synchronized selection. Changing one
+  track must not change the other track.
+- A live daily candle keeps its UTC-open timestamp throughout the day, so the
+  freshness bound follows the existing two-interval policy and is 2880 minutes.
+
+### Evidence
+
+- Static split-canvas regression: `20 passed`.
+- Browser: human main `4h`, machine main `1m`, human context `1d` with 215
+  Binance bars; no console warnings or errors.
+- Mobile browser at 390 CSS pixels: zero horizontal overflow and zero
+  timeframe-button intersections across all six selectors.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-equal-main-timeframes-daily-context.png`.
+
+## 2026-07-13 - Confirmed range breach triggers a full machine replan
+
+### Decisions
+
+- This decision supersedes the earlier same-day rule that kept the unbreached
+  side of a neutral grid eligible after a boundary breach.
+- The first touch of either range boundary pauses every new entry from the old
+  plan. Existing positions remain exit-only and can close only through their
+  recorded TP/SL rules.
+- A true range break requires three consecutive complete 1-minute closes
+  strictly outside the boundary. Confirmation triggers a fresh AI decision for
+  direction, the complete range, key levels, and all grid orders.
+- The replacement plan starts no earlier than the next unseen bar. It cannot
+  create fills from bars already available to the planner, and all fills from
+  the superseded plan remain in the durable ledger.
+- Range revisions are archived with both plan versions and the trigger bars.
+  Replanning is limited to two revisions per cycle with a 60-minute cooldown.
+- Planner failure is fail-closed: old entries remain paused, the error is
+  visible, and the system retries after five minutes. Fewer than 30 minutes
+  before cycle close, it waits for the next 12-hour decision instead.
+
+### Live Result
+
+- The old `4044-4078` neutral plan first touched its upper boundary at 16:18
+  Beijing and confirmed the break with the 16:21-16:23 closes.
+- Two existing short positions were genuinely stopped at 4078; this history
+  was preserved and was not reclassified or rewritten.
+- After the scheduler environment was repaired, the machine independently
+  replaced the plan at 19:33 Beijing with a `short` plan, full range
+  `4042-4098`, and three sell-grid entries at 4072, 4081, and 4089.5.
+- The runtime returned to `ok`, the new plan was inside range on its next tick,
+  and no historical level was backfilled as a new live trade.
+
+### Gotchas
+
+- The live scheduler initially failed to launch the planner because launchd's
+  PATH did not include `/opt/homebrew/bin`, where `codex` and its Node runtime
+  are installed. The generated schedule and installed live-tick job now carry
+  an explicit deterministic PATH.
+- A terminal `failed` state would have left the machine paused for the rest of
+  the cycle even after the environment was fixed. Failed replans now retain the
+  safety pause but retry every five minutes.
+- Replanning from the latest bar timestamp itself can introduce look-ahead if
+  that bar was already observed. `execution_start` is therefore later than the
+  observed bar and makes the next bar the first eligible execution input.
+- Recovery replay rows remain separate from live-observed fills. The four live
+  fills from the old plan remain the runtime paper sample; recovery rows are
+  still excluded from that claim.
+
+### Evidence
+
+- Focused range, scheduler, API, and split-canvas regression: `96 passed` and
+  `88 passed` in the two post-change suites.
+- Final full repository regression, including launchd PATH and failed-replan
+  retry behavior: `1411 passed in 371.13s`.
+- Live runtime: status `ok`, scheduler `active` with 4/4 matching and healthy
+  jobs, current range `4042-4098`, and machine not stood down.
+- Browser DOM: global status `运行`, direction `做空`, three visible short
+  grid orders, complete reassessment explanation, zero console errors, and no
+  horizontal overflow at 1280 CSS pixels.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-range-reassessment.png`.
+
 ## 2026-07-13 - Pending human limit orders stay visible and executable
 
 ### Decisions
@@ -3569,3 +3804,1291 @@ Date: 2026-07-08
   shows short `12.3247`, entry `4,056.9`, TP `4,036.7`, and SL `4,070.1`.
 - Screenshot:
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-pending-order-lifecycle.png`.
+
+## 2026-07-13 - Twelve-hour review closes into one testable next-iteration change
+
+### Decisions
+
+- Every completed 12-hour cycle now records market regime, direction, range,
+  key levels, signal, TP/SL geometry, execution evidence, and PnL separately.
+- A neutral market is determined by directional efficiency: the absolute net
+  move divided by the full high-low range. A slightly higher or lower close is
+  still neutral when path efficiency is below 35%.
+- No trade is a valid observed result. It is not automatically scored as a
+  strategy failure when planned levels were not touched.
+- One review can propose at most one changed dimension. It must have a durable
+  change id, one expected metric, and a stated validation rule.
+- Human-track output is advisory only and can never modify or lock the next
+  human plan. Machine-track output enters a paper challenger only.
+- A machine challenger needs at least 10 completed cycles and 30 trades before
+  it can be shown as ready for operator review; 100 trades are preferred. It
+  is never auto-promoted.
+- The next machine planner must explicitly carry the same structured change id,
+  dimension, mode, and metric. Legacy free-text reviews cannot silently alter
+  the next plan.
+
+### Gotchas
+
+- Treating neutral as exact `close == open` misclassifies ordinary range-bound
+  sessions as directional and creates false review feedback.
+- One losing or breached cycle is evidence for a challenger, not permission to
+  tune several parameters or declare a better strategy.
+- Reading review prose is not self-evolution. The loop becomes auditable only
+  when the proposed change is carried into the next plan and accumulated under
+  the same id with explicit sample counts.
+- Historical reviews lack the v3 evidence contract. They remain visible but are
+  labeled insufficient and cannot produce an automatic next-iteration change.
+- Meeting the minimum sample only means `ready_for_operator_review`; it never
+  means automatic production promotion.
+
+### Evidence
+
+- Focused review, dashboard, scoring, and cycle regressions: `102 passed`.
+- Full repository regression: `1418 passed in 406.24s`.
+- Browser at 1280 and 740 CSS pixels: both review tracks are visible, zero
+  horizontal overflow, and zero console errors.
+- Current historical cycle is explicitly labeled as legacy evidence and does
+  not claim a validated challenger.
+- Screenshots:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-review-v3.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-review-v3-mobile.png`.
+
+## 2026-07-13 - Position protection remains visible and active across cycles
+
+### Decisions
+
+- The position, risk, and fills widgets must derive from the same durable open
+  trades, including positions opened in an earlier cycle and still open now.
+- The position widget lists every open trade separately with direction,
+  quantity, notional, entry, holding time, exact TP, and exact SL.
+- TP and SL shown for a position must come from that trade or its entry fill.
+  The current plan is never a fallback because it may describe another trade.
+- A position remains protected after the cycle changes. Protective exits and
+  manual closes are executed against the position's origin ledger while also
+  recording the current request cycle for audit.
+
+### Gotchas
+
+- The fills table already included prior same-day trades, while position and
+  risk read only the current cycle. That made one page contradict itself.
+- Current-cycle-only protective sweeps did more than hide the position: they
+  also stopped monitoring the carried position's TP and SL.
+- The user's short from the day cycle was still open when this was diagnosed.
+  Once cross-cycle monitoring was restored, its trusted 1-minute bar touched
+  TP and the engine closed it normally at 4,036.7.
+
+### Evidence
+
+- Live result: short entry `4,056.9`, TP `4,036.7`, SL `4,070.1`, closed at TP
+  at Beijing time `22:09`; total realized PnL including costs is `+$243.97`.
+- Focused dashboard, API, execution, and cycle regressions: `80 passed`.
+- Full repository regression: `1422 passed in 413.73s`.
+- Browser: human position shows `无持仓`, fills show the TP close at `4,036.7`
+  and `+$243.97`, horizontal overflow is zero, and console errors are empty.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-position-protection.png`.
+
+## 2026-07-13 - Daily cycle and visible two-second Binance market refresh
+
+### Decisions
+
+- New DualTrack cycles use one Beijing natural day: `00:00-24:00`, starting
+  `2026-07-14`. Historical DAY/NIGHT cycle ids keep their original 12-hour
+  meaning so stored trades, reviews, and ledger records do not move.
+- The existing `2026-07-13_NIGHT` cycle is a one-time transition window from
+  `21:00` to midnight. At midnight it closes and `2026-07-14_DAY` opens for 24
+  hours.
+- The split canvas refreshes all active chart timeframes from Binance XAUUSDT
+  public REST every two seconds. There is no alternate provider, cached market
+  fallback, or synthetic bar.
+- Every chart uses the same latest Binance 1-minute close for its still-open
+  candle. Historical OHLC remains the exchange response, while the current
+  close and high/low envelope stay internally valid.
+- Chart refresh is a display path. Protective exits and paper matching remain
+  driven by the trusted 1-minute backend cadence, not by browser polling.
+
+### Gotchas
+
+- A WebSocket `open` event proved only that the handshake succeeded. Direct
+  probes of XAUUSDT kline, mark-price, and aggregate-trade streams produced no
+  messages, so the prior green `connected` state was a false health claim.
+- Concurrent REST requests for different timeframes can finish at slightly
+  different instants. Without one canonical live close, six individually valid
+  responses still show contradictory prices on one screen.
+- The 60-second full-page data reload briefly reintroduced divergent closes
+  until it was required to await the same canonical two-second refresh before
+  rendering.
+- Reusing `2026-07-13_DAY` for a new natural-day cycle would collide with an
+  already completed historical cycle. The midnight cutover preserves identity
+  and audit history.
+
+### Evidence
+
+- Focused DualTrack regression: `299 passed`.
+- Full repository regression: `1426 passed in 421.93s`.
+- Live browser at 1280 CSS pixels: all six chart closes remained identical
+  before and after the page's 60-second full reload; latest prices changed
+  during the sample and horizontal overflow was zero.
+- The data widget shows `2秒刷新`, a seconds-level refresh timestamp, and
+  `Binance REST ... 无备用源`.
+- Screenshots:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-24h-cycle-cutover.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-2s-live-market.png`.
+
+## 2026-07-14 - Unified daily PnL bars and cumulative NAV
+
+### Decisions
+
+- The operator-facing ledger has one PnL definition: every durable paper fill
+  is recorded in that track's daily realized PnL. Recovery provenance remains
+  in raw evidence for audit but is not a separate performance bucket or UI
+  column.
+- Daily ledger artifacts are rebuilt after every filled human order and every
+  minute-level DualTrack live tick. The ledger GET also reconciles from durable
+  fills so a stale derived ledger cannot hide a later cross-cycle exit.
+- The split canvas replaces the four-column history table with an interactive
+  daily PnL histogram and a cumulative NAV line starting at zero. Hover shows
+  date, daily PnL, and cumulative NAV.
+
+### Gotchas
+
+- The July 13 human row showed `+$93.48` because it combined a stale DAY entry
+  cost of `-$2.50` with the NIGHT trade's `+$95.98`. The DAY trade later closed
+  at TP for `+$243.97`, but that cross-cycle exit had not rebuilt the DAY ledger.
+- Hiding the recovery column without fixing ledger refresh would only conceal
+  the accounting error. Durable fills must remain the source of truth and the
+  daily/weekly ledgers must be treated as derived views.
+- Lightweight Charts returns business-day objects from crosshair events even
+  when input times are ISO date strings. Tooltip lookup must normalize that
+  object back to `YYYY-MM-DD`.
+- Page CSS color literals are token-gated; a tooltip shadow introduced an
+  unauthorized RGBA literal and was removed before completion.
+
+### Evidence
+
+- July 13 human realized PnL now reconciles to `+$339.95`: DAY `+$243.97` plus
+  NIGHT `+$95.98`.
+- Browser hover on July 13 shows daily PnL `+$339.95` and cumulative NAV
+  `+$432.49`; both tracks render daily bars plus NAV curves, with zero console
+  errors and zero horizontal overflow.
+- Focused DualTrack regression: `299 passed`.
+- Full repository regression: `1426 passed in 384.18s`.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-14-dualtrack-daily-pnl-nav.png`.
+
+## 2026-07-14 - Unified morning trading card closes review into next plan
+
+### Decisions
+
+- The 09:00 machine brief and the 10:00 morning review are one operator-facing
+  morning trading card: previous-cycle result, one review-driven adjustment,
+  the current cycle plan, and the evidence-chain status.
+- The card reads the actual cycle window. It says `24 hours` after the natural-
+  day cutover and still renders historical 12-hour cycles correctly.
+- `计划链路正常` means a completed previous review was read, an adjustment was
+  recorded, and the current AI plan is locked. Full lifecycle/runtime health
+  remains an independent audit conclusion.
+- The previous review is addressed through `previous_review_cycle_id`; missing
+  or incomplete review evidence is shown as missing and PnL is not inferred.
+
+### Gotchas
+
+- Keeping `未来 12 小时` in automation prose after the 24-hour cutover would
+  make a visually polished card factually wrong.
+- A successful brief build does not prove full system health. The card must not
+  turn plan availability into a global green status claim.
+- Neutral plans carry explicit long and short grid sides. Orders without a side
+  must fall back to the plan direction or they can appear in both grid columns.
+- The existing 10:00 report is a duplicate user-facing surface once its prior-
+  cycle result is incorporated into the 09:00 card.
+
+### Evidence
+
+- Relevant Feishu and machine-plan regression: `35 passed`.
+- Live Feishu delivery verified at `2026-07-14T01:31:27+00:00`; the newest
+  `dualtrack_machine_brief` receipt is `delivered=true`, channel `feishu`, and
+  message format `interactive_card`.
+- Desktop and mobile visual proofs:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-14-unified-morning-trading-card.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-14-unified-morning-trading-card-mobile.png`.
+
+## 2026-07-14 - Restore 12-hour strategy windows and expose machine rules
+
+### Decisions
+
+- Machine planning and review return to two Beijing-time windows:
+  `09:00-21:00` and `21:00-09:00`. Daily PnL and NAV accounting remain on the
+  Beijing natural day so strategy cadence and accounting cadence stay separate.
+- The already-open `2026-07-14_DAY` cycle closes at `21:00` as a one-time
+  21-hour transition window. Normal 12-hour DAY/NIGHT cycle ids resume from
+  `2026-07-14_NIGHT`; recorded fills are not reassigned retroactively.
+- The machine canvas shows the complete executable IF/THEN rule set and
+  highlights the branch currently matched by live runtime state. Thresholds and
+  prose are derived from the config API instead of being a second hard-coded
+  strategy specification.
+- Direction and range are re-evaluated on the 12-hour cadence or after a
+  confirmed range breach. Signal execution remains continuous, and market-data
+  or risk failures stop new entries immediately.
+
+### Gotchas
+
+- Reinterpreting the existing July 14 cycle as ending at `09:00` would move or
+  orphan already-recorded fills. The explicit `21:00` transition preserves the
+  audit trail.
+- A conceptual `two 5-minute closes` rule was discussed but is not the current
+  engine contract. The implemented rule remains the configured three
+  consecutive 1-minute closes and must not be silently relabeled in the UI.
+- A rules panel that is only explanatory copy will drift from execution. The
+  displayed confirmation count, timeframe, cooldown, retry delay, replan cap,
+  and minimum remaining time must all come from `/api/dualtrack/config`.
+- The in-app browser runtime currently fails while loading its browser client
+  with `Cannot redefine property: process`; source and API checks are trace, not
+  a substitute for the screenshot required by the Evidence Contract.
+
+### Evidence
+
+- Focused DualTrack regression: `300 passed`.
+- Full repository regression: `1427 passed in 387.79s`.
+- Inline dashboard JavaScript syntax and touched-file whitespace checks pass.
+- Missing visual proof: the machine rules panel on the localhost split canvas
+  still requires a desktop and sub-760px browser screenshot after the in-app
+  browser connection is restored.
+
+## 2026-07-14 - Single production strategy console migration
+
+### Decisions
+
+- `dashboard-dualtrack-split.html` is now a single production-strategy
+  console. It reads `strategy-production-console-v1`, not the previous
+  human/machine canvas payloads. The legacy pages, APIs, plan files, fills and
+  ledgers remain available as historical compatibility surfaces.
+- `StrategyPlan` is the only active production plan per cycle. It has a stable
+  ID, integer version, cycle, parameters, intraday rules, selected proposal
+  IDs, and per-field origin (`human`, `ai`, or `confirmed`). A new console
+  order carries `strategy_plan_id` and `strategy_plan_version` into the paper
+  fill ledger.
+- Old human and AI plans are read losslessly as same-schema `PlanProposal`
+  records. The compatibility rule remains explicit: locked human proposal
+  first, otherwise AI proposal, otherwise no production plan and no new entry.
+  It never blends fields silently.
+- `strategy_shadow` is a separate, deterministic historical counterfactual
+  path. It consumes frozen plan parameters plus chronological market events,
+  writes only `outputs/dualtrack/strategy_shadows/`, and reports orders,
+  fills, positions, PnL and review metrics. `execution_shadow` remains the
+  legacy ledger-vs-execution-engine parity surface and is not used for
+  strategy-performance comparisons.
+
+### Gotchas
+
+- Current Tiger/COMEX data was real but stale at validation time. The console
+  correctly rendered the chart while stopping all new entries; it must not be
+  relabeled as a live-ready chart or replaced with synthetic prices.
+- Historical dual-track paper fills cannot be retroactively rewritten into a
+  single ledger without changing audit evidence. They are retained as legacy
+  compatibility records; all new production-console orders have the new plan
+  attribution fields.
+- The first two recorded what-if variants (`atr-1-grid-8` and
+  `atr-2-grid-16`) had zero closed trades against the exact frozen historical
+  event window. Zero is a valid result, not missing data or a reason to invent
+  outcomes.
+- The preferred in-app browser connection failed with `Cannot redefine
+  property: process`; visual proof was captured with local headless Chrome
+  against the same localhost URL. This is browser-rendered evidence, not a
+  source-only claim.
+
+### Evidence
+
+- Targeted production-console, plan-store and shadow regression: `40 passed`.
+- Desktop, mobile, and Strategy Shadow browser-rendered evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-production-console-desktop-2026-07-14.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-production-console-mobile-2026-07-14.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-production-console-shadows-2026-07-14.png`.
+
+## 2026-07-14 - Paper robot console controls
+
+### Decisions
+
+- The production console now exposes actual paper-control actions: start,
+  stop, cancel all pending limit orders, revise range/grid as a new strategy
+  plan version, and reset displayed statistics by recording a new baseline.
+- Stop is execution-relevant: once control state has been configured, the
+  intraday runner skips new production entries while it is stopped. Protective
+  exits remain outside this gate.
+- Cancel changes only `accepted` pending orders. Replanning supersedes the old
+  plan but retains it; reset statistics retains every fill and ledger artifact.
+
+### Gotchas
+
+- These are paper controls, not live-broker controls. They never submit,
+  cancel, or flatten a live broker account.
+- Current market data remains stale, so start does not override the independent
+  trusted-market gate. A started robot still cannot open a position until the
+  data feed is fresh and canonical.
+
+### Evidence
+
+- Controls, plan history and runner regression: `65 passed`.
+- Browser-rendered control surface:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-live-controls-2026-07-14.png`.
+
+## 2026-07-14 - Baseline robot layout and live Tiger refresh
+
+### Decisions
+
+- The console layout follows the supplied grid-robot baseline literally: left
+  side starts with trend recognition and strategy configuration, then the
+  robot start / stop-and-clear controls; account summary, large price/grid
+  chart, real-time status, and fills occupy the same reading order.
+- MACD is no longer expanded by default. The default chart preserves the
+  primary price/grid view with EMA overlays.
+- Demo account equity is read from the real paper ledger (`ending_cash`), not
+  a display placeholder. The validated value is `$9,906.84` from a `$10,000`
+  starting balance and recorded paper PnL.
+
+### Gotchas
+
+- The stale quote was not a front-end refresh failure: the Tiger importer had
+  not run since `2026-07-06T09:48:00Z`. A read-only Tiger import refreshed 500
+  real MGC bars to `2026-07-14T04:18:00Z`; no fallback or synthetic quote was
+  used.
+- That one refresh does not prove a durable always-on ingestion schedule. The
+  next control-plane pass must wire the importer into the recurring runtime
+  before calling the feed continuously live.
+
+### Evidence
+
+- Layout, controls, plan-store, runner and API regression: `65 passed`.
+- Live data browser proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-baseline-live-feed-2026-07-14.png`.
+
+## 2026-07-14 - Reference-first grid robot shell
+
+### Decisions
+
+- The page is now rebuilt from the supplied grid-robot reference before any
+  additional backend-driven layout work. Its first view is exactly the
+  reference reading order: market/trend, strategy configuration, running
+  adjustment; then account overview, price/grid, real-time state, and fills.
+- Removed the `人工 / AI 提案差异` card from the operational first view. It
+  remains represented in the production-plan evidence model and can return in
+  a later history/detail surface, but it no longer competes with robot use.
+- The reference controls now have real UI affordances: direction and style are
+  selectable, the visible grid parameters are editable, start and
+  stop/cancel/flatten retain their paper-control handlers, and the K-line
+  period selector reads the existing canonical market-bars endpoint rather
+  than resampling or fabricating data in the browser.
+
+### Gotchas
+
+- “Smart fill” deliberately only fills reviewable visible parameters in this
+  phase; applying a changed direction/range/grid creates an explicit plan
+  version. It is not an opaque automatic mutation.
+- The 5-minute canonical response is reachable and has 240 real bars, but is
+  currently `stale` (not synthetic). The visual console therefore shows the
+  red fail-closed state; the missing recurring Tiger ingestion remains a
+  backend runtime concern, not a front-end refresh substitute.
+- Local headless Chrome constrains very narrow windows to a larger desktop
+  layout width, so its 390px screenshot is browser-rendered but only
+  conservative proof of mobile cropping. CSS switches the actual page to
+  single-column left cards and single-column control fields below 1120px.
+
+### Evidence
+
+- Reference-shell focused regression: `65 passed`.
+- Browser-rendered desktop and narrow-screen evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-reference-shell-desktop-2026-07-14.png` and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-reference-shell-mobile-2026-07-14.png`.
+
+## 2026-07-14 - Reference parity and button acceptance
+
+### Decisions
+
+- The reference comparison is now enforced at component level: the header
+  badges, left-card ordering, trend recommendation action, direction/style
+  selectors, parameter block, start/stop controls, running adjustment card,
+  four account metrics, large price/grid area, status and fills all use the
+  same visual reading order as the supplied robot console.
+- The chart remains the existing trusted `standard-kline` implementation as
+  required by the trading console contract. Grid lines are generated from the
+  active plan's real range and real grid count, not from screenshot values.
+- A real DevTools browser pass clicked every visible application button, all
+  six K-line period buttons, the period selector, every tab, and six chart
+  library controls. Paper-control actions were then verified against the
+  backend state rather than only checking their visual affordance.
+
+### Gotchas
+
+- The acceptance pass intentionally exercised the paper `adjust_plan` action.
+  It preserved the prior plan and created auditable versions through v4, as
+  designed; the final runtime state is `stopped`, with no new position opened.
+- There was no open position in the ledger, so the conditional `手动平仓`
+  control was correctly not rendered and could not be clicked. Its handler is
+  retained for when a position exists.
+- The market is still `stale`. Button validation did not bypass the market
+  gate: start can set the paper desired state, but no fresh-market entry can
+  be produced, and the final visible state remains stopped/new entries blocked.
+
+### Evidence
+
+- Focused regression and syntax validation: `65 passed`.
+- Browser interaction pass: all app, timeframe, tab and chart buttons passed;
+  start/stop, replanning and statistics reset all passed their backend-state
+  assertions. Final state: `stopped`, active plan version `4`.
+- Browser-rendered desktop, live button-check and actual mobile evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-reference-iteration-desktop-2026-07-14.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-browser-button-check-2026-07-14.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-reference-actual-mobile-2026-07-14.png`.
+
+## 2026-07-14 - Console market source switched to Binance
+
+### Decisions
+
+- Per the explicit operator decision, the production-console default market
+  reader now uses the existing Binance USD-M demo GOLD/XAUUSDT one-minute
+  feed. It is the same feed refreshed by the installed 60-second
+  `gold-1m-feed` heartbeat.
+- This is a source selection, not a fallback chain: when the configured
+  Binance source is absent or stale, the console blocks entries. It does not
+  quietly fall back to Tiger or synthetic data.
+
+### Gotchas
+
+- The Tiger MGC data is still retained in the market database and historic
+  receipts, but is no longer the console's default quote source. It was 39
+  minutes old at diagnosis time because `tiger_futures_feed.enabled` is false
+  and no Tiger heartbeat is installed.
+- The Binance source is an execution-venue/demo feed and carries its explicit
+  provenance flags (`public_proxy_feed`, `execution_venue_feed`,
+  `crypto_perpetual`, `xauusdt`). It is not claimed to be COMEX broker data.
+
+### Evidence
+
+- Market feed, API, console static, strategy control and runner regression:
+  `70 passed`.
+- Live console API assertion: `GOLD`, `binance_usdm`, `ready`, `fresh`, and
+  non-synthetic.
+- Browser-rendered proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-binance-live-2026-07-14.png`.
+
+## 2026-07-14 - Production console interaction repair
+
+### Decisions
+
+- The trend card is now strictly an operator-facing explanation: market,
+  symbol, timeframe, bar count, update time, trend and confidence.  Provider
+  implementation flags and raw operation metadata are retained in API
+  provenance, not rendered as trading guidance.
+- “根据当前行情智能填充参数” uses the already available, trusted one-minute
+  Binance bars to calculate a reviewable ATR/EMA suggestion.  It changes only
+  visible form fields and displays its calculation; applying the proposal
+  still requires the separate “调整区间” operation and therefore creates an
+  auditable plan version.
+- Start and stop/cancel/flatten are real paper-control actions.  The console
+  disables the active button during a request and preserves the outcome notice
+  across normal live refreshes, so an operator can see that the command was
+  accepted rather than mistaking a five-second repaint for a no-op.
+- Production-plan grid levels are rendered as chart price lines with labels,
+  using the existing `standard-kline` chart.  EMA is selectable with editable
+  fast/slow periods and MACD is an opt-in lower pane; neither creates a new
+  charting engine or invents market data.
+
+### Gotchas
+
+- A real-browser pass caught a render-path typo that static tests did not
+  exercise.  It was fixed before the final visual capture; this is why the
+  acceptance record includes user actions rather than only DOM-source checks.
+- The active plan's lower grid levels may sit outside the current candle price
+  viewport after the market moves.  They remain attached to the chart and are
+  visible when the user zooms/pans; the compact grid summary always states the
+  complete range, count and spacing.
+- The production browser bridge could not initialise in this environment, so
+  the interaction pass used a clean local Chrome session through DevTools.
+  It is still a real browser rendering the served dashboard, not a source-only
+  assertion.  The stop/start acceptance action restored the pre-test paper
+  state: `running`.
+
+### Evidence
+
+- Final focused regression plus syntax check: `95 passed`.
+- Real-browser journey passed: trusted fresh market, clean trend card, smart
+  fill and refresh persistence, editable EMA, MACD rendering, chart grid
+  lines, and stop/start backend control with persistent user feedback.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-ready-desktop-2026-07-14.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-ready-mobile-2026-07-14.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-macd-enabled-2026-07-14.png`.
+
+## 2026-07-14 - Production paper-grid lifecycle closure
+
+### Decisions
+
+- Direction, style and parameter controls now call one authoritative backend
+  preview contract before any order is placed. Neutral produces bilateral grid
+  orders, long produces buy orders below market, short produces sell orders
+  above market; steady uses a wider/lower-density grid and aggressive uses a
+  narrower/higher-density grid. The exact preview is drawn on the standard
+  K-line chart and becomes the committed plan only after Start is confirmed.
+- Start is a real paper lifecycle action: it creates a new versioned
+  `StrategyPlan`, submits accepted paper limit orders to the existing ledger,
+  and records `strategy_plan_id` plus `strategy_plan_version` on every order.
+  Identical repeated Start requests are idempotent. A changed configuration
+  while running must use the explicit running-adjustment action.
+- Runtime truth is represented by `desired_state` and `actual_state`. The UI
+  derives its button emphasis from actual state: Start is enabled only while
+  stopped; while running Start is dimmed and Stop is prominent, with the real
+  accepted-order count shown in the header and status card.
+- Stop is complete only after accepted orders are cancelled, open paper
+  positions are flattened with a fresh trusted quote, and reconciliation
+  passes. Running adjustment cancels and replaces grid orders without changing
+  the production ledger into a shadow ledger or silently stopping the robot.
+- A process-wide re-entrant control lock and a single activation helper enforce
+  at most one active production plan even when browser refresh, legacy
+  compatibility reads and Start arrive concurrently.
+- For alternate K-line periods, a stale exact-period Binance series no longer
+  masks fresh same-provider one-minute data. The server first prefers a fresh
+  exact series, then deterministically derives the requested period from fresh
+  Binance one-minute bars; it never falls back to another provider or
+  synthetic prices.
+
+### Gotchas
+
+- Real-browser testing exposed a race where the compatibility reader could
+  activate an older plan between Start and the next refresh. It was reproduced
+  with a plan/order version mismatch and fixed with the shared control lock;
+  a concurrent regression now asserts exactly one active plan and matching
+  order versions.
+- The browser pass also caught three source-level false positives: a stale 5m
+  exact series was being returned ahead of fresh 1m derivation, the mobile
+  account-grid CSS had an invalid `repeat()` value, and the preview hint could
+  remain visible after the same plan became live. All three were fixed and
+  rechecked in a real browser.
+- Acceptance intentionally created auditable paper plan history through v23
+  and then stopped the robot. Historical plans and cancelled orders were
+  retained. Final acceptance state is stopped, zero accepted orders, zero open
+  positions, reconciliation passed, and exactly one active plan record.
+- This closes the paper-trading console lifecycle only. It does not migrate to
+  live trading and does not switch execution to Nautilus.
+
+### Evidence
+
+- Real-browser journey passed 17 lifecycle and responsive assertions: fresh 5m
+  switching, direction/style geometry, preview chart layers, versioned Start,
+  running regrid, refresh persistence, idempotent Start, stop/cancel/flatten,
+  Strategy Shadow isolation, mobile layout and zero browser runtime errors.
+- Final repository regression: `1423 passed in 378.15s`; focused production
+  strategy, market-feed, API, console and shadow regression: `52 passed`.
+- The page also passes the repository design-token contract; operational state
+  colours remain semantic while ungoverned colour literals and forbidden heavy
+  font weights were removed.
+- Running short/aggressive proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-grid-running-2026-07-14.png`.
+- Running neutral/steady regrid proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-grid-regridded-2026-07-14.png`.
+- Strategy Shadow comparison proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-shadows-2026-07-14.png`.
+- Final mobile proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-grid-mobile-2026-07-14.png`.
+
+## 2026-07-14 - Goldbot public dashboard v5 deployment
+
+### Decisions
+
+- The production strategy console is now published at
+  `https://goldbot.park-ai-intel.com/dashboard-v5.html`. The existing v4 URL
+  is retained for compatibility, and the domain root redirects to v5.
+- Public v5 is an explicit observer surface. Live market data, account state,
+  production orders, timeframe switching and strategy/grid preview are
+  available; Start, Stop/cancel/flatten, running adjustment, statistics reset
+  and manual close remain local-only. The gateway permits only the preview
+  action and rejects every production mutation, so deployment cannot silently
+  expand the trading-control boundary.
+- The public route serves the same tested console implementation through a
+  stable v5 alias. It does not copy or fork the page into a second source of
+  truth.
+- The existing named Cloudflare Tunnel remains the deployment path. Its
+  connector was upgraded to cloudflared 2026.7.1 and pinned to QUIC after the
+  previous connector stopped registering reliably over HTTP/2.
+
+### Gotchas
+
+- A local gateway process being healthy was not sufficient evidence that the
+  public site was deployed: the initial public response was Cloudflare 1033
+  because no tunnel connector was registered. Completion required both a
+  persistent connector and successful external HTTP/browser checks.
+- The public console displays the pre-existing running paper plan v24 and its
+  five accepted orders. That plan started before this deployment; the public
+  preview test did not start, stop, replace or otherwise mutate it.
+- The public hostname continues to depend on the local Mac, gateway and named
+  tunnel being online, matching the existing v4 hosting model.
+- The bundled in-app browser bridge could not initialise because its process
+  shim conflicts with the current desktop runtime. Final acceptance therefore
+  used a clean, headless Google Chrome session with real layout, canvas,
+  interaction and network assertions.
+
+### Evidence
+
+- Public desktop proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-dashboard-v5-public-desktop-2026-07-14.png`.
+- Public strategy-preview/grid proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-dashboard-v5-public-preview-2026-07-14.png`.
+- Public mobile proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-dashboard-v5-public-mobile-2026-07-14.png`.
+
+## 2026-07-15 - Goldbot authenticated remote control
+
+### Decisions
+
+- Goldbot v5 will use Cloudflare Access on the existing Tunnel rather than
+  moving the frontend to Vercel. The chosen identity is the current Cloudflare
+  account member, additionally restricted at the gateway to
+  `zinan92@hotmail.com`.
+- The requested application session duration is seven days (`168h`). Access
+  authentication unlocks Start, Stop/cancel/flatten, running adjustment,
+  statistics reset and manual close; local `127.0.0.1:8765` control remains
+  available independently.
+- The public gateway validates the signed Access JWT against the application
+  audience and Cloudflare team issuer before any production mutation. Preview
+  remains non-mutating and available through the existing safe path.
+- Authenticated mutation attempts and upstream results are written to a
+  dedicated JSONL audit trail without logging the Access token.
+
+### Gotchas
+
+- The existing Wrangler OAuth and Tunnel certificate can manage deployment and
+  connectivity but both receive `403` from the Access applications API. A
+  one-time scoped Cloudflare token with `Access: Apps and Policies Write` is
+  required to create the edge application and policy.
+- Initializing Zero Trust through the signed-in dashboard reaches the free-plan
+  activation checkout at `$0/month`, but Cloudflare requires an explicit
+  authorization to charge the saved card if usage exceeds the free allowance.
+  Activation is paused at that consent step; no billing authorization has been
+  accepted by the agent.
+- Before the Access application, team domain and AUD tag were installed, the
+  gateway remained fail-closed and the public page stayed read-only. That
+  intermediate state did not expose remote trading controls.
+
+### Completed configuration
+
+- Activated Cloudflare Zero Trust Free after Park personally accepted the
+  dashboard billing authorization. Team name: `plain-pine-ac3d`.
+- Created self-hosted Access application `Goldbot v5` for
+  `goldbot.park-ai-intel.com` with application id
+  `66b8a370-676d-4fcb-9b68-46bbbba384a2` and AUD tag
+  `f591b72ad4a3d3bf1aa602a76ab991dbe4fb1b1802d6d513d0db167b8b403b5a`.
+- Created allow policy `Goldbot operator` with policy id
+  `04c3698f-4749-4809-97b6-1cdbb585e69a`, restricted to
+  `zinan92@hotmail.com`. Both the Access application and gateway session
+  contract use `168h`.
+- Installed the Access team issuer and AUD in the persistent gateway LaunchAgent
+  and restarted only the gateway. No strategy start, stop, order, position,
+  statistics-reset or manual-close mutation was invoked during acceptance.
+
+### Acceptance
+
+- An unauthenticated public request now receives a Cloudflare Access `302` to
+  the `plain-pine-ac3d.cloudflareaccess.com` login page.
+- The signed-in public dashboard displays `已登录 · 可控制`; the existing runtime
+  state controls render normally, with the active stop/cancel/flatten control
+  available and the start control disabled while the UI reports the robot as
+  running.
+- Gateway authentication unit tests: 5 passed. Related dashboard/control-plane
+  regression tests: 76 passed.
+
+### Evidence
+
+- Authenticated public dashboard and identity/control badge:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-authenticated-control-2026-07-15.png`.
+- Authenticated start/stop state and live runtime panel:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-authenticated-start-stop-2026-07-15.png`.
+
+## 2026-07-15 - Goldbot Access-session and trusted D1 startup recovery
+
+### Decisions
+
+- All dashboard API calls now identify themselves as AJAX with
+  `X-Requested-With: XMLHttpRequest`. An expired Cloudflare Access session therefore returns
+  a deterministic `401`; the page performs one top-level refresh to re-enter Access login
+  instead of parsing the login HTML as JSON.
+- Non-JSON API responses now fail with a user-readable service message. The raw
+  `Unexpected token '<'` parser error is no longer exposed.
+- Restored the startup prerequisite by adding native Binance USD-M `1d` candles in the
+  independent datafeed adapter. Strategy planning still fails closed unless D1, 4H, 1H,
+  15m and the 1m execution tape are trusted and non-synthetic.
+
+### Gotchas
+
+- The visible error looked like a Binance JSON failure, but the `<DOCTYPE>` response was a
+  Cloudflare Access login page returned to a background request. Cloudflare documents this
+  as an AJAX/session-expiry behavior.
+- After isolating the login-layer symptom, a second blocker remained: the datafeed adapter
+  declared Binance USD-M support only through `4h`, so a fresh 1m chart could coexist with
+  a correctly blocked D1 strategy preview.
+- No strategy start, stop, order, position, or ledger mutation was performed during this
+  repair. Startup readiness was verified with the non-mutating preview action.
+
+### Verification and evidence
+
+- Access AJAX probe now returns `401` instead of redirecting to an HTML login page.
+- Non-mutating production preview succeeds with 49 neutral/steady orders and fixed
+  D1/4H/1m planning contexts.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-access-recovery-market-2026-07-15.png`.
+- Browser start-readiness proof after the Binance D1 repair:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-start-ready-binance-d1-2026-07-15.png`.
+- Focused dashboard, market-feed, strategy-control and recommendation regression:
+  `82 passed`; gateway authentication regression: `5 passed`; browser acceptance had
+  fresh/non-synthetic Binance data, a 49-order D1/4H/1m preview, an enabled Start button,
+  and zero runtime errors.
+
+### Login UX follow-up
+
+- Replaced the Cloudflare-account OAuth step with Cloudflare Access One-time
+  PIN as the application's only identity provider. `Accept all identity
+  providers` is off, `onetimepin` is the sole selected provider, and instant
+  authentication is on.
+- The operator now enters an email address and receives a login code directly;
+  no Cloudflare dashboard account login is required. The email allow policy and
+  seven-day application session remain unchanged.
+- Visual proof of the simplified login page:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-email-otp-login-2026-07-15.png`.
+
+### OTP delivery troubleshooting
+
+- The Access code-entry page accepted `zinan92@hotmail.com` and one explicit
+  resend was issued. The application policy remains exact-email allow and the
+  Access authentication log shows `Allowed` entries with no `Blocked` entries.
+- Do not treat the text `A code has been emailed to you` as a delivery receipt.
+  Cloudflare deliberately shows it even when no message is sent, and its Access
+  authentication log is not an outbound-email delivery log. A mailbox receipt
+  is therefore still missing evidence.
+- Cloudflare documents `noreply@notify.cloudflare.com` as the OTP sender and
+  lists mailbox filtering or sender suppression after previous delivery failures
+  as the remaining causes once policy denial is excluded. A newly requested PIN
+  invalidates the previous PIN and expires after 10 minutes.
+- Visual traces:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-otp-resend-2026-07-15.jpg` and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-access-auth-log-2026-07-15.jpg`.
+
+## 2026-07-15 — Production console cycle rollover and ledger reconciliation
+
+### Decision
+
+- Runtime state is cycle-scoped. A `running` row from a previous 12-hour cycle
+  is now exposed as `stopped + stale_cycle` for the current cycle; it can no
+  longer create the false state `运行但无挂单` after rollover.
+- Account totals and trade history use only fills traceable to a
+  `strategy_plan_id`. Exit fills paired to those entries are included in the
+  same production trade. Legacy human/machine results remain available through
+  the historical ledger but are not silently added to production equity.
+- An empty current-cycle paper ledger retains the configured 10,000 USDC paper
+  account baseline. The current console therefore shows the versioned
+  production history: 6 trades, 1,193.16 USDC cumulative notional, -4.38 USDC
+  realized PnL and 9,995.62 USDC equity.
+- New protective exit fills inherit `strategy_plan_id` and
+  `strategy_plan_version` from the matched entry, closing the traceability gap
+  without rewriting old source records.
+- The recommendation block now names its direction source and explains that
+  parameters use the latest 14-period ATR. The duplicated broker/timeframe/bar
+  count sentence was removed. The opaque short plan hash was replaced with a
+  human-readable production strategy label.
+
+### Grid algorithm shown to the operator
+
+- Steady: half-range = `max(2 * ATR14, latest * 0.25%)`, 8 intervals,
+  per-grid notional = `max(10, equity * 1%)`, default leverage 1x.
+- Aggressive: half-range = `max(1 * ATR14, latest * 0.125%)`, 12 intervals,
+  per-grid notional = `max(10, equity * 1.5%)`, default leverage 2x.
+- Neutral centers the range on the latest price. Long shifts 75% of total width
+  below the latest price and only places buy entries; short mirrors that geometry
+  above the latest price and only places sell entries. All controls generate a
+  preview first and do not submit orders until explicit Start.
+
+### Gotchas
+
+- The prior page joined current cycle `2026-07-15_DAY` to runtime state from
+  `2026-07-14_DAY`, then read only the empty current human execution file. This
+  was a data-contract mismatch, not lost orders or lost history.
+- One preserved historical production trade has an exit timestamp one minute
+  earlier than its entry timestamp in the raw ledger. The compatibility reader
+  preserves that evidence rather than silently correcting it; a separate ledger
+  repair/migration should address historical timestamp quality.
+- `A code has been emailed` in Cloudflare Access remains non-evidence of mail
+  delivery; Park subsequently confirmed receipt of the OTP.
+
+### Verification and evidence
+
+- Focused backend, control-plane and static dashboard regression: 67 passed.
+- Browser acceptance confirmed stopped current-cycle state, restored account
+  equity, six historical production trades, explicit recommendation provenance,
+  and both steady/aggressive preview geometry without placing orders.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-ledger-reconciled-2026-07-15.jpg` and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-aggressive-preview-2026-07-15.jpg`.
+
+## 2026-07-15 — External operator user instruction contract
+
+### Decisions
+
+- The external user guide treats a robot as started only when the runtime is
+  `running`, at least one paper order is accepted, the current-orders table is
+  populated, and the chart is showing production orders rather than a preview.
+- Every non-intuitive control is classified as explanation-required, dangerous,
+  or a current limitation. The guide explains the exact ATR14 range geometry,
+  direction bias, grid count, notional sizing, TP/SL and runtime state machine.
+- The current safe distribution model is one designated operator with other
+  users observing. Cloudflare-authorized users still share one paper robot and
+  one paper ledger; the console does not provide per-user accounts or roles.
+- The guide documents actual control-plane behavior even where the visible copy
+  is currently inaccurate: running adjustment cancels and resubmits all pending
+  grid orders from the complete current form state, while existing positions
+  remain open.
+
+### Gotchas
+
+- `刷新趋势` currently reloads console and market data; it does not rerun AI,
+  create a proposal or relock the production direction.
+- A raw plan confidence of `1` is rendered as `100%`. That value is not a
+  calibrated probability, win rate or profit guarantee and should not be
+  exposed to external operators as certainty.
+- `价格冲出区间时` is stored in the plan, but its three advertised behaviors
+  have not been proven end to end in the new production control plane.
+- `重置盈亏 / 交易量统计` writes `statistics_baseline_at`, but the production
+  history/account aggregate does not yet apply that baseline to displayed
+  totals. The external guide therefore marks the control as not reliable yet.
+- This documentation task changed no dashboard surface. Per the Evidence
+  Contract, the Markdown guide and decision log are trace material rather than
+  new visual Evidence.
+
+## 2026-07-15 — Grid timeframe, capital sizing and AI-confidence audit
+
+### Decisions
+
+- The chart timeframe is presentation only. The target strategy contract uses
+  complete D1 bars for the persistent grid Range, complete 4H bars for spacing,
+  and 1m only for execution and breach confirmation. A 12-hour cycle produces a
+  review/proposal; it does not silently replace a continuously running grid.
+- `刷新趋势` is defined as a fresh market evaluation that creates a new
+  direction, style and grid-specification proposal. It must never directly
+  mutate orders or the production plan.
+- Capital sizing must start from `equity * leverage_limit`, then apply a margin
+  utilization cap and a worst-case plan-loss cap. The leverage limit is an
+  absolute ceiling, not a target utilization.
+- The first Strategy Shadow matrix will test D1 ATR14 Range multipliers, 4H ATR
+  spacing, 24-80 grids, 3x/5x/10x leverage, margin utilization and plan-loss
+  caps. No single untested parameter set is promoted to production.
+- The external operator guide is paused until the strategy specification is
+  implemented and browser-verified.
+
+### Current findings
+
+- The machine planner runs Codex `gpt-5.4` with one program-built user prompt.
+  There is no repository-owned custom system-prompt artifact, and the Codex
+  internal system prompt is not persisted in the planning trace.
+- The prompt currently receives cycle-local 1m OHLC/recent closes, a median of
+  ten completed non-weekend 12h ranges, the previous machine review, a replan
+  context and up to 16k characters of the finance newsletter. It does not
+  receive D1/4H ATR, full multi-timeframe bars or deterministic trend features.
+- Normal plan confidence is an uncalibrated 1-10 integer self-reported by the
+  LLM. A decision-error plan hard-codes `confidence=1`.
+- The current active production plan was locked from a 09:01 fail-closed plan.
+  The later successful 09:02 neutral plan (`5/10`) and 10:20 short replan
+  (`7/10`) did not replace it. The frontend then converted the error value `1`
+  to `100%` by treating it as a 0-1 probability.
+- The legacy DualTrack sizing contract uses a 100,000 U total notional ceiling
+  for 10,000 U equity at 10x. The new production console independently added
+  `equity * 1%` steady sizing, yielding 100 U per grid. That is an incomplete
+  migration, not an approved product decision.
+- A read-only audit of complete stored bars produced D1 ATR14 approximately
+  100.50 and 4H ATR14 approximately 31.57. The current DualTrack market feed
+  cannot yet aggregate `1d`; the target contract requires a trusted D1 feed and
+  complete-bar filter before use.
+
+### Gotchas
+
+- Four 25,000 U grids do equal the full 100,000 U notional ceiling, but at 10x
+  they also consume all 10,000 U initial margin when all four fill. A production
+  default needs explicit free-margin and loss buffers.
+- More grid levels do not mean every level can be sized by dividing the total
+  budget by the displayed count. Sizing must use maximum simultaneously filled
+  levels and the aggregate distance-to-stop loss.
+- D1 ATR14 with the old `2 ATR` half-range may be materially wider than the
+  current 12h planning range. It is a shadow candidate, not an automatic fix.
+- Markdown audit artifacts are trace material, not new visual Evidence. No UI
+  or runtime mutation was performed in this audit.
+
+## 2026-07-15 — Fixed-timeframe grid and auditable AI proposal implemented
+
+### Decisions
+
+- Superseded the rejected chart-timeframe ATR behavior. Production previews now
+  use complete D1 ATR14 for Range, complete 4H ATR14 for spacing and 1m for
+  execution. The visible chart timeframe is presentation-only.
+- Steady uses a `2 × D1 ATR14` half-range, `0.25 × 4H ATR14` target spacing,
+  50% margin-utilization cap and 5% max-plan-loss cap. Aggressive uses `1 ×`,
+  `0.125 ×`, 70% and 8%. Automatic grid count is clamped to 24–80.
+- Direction no longer moves the market Range. Neutral arms both sides, long
+  arms buy entries and short arms sell entries against identical geometry.
+- Per-grid notional is the lower of the capital cap and distance-to-stop loss
+  cap. `equity × leverage_limit` is an absolute ceiling, not target exposure;
+  neutral risk uses maximum same-side exposure rather than summing mutually
+  exclusive buy and sell books.
+- `刷新趋势` now runs an auditable AI evaluation over fixed D1/4H/1H contexts.
+  AI can propose direction and style only; deterministic code owns Range,
+  spacing, grid count, leverage and notional. The prompt and evidence inputs are
+  stored with the proposal.
+- Removed the false probability display. The UI separates a deterministic
+  rule score labelled `uncalibrated` from the model's 1–10 reasoning-material
+  self-assessment labelled `not a probability`.
+- AI refresh and adopting its recommendation create/preview a proposal only.
+  They do not mutate the active production plan, cancel orders or place orders.
+
+### Live verification
+
+- Trusted strategy inputs were available: 22 complete non-weekend D1 bars and
+  47 complete 4H bars. The inspected sample had D1 ATR14 about 100.50 and 4H
+  ATR14 about 33.67.
+- A real AI refresh recommended `short + steady`, produced rule score 74.4/100
+  (uncalibrated) and AI self-assessment 8/10 (not probability), and returned
+  `production_plan_unchanged=true`.
+- With current paper equity 9,995.62 U, a steady preview produced about 47
+  grids, about 800 U per grid, about 49,978 U capital budget and about 1.92x
+  actual leverage. The 10x setting remained a ceiling because the 5% loss cap
+  bound sizing first.
+- Switching the chart from 1m to 30m preserved the exact Range, grid count and
+  per-grid notional. Steady to aggressive narrowed Range and increased density;
+  short to neutral preserved geometry while changing armed order sides.
+- Full regression: `1438 passed in 367.40s`. Browser console had no errors;
+  390px mobile viewport had no horizontal overflow.
+
+### Gotchas
+
+- A high leverage limit does not imply high actual leverage. The loss budget is
+  intentionally allowed to bind before the capital ceiling.
+- The rule score is not historical success probability. Its reserved historical
+  calibration component remains zero until enough reproducible shadow outcomes
+  exist.
+- The active production plan is never silently replaced by a fresher AI plan.
+  An operator must explicitly start or apply a running adjustment.
+- The launchd environment could resolve the Codex wrapper but not Homebrew Node.
+  The planner now uses an absolute Codex path and an explicit PATH; failures are
+  returned as structured fail-closed API errors instead of dropped connections.
+- Full-page mobile screenshot stitching was unreliable. Evidence therefore uses
+  separate mobile viewport captures for the top and strategy-control sections.
+- Current Strategy Shadow output is a smoke comparison. Its cost model remains
+  zero and must not be treated as sufficient promotion evidence.
+
+### Evidence
+
+- Desktop AI/grid console:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-strategy-console-ai-grid-desktop.png`.
+- Mobile top and strategy controls:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-strategy-console-ai-grid-mobile.png` and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-strategy-console-mobile-strategy.png`.
+- Strategy Shadow comparison:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-strategy-shadow-comparison.png`.
+
+## 2026-07-15 — AI trend evaluation Input/Output receipt
+
+### Decisions
+
+- Every `刷新趋势` run now creates a standalone
+  `strategy-ai-evaluation-v1` receipt. Success and provider/validation failure
+  attempts are both archived; a failed evaluation never disappears into an API
+  error alone.
+- AI input now includes complete, trusted D1/4H/1H/15m contexts. Each context
+  records provider, bar window, latest completed OHLC, ATR14, EMA20, EMA50,
+  standard MACD(12/26/9), trend and directional efficiency.
+- 15m is confirmation evidence only. It cannot change the fixed D1 Range or 4H
+  spacing contract, and the operator's visible chart timeframe remains excluded.
+- The receipt stores the exact business prompt, raw model response, parsed
+  decision, deterministic rule-score components, final recommendation and
+  side-effect declaration. The server finalizes it with proposal/preview IDs,
+  `production_plan_unchanged` and `orders_created`.
+- Each AI refresh receives a unique evaluation-backed proposal ID, so repeated
+  identical decisions do not replace the previous visible evaluation history.
+- The current-trend card exposes a compact receipt entry. A responsive audit
+  dialog shows Input and Output side by side, offers current-cycle evaluation
+  history, and displays the local archive path plus SHA256.
+
+### Local archive contract
+
+- Path:
+  `outputs/dualtrack/strategy_control/evaluations/<cycle_id>/<timestamp>_<evaluation_id>.json`.
+- The archive is one atomic JSON record per file. `source_manifests` remains
+  available even when context validation fails before a model call.
+- The proposal also retains its `evaluation_receipt`, allowing the dashboard to
+  render the exact evidence without reconstructing it from current market data.
+
+### Gotchas
+
+- “AI 检查 K 线图” means it reads completed OHLC numbers and indicator
+  snapshots; it does not perform pixel-based visual chart interpretation.
+- D1 may have too few completed bars for fully warmed EMA50 or MACD. Missing
+  indicators are explicitly stored/displayed as insufficient sample, never
+  silently synthesized.
+- The complete prompt and response are intentionally local audit evidence. They
+  may include current account and plan context and therefore should stay behind
+  the existing authenticated dashboard boundary.
+- A receipt proves what the model saw and returned. It does not prove that the
+  recommendation is profitable or historically calibrated.
+
+### Verification and Evidence
+
+- A real Binance-backed refresh produced `short + steady`, rule score 73.3/100
+  (uncalibrated), and AI self-assessment 8/10 (not probability). The receipt
+  includes 22 D1, 63 4H, 95 1H and 159 15m completed bars; 15m EMA20 was
+  4,037.999925 and MACD histogram was 0.339211 for that snapshot.
+- The finalized receipt is 64,010 bytes and records
+  `production_plan_unchanged=true` plus `orders_created=0` at:
+  `outputs/dualtrack/strategy_control/evaluations/2026-07-15_DAY/2026-07-15T06-09-08.303402_00-00_ai-eval-0dc5545b91964186.json`.
+- Full regression: `1440 passed in 384.18s`. Desktop and 390px mobile browser
+  acceptance confirmed no console errors and no horizontal overflow.
+- Visual Evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-ai-evaluation-receipt-desktop.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-ai-evaluation-receipt-mobile.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-ai-evaluation-receipt-public-v5.png`.
+- The public Cloudflare Tunnel briefly returned 1033 during acceptance. Its
+  existing LaunchAgent was restarted, after which the authenticated public v5
+  page loaded the new receipt UI successfully.
+
+## 2026-07-15 — Runtime stop diagnosis and readable execution records
+
+### Findings and decisions
+
+- The robot did not stop because of stale market data, a cycle rollover, or an
+  automatic fill rule. The authoritative runtime records `last_action=stop` at
+  `2026-07-15T06:41:59.602095+00:00` (Beijing `2026-07-15 14:41`). The same
+  control operation cancelled the remaining accepted production grid orders.
+- The dashboard request log confirms a successful
+  `POST /api/strategy-console/control` at that time. This is an explicit stop
+  control path whose contract is “stop + cancel pending orders + flatten open
+  positions + reconcile”.
+- Stopped state is no longer shown without context. The header now says
+  `已停止 · 收到停止指令`; the runtime card exposes the last action and its
+  Beijing action time from the authoritative runtime record.
+- Execution tables now render timestamps as `YYYY-MM-DD HH:mm` in
+  `Asia/Shanghai`, with the column header explicitly marked `时间（北京）`.
+- Asset quantity is rendered with at most six decimal places and trailing zeros
+  removed. Ledger values remain unchanged; this is display formatting only.
+
+### Gotchas
+
+- The existing HTTP request log records endpoint, result and server time, but
+  not the control request body or authenticated actor identity. Therefore the
+  stopped action and time are proven, but attributing this historical action to
+  a specific person or browser session would be speculation.
+- `runtime.json` stores the latest authoritative runtime row rather than an
+  append-only operator audit trail. The visible last action is sufficient for
+  the current state explanation, but actor-level audit requires a separate
+  authenticated control-event contract in a future change.
+
+### Evidence
+
+- Public v5 runtime/action and readable fills:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-v5-stop-action-and-readable-fills-detail.png`.
+- Public v5 full-page capture:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-v5-stop-reason-beijing-time-readable-quantity.png`.
+- Focused regression: `61 passed`; full regression: `1442 passed in
+  400.43s`.
+## 2026-07-15 - Independent datafeed cutover (in progress)
+
+Objective: make the independent datafeed the trading framework's only market-data entry,
+while keeping broker execution adapters separate.
+
+### Decisions
+
+- Added `DatafeedMarketClient` as the HTTP consumer of `kline-candles-v1`; it fails closed
+  on unavailable, non-JSON, or non-200 datafeed responses.
+- Enabled the independent datafeed at `127.0.0.1:8100` in pipeline config and declared
+  per-instrument routes. GOLD uses `binance_usdm_futures`; MGCmain uses
+  `tiger_openapi_comex`.
+- Switched the dual-track chart market path to datafeed with `cache_policy=bypass`, strict
+  quality, execution-venue required, and no fallback. The response exposes canonical GOLD,
+  provider symbol XAUUSDT, provenance, freshness, and `reads_private_market_db=false`.
+- Added `DatafeedMarketRepository` for strategy/replay read contracts. Normal
+  `DualTrackCycleRunner` construction now uses datafeed; an explicitly supplied test DB is
+  retained temporarily as a compatibility seam while remaining consumers migrate.
+
+### Gotchas
+
+- Using `cache_policy=allow` on the live dashboard initially returned an older cached bar.
+  The chart path now bypasses cache and uses strict quality so it cannot quietly show stale
+  history as the current market.
+- The old market database mixed timezone-naive and timezone-aware timestamps. That produced
+  duplicate logical minutes after migration; datafeed now canonicalizes and deduplicates UTC.
+- The trading repository still contains ancillary/reporting modules that directly read
+  `market_data.db`. The cutover is not complete until these are migrated or removed and a
+  guard test proves production consumers cannot regress.
+- Tiger credentials are not present in the current environment. Tiger adapter behavior is
+  contract-tested and its 1,709 existing proven-source bars are migrated, but a fresh live
+  Tiger request cannot yet be claimed.
+
+### Verification so far
+
+- datafeed: 65 tests passed; ruff passed.
+- trading datafeed/chart/cycle targeted suites: 79 chart/client tests and 73
+  repository/cycle tests passed.
+- Live dashboard market API returned `ready`, `fresh=true`,
+  `source_mode=binance_usdm_futures`, `is_synthetic=false`, and
+  `reads_private_market_db=false`.
+- Visual evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-datafeed-source-health-full.png`.
+
+## 2026-07-15 — Public start-control 502 recovery
+
+### Findings and decisions
+
+- The failed public start did not create orders: the authoritative runtime
+  remained `stopped`, with zero accepted orders and zero open positions.
+- The public gateway used a fixed 20-second upstream timeout. A production
+  control request validates trusted 1m plus fixed D1/4H/1H/15m market contexts
+  before writing the paper ledger, so a transiently slow datafeed could outlive
+  that proxy deadline and surface as HTTP 502.
+- Authenticated control POSTs now receive a 90-second upstream deadline. Normal
+  read requests retain the 20-second deadline.
+- The gateway now forwards the upstream's bounded JSON error body for rejected
+  controls. The dashboard can therefore show the real rejection reason instead
+  of only `HTTP 400` or an empty response.
+- A 5xx or broken control response is now treated as an unknown outcome, not an
+  automatic failure. The browser polls the authoritative current-state endpoint
+  and reports success only when running orders (or a fully stopped/flat state)
+  are confirmed. It explicitly tells the operator not to repeat-click while
+  reconciliation is in progress.
+- The dashboard reuses the 1m market payload already returned by the current
+  read model and pauses its five-second refresh while a control action is busy
+  or the tab is hidden. This removes duplicate Binance reads and reduces
+  self-inflicted contention from multiple open tabs.
+
+### Gotchas
+
+- A proxy timeout does not prove whether a mutation committed. Repeating a
+  start/stop action before reading authoritative state can create ambiguous
+  operator feedback even when the backend action is idempotent.
+- The verification deliberately used `preview`, not `start`; it proved the
+  deployed market-validation path, public JSON proxying, button availability
+  and stopped/flat state without creating paper orders.
+- The full-page in-app-browser capture repeats the sticky header at browser
+  capture tile boundaries. The focused viewport evidence is the clearer visual
+  proof for the actionable start/disabled stop controls.
+
+### Verification and evidence
+
+- Public gateway preview: HTTP 200 in 6.37 seconds, 49 grid orders, no ledger
+  mutation. Invalid cycle requests returned the upstream JSON message through
+  the public gateway.
+- Public browser state: authenticated/control-enabled, market `实时·可信`, source
+  `binance_usdm_futures`, start enabled, stop disabled, runtime stopped, no
+  browser warnings/errors.
+- Focused regression: 67 trading tests and 7 gateway tests passed; dashboard
+  inline JavaScript parsed successfully.
+- Visual evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-start-control-recovered-actions-2026-07-15.png`.
+
+## 2026-07-15 - Datafeed becomes the production market-data boundary
+
+Objective: strategies, charts, reports, replay, health, and schedulers consume one
+auditable datafeed port; broker execution remains a separate port.
+
+### Decisions
+
+- Production market reads now construct `DatafeedMarketRepository`. The repository
+  is used by dual-track cycles, charts, replay, market view, data trust/lineage,
+  portfolio reports, health, system state, completion audits, and backtests.
+- Scheduled Binance, Tiger, FRED, and OANDA market-data refreshes call datafeed HTTP.
+  Trading scheduler modules no longer import exchange-specific candle collectors.
+- The OANDA and Tiger connector catalog price-feed ports now identify datafeed
+  adapters; execution adapters remain broker-owned and independent.
+- Production CSV imports are rejected with an instruction to install a datafeed
+  adapter. The old SQLite store is accepted only for system temporary paths used by
+  isolated tests and migration rehearsals; non-temporary private paths fail closed.
+- Added a CI architecture guard that freezes all remaining compatibility seams and
+  rejects new scheduler imports, direct market-data URLs, SQLite reads, or exchange
+  collectors outside those seams.
+
+### Gotchas
+
+- `TRADING_ORCHESTRATOR_MARKET_DB` is no longer a production routing mechanism.
+  Setting it to a non-temporary alternate database does not bypass datafeed.
+- Source availability is not credential readiness. Tiger/OANDA adapters must be
+  enabled in datafeed config before their scheduled jobs become healthy.
+- Datafeed downtime is a hard market-data failure. Trading does not silently fall
+  back to the old database, synthetic candles, Yahoo, or another unnamed source.
+- Daily snapshots no longer copy datafeed's private SQLite file. Trading archives its
+  own artifacts and consumes the owner-side datafeed storage-integrity receipt.
+- Existing legacy collector classes remain only to keep deterministic temporary-DB
+  tests and one-time migrations reproducible. Their default production entrypoints
+  delegate to datafeed.
+
+### Verification and evidence
+
+- Architecture boundary guard: 7 focused tests passed.
+- Live scheduled Binance refresh returned 1,500 GOLD 5m candles with
+  `market_data_backend=datafeed`, `provider_symbol=XAUUSDT`, fresh, non-synthetic.
+- Fail-closed drill against an unavailable datafeed returned connection refusal with
+  `fallback_used=false`.
+- First full trading regression found five compatibility-output regressions; all five
+  were fixed before the final rerun.
+- Final full trading regression: `1455 passed` in 6m38s.
+- Visual evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-datafeed-source-health-final.png`.
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-trading-datafeed-cutover-final.png`.
+
+## 2026-07-15 - Datafeed outage and dashboard recovery
+
+### Decision
+
+- Keep trading fail-closed. The dashboard block was caused by no process listening
+  on datafeed port `8100`, not by a Binance payload or downstream contract change.
+- Fix service ownership in `/Users/wendy/datafeed` with a persistent LaunchAgent;
+  no trading compatibility change or private market-data fallback was added.
+
+### Gotchas
+
+- A repo update and a running datafeed are separate facts. Connection refusal must
+  remain visible as `行情 blocked` until the owner service and a fresh live candle
+  are both verified.
+- Datafeed recovery must not auto-resume a deliberately stopped robot. The dashboard
+  is start-eligible again, but the runtime stays stopped until the user starts it.
+
+### Verification
+
+- Local and public v5 dashboards show `行情：实时·可信`, Binance USD-M provenance,
+  no blocked-data state, and an enabled start control.
+- Strategy-console current API reports fresh, non-synthetic GOLD/XAUUSDT 1m data.
+- Focused downstream regression: `68 passed`.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-datafeed-restored-dashboard.png`.
+
+## 2026-07-15 - Revalidate automatic grid notional at start
+
+### Decision
+
+- Distinguish automatic per-grid sizing from a manually fixed notional. Automatic
+  sizing is now recalculated inside the start transaction from the latest trusted
+  market/account snapshot; manual values remain subject to the unchanged hard cap.
+- Persist `grid.notional_mode` in the preview and production plan so sizing intent is
+  auditable. The dashboard labels automatic values as `自动风险上限`.
+
+### Gotchas
+
+- The safe per-grid notional changes when price crosses grid levels because the
+  number of armed buy/sell levels and their cumulative loss to the shared stop
+  change. A valid preview amount is therefore not a durable fixed quote.
+- Treating an auto-generated amount as manual created a time-of-check/time-of-use
+  failure: the start gate correctly rejected the stale number even though the user
+  had selected automatic sizing.
+- This fix does not relax risk limits and does not auto-start the robot. It only
+  recomputes the automatic amount at the atomic start check.
+
+### Verification
+
+- Live preview with stale `774.23 USD` in auto mode returned `200` and resized to the
+  current safe cap; the same stale value in manual mode remained blocked.
+- Focused backend/dashboard regression: `82 passed`.
+- Local and public v5 browser checks showed real-time trusted data, an enabled start
+  button, and a preview explicitly labeled `自动风险上限`; no start was clicked.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-grid-auto-notional-revalidation.png`.
