@@ -9,7 +9,7 @@ from services.dualtrack_feishu import DualTrackMachineBriefSender
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Send the 12-hour dualtrack machine plan to Feishu.")
+    parser = argparse.ArgumentParser(description="Send the dualtrack machine cycle plan to Feishu.")
     parser.add_argument("--cycle-id", default="")
     parser.add_argument("--as-of", default="")
     parser.add_argument("--send", action="store_true")

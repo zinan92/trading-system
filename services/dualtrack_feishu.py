@@ -12,7 +12,7 @@ from services.dualtrack_scoring import _trades_from_fills
 from services.dualtrack_store import DualTrackPlanStore
 from services.feishu_report_sender import FeishuReportSender, resolve_trade_sender
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 from services.trade_record_card import TradeRecordCardBuilder
 from services.trade_ticket_card import build_ticket_card
 
@@ -37,7 +37,7 @@ MACHINE_STRATEGY_CONFIG = {
 
 
 class DualTrackMachineBriefSender:
-    """Send the 12-hour machine-track plan to the trading-record channel."""
+    """Send the machine-track cycle plan to the trading-record channel."""
 
     def __init__(self, output_root: Path | None = None, market_db: Path | None = None, sender=None, config: dict[str, Any] | None = None) -> None:
         pipeline_config = load_pipeline_config()
@@ -57,8 +57,9 @@ class DualTrackMachineBriefSender:
         market = self._latest_market()
         anchor = _number(cycle_state.get("open_price")) or _number(market.get("close")) or _number(market.get("price"))
         trend_gate_armed = _trend_gate_armed(self.output_root, cycle_state)
+        previous_cycle = self._previous_cycle_summary(ai_plan or {})
         payload = {
-            "schema_version": "dualtrack-machine-brief-v1",
+            "schema_version": "dualtrack-machine-brief-v2",
             "generated_at": now.isoformat(),
             "cycle_id": cycle_id,
             "run_date": cycle_id.split("_", 1)[0],
@@ -69,6 +70,7 @@ class DualTrackMachineBriefSender:
             "status": "decision_error" if (ai_plan or {}).get("degraded") else "ready" if ai_plan else "blocked",
             "reason": (ai_plan or {}).get("planning_error", "") if (ai_plan or {}).get("degraded") else "" if ai_plan else "AI 作战单缺失，机器轨不能定义方向",
             "ai_plan": ai_plan or {},
+            "previous_cycle": previous_cycle,
             "human_plan_present": bool(human_plan),
             "market": market,
             "anchor_price": anchor,
@@ -100,13 +102,15 @@ class DualTrackMachineBriefSender:
             return {"status": "pytest_skipped", "run_date": run_date, "cycle_id": payload["cycle_id"], "sent": 0, "delivered": False}
 
         sender = self.sender if self.sender is not None else resolve_trade_sender()
-        title = f"黄金机器轨作战单｜{_cycle_kind_zh(str(payload['cycle_kind']))}"
+        duration_hours = int((payload.get("window") or {}).get("duration_hours") or 0)
+        title = f"黄金晨间交易卡｜未来 {duration_hours} 小时"
         result = FeishuReportSender(self.output_root, sender=sender).run(
             run_date=run_date,
             kind=BRIEF_KIND,
             title=title,
             message=str(payload["message"]),
             max_chars=2200,
+            card=self._build_morning_card(payload),
         )
         delivered = bool(result.get("delivered"))
         rows = [row for row in rows if row.get("cycle_id") != payload["cycle_id"]]
@@ -151,13 +155,122 @@ class DualTrackMachineBriefSender:
         symbol = str(market_data.get("symbol") or "GOLD")
         timeframe = str(market_data.get("timeframe") or "1m")
         try:
-            store = MarketStore(self.market_db)
+            store = market_data_repository(self.market_db)
             latest = store.load_latest_bar(symbol, timeframe)
             if latest:
                 return latest
             return store.load_latest_quote(symbol)
         except Exception as exc:  # noqa: BLE001 - Feishu brief should explain missing market data, not crash.
             return {"status": "missing", "reason": f"{exc.__class__.__name__}: {exc}"}
+
+    def _previous_cycle_summary(self, plan: dict[str, Any]) -> dict[str, Any]:
+        cycle_id = str(plan.get("previous_review_cycle_id") or "")
+        if not cycle_id:
+            return {"status": "missing", "cycle_id": ""}
+        review = _latest_row(self.output_root / "dualtrack" / "reviews" / f"{cycle_id}_machine.json")
+        if not review or review.get("completed") is not True:
+            return {"status": "missing", "cycle_id": cycle_id}
+        tpsl = review.get("tpsl_review") if isinstance(review.get("tpsl_review"), dict) else {}
+        next_iteration = review.get("next_iteration") if isinstance(review.get("next_iteration"), dict) else {}
+        return {
+            "status": "available",
+            "cycle_id": cycle_id,
+            "direction": str(review.get("decision") or "absent"),
+            "realized_regime": str(review.get("realized_regime") or review.get("realized_direction") or "absent"),
+            "direction_hit": review.get("direction_hit"),
+            "trade_count": int(review.get("recorded_trade_count") or review.get("trade_count") or 0),
+            "fill_count": int(review.get("recorded_fill_count") or review.get("fill_count") or 0),
+            "realized_pnl": _number(review.get("recorded_realized_pnl", review.get("realized_pnl"))),
+            "target_count": int(tpsl.get("target_count") or 0),
+            "stop_count": int(tpsl.get("stop_count") or 0),
+            "summary": str(review.get("summary") or ""),
+            "evidence_status": str((review.get("evidence") or {}).get("status") or "missing"),
+            "next_iteration": {
+                "status": str(next_iteration.get("status") or ""),
+                "change_id": str(next_iteration.get("change_id") or ""),
+                "dimension": str(next_iteration.get("dimension") or ""),
+                "change": str(next_iteration.get("change") or ""),
+            },
+        }
+
+    def _build_morning_card(self, payload: dict[str, Any]) -> dict[str, Any]:
+        plan = payload.get("ai_plan") if isinstance(payload.get("ai_plan"), dict) else {}
+        previous = payload.get("previous_cycle") if isinstance(payload.get("previous_cycle"), dict) else {}
+        market = payload.get("market") if isinstance(payload.get("market"), dict) else {}
+        grid = payload.get("grid") if isinstance(payload.get("grid"), dict) else {}
+        window = payload.get("window") if isinstance(payload.get("window"), dict) else {}
+        direction = str(plan.get("direction") or "absent")
+        duration_hours = int(window.get("duration_hours") or 0)
+        orders = grid.get("orders") if isinstance(grid.get("orders"), list) else []
+        range_payload = plan.get("range") if isinstance(plan.get("range"), dict) else {}
+        review_change = plan.get("review_change") if isinstance(plan.get("review_change"), dict) else {}
+        review_ready = previous.get("status") == "available"
+        adjustment_ready = bool(str(plan.get("review_adjustment") or "").strip())
+        plan_locked = str(plan.get("status") or "") == "locked"
+        chain_ready = payload.get("status") == "ready" and review_ready and adjustment_ready and plan_locked
+        title_date = str(payload.get("run_date") or "")
+
+        previous_result = (
+            f"**方向**　{_direction_zh(previous.get('direction'))} → 实际 {_direction_zh(previous.get('realized_regime'))}\n"
+            f"**结果**　{_signed_usd(previous.get('realized_pnl'))}　·　{previous.get('trade_count', 0)} 笔交易 / {previous.get('fill_count', 0)} 笔成交\n"
+            f"**风控**　止盈 {previous.get('target_count', 0)}　·　止损 {previous.get('stop_count', 0)}　·　方向{_review_hit_zh(previous.get('direction_hit'))}"
+            if review_ready
+            else "**上一周期复盘缺失**\n不展示或推断收益；本周期调整证据链不完整。"
+        )
+        adjustment = str(plan.get("review_adjustment") or "缺少复盘驱动的调整说明")
+        change_line = ""
+        if review_change:
+            change_line = (
+                f"\n**唯一实验变量**　{review_change.get('dimension') or '缺失'}"
+                f"　·　{review_change.get('change_id') or '缺少追溯编号'}"
+            )
+        long_grid = _grid_lines(orders, "long", default_side=direction)
+        short_grid = _grid_lines(orders, "short", default_side=direction)
+        plan_status = "正常" if chain_ready else "需检查"
+        market_provider = str(market.get("provider") or "缺失")
+
+        elements = [
+            _feishu_div(
+                f"**计划链路：{plan_status}**　·　{_direction_zh(direction)}　·　置信度 {plan.get('confidence', '缺失')}/10\n"
+                f"北京时间 {window.get('start_cst', '')[11:16]}-{window.get('end_cst', '')[11:16]}　·　最新价 {_fmt_price(market.get('close', market.get('price')))}"
+            ),
+            _feishu_fields([
+                ("预期区间", f"{_fmt_price(range_payload.get('low'))}-{_fmt_price(range_payload.get('high'))}"),
+                ("周期", f"未来 {duration_hours} 小时"),
+            ]),
+            {"tag": "hr"},
+            _feishu_div(f"**1｜上个周期结果**\n{previous_result}"),
+            {"tag": "hr"},
+            _feishu_div(f"**2｜本周期调整**\n{adjustment}{change_line}"),
+            {"tag": "hr"},
+            _feishu_div(
+                f"**3｜未来 {duration_hours} 小时计划**\n"
+                f"**方向**　{_direction_zh(direction)}\n"
+                f"**做多网格**　{long_grid or '无'}\n"
+                f"**做空网格**　{short_grid or '无'}\n"
+                f"**失效条件**　{_format_invalidation(plan.get('invalidation')) or '缺失'}"
+            ),
+            _feishu_fields([
+                ("最大名义预算", _money(grid.get("total_notional_budget"))),
+                ("行情来源", market_provider),
+            ]),
+            {"tag": "hr"},
+            _feishu_div(
+                f"**4｜状态边界**\n计划链路：**{plan_status}**。生命周期与运行健康由独立审计核验，本卡不提前宣称全系统健康。"
+            ),
+            _feishu_note(
+                f"证据链：{previous.get('cycle_id') or '上一复盘缺失'} → {payload.get('cycle_id')}"
+                f"　·　复盘证据 {previous.get('evidence_status') or 'missing'}"
+            ),
+        ]
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": _brief_template(direction, ready=payload.get("status") == "ready"),
+                "title": {"tag": "plain_text", "content": f"黄金晨间交易卡 · {title_date}"},
+            },
+            "elements": elements,
+        }
 
     def _format_message(self, payload: dict[str, Any]) -> str:
         plan = payload.get("ai_plan") if isinstance(payload.get("ai_plan"), dict) else {}
@@ -179,7 +292,7 @@ class DualTrackMachineBriefSender:
         range_payload = plan.get("range") if isinstance(plan.get("range"), dict) else {}
         orders = grid.get("orders") if isinstance(grid.get("orders"), list) else []
         order_lines = [
-            f"  {index + 1}. 入场 {_fmt_price(order.get('entry'))} -> 止盈 {_fmt_price(order.get('take_profit'))}，权重 {order.get('weight', 1)}，名义 {_money(float(grid.get('total_notional_budget') or 0) * float(order.get('weight', 1)))}"
+            f"  {index + 1}. {_direction_zh(str(order.get('side') or direction))}，入场 {_fmt_price(order.get('entry'))} -> 止盈 {_fmt_price(order.get('take_profit'))}，权重 {order.get('weight', 1)}，名义 {_money(float(grid.get('total_notional_budget') or 0) * float(order.get('weight', 1)))}"
             for index, order in enumerate(orders)
         ]
         lines.extend(
@@ -191,7 +304,7 @@ class DualTrackMachineBriefSender:
                 f"- 判断：{plan.get('rationale') or '缺失'}",
                 "",
                 "机器轨明确网格",
-                *(order_lines or ["  本周期中立，不挂入场单。"]),
+                *(order_lines or ["  计划不可执行：缺少明确网格订单。"]),
                 f"- 机器轨最大名义预算：{_money(grid.get('total_notional_budget'))}。",
                 "",
                 "你需要看什么",
@@ -284,7 +397,7 @@ class DualTrackTradeRecordNotifier:
             title = (
                 "黄金开单 · 自动成交"
                 if str(record.get("event") or "") == "entry"
-                else f"黄金交易记录｜{record['event_label']}｜{MACHINE_STRATEGY_NAME}"
+                else f"黄金平仓 · {_exit_title(str(record.get('event') or ''))}"
             )
             result = FeishuReportSender(self.output_root, sender=sender).run(
                 run_date=run_date,
@@ -292,7 +405,7 @@ class DualTrackTradeRecordNotifier:
                 title=title,
                 message=message,
                 max_chars=2200,
-                card=self._build_entry_feishu_card(record) if str(record.get("event") or "") == "entry" else None,
+                card=self._build_trade_feishu_card(record),
             )
             delivered = bool(result.get("delivered"))
             records = [row for row in records if self._key(row.get("cycle_id", ""), row.get("fill_id", "")) != key]
@@ -631,6 +744,78 @@ class DualTrackTradeRecordNotifier:
         }
         return build_ticket_card(view)
 
+    def _build_trade_feishu_card(self, record: dict[str, Any]) -> dict[str, Any]:
+        if str(record.get("event") or "") == "entry":
+            return self._build_entry_feishu_card(record)
+        return self._build_exit_feishu_card(record)
+
+    def _build_exit_feishu_card(self, record: dict[str, Any]) -> dict[str, Any]:
+        card = record.get("record_card") if isinstance(record.get("record_card"), dict) else {}
+        fill = record.get("fill") if isinstance(record.get("fill"), dict) else {}
+        trade = record.get("trade") if isinstance(record.get("trade"), dict) else {}
+        entry = card.get("entry", {}) if isinstance(card.get("entry"), dict) else {}
+        exit_plan = card.get("exit", {}) if isinstance(card.get("exit"), dict) else {}
+        protection = card.get("protection", {}) if isinstance(card.get("protection"), dict) else {}
+        pnl = card.get("pnl", {}) if isinstance(card.get("pnl"), dict) else {}
+        audit = card.get("audit", {}) if isinstance(card.get("audit"), dict) else {}
+
+        event = str(record.get("event") or "exit")
+        result_label = _exit_title(event)
+        template = {"target": "green", "stop": "red", "flatten": "wathet", "exit": "grey"}.get(event, "grey")
+        side = "多单" if str(card.get("side") or "") == "long" else "空单"
+        layer = _layer_label(fill)
+        rung = int(fill.get("rung") or 0) + 1
+        realized = _number(pnl.get("realized_pnl"))
+        r_multiple = _number(pnl.get("r_multiple"))
+        quantity = _number(card.get("quantity"))
+        notional = _number(fill.get("notional"))
+        total_cost = _number(trade.get("total_cost"))
+        protection_ok = protection.get("status") == "protected"
+        audit_ok = audit.get("status") == "complete"
+        path = _display_path(str(self._fills_path(str(record.get("cycle_id") or "")).resolve()))
+
+        flow_lines = [
+            "**交易闭环**",
+            f"✅ 1 · 原始开仓　—　{side} {_fmt_price(entry.get('price'))}　·　{entry.get('opened_at')}",
+            f"✅ 2 · 出场触发　—　{result_label}　·　成交 {_fmt_price(exit_plan.get('price'))}",
+            f"{'✅' if protection_ok else '⚠️'} 3 · 保护核对　—　TP {_fmt_price(protection.get('take_profit'))}　·　SL {_fmt_price(protection.get('stop_loss'))}",
+            f"{'✅' if realized is not None else '⚠️'} 4 · 盈亏核算　—　净结果 {_signed_usd(realized)}　·　R {_fmt_number(r_multiple)}　·　成本 {_money(total_cost)}",
+            f"{'💰' if (realized or 0) >= 0 else '📉'} **已平仓 · 净结果 {_signed_usd(realized)}**",
+        ]
+        elements = [
+            _feishu_div(
+                f"**GOLD {side}平仓　·　{MACHINE_STRATEGY_NAME}　·　{layer}第 {rung} 层**\n"
+                "机器轨已模拟平仓：未进入 demo/live"
+            ),
+            _feishu_fields([
+                ("账户", f"机器轨账户 {_money(pnl.get('account_equity'))}"),
+                ("执行模式", f"dualtrack_sim / {_order_type_zh(fill.get('order_type'))}"),
+            ]),
+            {"tag": "hr"},
+            _feishu_div("\n".join(flow_lines)),
+            _feishu_fields([
+                ("开仓价", _fmt_price(entry.get("price"))),
+                ("平仓价", _fmt_price(exit_plan.get("price"))),
+                ("止盈", _fmt_price(protection.get("take_profit"))),
+                ("止损", _fmt_price(protection.get("stop_loss"))),
+            ]),
+            _feishu_fields([
+                ("平仓数量", _fmt_number(quantity)),
+                ("名义金额", _money(notional)),
+                ("净结果", _signed_usd(realized)),
+                ("审计", "完整" if audit_ok else "需检查"),
+            ]),
+            _feishu_note(f"证据：{path}　·　平仓时间 {exit_plan.get('closed_at')}　·　追溯编号 {fill.get('fill_id')}"),
+        ]
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": template,
+                "title": {"tag": "plain_text", "content": f"黄金平仓 · {result_label}"},
+            },
+            "elements": elements,
+        }
+
     def _fills_path(self, cycle_id: str) -> Path:
         return self.output_root / "dualtrack" / "fills" / f"{cycle_id}_machine.json"
 
@@ -646,7 +831,7 @@ class DualTrackTradeRecordNotifier:
                 continue
             # Intraday machine simulation marks open inventory to the latest bar
             # with flatten events. Those are not real closing records until the
-            # 12-hour cycle is actually at its final bar.
+            # cycle is actually at its final bar.
             if event == "flatten":
                 try:
                     if parse_utc(fill.get("ts")) < window.end - timedelta(minutes=2):
@@ -699,9 +884,36 @@ def _direction_zh(value: Any) -> str:
     return {
         "long": "只做多",
         "short": "只做空",
+        "neutral": "双向区间",
         "flat": "不主动开仓",
         "absent": "缺少方向",
     }.get(direction, direction or "缺少方向")
+
+
+def _review_hit_zh(value: Any) -> str:
+    if value is True:
+        return "命中"
+    if value is False:
+        return "未命中"
+    return "缺少证据"
+
+
+def _brief_template(direction: str, *, ready: bool) -> str:
+    if not ready:
+        return "orange"
+    return {"long": "green", "short": "red", "neutral": "wathet"}.get(direction, "grey")
+
+
+def _grid_lines(orders: list[dict[str, Any]], side: str, *, default_side: str) -> str:
+    rows = []
+    for order in orders:
+        order_side = str(order.get("side") or default_side)
+        if order_side != side:
+            continue
+        weight = _number(order.get("weight"))
+        weight_label = "缺失" if weight is None else f"{weight * 100:.0f}%"
+        rows.append(f"{_fmt_price(order.get('entry'))} → {_fmt_price(order.get('take_profit'))}（{weight_label}）")
+    return "　/　".join(rows)
 
 
 def _side_zh(value: Any) -> str:
@@ -730,6 +942,33 @@ def _event_reason(event: str) -> str:
         "exit": "主动平仓",
         "entry": "开仓",
     }.get(event, event or "未知")
+
+
+def _exit_title(event: str) -> str:
+    return {
+        "target": "止盈",
+        "stop": "止损",
+        "flatten": "周期结束",
+        "exit": "主动平仓",
+    }.get(event, "平仓")
+
+
+def _feishu_div(content: str) -> dict[str, Any]:
+    return {"tag": "div", "text": {"tag": "lark_md", "content": content}}
+
+
+def _feishu_fields(pairs: list[tuple[str, str]]) -> dict[str, Any]:
+    return {
+        "tag": "div",
+        "fields": [
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**{label}**\n{value}"}}
+            for label, value in pairs
+        ],
+    }
+
+
+def _feishu_note(content: str) -> dict[str, Any]:
+    return {"tag": "note", "elements": [{"tag": "lark_md", "content": content}]}
 
 
 def _entry_reason(fill: dict[str, Any]) -> str:

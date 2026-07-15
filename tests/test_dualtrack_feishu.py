@@ -54,7 +54,83 @@ def test_machine_brief_sends_chinese_plan_to_trade_channel(tmp_path: Path):
     assert "机器轨明确网格" in text
     assert "入场 4198.00 -> 止盈 4210.00" in text
     assert "不读取或继承人工计划" in text
+    assert sender.cards[0]["header"]["template"] == "green"
+    assert sender.cards[0]["header"]["title"]["content"] == "黄金晨间交易卡 · 2026-07-10"
+    assert "上一周期复盘缺失" in str(sender.cards[0])
+    assert "未来 12 小时计划" in str(sender.cards[0])
     assert load_json(output_root / "dualtrack" / "machine_briefs" / f"{cycle_id}.json")[0]["status"] == "ready"
+
+
+def test_machine_brief_card_closes_previous_review_into_dynamic_12h_plan(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    cycle_id = "2026-07-15_DAY"
+    previous_cycle_id = "2026-07-14_NIGHT"
+    write_json(
+        output_root / "dualtrack" / "reviews" / f"{previous_cycle_id}_machine.json",
+        [{
+            "cycle_id": previous_cycle_id,
+            "completed": True,
+            "decision": "short",
+            "realized_regime": "neutral",
+            "direction_hit": False,
+            "recorded_trade_count": 3,
+            "recorded_fill_count": 6,
+            "recorded_realized_pnl": -79.85560588,
+            "tpsl_review": {"target_count": 0, "stop_count": 2},
+            "evidence": {"status": "complete"},
+            "next_iteration": {
+                "status": "proposed",
+                "change_id": f"{previous_cycle_id}:direction:01",
+                "dimension": "direction",
+                "change": "只测试方向/中立判定阈值",
+            },
+        }],
+    )
+    write_json(
+        output_root / "dualtrack" / "plans" / f"{cycle_id}_ai.json",
+        [{
+            "cycle_id": cycle_id,
+            "author": "ai",
+            "direction": "neutral",
+            "range": {"low": 3971.0, "high": 4033.0},
+            "key_levels": [3974.0, 3987.0, 4011.0, 4027.0],
+            "grid_orders": [
+                {"side": "long", "entry": 3987.0, "take_profit": 3999.0, "weight": 0.18},
+                {"side": "short", "entry": 4011.0, "take_profit": 3999.0, "weight": 0.18},
+            ],
+            "invalidation": [
+                {"side": "below", "price": 3971.0, "confirm": "touch"},
+                {"side": "above", "price": 4033.0, "confirm": "touch"},
+            ],
+            "confidence": 5,
+            "status": "locked",
+            "previous_review_cycle_id": previous_cycle_id,
+            "review_adjustment": "保留区间与 TP/SL，只把方向从 short 调整为 neutral。",
+            "review_change": {
+                "change_id": f"{previous_cycle_id}:direction:01",
+                "dimension": "direction",
+            },
+        }],
+    )
+    sender = _FakeSender()
+
+    result = DualTrackMachineBriefSender(output_root=output_root, sender=sender).send(cycle_id, force=True)
+
+    assert result["status"] == "pass"
+    card = sender.cards[0]
+    assert card["header"]["template"] == "wathet"
+    assert card["header"]["title"]["content"] == "黄金晨间交易卡 · 2026-07-15"
+    assert "计划链路：正常" in str(card)
+    assert "上个周期结果" in str(card)
+    assert "-$79.86" in str(card)
+    assert "方向未命中" in str(card)
+    assert "未来 12 小时计划" in str(card)
+    assert "3987.00 → 3999.00（18%）" in str(card)
+    assert "4011.00 → 3999.00（18%）" in str(card)
+    assert f"{previous_cycle_id} → {cycle_id}" in str(card)
+    artifact = load_json(output_root / "dualtrack" / "machine_briefs" / f"{cycle_id}.json")[0]
+    assert artifact["schema_version"] == "dualtrack-machine-brief-v2"
+    assert artifact["previous_cycle"]["status"] == "available"
 
 
 def test_trade_record_notifier_sends_entry_and_exit_once(tmp_path: Path):
@@ -137,7 +213,10 @@ def test_trade_record_notifier_sends_entry_and_exit_once(tmp_path: Path):
     assert sender.cards[0]["header"]["template"] == "green"
     assert sender.cards[0]["header"]["title"]["content"] == "黄金开单 · 自动成交"
     assert "机器轨网格" in str(sender.cards[0])
-    assert sender.cards[1] is None
+    assert sender.cards[1]["header"]["template"] == "green"
+    assert sender.cards[1]["header"]["title"]["content"] == "黄金平仓 · 止盈"
+    assert "交易闭环" in str(sender.cards[1])
+    assert "净结果 +$0.80" in str(sender.cards[1])
     assert "事件：止盈平仓" in sender.sent[1]
     assert "策略：机器轨网格" in sender.sent[1]
     rows = load_json(output_root / "dualtrack_trade_notifications" / "2026-07-10.json")
@@ -181,6 +260,53 @@ def test_trade_record_notifier_baselines_existing_cycle_before_sending_new_fills
     rows = load_json(output_root / "dualtrack_trade_notifications" / "2026-07-10.json")
     assert rows[0]["suppressed"] is True
     assert rows[1]["delivered"] is True
+
+
+def test_stop_exit_uses_red_close_card(tmp_path: Path):
+    output_root = tmp_path / "outputs"
+    cycle_id = "2026-07-10_DAY"
+    fills = [
+        {
+            "fill_id": f"{cycle_id}_grid_0001",
+            "ts": "2026-07-10T01:00:00+00:00",
+            "side": "buy",
+            "price": 100.0,
+            "sl": 98.0,
+            "tp": 101.0,
+            "layer": "grid",
+            "order_type": "limit",
+            "event": "entry",
+            "rung": 0,
+            "notional": 100.0,
+            "cost": 0.1,
+            "track": "machine",
+        },
+        {
+            "fill_id": f"{cycle_id}_grid_0002",
+            "ts": "2026-07-10T01:05:00+00:00",
+            "side": "sell",
+            "price": 98.0,
+            "sl": 98.0,
+            "tp": 101.0,
+            "layer": "grid",
+            "order_type": "stop",
+            "event": "stop",
+            "rung": 0,
+            "notional": 98.0,
+            "cost": 0.1,
+            "matched_entries": [{"trade_id": f"{cycle_id}_grid_0001", "units": 1.0}],
+            "track": "machine",
+        },
+    ]
+    write_json(output_root / "dualtrack" / "fills" / f"{cycle_id}_machine.json", fills)
+    notifier = DualTrackTradeRecordNotifier(output_root=output_root, sender=_FakeSender())
+
+    record = notifier._record_for_fill(cycle_id, fills[1], fills)
+    card = notifier._build_exit_feishu_card(record)
+
+    assert card["header"]["template"] == "red"
+    assert card["header"]["title"]["content"] == "黄金平仓 · 止损"
+    assert "净结果 -$2.20" in str(card)
 
 
 def test_trade_record_notifier_ignores_intraday_flatten_marks(tmp_path: Path):
