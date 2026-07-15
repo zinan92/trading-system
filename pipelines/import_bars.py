@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from services.run_date import utc_run_date
 
@@ -11,12 +11,15 @@ from services.bar_importer import BarCsvImporter
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
+from services.market_data_access import uses_independent_datafeed
 
 
 def _paths() -> tuple[Path, Path]:
     config = load_pipeline_config()
     env_local_db = os.getenv("TRADING_ORCHESTRATOR_MARKET_DB")
     local_db = Path(env_local_db or str(ROOT / config.get("local_market_db", "data/market_data.db")))
+    if uses_independent_datafeed(local_db):
+        raise RuntimeError("Production CSV imports belong in a datafeed adapter, not trading-orchestrator")
     output_root = Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     return local_db, output_root
 

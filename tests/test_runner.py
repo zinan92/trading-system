@@ -33,7 +33,7 @@ def test_runner_once_writes_status(tmp_path: Path, monkeypatch):
     assert status["collector_count"] == 5
     assert status["oanda_feed_status"] == "skipped"
     assert status["oanda_feed_imported_rows"] == 0
-    assert "OANDA_API_TOKEN" in status["oanda_feed_missing_env"]
+    assert "configure_oanda_v20_in_datafeed" in status["oanda_feed_missing_env"]
     assert status["broker_feed_new_files"] == 0
     assert status["broker_receipt_total_count"] == 0
     assert status["data_source_status"] == "fail"

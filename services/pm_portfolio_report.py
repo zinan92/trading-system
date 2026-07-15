@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,6 +12,7 @@ from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_config import base_rung_notional, dualtrack_config
 from services.dualtrack_feishu import MACHINE_STRATEGY_ID, MACHINE_STRATEGY_NAME
 from services.dualtrack_scoring import _trades_from_fills
+from services.market_data_access import market_data_repository
 
 
 PM_REPORT_KINDS = {
@@ -101,64 +101,30 @@ class PMPortfolioReportBuilder:
         return report_path
 
     def _market_move(self) -> MarketMove | None:
-        if not self.market_db.exists():
-            return None
-        with sqlite3.connect(self.market_db) as con:
-            for timeframe in ("5m", "1m"):
-                latest = con.execute(
-                    """
-                    SELECT timestamp, close, provider
-                    FROM bars
-                    WHERE symbol='GOLD' AND timeframe=?
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                    """,
-                    (timeframe,),
-                ).fetchone()
-                if not latest:
-                    continue
-                end_time, end_price, provider = latest
-                cutoff = self._parse_time(end_time) - timedelta(hours=REPORT_WINDOW_HOURS)
-                start = con.execute(
-                    """
-                    SELECT timestamp, close
-                    FROM bars
-                    WHERE symbol='GOLD' AND timeframe=? AND timestamp <= ?
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                    """,
-                    (timeframe, cutoff.isoformat().replace("+00:00", "+00:00")),
-                ).fetchone()
-                if not start:
-                    start = con.execute(
-                        """
-                        SELECT timestamp, close
-                        FROM bars
-                        WHERE symbol='GOLD' AND timeframe=?
-                        ORDER BY timestamp ASC
-                        LIMIT 1
-                        """,
-                        (timeframe,),
-                    ).fetchone()
-                high_low = con.execute(
-                    """
-                    SELECT MAX(high), MIN(low)
-                    FROM bars
-                    WHERE symbol='GOLD' AND timeframe=? AND timestamp >= ? AND timestamp <= ?
-                    """,
-                    (timeframe, start[0], end_time),
-                ).fetchone()
-                high, low = high_low or (None, None)
-                return MarketMove(
-                    timeframe=timeframe,
-                    provider=str(provider),
-                    start_time=str(start[0]),
-                    end_time=str(end_time),
-                    start_price=float(start[1]),
-                    end_price=float(end_price),
-                    high=float(high if high is not None else max(float(start[1]), float(end_price))),
-                    low=float(low if low is not None else min(float(start[1]), float(end_price))),
-                )
+        store = market_data_repository(self.market_db)
+        for timeframe in ("5m", "1m"):
+            latest = store.load_latest_bar("GOLD", timeframe)
+            if not latest:
+                continue
+            end_time = str(latest["timestamp"])
+            end_price = float(latest["close"])
+            cutoff = self._parse_time(end_time) - timedelta(hours=REPORT_WINDOW_HOURS)
+            rows = store.load_bars_between("GOLD", timeframe, cutoff.isoformat(), end_time)
+            if not rows:
+                rows = store.load_bars("GOLD", timeframe, 1)
+            if not rows:
+                continue
+            start = rows[0]
+            return MarketMove(
+                timeframe=timeframe,
+                provider=str(latest.get("provider", "")),
+                start_time=str(start.timestamp),
+                end_time=end_time,
+                start_price=float(start.close),
+                end_price=end_price,
+                high=max(float(row.high) for row in rows),
+                low=min(float(row.low) for row in rows),
+            )
         return None
 
     def _strategy_window(self, strategy_id: str, run_date: str, window_start: datetime) -> dict[str, Any]:

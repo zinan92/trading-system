@@ -10,7 +10,7 @@ from services.alert_notifier import resolve_alert_sender
 from services.data_gap_doctor import DataGapDoctor
 from services.data_source_preflight import DataSourcePreflight
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository, uses_independent_datafeed
 from services.secrets_audit import SecretsAudit
 
 
@@ -23,7 +23,7 @@ class HealthCheck:
 
     def run(self, run_date: str) -> dict:
         checks = [
-            self._market_db_check(),
+            self._market_data_check(),
             self._data_source_check(run_date),
             self._data_quality_check(run_date),
             self._data_gap_check(run_date),
@@ -55,10 +55,10 @@ class HealthCheck:
         write_json(self.output_root / "health" / f"{run_date}.json", [payload])
         return payload
 
-    def _market_db_check(self) -> dict:
-        if not self.market_db.exists():
+    def _market_data_check(self) -> dict:
+        if not uses_independent_datafeed(self.market_db) and not self.market_db.exists():
             return self._check("market_db", "error", f"market db missing: {self.market_db}", {})
-        coverage = MarketStore(self.market_db).coverage()
+        coverage = market_data_repository(self.market_db).coverage()
         gold_rows = sum(item["rows"] for item in coverage if item["symbol"] == "GOLD" and item["timeframe"] == "5m")
         non_seed_rows = sum(
             item["rows"]
@@ -66,8 +66,8 @@ class HealthCheck:
             if item["symbol"] == "GOLD" and item["timeframe"] == "5m" and item["provider"] != "local_synthetic_seed"
         )
         if non_seed_rows < 200:
-            return self._check("market_db", "warn", f"GOLD 5m non-seed rows low: {non_seed_rows}", {"gold_5m_rows": gold_rows, "gold_5m_non_seed_rows": non_seed_rows})
-        return self._check("market_db", "ok", "local market database has GOLD 5m coverage", {"gold_5m_rows": gold_rows, "gold_5m_non_seed_rows": non_seed_rows})
+            return self._check("market_db", "warn", f"GOLD 5m non-seed rows low: {non_seed_rows}", {"backend": "datafeed", "gold_5m_rows": gold_rows, "gold_5m_non_seed_rows": non_seed_rows})
+        return self._check("market_db", "ok", "datafeed has GOLD 5m coverage", {"backend": "datafeed", "gold_5m_rows": gold_rows, "gold_5m_non_seed_rows": non_seed_rows})
 
     def _data_quality_check(self, run_date: str) -> dict:
         data_quality = self._load_mapping(self.output_root / "data_quality" / f"{run_date}.json")

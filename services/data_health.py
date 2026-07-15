@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Iterable
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.market_data_access import market_data_repository, uses_independent_datafeed
 
 
 _TIMEFRAME_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400}
@@ -85,7 +86,7 @@ class DataHealthAuditor:
                 "symbol": self.symbol,
                 "timeframe": self.timeframe,
                 "status": "error",
-                "message": "no bars in local market_data.db",
+                "message": "no bars available from market data port",
                 "summary": {},
                 "issues": [],
                 "providers": [],
@@ -110,7 +111,7 @@ class DataHealthAuditor:
             "checked_at": checked_at,
             "symbol": self.symbol,
             "timeframe": self.timeframe,
-            "db_path": str(self.db_path),
+            "market_data_backend": "datafeed" if uses_independent_datafeed(self.db_path) else "legacy_test_store",
             "status": status,
             "summary": {
                 "total_bars": len(rows),
@@ -143,6 +144,11 @@ class DataHealthAuditor:
         just inject zigzag noise into the chart. Returns the count that
         would be / was removed.
         """
+        if uses_independent_datafeed(self.db_path):
+            count = self._degenerate_count(self._load_rows())["total"]
+            if not dry_run:
+                raise RuntimeError("datafeed owns market-data maintenance; trading is read-only")
+            return {"would_delete": count, "dry_run": True, "owner": "datafeed"}
         with sqlite3.connect(self.db_path) as conn:
             count = conn.execute(
                 """
@@ -173,6 +179,11 @@ class DataHealthAuditor:
         misalignment/conflict warnings. Returns the count that would be / was
         removed.
         """
+        if uses_independent_datafeed(self.db_path):
+            count = sum(1 for row in self._load_rows() if row.provider == "local_synthetic_seed")
+            if not dry_run:
+                raise RuntimeError("datafeed owns market-data maintenance; trading is read-only")
+            return {"would_delete": count, "dry_run": True, "owner": "datafeed"}
         with sqlite3.connect(self.db_path) as conn:
             count = conn.execute(
                 """
@@ -194,6 +205,23 @@ class DataHealthAuditor:
     # ------------------------------------------------------------------ internals
 
     def _load_rows(self) -> list[_BarRow]:
+        if uses_independent_datafeed(self.db_path):
+            bars = market_data_repository(self.db_path).load_bars(
+                self.symbol, self.timeframe, 60_000
+            )
+            return [
+                _BarRow(
+                    timestamp=bar.timestamp,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    provider=bar.provider,
+                    quality_flags=bar.quality_flags,
+                )
+                for bar in bars
+            ]
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """

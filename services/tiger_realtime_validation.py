@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from schemas.market_data import Bar
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
-from services.market_store import MarketStore
-from services.tiger_futures_feed import TigerFuturesFeedClient, is_trading_at
+from services.datafeed_market_client import DatafeedMarketClient
+
+
+def _is_trading_at(timestamp: datetime, sessions: dict) -> bool:
+    for window in sessions.get("trading_windows", []):
+        start = datetime.fromisoformat(str(window["start"]).replace("Z", "+00:00")).astimezone(timezone.utc)
+        end = datetime.fromisoformat(str(window["end"]).replace("Z", "+00:00")).astimezone(timezone.utc)
+        if start <= timestamp.astimezone(timezone.utc) < end:
+            return True
+    return False
 
 
 class TigerRealtimeValidation:
@@ -41,6 +48,17 @@ class TigerRealtimeValidation:
         limit: int = 5,
     ) -> dict:
         now = self._parse_as_of(as_of)
+        if self.quote_client is None:
+            return self._run_datafeed(
+                now=now,
+                trading_date=trading_date,
+                poll_seconds=poll_seconds,
+                max_lag_seconds=max_lag_seconds,
+                limit=limit,
+            )
+        from services.market_store import MarketStore
+        from services.tiger_futures_feed import TigerFuturesFeedClient
+
         client = TigerFuturesFeedClient(MarketStore(Path(":memory:")), self.config, quote_client=self.quote_client)
         preflight = client.preflight()
         base = self._base_payload(client, now, poll_seconds, max_lag_seconds)
@@ -78,6 +96,58 @@ class TigerRealtimeValidation:
             now=now,
             max_lag_seconds=max_lag_seconds,
         )
+
+    def _run_datafeed(
+        self,
+        *,
+        now: datetime,
+        trading_date: str | None,
+        poll_seconds: float,
+        max_lag_seconds: float,
+        limit: int,
+    ) -> dict:
+        pipeline = load_pipeline_config()
+        datafeed = pipeline.get("datafeed", {}) or {}
+        route = (datafeed.get("instrument_routes", {}) or {}).get("MGCmain", {})
+        client = DatafeedMarketClient(base_url=str(datafeed.get("base_url") or "http://127.0.0.1:8100"))
+        source = str(route.get("source") or "tiger_openapi_comex")
+        ticker = str(route.get("ticker") or "MGCmain")
+        asset_class = str(route.get("asset_class") or "commodity")
+        base = {
+            "schema_version": "tiger-realtime-validation-v1",
+            "provider": source,
+            "contract": ticker,
+            "output_symbol": "MGCmain",
+            "timeframe": "1m",
+            "checked_at": now.isoformat(),
+            "poll_seconds": float(poll_seconds),
+            "max_lag_seconds": float(max_lag_seconds),
+            "safety": {"read_only": True, "writes_market_db": False, "opens_quote_client": False, "opens_trade_client": False, "opens_order_clients": False, "submits_orders": False},
+            "market_data_backend": "datafeed",
+        }
+        sessions = []
+        for candidate in self._candidate_trading_dates(now, trading_date):
+            try:
+                receipt = client.sessions(asset_class=asset_class, ticker=ticker, source=source, trading_date=candidate)
+                error = ""
+            except Exception as exc:
+                receipt = {"windows": [], "trading_windows": []}
+                error = f"{type(exc).__name__}: {exc}"
+            sessions.append({"trading_date": candidate, "timezone": receipt.get("timezone", ""), "is_trading_now": _is_trading_at(now, receipt), "trading_windows": receipt.get("trading_windows", []), "window_count": len(receipt.get("windows", [])), "error": error})
+        active = next((item for item in sessions if item["is_trading_now"]), None)
+        if active is None:
+            return {**base, "status": "pending_market_open", "message": "COMEX futures session is not trading at validation time; rerun during the next trading window.", "sessions": sessions, "next_trading_window": self._next_trading_window(sessions, now)}
+        first = self._datafeed_latest(client, asset_class, ticker, source, limit)
+        if poll_seconds > 0:
+            self.sleeper(float(poll_seconds))
+        second = self._datafeed_latest(client, asset_class, ticker, source, limit)
+        return self._market_open_payload(base=base, preflight={"ready": True, "status": "pass", "message": "datafeed adapter ready"}, sessions=sessions, active_session=active, first=first, second=second, now=now, max_lag_seconds=max_lag_seconds)
+
+    @staticmethod
+    def _datafeed_latest(client: DatafeedMarketClient, asset_class: str, ticker: str, source: str, limit: int) -> dict:
+        payload = client.candles(asset_class=asset_class, ticker=ticker, timeframe="1m", limit=limit, source=source, cache_policy="bypass", quality="strict", require_execution_venue=True)
+        rows = payload.get("candles", [])
+        return rows[-1] if rows else {}
 
     def _market_open_payload(
         self,
@@ -129,11 +199,11 @@ class TigerRealtimeValidation:
             "fresh": fresh,
         }
 
-    def _fetch_latest(self, client: TigerFuturesFeedClient, *, limit: int) -> dict:
+    def _fetch_latest(self, client: Any, *, limit: int) -> dict:
         bars = client.fetch(limit=limit)
         return self._bar_payload(bars[-1]) if bars else {}
 
-    def _bar_payload(self, bar: Bar) -> dict:
+    def _bar_payload(self, bar: Any) -> dict:
         return {
             "symbol": bar.symbol,
             "timeframe": bar.timeframe,
@@ -143,7 +213,7 @@ class TigerRealtimeValidation:
             "quality_flags": bar.quality_flags,
         }
 
-    def _session_payloads(self, client: TigerFuturesFeedClient, *, now: datetime, trading_date: str | None) -> list[dict]:
+    def _session_payloads(self, client: Any, *, now: datetime, trading_date: str | None) -> list[dict]:
         results = []
         for candidate in self._candidate_trading_dates(now, trading_date):
             try:
@@ -156,7 +226,7 @@ class TigerRealtimeValidation:
                 {
                     "trading_date": candidate,
                     "timezone": sessions.get("timezone", ""),
-                    "is_trading_now": is_trading_at(now, sessions),
+                    "is_trading_now": _is_trading_at(now, sessions),
                     "trading_windows": sessions.get("trading_windows", []),
                     "window_count": len(sessions.get("windows", [])),
                     "error": error,
@@ -188,7 +258,7 @@ class TigerRealtimeValidation:
 
     def _base_payload(
         self,
-        client: TigerFuturesFeedClient,
+        client: Any,
         now: datetime,
         poll_seconds: float,
         max_lag_seconds: float,

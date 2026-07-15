@@ -5,7 +5,7 @@ from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config, load_strategy_config
 from services.journal_store import load_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 from services.paper_executor import PaperExecutor
 from services.paper_equity_curve import PaperEquityCurve
 from services.paper_exit_decisions import PaperExitDecisionQueue
@@ -708,6 +708,4 @@ class ReportBuilder:
     def _market_coverage(self) -> list[dict]:
         pipeline_config = load_pipeline_config()
         db_path = Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / pipeline_config.get("local_market_db", "data/market_data.db"))))
-        if not db_path.exists():
-            return []
-        return MarketStore(db_path).coverage()
+        return market_data_repository(db_path).coverage()

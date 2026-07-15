@@ -6,6 +6,7 @@ from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
+from services.market_data_access import market_data_repository, uses_independent_datafeed
 
 
 class DataIntegrityCheck:
@@ -32,7 +33,7 @@ class DataIntegrityCheck:
             },
             "checks": checks,
             "source_artifacts": {
-                "market_db": str(self.market_db),
+                "market_data_port": "datafeed" if uses_independent_datafeed(self.market_db) else "legacy_test_store",
                 "raw_gold": str(self.output_root / "raw_snapshots" / run_date / "GOLD_5m.json"),
                 "raw_quotes": str(self.output_root / "raw_snapshots" / run_date / "quote_snapshots.json"),
                 "clean_gold": str(self.output_root / "clean_bars" / run_date / "GOLD_5m.json"),
@@ -47,6 +48,23 @@ class DataIntegrityCheck:
         return payload
 
     def _sqlite_check(self) -> dict:
+        if uses_independent_datafeed(self.market_db):
+            repository = market_data_repository(self.market_db)
+            health = repository.health()
+            storage = health.get("storage", {})
+            coverage = repository.coverage()
+            gold_5m = sum(
+                int(row.get("rows") or 0)
+                for row in coverage
+                if row.get("symbol") == "GOLD" and row.get("timeframe") == "5m"
+            )
+            status = "pass" if storage.get("status") == "ok" and gold_5m > 0 else "fail"
+            return self._check(
+                "datafeed_storage",
+                status,
+                f"datafeed integrity={storage.get('integrity')}; GOLD 5m rows={gold_5m}",
+                {**storage, "gold_5m_rows": gold_5m},
+            )
         if not self.market_db.exists():
             return self._check("sqlite_market_db", "fail", "market_data.db is missing", {"path": str(self.market_db)})
         try:
@@ -88,10 +106,15 @@ class DataIntegrityCheck:
             return self._check("daily_snapshot", "fail", "daily snapshot receipt is missing", {})
         snapshot_path = Path(str(snapshot.get("snapshot_path", "")))
         included = snapshot.get("included_files", [])
+        independent = uses_independent_datafeed(self.market_db)
         has_db = any(item.get("arcname") == "data/market_data.db" for item in included)
-        if snapshot.get("status") != "pass" or not snapshot_path.exists() or not has_db:
+        storage_receipt_ok = independent and bool(
+            market_data_repository(self.market_db).health().get("storage", {}).get("status") == "ok"
+        )
+        if snapshot.get("status") != "pass" or not snapshot_path.exists() or not (has_db or storage_receipt_ok):
             return self._check("daily_snapshot", "fail", "snapshot package is not restorable enough", {"snapshot": snapshot, "has_market_db": has_db})
-        return self._check("daily_snapshot", "pass", "snapshot package exists and includes market_data.db", {"snapshot_path": str(snapshot_path), "sha256": snapshot.get("snapshot_sha256"), "included_file_count": snapshot.get("included_file_count")})
+        summary = "snapshot package exists; datafeed storage has an owner integrity receipt" if independent else "snapshot package exists and includes market_data.db"
+        return self._check("daily_snapshot", "pass", summary, {"snapshot_path": str(snapshot_path), "sha256": snapshot.get("snapshot_sha256"), "included_file_count": snapshot.get("included_file_count"), "datafeed_storage_receipt": storage_receipt_ok})
 
     def _latest(self, path: Path) -> dict:
         rows = load_json(path)

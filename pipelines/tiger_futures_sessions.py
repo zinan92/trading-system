@@ -4,7 +4,27 @@ import argparse
 import json
 
 from services.run_date import utc_run_date
-from services.tiger_futures_feed import run_tiger_futures_sessions
+from services.config_loader import ROOT, load_pipeline_config
+from services.datafeed_market_client import DatafeedMarketClient
+from services.journal_store import write_json
+
+
+def run_tiger_futures_sessions(run_date: str, trading_date: str | None = None, config: dict | None = None) -> dict:
+    pipeline = load_pipeline_config()
+    datafeed = pipeline.get("datafeed", {}) or {}
+    route = (datafeed.get("instrument_routes", {}) or {}).get("MGCmain", {})
+    client = DatafeedMarketClient(base_url=str(datafeed.get("base_url") or "http://127.0.0.1:8100"))
+    result = client.sessions(
+        asset_class=str(route.get("asset_class") or "commodity"),
+        ticker=str(route.get("ticker") or "MGCmain"),
+        source=str(route.get("source") or "tiger_openapi_comex"),
+        trading_date=trading_date or run_date,
+    )
+    result["run_date"] = run_date
+    output_root = ROOT / str(pipeline.get("output_root", "outputs"))
+    write_json(output_root / "tiger_futures_sessions" / "current.json", [result])
+    write_json(output_root / "tiger_futures_sessions" / f"{run_date}.json", [result])
+    return result
 
 
 def main() -> None:

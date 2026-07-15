@@ -12,6 +12,7 @@ from services.config_loader import ROOT, load_assets, load_pipeline_config
 from services.broker_feed_bridge import BrokerFeedBridge
 from services.journal_store import load_json, write_json
 from services.kline_client import KlineClient
+from services.market_data_access import uses_independent_datafeed
 
 # Treat a 5m bar as fresh while it is at most one bar plus a small grace
 # window old. Anything beyond that is "stale" — surfacing this in the
@@ -53,7 +54,8 @@ def collect_once(run_date: str | None = None) -> list[dict]:
     run_date = run_date or utc_run_date()
     config = load_pipeline_config()
     local_db_path, output_root = _paths(config)
-    BrokerFeedBridge(output_root=output_root, market_db=local_db_path).import_pending(run_date)
+    if not uses_independent_datafeed(local_db_path):
+        BrokerFeedBridge(output_root=output_root, market_db=local_db_path).import_pending(run_date)
     kline = KlineClient(
         base_url=config["kline_base_url"],
         fallback_to_mock=bool(config.get("fallback_to_mock", True)),
@@ -82,7 +84,7 @@ def collect_once(run_date: str | None = None) -> list[dict]:
                     "provider": display["provider"],
                     "quality_flags": display.get("quality_flags", []),
                     "record_type": display.get("record_type", "bar"),
-                    "local_db": str(local_db_path) if local_db_path else "",
+                    "market_data_backend": "datafeed" if uses_independent_datafeed(local_db_path) else "legacy_test_store",
                     "stored_rows_seen": len(bars),
                     "fetch_status": fetch_status,
                     "bar_age_seconds": bar_age_seconds,

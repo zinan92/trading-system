@@ -8,7 +8,7 @@ from pathlib import Path
 from services.config_loader import ROOT, load_pipeline_config
 from services.daily_snapshot import DailySnapshot
 from services.journal_store import write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository, uses_independent_datafeed
 
 
 class DataArchiveManifest:
@@ -20,14 +20,16 @@ class DataArchiveManifest:
     def run(self, run_date: str) -> dict:
         files = [self._file_record(path) for path in self._expected_paths(run_date)]
         missing = [item for item in files if not item["exists"]]
-        coverage = MarketStore(self.market_db).coverage() if self.market_db.exists() else []
+        coverage = market_data_repository(self.market_db).coverage()
         gold_5m = [item for item in coverage if item["symbol"] == "GOLD" and item["timeframe"] == "5m"]
-        snapshot = DailySnapshot(self.output_root, self.market_db).build(run_date, files)
+        independent = uses_independent_datafeed(self.market_db)
+        snapshot = DailySnapshot(self.output_root, None if independent else self.market_db).build(run_date, files)
         payload = {
             "run_date": run_date,
             "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-            "status": "pass" if not missing and self.market_db.exists() and gold_5m else "warn",
-            "market_db": self._file_record(self.market_db),
+            "status": "pass" if not missing and gold_5m else "warn",
+            "market_data": {"backend": "datafeed" if independent else "legacy_test_store", "available": bool(coverage)},
+            "market_db": self._file_record(self.market_db) if not independent else {"exists": False, "deprecated": True},
             "market_coverage": coverage,
             "gold_5m_rows": sum(int(item["rows"]) for item in gold_5m),
             "gold_5m_latest_timestamp": max((str(item.get("last_timestamp", "")) for item in gold_5m), default=""),
@@ -108,7 +110,7 @@ class DataArchiveManifest:
             f"# Data Archive Manifest - {run_date}",
             "",
             f"- Status: {payload['status']}",
-            f"- Market DB: {payload['market_db']['path']}",
+            f"- Market data: {payload['market_data']['backend']}",
             f"- GOLD 5m rows: {payload['gold_5m_rows']}",
             f"- GOLD latest timestamp: {payload['gold_5m_latest_timestamp']}",
             f"- Files: {payload['present_file_count']} / {payload['file_count']}",

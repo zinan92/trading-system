@@ -8,7 +8,7 @@ from pathlib import Path
 from services.config_loader import ROOT, load_pipeline_config
 from services.lab_registry import LabRegistry
 from services.lab_tiger_contract_grid import TigerContractGridConfig, run_tiger_contract_grid
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 
 
 def main() -> None:
@@ -21,7 +21,7 @@ def main() -> None:
     config = load_pipeline_config()
     output_root = Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
-    bars = MarketStore(market_db).load_bars(args.symbol, args.timeframe, 2_000_000)
+    bars = market_data_repository(market_db).load_bars(args.symbol, args.timeframe, 60_000)
     report = run_tiger_contract_grid(
         output_root,
         LabRegistry(output_root),

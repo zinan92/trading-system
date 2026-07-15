@@ -12,8 +12,8 @@ from pathlib import Path
 
 from schemas.asset import Asset
 from services.config_loader import load_pipeline_config
+from services.market_data_access import market_data_repository, uses_independent_datafeed
 from schemas.market_data import Bar
-from services.market_store import MarketStore
 from services.yahoo_chart_client import YahooChartClient
 
 
@@ -33,7 +33,8 @@ class KlineClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.fallback_to_mock = fallback_to_mock
-        self.store = MarketStore(local_db_path) if local_db_path else None
+        self.store = market_data_repository(local_db_path) if local_db_path else None
+        self.independent_datafeed = uses_independent_datafeed(local_db_path)
         self.allow_synthetic_seed = allow_synthetic_seed
         self.allow_public_snapshot_bar_for_paper = allow_public_snapshot_bar_for_paper
         self.gold_backfill = gold_backfill or {}
@@ -44,6 +45,8 @@ class KlineClient:
 
     def fetch(self, asset: Asset, timeframe: str = "1d", limit: int = 30) -> list[Candle]:
         try:
+            if self.independent_datafeed and self.store:
+                return self.store.load_bars(asset.symbol, timeframe, limit)
             if asset.symbol == "GOLD" and timeframe == "5m" and self.store:
                 return self._fetch_local_gold_5m(asset, limit)
             # Non-5m GOLD (e.g. the 1m series the chan strategy consumes) is a

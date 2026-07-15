@@ -150,6 +150,7 @@ def test_schedule_manager_generates_full_launch_agent_artifacts(tmp_path: Path):
     assert dualtrack_live_tick["RunAtLoad"] is True
     assert dualtrack_live_tick["ProgramArguments"] == ["python3", "-m", "pipelines.dualtrack_cycle_runner", "--event", "live-tick"]
     assert dualtrack_live_tick["EnvironmentVariables"]["TRADING_ORCHESTRATOR_MARKET_DB"].endswith("data/market_data.db")
+    assert "/opt/homebrew/bin" in dualtrack_live_tick["EnvironmentVariables"]["PATH"]
 
 
 def test_schedule_manager_generates_dualtrack_focus_profile_and_removes_stale_generated_plists(tmp_path: Path):

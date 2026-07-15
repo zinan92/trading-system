@@ -6,7 +6,7 @@ from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config, load_strategy_config
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 from services.trade_record_card import TradeRecordCardBuilder
 
 
@@ -220,10 +220,8 @@ class TradeRecordAcceptanceAudit:
         direct = self._number(exit_decision.get("latest_price"))
         if direct is not None:
             return direct
-        if not self.market_db.exists():
-            return None
         symbol = str(trade.get("symbol") or "GOLD")
-        store = MarketStore(self.market_db)
+        store = market_data_repository(self.market_db)
         latest = store.load_latest_bar(symbol, "1m") or store.load_latest_bar(symbol, "5m")
         if not latest and symbol != "GOLD":
             latest = store.load_latest_bar("GOLD", "1m") or store.load_latest_bar("GOLD", "5m")

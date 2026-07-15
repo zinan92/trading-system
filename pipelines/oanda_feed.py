@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date
 from services.run_date import utc_run_date
 
-from services.oanda_feed_client import run_oanda_feed_import
+from services.datafeed_source_jobs import run_oanda_feed_import
 
 
 def main() -> None:

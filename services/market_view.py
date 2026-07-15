@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterable
 
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 
 
 OBSIDIAN_DAILY_TRADE_ANALYSIS_DIR = Path("003_park原始输出") / "每日交易分析"
@@ -228,11 +228,8 @@ def infer_market_view_reference_price(
     generated_at = str(market_view.get("generated_at") or "")
     if not generated_at or not market_db:
         return None
-    db_path = Path(market_db)
-    if not db_path.exists():
-        return None
     try:
-        store = MarketStore(db_path)
+        store = market_data_repository(Path(market_db))
         for timeframe in ("1m", "5m"):
             row = store.load_bar_at_or_before(symbol, timeframe, generated_at)
             value = _safe_float(row.get("close") if row else None)

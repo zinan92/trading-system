@@ -7,7 +7,7 @@ from typing import Iterable
 
 from services.config_loader import ROOT, load_pipeline_config, load_risk_rules, load_strategy_config
 from services.journal_store import load_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 from services.market_view import MarketViewStore, infer_market_view_reference_price, market_view_target_expiry_bounds
 from services.trade_record_card import TradeRecordCardBuilder
 from schemas.market_data import Bar
@@ -230,7 +230,7 @@ class ReplayState:
         limit_value = limit or self.DEFAULT_LIMITS.get(timeframe, 240)
         seconds = self._timeframe_seconds(timeframe)
         start = cursor_dt - timedelta(seconds=seconds * (limit_value + 4))
-        rows = MarketStore(self.market_db).load_bars_between(
+        rows = market_data_repository(self.market_db).load_bars_between(
             symbol,
             timeframe,
             start.isoformat(),
@@ -251,7 +251,7 @@ class ReplayState:
         seconds = self._timeframe_seconds(target_timeframe)
         source_seconds = self._timeframe_seconds(source_timeframe)
         start = cursor_dt - timedelta(seconds=seconds * (limit + 4) + source_seconds * 4)
-        return MarketStore(self.market_db).load_bars_between(
+        return market_data_repository(self.market_db).load_bars_between(
             symbol,
             source_timeframe,
             start.isoformat(),
@@ -271,7 +271,7 @@ class ReplayState:
         seconds = self._timeframe_seconds(target_timeframe)
         source_seconds = self._timeframe_seconds(source_timeframe)
         start = cursor_dt - timedelta(seconds=seconds * (limit + 4) + source_seconds * 4)
-        rows = MarketStore(self.market_db).load_aggregated_bars_between(
+        rows = market_data_repository(self.market_db).load_aggregated_bars_between(
             symbol,
             source_timeframe,
             target_timeframe,
@@ -407,7 +407,7 @@ class ReplayState:
         end = datetime.combine(date.fromisoformat(run_date), time.max, tzinfo=timezone.utc).replace(microsecond=0)
         start = end - timedelta(days=1)
         if self.market_db.exists():
-            store = MarketStore(self.market_db)
+            store = market_data_repository(self.market_db)
             rows = store.load_bars_between(symbol, "1m", start.isoformat(), end.isoformat())
             if rows:
                 last = self._parse_ts(rows[-1].timestamp)

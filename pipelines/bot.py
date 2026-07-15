@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
 from pathlib import Path
 from services.run_date import utc_run_date
 
-from services.binance_futures_feed import run_binance_usdm_feed_import
+from services.market_data_refresh import refresh_market_data
 from services.broker_adapter import broker_preflight
 from services.broker_feed_bridge import BrokerFeedBridge
 from services.broker_receipts import BrokerReceiptImporter
@@ -15,7 +14,7 @@ from services.decision_trace import DecisionTrace
 from services.data_source_lineage import DataSourceLineage
 from services.data_source_preflight import DataSourcePreflight
 from services.live_submission_safety import LiveSubmissionSafetySmoke
-from services.oanda_feed_client import run_oanda_feed_import
+from services.datafeed_source_jobs import run_oanda_feed_import
 from pipelines.collect import collect_once
 from pipelines.daily import run_daily_pipeline
 from services.journal_store import JournalStore, load_json
@@ -25,7 +24,16 @@ from services.paper_auto_approval_gate import PaperAutoApprovalGate
 from services.pending_auto_resolver import resolve_pending_cycle, sweep_stale_pending
 from services.reporting import ReportBuilder
 from services.risk_monitor import RiskMonitor
-from services.strategy_guardrails import StrategyGuardrails
+from services.strategy_guardrails import StrategyGuardrails  # noqa: F401 - compatibility injection seam
+
+
+def run_binance_usdm_feed_import(run_date: str) -> dict:
+    return refresh_market_data(
+        run_date=run_date,
+        symbol="GOLD",
+        timeframe="5m",
+        output_kind="binance_usdm_feed",
+    )
 
 
 def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:

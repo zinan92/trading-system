@@ -166,12 +166,14 @@ class ScheduleManager:
 
     def _dualtrack_live_tick_job(self, log_dir: Path) -> dict:
         label = "com.wendy.trading-orchestrator.dualtrack-live-tick"
-        return self._base_job(
+        job = self._base_job(
             label,
             [self.python, "-m", "pipelines.dualtrack_cycle_runner", "--event", "live-tick"],
             log_dir,
             extra={"StartInterval": 60, "RunAtLoad": True},
         )
+        job["EnvironmentVariables"]["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        return job
 
     def _dashboard_job(self, log_dir: Path, port: int) -> dict:
         label = "com.wendy.trading-orchestrator.dashboard"

@@ -4,6 +4,7 @@ import argparse
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import median
 from typing import Any, Sequence
 
 from schemas.market_data import Bar
@@ -22,8 +23,10 @@ from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
+from services.strategy_control_plane import StrategyControlPlane
 from services.dualtrack_tiger_human_sync import DualTrackTigerHumanSync
 from services.journal_store import load_json, write_json
+from services.datafeed_market_repository import DatafeedMarketRepository
 from services.market_store import MarketStore
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
 
@@ -57,7 +60,13 @@ class DualTrackCycleRunner:
         self.machine = DualTrackMachineRunner(self.output_root, config=self.config)
         self.machine_planner = DualTrackMachinePlanner(self.output_root, config=self.config)
         self.scorer = DualTrackScorer(self.output_root, config=self.config)
-        self.market = MarketStore(self.market_db)
+        # Explicit market_db remains a test/replay compatibility seam. Normal
+        # production construction consumes the independent datafeed only.
+        self.market = (
+            MarketStore(self.market_db)
+            if market_db is not None
+            else DatafeedMarketRepository(config=pipeline_config)
+        )
 
     def pre_cycle(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         bars = self._cycle_bars(cycle_id, as_of=as_of)
@@ -84,6 +93,7 @@ class DualTrackCycleRunner:
             cycle_id,
             bars=bars,
             prev_cycle_range=prev_range,
+            volatility_context=self.planning_volatility_context(cycle_id),
             as_of=as_of or cycle_window_from_id(cycle_id).start,
         )
         trend_gate_armed = self._freeze_trend_gate(cycle_id, as_of=as_of or cycle_window_from_id(cycle_id).start)
@@ -100,6 +110,10 @@ class DualTrackCycleRunner:
 
     def intraday_tick(self, cycle_id: str | None = None, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         window = cycle_window(as_of) if cycle_id is None else cycle_window_from_id(cycle_id)
+        production_control = StrategyControlPlane(self.output_root)
+        if production_control.runtime_configured() and production_control.runtime_state(window.cycle_id)["desired_state"] != "running":
+            self.store.audit(window.cycle_id, "cycle_runner_intraday_skipped", {"reason": "production_strategy_stopped"})
+            return {"event": "intraday", "cycle_id": window.cycle_id, "status": "skipped", "reason": "production_strategy_stopped"}
         session_status = self._market_session_status(as_of)
         if self._market_session_enabled() and not session_status["is_open"]:
             self.store.audit(window.cycle_id, "cycle_runner_intraday_skipped", {"reason": "market_closed", "market_session": session_status})
@@ -139,10 +153,19 @@ class DualTrackCycleRunner:
                 "reason": "intraday_tick_observed",
             },
         )
+        reassessment = self._advance_range_reassessment(
+            window.cycle_id,
+            bars,
+            state=state,
+            prev_range=prev_range,
+            as_of=as_of,
+        )
+        if reassessment is not None:
+            state = self._attach_range_reassessment(window.cycle_id, state, reassessment)
         self._write_runner_state(
             window.cycle_id,
             "intraday",
-            {"bar_count": len(bars), "prev_range": prev_range},
+            {"bar_count": len(bars), "prev_range": prev_range, "range_reassessment": reassessment or {}},
             observed_at=as_of,
         )
         trade_notifications = self._notify_machine_trade_records(window.cycle_id)
@@ -152,8 +175,229 @@ class DualTrackCycleRunner:
             "status": "ran",
             "bar_count": len(bars),
             "state": state,
+            "range_reassessment": reassessment,
             "trade_notifications": trade_notifications,
         }
+
+    def _advance_range_reassessment(
+        self,
+        cycle_id: str,
+        bars: Sequence[Bar],
+        *,
+        state: dict[str, Any],
+        prev_range: float,
+        as_of: str | datetime | None,
+    ) -> dict[str, Any] | None:
+        rules = self._range_reassessment_config()
+        if not rules["enabled"]:
+            return None
+        plan = self.store.machine_plan(cycle_id)
+        if not plan or plan.get("degraded"):
+            return None
+        now = parse_utc(as_of)
+        latest = self._latest_range_reassessment(cycle_id)
+        plan_locked_at = str(plan.get("locked_at") or "")
+        same_plan_pending = bool(
+            latest
+            and latest.get("plan_locked_at") == plan_locked_at
+            and latest.get("status") != "replanned"
+        )
+        trigger = _confirmed_range_breach(plan, bars, confirm_closes=rules["confirm_closes"])
+        if not trigger and same_plan_pending and isinstance(latest.get("trigger"), dict):
+            trigger = dict(latest["trigger"])
+        if not trigger:
+            touch = _first_range_touch(plan, bars)
+            if not touch:
+                return latest if latest and latest.get("status") == "replanned" else None
+            return self._record_range_reassessment(cycle_id, {
+                "status": "awaiting_confirmation",
+                "plan_locked_at": plan_locked_at,
+                "previous_range": dict(plan.get("range") or {}),
+                "touch": touch,
+                "confirmation_rule": {"timeframe": "1m", "consecutive_closes": rules["confirm_closes"]},
+                "entry_mode": "paused",
+            }, now=now)
+
+        if same_plan_pending and latest.get("status") in {"max_replans_reached", "window_too_short"}:
+            return latest
+        if same_plan_pending and latest.get("status") == "failed":
+            failed_at = parse_utc(latest.get("recorded_at"))
+            retry_at = parse_utc(latest.get("retry_at")) if latest.get("retry_at") else (
+                failed_at + timedelta(minutes=rules["failure_retry_minutes"])
+            )
+            if now < retry_at:
+                return latest
+        if same_plan_pending and latest.get("status") == "cooldown":
+            retry_at = parse_utc(latest.get("retry_at")) if latest.get("retry_at") else None
+            if retry_at and now < retry_at:
+                return latest
+
+        open_positions = _open_machine_positions(
+            load_json(self.output_root / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+        )
+        if open_positions:
+            return self._record_range_reassessment(cycle_id, {
+                "status": "waiting_for_flat",
+                "plan_locked_at": plan_locked_at,
+                "previous_range": dict(plan.get("range") or {}),
+                "trigger": trigger,
+                "open_position_ids": [str(row.get("position_id") or row.get("trade_id") or "") for row in open_positions],
+                "entry_mode": "exit_only",
+            }, now=now)
+
+        revision_rows = load_json(self.output_root / "dualtrack" / "plan_revisions" / f"{cycle_id}_ai.json")
+        range_revisions = [row for row in revision_rows if str(row.get("reason") or "").startswith("confirmed_range_breach_")]
+        if len(range_revisions) >= rules["max_replans_per_cycle"]:
+            return self._record_range_reassessment(cycle_id, {
+                "status": "max_replans_reached",
+                "plan_locked_at": plan_locked_at,
+                "previous_range": dict(plan.get("range") or {}),
+                "trigger": trigger,
+                "revision_count": len(range_revisions),
+                "entry_mode": "paused",
+            }, now=now)
+
+        if range_revisions:
+            last_revision_at = parse_utc(range_revisions[-1]["revised_at"])
+            retry_at = last_revision_at + timedelta(minutes=rules["cooldown_minutes"])
+            if now < retry_at:
+                return self._record_range_reassessment(cycle_id, {
+                    "status": "cooldown",
+                    "plan_locked_at": plan_locked_at,
+                    "previous_range": dict(plan.get("range") or {}),
+                    "trigger": trigger,
+                    "retry_at": retry_at.isoformat(),
+                    "entry_mode": "exit_only",
+                }, now=now)
+
+        window = cycle_window_from_id(cycle_id)
+        remaining_minutes = (window.end - now).total_seconds() / 60.0
+        if remaining_minutes < rules["minimum_remaining_minutes"]:
+            return self._record_range_reassessment(cycle_id, {
+                "status": "window_too_short",
+                "plan_locked_at": plan_locked_at,
+                "previous_range": dict(plan.get("range") or {}),
+                "trigger": trigger,
+                "remaining_minutes": round(remaining_minutes, 2),
+                "entry_mode": "paused",
+            }, now=now)
+
+        replan_context = {
+            "status": "confirmed",
+            "trigger": trigger,
+            "previous_plan_locked_at": plan_locked_at,
+            "previous_range": dict(plan.get("range") or {}),
+            "detected_at": now.isoformat(),
+            "confirmation_rule": {"timeframe": "1m", "consecutive_closes": rules["confirm_closes"]},
+        }
+        revision_reason = f"confirmed_range_breach_{trigger['side']}"
+        execution_start = max(now, parse_utc(bars[-1].timestamp) + timedelta(minutes=1))
+        revised = self.machine_planner.ensure_plan(
+            cycle_id,
+            bars=bars,
+            prev_cycle_range=prev_range,
+            volatility_context=self.planning_volatility_context(cycle_id),
+            as_of=now,
+            force=True,
+            execution_start=execution_start,
+            revision_reason=revision_reason,
+            replan_context=replan_context,
+        )
+        success = bool(
+            revised.get("locked_at")
+            and revised.get("locked_at") != plan_locked_at
+            and revised.get("revision_reason") == revision_reason
+        )
+        if not success:
+            planning_rows = load_json(self.output_root / "dualtrack" / "planning" / f"{cycle_id}_machine.json")
+            planning_error = str((planning_rows[-1] if planning_rows else {}).get("planning_error") or "range_reassessment_failed")
+            return self._record_range_reassessment(cycle_id, {
+                "status": "failed",
+                "plan_locked_at": plan_locked_at,
+                "previous_range": dict(plan.get("range") or {}),
+                "trigger": trigger,
+                "planning_error": planning_error,
+                "retry_at": (now + timedelta(minutes=rules["failure_retry_minutes"])).isoformat(),
+                "entry_mode": "paused",
+            }, now=now)
+        return self._record_range_reassessment(cycle_id, {
+            "status": "replanned",
+            "plan_locked_at": plan_locked_at,
+            "previous_range": dict(plan.get("range") or {}),
+            "trigger": trigger,
+            "replacement_plan": {
+                "locked_at": revised.get("locked_at"),
+                "execution_start": revised.get("execution_start"),
+                "direction": revised.get("direction"),
+                "range": dict(revised.get("range") or {}),
+                "grid_order_count": len(revised.get("grid_orders") or []),
+            },
+            "entry_mode": "new_plan",
+        }, now=now)
+
+    def _range_reassessment_config(self) -> dict[str, Any]:
+        planner = self.config.get("machine_planner") if isinstance(self.config.get("machine_planner"), dict) else {}
+        raw = planner.get("range_reassessment") if isinstance(planner.get("range_reassessment"), dict) else {}
+        return {
+            "enabled": bool(raw.get("enabled", True)),
+            "confirm_closes": max(2, int(raw.get("confirm_closes", 3))),
+            "cooldown_minutes": max(0, int(raw.get("cooldown_minutes", 60))),
+            "failure_retry_minutes": max(1, int(raw.get("failure_retry_minutes", 5))),
+            "max_replans_per_cycle": max(1, int(raw.get("max_replans_per_cycle", 2))),
+            "minimum_remaining_minutes": max(0, int(raw.get("minimum_remaining_minutes", 30))),
+        }
+
+    def _latest_range_reassessment(self, cycle_id: str) -> dict[str, Any] | None:
+        rows = load_json(self.output_root / "dualtrack" / "reassessment" / f"{cycle_id}.json")
+        return rows[-1] if rows else None
+
+    def _record_range_reassessment(
+        self,
+        cycle_id: str,
+        payload: dict[str, Any],
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        path = self.output_root / "dualtrack" / "reassessment" / f"{cycle_id}.json"
+        rows = load_json(path)
+        row = {
+            "schema_version": "dualtrack-range-reassessment-v1",
+            "cycle_id": cycle_id,
+            "recorded_at": now.isoformat(),
+            **payload,
+        }
+        latest = rows[-1] if rows else {}
+        signature = lambda item: (
+            item.get("status"),
+            item.get("plan_locked_at"),
+            (item.get("trigger") or {}).get("confirmed_at"),
+            (item.get("touch") or {}).get("touched_at"),
+            item.get("retry_at"),
+            ((item.get("replacement_plan") or {}).get("locked_at")),
+        )
+        if signature(latest) == signature(row):
+            return latest
+        rows.append(row)
+        write_json(path, rows)
+        self.store.audit(cycle_id, f"machine_range_reassessment_{row['status']}", row)
+        return row
+
+    def _attach_range_reassessment(
+        self,
+        cycle_id: str,
+        state: dict[str, Any],
+        reassessment: dict[str, Any],
+    ) -> dict[str, Any]:
+        updated = dict(state)
+        status = str(reassessment.get("status") or "")
+        layers = [item for item in updated.get("layers") or [] if not str(item).startswith("range_reassessment:")]
+        layers.append(f"range_reassessment:{status}")
+        updated["layers"] = layers
+        updated["range_reassessment"] = dict(reassessment)
+        if status in {"failed", "max_replans_reached", "window_too_short"}:
+            updated["machine_stood_down"] = True
+        write_json(self.output_root / "dualtrack" / "cycles" / f"{cycle_id}.json", [updated])
+        return updated
 
     def close_cycle(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         existing = load_json(self.output_root / "dualtrack" / "attribution" / f"{cycle_id}.json")
@@ -314,13 +558,20 @@ class DualTrackCycleRunner:
     def live_tick(self, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         now = parse_utc(as_of)
         window = cycle_window(now)
+        lifecycle = self._lifecycle_results(now)
+        protective_sweep = self._sweep_active_human_protective_exits(window.cycle_id, now=now)
+        sync = self.sync_obsidian_human_plans(as_of=now, include_next=False)
+        intraday = self.intraday_tick(as_of=now)
+        ledger = self.scorer.rebuild_ledgers()
         return {
             "event": "live_tick",
             "as_of": now.isoformat(),
-            "lifecycle": self._lifecycle_results(now),
-            "protective_sweep": self._sweep_human_protective_exits(window.cycle_id, now=now),
-            "sync": self.sync_obsidian_human_plans(as_of=now, include_next=False),
-            "intraday": self.intraday_tick(as_of=now),
+            "lifecycle": lifecycle,
+            "protective_sweep": protective_sweep,
+            "sync": sync,
+            "intraday": intraday,
+            "ledger_refreshed": True,
+            "ledger_daily_count": len(ledger.get("daily") or []),
         }
 
     def _lifecycle_results(self, now: datetime) -> list[dict[str, Any]]:
@@ -352,6 +603,62 @@ class DualTrackCycleRunner:
             "live_observed_until": latest.isoformat() if latest else None,
             "reason": "live_coverage_reached_cycle_close" if complete else "cycle_closed_without_complete_live_runner_coverage",
         }
+
+    def _sweep_active_human_protective_exits(self, current_cycle_id: str, *, now: datetime) -> dict[str, Any]:
+        cycle_ids = self._active_human_cycle_ids(current_cycle_id)
+        results = [
+            (cycle_id, self._sweep_human_protective_exits(cycle_id, now=now))
+            for cycle_id in cycle_ids
+        ]
+        if len(results) == 1:
+            source_cycle_id, result = results[0]
+            if source_cycle_id == current_cycle_id:
+                return result
+            return {**result, "source_cycle_id": source_cycle_id}
+        triggered = [row for _, result in results for row in (result.get("triggered") or [])]
+        return {
+            "status": "triggered" if triggered else "ok",
+            "triggered": triggered,
+            "processed_events": sum(int(result.get("processed_events") or 0) for _, result in results),
+            "source": next((str(result.get("source") or "") for _, result in reversed(results) if result.get("source")), ""),
+            "source_cycle_ids": [cycle_id for cycle_id, _ in results],
+            "cycles": [
+                {"cycle_id": cycle_id, "status": result.get("status"), "triggered": len(result.get("triggered") or [])}
+                for cycle_id, result in results
+            ],
+        }
+
+    def _active_human_cycle_ids(self, current_cycle_id: str) -> list[str]:
+        current_start = cycle_window_from_id(current_cycle_id).start
+        candidates = {current_cycle_id}
+        for directory in ("fills", "orders"):
+            root = self.output_root / "dualtrack" / directory
+            if not root.exists():
+                continue
+            for path in root.glob("*_human.json"):
+                candidates.add(path.name.removesuffix("_human.json"))
+        active: list[str] = []
+        for cycle_id in candidates:
+            try:
+                if cycle_window_from_id(cycle_id).start > current_start:
+                    continue
+            except ValueError:
+                continue
+            snapshot = self.execution.snapshot(cycle_id)
+            has_position = any(
+                str(position.get("status") or "open") == "open"
+                and float(position.get("remaining_units") or 0.0) > 0
+                for position in snapshot.get("positions") or []
+            )
+            has_pending_limit = any(
+                str(order.get("state") or "") == "accepted"
+                and str(order.get("event") or "entry") == "entry"
+                and str(order.get("order_type") or "") == "limit"
+                for order in snapshot.get("orders") or []
+            )
+            if has_position or has_pending_limit:
+                active.append(cycle_id)
+        return sorted(active, key=lambda value: cycle_window_from_id(value).start) or [current_cycle_id]
 
     def _sweep_human_protective_exits(self, cycle_id: str, *, now: datetime) -> dict[str, Any]:
         snapshot = self.execution.snapshot(cycle_id)
@@ -494,7 +801,7 @@ class DualTrackCycleRunner:
 
     def previous_cycle_range(self, cycle_id: str) -> float:
         window = cycle_window_from_id(cycle_id)
-        start = window.start - timedelta(hours=12)
+        start = window.start - (window.end - window.start)
         end = window.start - timedelta(seconds=1)
         bars = self._filter_market_session_bars(
             self.market.load_bars_between(self.symbol, self.timeframe, start.isoformat(), end.isoformat())
@@ -505,6 +812,74 @@ class DualTrackCycleRunner:
         if rejected:
             raise ValueError(rejected)
         return round(max(float(bar.high) for bar in bars) - min(float(bar.low) for bar in bars), 8)
+
+    def planning_volatility_context(self, cycle_id: str) -> dict[str, Any]:
+        """Build a recorded range reference from complete non-weekend cycles."""
+        planner = self.config.get("machine_planner") if isinstance(self.config.get("machine_planner"), dict) else {}
+        lookback = max(1, int(planner.get("volatility_lookback_cycles") or 10))
+        minimum_samples = max(1, int(planner.get("minimum_active_cycle_samples") or 3))
+        minimum_coverage = min(1.0, max(0.0, float(planner.get("minimum_sample_coverage_pct") or 0.8)))
+        multiplier = max(0.0, float(planner.get("minimum_range_multiplier") or 1.0))
+        exclude_weekends = bool(planner.get("exclude_weekends_from_range_reference", True))
+        current = cycle_window_from_id(cycle_id)
+        duration_seconds = max(1.0, self._timeframe_duration().total_seconds())
+        selected: list[dict[str, Any]] = []
+        excluded: list[dict[str, Any]] = []
+        cursor = current.start
+        attempts = 0
+        while len(selected) < lookback and attempts < lookback * 3:
+            cursor -= timedelta(seconds=1)
+            sample_window = cycle_window(cursor)
+            cursor = sample_window.start
+            sample_duration_seconds = max(1.0, (sample_window.end - sample_window.start).total_seconds())
+            expected_bars = max(1, int(sample_duration_seconds / duration_seconds))
+            bars = self._filter_market_session_bars(
+                self.market.load_bars_between(
+                    self.symbol,
+                    self.timeframe,
+                    sample_window.start.isoformat(),
+                    (sample_window.end - timedelta(seconds=1)).isoformat(),
+                )
+            )
+            attempts += 1
+            sample = {
+                "cycle_id": sample_window.cycle_id,
+                "start": sample_window.start.isoformat(),
+                "weekday": sample_window.start.strftime("%a"),
+                "bar_count": len(bars),
+                "expected_bar_count": expected_bars,
+                "coverage_pct": round(min(1.0, len(bars) / expected_bars), 4),
+            }
+            if bars:
+                sample["range"] = round(max(float(bar.high) for bar in bars) - min(float(bar.low) for bar in bars), 8)
+            if exclude_weekends and sample_window.start.weekday() >= 5:
+                excluded.append({**sample, "reason": "weekend_low_liquidity"})
+                continue
+            rejected = self._market_bar_rejection_reason(bars) if bars else "cycle_bars_missing"
+            if rejected:
+                excluded.append({**sample, "reason": rejected})
+                continue
+            if sample["coverage_pct"] < minimum_coverage:
+                excluded.append({**sample, "reason": "sample_coverage_insufficient"})
+                continue
+            selected.append(sample)
+        ranges = [float(sample["range"]) for sample in selected]
+        reference = round(float(median(ranges)), 8) if len(ranges) >= minimum_samples else None
+        cadence_hours = int((current.end - current.start).total_seconds() // 3600)
+        return {
+            "schema_version": "dualtrack-planning-volatility-v1",
+            "method": f"median_completed_non_weekend_{cadence_hours}h_range",
+            "status": "ready" if reference is not None else "insufficient_samples",
+            "lookback_cycles": lookback,
+            "minimum_active_cycle_samples": minimum_samples,
+            "minimum_sample_coverage_pct": minimum_coverage,
+            "exclude_weekends": exclude_weekends,
+            "selected_samples": selected,
+            "excluded_samples": excluded,
+            "reference_range": reference,
+            "minimum_plan_range": round(reference * multiplier, 8) if reference is not None else None,
+            "minimum_range_multiplier": multiplier,
+        }
 
     def _market_bar_rejection_reason(self, bars: Sequence[Bar]) -> str:
         expected_provider = str((self.config.get("market_data") or {}).get("provider") or "")
@@ -694,6 +1069,95 @@ class DualTrackCycleRunner:
             "refreshed_order_sync",
         )
         return {key: report.get(key) for key in keys if key in report}
+
+
+def _active_plan_bars(plan: dict[str, Any], bars: Sequence[Bar]) -> tuple[Bar, ...]:
+    execution_start = plan.get("execution_start")
+    if execution_start in (None, ""):
+        return tuple(bars)
+    start = parse_utc(execution_start)
+    return tuple(bar for bar in bars if parse_utc(bar.timestamp) >= start)
+
+
+def _first_range_touch(plan: dict[str, Any], bars: Sequence[Bar]) -> dict[str, Any] | None:
+    plan_range = plan.get("range") if isinstance(plan.get("range"), dict) else {}
+    low = plan_range.get("low")
+    high = plan_range.get("high")
+    if low is None or high is None:
+        return None
+    low_price = float(low)
+    high_price = float(high)
+    for bar in _active_plan_bars(plan, bars):
+        touched_low = float(bar.low) <= low_price
+        touched_high = float(bar.high) >= high_price
+        if not touched_low and not touched_high:
+            continue
+        side = "both" if touched_low and touched_high else "below" if touched_low else "above"
+        boundary: float | dict[str, float] = (
+            {"low": low_price, "high": high_price}
+            if side == "both"
+            else low_price if side == "below" else high_price
+        )
+        return {
+            "side": side,
+            "boundary": boundary,
+            "touched_at": bar.timestamp,
+            "bar_low": float(bar.low),
+            "bar_high": float(bar.high),
+            "bar_close": float(bar.close),
+        }
+    return None
+
+
+def _confirmed_range_breach(
+    plan: dict[str, Any],
+    bars: Sequence[Bar],
+    *,
+    confirm_closes: int,
+) -> dict[str, Any] | None:
+    plan_range = plan.get("range") if isinstance(plan.get("range"), dict) else {}
+    low = plan_range.get("low")
+    high = plan_range.get("high")
+    if low is None or high is None:
+        return None
+    low_price = float(low)
+    high_price = float(high)
+    rows = _active_plan_bars(plan, bars)
+    required = max(2, int(confirm_closes))
+    streaks: dict[str, list[Bar]] = {"below": [], "above": []}
+    for bar in rows:
+        close = float(bar.close)
+        streaks["below"] = [*streaks["below"], bar] if close < low_price else []
+        streaks["above"] = [*streaks["above"], bar] if close > high_price else []
+        for side, boundary in (("below", low_price), ("above", high_price)):
+            streak = streaks[side]
+            if len(streak) < required:
+                continue
+            confirmed = streak[-required:]
+            return {
+                "side": side,
+                "boundary": boundary,
+                "confirmation_start": confirmed[0].timestamp,
+                "confirmed_at": confirmed[-1].timestamp,
+                "consecutive_closes": required,
+                "closes": [float(item.close) for item in confirmed],
+                "bar_low": float(confirmed[-1].low),
+                "bar_high": float(confirmed[-1].high),
+                "bar_close": float(confirmed[-1].close),
+            }
+    return None
+
+
+def _open_machine_positions(fills: Any) -> list[dict[str, Any]]:
+    rows = fills if isinstance(fills, list) else []
+    return [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("event") == "entry"
+        and row.get("position_status") == "open"
+        and float(row.get("remaining_units") or 0.0) > 0
+    ]
 
 
 def build_parser() -> argparse.ArgumentParser:  # pragma: no cover - thin CLI wrapper

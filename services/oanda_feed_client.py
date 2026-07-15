@@ -14,6 +14,8 @@ from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
 from services.live_env import apply_live_env, live_env_value_present
 from services.market_store import MarketStore
+from services.market_data_access import uses_independent_datafeed
+from services.market_data_refresh import refresh_market_data
 
 
 class OandaFeedClient:
@@ -172,6 +174,27 @@ def run_oanda_feed_import(run_date: str, output_root: Path | None = None, market
     config = load_pipeline_config()
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
+    if uses_independent_datafeed(market_db):
+        try:
+            return refresh_market_data(
+                run_date=run_date,
+                symbol="GOLD",
+                timeframe="5m",
+                output_kind="oanda_feed",
+                source="oanda_v20",
+                output_root=output_root,
+            )
+        except Exception as error:
+            result = {
+                "run_date": run_date,
+                "status": "skipped",
+                "message": f"OANDA datafeed adapter is not available: {error}",
+                "imported_rows": 0,
+                "market_data_backend": "datafeed",
+            }
+            write_json(output_root / "oanda_feed" / "current.json", [result])
+            write_json(output_root / "oanda_feed" / f"{run_date}.json", [result])
+            return result
     result = OandaFeedClient(MarketStore(market_db), config.get("oanda_feed", {})).fetch_and_store()
     result["run_date"] = run_date
     result["market_db"] = str(market_db)

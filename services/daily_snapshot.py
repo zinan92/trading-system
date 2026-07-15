@@ -9,7 +9,7 @@ from services.journal_store import write_json
 
 
 class DailySnapshot:
-    def __init__(self, output_root: Path, market_db: Path) -> None:
+    def __init__(self, output_root: Path, market_db: Path | None) -> None:
         self.output_root = output_root
         self.market_db = market_db
 
@@ -19,7 +19,7 @@ class DailySnapshot:
         snapshot_path = snapshot_dir / f"{run_date}.tar.gz"
         included: list[dict] = []
         with tarfile.open(snapshot_path, "w:gz") as archive:
-            if self.market_db.exists():
+            if self.market_db is not None and self.market_db.exists():
                 archive.add(self.market_db, arcname="data/market_data.db")
                 included.append(self._included_record(self.market_db, "data/market_data.db"))
             for item in files:
