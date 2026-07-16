@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from services.config_loader import ROOT
-from services.dualtrack_execution_contract import canonical_market_event
+from services.dualtrack_execution_contract import canonical_market_event, normalize_execution_command
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_shadow_input import build_shadow_input
 from services.journal_store import load_json, write_json
@@ -76,7 +76,7 @@ class NautilusExecutionAdapter:
         return _order_receipt(row)
 
     def _prepare_command(self, command: dict[str, Any]) -> dict[str, Any]:
-        prepared = dict(command)
+        prepared = normalize_execution_command(command, self.config)
         event = str(prepared.get("event") or "entry").lower()
         if event not in {"exit", "stop", "target", "flatten"}:
             return prepared

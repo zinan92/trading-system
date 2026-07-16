@@ -17,7 +17,10 @@ from pipelines.dualtrack_shadow_cutover_status import build_cutover_status
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_clock import cycle_window
 from services.dualtrack_config import dualtrack_config
-from services.dualtrack_execution_adapter import LegacyPaperExecutionAdapter
+from services.dualtrack_execution_adapter import (
+    NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT,
+    LegacyPaperExecutionAdapter,
+)
 from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
 from services.journal_store import load_json, write_json
 from services.strategy_control_plane import StrategyControlPlane
@@ -29,6 +32,7 @@ def build_attended_cutover_precheck(
     config: dict[str, Any] | None = None,
     environ: dict[str, str] | None = None,
     cycle_id: str | None = None,
+    allow_shadow_gate_override: bool = False,
 ) -> dict[str, Any]:
     output = Path(output_root)
     cfg = dict(config or dualtrack_config())
@@ -54,11 +58,29 @@ def build_attended_cutover_precheck(
     preflight_path = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
     preflight_rows = load_json(preflight_path)
     preflight = preflight_rows[-1] if preflight_rows and isinstance(preflight_rows[-1], dict) else {}
+    parity_rows = load_json(output / "dualtrack" / "nautilus" / "parity" / "current.json")
+    parity = parity_rows[-1] if parity_rows and isinstance(parity_rows[-1], dict) else {}
+    override_requested = bool(allow_shadow_gate_override)
+    override_authorized = (
+        override_requested
+        and environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE")
+        == NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT
+    )
+    override_used = (
+        gate.get("status") != "ready_for_attended_paper_switch"
+        and override_authorized
+        and parity.get("status") == "pass"
+    )
 
     blockers: list[dict[str, Any]] = []
     _require(blockers, settings.get("authoritative") == "legacy_paper", "legacy_not_authoritative")
     _require(blockers, settings.get("real_money_eligible") is not True, "real_money_mode_forbidden")
-    _require(blockers, gate.get("status") == "ready_for_attended_paper_switch", "shadow_gate_not_ready", gate)
+    _require(
+        blockers,
+        gate.get("status") == "ready_for_attended_paper_switch" or override_used,
+        "shadow_gate_not_ready",
+        {"shadow_gate": gate, "fixed_fixture_status": parity.get("status")},
+    )
     _require(
         blockers,
         runtime.get("desired_state") == "stopped" and runtime.get("actual_state") == "stopped",
@@ -127,6 +149,12 @@ def build_attended_cutover_precheck(
         "status": "ready_for_operator_cutover" if ready else "blocked",
         "blockers": blockers,
         "shadow_gate": gate,
+        "shadow_gate_override": {
+            "requested": override_requested,
+            "used": override_used,
+            "fixed_fixture_status": str(parity.get("status") or "missing"),
+            "original_gate_status": str(gate.get("status") or "missing"),
+        },
         "runtime": {
             "desired_state": runtime.get("desired_state"),
             "actual_state": runtime.get("actual_state"),

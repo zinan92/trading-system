@@ -95,16 +95,83 @@ def test_direction_arms_sides_without_moving_range(tmp_path: Path) -> None:
     assert {o["side"] for o in previews["neutral"]["orders"]} == {"buy", "sell"}
 
 
-def test_auto_notional_is_min_of_capital_and_risk_caps(tmp_path: Path) -> None:
+def test_auto_notional_uses_the_full_leverage_capacity_on_the_worst_side(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     preview = grid_sizing.build_grid_preview(
         "2026-07-05_DAY", {"direction": "neutral", "style": "steady"},
         market=market(), account=account(), config=plane.config,
     )
     risk = preview["risk"]
-    expected = min(risk["capital_notional_cap_per_grid"], risk["risk_notional_cap_per_grid"])
-    assert preview["grid"]["notional_per_grid"] == pytest.approx(expected, abs=0.01)
+    assert preview["grid"]["notional_per_grid"] == pytest.approx(
+        risk["capital_notional_cap_per_grid"], abs=0.01,
+    )
+    assert risk["capital_budget"] == 100_000.0
+    assert (
+        preview["grid"]["notional_per_grid"]
+        * risk["max_simultaneous_same_side_levels"]
+    ) == pytest.approx(risk["absolute_notional_ceiling"], abs=0.25)
     assert preview["grid"]["notional_mode"] == "auto"
+
+
+def test_style_changes_geometry_but_not_the_capital_utilization_policy(tmp_path: Path) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    previews = {
+        style: grid_sizing.build_grid_preview(
+            "2026-07-05_DAY", {"direction": "neutral", "style": style},
+            market=market(), account=account(), config=plane.config,
+        )
+        for style in ("steady", "aggressive")
+    }
+
+    steady = previews["steady"]
+    aggressive = previews["aggressive"]
+    assert steady["range"] != aggressive["range"]
+    assert steady["grid"]["spacing"] != aggressive["grid"]["spacing"]
+    assert steady["risk"]["capital_budget"] == aggressive["risk"]["capital_budget"] == 100_000.0
+    assert steady["grid"]["margin_utilization_cap"] == aggressive["grid"]["margin_utilization_cap"] == 1.0
+    assert steady["grid"]["notional_per_grid"] == aggressive["grid"]["notional_per_grid"]
+
+
+def test_arithmetic_and_geometric_modes_generate_their_declared_geometry(tmp_path: Path) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    base = {
+        "direction": "neutral",
+        "style": "steady",
+        "range": {"low": 90.0, "high": 130.0},
+        "grid": {"count": 8},
+    }
+    arithmetic = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY", {**base, "grid": {**base["grid"], "mode": "arithmetic"}},
+        market=market(), account=account(), config=plane.config,
+    )
+    geometric = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY", {**base, "grid": {**base["grid"], "mode": "geometric"}},
+        market=market(), account=account(), config=plane.config,
+    )
+
+    arithmetic_levels = arithmetic["grid"]["levels"]
+    geometric_levels = geometric["grid"]["levels"]
+    arithmetic_steps = [right - left for left, right in zip(arithmetic_levels, arithmetic_levels[1:])]
+    geometric_ratios = [right / left for left, right in zip(geometric_levels, geometric_levels[1:])]
+    assert arithmetic["grid"]["mode"] == "arithmetic"
+    assert geometric["grid"]["mode"] == "geometric"
+    assert max(arithmetic_steps) - min(arithmetic_steps) < 1e-6
+    assert max(geometric_ratios) - min(geometric_ratios) < 1e-6
+    assert geometric["grid"]["spacing_ratio"] > 1.0
+    assert geometric["preview_id"] == grid_sizing.build_grid_preview(
+        "2026-07-05_DAY", {**base, "grid": {**base["grid"], "mode": "geometric"}},
+        market=market(), account=account(), config=plane.config,
+    )["preview_id"]
+
+
+def test_unknown_grid_mode_is_rejected(tmp_path: Path) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    with pytest.raises(ValueError, match="grid mode"):
+        grid_sizing.build_grid_preview(
+            "2026-07-05_DAY",
+            {"direction": "neutral", "style": "steady", "grid": {"mode": "log-ish"}},
+            market=market(), account=account(), config=plane.config,
+        )
 
 
 def test_manual_notional_above_safe_cap_is_rejected(tmp_path: Path) -> None:

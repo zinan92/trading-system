@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 from pathlib import Path
+from copy import deepcopy
 
 import pytest
 
 import pipelines.dashboard_server as dashboard_server
 import pipelines.dualtrack_execution_reconcile as reconcile_pipeline
 from services.journal_store import load_json, write_json
+from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_execution_engine(monkeypatch: pytest.MonkeyPatch):
+    config = deepcopy(TEST_CONFIG)
+    config["execution_engine"] = {
+        "authoritative": "legacy_paper",
+        "shadow": "none",
+        "real_money_eligible": False,
+    }
+    factory = lambda *args, **kwargs: deepcopy(config)
+    monkeypatch.setattr("services.dualtrack_config.dualtrack_config", factory)
+    monkeypatch.setattr(dashboard_server, "dualtrack_config", factory)
 
 
 def test_execution_endpoint_separates_authoritative_and_shadow_reconciliation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,9 +87,10 @@ def test_reconciliation_pipeline_passes_exact_matching_candidate(tmp_path: Path)
             "ending_cash": 10_000.0,
             "equity": 10_000.0,
             "margin": 0.0,
-            "exposure": 0.0,
-            "slippage": 0.0,
-        },
+                "exposure": 0.0,
+                "slippage": 0.0,
+                "fees": 0.0,
+            },
         "reconciliation": {"status": "ok"},
     }
     candidate_path = tmp_path / "candidate.json"

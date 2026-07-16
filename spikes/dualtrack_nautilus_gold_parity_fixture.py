@@ -249,9 +249,20 @@ def _nautilus_snapshot(instrument, *, cycle_id: str, scenario: dict[str, Any]) -
             "price": float(row["avg_px"]),
             "quantity": _quantity(scenario),
             "event": "entry" if index == 0 else _exit_event(float(row["avg_px"]), scenario),
+            "order_type": (
+                "limit"
+                if (index == 0 and scenario.get("entry_order_type") == "limit")
+                or (index > 0 and _exit_event(float(row["avg_px"]), scenario) == "target")
+                else "market"
+            ),
+            "liquidity": "maker" if index > 0 and _exit_event(float(row["avg_px"]), scenario) == "target" else "taker",
+            "ts": f"2026-07-10T01:0{index}:00+00:00",
         }
         for index, row in enumerate(fills_report.to_dict("records"))
     ]
+    for fill in fills:
+        fee_rate = float(instrument.maker_fee if fill["liquidity"] == "maker" else instrument.taker_fee)
+        fill["cost"] = round(float(fill["price"]) * float(fill["quantity"]) * fee_rate, 8)
     position_rows = positions_report.to_dict("records")
     realized = _money_number(position_rows[-1]["realized_pnl"]) if position_rows else 0.0
     return {
@@ -260,7 +271,16 @@ def _nautilus_snapshot(instrument, *, cycle_id: str, scenario: dict[str, Any]) -
         "cycle_id": cycle_id,
         "orders": _candidate_orders(fills, scenario),
         "fills": fills,
-        "positions": ([{"status": "closed", "side": scenario["position_side"], "remaining_units": 0.0}] if position_rows else []),
+        "positions": ([{
+            "status": "closed",
+            "side": scenario["position_side"],
+            "remaining_units": 0.0,
+            "entry_price": scenario["entry_price"],
+            "exit_price": fills[-1]["price"] if len(fills) > 1 else None,
+            "realized_pnl": realized,
+            "sl": scenario["sl"],
+            "tp": scenario["tp"],
+        }] if position_rows else []),
         "account": ({
             "starting_cash": 10_000.0,
             "realized_pnl": realized,
@@ -268,6 +288,8 @@ def _nautilus_snapshot(instrument, *, cycle_id: str, scenario: dict[str, Any]) -
             "margin": 0.0,
             "exposure": 0.0,
             "slippage": 0.0,
+            "fees": round(sum(float(row["cost"]) for row in fills), 8),
+            "equity": round(10_000.0 + realized, 8),
         } if position_rows else {
             "starting_cash": 10_000.0,
             "realized_pnl": 0.0,
@@ -275,10 +297,16 @@ def _nautilus_snapshot(instrument, *, cycle_id: str, scenario: dict[str, Any]) -
             "margin": 0.0,
             "exposure": 0.0,
             "slippage": 0.0,
+            "fees": 0.0,
+            "equity": 10_000.0,
         }),
         "pnl": {"realized": realized, "unrealized": 0.0},
         "mark": {"price": exit_bar["close"], "fresh": True, "source": "fixture"},
-        "capabilities": {"native_order_lifecycle": True, "paper_shadow": True},
+        "capabilities": {
+            "native_order_lifecycle": True,
+            "paper_shadow": True,
+            "comparison_normalization": _comparison_normalization(instrument),
+        },
         "reconciliation": {"status": "ok"},
     }
 
@@ -392,16 +420,32 @@ def _nautilus_sequence_snapshot(instrument, *, cycle_id: str, scenario: dict[str
             "price": float(row["avg_px"]),
             "quantity": float(commands[index]["quantity"]),
             "event": commands[index]["event"],
+            "order_type": "market",
+            "liquidity": "taker",
+            "ts": f"2026-07-10T01:0{index}:00+00:00",
+            "cost": round(
+                float(row["avg_px"]) * float(commands[index]["quantity"]) * float(instrument.taker_fee),
+                8,
+            ),
         }
         for index, row in enumerate(fill_rows)
     ]
     realized = _money_number(position_rows[-1]["realized_pnl"]) if position_rows else 0.0
     open_units = 2.0 if scenario["kind"] == "scale_in" else (1.0 if scenario["kind"] == "duplicate" else 0.0)
     positions = (
-        [{"status": "open", "side": "long", "remaining_units": 2.0}]
+        [{
+            "status": "open", "side": "long", "remaining_units": 2.0,
+            "entry_price": 99.0, "exit_price": None, "realized_pnl": realized, "sl": None, "tp": None,
+        }]
         if scenario["kind"] == "scale_in"
-        else ([{"status": "open", "side": "long", "remaining_units": 1.0}] if scenario["kind"] == "duplicate"
-        else [{"status": "closed", "side": "long", "remaining_units": 0.0}]
+        else ([{
+            "status": "open", "side": "long", "remaining_units": 1.0,
+            "entry_price": 100.0, "exit_price": None, "realized_pnl": realized, "sl": None, "tp": None,
+        }] if scenario["kind"] == "duplicate"
+        else [{
+            "status": "closed", "side": "long", "remaining_units": 0.0,
+            "entry_price": 100.0, "exit_price": 110.0, "realized_pnl": realized, "sl": None, "tp": None,
+        }]
         )
     )
     unrealized = 0.0 if scenario["kind"] == "scale_in" else 0.0
@@ -409,7 +453,7 @@ def _nautilus_sequence_snapshot(instrument, *, cycle_id: str, scenario: dict[str
         "schema_version": "dualtrack-execution-v1", "engine": "nautilus_shadow", "cycle_id": cycle_id,
         "orders": [
             {"order_id": f"nautilus-{index + 1}", "state": "filled", "side": fill["side"], "event": fill["event"],
-             "order_type": "market", "price": fill["price"], "quantity": fill["quantity"]}
+             "order_type": "market", "price": fill["price"], "quantity": fill["quantity"], "ts": fill["ts"]}
             for index, fill in enumerate(fills)
         ],
         "fills": fills, "positions": positions,
@@ -418,10 +462,17 @@ def _nautilus_sequence_snapshot(instrument, *, cycle_id: str, scenario: dict[str
             "exposure": 198.0 if scenario["kind"] == "scale_in" else (100.0 if scenario["kind"] == "duplicate" else 0.0),
             "margin": 19.8 if scenario["kind"] == "scale_in" else (10.0 if scenario["kind"] == "duplicate" else 0.0),
             "slippage": 0.0,
+            "fees": round(sum(float(row["cost"]) for row in fills), 8),
+            "equity": round(10_000.0 + realized + unrealized, 8),
         },
         "pnl": {"realized": realized, "unrealized": unrealized},
         "mark": {"price": scenario["bars"][-1], "fresh": True, "source": "fixture"},
-        "capabilities": {"native_order_lifecycle": True, "paper_shadow": True}, "reconciliation": {"status": "ok"},
+        "capabilities": {
+            "native_order_lifecycle": True,
+            "paper_shadow": True,
+            "comparison_normalization": _comparison_normalization(instrument),
+        },
+        "reconciliation": {"status": "ok"},
     }
 
 
@@ -501,6 +552,7 @@ def _candidate_orders(fills: list[dict[str, Any]], scenario: dict[str, Any]) -> 
             "order_type": "limit",
             "price": scenario["entry_price"],
             "quantity": _quantity(scenario),
+            "ts": "2026-07-10T01:00:00+00:00",
         }]
     return [
         {
@@ -511,6 +563,7 @@ def _candidate_orders(fills: list[dict[str, Any]], scenario: dict[str, Any]) -> 
             "order_type": "limit" if fill["event"] == "target" else "market",
             "price": fill["price"],
             "quantity": fill["quantity"],
+            "ts": fill.get("ts"),
         }
         for index, fill in enumerate(fills)
     ]
@@ -522,6 +575,15 @@ def _quantity(scenario: dict[str, Any]) -> float:
 
 def _money_number(value: Any) -> float:
     return float(str(value).split()[0])
+
+
+def _comparison_normalization(instrument) -> dict[str, Any]:
+    return {
+        "mode": "venue_precision",
+        "price_decimals": int(instrument.price_precision),
+        "quantity_decimals": int(instrument.size_precision),
+        "money_decimals": 8,
+    }
 
 
 if __name__ == "__main__":

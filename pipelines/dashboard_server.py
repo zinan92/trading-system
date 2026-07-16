@@ -907,15 +907,21 @@ def build_strategy_console_control_response(
     cycle_id = str(payload.get("cycle_id") or cycle_window(payload.get("as_of")).cycle_id)
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+    action = str(payload.get("action") or "")
     # The chart selector is display-only. Production planning always receives
-    # the fixed 1m execution tape plus D1/4H/1H/15m strategy contexts.
+    # the fixed 1m execution tape. Grid geometry needs only D1/4H; the AI
+    # recommendation path separately requires D1/4H/1H/15m.
     trusted_market = dict(market or build_dualtrack_market_bars_response(
         timeframe="1m",
         limit=240,
         as_of=payload.get("as_of"),
     ))
     if not isinstance(trusted_market.get("strategy_timeframes"), dict):
-        trusted_market["strategy_timeframes"] = build_strategy_timeframes_response(as_of=payload.get("as_of"))
+        required = ("1d", "4h") if action != "refresh_recommendation" else ("1d", "4h", "1h", "15m")
+        trusted_market["strategy_timeframes"] = build_strategy_timeframes_response(
+            as_of=payload.get("as_of"),
+            timeframes=required,
+        )
     trusted_account = account
     if trusted_account is None:
         history = build_strategy_console_production_history(
@@ -925,7 +931,6 @@ def build_strategy_console_control_response(
         )
         trusted_account = dict(history.get("account") or {})
     plane = StrategyControlPlane(output)
-    action = str(payload.get("action") or "")
     if action == "refresh_recommendation":
         contexts = dict(trusted_market.get("strategy_timeframes") or {})
         if not all(timeframe in contexts for timeframe in ("1d", "4h", "1h", "15m")):
@@ -1023,6 +1028,7 @@ def build_strategy_timeframes_response(
     as_of: str | None = None,
     market_db: Path | None = None,
     config: dict | None = None,
+    timeframes: tuple[str, ...] = ("1d", "4h", "1h", "15m"),
 ) -> dict[str, dict[str, Any]]:
     """Build fixed, completed strategy bars; never follows the chart timeframe."""
     checked_at = parse_utc(as_of)
@@ -1031,10 +1037,23 @@ def build_strategy_timeframes_response(
     seconds = {"1d": 86_400, "4h": 14_400, "1h": 3_600, "15m": 900}
     minimum = {"1d": 15, "4h": 15, "1h": 15, "15m": 50}
     result: dict[str, dict[str, Any]] = {}
-    for timeframe, limit in specs.items():
+    unknown = set(timeframes) - set(specs)
+    if unknown:
+        raise ValueError(f"unsupported strategy timeframes: {sorted(unknown)}")
+    for timeframe in timeframes:
+        limit = specs[timeframe]
         snapshot = feed.snapshot(symbol="GOLD", timeframe=timeframe, limit=limit, as_of=as_of)
-        if snapshot.get("status") not in {"ready", "derived"} or snapshot.get("is_synthetic") is not False:
-            raise ValueError(f"strategy timeframe {timeframe} is unavailable or untrusted")
+        trusted = snapshot.get("status") in {"ready", "derived"} and snapshot.get("is_synthetic") is False
+        # A single upstream connection reset must not make the operator's selected
+        # grid mode disagree with the chart. Retry only the exact same trusted
+        # source/timeframe once; synthetic data is never retried or accepted.
+        if not trusted and snapshot.get("is_synthetic") is False:
+            snapshot = feed.snapshot(symbol="GOLD", timeframe=timeframe, limit=limit, as_of=as_of)
+            trusted = snapshot.get("status") in {"ready", "derived"} and snapshot.get("is_synthetic") is False
+        if not trusted:
+            issues = snapshot.get("access_issues") or []
+            detail = f": {issues[0]}" if issues else ""
+            raise ValueError(f"strategy timeframe {timeframe} is unavailable or untrusted{detail}")
         completed: list[dict[str, Any]] = []
         for bar in snapshot.get("bars") or []:
             started = parse_utc(str(bar.get("timestamp") or ""))

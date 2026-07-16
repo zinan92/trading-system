@@ -375,7 +375,7 @@ def _fills_from_reports(
             requested_price = float(command.get("price") or price)
         if price_precision is not None:
             requested_price = round(requested_price, price_precision)
-        fills.append({
+        fill = {
             "fill_id": f"nautilus-{str(row.get('event_id') or order_id)}",
             "order_id": order_id,
             "trade_id": command_id,
@@ -391,7 +391,11 @@ def _fills_from_reports(
             "liquidity": str(row.get("liquidity_side") or "").lower(),
             "strategy_plan_id": command.get("strategy_plan_id"),
             "strategy_plan_version": command.get("strategy_plan_version"),
-        })
+        }
+        raw_order_type = str(row.get("order_type") or row.get("type") or "").upper()
+        if raw_order_type:
+            fill["order_type"] = "market" if "MARKET" in raw_order_type else "limit"
+        fills.append(fill)
     event_priority = {"entry": 0, "exit": 1, "target": 1, "stop": 1, "flatten": 1}
     return sorted(
         fills,
@@ -459,6 +463,9 @@ def _normalized_order(
         "strategy_plan_id": command.get("strategy_plan_id"),
         "strategy_plan_version": command.get("strategy_plan_version"),
     }
+    timestamp = _timestamp_text(row.get("ts_last") or row.get("ts_init"))
+    if timestamp:
+        result["ts"] = timestamp
     if not child:
         result["requested_price"] = float(command.get("price") or result["price"])
         result["requested_quantity"] = float(command.get("quantity") or result["quantity"])

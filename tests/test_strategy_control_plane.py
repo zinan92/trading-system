@@ -1,11 +1,26 @@
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 
 import pytest
 
 from services.dualtrack_execution_adapter import build_execution_engine_adapter
+from services.dualtrack_config import dualtrack_config as load_test_config
 from services.strategy_control_plane import StrategyControlPlane
 import services.strategy_control_plane as strategy_control_plane_module
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_execution_engine(monkeypatch: pytest.MonkeyPatch):
+    config = load_test_config()
+    config["execution_engine"] = {
+        "authoritative": "legacy_paper",
+        "shadow": "none",
+        "real_money_eligible": False,
+    }
+    factory = lambda *args, **kwargs: deepcopy(config)
+    monkeypatch.setattr(strategy_control_plane_module, "dualtrack_config", factory)
+    monkeypatch.setattr("services.dualtrack_config.dualtrack_config", factory)
 
 
 def proposal(cycle_id: str, source: str, direction: str = "long") -> dict:
@@ -178,7 +193,8 @@ def test_preview_direction_and_style_change_grid_geometry_and_order_sides(tmp_pa
     assert neutral["risk"]["max_loss"] > 0
     assert neutral["grid"]["notional_per_grid"] > 100
     assert neutral["risk"]["absolute_notional_ceiling"] == 100_000
-    assert neutral["risk"]["capital_budget"] == 50_000
+    assert neutral["risk"]["capital_budget"] == 100_000
+    assert neutral["grid"]["margin_utilization_cap"] == 1.0
     assert neutral["risk"]["calibration_status"] == "shadow_candidate"
 
 
@@ -245,7 +261,7 @@ def test_auto_notional_revalidates_against_start_market_while_manual_notional_re
 
     assert started["preview"]["grid"]["notional_mode"] == "auto"
     assert started["preview"]["grid"]["notional_per_grid"] < stale_notional
-    assert started["preview"]["grid"]["notional_per_grid"] == started["preview"]["risk"]["risk_notional_cap_per_grid"]
+    assert started["preview"]["grid"]["notional_per_grid"] == started["preview"]["risk"]["capital_notional_cap_per_grid"]
     assert started["plan"]["grid"]["notional_per_grid"] == started["preview"]["grid"]["notional_per_grid"]
     assert started["accepted_orders"] > 0
 

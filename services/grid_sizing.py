@@ -2,9 +2,10 @@
 
 Single source of truth for the fixed-timeframe grid contract: complete D1
 ATR14 owns the range, complete 4H ATR14 owns the spacing, and per-grid
-notional is the lower of the capital cap (`equity × leverage ×
-margin_utilization ÷ max simultaneous same-side levels`) and the plan-loss
-cap (`equity × max_plan_loss_pct ÷ worst same-side loss rate`).
+notional comes from the operator-visible leverage capacity (`equity ×
+leverage ÷ max simultaneous same-side levels`).  Plan-loss remains an
+explicit risk diagnostic; it must never silently shrink the configured
+capital deployment.
 
 Pure functions only: no I/O, no plan or ledger mutation, no clock reads.
 Identical market/account/config inputs must produce an identical preview,
@@ -21,6 +22,7 @@ from typing import Any
 
 GRID_DIRECTIONS = {"neutral", "long", "short"}
 GRID_STYLES = {"steady", "aggressive"}
+GRID_MODES = {"arithmetic", "geometric"}
 
 
 def validate_market(market: dict[str, Any]) -> None:
@@ -134,8 +136,10 @@ def build_grid_preview(
     style_cfg = dict(styles.get(style) or {})
     range_multiple = positive_number(style_cfg.get("range_atr_multiple"), "range ATR multiple")
     spacing_multiple = positive_number(style_cfg.get("spacing_atr_multiple"), "spacing ATR multiple")
-    margin_utilization = positive_number(style_cfg.get("margin_utilization_cap"), "margin utilization cap")
-    max_plan_loss_pct = positive_number(style_cfg.get("max_plan_loss_pct"), "max plan loss pct")
+    # Capital policy is global.  A style changes price geometry only; it must
+    # not secretly turn 10x into 5x or 7x.
+    margin_utilization = positive_number(strategy_cfg.get("capital_utilization_cap", 1.0), "capital utilization cap")
+    max_plan_loss_pct = positive_number(strategy_cfg.get("max_plan_loss_pct", 0.10), "max plan loss pct")
     if margin_utilization > 1 or max_plan_loss_pct > 1:
         raise ValueError("strategy risk fractions must not exceed 1")
 
@@ -150,6 +154,9 @@ def build_grid_preview(
     if low <= 0 or high <= low:
         raise ValueError("grid range must have positive low below high")
     grid_input = body.get("grid") if isinstance(body.get("grid"), dict) else {}
+    mode = str(grid_input.get("mode") or strategy_cfg.get("default_mode") or "arithmetic").lower()
+    if mode not in GRID_MODES:
+        raise ValueError("grid mode must be arithmetic or geometric")
     target_spacing = max(
         spacing_atr * spacing_multiple,
         latest * float(config.get("cost_per_side_bp") or 0.0) * 2.0
@@ -173,7 +180,17 @@ def build_grid_preview(
     if leverage <= 0 or leverage > leverage_limit:
         raise ValueError(f"leverage must be greater than 0 and at most {leverage_limit:g}")
 
-    levels = [low + spacing * index for index in range(count + 1)]
+    if mode == "geometric":
+        spacing_ratio = (high / low) ** (1.0 / count)
+        levels = [low * (spacing_ratio ** index) for index in range(count + 1)]
+        lower_stop = low / spacing_ratio
+        upper_stop = high * spacing_ratio
+    else:
+        spacing_ratio = None
+        levels = [low + spacing * index for index in range(count + 1)]
+        lower_stop = low - spacing
+        upper_stop = high + spacing
+    level_spacings = [right - left for left, right in zip(levels, levels[1:])]
     nearest_index = min(range(len(levels)), key=lambda index: abs(levels[index] - latest))
     provisional_orders: list[dict[str, Any]] = []
     for index, raw_price in enumerate(levels):
@@ -185,8 +202,8 @@ def build_grid_preview(
             continue
         if direction == "short" and side != "sell":
             continue
-        tp = price + spacing if side == "buy" else price - spacing
-        sl = low - spacing if side == "buy" else high + spacing
+        tp = levels[index + 1] if side == "buy" else levels[index - 1]
+        sl = lower_stop if side == "buy" else upper_stop
         provisional_orders.append({
             "preview_order_id": f"preview-{index:02d}-{side}",
             "level": index,
@@ -216,7 +233,10 @@ def build_grid_preview(
     max_side_loss_rate = max(side_loss_rates.values())
     max_loss_budget = equity * max_plan_loss_pct
     risk_notional_cap = max_loss_budget / max_side_loss_rate if max_side_loss_rate > 0 else capital_notional_cap
-    safe_notional = min(capital_notional_cap, risk_notional_cap)
+    # The leverage ceiling owns sizing.  The plan-loss calculation below is
+    # advisory and remains visible so an operator can lower leverage or edit
+    # the range deliberately instead of receiving a hidden haircut.
+    safe_notional = capital_notional_cap
     requested_notional = number_or(grid_input.get("notional_per_grid"), 0.0)
     default_notional_mode = "manual" if requested_notional > 0 else "auto"
     notional_mode = str(grid_input.get("notional_mode") or default_notional_mode).lower()
@@ -252,6 +272,11 @@ def build_grid_preview(
     max_loss = max(side_losses.values())
     max_side_notional = max(side_counts[side] * notional for side in side_counts)
     estimated_margin = max_side_notional / leverage
+    round_trip_cost_rate = 2.0 * float(config.get("cost_per_side_bp") or 0.0) / 10_000.0
+    net_profit_rates = [
+        abs(order["tp"] - order["price"]) / order["price"] - round_trip_cost_rate
+        for order in provisional_orders
+    ]
     preview = {
         "schema_version": "strategy-grid-preview-v1",
         "cycle_id": cycle_id,
@@ -275,7 +300,12 @@ def build_grid_preview(
         },
         "grid": {
             "count": count,
+            "mode": mode,
+            "levels": [round(level, 8) for level in levels],
             "spacing": round(spacing, 4),
+            "spacing_ratio": round(spacing_ratio, 10) if spacing_ratio else None,
+            "min_spacing": round(min(level_spacings), 4),
+            "max_spacing": round(max(level_spacings), 4),
             "target_spacing": round(target_spacing, 4),
             "spacing_source_timeframe": spacing_timeframe,
             "spacing_atr_period": spacing_period,
@@ -286,6 +316,7 @@ def build_grid_preview(
             "leverage": round(leverage, 2),
             "leverage_limit": round(leverage_limit, 2),
             "margin_utilization_cap": margin_utilization,
+            "net_profit_per_grid_pct": round(min(net_profit_rates) * 100.0, 4),
             "out_of_range": str(body.get("out_of_range") or grid_input.get("out_of_range") or "exit_only"),
         },
         "orders": orders,
@@ -300,6 +331,9 @@ def build_grid_preview(
             "risk_notional_cap_per_grid": round(risk_notional_cap, 2),
             "max_simultaneous_same_side_levels": max_simultaneous_levels,
             "actual_leverage": round(max_side_notional / equity, 4) if equity else None,
+            "capital_utilization_pct": round(max_side_notional / absolute_notional_ceiling * 100.0, 4),
+            "sizing_constraint": "leverage_capacity",
+            "risk_budget_exceeded": max_loss > max_loss_budget + 1e-8,
             "calibration_status": "shadow_candidate",
         },
         "strategy_timeframes": {

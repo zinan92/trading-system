@@ -73,22 +73,29 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "min_grid_count": 24,
         "max_grid_count": 80,
         "cost_spacing_multiple": 5.0,
+        "default_mode": "arithmetic",
+        "capital_utilization_cap": 1.0,
+        "max_plan_loss_pct": 0.10,
         "styles": {
             "steady": {
                 "range_atr_multiple": 2.0,
                 "spacing_atr_multiple": 0.25,
-                "margin_utilization_cap": 0.50,
-                "max_plan_loss_pct": 0.05,
             },
             "aggressive": {
                 "range_atr_multiple": 1.0,
                 "spacing_atr_multiple": 0.125,
-                "margin_utilization_cap": 0.70,
-                "max_plan_loss_pct": 0.08,
             },
         },
     },
     "cost_per_side_bp": 0.5,
+    "execution_contract": {
+        "schema_version": "dualtrack-execution-contract-v1",
+        "execution_instrument_id": "XAUUSDT",
+        "price_precision": 2,
+        "price_increment": "0.01",
+        "quantity_precision": 3,
+        "quantity_increment": "0.001",
+    },
     "execution_shadow": {
         "nautilus": {
             "instrument_endpoint": "http://127.0.0.1:8100/api/instruments/commodity/XAUUSDT",

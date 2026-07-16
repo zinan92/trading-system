@@ -111,6 +111,10 @@ class DualTrackHumanEngine:
             "track": "human",
         }
         fill.update(order_cost.fill_fields())
+        if fill.get("liquidity") in (None, ""):
+            model_liquidity = (fill.get("cost_model") or {}).get("liquidity")
+            if model_liquidity not in (None, ""):
+                fill["liquidity"] = model_liquidity
         fill["pnl_units"] = _pnl_units(fill)
         if not fill["trade_id"]:
             fill["trade_id"] = _default_trade_id(cycle_id, rows, event=event, position_id=position_id)
@@ -595,6 +599,10 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "realized_pnl": round(float(fill.get("realized_pnl", 0.0) or 0.0), 8),
                 "status": fill.get("position_status", "open"),
             }
+            if fill.get("strategy_plan_id") not in (None, ""):
+                trades[trade_id]["strategy_plan_id"] = fill["strategy_plan_id"]
+            if fill.get("strategy_plan_version") not in (None, ""):
+                trades[trade_id]["strategy_plan_version"] = fill["strategy_plan_version"]
             continue
         for match in fill.get("matched_entries") or []:
             trade_id = str(match.get("trade_id") or "")

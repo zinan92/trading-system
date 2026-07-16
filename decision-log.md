@@ -5422,3 +5422,231 @@ auditable datafeed port; broker execution remains a separate port.
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-migration-gate-desktop.png`.
 - 390px mobile evidence:
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-migration-gate-mobile.png`.
+
+## 2026-07-16 - Nautilus paper authority cutover and contract-level drift audit
+
+### Decision
+
+- Complete the paper-only authority migration now at a stopped/flat cycle
+  boundary. Keep the normal seven completed-cycle gate at `7/7`; do not lower or
+  rewrite it. The operator-authorized acceleration is a separately acknowledged,
+  receipt-backed override which is valid only when the deterministic Nautilus
+  fixture gate passes, both ledgers are flat and reconciled, the isolated runtime
+  is ready, and `real_money_eligible=false`.
+- Normalize every new execution command before either engine accepts it. XAUUSDT
+  executable prices now use `0.01`, quantities use `0.001`, and the command keeps
+  its raw requested values plus immutable execution-contract and fee-contract
+  hashes. Legacy and Nautilus therefore receive the same executable numbers.
+- Make reconciliation economic and traceable, not count-only. It now checks fees,
+  equity, fill cost/slippage/time, order time, position economics and
+  StrategyPlan ID/version. Money remains eight-decimal exact; venue rounding is
+  allowed only for price and quantity when explicitly declared by the candidate.
+- Canonicalize spelling-only lifecycle aliases (`canceled` and `cancelled`) while
+  continuing to treat semantically different states as drift.
+- Preserve every historical Legacy fill/order/trade and every previous Nautilus
+  shadow artifact byte-for-byte. Old cycles are classified as non-qualifying
+  evidence rather than rewritten to look compatible.
+- Treat the current migrated UI state explicitly. Once Nautilus is authoritative,
+  the dashboard shows `已切换（Paper）`, fixed-fixture status, and the old-cycle
+  streak separately instead of presenting an already-completed migration as a
+  pending failed gate.
+
+### Migration result
+
+- Cutover receipt: `20260716T013003702625Z`; status `applied`.
+- Authoritative engine: `nautilus_paper`; current cycle `2026-07-16_DAY` remains
+  `stopped`, with zero accepted orders, zero positions, and reconciliation `ok`.
+- The controller backed up `configs/dualtrack.yaml` plus both installed
+  LaunchAgent plists, stopped both adapter-owning services, wrote the paper-only
+  authority/runtime/override environment, restarted them, and validated the
+  dashboard API. No order was submitted and no real-money path was enabled.
+- Rollback remains available from the cutover receipt and restores the exact
+  Legacy config/service bytes while preserving all three ledger namespaces.
+
+### Full drift audit
+
+- The historical `2026-07-15_NIGHT` engines still agree on lifecycle counts:
+  57 orders, 12 fills and 6 positions on each side.
+- The previously discussed `0.29247753 USD` net-PnL difference is fully explained:
+  `0.28891059 USD` is the mixed historical fee-contract transition and
+  `0.00356694 USD` is venue price/quantity precision. It is not missing cash.
+- With the expanded schema, the old-cycle audit exposes 120 rows: 58 chronology,
+  31 economic, 19 schema/semantic, and 12 StrategyPlan traceability differences.
+  Most chronology/schema rows are missing fields in the old replay artifact;
+  they are intentionally not backfilled. The earlier 45 `cancelled/canceled`
+  rows disappear after canonicalization because they were spelling-only.
+- New deterministic fixtures cover market long/short, untouched limit orders,
+  scale-in weighted average, partial reduction, TP/SL, same-bar conservative
+  priority, fees/slippage/margin/exposure/PnL, duplicate replay, restart and
+  residual-unit reconciliation. All 10 fixture classes pass with the expanded
+  schema.
+
+### Gotchas
+
+- Running the fixed parity fixtures does not refresh
+  `cutover/shadow_gate_current.json` by itself. The shadow cutover status must be
+  rebuilt after the fixture gate or the API/UI can display a stale blocker.
+- Several tests implicitly loaded the live `configs/dualtrack.yaml` and therefore
+  failed after a legitimate authority switch. Those tests now freeze a complete
+  Legacy test config; test behavior no longer depends on the operator's current
+  production engine.
+- A candidate field must not be invented when Nautilus upstream reports omit it.
+  Order/fill time and order type are emitted only when present; the deterministic
+  fixture supplies the explicit engine-neutral evidence it is intended to test.
+- StrategyPlan trace is absent from some historical persisted Legacy trade rows
+  even when newer candidate artifacts contain it. Historical records remain
+  immutable; all new commands carry the versioned trace.
+- `Strategy Shadows` currently has no generated comparison result. The UI and
+  saved screenshot correctly show this as missing historical what-if evidence;
+  it is not evidence against the production cutover and was not fabricated.
+
+### Verification and evidence
+
+- Focused execution/cutover/UI regression: `135 passed`.
+- Final full repository regression after the live cutover and test-isolation fix:
+  `1538 passed in 479.98s`.
+- Browser validation on the authenticated public v5 page: `Nautilus Paper（当前）`,
+  stopped, zero orders, zero positions, preserved 10,005.35 equity and 13 fills,
+  fresh Binance data, and zero browser console errors.
+- Desktop:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-cutover-desktop.png`.
+- 390px mobile:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-cutover-mobile.png`.
+- Real-time grid:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-cutover-realtime-grid.png`.
+- Strategy Shadow empty-state evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-cutover-strategy-shadows.png`.
+
+## 2026-07-16 - Leverage-derived grid sizing, grid modes, and chart hierarchy
+
+### Decision
+
+- Define the operator-selected leverage as the worst-side notional ceiling. With
+  10,000 USD equity and 10x leverage, the grid may deploy up to 100,000 USD of
+  simultaneous same-side notional. For a neutral grid, the denominator is the
+  larger of the buy-entry and sell-entry rung counts; it is not the total number
+  of bilateral orders.
+- Calculate automatic per-grid notional as
+  `equity × leverage × capital_utilization_cap ÷ max_same_side_entry_levels`.
+  `capital_utilization_cap` is now a single global value of 1.0. Steady and
+  aggressive styles change range and spacing geometry only; they no longer
+  carry hidden 50%/70% capital haircuts or different sizing risk budgets.
+- Keep plan-loss math visible as a diagnostic and flag when it exceeds the
+  configured advisory budget. It no longer silently reduces the order size.
+  Lowering leverage is the explicit operator control for reducing deployment.
+- Preserve the grid-count contract: D1 ATR14 determines the range, 4H ATR14
+  determines the target spacing, and the resulting interval count is clamped to
+  24-80 unless the operator enters a valid count explicitly.
+- Add grid mode to the versioned preview/plan/order path. `arithmetic` uses equal
+  absolute price differences; `geometric` uses equal price ratios. Both derive
+  TP from the adjacent grid level, include fee-deducted minimum profit per grid,
+  and produce deterministic preview hashes.
+- Reduce chart noise by making ordinary chart reference lines faint, drawing
+  grid/order levels as solid side-colored lines, removing the duplicate
+  grid-plus-order line at the same price, and showing right-axis labels only for
+  the six orders nearest the current price. Range boundaries remain emphasized.
+
+### Binance feature inventory for later product review
+
+- Candidate next: trigger price; open initial position on creation; TP/SL by
+  price, PnL or ROI; explicit close-all-versus-keep-position behavior when the
+  bot stops; fee-deducted profit/grid; estimated liquidation prices.
+- Later / requires a separate execution design: trailing up/down with a movement
+  limit, automatic margin addition on bracket change, live parameter
+  customization, and copy-strategy workflows.
+- Read-only reporting ideas: runtime, 24h/total matched trades, historical
+  ROI/PnL curve, bot preview chart, range/grid/mode summary, and historical
+  strategy comparison. These do not authorize production mutations.
+
+### Gotchas
+
+- The previous sizing formula took the minimum of a style-specific capital cap
+  and a style-specific plan-loss cap. On the same live 53-grid preview this made
+  steady use about 1.89x while aggressive used about 6.09x, despite both showing
+  a 10x leverage limit. This was the source of the unexplained quantity change.
+- A bilateral neutral grid must not divide capacity by all buy and sell orders.
+  Only the maximum simultaneously accumulating side owns the worst-case margin
+  denominator; using total order count would understate usable capacity by about
+  half.
+- Grid preview/start originally built all D1/4H/1H/15m contexts before sizing,
+  so an unrelated 1H outage could block a calculation that only consumes D1 and
+  4H. Preview/start now fetch only D1/4H; AI trend refresh remains fail-closed on
+  all four required timeframes.
+- Full-page screenshots of the canvas page can tile a sticky region in the
+  in-app browser. Evidence therefore uses a desktop viewport capture for the
+  chart and a separately scrolled 390px viewport capture for the controls.
+- The authenticated public preview POST briefly returned Cloudflare 530 while
+  the same local API remained healthy. No production mutation was attempted;
+  interactive acceptance used the local authenticated control surface and the
+  public page was rechecked read-only after the service settled.
+- The final public read-only check then exposed Cloudflare Tunnel error 1033:
+  the dashboard and gateway listeners were healthy, but the named tunnel had
+  zero edge connections. Restarting its existing LaunchAgent restored two edge
+  connectors; the authenticated page recovered without changing robot, order,
+  position, or ledger state.
+
+### Verification and evidence
+
+- Live stopped-state preview, 10,005.35 USD equity, 10x leverage: steady and
+  aggressive both calculate 3,705.68 USD per grid with 27 worst-side levels,
+  or 100,053.36 USD total worst-side notional versus a 100,053.46 USD ceiling.
+- Arithmetic and geometric previews both produced 53 deterministic orders; the
+  displayed fee-deducted minimum profit/grid was 0.17%/0.18% for the steady
+  snapshot and 0.08% for the aggressive snapshot.
+- Full repository regression: `1543 passed in 519.31s`.
+- Browser acceptance: trusted Binance USD-M data, Nautilus Paper authority,
+  stopped, zero accepted orders, zero open positions, 390px horizontal overflow
+  zero, no browser console errors, and no production-ledger writes from the
+  preview interactions. Final public read-only state remained stopped with
+  10,005.35 USD equity, 13 historical trades, zero orders, and zero positions.
+- Desktop chart hierarchy:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-grid-visual-hierarchy.png`.
+- Desktop sizing/modes:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-grid-sizing-modes-desktop.png`.
+- 390px sizing/modes:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-grid-sizing-modes-mobile.png`.
+
+## 2026-07-16 - Trusted strategy-timeframe retry and truthful grid-mode preview
+
+### Decision
+
+- Keep D1 and 4H strategy inputs fail-closed, but retry the exact same
+  source/timeframe once when a non-synthetic snapshot is temporarily
+  unavailable. The retry does not change provider, accept stale data, or allow
+  synthetic data; a second failure still blocks preview and new positions.
+- Preserve the last valid grid preview when a later preview request fails. A
+  failed arithmetic/geometric switch now rolls the selected button back and
+  explicitly says which grid remains on the chart, instead of showing a new
+  selection over old grid geometry.
+- Make mode geometry auditable in the chart summary. Arithmetic displays one
+  fixed USD price gap; geometric displays the fixed percentage ratio plus its
+  lower-to-upper USD price-gap range.
+
+### Gotchas
+
+- The previous grid-mode click changed the selected button before the async
+  preview completed. On a transient D1 failure, the preview was then cleared
+  and the chart fell back to the production plan without rolling back the
+  button. The backend geometric calculation was correct, but the UI could
+  falsely imply that the old chart was geometric.
+- Equal-ratio levels do not have equal dollar gaps. On the accepted live
+  53-grid preview, the ratio was about 0.19% while absolute gaps increased from
+  about 7.15 to 7.87 USD across the range. Showing only the ratio made the
+  visual difference unnecessarily hard to verify.
+
+### Verification and evidence
+
+- Focused strategy-timeframe, static UI, sizing, and control-plane regression:
+  `47 passed`.
+- Final full repository rerun: `1545 passed in 509.07s`. The first full run had
+  one unrelated offline-runner isolation failure (`1544 passed, 1 failed`); that
+  test passed alone and the clean full rerun did not reproduce it.
+- Synthetic strategy data is rejected immediately and is never retried; the
+  dedicated transient-retry/synthetic-rejection/UI-rollback check passed `4/4`.
+- Authenticated public browser acceptance: arithmetic showed a fixed 7.5 USD
+  gap; geometric showed a 0.19% ratio and a 7.15-7.87 USD variable gap, both
+  with 53 deterministic preview orders. Preview created no production orders.
+- Arithmetic chart:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-arithmetic-grid-chart-fixed.png`.
+- Geometric chart:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-geometric-grid-chart-fixed.png`.

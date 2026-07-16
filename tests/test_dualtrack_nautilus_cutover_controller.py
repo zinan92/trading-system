@@ -6,6 +6,7 @@ from pathlib import Path
 
 from services.journal_store import write_json
 from pipelines.dualtrack_nautilus_cutover_apply import (
+    ACCELERATED_GATE_OVERRIDE_ACKNOWLEDGEMENT,
     CUTOVER_ACKNOWLEDGEMENT,
     ROLLBACK_ACKNOWLEDGEMENT,
     DualTrackNautilusCutoverController,
@@ -124,6 +125,32 @@ def test_attended_cutover_backs_up_files_persists_service_approval_and_validates
     assert all(Path(row["backup_path"]).exists() for row in result["backups"])
     assert result["orders_submitted"] is False
     assert result["real_money_eligible"] is False
+
+
+def test_accelerated_cutover_requires_second_ack_and_persists_audited_override(tmp_path: Path) -> None:
+    controller, output, config_path, launch_agents, calls = _fixture(tmp_path)
+
+    blocked = controller.apply(
+        acknowledgement=CUTOVER_ACKNOWLEDGEMENT,
+        allow_shadow_gate_override=True,
+        shadow_gate_override_acknowledgement="yes",
+    )
+    assert blocked["status"] == "blocked"
+    assert blocked["blocker"] == "missing_shadow_gate_override_acknowledgement"
+    assert calls == []
+
+    result = controller.apply(
+        acknowledgement=CUTOVER_ACKNOWLEDGEMENT,
+        allow_shadow_gate_override=True,
+        shadow_gate_override_acknowledgement=ACCELERATED_GATE_OVERRIDE_ACKNOWLEDGEMENT,
+    )
+
+    assert result["status"] == "applied"
+    assert result["shadow_gate_override"]["used"] is True
+    for label in LABELS:
+        with (launch_agents / f"{label}.plist").open("rb") as handle:
+            env = plistlib.load(handle)["EnvironmentVariables"]
+        assert env["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE"] == ACCELERATED_GATE_OVERRIDE_ACKNOWLEDGEMENT
 
 
 def test_failed_post_validation_automatically_restores_every_file(tmp_path: Path) -> None:

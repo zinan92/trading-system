@@ -4,10 +4,15 @@ import os
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from services.dualtrack_execution_contract import canonical_market_event
+from services.dualtrack_execution_contract import canonical_market_event, normalize_execution_command
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_scoring import _trades_from_fills, apply_unrealized
 from services.journal_store import load_json, write_json
+
+
+NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT = (
+    "I_UNDERSTAND_NAUTILUS_PAPER_CUTOVER_BYPASSES_7_CYCLE_SHADOW_GATE"
+)
 
 
 @runtime_checkable
@@ -50,9 +55,11 @@ class LegacyPaperExecutionAdapter:
 
     def __init__(self, output_root: Path, *, config: dict[str, Any] | None = None) -> None:
         self.output_root = Path(output_root)
+        self.config = dict(config or {})
         self.engine = DualTrackHumanEngine(self.output_root, config=config)
 
     def submit_order(self, command: dict[str, Any]) -> dict[str, Any]:
+        command = normalize_execution_command(command, self.config)
         if _is_pending_limit_entry(command):
             if _is_marketable_limit(command):
                 fill_command = {
@@ -164,6 +171,7 @@ class LegacyPaperExecutionAdapter:
         account["exposure"] = exposure
         account["margin"] = round(exposure / float(self.engine.config.get("max_leverage") or 1.0), 8)
         account["slippage"] = round(sum(float(fill.get("slippage") or 0.0) for fill in fills), 8)
+        account["fees"] = round(sum(float(fill.get("cost") or 0.0) for fill in fills), 8)
         account["equity"] = round(float(account["ending_cash"]) + float(unrealized or 0.0), 8)
         return {
             "schema_version": "dualtrack-execution-v1",
@@ -374,6 +382,7 @@ def build_execution_engine_adapter(
     config: dict[str, Any] | None = None,
     nautilus_python: str | Path | None = None,
     allow_paper_switch: bool = False,
+    allow_shadow_gate_override: bool = False,
 ) -> ExecutionEngineAdapter:
     normalized = str(engine or "legacy_paper").strip().lower()
     if normalized == "legacy_paper":
@@ -384,7 +393,10 @@ def build_execution_engine_adapter(
         gate_rows = load_json(Path(output_root) / "dualtrack" / "cutover" / "shadow_gate_current.json")
         gate = gate_rows[-1] if gate_rows else {}
         if gate.get("status") != "ready_for_attended_paper_switch":
-            raise RuntimeError("Nautilus paper switch evidence gate is not ready")
+            parity_rows = load_json(Path(output_root) / "dualtrack" / "nautilus" / "parity" / "current.json")
+            parity = parity_rows[-1] if parity_rows else {}
+            if not allow_shadow_gate_override or parity.get("status") != "pass":
+                raise RuntimeError("Nautilus paper switch evidence gate is not ready")
         if nautilus_python in (None, ""):
             raise RuntimeError("Nautilus paper switch requires an isolated runtime path")
         from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
@@ -422,6 +434,10 @@ def execution_engine_selection(
 
     environment = dict(os.environ if environ is None else environ)
     approved = environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") == "1"
+    shadow_gate_override = (
+        environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE")
+        == NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT
+    )
     nautilus_python = str(environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or "").strip()
     if authoritative == "nautilus_paper" and not approved:
         raise RuntimeError("Nautilus paper switch requires attended approval")
@@ -434,6 +450,7 @@ def execution_engine_selection(
         "real_money_eligible": False,
         "attended_approval": approved,
         "nautilus_python": nautilus_python,
+        "shadow_gate_override": shadow_gate_override,
     }
 
 
@@ -456,6 +473,7 @@ def build_configured_execution_engine_adapter(
         config=config,
         nautilus_python=selection["nautilus_python"] or None,
         allow_paper_switch=selection["attended_approval"],
+        allow_shadow_gate_override=selection["shadow_gate_override"],
     )
     if selection["shadow"] != "nautilus_paper" or authoritative.name == "nautilus_paper":
         return authoritative
@@ -505,7 +523,7 @@ def _orders_from_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     orders = []
     for fill in fills:
-        orders.append({
+        order = {
             "order_id": str(fill.get("fill_id") or ""),
             "state": "filled",
             "side": str(fill.get("side") or "").lower(),
@@ -513,7 +531,11 @@ def _orders_from_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "order_type": str(fill.get("order_type") or "").lower(),
             "price": float(fill.get("price") or 0.0),
             "quantity": float(fill.get("pnl_units") or fill.get("units") or 0.0),
-        })
+        }
+        for key in ("ts", "strategy_plan_id", "strategy_plan_version"):
+            if fill.get(key) not in (None, ""):
+                order[key] = fill[key]
+        orders.append(order)
     return orders
 
 

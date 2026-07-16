@@ -12,11 +12,76 @@ import hashlib
 import json
 import math
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 
 MARKET_EVENT_SCHEMA = "dualtrack-market-event-v1"
 EXECUTION_RECONCILIATION_SCHEMA = "dualtrack-execution-parity-v1"
+EXECUTION_COMMAND_CONTRACT_SCHEMA = "dualtrack-execution-contract-v1"
+
+
+def normalize_execution_command(command: dict[str, Any], config: dict[str, Any] | None) -> dict[str, Any]:
+    """Apply one explicit venue precision and attach immutable contract evidence.
+
+    Both paper engines call this before accepting an order.  Raw requested
+    values remain available for audit, while all executable values use the
+    exact same price/quantity increments and fee-contract fingerprint.
+    """
+
+    normalized = dict(command)
+    settings = dict((config or {}).get("execution_contract") or {})
+    if not settings:
+        return normalized
+    price_increment = _positive_decimal(settings.get("price_increment"), "execution price_increment")
+    quantity_increment = _positive_decimal(settings.get("quantity_increment"), "execution quantity_increment")
+
+    raw_price = _decimal_or_none(normalized.get("price"))
+    raw_market_price = _decimal_or_none(normalized.get("market_price"))
+    raw_quantity = _decimal_or_none(normalized.get("quantity", normalized.get("contracts")))
+    raw_notional = _decimal_or_none(normalized.get("notional"))
+    price_basis = raw_price or raw_market_price
+    if raw_quantity is None and raw_notional is not None and price_basis is not None and price_basis > 0:
+        raw_quantity = raw_notional / price_basis
+
+    if raw_price is not None:
+        executable_price = _round_to_increment(raw_price, price_increment)
+        if executable_price != raw_price and normalized.get("requested_price") in (None, ""):
+            normalized["requested_price"] = float(raw_price)
+        normalized["price"] = float(executable_price)
+    if raw_market_price is not None:
+        normalized["market_price"] = float(_round_to_increment(raw_market_price, price_increment))
+    for key in ("sl", "tp"):
+        value = _decimal_or_none(normalized.get(key))
+        if value is not None:
+            normalized[key] = float(_round_to_increment(value, price_increment))
+
+    if raw_quantity is not None:
+        executable_quantity = _round_to_increment(raw_quantity, quantity_increment)
+        if executable_quantity <= 0:
+            raise ValueError("execution quantity rounds to zero at venue precision")
+        if executable_quantity != raw_quantity and normalized.get("requested_quantity") in (None, ""):
+            normalized["requested_quantity"] = float(raw_quantity)
+        normalized["quantity"] = float(executable_quantity)
+        if command.get("contracts") not in (None, ""):
+            normalized["contracts"] = float(executable_quantity)
+        executable_price = _decimal_or_none(normalized.get("price") or normalized.get("market_price"))
+        if executable_price is not None:
+            normalized["notional"] = float((executable_price * executable_quantity).quantize(Decimal("0.00000001")))
+
+    contract_payload = {
+        "schema_version": str(settings.get("schema_version") or EXECUTION_COMMAND_CONTRACT_SCHEMA),
+        "execution_instrument_id": str(settings.get("execution_instrument_id") or ""),
+        "price_increment": str(price_increment),
+        "quantity_increment": str(quantity_increment),
+    }
+    fee_payload = dict((config or {}).get("paper_fee_model") or {})
+    normalized["execution_contract"] = {
+        **contract_payload,
+        "contract_hash": _payload_hash(contract_payload),
+        "fee_contract_hash": _payload_hash(fee_payload),
+    }
+    return normalized
 
 
 def canonical_market_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -90,7 +155,7 @@ def compare_execution_snapshots(
     _compare_fills(authoritative.get("fills") or [], candidate.get("fills") or [], differences, normalization)
     _compare_positions(authoritative.get("positions") or [], candidate.get("positions") or [], differences, normalization)
 
-    for field in ("starting_cash", "realized_pnl", "ending_cash", "margin", "exposure", "slippage"):
+    for field in ("starting_cash", "realized_pnl", "ending_cash", "equity", "margin", "exposure", "slippage", "fees"):
         expected = _normalized_number((authoritative.get("account") or {}).get(field), normalization["money_decimals"])
         actual = _normalized_number((candidate.get("account") or {}).get(field), normalization["money_decimals"])
         if expected != actual:
@@ -189,7 +254,10 @@ def _compare_fills(
     normalization: dict[str, Any],
 ) -> None:
     for index, (expected_fill, actual_fill) in enumerate(zip(authoritative, candidate)):
-        for field in ("side", "event", "price", "quantity"):
+        for field in (
+            "side", "event", "order_type", "liquidity", "price", "quantity", "cost", "slippage", "ts",
+            "strategy_plan_id", "strategy_plan_version",
+        ):
             expected = _fill_value(expected_fill, field, normalization)
             actual = _fill_value(actual_fill, field, normalization)
             if expected != actual:
@@ -207,7 +275,10 @@ def _compare_orders(
     normalization: dict[str, Any],
 ) -> None:
     for index, (expected_order, actual_order) in enumerate(zip(authoritative, candidate)):
-        for field in ("state", "side", "event", "order_type", "price", "quantity"):
+        for field in (
+            "state", "side", "event", "order_type", "price", "quantity", "ts",
+            "strategy_plan_id", "strategy_plan_version",
+        ):
             expected = _order_value(expected_order, field, normalization)
             actual = _order_value(actual_order, field, normalization)
             if expected != actual:
@@ -225,7 +296,10 @@ def _compare_positions(
     normalization: dict[str, Any],
 ) -> None:
     for index, (expected_position, actual_position) in enumerate(zip(authoritative, candidate)):
-        for field in ("status", "side", "remaining_units"):
+        for field in (
+            "status", "side", "remaining_units", "entry_price", "exit_price", "realized_pnl", "sl", "tp",
+            "strategy_plan_id", "strategy_plan_version",
+        ):
             expected = _position_value(expected_position, field, normalization)
             actual = _position_value(actual_position, field, normalization)
             if expected != actual:
@@ -244,12 +318,24 @@ def _fill_value(fill: dict[str, Any], field: str, normalization: dict[str, Any])
         )
     if field == "price":
         return _normalized_number(fill.get(field), normalization["price_decimals"])
+    if field in {"cost", "slippage"}:
+        return _normalized_number(fill.get(field), normalization["money_decimals"])
+    if field == "ts":
+        return _comparable_timestamp(fill.get(field))
+    if field == "strategy_plan_version":
+        return _comparable_integer(fill.get(field))
     return str(fill.get(field) or "").lower()
 
 
 def _position_value(position: dict[str, Any], field: str, normalization: dict[str, Any]) -> Any:
     if field == "remaining_units":
         return _normalized_number(position.get(field), normalization["quantity_decimals"])
+    if field in {"entry_price", "exit_price", "sl", "tp"}:
+        return _normalized_number(position.get(field), normalization["price_decimals"])
+    if field == "realized_pnl":
+        return _normalized_number(position.get(field), normalization["money_decimals"])
+    if field == "strategy_plan_version":
+        return _comparable_integer(position.get(field))
     return str(position.get(field) or "").lower()
 
 
@@ -258,7 +344,41 @@ def _order_value(order: dict[str, Any], field: str, normalization: dict[str, Any
         return _normalized_number(order.get(field), normalization["price_decimals"])
     if field == "quantity":
         return _normalized_number(order.get(field), normalization["quantity_decimals"])
+    if field == "state":
+        return _canonical_order_state(order.get(field))
+    if field == "ts":
+        return _comparable_timestamp(order.get(field))
+    if field == "strategy_plan_version":
+        return _comparable_integer(order.get(field))
     return str(order.get(field) or "").lower()
+
+
+def _canonical_order_state(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "canceled": "cancelled",
+        "partiallyfilled": "partially_filled",
+        "partially_filled": "partially_filled",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _comparable_timestamp(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return _iso_utc(value, "execution timestamp")
+    except ValueError:
+        return str(value).strip()
+
+
+def _comparable_integer(value: Any) -> int | str:
+    if value in (None, ""):
+        return ""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _comparison_normalization(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -302,3 +422,32 @@ def _normalized_number(value: Any, decimals: int | None) -> float | None:
 def _stable_id(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return f"market-{hashlib.sha256(encoded).hexdigest()[:20]}"
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("execution numeric value is invalid") from exc
+    if not parsed.is_finite():
+        raise ValueError("execution numeric value must be finite")
+    return parsed
+
+
+def _positive_decimal(value: Any, label: str) -> Decimal:
+    parsed = _decimal_or_none(value)
+    if parsed is None or parsed <= 0:
+        raise ValueError(f"{label} must be positive")
+    return parsed
+
+
+def _round_to_increment(value: Decimal, increment: Decimal) -> Decimal:
+    units = (value / increment).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return (units * increment).quantize(increment)
+
+
+def _payload_hash(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"

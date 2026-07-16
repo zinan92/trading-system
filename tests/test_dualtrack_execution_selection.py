@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from services.dualtrack_execution_adapter import (
+    NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT,
     build_configured_execution_engine_adapter,
     execution_engine_selection,
 )
@@ -20,6 +21,7 @@ def test_execution_selection_defaults_to_legacy_with_nautilus_shadow() -> None:
         "real_money_eligible": False,
         "attended_approval": False,
         "nautilus_python": "",
+        "shadow_gate_override": False,
     }
 
 
@@ -58,6 +60,23 @@ def test_nautilus_cutover_requires_exact_approval_and_isolated_runtime_env() -> 
     assert selection["attended_approval"] is True
     assert selection["nautilus_python"] == "/isolated/nautilus/bin/python"
     assert selection["real_money_eligible"] is False
+
+
+def test_accelerated_gate_override_requires_exact_paper_only_acknowledgement() -> None:
+    config = {"execution_engine": {"authoritative": "nautilus_paper", "real_money_eligible": False}}
+    base = {
+        "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED": "1",
+        "TRADING_ORCHESTRATOR_NAUTILUS_PYTHON": "/isolated/nautilus/bin/python",
+    }
+
+    assert execution_engine_selection(config, environ={
+        **base,
+        "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE": "yes",
+    })["shadow_gate_override"] is False
+    assert execution_engine_selection(config, environ={
+        **base,
+        "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE": NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT,
+    })["shadow_gate_override"] is True
 
 
 def test_execution_selection_rejects_unknown_or_real_money_engine() -> None:

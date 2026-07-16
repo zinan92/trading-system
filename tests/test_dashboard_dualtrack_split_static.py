@@ -38,7 +38,33 @@ def test_console_exposes_visible_grid_and_user_configurable_indicators() -> None
     for control in ('id="showEma"', 'id="showMacd"', 'id="emaFast"', 'id="emaSlow"', 'id="gridSummary"'):
         assert control in html
     assert "requestPreview" in html
-    assert "Grid ${index}" in html
+    assert "visibleGridLevels" in html
+    assert 'gridColor:"rgba(255,255,255,.018)"' in html
+    assert "axisLabelVisible:labelledPrices.has" in html
+
+
+def test_console_exposes_real_arithmetic_and_geometric_grid_modes() -> None:
+    html = (ROOT / "dashboard-dualtrack-split.html").read_text(encoding="utf-8")
+
+    assert 'data-grid-mode="arithmetic"' in html
+    assert 'data-grid-mode="geometric"' in html
+    assert "gridMode" in html
+    assert "mode:state.gridMode" in html
+    assert "等价差" in html
+    assert "等比例" in html
+    assert "净收益/格" in html
+    assert "单格价差" in html
+
+
+def test_failed_grid_mode_preview_keeps_last_valid_grid_and_rolls_back_selection() -> None:
+    html = (ROOT / "dashboard-dualtrack-split.html").read_text(encoding="utf-8")
+
+    assert "const previousPreview=state.preview" in html
+    assert "state.preview=previousPreview" in html
+    assert "未切换，图上仍显示" in html
+    assert "const previousMode=state.gridMode" in html
+    assert "state.gridMode=previousMode" in html
+    assert "setGridMode(previousMode)" in html
 
 
 def test_console_keeps_action_feedback_visible_after_a_refresh() -> None:
@@ -74,7 +100,7 @@ def test_console_preserves_auto_sizing_until_user_manually_edits_notional() -> N
     assert 'notionalMode:"auto"' in html
     assert "notional_mode:state.notionalMode" in html
     assert 'state.notionalMode="manual"' in html
-    assert "自动风险上限" in html
+    assert "杠杆容量倒推" in html
 
 
 def test_console_direction_and_style_controls_request_new_grid_geometry() -> None:
@@ -174,6 +200,9 @@ def test_console_names_the_authoritative_engine_and_shadow_gate() -> None:
     assert "当前周期实时对账有差异" in html
     assert "required_consecutive_passes" in html
     assert "observed_consecutive_passes" in html
+    assert "已切换（Paper）" in html
+    assert "固定测试通过" in html
+    assert 'engine==="nautilus_paper"' in html
 
 
 def test_console_reconciles_authoritative_state_after_an_uncertain_control_response() -> None:

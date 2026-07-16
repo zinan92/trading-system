@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 from pathlib import Path
+from copy import deepcopy
 
 import pytest
 
 import pipelines.dashboard_server as dashboard_server
 from services.journal_store import load_json, write_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_execution_engine(monkeypatch: pytest.MonkeyPatch):
+    config = deepcopy(TEST_CONFIG)
+    config["execution_engine"] = {
+        "authoritative": "legacy_paper",
+        "shadow": "none",
+        "real_money_eligible": False,
+    }
+    factory = lambda *args, **kwargs: deepcopy(config)
+    monkeypatch.setattr("services.dualtrack_config.dualtrack_config", factory)
+    monkeypatch.setattr(dashboard_server, "dualtrack_config", factory)
 
 
 def _entry_fill(*, cycle_id: str, track: str, side: str = "buy", price: float = 100.0, units: float = 2.0) -> dict:

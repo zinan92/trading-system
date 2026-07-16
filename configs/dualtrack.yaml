@@ -18,7 +18,7 @@
     "provider": "binance_usdm_futures"
   },
   "execution_engine": {
-    "authoritative": "legacy_paper",
+    "authoritative": "nautilus_paper",
     "shadow": "nautilus_paper",
     "shadow_runtime_path": "/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python",
     "real_money_eligible": false,
@@ -74,22 +74,29 @@
     "min_grid_count": 24,
     "max_grid_count": 80,
     "cost_spacing_multiple": 5,
+    "default_mode": "arithmetic",
+    "capital_utilization_cap": 1,
+    "max_plan_loss_pct": 0.1,
     "styles": {
       "steady": {
         "range_atr_multiple": 2,
-        "spacing_atr_multiple": 0.25,
-        "margin_utilization_cap": 0.5,
-        "max_plan_loss_pct": 0.05
+        "spacing_atr_multiple": 0.25
       },
       "aggressive": {
         "range_atr_multiple": 1,
-        "spacing_atr_multiple": 0.125,
-        "margin_utilization_cap": 0.7,
-        "max_plan_loss_pct": 0.08
+        "spacing_atr_multiple": 0.125
       }
     }
   },
   "cost_per_side_bp": 0.5,
+  "execution_contract": {
+    "schema_version": "dualtrack-execution-contract-v1",
+    "execution_instrument_id": "XAUUSDT",
+    "price_precision": 2,
+    "price_increment": "0.01",
+    "quantity_precision": 3,
+    "quantity_increment": "0.001"
+  },
   "paper_fee_model": {
     "mode": "account_observed",
     "maker_fee_rate": "0",
@@ -115,7 +122,7 @@
     }
   },
   "scoreboard": {
-    "gate_threshold": 0.60,
+    "gate_threshold": 0.6,
     "window_cycles": 30
   },
   "review": {
@@ -130,5 +137,8 @@
     "reversal_bp": 10,
     "min_run_pct": 0.3
   },
-  "weekly_target_usd": [1000, 1500]
+  "weekly_target_usd": [
+    1000,
+    1500
+  ]
 }

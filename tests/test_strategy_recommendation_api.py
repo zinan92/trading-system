@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
+import pipelines.dashboard_server as dashboard_server
 from pipelines.dashboard_server import build_strategy_console_control_response
 from services.strategy_control_plane import StrategyControlPlane
 
@@ -80,3 +83,85 @@ def test_refresh_recommendation_saves_ai_proposal_without_mutating_production(tm
     assert result["preview"]["strategy_timeframes"] == {"range": "1d", "spacing": "4h", "execution": "1m"}
     assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
     assert not (output / "dualtrack" / "orders" / f"{cycle_id}_human.json").exists()
+
+
+def test_grid_preview_requires_only_the_d1_and_4h_planning_timeframes(tmp_path: Path, monkeypatch) -> None:
+    market = _market()
+    contexts = market.pop("strategy_timeframes")
+    requested = []
+
+    def partial_contexts(*, timeframes=None, **_kwargs):
+        requested.append(tuple(timeframes or ()))
+        return {timeframe: contexts[timeframe] for timeframe in timeframes}
+
+    monkeypatch.setattr(dashboard_server, "build_strategy_timeframes_response", partial_contexts)
+    result = build_strategy_console_control_response(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "action": "preview",
+            "direction": "neutral",
+            "style": "steady",
+        },
+        output_root=tmp_path / "outputs",
+        market=market,
+        account={"equity": 10_000},
+    )
+
+    assert requested == [("1d", "4h")]
+    assert result["preview"]["strategy_timeframes"] == {"range": "1d", "spacing": "4h", "execution": "1m"}
+
+
+def test_strategy_timeframes_retry_one_transient_same_source_failure(monkeypatch) -> None:
+    calls = []
+
+    class FlakyFeed:
+        def snapshot(self, *, timeframe, **_kwargs):
+            calls.append(timeframe)
+            if timeframe == "1d" and calls.count("1d") == 1:
+                return {
+                    "status": "blocked",
+                    "is_synthetic": False,
+                    "access_issues": ["datafeed unavailable: temporary connection reset"],
+                    "bars": [],
+                }
+            return {
+                "status": "ready",
+                "fresh": True,
+                "is_synthetic": False,
+                "provider": "binance_usdm_futures",
+                "bars": _bars(timeframe, 32 if timeframe == "1d" else 64, 4050, 20 if timeframe == "1d" else 8),
+            }
+
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", lambda **_kwargs: FlakyFeed())
+    result = dashboard_server.build_strategy_timeframes_response(
+        as_of="2026-07-05T12:00:00+00:00",
+        timeframes=("1d", "4h"),
+    )
+
+    assert calls == ["1d", "1d", "4h"]
+    assert result["1d"]["provider"] == "binance_usdm_futures"
+    assert result["4h"]["provider"] == "binance_usdm_futures"
+
+
+def test_strategy_timeframes_never_retry_or_accept_synthetic_data(monkeypatch) -> None:
+    calls = []
+
+    class SyntheticFeed:
+        def snapshot(self, *, timeframe, **_kwargs):
+            calls.append(timeframe)
+            return {
+                "status": "ready",
+                "fresh": True,
+                "is_synthetic": True,
+                "provider": "synthetic_fixture",
+                "bars": _bars(timeframe, 32, 4050, 20),
+            }
+
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", lambda **_kwargs: SyntheticFeed())
+    with pytest.raises(ValueError, match="strategy timeframe 1d is unavailable or untrusted"):
+        dashboard_server.build_strategy_timeframes_response(
+            as_of="2026-07-05T12:00:00+00:00",
+            timeframes=("1d",),
+        )
+
+    assert calls == ["1d"]

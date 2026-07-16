@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from services.dualtrack_execution_contract import canonical_market_event, compare_execution_snapshots
+from services.dualtrack_execution_contract import (
+    canonical_market_event,
+    compare_execution_snapshots,
+    normalize_execution_command,
+)
 from services.dualtrack_shadow_reconciliation import DualTrackShadowReconciler
 from services.journal_store import load_json
 
@@ -106,6 +110,93 @@ def test_execution_parity_compares_order_terminal_state() -> None:
         "authoritative": "filled",
         "candidate": "accepted",
     }]
+
+
+def test_execution_parity_treats_cancelled_and_canceled_as_the_same_terminal_state() -> None:
+    authoritative = _snapshot()
+    authoritative["orders"] = [{
+        "state": "cancelled", "side": "buy", "event": "entry", "order_type": "limit",
+        "price": 100, "quantity": 1,
+    }]
+    candidate = _snapshot("nautilus")
+    candidate["orders"] = [{
+        "state": "CANCELED", "side": "buy", "event": "entry", "order_type": "limit",
+        "price": 100, "quantity": 1,
+    }]
+
+    report = compare_execution_snapshots(authoritative, candidate, cycle_id="2026-07-10_DAY")
+
+    assert report["status"] == "pass"
+
+
+def test_execution_parity_catches_fee_equity_timing_and_plan_trace_drift() -> None:
+    authoritative = _snapshot()
+    authoritative["account"] = {"fees": 0.04, "equity": 9999.96}
+    authoritative["fills"] = [{
+        "side": "buy", "event": "entry", "price": 100, "quantity": 1,
+        "cost": 0.04, "ts": "2026-07-10T01:00:00Z",
+        "strategy_plan_id": "plan-1", "strategy_plan_version": 1,
+    }]
+    candidate = _snapshot("nautilus")
+    candidate["account"] = {"fees": 0.05, "equity": 9999.95}
+    candidate["fills"] = [{
+        "side": "buy", "event": "entry", "price": 100, "quantity": 1,
+        "cost": 0.05, "ts": "2026-07-10T01:01:00+00:00",
+        "strategy_plan_id": "plan-2", "strategy_plan_version": 2,
+    }]
+
+    report = compare_execution_snapshots(authoritative, candidate, cycle_id="2026-07-10_DAY")
+
+    assert {row["path"] for row in report["differences"]} == {
+        "account.fees",
+        "account.equity",
+        "fills[0].cost",
+        "fills[0].ts",
+        "fills[0].strategy_plan_id",
+        "fills[0].strategy_plan_version",
+    }
+
+
+def test_execution_command_uses_one_venue_precision_and_versions_fee_contract() -> None:
+    config = {
+        "execution_contract": {
+            "schema_version": "dualtrack-execution-contract-v1",
+            "execution_instrument_id": "XAUUSDT",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+        },
+        "paper_fee_model": {
+            "mode": "account_observed",
+            "maker_fee_rate": "0",
+            "taker_fee_rate": "0.000400",
+            "source": "authenticated_account_commissionRate",
+            "observed_at": "2026-07-10T10:53:16+00:00",
+            "real_money_eligible": False,
+        },
+    }
+    command = {
+        "price": 4060.1089,
+        "market_price": 4060.107,
+        "quantity": 0.17772282,
+        "contracts": 0.17772282,
+        "notional": 721.594349659898,
+        "sl": 4010.004,
+        "tp": 4100.006,
+    }
+
+    normalized = normalize_execution_command(command, config)
+
+    assert normalized["price"] == 4060.11
+    assert normalized["market_price"] == 4060.11
+    assert normalized["quantity"] == 0.178
+    assert normalized["contracts"] == 0.178
+    assert normalized["notional"] == 722.69958
+    assert normalized["sl"] == 4010.0
+    assert normalized["tp"] == 4100.01
+    assert normalized["requested_price"] == 4060.1089
+    assert normalized["requested_quantity"] == 0.17772282
+    assert normalized["execution_contract"]["fee_contract_hash"].startswith("sha256:")
+    assert normalized["execution_contract"]["contract_hash"].startswith("sha256:")
 
 
 def test_execution_parity_applies_only_declared_venue_precision() -> None:

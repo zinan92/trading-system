@@ -26,10 +26,12 @@ from urllib.request import Request, urlopen
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_config import dualtrack_config
+from services.dualtrack_execution_adapter import NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT
 from services.journal_store import load_json, write_json
 
 
 CUTOVER_ACKNOWLEDGEMENT = "I_UNDERSTAND_NAUTILUS_PAPER_CUTOVER_WILL_RESTART_LOCAL_SERVICES"
+ACCELERATED_GATE_OVERRIDE_ACKNOWLEDGEMENT = NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT
 ROLLBACK_ACKNOWLEDGEMENT = "I_UNDERSTAND_NAUTILUS_PAPER_ROLLBACK_WILL_RESTORE_LEGACY_AND_RESTART_LOCAL_SERVICES"
 SERVICE_LABELS = (
     "com.wendy.trading-orchestrator.dualtrack-live-tick",
@@ -61,15 +63,33 @@ class DualTrackNautilusCutoverController:
         self.service_starter = service_starter or self._default_start
         self.engine_validator = engine_validator or self._default_engine_validator
 
-    def apply(self, *, acknowledgement: str, cycle_id: str | None = None) -> dict[str, Any]:
+    def apply(
+        self,
+        *,
+        acknowledgement: str,
+        cycle_id: str | None = None,
+        allow_shadow_gate_override: bool = False,
+        shadow_gate_override_acknowledgement: str = "",
+    ) -> dict[str, Any]:
         if acknowledgement != CUTOVER_ACKNOWLEDGEMENT:
             return self._blocked("missing_cutover_acknowledgement", acknowledgement_ok=False)
+        if (
+            allow_shadow_gate_override
+            and shadow_gate_override_acknowledgement != ACCELERATED_GATE_OVERRIDE_ACKNOWLEDGEMENT
+        ):
+            return self._blocked("missing_shadow_gate_override_acknowledgement", acknowledgement_ok=True)
         config = dualtrack_config(self.config_path)
+        precheck_environ = dict(self.environ)
+        if allow_shadow_gate_override:
+            precheck_environ["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE"] = (
+                ACCELERATED_GATE_OVERRIDE_ACKNOWLEDGEMENT
+            )
         precheck = self.precheck_builder(
             self.output_root,
             config=config,
-            environ=self.environ,
+            environ=precheck_environ,
             cycle_id=cycle_id,
+            allow_shadow_gate_override=allow_shadow_gate_override,
         )
         if precheck.get("status") != "ready_for_operator_cutover":
             return self._blocked("precheck_not_ready", acknowledgement_ok=True, precheck=precheck)
@@ -97,7 +117,7 @@ class DualTrackNautilusCutoverController:
         try:
             quiesce_receipts = self.service_quiescer(SERVICE_LABELS)
             self._require_service_success(quiesce_receipts, expected="stopped")
-            self._write_cutover_files(runtime_path)
+            self._write_cutover_files(runtime_path, shadow_gate_override=allow_shadow_gate_override)
             start_receipts = self.service_starter(service_paths)
             self._require_service_success(start_receipts, expected="started")
             post_validation = self.engine_validator("nautilus_paper")
@@ -143,6 +163,11 @@ class DualTrackNautilusCutoverController:
                     "start_receipts": rollback_start,
                 },
                 "rollback_validation": rollback_validation,
+                "shadow_gate_override": {
+                    "requested": allow_shadow_gate_override,
+                    "used": allow_shadow_gate_override,
+                    "acknowledgement": shadow_gate_override_acknowledgement if allow_shadow_gate_override else "",
+                },
                 **self._safety(config_write_performed=True),
             }
             self._write_receipt("apply", cutover_id, payload)
@@ -158,6 +183,11 @@ class DualTrackNautilusCutoverController:
             "quiesce_receipts": quiesce_receipts,
             "start_receipts": start_receipts,
             "post_validation": post_validation,
+            "shadow_gate_override": {
+                "requested": allow_shadow_gate_override,
+                "used": allow_shadow_gate_override,
+                "acknowledgement": shadow_gate_override_acknowledgement if allow_shadow_gate_override else "",
+            },
             "rollback": {
                 "required": True,
                 "acknowledgement": ROLLBACK_ACKNOWLEDGEMENT,
@@ -271,7 +301,7 @@ class DualTrackNautilusCutoverController:
             "reconciliation": reconciliation,
         }
 
-    def _write_cutover_files(self, runtime_path: str) -> None:
+    def _write_cutover_files(self, runtime_path: str, *, shadow_gate_override: bool = False) -> None:
         config = json.loads(self.config_path.read_text(encoding="utf-8"))
         settings = dict(config.get("execution_engine") or {})
         settings["authoritative"] = "nautilus_paper"
@@ -284,6 +314,12 @@ class DualTrackNautilusCutoverController:
             env = dict(payload.get("EnvironmentVariables") or {})
             env["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED"] = "1"
             env["TRADING_ORCHESTRATOR_NAUTILUS_PYTHON"] = runtime_path
+            if shadow_gate_override:
+                env["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE"] = (
+                    ACCELERATED_GATE_OVERRIDE_ACKNOWLEDGEMENT
+                )
+            else:
+                env.pop("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE", None)
             payload["EnvironmentVariables"] = env
             self._atomic_write(path, plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=False))
 
@@ -486,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cycle-id", default="")
     parser.add_argument("--acknowledgement", required=True)
     parser.add_argument("--apply-receipt", default="")
+    parser.add_argument("--allow-shadow-gate-override", action="store_true")
+    parser.add_argument("--shadow-gate-override-acknowledgement", default="")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     output = Path(args.output_root) if args.output_root else ROOT / str(load_pipeline_config().get("output_root", "outputs"))
@@ -495,7 +533,12 @@ def main(argv: list[str] | None = None) -> int:
         launch_agents_dir=Path(args.launch_agents_dir) if args.launch_agents_dir else None,
     )
     if args.action == "apply":
-        result = controller.apply(acknowledgement=args.acknowledgement, cycle_id=args.cycle_id or None)
+        result = controller.apply(
+            acknowledgement=args.acknowledgement,
+            cycle_id=args.cycle_id or None,
+            allow_shadow_gate_override=args.allow_shadow_gate_override,
+            shadow_gate_override_acknowledgement=args.shadow_gate_override_acknowledgement,
+        )
     else:
         if not args.apply_receipt:
             parser.error("rollback requires --apply-receipt")
