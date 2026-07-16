@@ -318,6 +318,75 @@ def test_start_is_fail_closed_for_stale_market(tmp_path: Path) -> None:
     assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
 
 
+def test_start_accepts_complete_grid_before_processing_a_legitimate_fill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    class FillingAdapter:
+        name = "nautilus_paper"
+
+        def __init__(self) -> None:
+            self.orders: list[dict] = []
+            self.filled = False
+
+        def submit_order(self, command: dict) -> dict:
+            row = {
+                "order_id": command["source_fill_id"],
+                "state": "accepted",
+                "side": command["side"],
+                "price": command["price"],
+                "quantity": command["quantity"],
+                "strategy_plan_id": command["strategy_plan_id"],
+                "strategy_plan_version": command["strategy_plan_version"],
+            }
+            self.orders.append(row)
+            return dict(row)
+
+        def snapshot(self, _cycle_id: str, **_kwargs) -> dict:
+            return {
+                "orders": [dict(row) for row in self.orders],
+                "fills": ([{"fill_id": "fill-1"}] if self.filled else []),
+                "positions": [],
+            }
+
+        def process_market_event(self, _event: dict) -> dict:
+            self.filled = True
+            self.orders[0]["state"] = "filled"
+            return {"status": "replayed"}
+
+        def reconcile(self, _cycle_id: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+        def cancel_orders(self, _cycle_id: str, **_kwargs) -> dict:
+            return {"cancelled_order_count": 0, "cancelled_order_ids": []}
+
+    adapter = FillingAdapter()
+    monkeypatch.setattr(
+        "services.strategy_control_plane.build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+
+    started = plane.control(
+        cycle_id,
+        "start",
+        {"direction": "long", "style": "steady"},
+        market=market(),
+        account={"ending_cash": 10_000.0},
+        now="2026-07-05T01:40:00+00:00",
+    )
+
+    assert started["created_orders"] > 1
+    assert started["filled_orders"] == 1
+    assert started["accepted_orders"] == started["created_orders"] - 1
+    assert started["runtime"]["actual_state"] == "running"
+
+
 def test_runtime_state_is_scoped_to_the_requested_cycle(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     plane = StrategyControlPlane(output)

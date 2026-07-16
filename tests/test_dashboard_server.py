@@ -1275,7 +1275,7 @@ def test_dashboard_v5_is_a_stable_alias_for_the_production_strategy_console():
     source = Path(dashboard_server.__file__).read_text(encoding="utf-8")
 
     assert 'if parsed.path == "/dashboard-v5.html":' in source
-    assert 'self._serve_static_alias("/dashboard-dualtrack-split.html")' in source
+    assert 'self._serve_static_alias("/dashboard-gridmind.html")' in source
     assert 'https://goldbot.park-ai-intel.com/dashboard-v5.html' in source
     assert 'http://127.0.0.1:8766/dashboard-v5.html' in source
 

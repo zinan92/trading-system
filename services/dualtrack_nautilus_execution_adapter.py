@@ -15,7 +15,7 @@ from services.journal_store import load_json, write_json
 
 
 ReplayExecutor = Callable[[Path, Path, Path], dict[str, Any]]
-REPLAY_VERSION = "dualtrack-nautilus-replay-v5"
+REPLAY_VERSION = "dualtrack-nautilus-replay-v6"
 
 
 class NautilusExecutionAdapter:
@@ -225,6 +225,7 @@ class NautilusExecutionAdapter:
             }
         if not any(row.get("event_id") == event_id for row in rows):
             rows.append(normalized)
+            rows.sort(key=_market_event_sort_key)
             write_json(path, rows)
         if self.defer_replay:
             return {
@@ -402,8 +403,8 @@ class NautilusExecutionAdapter:
         }
 
     def _replay(self, cycle_id: str) -> dict[str, Any]:
-        events = load_json(self._events_path(cycle_id))
-        commands = load_json(self._commands_path(cycle_id))
+        events = sorted(load_json(self._events_path(cycle_id)), key=_market_event_sort_key)
+        commands = sorted(load_json(self._commands_path(cycle_id)), key=_command_sort_key)
         bundle = build_shadow_input(
             cycle_id=cycle_id,
             authoritative_snapshot={"cycle_id": cycle_id, "engine": self.name, "fills": []},
@@ -437,8 +438,33 @@ class NautilusExecutionAdapter:
         return normalized
 
     def _persist_snapshot(self, cycle_id: str, snapshot: dict[str, Any]) -> None:
+        previous_fills = load_json(self._fills_path(cycle_id))
+        next_fills = list(snapshot.get("fills") or [])
+        if previous_fills:
+            previous_by_id = {
+                _fill_business_key(row): row
+                for row in previous_fills
+                if isinstance(row, dict) and _fill_business_key(row)
+            }
+            next_by_id = {
+                _fill_business_key(row): row
+                for row in next_fills
+                if isinstance(row, dict) and _fill_business_key(row)
+            }
+            missing = sorted(set(previous_by_id) - set(next_by_id))
+            changed = sorted(
+                fill_id
+                for fill_id in set(previous_by_id) & set(next_by_id)
+                if _fill_business_value(previous_by_id[fill_id])
+                != _fill_business_value(next_by_id[fill_id])
+            )
+            if missing or changed or len(previous_by_id) != len(previous_fills):
+                raise RuntimeError(
+                    "immutable fill history regressed"
+                    f"; missing={missing}; changed={changed}"
+                )
         write_json(self._orders_path(cycle_id), list(snapshot.get("orders") or []))
-        write_json(self._fills_path(cycle_id), list(snapshot.get("fills") or []))
+        write_json(self._fills_path(cycle_id), next_fills)
         write_json(self._positions_path(cycle_id), list(snapshot.get("positions") or []))
         write_json(self.root / "accounts" / f"{cycle_id}.json", [dict(snapshot.get("account") or {})])
         write_json(self._snapshot_path(cycle_id), [snapshot])
@@ -577,7 +603,7 @@ def _canonical_command(command: dict[str, Any]) -> dict[str, Any]:
 
 def _order_receipt(row: dict[str, Any]) -> dict[str, Any]:
     command = dict(row.get("command") or {})
-    return {
+    receipt = {
         "schema_version": "dualtrack-nautilus-order-receipt-v1",
         "order_id": str(row.get("command_id") or ""),
         "cycle_id": str(row.get("cycle_id") or command.get("cycle_id") or ""),
@@ -589,6 +615,33 @@ def _order_receipt(row: dict[str, Any]) -> dict[str, Any]:
         "quantity": float(command.get("quantity") or 0.0),
         "engine": "nautilus_paper",
     }
+    for field in ("ts", "sl", "tp", "strategy_plan_id", "strategy_plan_version"):
+        if command.get(field) not in (None, ""):
+            receipt[field] = command[field]
+    receipt["requested_price"] = float(command.get("requested_price") or command.get("price") or 0.0)
+    receipt["requested_quantity"] = float(
+        command.get("requested_quantity") or command.get("quantity") or 0.0
+    )
+    return receipt
+
+
+def _market_event_sort_key(row: dict[str, Any]) -> str:
+    return str(row.get("ts_event") or "")
+
+
+def _command_sort_key(row: dict[str, Any]) -> str:
+    command = row.get("command") if isinstance(row.get("command"), dict) else {}
+    return str(command.get("ts") or "")
+
+
+def _fill_business_key(row: dict[str, Any]) -> str:
+    """Return the stable fill identity exposed by the execution contract."""
+    return str(row.get("order_id") or row.get("fill_id") or "")
+
+
+def _fill_business_value(row: dict[str, Any]) -> dict[str, Any]:
+    """Ignore replay-local IDs while protecting every economic fill field."""
+    return {key: value for key, value in row.items() if key != "fill_id"}
 
 
 def _sum_if_present(

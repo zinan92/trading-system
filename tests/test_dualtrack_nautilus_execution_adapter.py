@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
 from services.journal_store import load_json, write_json
 
@@ -120,6 +122,113 @@ def test_persists_orders_fills_positions_and_restarts_idempotently(tmp_path: Pat
     duplicate = restarted.process_market_event(event)
     assert duplicate["status"] == "idempotent"
     assert len(load_json(adapter.root / "events" / f"{CYCLE_ID}.json")) == 1
+
+
+def test_order_receipt_keeps_submission_time_and_strategy_traceability(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+        defer_replay=True,
+    )
+
+    receipt = adapter.submit_order({
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "sl": 95.0,
+        "tp": 105.0,
+        "strategy_plan_id": "plan-2",
+        "strategy_plan_version": 2,
+        "source_fill_id": "traceable-order",
+    })
+
+    assert receipt["ts"] == "2026-07-10T01:00:30+00:00"
+    assert receipt["strategy_plan_id"] == "plan-2"
+    assert receipt["strategy_plan_version"] == 2
+    assert receipt["sl"] == 95.0
+    assert receipt["tp"] == 105.0
+
+
+def test_replay_sorts_backfilled_market_events_before_live_commands(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    seen_event_times: list[list[str]] = []
+
+    def replay(_preflight: Path, input_path: Path, _output: Path) -> dict:
+        bundle = load_json(input_path)[-1]
+        seen_event_times.append([row["ts_event"] for row in bundle["market_events"]])
+        snapshot = _candidate(CYCLE_ID)
+        snapshot["fills"] = []
+        snapshot["positions"] = []
+        snapshot["orders"] = []
+        return snapshot
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    adapter.submit_order({
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T11:52:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "source_fill_id": "live-command",
+    })
+    base = {
+        "cycle_id": CYCLE_ID,
+        "price": 100.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    }
+    adapter.process_market_event({**base, "event_id": "live", "ts_event": "2026-07-10T11:52:33+00:00"})
+    adapter.process_market_event({**base, "event_id": "backfill", "ts_event": "2026-07-10T01:01:00+00:00"})
+
+    adapter.flush(CYCLE_ID)
+
+    assert seen_event_times == [[
+        "2026-07-10T01:01:00+00:00",
+        "2026-07-10T11:52:33+00:00",
+    ]]
+    persisted = load_json(adapter.root / "events" / f"{CYCLE_ID}.json")
+    assert [row["event_id"] for row in persisted] == ["backfill", "live"]
+
+
+def test_persisted_fill_history_is_append_only(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+    )
+    first = _candidate(CYCLE_ID)
+    adapter._persist_snapshot(CYCLE_ID, first)
+    regressed = _candidate(CYCLE_ID)
+    regressed["fills"] = []
+
+    with pytest.raises(RuntimeError, match="immutable fill history regressed"):
+        adapter._persist_snapshot(CYCLE_ID, regressed)
 
 
 def test_retries_persisted_event_until_replay_is_acknowledged(tmp_path: Path) -> None:

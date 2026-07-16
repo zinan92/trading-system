@@ -5650,3 +5650,135 @@ auditable datafeed port; broker execution remains a separate port.
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-arithmetic-grid-chart-fixed.png`.
 - Geometric chart:
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-geometric-grid-chart-fixed.png`.
+
+## 2026-07-16 - GRIDMIND visual restoration with the full production console contract
+
+### Decision
+
+- Keep the compact GRIDMIND visual system from the first Claude reskin: five
+  account metrics, a wide chart/data column, a narrow decision/control rail,
+  terminal typography, and restrained amber/green/red state accents.
+- Restore missing capabilities by reusing the proven production-console logic,
+  not by extending the first reskin's simplified handwritten implementation.
+  The restored page retains clickable direction/style/grid-mode previews,
+  editable range/grid/notional/leverage/out-of-range fields, preview risk,
+  start/stop, running range adjustment, statistics reset, AI Input/Output
+  receipts, EMA/MACD, six data tabs, manual close, operator audit, execution
+  engine, and Nautilus cutover status.
+- Continue using `standard-kline`; the first GRIDMIND draft's custom canvas is
+  not a production chart contract. Include the complete active/preview range in
+  price autoscaling so the grid geometry remains visible while all overlays
+  still move with the chart's native scale and pan behavior.
+- Make `/dashboard-v5.html` serve `dashboard-gridmind.html`. Keep
+  `dashboard-dualtrack-split.html` unchanged as the compatibility entry point.
+
+### Gotchas
+
+- The earlier follow-up replaced `dashboard-gridmind.html` with the full legacy
+  page to recover functionality. That restored behavior but also erased the
+  compact visual hierarchy; the right fix was to preserve the full controller
+  contract while replacing only the information architecture and skin.
+- Price lines do not participate in Lightweight Charts autoscaling by default.
+  Without an explicit `autoscaleInfoProvider`, a valid wide grid can exist but
+  most levels remain outside the visible price scale. The GRIDMIND page now
+  includes the selected production/preview range in autoscaling.
+- The control rail is intentionally independently scrollable on desktop because
+  the complete production controls cannot fit inside the screenshot draft's
+  shorter read-only rail. At 1120px and below it returns to normal document flow.
+- Automated public browsing reaches the Cloudflare Access login page without the
+  operator session. Public authenticated visual proof is therefore not claimed;
+  the local v5 route and the public gateway upstream were verified, while the
+  edge remained fail-closed with HTTP 302 to Access.
+
+### Verification and evidence
+
+- Focused dashboard/server/chart regression: `70 passed`.
+- Full repository regression: `1550 passed in 526.82s`.
+- Browser acceptance: trusted Binance USD-M data, live 1m/5m switching, five
+  populated account metrics, no horizontal overflow at 390px, AI receipt with
+  Input/Output/archive, and zero browser console errors.
+- Read-only preview acceptance: short + aggressive + geometric produced 53 grid
+  intervals, 26 candidate orders, 3,848.21 USD per grid, and 10x estimated
+  leverage; the production runtime remained stopped with zero accepted orders
+  and zero open positions.
+- Dashboard service restart preserved authoritative state exactly: cycle
+  `2026-07-16_DAY`, `nautilus_paper`, stopped, zero orders, zero positions.
+  The local gateway returned the new GRIDMIND page and the public edge returned
+  the expected Cloudflare Access 302.
+- Final desktop v5:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-v5-final-desktop.png`.
+- Geometric preview/grid visibility:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-geometric-fit.png`.
+- 390px full-page acceptance:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-mobile-local.png`.
+
+## 2026-07-16 - Chronological execution replay and immutable fill history
+
+### Decision
+
+- Treat execution lifecycle as four separate facts: submitted order, accepted
+  order, immutable fill, and derived position. A filled order leaves the current
+  order list but must remain in fill history; a position can change only through
+  a later close fill.
+- Sort both trusted market events and execution commands by event time before
+  every Nautilus rebuild. Historical bars may be backfilled, but they can never
+  be appended after a live control command and replayed as if they arrived later.
+- Validate the complete start batch before advancing the market. A start is now
+  all-or-zero: every planned order must be accepted or legitimately filled. On
+  failure, the control plane cancels pending orders, flattens any positions
+  created during the failed attempt, advances one cleanup event, and verifies
+  zero remaining orders and positions before reporting failure.
+- Use the durable client order ID as the business identity of a fill. Nautilus
+  internal event IDs are replay-local random values and cannot be used for
+  append-only guarantees. Persisted fill history rejects a missing or
+  economically changed prior fill.
+- Show position open/close time in Beijing time. Render the fill tab from the
+  immutable production fill history rather than from the current derived trade
+  snapshot, and label each event as open-long, close-long, open-short, or
+  close-short.
+
+### Root cause
+
+- The 19:52 start did submit the complete 53-order batch. A live start event was
+  persisted before older cycle bars, so Nautilus received event time in the
+  order `11:52 -> 01:01 -> cleanup -> 01:02...`. This time travel caused two
+  sell orders to appear filled transiently; the start verifier then observed
+  only 51 accepted orders, rolled those 51 back, and left the transient state
+  dependent on replay order.
+- A later full replay reordered/recomputed that state and the temporary fill and
+  position disappeared. It was not a user cancellation and was not valid fill
+  lifecycle behavior; the UI was exposing a derived replay snapshot as if it
+  were an immutable ledger.
+
+### Gotchas
+
+- Nautilus regenerates an internal event UUID during each replay. Comparing that
+  UUID initially caused valid later partial-close replays to be rejected; the
+  stable client order ID is the correct fill identity for this execution model.
+- Commands with identical timestamps must keep insertion order. Python's stable
+  sort is relied on so an entry remains before its associated cancel/exit at the
+  same event time.
+- The dashboard rolled from `2026-07-16_DAY` to `2026-07-16_NIGHT` during the
+  investigation. The new cycle correctly displays stopped, zero orders, and
+  zero positions; this rollover must not be described as manual cleanup of the
+  previous cycle artifact.
+- The transient 19:52 fill was never captured in an immutable intermediate
+  ledger, so it cannot be reconstructed faithfully after the fact. Do not
+  fabricate it from screenshots or current replay output.
+
+### Verification and evidence
+
+- Focused controller, adapter, dashboard, cycle-runner, and execution contract
+  regression: `109 passed` plus real Nautilus runtime/cutover regression
+  `43 passed`.
+- Final clean full repository regression after the replay-version fixture was
+  updated: `1555 passed in 698.82s`.
+- Browser acceptance clicked current positions, current orders, fills, and the
+  5m timeframe. The position table shows Beijing open/close time, fills remain
+  visible as immutable lifecycle events, 5m loads trusted Binance USD-M data,
+  and current-cycle orders remain zero. No dashboard-originated console errors
+  were observed.
+- Desktop lifecycle evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-order-lifecycle-desktop.png`.
+- 390px position-time evidence (zero horizontal page overflow):
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-order-lifecycle-mobile.png`.

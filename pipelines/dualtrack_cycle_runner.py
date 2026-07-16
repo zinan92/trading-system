@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any, Sequence
@@ -29,6 +29,26 @@ from services.journal_store import load_json, write_json
 from services.datafeed_market_repository import DatafeedMarketRepository
 from services.market_store import MarketStore
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
+
+
+def _parse_execution_time(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    try:
+        if text.replace(".", "", 1).isdigit():
+            number = float(text)
+            magnitude = abs(number)
+            if magnitude >= 1e17:
+                number /= 1_000_000_000
+            elif magnitude >= 1e14:
+                number /= 1_000_000
+            elif magnitude >= 1e11:
+                number /= 1_000
+            return datetime.fromtimestamp(number, tz=timezone.utc).replace(microsecond=0)
+        return parse_utc(text)
+    except (OverflowError, OSError, TypeError, ValueError):
+        return None
 
 
 class DualTrackCycleRunner:
@@ -721,11 +741,15 @@ class DualTrackCycleRunner:
         if market_ts < cycle_window_from_id(cycle_id).start:
             return {"status": "skipped", "reason": "market_data_outside_cycle", "triggered": []}
 
-        earliest_activity = min(
-            [parse_utc(position.get("entry_ts")) for position in open_trades if position.get("entry_ts")]
-            + [parse_utc(order.get("ts")) for order in pending_limits if order.get("ts")],
-            default=cycle_window_from_id(cycle_id).start,
-        )
+        activity_times = [
+            parsed
+            for value in (
+                [position.get("entry_ts") for position in open_trades]
+                + [order.get("ts") for order in pending_limits]
+            )
+            if (parsed := _parse_execution_time(value)) is not None
+        ]
+        earliest_activity = min(activity_times, default=cycle_window_from_id(cycle_id).start)
         replay_start = max(
             cycle_window_from_id(cycle_id).start,
             earliest_activity.replace(second=0, microsecond=0),
@@ -793,7 +817,6 @@ class DualTrackCycleRunner:
             "provider": str(bar.provider or ""),
             "instrument_id": self._execution_instrument_id(),
         }
-
     def _execution_instrument_id(self) -> str:
         shadow = ((self.config.get("execution_shadow") or {}).get("nautilus") or {})
         return str(shadow.get("execution_instrument_id") or "XAUUSDT")

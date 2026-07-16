@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from services.dualtrack_nautilus_execution_adapter import REPLAY_VERSION
 from services.dualtrack_shadow_execution_adapter import ShadowingExecutionEngineAdapter
 from services.journal_store import load_json, write_json
 
@@ -32,7 +33,7 @@ class FakeAdapter:
             "orders": [],
             "fills": [],
             "positions": list(getattr(self, "positions", [])),
-            "capabilities": {"replay_version": "dualtrack-nautilus-replay-v5"},
+            "capabilities": {"replay_version": REPLAY_VERSION},
         }
 
     def reconcile(self, cycle_id: str) -> dict:

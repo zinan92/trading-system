@@ -8,7 +8,7 @@ or writes an authoritative legacy ledger.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -376,7 +376,10 @@ def _fills_from_reports(
         if price_precision is not None:
             requested_price = round(requested_price, price_precision)
         fill = {
-            "fill_id": f"nautilus-{str(row.get('event_id') or order_id)}",
+            # Nautilus event IDs are regenerated on every replay. The client
+            # order ID is our durable execution identity, so use it to keep a
+            # completed fill stable across deterministic rebuilds.
+            "fill_id": f"nautilus-{order_id}",
             "order_id": order_id,
             "trade_id": command_id,
             "cycle_id": str(command.get("cycle_id") or ""),
@@ -492,6 +495,16 @@ def _parent_command_id(order_id: str) -> str:
 def _timestamp_text(value: Any) -> str:
     if value in (None, ""):
         return ""
+    if isinstance(value, (int, float)) or str(value).strip().replace(".", "", 1).isdigit():
+        number = float(value)
+        magnitude = abs(number)
+        if magnitude >= 1e17:
+            number /= 1_000_000_000
+        elif magnitude >= 1e14:
+            number /= 1_000_000
+        elif magnitude >= 1e11:
+            number /= 1_000
+        return datetime.fromtimestamp(number, tz=timezone.utc).isoformat()
     isoformat = getattr(value, "isoformat", None)
     return str(isoformat() if callable(isoformat) else value)
 

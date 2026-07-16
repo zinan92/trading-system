@@ -403,6 +403,10 @@ class StrategyControlPlane:
         adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
         try:
             receipts = self._submit_preview_orders(adapter, cycle_id, adjusted, preview, market=market, timestamp=timestamp)
+            submitted_ids = {str(row.get("order_id") or "") for row in receipts}
+            accepted_before_market = self._accepted_orders(cycle_id, adapter=adapter)
+            if {str(row.get("order_id") or "") for row in accepted_before_market} != submitted_ids:
+                raise ValueError("paper start did not accept the complete grid")
             execution_event = self._advance_selected_execution(
                 adapter,
                 cycle_id,
@@ -410,11 +414,28 @@ class StrategyControlPlane:
                 now=now,
                 identity="strategy-start",
             )
+            terminal_orders = {
+                str(row.get("order_id") or ""): row
+                for row in adapter.snapshot(cycle_id).get("orders") or []
+            }
+            missing_ids = sorted(submitted_ids - set(terminal_orders))
+            invalid_states = sorted(
+                order_id
+                for order_id in submitted_ids & set(terminal_orders)
+                if str(terminal_orders[order_id].get("state") or "").lower()
+                not in {"accepted", "filled"}
+            )
+            if missing_ids or invalid_states:
+                raise ValueError(
+                    "paper start lost submitted grid orders"
+                    f"; missing={missing_ids}; invalid_states={invalid_states}"
+                )
             accepted = self._accepted_orders(cycle_id, adapter=adapter)
-            if {str(row.get("order_id") or "") for row in accepted} != {
-                str(row.get("order_id") or "") for row in receipts
-            }:
-                raise ValueError("paper start did not activate the complete grid")
+            filled_count = sum(
+                1
+                for order_id in submitted_ids
+                if str(terminal_orders[order_id].get("state") or "").lower() == "filled"
+            )
             reconciliation = adapter.reconcile(cycle_id)
             if reconciliation.get("status") != "ok":
                 raise ValueError("paper ledger reconciliation failed")
@@ -431,6 +452,30 @@ class StrategyControlPlane:
             except Exception as cleanup_exc:
                 cleanup_errors.append(f"cancel: {cleanup_exc}")
             try:
+                cleanup_snapshot = adapter.snapshot(cycle_id)
+                cleanup_price = _positive_number(market.get("latest_close"), "market latest_close")
+                for position in cleanup_snapshot.get("positions") or []:
+                    if str(position.get("status") or "") != "open":
+                        continue
+                    close_side = "sell" if str(position.get("side") or "") in {"buy", "long"} else "buy"
+                    adapter.submit_order({
+                        "cycle_id": cycle_id,
+                        "ts": _timestamp(now),
+                        "side": close_side,
+                        "event": "flatten",
+                        "order_type": "market",
+                        "price": cleanup_price,
+                        "market_price": cleanup_price,
+                        "trade_id": position.get("trade_id"),
+                        "position_id": position.get("position_id"),
+                        "target_position_side": position.get("side"),
+                        "target_entry_price": position.get("entry_price"),
+                        "symbol": position.get("symbol") or str(market.get("symbol") or "GOLD"),
+                        "source": "strategy_production_console",
+                        "source_fill_id": f"strategy-start-cleanup:{cycle_id}:{position.get('trade_id')}",
+                        "strategy_plan_id": adjusted["strategy_plan_id"],
+                        "strategy_plan_version": adjusted["version"],
+                    })
                 self._advance_selected_execution(
                     adapter,
                     cycle_id,
@@ -438,6 +483,21 @@ class StrategyControlPlane:
                     now=now,
                     identity="strategy-start-cleanup",
                 )
+                cleanup_terminal = adapter.snapshot(cycle_id)
+                remaining_orders = [
+                    row for row in cleanup_terminal.get("orders") or []
+                    if str(row.get("state") or "").lower() == "accepted"
+                ]
+                remaining_positions = [
+                    row for row in cleanup_terminal.get("positions") or []
+                    if str(row.get("status") or "").lower() == "open"
+                ]
+                if remaining_orders or remaining_positions:
+                    raise RuntimeError(
+                        "start cleanup left live paper state"
+                        f"; accepted_orders={len(remaining_orders)}"
+                        f"; open_positions={len(remaining_positions)}"
+                    )
             except Exception as cleanup_exc:
                 cleanup_errors.append(f"advance: {cleanup_exc}")
             adjusted["status"] = "failed"
@@ -447,13 +507,14 @@ class StrategyControlPlane:
             failure_detail = str(exc)
             if cleanup_errors:
                 failure_detail = f"{failure_detail}; start cleanup failed: {'; '.join(cleanup_errors)}"
+            accepted_after_cleanup = len(self._accepted_orders(cycle_id, adapter=adapter))
             self._write_runtime({
                 **starting,
                 "desired_state": "stopped",
                 "actual_state": "error",
                 "updated_at": _timestamp(now),
                 "last_error": failure_detail,
-                "accepted_order_count": 0,
+                "accepted_order_count": accepted_after_cleanup,
             })
             raise
 
@@ -461,7 +522,7 @@ class StrategyControlPlane:
             **starting,
             "actual_state": "running",
             "updated_at": _timestamp(now),
-            "accepted_order_count": len(receipts),
+            "accepted_order_count": len(accepted),
         }
         self._write_runtime(running)
         return {
@@ -473,7 +534,8 @@ class StrategyControlPlane:
             "execution_event": execution_event,
             "reconciliation": reconciliation,
             "created_orders": len(receipts),
-            "accepted_orders": len(receipts),
+            "accepted_orders": len(accepted),
+            "filled_orders": filled_count,
             "idempotent": False,
         }
 

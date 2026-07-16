@@ -144,7 +144,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._redirect("command-center.html")
             return
         if parsed.path == "/dashboard-v5.html":
-            self._serve_static_alias("/dashboard-dualtrack-split.html")
+            self._serve_static_alias("/dashboard-gridmind.html")
             return
         if parsed.path == "/api/command-center-state":
             self._handle_command_center_state_api()
@@ -755,7 +755,9 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
             "account": production_account,
             "pnl": production_history["pnl"],
             "trades": production_history["trades"],
+            "fills": production_history["fills"],
             "trade_summary": production_history["summary"],
+            "current_cycle_fills": execution.get("fills", []),
             "current_cycle_trades": (
                 execution.get("positions", [])
                 if str(execution.get("engine") or "") == "nautilus_paper"
