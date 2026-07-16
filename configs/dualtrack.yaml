@@ -15,7 +15,14 @@
   "market_data": {
     "symbol": "GOLD",
     "timeframe": "1m",
-    "provider": "binance_usdm"
+    "provider": "binance_usdm_futures"
+  },
+  "execution_engine": {
+    "authoritative": "legacy_paper",
+    "shadow": "nautilus_paper",
+    "shadow_runtime_path": "/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python",
+    "real_money_eligible": false,
+    "switch_requires_attended_approval": true
   },
   "market_session": {
     "enabled": false,
@@ -83,6 +90,15 @@
     }
   },
   "cost_per_side_bp": 0.5,
+  "paper_fee_model": {
+    "mode": "account_observed",
+    "maker_fee_rate": "0",
+    "taker_fee_rate": "0.000400",
+    "source": "authenticated_account_commissionRate",
+    "environment": "demo",
+    "observed_at": "2026-07-10T10:53:16+00:00",
+    "real_money_eligible": false
+  },
   "execution_shadow": {
     "nautilus": {
       "instrument_endpoint": "http://127.0.0.1:8100/api/instruments/commodity/XAUUSDT",

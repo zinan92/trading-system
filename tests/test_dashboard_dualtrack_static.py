@@ -422,10 +422,10 @@ def test_dashboard_server_runtime_status_exposes_machine_fills_during_cycle(tmp_
         def snapshot(self, **kwargs):
             return {
                 "status": "ready",
-                "source_mode": "requested_symbol",
+                "source_mode": "binance_usdm_futures",
                 "symbol": "GOLD",
                 "timeframe": "1m",
-                "provider": "binance_usdm",
+                    "provider": "binance_usdm_futures",
                 "fresh": True,
                 "latest_timestamp": "2026-07-05T02:04:00+00:00",
                 "age_minutes": 1.0,
@@ -484,7 +484,7 @@ def test_dashboard_server_runtime_status_exposes_machine_fills_during_cycle(tmp_
     assert response["sample"]["machine_fills_hidden"] is False
     assert response["sample"]["machine_fill_count"] == 1
     assert response["runner"]["bar_count"] == 64
-    assert response["market"]["provider"] == "binance_usdm"
+    assert response["market"]["provider"] == "binance_usdm_futures"
     assert response["machine_range_observation"]["status"] == "high_breached"
     assert response["machine_range_observation"]["eligible_sides"] == []
     assert response["machine_range_reassessment"]["status"] == "awaiting_confirmation"
@@ -500,7 +500,7 @@ def test_dashboard_server_runtime_status_warns_when_simulation_filtered_invalid_
         def snapshot(self, **kwargs):
             return {
                 "status": "ready", "source_mode": "requested_symbol", "symbol": "GOLD", "timeframe": "1m",
-                "provider": "binance_usdm", "fresh": True, "latest_timestamp": "2026-07-05T02:04:00+00:00", "age_minutes": 1.0,
+                "provider": "binance_usdm_futures", "fresh": True, "latest_timestamp": "2026-07-05T02:04:00+00:00", "age_minutes": 1.0,
             }
 
     monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeMarketFeed)
@@ -536,7 +536,7 @@ def test_dashboard_server_runtime_status_exposes_previous_closed_cycle_summary(t
                 "source_mode": "requested_symbol",
                 "symbol": "GOLD",
                 "timeframe": "1m",
-                "provider": "binance_usdm",
+                "provider": "binance_usdm_futures",
                 "fresh": True,
                 "latest_timestamp": "2026-07-05T14:04:00+00:00",
                 "age_minutes": 1.0,

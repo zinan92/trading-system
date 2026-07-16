@@ -117,6 +117,13 @@ def test_official_feed_receipt_refreshes_from_current_local_state(tmp_path: Path
     ]
     write_json(root / "clean_bars" / run_date / "GOLD_5m.json", [bar.to_dict() for bar in bars])
     write_json(root / "data_quality" / f"{run_date}.json", {"GOLD": {"allows_trading": True, "reasons": []}})
+    write_json(root / "oanda_feed" / "current.json", [{
+        "status": "skipped",
+        "ready": False,
+        "imported_rows": 0,
+        "missing_env": ["OANDA_API_TOKEN", "OANDA_ACCOUNT_ID"],
+        "instrument": "XAU_USD",
+    }])
     MarketStore(db_path).upsert_bars(bars)
     MarketStore(db_path).upsert_quote(bars[-1])
 

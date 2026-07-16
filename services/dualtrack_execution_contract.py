@@ -71,11 +71,12 @@ def compare_execution_snapshots(
 
     if not isinstance(authoritative, dict) or not isinstance(candidate, dict):
         raise ValueError("execution snapshots must be objects")
+    normalization = _comparison_normalization(candidate)
     fields = ("realized", "unrealized")
     differences: list[dict[str, Any]] = []
     for field in fields:
-        expected = _number_or_none((authoritative.get("pnl") or {}).get(field))
-        actual = _number_or_none((candidate.get("pnl") or {}).get(field))
+        expected = _normalized_number((authoritative.get("pnl") or {}).get(field), normalization["money_decimals"])
+        actual = _normalized_number((candidate.get("pnl") or {}).get(field), normalization["money_decimals"])
         if expected != actual:
             differences.append({"path": f"pnl.{field}", "authoritative": expected, "candidate": actual})
 
@@ -85,13 +86,13 @@ def compare_execution_snapshots(
         if expected != actual:
             differences.append({"path": f"{field}.count", "authoritative": expected, "candidate": actual})
 
-    _compare_orders(authoritative.get("orders") or [], candidate.get("orders") or [], differences)
-    _compare_fills(authoritative.get("fills") or [], candidate.get("fills") or [], differences)
-    _compare_positions(authoritative.get("positions") or [], candidate.get("positions") or [], differences)
+    _compare_orders(authoritative.get("orders") or [], candidate.get("orders") or [], differences, normalization)
+    _compare_fills(authoritative.get("fills") or [], candidate.get("fills") or [], differences, normalization)
+    _compare_positions(authoritative.get("positions") or [], candidate.get("positions") or [], differences, normalization)
 
     for field in ("starting_cash", "realized_pnl", "ending_cash", "margin", "exposure", "slippage"):
-        expected = _number_or_none((authoritative.get("account") or {}).get(field))
-        actual = _number_or_none((candidate.get("account") or {}).get(field))
+        expected = _normalized_number((authoritative.get("account") or {}).get(field), normalization["money_decimals"])
+        actual = _normalized_number((candidate.get("account") or {}).get(field), normalization["money_decimals"])
         if expected != actual:
             differences.append({"path": f"account.{field}", "authoritative": expected, "candidate": actual})
 
@@ -104,8 +105,14 @@ def compare_execution_snapshots(
             "candidate": actual_reconciliation,
         })
 
-    expected_open = _open_units(authoritative.get("positions") or [])
-    actual_open = _open_units(candidate.get("positions") or [])
+    expected_open = _normalized_number(
+        _open_units(authoritative.get("positions") or []),
+        normalization["quantity_decimals"],
+    )
+    actual_open = _normalized_number(
+        _open_units(candidate.get("positions") or []),
+        normalization["quantity_decimals"],
+    )
     if expected_open != actual_open:
         differences.append({"path": "positions.open_units", "authoritative": expected_open, "candidate": actual_open})
 
@@ -115,7 +122,7 @@ def compare_execution_snapshots(
         "authoritative_engine": str(authoritative.get("engine") or ""),
         "candidate_engine": str(candidate.get("engine") or ""),
         "status": "pass" if not differences else "drift",
-        "tolerance": {"mode": "exact", "value": 0},
+        "tolerance": _reported_normalization(normalization),
         "differences": differences,
     }
 
@@ -168,18 +175,23 @@ def _number_or_none(value: Any) -> float | None:
 
 
 def _open_units(positions: list[dict[str, Any]]) -> float:
-    return round(sum(_number_or_none(item.get("remaining_units")) or 0.0 for item in positions if item.get("status") == "open"), 8)
+    return sum(
+        _number_or_none(item.get("remaining_units")) or 0.0
+        for item in positions
+        if item.get("status") == "open"
+    )
 
 
 def _compare_fills(
     authoritative: list[dict[str, Any]],
     candidate: list[dict[str, Any]],
     differences: list[dict[str, Any]],
+    normalization: dict[str, Any],
 ) -> None:
     for index, (expected_fill, actual_fill) in enumerate(zip(authoritative, candidate)):
         for field in ("side", "event", "price", "quantity"):
-            expected = _fill_value(expected_fill, field)
-            actual = _fill_value(actual_fill, field)
+            expected = _fill_value(expected_fill, field, normalization)
+            actual = _fill_value(actual_fill, field, normalization)
             if expected != actual:
                 differences.append({
                     "path": f"fills[{index}].{field}",
@@ -192,11 +204,12 @@ def _compare_orders(
     authoritative: list[dict[str, Any]],
     candidate: list[dict[str, Any]],
     differences: list[dict[str, Any]],
+    normalization: dict[str, Any],
 ) -> None:
     for index, (expected_order, actual_order) in enumerate(zip(authoritative, candidate)):
         for field in ("state", "side", "event", "order_type", "price", "quantity"):
-            expected = _order_value(expected_order, field)
-            actual = _order_value(actual_order, field)
+            expected = _order_value(expected_order, field, normalization)
+            actual = _order_value(actual_order, field, normalization)
             if expected != actual:
                 differences.append({
                     "path": f"orders[{index}].{field}",
@@ -209,11 +222,12 @@ def _compare_positions(
     authoritative: list[dict[str, Any]],
     candidate: list[dict[str, Any]],
     differences: list[dict[str, Any]],
+    normalization: dict[str, Any],
 ) -> None:
     for index, (expected_position, actual_position) in enumerate(zip(authoritative, candidate)):
         for field in ("status", "side", "remaining_units"):
-            expected = _position_value(expected_position, field)
-            actual = _position_value(actual_position, field)
+            expected = _position_value(expected_position, field, normalization)
+            actual = _position_value(actual_position, field, normalization)
             if expected != actual:
                 differences.append({
                     "path": f"positions[{index}].{field}",
@@ -222,24 +236,67 @@ def _compare_positions(
                 })
 
 
-def _fill_value(fill: dict[str, Any], field: str) -> Any:
+def _fill_value(fill: dict[str, Any], field: str, normalization: dict[str, Any]) -> Any:
     if field == "quantity":
-        return _number_or_none(fill.get("quantity", fill.get("pnl_units", fill.get("units"))))
+        return _normalized_number(
+            fill.get("quantity", fill.get("pnl_units", fill.get("units"))),
+            normalization["quantity_decimals"],
+        )
     if field == "price":
-        return _number_or_none(fill.get(field))
+        return _normalized_number(fill.get(field), normalization["price_decimals"])
     return str(fill.get(field) or "").lower()
 
 
-def _position_value(position: dict[str, Any], field: str) -> Any:
+def _position_value(position: dict[str, Any], field: str, normalization: dict[str, Any]) -> Any:
     if field == "remaining_units":
-        return _number_or_none(position.get(field))
+        return _normalized_number(position.get(field), normalization["quantity_decimals"])
     return str(position.get(field) or "").lower()
 
 
-def _order_value(order: dict[str, Any], field: str) -> Any:
-    if field in {"price", "quantity"}:
-        return _number_or_none(order.get(field))
+def _order_value(order: dict[str, Any], field: str, normalization: dict[str, Any]) -> Any:
+    if field == "price":
+        return _normalized_number(order.get(field), normalization["price_decimals"])
+    if field == "quantity":
+        return _normalized_number(order.get(field), normalization["quantity_decimals"])
     return str(order.get(field) or "").lower()
+
+
+def _comparison_normalization(candidate: dict[str, Any]) -> dict[str, Any]:
+    provided = (candidate.get("capabilities") or {}).get("comparison_normalization") or {}
+    if not provided:
+        return {
+            "mode": "exact",
+            "price_decimals": None,
+            "quantity_decimals": None,
+            "money_decimals": None,
+        }
+    if provided.get("mode") != "venue_precision":
+        raise ValueError("execution comparison normalization mode is invalid")
+    try:
+        values = {
+            "mode": "venue_precision",
+            "price_decimals": int(provided["price_decimals"]),
+            "quantity_decimals": int(provided["quantity_decimals"]),
+            "money_decimals": int(provided["money_decimals"]),
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("execution comparison normalization is invalid") from exc
+    if any(values[key] < 0 or values[key] > 15 for key in ("price_decimals", "quantity_decimals", "money_decimals")):
+        raise ValueError("execution comparison normalization is invalid")
+    return values
+
+
+def _reported_normalization(normalization: dict[str, Any]) -> dict[str, Any]:
+    if normalization["mode"] == "exact":
+        return {"mode": "exact", "value": 0}
+    return dict(normalization)
+
+
+def _normalized_number(value: Any, decimals: int | None) -> float | None:
+    parsed = _number_or_none(value)
+    if parsed is None or decimals is None:
+        return parsed
+    return round(parsed, decimals)
 
 
 def _stable_id(payload: dict[str, Any]) -> str:

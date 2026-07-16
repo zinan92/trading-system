@@ -23,29 +23,52 @@ def build_cutover_status(output_root: Path, *, required_passes: int = REQUIRED_C
     fixture_rows = load_json(Path(output_root) / "dualtrack" / "nautilus" / "parity" / "current.json")
     fixture_gate = fixture_rows[-1] if fixture_rows else {}
     reports = _cycle_reports(Path(output_root) / "dualtrack" / "reconciliation")
+    completed_reports = [report for report in reports if _is_completed_report(report)]
     consecutive_passes = 0
-    for report in reversed(reports):
+    for report in reversed(completed_reports):
         if report.get("status") != "pass" or not bool((report.get("shadow_evidence") or {}).get("qualifies_for_cutover")):
             break
         consecutive_passes += 1
 
-    latest = reports[-1] if reports else {}
+    latest_observation = reports[-1] if reports else {}
+    latest_completed = completed_reports[-1] if completed_reports else {}
     fixtures_pass = fixture_gate.get("status") == "pass"
-    ready = fixtures_pass and bool(reports) and consecutive_passes >= required_passes
-    blocker = "" if ready else _blocker(latest, consecutive_passes, required_passes, fixtures_pass=fixtures_pass)
+    current_observation_healthy = (
+        not latest_observation
+        or _is_completed_report(latest_observation)
+        or latest_observation.get("status") == "pass"
+    )
+    ready = (
+        fixtures_pass
+        and bool(completed_reports)
+        and consecutive_passes >= required_passes
+        and current_observation_healthy
+    )
+    blocker = "" if ready else _blocker(
+        latest_completed,
+        latest_observation,
+        consecutive_passes,
+        required_passes,
+        fixtures_pass=fixtures_pass,
+    )
     return {
-        "schema_version": "dualtrack-shadow-cutover-gate-v1",
+        "schema_version": "dualtrack-shadow-cutover-gate-v2",
         "scope": "paper_only",
         "configured_engine_changed": False,
         "required_consecutive_passes": required_passes,
         "observed_consecutive_passes": consecutive_passes,
         "status": "ready_for_attended_paper_switch" if ready else "blocked",
         "blocker": blocker,
-        "latest_cycle_id": str(latest.get("cycle_id") or ""),
-        "latest_reconciliation_status": str(latest.get("status") or "missing"),
+        "latest_cycle_id": str(latest_completed.get("cycle_id") or ""),
+        "latest_reconciliation_status": str(latest_completed.get("status") or "missing"),
+        "latest_completed_cycle_id": str(latest_completed.get("cycle_id") or ""),
+        "latest_completed_reconciliation_status": str(latest_completed.get("status") or "missing"),
+        "latest_observation_cycle_id": str(latest_observation.get("cycle_id") or ""),
+        "latest_observation_reconciliation_status": str(latest_observation.get("status") or "missing"),
         "fixture_gate_status": str(fixture_gate.get("status") or "missing"),
         "fixture_gate_blockers": list(fixture_gate.get("blockers") or []),
-        "considered_cycles": [str(report.get("cycle_id") or "") for report in reports],
+        "considered_cycles": [str(report.get("cycle_id") or "") for report in completed_reports],
+        "observed_cycles": [str(report.get("cycle_id") or "") for report in reports],
         "real_money_eligible": False,
     }
 
@@ -63,15 +86,41 @@ def _cycle_reports(directory: Path) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda report: str(report.get("cycle_id") or ""))
 
 
-def _blocker(latest: dict[str, Any], consecutive_passes: int, required_passes: int, *, fixtures_pass: bool) -> str:
+def _is_completed_report(report: dict[str, Any]) -> bool:
+    evidence = report.get("shadow_evidence") or {}
+    checks = evidence.get("qualification_checks") or {}
+    return checks.get("cycle_complete") is True and checks.get("cycle_close_artifact") is True
+
+
+def _blocker(
+    latest_completed: dict[str, Any],
+    latest_observation: dict[str, Any],
+    consecutive_passes: int,
+    required_passes: int,
+    *,
+    fixtures_pass: bool,
+) -> str:
     if not fixtures_pass:
         return "fixed_parity_fixtures_not_passed"
-    if not latest:
+    if not latest_observation:
         return "reconciliation_history_missing"
-    if latest.get("status") != "pass":
-        return str(latest.get("blocker") or f"latest_reconciliation_{latest.get('status') or 'missing'}")
-    if not bool((latest.get("shadow_evidence") or {}).get("qualifies_for_cutover")):
-        return "candidate_activity_insufficient"
+    if (
+        consecutive_passes >= required_passes
+        and not _is_completed_report(latest_observation)
+        and latest_observation.get("status") != "pass"
+    ):
+        return f"current_observation_{latest_observation.get('status') or 'missing'}"
+    if not latest_completed:
+        observation_evidence = latest_observation.get("shadow_evidence") or {}
+        return str(observation_evidence.get("qualification_blocker") or "completed_cycle_evidence_missing")
+    if latest_completed.get("status") != "pass":
+        return str(
+            latest_completed.get("blocker")
+            or f"latest_reconciliation_{latest_completed.get('status') or 'missing'}"
+        )
+    evidence = latest_completed.get("shadow_evidence") or {}
+    if not bool(evidence.get("qualifies_for_cutover")):
+        return str(evidence.get("qualification_blocker") or "candidate_activity_insufficient")
     return f"requires_{required_passes}_consecutive_passes_observed_{consecutive_passes}"
 
 

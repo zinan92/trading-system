@@ -201,6 +201,25 @@ def test_legacy_adapter_rejects_untrusted_market_event(tmp_path: Path) -> None:
         })
 
 
+def test_legacy_adapter_cancels_selected_pending_orders_through_execution_contract(tmp_path: Path) -> None:
+    adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
+    first = adapter.submit_order({**_entry(), "source_fill_id": "cancel-1"})
+    second = adapter.submit_order({**_entry(), "price": 101.0, "source_fill_id": "cancel-2"})
+
+    result = adapter.cancel_orders(
+        "2026-07-05_DAY",
+        order_ids=[first["order_id"]],
+        ts="2026-07-05T01:03:00+00:00",
+        reason="regrid",
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["cancelled_order_ids"] == [first["order_id"]]
+    states = {row["order_id"]: row["state"] for row in adapter.snapshot("2026-07-05_DAY")["orders"]}
+    assert states[first["order_id"]] == "cancelled"
+    assert states[second["order_id"]] == "accepted"
+
+
 def test_adapter_factory_fails_closed_without_attended_nautilus_approval(tmp_path: Path) -> None:
     assert build_execution_engine_adapter(tmp_path / "outputs", engine="legacy_paper").name == "legacy_paper"
 

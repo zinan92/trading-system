@@ -22,7 +22,7 @@ from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
-from services.dualtrack_execution_adapter import build_execution_engine_adapter
+from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_scoring import (
@@ -735,6 +735,7 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
         output_root=output,
         mark_price=market.get("latest_close"),
         mark_fresh=bool(market.get("fresh")),
+        authoritative_engine=str(execution.get("engine") or "legacy_paper"),
     )
     production_account = {
         **production_history["account"],
@@ -755,7 +756,11 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
             "pnl": production_history["pnl"],
             "trades": production_history["trades"],
             "trade_summary": production_history["summary"],
-            "current_cycle_trades": trades.get("trades", []),
+            "current_cycle_trades": (
+                execution.get("positions", [])
+                if str(execution.get("engine") or "") == "nautilus_paper"
+                else trades.get("trades", [])
+            ),
             "history_contract": production_history["history_contract"],
         },
         "ledger": build_dualtrack_ledger_response(output_root=output),
@@ -787,6 +792,7 @@ def build_strategy_console_production_history(
     mark_price: float | None = None,
     mark_fresh: bool = False,
     limit: int = 200,
+    authoritative_engine: str = "legacy_paper",
 ) -> dict:
     """Aggregate only versioned StrategyPlan fills into the production ledger.
 
@@ -830,6 +836,23 @@ def build_strategy_console_production_history(
                     "strategy_plan_version": entry.get("strategy_plan_version"),
                     "source_cycle_id": cycle_id,
                 })
+    if str(authoritative_engine or "legacy_paper") == "nautilus_paper":
+        snapshots_dir = output / "dualtrack" / "nautilus_authoritative" / "snapshots"
+        if snapshots_dir.exists():
+            for path in sorted(snapshots_dir.glob("*.json")):
+                cycle_id = path.stem
+                snapshots = load_json(path)
+                snapshot = snapshots[-1] if snapshots and isinstance(snapshots[-1], dict) else {}
+                selected_fills = [
+                    row for row in snapshot.get("fills") or []
+                    if isinstance(row, dict) and row.get("strategy_plan_id") not in (None, "")
+                ]
+                selected_trades = [
+                    row for row in snapshot.get("positions") or []
+                    if isinstance(row, dict) and row.get("strategy_plan_id") not in (None, "")
+                ]
+                production_fills.extend({**row, "source_cycle_id": cycle_id} for row in selected_fills)
+                production_trades.extend({**row, "source_cycle_id": cycle_id} for row in selected_trades)
     enriched = apply_unrealized(production_trades, mark_price, mark_fresh=mark_fresh)
     enriched.sort(key=lambda trade: str(trade.get("exit_ts") or trade.get("entry_ts") or ""))
     production_fills.sort(key=lambda fill: str(fill.get("ts") or ""))
@@ -858,7 +881,13 @@ def build_strategy_console_production_history(
             "equity": equity,
         },
         "history_contract": {
-            "source": "versioned_strategy_plan_fills_only",
+            "source": (
+                "versioned_strategy_plan_and_nautilus_authoritative"
+                if str(authoritative_engine or "legacy_paper") == "nautilus_paper"
+                else "versioned_strategy_plan_fills_only"
+            ),
+            "authoritative_engine": str(authoritative_engine or "legacy_paper"),
+            "nautilus_shadow_excluded": True,
             "legacy_dualtrack_history_preserved": True,
             "legacy_dualtrack_totals_mixed_into_production": False,
         },
@@ -1094,10 +1123,53 @@ def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | No
     if production_plan:
         command["strategy_plan_id"] = production_plan["strategy_plan_id"]
         command["strategy_plan_version"] = production_plan["version"]
-    receipt = build_execution_engine_adapter(root).submit_order(command)
+    adapter = build_configured_execution_engine_adapter(root)
+    immediate_nautilus_event = (
+        str(getattr(adapter, "name", "")) == "nautilus_paper"
+        and (
+            str(command.get("order_type") or "market").lower() == "market"
+            or event in {"exit", "stop", "target", "flatten"}
+        )
+    )
+    if immediate_nautilus_event:
+        trusted_price = _finite_float(command.get("market_price"))
+        if trusted_price is None or not command.get("market_timestamp") or not command.get("market_source"):
+            raise ValueError("Nautilus market order requires a server-validated market event")
+    receipt = adapter.submit_order(command)
     if receipt.get("state") == "accepted" or receipt.get("status") == "accepted":
+        if immediate_nautilus_event:
+            cfg = dualtrack_config()
+            nautilus = ((cfg.get("execution_shadow") or {}).get("nautilus") or {})
+            market_price = float(command["market_price"])
+            adapter.process_market_event({
+                "schema_version": "dualtrack-market-event-v1",
+                "event_id": f"dashboard-order:{receipt.get('order_id')}:{command.get('ts')}",
+                "cycle_id": str(command.get("cycle_id") or ""),
+                "ts_event": str(command.get("ts") or ""),
+                "event_started_at": str(command.get("market_timestamp") or ""),
+                "source": str(command.get("market_source") or ""),
+                "provider": str(command.get("market_source") or ""),
+                "instrument_id": str(nautilus.get("execution_instrument_id") or command.get("symbol") or "GOLD"),
+                "symbol": str(command.get("symbol") or "GOLD"),
+                "timeframe": "1m",
+                "open": market_price,
+                "high": market_price,
+                "low": market_price,
+                "close": market_price,
+                "price": market_price,
+                "fresh": True,
+                "is_synthetic": False,
+            })
+            snapshot = adapter.snapshot(str(command.get("cycle_id") or ""))
+            fill = next((
+                row for row in reversed(snapshot.get("fills") or [])
+                if str(row.get("order_id") or "") == str(receipt.get("order_id") or "")
+            ), None)
+            if fill is not None:
+                return {"status": "filled", "fill": fill}
         return {"status": "accepted", "order": receipt}
-    DualTrackScorer(root).rebuild_ledgers()
+    if str(getattr(adapter, "name", "")) == "legacy_paper":
+        DualTrackScorer(root).rebuild_ledgers()
     return {"status": "filled", "fill": receipt}
 
 
@@ -1240,7 +1312,8 @@ def build_dualtrack_execution_response(
     output = _dualtrack_output_root(output_root)
     closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
     mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
-    snapshot = build_execution_engine_adapter(output).snapshot(
+    adapter = build_configured_execution_engine_adapter(output)
+    snapshot = adapter.snapshot(
         cycle_id,
         mark_price=mark["price"],
         mark_fresh=mark["fresh"],
@@ -1258,7 +1331,8 @@ def build_dualtrack_execution_response(
     }
     return {
         **snapshot,
-        "reconciliation": latest_reconciliation,
+        "reconciliation": adapter.reconcile(cycle_id),
+        "execution_shadow_reconciliation": latest_reconciliation,
         "shadow_cutover": latest_cutover,
         "safety": {
             "read_only": True,
@@ -1493,12 +1567,15 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     )
     effective = store.machine_plan(window.cycle_id)
     closed = now >= window.end
+    market_provider = str(market.get("provider") or "")
+    market_source_mode = str(market.get("source_mode") or "")
     market_ok = (
         market.get("status") == "ready"
         and market.get("fresh") is True
-        and market.get("source_mode") == "requested_symbol"
+        and bool(market_provider)
+        and market_source_mode in {"requested_symbol", market_provider}
         and market.get("is_synthetic") is not True
-        and (not market_config.get("provider") or market.get("provider") == market_config.get("provider"))
+        and (not market_config.get("provider") or market_provider == market_config.get("provider"))
     )
     stood_down = bool(cycle_state.get("machine_stood_down", effective is None))
     machine_layers = list(machine.get("layers") or cycle_state.get("layers") or [])

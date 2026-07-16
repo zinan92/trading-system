@@ -9,7 +9,7 @@ import pipelines.dualtrack_execution_reconcile as reconcile_pipeline
 from services.journal_store import load_json, write_json
 
 
-def test_execution_endpoint_is_read_only_and_exposes_latest_reconciliation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execution_endpoint_separates_authoritative_and_shadow_reconciliation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-10_DAY"
     write_json(
@@ -30,7 +30,12 @@ def test_execution_endpoint_is_read_only_and_exposes_latest_reconciliation(tmp_p
 
     assert payload["schema_version"] == "dualtrack-execution-v1"
     assert payload["engine"] == "legacy_paper"
-    assert payload["reconciliation"] == {"status": "blocked", "blocker": "instrument_definition_missing"}
+    assert payload["reconciliation"]["engine"] == "legacy_paper"
+    assert payload["reconciliation"]["status"] == "ok"
+    assert payload["execution_shadow_reconciliation"] == {
+        "status": "blocked",
+        "blocker": "instrument_definition_missing",
+    }
     assert payload["shadow_cutover"] == {"status": "blocked", "blocker": "candidate_snapshot_missing"}
     assert payload["safety"] == {
         "read_only": True,

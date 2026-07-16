@@ -18,7 +18,7 @@ from services.dualtrack_clock import (
     parse_utc,
 )
 from services.dualtrack_config import dualtrack_config
-from services.dualtrack_execution_adapter import build_execution_engine_adapter
+from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_scoring import DualTrackScorer
@@ -56,7 +56,7 @@ class DualTrackCycleRunner:
         self.symbol = symbol or str(market_data.get("symbol") or "GOLD")
         self.timeframe = timeframe or str(market_data.get("timeframe") or "1m")
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
-        self.execution = build_execution_engine_adapter(self.output_root, config=self.config)
+        self.execution = build_configured_execution_engine_adapter(self.output_root, config=self.config)
         self.machine = DualTrackMachineRunner(self.output_root, config=self.config)
         self.machine_planner = DualTrackMachinePlanner(self.output_root, config=self.config)
         self.scorer = DualTrackScorer(self.output_root, config=self.config)
@@ -402,7 +402,13 @@ class DualTrackCycleRunner:
     def close_cycle(self, cycle_id: str, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         existing = load_json(self.output_root / "dualtrack" / "attribution" / f"{cycle_id}.json")
         if existing:
-            return {"event": "close", "cycle_id": cycle_id, "status": "already_closed", "attribution": existing[-1]}
+            return {
+                "event": "close",
+                "cycle_id": cycle_id,
+                "status": "already_closed",
+                "attribution": existing[-1],
+                "shadow_finalization": self._finalize_execution_shadow(cycle_id),
+            }
         bars = self._cycle_bars(cycle_id, as_of=cycle_window_from_id(cycle_id).end)
         if not bars:
             self.store.audit(cycle_id, "cycle_runner_close_skipped", {"reason": "cycle_bars_missing"})
@@ -453,7 +459,14 @@ class DualTrackCycleRunner:
         if human_fill_sync is not None:
             payload["human_fill_sync"] = human_fill_sync
         payload["trade_notifications"] = self._notify_machine_trade_records(cycle_id)
+        payload["shadow_finalization"] = self._finalize_execution_shadow(cycle_id)
         return payload
+
+    def _finalize_execution_shadow(self, cycle_id: str) -> dict[str, Any] | None:
+        flush_shadow = getattr(self.execution, "flush_shadow", None)
+        if not callable(flush_shadow):
+            return None
+        return flush_shadow(cycle_id, cycle_complete=True)
 
     def fast_forward_day(self, date: str) -> dict[str, Any]:
         results = []
@@ -616,9 +629,14 @@ class DualTrackCycleRunner:
                 return result
             return {**result, "source_cycle_id": source_cycle_id}
         triggered = [row for _, result in results for row in (result.get("triggered") or [])]
+        accepted_limit_fills = [
+            row for _, result in results for row in (result.get("accepted_limit_fills") or [])
+        ]
         return {
             "status": "triggered" if triggered else "ok",
             "triggered": triggered,
+            "accepted_limit_fills": accepted_limit_fills,
+            "accepted_limit_fill_count": len(accepted_limit_fills),
             "processed_events": sum(int(result.get("processed_events") or 0) for _, result in results),
             "source": next((str(result.get("source") or "") for _, result in reversed(results) if result.get("source")), ""),
             "source_cycle_ids": [cycle_id for cycle_id, _ in results],
@@ -721,28 +739,41 @@ class DualTrackCycleRunner:
 
         events = [self._protective_bar_event(cycle_id, bar, now=now) for bar in bars]
         if not events:
+            fallback_price = float(latest.get("close") or 0.0)
             events = [{
                 "cycle_id": cycle_id,
                 "ts_event": now.isoformat(),
-                "price": latest.get("close"),
+                "price": fallback_price,
+                "open": fallback_price,
+                "high": fallback_price,
+                "low": fallback_price,
                 "fresh": True,
                 "is_synthetic": False,
                 "source": f"market_db:{provider or 'unknown'}",
+                "provider": provider,
+                "instrument_id": self._execution_instrument_id(),
             }]
 
         triggered: list[dict[str, Any]] = []
+        accepted_limit_fills: list[dict[str, Any]] = []
         last_sweep: dict[str, Any] = {"status": "ok", "triggered": []}
         for event in events:
             last_sweep = self.execution.process_market_event(event)
             triggered.extend(last_sweep.get("triggered") or [])
+            accepted_limit_fills.extend(last_sweep.get("accepted_limit_fills") or [])
+        flush_shadow = getattr(self.execution, "flush_shadow", None)
+        shadow_flush = flush_shadow(cycle_id) if callable(flush_shadow) else None
         return {
             **last_sweep,
             "status": "triggered" if triggered else "ok",
             "triggered": triggered,
+            "accepted_limit_fills": accepted_limit_fills,
+            "accepted_limit_fill_count": len(accepted_limit_fills),
             "processed_events": len(events),
             "first_event_ts": events[0].get("event_started_at") or events[0].get("ts_event"),
             "last_event_ts": events[-1].get("event_started_at") or events[-1].get("ts_event"),
             "source": events[-1]["source"],
+            "shadow_flush": shadow_flush,
         }
 
     def _protective_bar_event(self, cycle_id: str, bar: Bar, *, now: datetime) -> dict[str, Any]:
@@ -759,7 +790,13 @@ class DualTrackCycleRunner:
             "fresh": True,
             "is_synthetic": False,
             "source": f"market_db:{bar.provider or 'unknown'}",
+            "provider": str(bar.provider or ""),
+            "instrument_id": self._execution_instrument_id(),
         }
+
+    def _execution_instrument_id(self) -> str:
+        shadow = ((self.config.get("execution_shadow") or {}).get("nautilus") or {})
+        return str(shadow.get("execution_instrument_id") or "XAUUSDT")
 
     def _latest_market_record(self) -> dict[str, Any]:
         records = [

@@ -21,10 +21,13 @@ from services.trading_journal import TradingJournalBuilder
 
 
 class ReportBuilder:
-    def __init__(self, output_root: Path | None = None) -> None:
+    def __init__(self, output_root: Path | None = None, market_db: Path | None = None) -> None:
         pipeline_config = load_pipeline_config()
         env_output_root = os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT")
         self.output_root = output_root or Path(env_output_root or str(ROOT / pipeline_config.get("output_root", "outputs")))
+        self.market_db = market_db or Path(
+            os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / pipeline_config.get("local_market_db", "data/market_data.db")))
+        )
 
     def build_daily_report(self, run_date: str) -> Path:
         signals = load_json(self.output_root / "signals" / f"{run_date}.json")
@@ -706,6 +709,4 @@ class ReportBuilder:
         return lines
 
     def _market_coverage(self) -> list[dict]:
-        pipeline_config = load_pipeline_config()
-        db_path = Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / pipeline_config.get("local_market_db", "data/market_data.db"))))
-        return market_data_repository(db_path).coverage()
+        return market_data_repository(self.market_db).coverage()

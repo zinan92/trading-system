@@ -1346,6 +1346,107 @@ def test_strategy_console_production_history_keeps_prior_versioned_trades(tmp_pa
     assert result["trades"][0]["source_cycle_id"] == cycle_id
 
 
+def test_strategy_console_history_combines_legacy_archive_with_authoritative_nautilus_only(tmp_path: Path):
+    output = tmp_path / "outputs"
+    legacy_cycle = "2026-07-04_NIGHT"
+    write_json(output / "dualtrack" / "fills" / f"{legacy_cycle}_human.json", [
+        {
+            "fill_id": "legacy-entry",
+            "cycle_id": legacy_cycle,
+            "trade_id": "legacy-trade",
+            "event": "entry",
+            "side": "buy",
+            "ts": "2026-07-04T13:10:00+00:00",
+            "price": 100.0,
+            "pnl_units": 1.0,
+            "notional": 100.0,
+            "cost": 0.1,
+            "realized_pnl": -0.1,
+            "strategy_plan_id": "legacy-plan",
+            "strategy_plan_version": 1,
+        },
+        {
+            "fill_id": "legacy-exit",
+            "cycle_id": legacy_cycle,
+            "trade_id": "legacy-trade",
+            "event": "target",
+            "side": "sell",
+            "ts": "2026-07-04T13:20:00+00:00",
+            "price": 110.0,
+            "pnl_units": 1.0,
+            "notional": 110.0,
+            "cost": 0.1,
+            "realized_pnl": 9.9,
+        },
+    ])
+    active_cycle = "2026-07-05_DAY"
+    write_json(
+        output / "dualtrack" / "nautilus_authoritative" / "snapshots" / f"{active_cycle}.json",
+        [{
+            "engine": "nautilus_paper",
+            "cycle_id": active_cycle,
+            "fills": [
+                {
+                    "fill_id": "nautilus-entry",
+                    "trade_id": "nautilus-open",
+                    "event": "entry",
+                    "side": "buy",
+                    "ts": "2026-07-05T01:00:00+00:00",
+                    "price": 100.0,
+                    "quantity": 2.0,
+                    "strategy_plan_id": "nautilus-plan",
+                    "strategy_plan_version": 2,
+                },
+            ],
+            "positions": [
+                {
+                    "trade_id": "nautilus-open",
+                    "position_id": "POS-nautilus-open",
+                    "status": "open",
+                    "side": "long",
+                    "remaining_units": 2.0,
+                    "entry_price": 100.0,
+                    "entry_ts": "2026-07-05T01:00:00+00:00",
+                    "realized_pnl": 4.0,
+                    "strategy_plan_id": "nautilus-plan",
+                    "strategy_plan_version": 2,
+                },
+            ],
+        }],
+    )
+    write_json(
+        output / "dualtrack" / "nautilus_paper" / "snapshots" / f"{active_cycle}.json",
+        [{
+            "engine": "nautilus_paper",
+            "cycle_id": active_cycle,
+            "fills": [{
+                "fill_id": "shadow-must-not-leak",
+                "strategy_plan_id": "shadow-plan",
+            }],
+            "positions": [],
+        }],
+    )
+
+    result = dashboard_server.build_strategy_console_production_history(
+        output_root=output,
+        mark_price=105.0,
+        mark_fresh=True,
+        authoritative_engine="nautilus_paper",
+    )
+
+    assert result["summary"]["trade_count"] == 2
+    assert result["summary"]["fill_count"] == 3
+    assert result["summary"]["realized_pnl"] == 13.8
+    assert result["summary"]["unrealized_pnl"] == 10.0
+    assert result["account"]["ending_cash"] == 10_013.8
+    assert result["account"]["equity"] == 10_023.8
+    assert {row["fill_id"] for row in result["fills"]} == {
+        "legacy-entry", "legacy-exit", "nautilus-entry",
+    }
+    assert result["history_contract"]["source"] == "versioned_strategy_plan_and_nautilus_authoritative"
+    assert result["history_contract"]["nautilus_shadow_excluded"] is True
+
+
 def test_compact_strategy_payload_keeps_replay_fields_and_drops_ops_bulk():
     payload = {
         "contract": {"version": 1},

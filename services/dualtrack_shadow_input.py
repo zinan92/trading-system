@@ -18,6 +18,7 @@ def build_shadow_input(
     authoritative_snapshot: dict[str, Any],
     market_events: list[dict[str, Any]],
     commands: list[dict[str, Any]] | None = None,
+    execution_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one replayable input bundle without altering an execution ledger.
 
@@ -51,6 +52,15 @@ def build_shadow_input(
         "commands": _normalized_commands(commands or [], cycle_id=cycle_id),
         "market_events": normalized_events,
     }
+    if execution_settings is not None:
+        capital = float(execution_settings.get("starting_cash") or 0.0)
+        leverage = float(execution_settings.get("max_leverage") or 0.0)
+        if capital <= 0 or leverage <= 0:
+            raise ValueError("shadow execution settings require positive starting_cash and max_leverage")
+        payload["execution_settings"] = {
+            "starting_cash": capital,
+            "max_leverage": leverage,
+        }
     payload["input_id"] = _stable_id(payload)
     return payload
 

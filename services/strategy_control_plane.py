@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from services.dualtrack_execution_adapter import build_execution_engine_adapter
+from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_store import DualTrackPlanStore
 from services.control_audit import append_control_event, build_control_event, read_last_control_event
@@ -322,16 +322,32 @@ class StrategyControlPlane:
             self._activate_plan(adjusted)
             return {"action": action, "plan": adjusted}
         if action == "cancel_all":
-            path = self.output_root / "dualtrack" / "orders" / f"{cycle_id}_human.json"
-            rows = load_json(path)
-            cancelled = 0
-            for row in rows:
-                if row.get("state") == "accepted":
-                    row["state"] = "cancelled"
-                    row["cancelled_at"] = _timestamp(now)
-                    cancelled += 1
-            write_json(path, rows)
-            return {"action": action, "cancelled_orders": cancelled}
+            adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
+            receipt = adapter.cancel_orders(
+                cycle_id,
+                ts=_timestamp(now),
+                reason="operator_cancel_all",
+            )
+            execution_event = self._advance_selected_execution(
+                adapter,
+                cycle_id,
+                market=market,
+                now=now,
+                identity="operator-cancel-all",
+            )
+            accepted_after = self._accepted_orders(cycle_id, adapter=adapter)
+            if accepted_after:
+                raise ValueError("paper cancel left accepted orders")
+            reconciliation = adapter.reconcile(cycle_id)
+            if reconciliation.get("status") != "ok":
+                raise ValueError("paper ledger reconciliation failed")
+            return {
+                "action": action,
+                "cancelled_orders": int(receipt.get("cancelled_order_count") or 0),
+                "execution_receipt": receipt,
+                "execution_event": execution_event,
+                "reconciliation": reconciliation,
+            }
         raise ValueError("unsupported production control action")
 
     def _start(
@@ -384,21 +400,59 @@ class StrategyControlPlane:
             "accepted_order_count": 0,
         }
         self._write_runtime(starting)
-        adapter = build_execution_engine_adapter(self.output_root)
+        adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
         try:
             receipts = self._submit_preview_orders(adapter, cycle_id, adjusted, preview, market=market, timestamp=timestamp)
+            execution_event = self._advance_selected_execution(
+                adapter,
+                cycle_id,
+                market=market,
+                now=now,
+                identity="strategy-start",
+            )
+            accepted = self._accepted_orders(cycle_id, adapter=adapter)
+            if {str(row.get("order_id") or "") for row in accepted} != {
+                str(row.get("order_id") or "") for row in receipts
+            }:
+                raise ValueError("paper start did not activate the complete grid")
+            reconciliation = adapter.reconcile(cycle_id)
+            if reconciliation.get("status") != "ok":
+                raise ValueError("paper ledger reconciliation failed")
         except Exception as exc:
-            self._cancel_pending(cycle_id, now=now, strategy_plan_id=adjusted["strategy_plan_id"])
+            cleanup_errors: list[str] = []
+            try:
+                self._cancel_pending(
+                    cycle_id,
+                    now=now,
+                    strategy_plan_id=adjusted["strategy_plan_id"],
+                    adapter=adapter,
+                    reason="start_failed",
+                )
+            except Exception as cleanup_exc:
+                cleanup_errors.append(f"cancel: {cleanup_exc}")
+            try:
+                self._advance_selected_execution(
+                    adapter,
+                    cycle_id,
+                    market=market,
+                    now=now,
+                    identity="strategy-start-cleanup",
+                )
+            except Exception as cleanup_exc:
+                cleanup_errors.append(f"advance: {cleanup_exc}")
             adjusted["status"] = "failed"
             current["status"] = "active"
             self._write_plan(adjusted)
             self._write_plan(current)
+            failure_detail = str(exc)
+            if cleanup_errors:
+                failure_detail = f"{failure_detail}; start cleanup failed: {'; '.join(cleanup_errors)}"
             self._write_runtime({
                 **starting,
                 "desired_state": "stopped",
                 "actual_state": "error",
                 "updated_at": _timestamp(now),
-                "last_error": str(exc),
+                "last_error": failure_detail,
                 "accepted_order_count": 0,
             })
             raise
@@ -416,6 +470,8 @@ class StrategyControlPlane:
             "plan": adjusted,
             "preview": preview,
             "orders": receipts,
+            "execution_event": execution_event,
+            "reconciliation": reconciliation,
             "created_orders": len(receipts),
             "accepted_orders": len(receipts),
             "idempotent": False,
@@ -447,9 +503,9 @@ class StrategyControlPlane:
                 "idempotent": True,
             }
 
-        orders_path = self.output_root / "dualtrack" / "orders" / f"{cycle_id}_human.json"
-        orders_before = load_json(orders_path)
-        old_accepted = sum(1 for row in orders_before if row.get("state") == "accepted")
+        old_orders = self._accepted_orders(cycle_id)
+        old_order_ids = [str(row.get("order_id") or "") for row in old_orders if row.get("order_id")]
+        old_accepted = len(old_order_ids)
         adjusted = self._plan_from_preview(current, preview, now=now)
         timestamp = _timestamp(now)
         replanning = {
@@ -464,24 +520,80 @@ class StrategyControlPlane:
             "accepted_order_count": 0,
         }
         self._write_runtime(replanning)
-        self._activate_plan(adjusted)
-        adapter = build_execution_engine_adapter(self.output_root)
+        adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
+        receipts: list[dict[str, Any]] = []
         try:
-            cancelled = self._cancel_pending(cycle_id, now=now)
-            receipts = self._submit_preview_orders(adapter, cycle_id, adjusted, preview, market=market, timestamp=timestamp)
+            # Two-phase paper replacement: the old grid stays live until every
+            # replacement order is accepted. A failed stage is removed without
+            # pretending that an engine cancellation can be rolled back.
+            receipts = self._submit_preview_orders(
+                adapter,
+                cycle_id,
+                adjusted,
+                preview,
+                market=market,
+                timestamp=timestamp,
+            )
+            cancel_receipt = adapter.cancel_orders(
+                cycle_id,
+                order_ids=old_order_ids,
+                ts=_timestamp(now),
+                reason="regrid",
+            )
+            cancelled = int(
+                cancel_receipt.get("cancelled_order_count")
+                or len(cancel_receipt.get("cancelled_order_ids") or [])
+            )
+            if cancelled != old_accepted:
+                raise ValueError("regrid did not cancel every previous grid order")
+            execution_event = self._advance_selected_execution(
+                adapter,
+                cycle_id,
+                market=market,
+                now=now,
+                identity="strategy-regrid",
+            )
+            accepted_ids = {
+                str(row.get("order_id") or "")
+                for row in self._accepted_orders(cycle_id, adapter=adapter)
+            }
+            replacement_ids = {str(row.get("order_id") or "") for row in receipts}
+            if accepted_ids != replacement_ids:
+                raise ValueError("regrid did not leave exactly the replacement grid active")
+            self._activate_plan(adjusted)
         except Exception as exc:
-            write_json(orders_path, orders_before)
+            cleanup_error = ""
+            try:
+                adapter.cancel_orders(
+                    cycle_id,
+                    strategy_plan_id=adjusted["strategy_plan_id"],
+                    ts=_timestamp(now),
+                    reason="regrid_stage_failed",
+                )
+                self._advance_selected_execution(
+                    adapter,
+                    cycle_id,
+                    market=market,
+                    now=now,
+                    identity="strategy-regrid-cleanup",
+                )
+            except Exception as cleanup_exc:
+                cleanup_error = str(cleanup_exc)
             adjusted["status"] = "failed"
             current["status"] = "active"
             self._write_plan(adjusted)
             self._write_plan(current)
+            accepted_after_failure = len(self._accepted_orders(cycle_id))
+            failure_detail = str(exc)
+            if cleanup_error:
+                failure_detail = f"{failure_detail}; regrid cleanup failed: {cleanup_error}"
             self._write_runtime({
                 **runtime,
-                "actual_state": "error",
+                "actual_state": "running" if not cleanup_error and accepted_after_failure >= old_accepted else "error",
                 "updated_at": _timestamp(now),
                 "last_action": "adjust_plan",
-                "last_error": str(exc),
-                "accepted_order_count": old_accepted,
+                "last_error": failure_detail,
+                "accepted_order_count": accepted_after_failure,
             })
             raise
 
@@ -498,6 +610,7 @@ class StrategyControlPlane:
             "plan": adjusted,
             "preview": preview,
             "orders": receipts,
+            "execution_event": execution_event,
             "created_orders": len(receipts),
             "cancelled_orders": cancelled,
             "idempotent": False,
@@ -550,11 +663,17 @@ class StrategyControlPlane:
             "last_error": None,
         }
         self._write_runtime(stopping)
-        cancelled = self._cancel_pending(cycle_id, now=now)
-        adapter = build_execution_engine_adapter(self.output_root)
+        adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
+        cancelled = self._cancel_pending(
+            cycle_id,
+            now=now,
+            adapter=adapter,
+            reason="stop",
+        )
         snapshot = adapter.snapshot(cycle_id)
         open_positions = [row for row in snapshot.get("positions") or [] if row.get("status") == "open"]
         flattened: list[dict[str, Any]] = []
+        execution_event: dict[str, Any] | None = None
         try:
             if open_positions:
                 _validate_market(market or {})
@@ -572,12 +691,53 @@ class StrategyControlPlane:
                         "market_price": price,
                         "trade_id": position.get("trade_id"),
                         "position_id": position.get("position_id"),
+                        "target_position_side": position.get("side"),
+                        "target_entry_price": position.get("entry_price"),
                         "symbol": position.get("symbol") or str((market or {}).get("symbol") or "GOLD"),
                         "source": "strategy_production_console",
                         "source_fill_id": f"strategy-stop:{cycle_id}:{position.get('trade_id')}",
                         "strategy_plan_id": previous.get("strategy_plan_id"),
                         "strategy_plan_version": previous.get("strategy_plan_version"),
                     }))
+            if market is not None:
+                _validate_market(market)
+                price = _positive_number(market.get("latest_close"), "market latest_close")
+                timestamp = _timestamp(now)
+                execution_event = adapter.process_market_event({
+                    "schema_version": "dualtrack-market-event-v1",
+                    "event_id": f"strategy-stop:{cycle_id}:{timestamp}",
+                    "cycle_id": cycle_id,
+                    "ts_event": timestamp,
+                    "event_started_at": market.get("latest_timestamp"),
+                    "source": str(market.get("provider") or market.get("source_mode") or ""),
+                    "provider": str(market.get("provider") or ""),
+                    "instrument_id": str(
+                        ((self.config.get("execution_shadow") or {}).get("nautilus") or {}).get(
+                            "execution_instrument_id"
+                        )
+                        or market.get("symbol")
+                        or ""
+                    ),
+                    "symbol": str(market.get("symbol") or "GOLD"),
+                    "timeframe": str(market.get("timeframe") or "1m"),
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "price": price,
+                    "fresh": True,
+                    "is_synthetic": False,
+                })
+                flush_shadow = getattr(adapter, "flush_shadow", None)
+                if callable(flush_shadow):
+                    flush_shadow(cycle_id)
+            elif adapter.name == "nautilus_paper":
+                raise ValueError("Nautilus stop requires a fresh trusted market mark")
+            terminal = adapter.snapshot(cycle_id)
+            if [row for row in terminal.get("orders") or [] if row.get("state") == "accepted"]:
+                raise ValueError("paper stop left accepted orders")
+            if [row for row in terminal.get("positions") or [] if row.get("status") == "open"]:
+                raise ValueError("paper stop left open positions")
             reconciliation = adapter.reconcile(cycle_id)
             if reconciliation.get("status") != "ok":
                 raise ValueError("paper ledger reconciliation failed")
@@ -603,6 +763,7 @@ class StrategyControlPlane:
             "runtime": stopped,
             "cancelled_orders": cancelled,
             "flattened_positions": len(flattened),
+            "execution_event": execution_event,
             "reconciliation": reconciliation,
             "historical_records_preserved": True,
         }
@@ -643,23 +804,74 @@ class StrategyControlPlane:
         }
         return plan
 
-    def _accepted_orders(self, cycle_id: str) -> list[dict[str, Any]]:
-        path = self.output_root / "dualtrack" / "orders" / f"{cycle_id}_human.json"
-        return [row for row in load_json(path) if row.get("state") == "accepted"]
+    def _accepted_orders(self, cycle_id: str, *, adapter=None) -> list[dict[str, Any]]:
+        execution = adapter or build_configured_execution_engine_adapter(self.output_root, config=self.config)
+        snapshot = execution.snapshot(cycle_id)
+        return [
+            row
+            for row in snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
 
-    def _cancel_pending(self, cycle_id: str, *, now: str | None, strategy_plan_id: str | None = None) -> int:
-        path = self.output_root / "dualtrack" / "orders" / f"{cycle_id}_human.json"
-        rows = load_json(path)
-        cancelled = 0
-        for row in rows:
-            row_plan_id = row.get("strategy_plan_id") or (row.get("command") or {}).get("strategy_plan_id")
-            if row.get("state") != "accepted" or (strategy_plan_id and row_plan_id != strategy_plan_id):
-                continue
-            row["state"] = "cancelled"
-            row["cancelled_at"] = _timestamp(now)
-            cancelled += 1
-        write_json(path, rows)
-        return cancelled
+    def _advance_selected_execution(
+        self,
+        adapter,
+        cycle_id: str,
+        *,
+        market: dict[str, Any] | None,
+        now: str | None,
+        identity: str,
+    ) -> dict[str, Any] | None:
+        """Make accepted mutations observable before an active Nautilus control returns."""
+
+        if str(getattr(adapter, "name", "")) != "nautilus_paper":
+            return None
+        _validate_market(market or {})
+        price = _positive_number((market or {}).get("latest_close"), "market latest_close")
+        timestamp = _timestamp(now)
+        return adapter.process_market_event({
+            "schema_version": "dualtrack-market-event-v1",
+            "event_id": f"{identity}:{cycle_id}:{timestamp}",
+            "cycle_id": cycle_id,
+            "ts_event": timestamp,
+            "event_started_at": (market or {}).get("latest_timestamp"),
+            "source": str((market or {}).get("provider") or (market or {}).get("source_mode") or ""),
+            "provider": str((market or {}).get("provider") or ""),
+            "instrument_id": str(
+                ((self.config.get("execution_shadow") or {}).get("nautilus") or {}).get(
+                    "execution_instrument_id"
+                )
+                or (market or {}).get("symbol")
+                or ""
+            ),
+            "symbol": str((market or {}).get("symbol") or "GOLD"),
+            "timeframe": str((market or {}).get("timeframe") or "1m"),
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "price": price,
+            "fresh": True,
+            "is_synthetic": False,
+        })
+
+    def _cancel_pending(
+        self,
+        cycle_id: str,
+        *,
+        now: str | None,
+        strategy_plan_id: str | None = None,
+        adapter=None,
+        reason: str = "",
+    ) -> int:
+        execution = adapter or build_configured_execution_engine_adapter(self.output_root, config=self.config)
+        receipt = execution.cancel_orders(
+            cycle_id,
+            strategy_plan_id=strategy_plan_id,
+            ts=_timestamp(now),
+            reason=reason,
+        )
+        return int(receipt.get("cancelled_order_count") or len(receipt.get("cancelled_order_ids") or []))
 
     def _write_runtime(self, row: dict[str, Any]) -> None:
         write_json(self.root / "runtime.json", [row])
@@ -749,5 +961,3 @@ def _timestamp(value: str | None) -> str:
     if value:
         return str(value)
     return datetime.now(timezone.utc).isoformat()
-
-

@@ -5,6 +5,7 @@ import pytest
 
 from services.dualtrack_execution_adapter import build_execution_engine_adapter
 from services.strategy_control_plane import StrategyControlPlane
+import services.strategy_control_plane as strategy_control_plane_module
 
 
 def proposal(cycle_id: str, source: str, direction: str = "long") -> dict:
@@ -122,6 +123,34 @@ def test_production_controls_are_durable_and_preserve_history(tmp_path: Path) ->
     assert plane.active_plan(cycle_id)["range"]["low"] == 98.0
     assert plane.control(cycle_id, "reset_statistics")["historical_records_preserved"] is True
     assert plane.control(cycle_id, "stop", now="2026-07-05T01:41:00+00:00")["runtime"]["desired_state"] == "stopped"
+
+
+def test_control_plane_reads_accepted_orders_from_selected_execution_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SelectedAdapter:
+        name = "nautilus_paper"
+
+        def snapshot(self, cycle_id: str, **_kwargs) -> dict:
+            return {
+                "cycle_id": cycle_id,
+                "orders": [
+                    {"order_id": "n-accepted", "state": "accepted"},
+                    {"order_id": "n-filled", "state": "filled"},
+                ],
+            }
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: SelectedAdapter(),
+    )
+    plane = StrategyControlPlane(tmp_path / "outputs")
+
+    assert plane._accepted_orders("2026-07-05_DAY") == [
+        {"order_id": "n-accepted", "state": "accepted"},
+    ]
 
 
 def test_preview_direction_and_style_change_grid_geometry_and_order_sides(tmp_path: Path) -> None:
@@ -367,6 +396,78 @@ def test_running_adjustment_replaces_pending_grid_without_stopping_runtime(tmp_p
     assert adjusted["created_orders"] == len(current_orders) > 0
     assert all(order["side"] == "sell" for order in current_orders)
     assert all(order["strategy_plan_id"] == adjusted["plan"]["strategy_plan_id"] for order in current_orders)
+
+
+def test_failed_running_adjustment_keeps_previous_grid_and_removes_staged_orders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        {"direction": "neutral", "style": "steady"},
+        market=market(),
+        account={"ending_cash": 10_000.0},
+        now="2026-07-05T01:40:00+00:00",
+    )
+    old_plan_id = started["plan"]["strategy_plan_id"]
+    old_orders = [
+        row for row in build_execution_engine_adapter(output).snapshot(cycle_id)["orders"]
+        if row["state"] == "accepted"
+    ]
+    real = build_execution_engine_adapter(output)
+
+    class FailingStageAdapter:
+        name = real.name
+
+        def __init__(self) -> None:
+            self.submissions = 0
+
+        def submit_order(self, command: dict) -> dict:
+            self.submissions += 1
+            if self.submissions == 3:
+                raise RuntimeError("injected staged order failure")
+            return real.submit_order(command)
+
+        def cancel_orders(self, cycle_id: str, **kwargs) -> dict:
+            return real.cancel_orders(cycle_id, **kwargs)
+
+        def snapshot(self, cycle_id: str, **kwargs) -> dict:
+            return real.snapshot(cycle_id, **kwargs)
+
+        def reconcile(self, cycle_id: str) -> dict:
+            return real.reconcile(cycle_id)
+
+    monkeypatch.setattr(
+        "services.strategy_control_plane.build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: FailingStageAdapter(),
+    )
+
+    with pytest.raises(RuntimeError, match="injected staged order failure"):
+        plane.control(
+            cycle_id,
+            "adjust_plan",
+            {"direction": "short", "style": "aggressive"},
+            market=market(),
+            account={"ending_cash": 10_000.0},
+            now="2026-07-05T01:42:00+00:00",
+        )
+
+    accepted = [
+        row for row in build_execution_engine_adapter(output).snapshot(cycle_id)["orders"]
+        if row["state"] == "accepted"
+    ]
+    runtime = plane.runtime_state(cycle_id)
+    assert len(accepted) == len(old_orders)
+    assert all(row["strategy_plan_id"] == old_plan_id for row in accepted)
+    assert runtime["actual_state"] == "running"
+    assert runtime["strategy_plan_id"] == old_plan_id
+    assert "injected staged order failure" in runtime["last_error"]
 
 
 def test_concurrent_refresh_cannot_override_started_plan_or_create_two_active_plans(tmp_path: Path) -> None:

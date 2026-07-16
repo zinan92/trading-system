@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -14,6 +15,17 @@ class ExecutionEngineAdapter(Protocol):
     name: str
 
     def submit_order(self, command: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+    def cancel_orders(
+        self,
+        cycle_id: str,
+        *,
+        order_ids: list[str] | None = None,
+        strategy_plan_id: str | None = None,
+        ts: str | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
         ...
 
     def process_market_event(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -58,6 +70,41 @@ class LegacyPaperExecutionAdapter:
         fill = self.engine.submit_order(command)
         self._record_shadow_command(command, fill)
         return fill
+
+    def cancel_orders(
+        self,
+        cycle_id: str,
+        *,
+        order_ids: list[str] | None = None,
+        strategy_plan_id: str | None = None,
+        ts: str | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        selected_ids = {str(value) for value in (order_ids or []) if str(value)}
+        rows = load_json(self._orders_path(cycle_id))
+        cancelled_ids: list[str] = []
+        for row in rows:
+            row_id = str(row.get("order_id") or "")
+            row_command = row.get("command") if isinstance(row.get("command"), dict) else {}
+            row_plan_id = str(row.get("strategy_plan_id") or row_command.get("strategy_plan_id") or "")
+            if row.get("state") != "accepted":
+                continue
+            if selected_ids and row_id not in selected_ids:
+                continue
+            if strategy_plan_id and row_plan_id != str(strategy_plan_id):
+                continue
+            row["state"] = "cancelled"
+            row["cancelled_at"] = ts
+            row["cancel_reason"] = str(reason or "")
+            cancelled_ids.append(row_id)
+        if cancelled_ids:
+            write_json(self._orders_path(cycle_id), rows)
+        return {
+            "status": "cancelled" if cancelled_ids else "idempotent",
+            "cycle_id": cycle_id,
+            "cancelled_order_ids": cancelled_ids,
+            "cancelled_order_count": len(cancelled_ids),
+        }
 
     def process_market_event(self, event: dict[str, Any]) -> dict[str, Any]:
         event = canonical_market_event(event)
@@ -345,8 +392,112 @@ def build_execution_engine_adapter(
         return NautilusExecutionAdapter(
             output_root,
             nautilus_python=nautilus_python,
+            storage_namespace="nautilus_authoritative",
+            config=config,
         )
     raise ValueError(f"unknown execution engine: {engine}")
+
+
+def execution_engine_selection(
+    config: dict[str, Any] | None,
+    *,
+    environ: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Resolve the authoritative paper engine without allowing config self-approval.
+
+    The persisted config may express the desired paper engine, but the Nautilus
+    cutover remains attended: approval and the isolated runtime path must arrive
+    through the service environment.  This deliberately has no real-money mode.
+    """
+
+    settings = dict((config or {}).get("execution_engine") or {})
+    authoritative = str(settings.get("authoritative") or "legacy_paper").strip().lower()
+    shadow = str(settings.get("shadow") or "nautilus_paper").strip().lower()
+    if authoritative not in {"legacy_paper", "nautilus_paper"}:
+        raise ValueError(f"unsupported authoritative execution engine: {authoritative}")
+    if shadow not in {"none", "nautilus_paper"}:
+        raise ValueError(f"unsupported shadow execution engine: {shadow}")
+    if settings.get("real_money_eligible") not in (None, False):
+        raise ValueError("DualTrack execution engine selection is paper-only")
+
+    environment = dict(os.environ if environ is None else environ)
+    approved = environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") == "1"
+    nautilus_python = str(environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or "").strip()
+    if authoritative == "nautilus_paper" and not approved:
+        raise RuntimeError("Nautilus paper switch requires attended approval")
+    if authoritative == "nautilus_paper" and not nautilus_python:
+        raise RuntimeError("Nautilus paper switch requires an isolated runtime path")
+    return {
+        "authoritative": authoritative,
+        "shadow": shadow,
+        "paper_only": True,
+        "real_money_eligible": False,
+        "attended_approval": approved,
+        "nautilus_python": nautilus_python,
+    }
+
+
+def build_configured_execution_engine_adapter(
+    output_root: Path,
+    *,
+    config: dict[str, Any] | None = None,
+    environ: dict[str, str] | None = None,
+) -> ExecutionEngineAdapter:
+    """Build the one authoritative paper adapter selected by validated config."""
+
+    if config is None:
+        from services.dualtrack_config import dualtrack_config
+
+        config = dualtrack_config()
+    selection = execution_engine_selection(config, environ=environ)
+    authoritative = build_execution_engine_adapter(
+        output_root,
+        engine=selection["authoritative"],
+        config=config,
+        nautilus_python=selection["nautilus_python"] or None,
+        allow_paper_switch=selection["attended_approval"],
+    )
+    if selection["shadow"] != "nautilus_paper" or authoritative.name == "nautilus_paper":
+        return authoritative
+
+    environment = dict(os.environ if environ is None else environ)
+    settings = dict((config or {}).get("execution_engine") or {})
+    shadow_python = str(
+        environment.get("TRADING_ORCHESTRATOR_NAUTILUS_SHADOW_PYTHON")
+        or settings.get("shadow_runtime_path")
+        or ""
+    ).strip()
+    from services.dualtrack_shadow_execution_adapter import ShadowingExecutionEngineAdapter
+
+    if not shadow_python:
+        return ShadowingExecutionEngineAdapter(
+            output_root,
+            authoritative=authoritative,
+            shadow=None,
+            blocker="nautilus_shadow_runtime_missing",
+        )
+    try:
+        from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+
+        shadow = NautilusExecutionAdapter(
+            output_root,
+            nautilus_python=shadow_python,
+            storage_namespace="nautilus_paper",
+            defer_replay=True,
+            config=config,
+        )
+    except Exception as exc:
+        return ShadowingExecutionEngineAdapter(
+            output_root,
+            authoritative=authoritative,
+            shadow=None,
+            blocker=f"nautilus_shadow_unavailable:{str(exc)[-500:]}",
+        )
+    return ShadowingExecutionEngineAdapter(
+        output_root,
+        authoritative=authoritative,
+        shadow=shadow,
+    )
 
 
 def _orders_from_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:

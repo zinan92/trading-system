@@ -5092,3 +5092,333 @@ auditable datafeed port; broker execution remains a separate port.
   button, and a preview explicitly labeled `自动风险上限`; no start was clicked.
 - Visual proof:
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-grid-auto-notional-revalidation.png`.
+
+## 2026-07-15 - Datafeed provider contract and missed-fill recovery
+
+### Decision
+
+- Keep provider validation exact and fail-closed. Align the production DualTrack
+  market-data provider with datafeed's canonical GOLD route,
+  `binance_usdm_futures`; do not add a silent alias or fallback.
+- Keep broker/execution identity `binance_usdm` separate. A market-data source
+  name and an order-routing broker name are different contracts and must not be
+  renamed together.
+- Recover the missed current-cycle paper events only after pausing the one-minute
+  scheduler, preserving pre-replay artifacts, and proving replay idempotency.
+
+### Recovery result
+
+- The accepted 4060.1089 buy limit was filled at the close of the 21:25 Beijing
+  minute bar and recorded at 21:26.
+- The 4067.9911 target was reached during the 21:58 minute bar and recorded at
+  21:59. The trade is closed, so current position is correctly zero.
+- Net trade PnL after both-side costs is `+1.32861937 USD`. The current cycle has
+  2 fills, 1 closed trade, 50 remaining accepted orders, and clean execution
+  reconciliation.
+- A second replay processed the same history without changing the orders, fills,
+  trades, or account hashes. The scheduler was restored and its next tick exited
+  0 without `market_provider_mismatch`.
+
+### Gotchas
+
+- Zero current position does not mean an order failed. The UI must be checked
+  against fills, closed trades, realized PnL, and pending-order state together.
+- One-minute candle timestamps are interval starts; chronology-safe paper fills
+  are recorded at the interval end, hence 21:25 touch becomes 21:26 execution
+  time in the ledger.
+- `runtime.accepted_order_count` is the original start receipt (51), while the
+  live execution snapshot now has 50 pending orders. The dashboard correctly
+  renders the latter as the actionable count.
+- A pre-existing 2026-07-15 DAY human trade has an exit timestamp earlier than
+  its entry timestamp. This is unrelated to the provider fix but remains a
+  separate ledger-chronology debt to repair and backfill explicitly.
+- The account panel is cumulative across versioned production-plan history. The
+  recovered current-cycle trade is +1.33 USD, while the displayed cumulative
+  realized PnL also includes earlier production trades.
+
+### Verification and evidence
+
+- Test-first contract reproduced the drift (`binance_usdm` versus
+  `binance_usdm_futures`) before the fix.
+- Focused provider, execution-adapter, cycle-runner, and runtime-dashboard
+  regression: 74 passed.
+- Full repository regression after fixture migration: 1475 passed in 547.71s.
+- Pre-replay snapshot:
+  `/Users/wendy/trading-orchestrator/outputs/dualtrack/recovery/2026-07-15-provider-contract-replay/pre/`.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-grid-fill-recovery-dashboard.png`.
+
+## 2026-07-15 - Chronology-safe protective exits and current-cycle ledger repair
+
+### Decision
+
+- A protective market event whose end timestamp is not later than a trade's
+  entry timestamp is ineligible for that trade. Skip it before price
+  evaluation, even when the old candle close itself is beyond TP/SL.
+- Enforce the same invariant at the ledger write boundary: every exit must be
+  strictly later than its matched entry. This prevents any caller from
+  bypassing the event-loop guard.
+- Allocate new fill IDs after the highest persisted suffix, not from row count,
+  because a controlled repair can leave intentional sequence gaps.
+- Aggregate accepted-limit fills across the complete replay window so the
+  scheduler receipt reports every real fill, not only the final market event.
+
+### Recovery result
+
+- Removed two impossible current-cycle targets whose timestamps preceded their
+  entries: `2026-07-15_NIGHT_human_0004` and `_0006`.
+- Replayed the same trusted Binance USD-M Futures 1m history. The 4044.3444
+  long correctly reached 4052.2266 during the 23:41 Beijing bar and closed at
+  23:42 for net `+1.33407949 USD`.
+- The 4052.2266 long has not reached 4060.1088 and remains open. A later real
+  touch opened the 4036.4622 grid long at 00:20 Beijing on 2026-07-16.
+- Current authoritative state at visual capture: 47 pending orders, 2 open
+  positions, 6 current-cycle fills, unique fill IDs, and local execution
+  reconciliation `ok` with no chronology errors.
+- The one-minute LaunchAgent was restored; its first post-repair run exited 0.
+
+### Gotchas
+
+- Filtering only the pre-entry OHLC range is insufficient. Falling back to the
+  old candle close can still trigger a new trade, so the entire event must be
+  rejected when its end timestamp is at or before entry.
+- `len(rows) + 1` is not a safe durable identifier allocator after a repair;
+  it can collide with a higher existing suffix.
+- Per-event replay receipts must be aggregated. The final event often reports
+  zero fills even though an earlier event in the same sweep legitimately
+  filled an order.
+- A historical 2026-07-15 DAY trade still has a pre-entry exit. It is outside
+  this current-cycle repair and remains explicitly blocked from silent rewrite
+  until its own historical replay evidence is approved.
+- The local datafeed health endpoint exceeded its 10-second client timeout
+  during full regression. Test-only market DBs are now propagated through the
+  report/doctor dependency boundary instead of accidentally calling the live
+  service; production remains fail-closed.
+
+### Verification and evidence
+
+- Focused chronology, ID allocation, replay summary, execution, provider, and
+  dashboard regression: 102 passed.
+- The isolated daily-review/report/doctor boundary regression: 3 passed.
+- Corrupt-state pre-repair snapshot:
+  `/Users/wendy/trading-orchestrator/outputs/dualtrack/recovery/2026-07-15-chronology-repair/pre/`.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-grid-chronology-recovery-dashboard.png`.
+
+## 2026-07-16 - M0 freeze the Nautilus paper-engine cutover boundary
+
+### Decision
+
+- Keep `legacy_paper` as the sole authoritative paper engine while declaring
+  `nautilus_paper` as the migration shadow. No configured engine changed.
+- Route the scheduler, production strategy control plane, dashboard order
+  endpoint, and execution snapshot endpoint through one configuration-aware
+  adapter factory.
+- Persistent config may express the desired engine but cannot self-authorize a
+  Nautilus cutover. Attended approval and the isolated Nautilus runtime path
+  must come from the service environment, and the existing shadow gate remains
+  a separate mandatory check.
+- Freeze the migration milestones and exit criteria in
+  `docs/dualtrack-nautilus-migration-plan.md` before implementing continuous
+  shadow delivery.
+
+### Gotchas
+
+- The existing Nautilus adapter and fixed parity pass did not mean production
+  was wired to Nautilus; every production caller still relied on the factory's
+  default `legacy_paper` selection.
+- A config boolean such as `allow_paper_switch` is not attended approval. It is
+  writable ahead of time and therefore cannot satisfy the cutover trust gate.
+- The isolated runtime previously used under `/tmp` is not a durable production
+  dependency. M1 must provision a stable isolated path before continuous
+  shadow operation.
+- The live cutover gate is correctly blocked at `0/7` because the only recorded
+  parity cycle did not contain qualifying command activity.
+
+### Verification
+
+- Pre-change execution boundary baseline: `30 passed`.
+- New selection contract first failed because the configured builder did not
+  exist; after implementation, the production callers use the configured
+  factory and keep `legacy_paper` authoritative.
+- Nautilus instrument preflight: `ready_for_paper_shadow`.
+- Fixed parity fixture gate: `pass`; paper cutover gate:
+  `candidate_activity_insufficient`, `0/7`.
+
+## 2026-07-16 - M1 continuous Nautilus paper shadow runtime
+
+### Decision
+
+- Install pinned NautilusTrader 1.230.0 in the stable isolated runtime
+  `/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0`; stop using
+  `/tmp` as an execution dependency.
+- Mirror the exact accepted production command and canonical market event into
+  a separate Nautilus journal. Shadow failures are append-only evidence and do
+  not alter or stop the authoritative legacy paper result.
+- Defer Nautilus replay until the end of each live-tick event batch. Queue each
+  immutable event once, replay the complete prefix once, then acknowledge all
+  commands/events included in that successful replay.
+- Idempotently backfill the current cycle's 51 pre-shadow production commands
+  from the existing immutable `shadow_commands` journal. Do not ask the user to
+  restart the robot and do not copy candidate fills into the legacy ledger.
+
+### Gotchas
+
+- The first continuous attempt called a full Nautilus subprocess replay for
+  every bar in the legacy replay window. It exceeded 90 seconds and was
+  manually terminated. Increasing the timeout would have hidden an O(n^2)
+  integration error.
+- A later successful event replay includes earlier unacknowledged events. The
+  processed-event journal must acknowledge the entire replayed prefix, not only
+  the event that triggered the retry.
+- Importing commands after all market events were already acknowledged still
+  requires a replay. A separate processed-command journal is therefore needed;
+  event freshness alone is not a sufficient dirty-state signal.
+- Fixed fixture parity is not live parity. The first command-bearing live
+  comparison correctly reported drift rather than advancing the cutover gate.
+
+### Verification
+
+- Continuous-shadow unit and integration regression: `94 passed`.
+- Real live tick after batching: `4.41 seconds`, exit 0, one flush, six newly
+  processed events.
+- Current shadow journal: 246 unique events / 246 processed; 51 unique commands
+  / 51 processed.
+- Current authoritative engine: `legacy_paper`; reconciliation `ok`, six fills,
+  four positions, two open positions.
+- Current fixed parity fixture gate remains `pass`; command-bearing live parity
+  reports 49 explicit differences and cutover remains blocked at `0/7`.
+
+## 2026-07-16 - M2-M5 Nautilus lifecycle, accounting, and attended-cutover rehearsal
+
+### Decision
+
+- Implement cancellations as durable commands, not mutable order-row edits. All
+  commands sharing one timestamp are delivered through one Nautilus clock alert
+  in journal order; this is required for complete 40-50 order batch cancellation.
+- Preserve Nautilus HEDGING position identity on every close. Partial reduction
+  targets the exact position ID and resizes the remaining TP/SL protection;
+  regrid is two phase: cancel the old accepted set, verify it is gone, then arm
+  the replacement set.
+- Normalize the engine snapshot as the one read model for orders, fills,
+  positions, account, realized/unrealized PnL, margin, exposure, fees and
+  slippage. Production reconciliation now comes from the selected engine;
+  candidate reconciliation is exposed separately as
+  `execution_shadow_reconciliation`.
+- Permit comparison rounding only when the candidate explicitly declares the
+  venue price/quantity/money precision. Exact comparison remains exact; side,
+  state, event and other semantic drift can never be rounded away.
+- Use the authenticated demo account's observed paper fee contract (maker 0,
+  taker 0.0004). Keep the older flat-fee historical drift unchanged. Only new
+  command-bearing 12-hour cycles under the unified contract can count toward
+  7/7; no historical evidence is rewritten.
+- Isolate candidate and production persistence. Continuous shadow stays under
+  `dualtrack/nautilus_paper`; an attended cutover writes only under
+  `dualtrack/nautilus_authoritative`. Pre-cutover shadow orders therefore cannot
+  become production orders through directory reuse.
+- When Nautilus is authoritative, production history combines the preserved
+  versioned Legacy archive with only `nautilus_authoritative` snapshots. Shadow
+  fills are excluded. Market orders and manual closes are advanced with the
+  server-validated market event before the API returns a fill.
+- Keep `legacy_paper` authoritative. The real Nautilus cutover remains blocked
+  until the live gate reaches seven consecutive qualifying cycles and the
+  operator supplies attended service approval.
+- Count only completed 12-hour cycles. A passing intracycle comparison is
+  debugging evidence but never advances 7/7. The close path now re-runs the
+  shadow comparison idempotently and requires a persisted close artifact,
+  command activity, trusted configured-provider events, the current paper fee
+  contract, and a pinned replay version.
+- Add a read-only attended-cutover precheck which combines the 7/7 evidence gate
+  with the operational flat-state boundary. It refuses Go while Legacy is
+  running, accepted orders or positions remain, either ledger does not
+  reconcile, service-environment approval is absent, or the isolated runtime
+  and preflight are unavailable. It cannot edit config or submit an order.
+
+### Gotchas
+
+- Scheduling one clock alert per cancellation at the same nanosecond caused a
+  real Nautilus batch to cancel only a prefix. Timestamp batching is execution
+  semantics, not a performance-only optimization.
+- A factory switch alone is unsafe if candidate state and authoritative state
+  share disk paths. This was not visible in empty-directory unit tests; the
+  cutover rehearsal now pre-seeds a historical shadow command to prove it stays
+  excluded.
+- Overwriting `production_execution.reconciliation` with the latest shadow
+  comparison made a healthy Legacy ledger appear drifted. Active-ledger health
+  and migration evidence must stay visibly separate.
+- Existing shadow PnL differs from Legacy by the historical fee model. This is
+  expected evidence and resets the streak; precision normalization must not be
+  used to hide money-model differences.
+- `re_arm_max` is a Strategy Lab parameter, not authorization for an automatic
+  production re-arm loop. Production replacement behavior remains driven by
+  explicit grid events and control actions.
+- Browser full-page capture failed in the Codex in-app tab through both the
+  high-level screenshot API and raw CDP. The same live local dashboard was then
+  captured with the browser fallback; public DOM/error checks still used the
+  authenticated public tab and reported zero browser errors.
+- The first gate implementation could count an open cycle as soon as its current
+  prefix matched. That did not prove 12 hours of behavior. `cycle_complete` is
+  now cross-checked against the cycle attribution artifact before qualification.
+- Excluding open cycles only at increment time was insufficient: after a 7/7
+  completed streak, the next open cycle's provisional report would reset the
+  gate to zero until its close. The gate now counts and resets only from strict
+  v2 completed-cycle evidence. The newest open report remains visible through
+  separate observation fields but cannot erase earned qualification. An open
+  cycle with live drift can still block the attended switch without resetting
+  the completed streak; an open passing prefix leaves a 7/7 gate ready.
+- The updated datafeed reports the canonical provider name in `source_mode`
+  instead of the older `requested_symbol` marker. The production order path
+  already accepted both forms, but the legacy runtime-status endpoint did not,
+  causing a false `blocked` message while the same payload was fresh and ready.
+  Runtime diagnostics now use the same fail-closed contract: ready, fresh,
+  explicit provider, non-synthetic, canonical source mode, and exact configured
+  provider match.
+- `test_official_feed_receipt_refreshes_from_current_local_state` was not truly
+  local: when its temporary output root had no OANDA receipt it queried the live
+  datafeed health endpoint, making the full suite depend on network timing. The
+  fixture now persists the explicit local skipped-OANDA state it intends to
+  test; production fail-closed behavior was not relaxed.
+
+### Verification and evidence
+
+- Fixed real Nautilus parity gate: all 10 lifecycle classes pass.
+- Added the M5 transactional apply/rollback controller. It requires the read-only
+  7/7 precheck and an exact acknowledgement, stops both adapter-owning services
+  before any write, backs up the config and two installed LaunchAgent plists,
+  persists service-environment approval/runtime, restarts and validates the
+  selected engine, and automatically restores Legacy on failed validation.
+  Explicit rollback separately requires stopped/flat/reconciled Nautilus and
+  restores the apply backups byte-for-byte. Neither path starts a strategy or
+  submits an order. The live controller has not been applied because M4 is 0/7.
+- Exercised the real apply command against the current live state with the exact
+  acknowledgement and isolated runtime path. It returned exit 2 with only the
+  expected blockers (`shadow_gate_not_ready`, running Legacy runtime, 45 open
+  Legacy orders), reported `config_write_performed=false`, and left the config
+  plus both installed LaunchAgent files byte-identical. Legacy remained running.
+- Automatic rollback is itself an audited state machine. A restore, restart, or
+  Legacy revalidation failure now returns and persists
+  `automatic_rollback_failed` instead of escaping without a receipt. Service
+  quiescence is idempotent: a non-zero `bootout` is acceptable only when an
+  immediate `launchctl print` proves the job is no longer loaded.
+- Real isolated cutover rehearsal: start, regrid, cancel-all, manual market
+  open/close, stop and final reconciliation pass; the historical shadow command
+  remains untouched in the shadow directory.
+- Isolated rollback selection restores `legacy_paper` after the Nautilus stop;
+  the Legacy history bytes and Nautilus authoritative snapshot remain present
+  and unchanged.
+- The live attended precheck currently reports No-Go for exactly the expected
+  reasons: 0/7, production runtime running, 45 accepted Legacy orders, and no
+  cutover-only service approval/runtime environment. Legacy reconciliation is
+  `ok`, so this is a controlled migration block rather than a production fault.
+- Focused completed-cycle gate/dashboard/cutover regression: `71 passed`.
+- Focused transactional M5 controller regression: `7 passed`.
+- Final full repository regression after the transactional apply/rollback and
+  failure-visible automatic rollback: `1531 passed` in 411.33 seconds.
+- Current production check after tests: `legacy_paper`, runtime `running`,
+  authoritative reconciliation `ok`; live-tick LaunchAgent running with last
+  exit code 0. Runtime market diagnostics now report `ok / 行情新鲜`. Shadow
+  gate remains blocked at `0/7`.
+- Desktop evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-migration-gate-desktop.png`.
+- 390px mobile evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-migration-gate-mobile.png`.

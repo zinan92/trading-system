@@ -161,6 +161,21 @@ def test_console_explains_the_last_runtime_control_action() -> None:
     assert "动作时间（北京）" in html
 
 
+def test_console_names_the_authoritative_engine_and_shadow_gate() -> None:
+    html = (ROOT / "dashboard-dualtrack-split.html").read_text(encoding="utf-8")
+
+    assert "执行内核" in html
+    assert "Nautilus 迁移门禁" in html
+    assert "等待当前 12 小时周期结束" in html
+    assert "手续费契约不一致" in html
+    assert "executionEngineText" in html
+    assert "cutoverGateText" in html
+    assert "最近完成周期对账有差异" in html
+    assert "当前周期实时对账有差异" in html
+    assert "required_consecutive_passes" in html
+    assert "observed_consecutive_passes" in html
+
+
 def test_console_reconciles_authoritative_state_after_an_uncertain_control_response() -> None:
     html = (ROOT / "dashboard-dualtrack-split.html").read_text(encoding="utf-8")
 

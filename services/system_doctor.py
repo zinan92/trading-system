@@ -22,24 +22,27 @@ from services.strategy_guardrails import StrategyGuardrails
 
 
 class SystemDoctor:
-    def __init__(self, output_root: Path | None = None) -> None:
+    def __init__(self, output_root: Path | None = None, market_db: Path | None = None) -> None:
         config = load_pipeline_config()
         self.config = config
         self.output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
+        self.market_db = market_db or Path(
+            os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db")))
+        )
 
     def run(self, run_date: str) -> dict:
         broker = broker_preflight(self.output_root)
         feed_doctor = BrokerFeedDoctor(self.output_root).run(run_date)
         receipts = BrokerReceiptImporter(self.output_root).import_pending(run_date)
-        data_source = DataSourcePreflight(self.output_root).run(run_date)
+        data_source = DataSourcePreflight(self.output_root, self.market_db).run(run_date)
         paper_reconciliation = PaperReconciliation(self.output_root).run(run_date)
         strategy_guardrails = StrategyGuardrails(self.output_root).run(run_date)
-        health = HealthCheck(self.output_root).run(run_date)
-        audit = CompletionAudit(self.output_root).run(run_date)
-        mock_runtime = MockTradingRuntime(self.output_root).run(run_date)
-        live_readiness = LiveReadiness(self.output_root).run(run_date)
+        health = HealthCheck(self.output_root, self.market_db).run(run_date)
+        audit = CompletionAudit(self.output_root, self.market_db).run(run_date)
+        mock_runtime = MockTradingRuntime(self.output_root, self.market_db).run(run_date)
+        live_readiness = LiveReadiness(self.output_root, self.market_db).run(run_date)
         live_switch_plan = LiveSwitchPlan(self.output_root).run(run_date)
-        live_cutover = LiveCutoverPackage(self.output_root).run(run_date)
+        live_cutover = LiveCutoverPackage(self.output_root, self.market_db).run(run_date)
         latest_runner = self._load_mapping(self.output_root / "runner_status" / "current.json")
         mt5_smoke = (load_json(self.output_root / "mt5_bridge_smoke" / "current.json") or [{}])[-1]
         feed_smoke = (load_json(self.output_root / "broker_feed_smoke" / "current.json") or [{}])[-1]

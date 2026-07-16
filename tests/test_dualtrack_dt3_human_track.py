@@ -9,7 +9,7 @@ from schemas.market_data import Bar
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_store import DualTrackPlanStore
-from services.journal_store import load_json
+from services.journal_store import load_json, write_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG, _mgc_config
 
 
@@ -242,6 +242,122 @@ def test_human_protective_sweep_executes_short_stop_once_at_sl_price(tmp_path: P
     assert trades[0]["status"] == "closed"
     assert trades[0]["remaining_units"] == 0.0
     assert trades[0]["realized_pnl"] == pytest.approx(-50.1025)
+
+
+def test_human_exit_rejects_timestamp_at_or_before_entry(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+    entry = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+
+    with pytest.raises(ValueError, match="exit timestamp must be after entry timestamp"):
+        human.submit_order({
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:01:00+00:00",
+            "side": "sell",
+            "event": "target",
+            "order_type": "limit",
+            "price": 105.0,
+            "trade_id": entry["trade_id"],
+            "position_id": "manual",
+        })
+
+    assert len(load_json(tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json")) == 1
+
+
+def test_human_repairs_pre_entry_protective_exit_idempotently(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+    entry = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+    fills_path = tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json"
+    rows = load_json(fills_path)
+    rows[0]["remaining_units"] = 0.0
+    rows[0]["position_status"] = "closed"
+    rows[0]["closed_units"] = rows[0]["pnl_units"]
+    rows.append({
+        "fill_id": f"{cycle_id}_human_0002",
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:01:00+00:00",
+        "event": "target",
+        "trade_id": entry["trade_id"],
+        "source_fill_id": f"dualtrack-protective:{cycle_id}:{entry['trade_id']}:target:105.0000",
+    })
+    write_json(fills_path, rows)
+
+    repaired = human.repair_pre_entry_protective_exits(cycle_id)
+    repeated = human.repair_pre_entry_protective_exits(cycle_id)
+    fills = load_json(fills_path)
+    trades = load_json(tmp_path / "outputs" / "dualtrack" / "trades" / f"{cycle_id}_human.json")
+
+    assert repaired["status"] == "repaired"
+    assert repaired["removed_fill_ids"] == [f"{cycle_id}_human_0002"]
+    assert repeated["status"] == "ok"
+    assert len(fills) == 1
+    assert fills[0]["remaining_units"] == pytest.approx(fills[0]["pnl_units"])
+    assert fills[0]["position_status"] == "open"
+    assert "closed_units" not in fills[0]
+    assert trades[0]["status"] == "open"
+
+
+def test_human_fill_id_advances_past_highest_suffix_after_recovery_gap(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+    human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:01:00+00:00",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+    second = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 99.0,
+        "notional": 1000.0,
+        "sl": 94.0,
+        "tp": 104.0,
+    })
+    fills_path = tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json"
+    rows = load_json(fills_path)
+    rows[-1]["fill_id"] = f"{cycle_id}_human_0003"
+    write_json(fills_path, rows)
+
+    target = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:03:00+00:00",
+        "side": "sell",
+        "event": "target",
+        "order_type": "limit",
+        "price": 104.0,
+        "trade_id": second["trade_id"],
+        "position_id": "manual",
+    })
+    fill_ids = [row["fill_id"] for row in load_json(fills_path)]
+
+    assert target["fill_id"] == f"{cycle_id}_human_0004"
+    assert len(fill_ids) == len(set(fill_ids))
 
 
 def test_human_paper_fee_model_charges_taker_entry_and_maker_target(tmp_path: Path) -> None:

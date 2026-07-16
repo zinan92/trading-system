@@ -14,8 +14,8 @@ def _preflight(path: Path) -> None:
         "status": "ready_for_paper_shadow",
         "fee_model": {
             "mode": "account_observed",
-            "maker_fee_rate": "0.00005",
-            "taker_fee_rate": "0.00005",
+            "maker_fee_rate": "0",
+            "taker_fee_rate": "0.000400",
             "funding_rate": "0.0001",
             "funding_time": 1,
             "observed_at": "2026-07-10T10:00:00+00:00",
@@ -31,7 +31,15 @@ def _candidate(cycle_id: str) -> dict:
         "cycle_id": cycle_id,
         "orders": [{"order_id": "n-1", "state": "filled"}],
         "fills": [{"fill_id": "n-fill-1", "side": "buy", "price": 100.0, "quantity": 1.0}],
-        "positions": [{"status": "open", "side": "long", "remaining_units": 1.0}],
+        "positions": [{
+            "trade_id": "n-entry-1",
+            "position_id": "POS-n-entry-1",
+            "status": "open",
+            "side": "long",
+            "remaining_units": 1.0,
+            "strategy_plan_id": "plan-test",
+            "strategy_plan_version": 1,
+        }],
         "account": {"margin": 10.0, "exposure": 100.0, "slippage": 0.0},
         "pnl": {"realized": -0.005, "unrealized": 0.0},
         "mark": {"price": 100.0, "fresh": True, "source": "test"},
@@ -156,6 +164,237 @@ def test_retries_persisted_event_until_replay_is_acknowledged(tmp_path: Path) ->
     assert adapter.process_market_event(event)["status"] == "idempotent"
     assert len(attempts) == 2
     assert len(load_json(adapter.root / "processed_events" / f"{CYCLE_ID}.json")) == 1
+
+
+def test_later_success_acknowledges_every_event_in_the_replayed_prefix(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    attempts = []
+
+    def replay(_preflight: Path, _input: Path, _output: Path) -> dict:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("injected first-event failure")
+        return _candidate(CYCLE_ID)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+    )
+    first = {
+        "event_id": "event-1",
+        "cycle_id": CYCLE_ID,
+        "ts_event": "2026-07-10T01:01:00+00:00",
+        "price": 100.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    }
+    second = {**first, "event_id": "event-2", "ts_event": "2026-07-10T01:02:00+00:00", "price": 101.0}
+
+    try:
+        adapter.process_market_event(first)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("first replay should fail")
+    assert adapter.process_market_event(second)["status"] == "replayed"
+
+    processed = load_json(adapter.root / "processed_events" / f"{CYCLE_ID}.json")
+    assert [row["event_id"] for row in processed] == ["event-1", "event-2"]
+    assert adapter.process_market_event(first)["status"] == "idempotent"
+
+
+def test_deferred_mode_queues_many_events_and_replays_the_batch_once(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    attempts = []
+
+    def replay(_preflight: Path, _input: Path, _output: Path) -> dict:
+        attempts.append(1)
+        return _candidate(CYCLE_ID)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    adapter.submit_order({
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "source_fill_id": "deferred-command-1",
+    })
+    base = {
+        "cycle_id": CYCLE_ID,
+        "price": 100.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    }
+
+    assert adapter.process_market_event({**base, "event_id": "event-1", "ts_event": "2026-07-10T01:01:00+00:00"})["status"] == "queued"
+    assert adapter.process_market_event({**base, "event_id": "event-2", "ts_event": "2026-07-10T01:02:00+00:00"})["status"] == "queued"
+    assert attempts == []
+
+    result = adapter.flush(CYCLE_ID)
+
+    assert result["status"] == "replayed"
+    assert result["processed_event_count"] == 2
+    assert result["processed_command_count"] == 1
+    assert len(attempts) == 1
+    assert [row["event_id"] for row in load_json(adapter.root / "processed_events" / f"{CYCLE_ID}.json")] == [
+        "event-1",
+        "event-2",
+    ]
+    assert adapter.flush(CYCLE_ID)["status"] == "idempotent"
+    assert len(attempts) == 1
+    assert len(load_json(adapter.root / "processed_commands" / f"{CYCLE_ID}.json")) == 1
+
+
+def test_persists_idempotent_cancel_commands_for_authoritative_order_ids(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+        defer_replay=True,
+    )
+    order = adapter.submit_order({
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "source_fill_id": "strategy-grid:plan-1:order-1",
+        "authoritative_order_id": "legacy-order-1",
+        "strategy_plan_id": "plan-1",
+        "strategy_plan_version": 1,
+    })
+
+    first = adapter.cancel_orders(
+        CYCLE_ID,
+        order_ids=["legacy-order-1"],
+        ts="2026-07-10T01:05:00+00:00",
+        reason="regrid",
+    )
+    second = adapter.cancel_orders(
+        CYCLE_ID,
+        order_ids=["legacy-order-1"],
+        ts="2026-07-10T01:05:00+00:00",
+        reason="regrid",
+    )
+
+    assert order["state"] == "accepted"
+    assert first == second
+    assert first["cancelled_order_ids"] == ["legacy-order-1"]
+    commands = load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")
+    assert len(commands) == 2
+    assert commands[-1]["command"]["event"] == "cancel"
+    assert commands[-1]["command"]["cancel_order_id"] == commands[0]["command_id"]
+    assert commands[-1]["command"]["strategy_plan_id"] == "plan-1"
+
+
+def test_close_command_resolves_one_hedged_position_and_persists_target_identity(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+        defer_replay=True,
+    )
+    snapshot = _candidate(CYCLE_ID)
+    snapshot["positions"] = [{
+        "trade_id": "nautilus-entry-1",
+        "position_id": "POS-nautilus-entry-1",
+        "status": "open",
+        "side": "long",
+        "remaining_units": 0.25,
+        "entry_price": 4000.0,
+        "strategy_plan_id": "plan-1",
+        "strategy_plan_version": 1,
+    }]
+    adapter._persist_snapshot(CYCLE_ID, snapshot)
+
+    receipt = adapter.submit_order({
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T01:05:00+00:00",
+        "side": "sell",
+        "event": "flatten",
+        "order_type": "market",
+        "price": 4010.0,
+        "trade_id": "legacy-trade-1",
+        "target_position_side": "long",
+        "target_entry_price": 4000.0,
+        "strategy_plan_id": "plan-1",
+        "strategy_plan_version": 1,
+        "source_fill_id": "strategy-stop:legacy-trade-1",
+    })
+
+    command = load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")[-1]["command"]
+    assert receipt["state"] == "accepted"
+    assert command["target_position_id"] == "POS-nautilus-entry-1"
+    assert command["target_command_id"] == "nautilus-entry-1"
+    assert command["quantity"] == 0.25
+
+
+def test_reconciliation_detects_account_identity_and_traceability_drift(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+    )
+    snapshot = _candidate(CYCLE_ID)
+    snapshot["account"] = {
+        "starting_cash": 10_000.0,
+        "realized_pnl": 10.0,
+        "ending_cash": 9_999.0,
+        "equity": 9_999.0,
+        "fees": 1.0,
+        "margin": 99.0,
+        "exposure": 100.0,
+        "slippage": 0.0,
+    }
+    snapshot["fills"][0]["cost"] = 0.5
+    snapshot["positions"][0]["strategy_plan_id"] = None
+    adapter._persist_snapshot(CYCLE_ID, snapshot)
+
+    report = adapter.reconcile(CYCLE_ID)
+
+    assert report["status"] == "drift"
+    codes = {row["code"] for row in report["issues"]}
+    assert {
+        "account_ending_cash_mismatch",
+        "account_fees_mismatch",
+        "account_margin_mismatch",
+        "open_position_strategy_plan_missing",
+    } <= codes
 
 
 def test_rejects_market_event_without_execution_identity(tmp_path: Path) -> None:

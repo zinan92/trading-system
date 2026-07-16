@@ -234,7 +234,11 @@ def test_order_post_response_routes_through_execution_adapter(
             captured.update(payload)
             return {"fill_id": "adapter-fill", "event": "entry"}
 
-    monkeypatch.setattr(dashboard_server, "build_execution_engine_adapter", lambda output_root: FakeAdapter())
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda output_root: FakeAdapter(),
+    )
 
     response = dashboard_server.build_dualtrack_order_post_response(
         {"cycle_id": "2026-07-05_DAY", "side": "buy"},
@@ -243,6 +247,68 @@ def test_order_post_response_routes_through_execution_adapter(
 
     assert captured["side"] == "buy"
     assert response == {"status": "filled", "fill": {"fill_id": "adapter-fill", "event": "entry"}}
+
+
+def test_nautilus_market_close_advances_with_server_validated_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    class FakeNautilusAdapter:
+        name = "nautilus_paper"
+
+        def submit_order(self, payload: dict) -> dict:
+            captured["command"] = dict(payload)
+            return {"order_id": "nautilus-close-1", "state": "accepted"}
+
+        def process_market_event(self, event: dict) -> dict:
+            captured["event"] = dict(event)
+            return {"status": "replayed"}
+
+        def snapshot(self, cycle_id: str) -> dict:
+            return {
+                "cycle_id": cycle_id,
+                "fills": [{
+                    "fill_id": "nautilus-fill-1",
+                    "order_id": "nautilus-close-1",
+                    "event": "exit",
+                    "price": 101.0,
+                }],
+            }
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda output_root: FakeNautilusAdapter(),
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "dualtrack_config",
+        lambda: {"execution_shadow": {"nautilus": {"execution_instrument_id": "XAUUSDT-PERP.BINANCE"}}},
+    )
+
+    response = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "ts": "2026-07-05T01:20:00+00:00",
+            "side": "sell",
+            "event": "exit",
+            "order_type": "market",
+            "price": 101.0,
+            "market_price": 101.0,
+            "market_timestamp": "2026-07-05T01:19:00+00:00",
+            "market_source": "binance_usdm_futures",
+            "trade_id": "open-position-1",
+        },
+        output_root=tmp_path / "outputs",
+    )
+
+    assert response["status"] == "filled"
+    assert response["fill"]["fill_id"] == "nautilus-fill-1"
+    assert captured["event"]["provider"] == "binance_usdm_futures"
+    assert captured["event"]["instrument_id"] == "XAUUSDT-PERP.BINANCE"
+    assert captured["event"]["price"] == 101.0
 
 
 def test_human_trades_endpoint_returns_order_rows_with_unrealized_when_mark_fresh(

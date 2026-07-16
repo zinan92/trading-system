@@ -135,6 +135,29 @@ def _realized_pnl(fills: list[dict]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
 
 
+def test_already_closed_cycle_finalizes_shadow_qualification(tmp_path: Path) -> None:
+    class Execution:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, bool]] = []
+
+        def flush_shadow(self, cycle_id: str, *, cycle_complete: bool = False) -> dict:
+            self.calls.append((cycle_id, cycle_complete))
+            return {"status": "ok", "cycle_complete": cycle_complete}
+
+    cycle_id = "2026-07-05_DAY"
+    output = tmp_path / "outputs"
+    write_json(output / "dualtrack" / "attribution" / f"{cycle_id}.json", [{"status": "closed"}])
+    runner = object.__new__(DualTrackCycleRunner)
+    runner.output_root = output
+    runner.execution = Execution()
+
+    result = runner.close_cycle(cycle_id, as_of="2026-07-05T13:01:00+00:00")
+
+    assert result["status"] == "already_closed"
+    assert result["shadow_finalization"] == {"status": "ok", "cycle_complete": True}
+    assert runner.execution.calls == [(cycle_id, True)]
+
+
 def _comex_config() -> dict:
     config = deepcopy(TEST_CONFIG)
     config["market_session"] = {
@@ -599,7 +622,7 @@ def test_live_tick_same_bar_stop_and_target_uses_conservative_stop_first(tmp_pat
     assert fills[-1]["price"] == 95.0
 
 
-def test_live_tick_does_not_apply_pre_entry_bar_wick_to_new_trade(tmp_path: Path) -> None:
+def test_live_tick_does_not_apply_pre_entry_bar_range_or_close_to_new_trade(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     output = tmp_path / "outputs"
     store = MarketStore(db)
@@ -611,7 +634,7 @@ def test_live_tick_does_not_apply_pre_entry_bar_wick_to_new_trade(tmp_path: Path
             open=100.0,
             high=106.0,
             low=99.0,
-            close=100.0,
+            close=106.0,
             volume=1.0,
             provider="test",
         ),
@@ -627,6 +650,18 @@ def test_live_tick_does_not_apply_pre_entry_bar_wick_to_new_trade(tmp_path: Path
             provider="test",
         ),
     ])
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+    runner.execution.submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 120.0,
+        "notional": 1000.0,
+        "sl": 125.0,
+        "tp": 110.0,
+    })
     DualTrackHumanEngine(output, config=TEST_CONFIG).submit_order({
         "cycle_id": "2026-07-05_DAY",
         "ts": "2026-07-05T01:02:30+00:00",
@@ -639,9 +674,7 @@ def test_live_tick_does_not_apply_pre_entry_bar_wick_to_new_trade(tmp_path: Path
         "tp": 90.0,
     })
 
-    result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
-        as_of="2026-07-05T01:03:30+00:00"
-    )
+    result = runner.live_tick(as_of="2026-07-05T01:03:30+00:00")
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
     assert result["protective_sweep"]["status"] == "ok"
@@ -755,6 +788,7 @@ def test_live_tick_routes_trusted_market_event_through_execution_adapter(tmp_pat
     output = tmp_path / "outputs"
     _seed_bars(MarketStore(db), datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [100.0, 106.0])
     captured = {}
+    flushed = []
 
     class FakeExecutionAdapter:
         name = "fake"
@@ -766,7 +800,15 @@ def test_live_tick_routes_trusted_market_event_through_execution_adapter(tmp_pat
             captured.update(event)
             return {"status": "triggered", "triggered": [{"event": "stop"}]}
 
-    monkeypatch.setattr(cycle_runner_module, "build_execution_engine_adapter", lambda *args, **kwargs: FakeExecutionAdapter())
+        def flush_shadow(self, cycle_id: str) -> dict:
+            flushed.append(cycle_id)
+            return {"status": "replayed"}
+
+    monkeypatch.setattr(
+        cycle_runner_module,
+        "build_configured_execution_engine_adapter",
+        lambda *args, **kwargs: FakeExecutionAdapter(),
+    )
 
     result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
         as_of="2026-07-05T01:01:30+00:00"
@@ -776,6 +818,9 @@ def test_live_tick_routes_trusted_market_event_through_execution_adapter(tmp_pat
     assert captured["cycle_id"] == "2026-07-05_DAY"
     assert captured["price"] == 106.0
     assert captured["source"] == "market_db:test"
+    assert captured["provider"] == "test"
+    assert captured["instrument_id"] == "XAUUSDT"
+    assert flushed == ["2026-07-05_DAY"]
 
 
 def test_live_tick_processes_pending_limit_without_an_open_position(tmp_path: Path, monkeypatch) -> None:
@@ -802,7 +847,11 @@ def test_live_tick_processes_pending_limit_without_an_open_position(tmp_path: Pa
             captured.update(event)
             return {"status": "ok", "triggered": [], "accepted_limit_fill_count": 1}
 
-    monkeypatch.setattr(cycle_runner_module, "build_execution_engine_adapter", lambda *args, **kwargs: FakeExecutionAdapter())
+    monkeypatch.setattr(
+        cycle_runner_module,
+        "build_configured_execution_engine_adapter",
+        lambda *args, **kwargs: FakeExecutionAdapter(),
+    )
 
     result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
         as_of="2026-07-05T01:01:30+00:00"
@@ -811,6 +860,73 @@ def test_live_tick_processes_pending_limit_without_an_open_position(tmp_path: Pa
     assert result["protective_sweep"]["processed_events"] > 0
     assert captured["cycle_id"] == "2026-07-05_DAY"
     assert captured["price"] == 106.0
+
+
+def test_live_tick_replays_datafeed_limit_fill_and_target_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    MarketStore(db).upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:01:00+00:00",
+            open=101.0,
+            high=102.0,
+            low=99.0,
+            close=100.0,
+            volume=1.0,
+            provider="binance_usdm_futures",
+        ),
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:02:00+00:00",
+            open=100.0,
+            high=111.0,
+            low=100.0,
+            close=110.0,
+            volume=1.0,
+            provider="binance_usdm_futures",
+        ),
+    ])
+    config = deepcopy(TEST_CONFIG)
+    config["market_data"] = {
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "provider": "binance_usdm_futures",
+    }
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=config)
+    runner.execution.submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 110.0,
+        "source": "provider-contract-test",
+    })
+    monkeypatch.setattr(runner, "_lifecycle_results", lambda _now: [])
+    monkeypatch.setattr(runner, "sync_obsidian_human_plans", lambda **_kwargs: {"status": "skipped"})
+    monkeypatch.setattr(runner, "intraday_tick", lambda **_kwargs: {"status": "skipped"})
+
+    first = runner.live_tick(as_of="2026-07-05T01:02:30+00:00")
+    second = runner.live_tick(as_of="2026-07-05T01:02:30+00:00")
+
+    snapshot = runner.execution.snapshot("2026-07-05_DAY", mark_price=110.0, mark_fresh=True)
+    assert first["protective_sweep"]["status"] == "triggered"
+    assert first["protective_sweep"]["accepted_limit_fill_count"] == 1
+    assert len(first["protective_sweep"]["accepted_limit_fills"]) == 1
+    assert [fill["event"] for fill in snapshot["fills"]] == ["entry", "target"]
+    assert snapshot["orders"][0]["state"] == "filled"
+    assert snapshot["positions"][0]["status"] == "closed"
+    assert second["protective_sweep"]["reason"] == "no_open_positions_or_pending_orders"
+    assert runner.execution.reconcile("2026-07-05_DAY")["status"] == "ok"
 
 
 def test_live_tick_rejects_one_minute_protective_mark_older_than_three_minutes(tmp_path: Path) -> None:

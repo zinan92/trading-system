@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -90,7 +91,7 @@ class DualTrackHumanEngine:
         if order_cost.notional <= 0:
             raise ValueError("notional must be positive")
         plan = self.store.load_plan(cycle_id, "human")
-        fill_id = f"{cycle_id}_human_{len(rows) + 1:04d}"
+        fill_id = _next_fill_id(cycle_id, rows)
         fill = {
             "fill_id": fill_id,
             "cycle_id": cycle_id,
@@ -195,6 +196,7 @@ class DualTrackHumanEngine:
         event_high = _finite_float(mark_high)
         event_low = _finite_float(mark_low)
         event_start = parse_utc(event_started_at) if event_started_at is not None else None
+        event_end = parse_utc(ts) if ts is not None else None
         rows = load_json(self._fills_path(cycle_id))
         entries = {
             str(row.get("trade_id") or row.get("fill_id") or ""): row
@@ -208,6 +210,8 @@ class DualTrackHumanEngine:
             if float(trade.get("remaining_units") or 0.0) <= _EPSILON:
                 continue
             entry_ts = parse_utc(trade.get("entry_ts"))
+            if event_end is not None and event_end <= entry_ts:
+                continue
             range_is_post_entry = event_start is not None and event_start >= entry_ts
             trigger = _protective_trigger(
                 trade,
@@ -254,6 +258,50 @@ class DualTrackHumanEngine:
             rows = load_json(self._fills_path(cycle_id))
         return {"status": "triggered" if triggered else "ok", "mark_price": mark, "triggered": triggered}
 
+    def repair_pre_entry_protective_exits(self, cycle_id: str) -> dict[str, Any]:
+        rows = load_json(self._fills_path(cycle_id))
+        entry_times = {
+            str(row.get("trade_id") or row.get("fill_id") or ""): parse_utc(row.get("ts"))
+            for row in rows
+            if str(row.get("event") or "entry") == "entry" and row.get("ts")
+        }
+        removed_fill_ids = {
+            str(row.get("fill_id") or "")
+            for row in rows
+            if str(row.get("source_fill_id") or "").startswith("dualtrack-protective:")
+            and str(row.get("event") or "") in {"stop", "target"}
+            and str(row.get("trade_id") or "") in entry_times
+            and parse_utc(row.get("ts")) <= entry_times[str(row.get("trade_id") or "")]
+        }
+        if not removed_fill_ids:
+            return {"status": "ok", "cycle_id": cycle_id, "removed_fill_ids": [], "fill_count": len(rows)}
+
+        rebuilt: list[dict[str, Any]] = []
+        for original in rows:
+            if str(original.get("fill_id") or "") in removed_fill_ids:
+                continue
+            row = deepcopy(original)
+            event = str(row.get("event") or "entry")
+            if event == "entry":
+                row["remaining_units"] = row.get("pnl_units", _pnl_units(row))
+                row["position_status"] = "open"
+                row.pop("closed_units", None)
+            else:
+                for key in ("matched_entries", "gross_pnl", "position_side", "remaining_units", "position_status"):
+                    row.pop(key, None)
+                self._apply_exit(rebuilt, row)
+            rebuilt.append(row)
+
+        write_json(self._fills_path(cycle_id), rebuilt)
+        self._write_trades(cycle_id, rebuilt)
+        self._write_account(cycle_id, rebuilt)
+        return {
+            "status": "repaired",
+            "cycle_id": cycle_id,
+            "removed_fill_ids": sorted(removed_fill_ids),
+            "fill_count": len(rebuilt),
+        }
+
     def _fills_path(self, cycle_id: str) -> Path:
         return self.root / "fills" / f"{cycle_id}_human.json"
 
@@ -298,6 +346,9 @@ class DualTrackHumanEngine:
             raise ValueError("exit size must be positive")
         if not lots:
             raise ValueError("exit order has no open human entry to close")
+        exit_ts = parse_utc(fill.get("ts"))
+        if any(exit_ts <= parse_utc(lot["row"].get("ts")) for lot in lots):
+            raise ValueError("exit timestamp must be after entry timestamp")
         matched = []
         matched_plan_ids: set[str] = set()
         matched_plan_versions: set[int] = set()
@@ -473,6 +524,20 @@ def _default_trade_id(cycle_id: str, rows: list[dict[str, Any]], *, event: str, 
         return ""
     count = sum(1 for row in rows if str(row.get("event") or "entry") == "entry") + 1
     return f"{cycle_id}_{position_id}_trade_{count:04d}"
+
+
+def _next_fill_id(cycle_id: str, rows: list[dict[str, Any]]) -> str:
+    prefix = f"{cycle_id}_human_"
+    suffixes: list[int] = []
+    for row in rows:
+        fill_id = str(row.get("fill_id") or "")
+        if not fill_id.startswith(prefix):
+            continue
+        try:
+            suffixes.append(int(fill_id.removeprefix(prefix)))
+        except ValueError:
+            continue
+    return f"{prefix}{max(suffixes, default=0) + 1:04d}"
 
 
 def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:

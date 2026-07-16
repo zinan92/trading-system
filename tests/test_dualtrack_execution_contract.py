@@ -108,6 +108,76 @@ def test_execution_parity_compares_order_terminal_state() -> None:
     }]
 
 
+def test_execution_parity_applies_only_declared_venue_precision() -> None:
+    authoritative = _snapshot()
+    authoritative["orders"] = [{
+        "state": "accepted", "side": "buy", "event": "entry", "order_type": "limit",
+        "price": 4035.1043, "quantity": 0.19749744,
+    }]
+    authoritative["fills"] = [{
+        "side": "buy", "event": "entry", "price": 4035.1043, "quantity": 0.19749744,
+    }]
+    authoritative["positions"] = [{"status": "open", "side": "long", "remaining_units": 0.19749744}]
+    candidate = _snapshot("nautilus", units=0.197)
+    candidate["orders"] = [{
+        "state": "accepted", "side": "buy", "event": "entry", "order_type": "limit",
+        "price": 4035.10, "quantity": 0.197,
+    }]
+    candidate["fills"] = [{
+        "side": "buy", "event": "entry", "price": 4035.10, "quantity": 0.197,
+    }]
+    candidate["positions"] = [{"status": "open", "side": "long", "remaining_units": 0.197}]
+    candidate["capabilities"] = {
+        "comparison_normalization": {
+            "mode": "venue_precision",
+            "price_decimals": 2,
+            "quantity_decimals": 3,
+            "money_decimals": 8,
+        },
+    }
+
+    report = compare_execution_snapshots(authoritative, candidate, cycle_id="2026-07-10_DAY")
+
+    assert report["status"] == "pass"
+    assert report["tolerance"] == candidate["capabilities"]["comparison_normalization"]
+
+
+def test_execution_parity_never_normalizes_semantic_or_money_drift() -> None:
+    authoritative = _snapshot(realized=1.00000001)
+    authoritative["fills"] = [{"side": "buy", "event": "entry", "price": 100.004, "quantity": 1.0004}]
+    candidate = _snapshot("nautilus", realized=1.00000002)
+    candidate["fills"] = [{"side": "sell", "event": "entry", "price": 100.00, "quantity": 1.000}]
+    candidate["capabilities"] = {
+        "comparison_normalization": {
+            "mode": "venue_precision",
+            "price_decimals": 2,
+            "quantity_decimals": 3,
+            "money_decimals": 8,
+        },
+    }
+
+    report = compare_execution_snapshots(authoritative, candidate, cycle_id="2026-07-10_DAY")
+
+    assert report["status"] == "drift"
+    assert {row["path"] for row in report["differences"]} == {"pnl.realized", "fills[0].side"}
+
+
+@pytest.mark.parametrize(
+    "normalization",
+    [
+        {"mode": "venue_precision", "price_decimals": None, "quantity_decimals": 3, "money_decimals": 8},
+        {"mode": "venue_precision", "price_decimals": 2, "quantity_decimals": -1, "money_decimals": 8},
+        {"mode": "something_else", "price_decimals": 2, "quantity_decimals": 3, "money_decimals": 8},
+    ],
+)
+def test_execution_parity_rejects_invalid_declared_normalization(normalization: dict) -> None:
+    candidate = _snapshot("nautilus")
+    candidate["capabilities"] = {"comparison_normalization": normalization}
+
+    with pytest.raises(ValueError, match="normalization"):
+        compare_execution_snapshots(_snapshot(), candidate, cycle_id="2026-07-10_DAY")
+
+
 def test_shadow_reconciler_records_blocked_when_candidate_is_not_available(tmp_path: Path) -> None:
     report = DualTrackShadowReconciler(tmp_path / "outputs").record(
         "2026-07-10_DAY",

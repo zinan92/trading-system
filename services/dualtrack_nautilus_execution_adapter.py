@@ -9,11 +9,13 @@ from typing import Any, Callable
 
 from services.config_loader import ROOT
 from services.dualtrack_execution_contract import canonical_market_event
+from services.dualtrack_config import dualtrack_config
 from services.dualtrack_shadow_input import build_shadow_input
 from services.journal_store import load_json, write_json
 
 
 ReplayExecutor = Callable[[Path, Path, Path], dict[str, Any]]
+REPLAY_VERSION = "dualtrack-nautilus-replay-v5"
 
 
 class NautilusExecutionAdapter:
@@ -26,27 +28,41 @@ class NautilusExecutionAdapter:
         output_root: Path,
         *,
         nautilus_python: str | Path,
+        storage_namespace: str = "nautilus_paper",
         preflight_path: str | Path | None = None,
         replay_executor: ReplayExecutor | None = None,
+        defer_replay: bool = False,
+        config: dict[str, Any] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
-        self.root = self.output_root / "dualtrack" / "nautilus_paper"
+        namespace = str(storage_namespace or "").strip()
+        if not namespace or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in namespace):
+            raise ValueError("Nautilus storage namespace is invalid")
+        self.storage_namespace = namespace
+        self.root = self.output_root / "dualtrack" / namespace
         self.nautilus_python = Path(nautilus_python)
         self.preflight_path = Path(
             preflight_path
             or self.output_root / "dualtrack" / "nautilus" / "instrument_preflight.json"
         )
         self._replay_executor = replay_executor or self._subprocess_replay
+        self.defer_replay = bool(defer_replay)
+        self.config = dict(config or dualtrack_config())
         self._validate_runtime()
 
     def submit_order(self, command: dict[str, Any]) -> dict[str, Any]:
-        normalized = _canonical_command(command)
+        normalized = _canonical_command(self._prepare_command(command))
         cycle_id = normalized["cycle_id"]
         path = self._commands_path(cycle_id)
         rows = load_json(path)
         command_id = normalized["command_id"]
         existing = next((row for row in rows if row.get("command_id") == command_id), None)
         if existing:
+            incoming_authoritative_id = str(normalized["command"].get("authoritative_order_id") or "")
+            existing_command = existing.get("command") if isinstance(existing.get("command"), dict) else {}
+            if incoming_authoritative_id and not existing_command.get("authoritative_order_id"):
+                existing["command"] = {**existing_command, "authoritative_order_id": incoming_authoritative_id}
+                write_json(path, rows)
             return _order_receipt(existing)
         row = {
             "schema_version": "dualtrack-shadow-command-v1",
@@ -58,6 +74,136 @@ class NautilusExecutionAdapter:
         write_json(path, rows)
         self._persist_accepted_orders(cycle_id, rows)
         return _order_receipt(row)
+
+    def _prepare_command(self, command: dict[str, Any]) -> dict[str, Any]:
+        prepared = dict(command)
+        event = str(prepared.get("event") or "entry").lower()
+        if event not in {"exit", "stop", "target", "flatten"}:
+            return prepared
+        cycle_id = str(prepared.get("cycle_id") or "")
+        target = self._resolve_open_position(cycle_id, prepared)
+        if target is None:
+            raise ValueError("Nautilus close command could not resolve exactly one open position")
+        prepared["target_position_id"] = str(target.get("position_id") or "")
+        prepared["target_command_id"] = str(target.get("trade_id") or "")
+        remaining_before = float(target.get("remaining_units") or 0.0)
+        if prepared.get("quantity") in (None, "") and prepared.get("contracts") in (None, ""):
+            prepared["quantity"] = remaining_before
+        requested = float(prepared.get("quantity") or prepared.get("contracts") or 0.0)
+        if requested <= 0 or requested > remaining_before + 1e-9:
+            raise ValueError("Nautilus close quantity exceeds the target position")
+        prepared["target_remaining_before"] = remaining_before
+        prepared["target_remaining_after"] = max(0.0, remaining_before - requested)
+        return prepared
+
+    def _resolve_open_position(self, cycle_id: str, command: dict[str, Any]) -> dict[str, Any] | None:
+        positions = [
+            row
+            for row in self.snapshot(cycle_id).get("positions") or []
+            if str(row.get("status") or "") == "open"
+        ]
+        exact_ids = {
+            str(command.get("trade_id") or ""),
+            str(command.get("position_id") or ""),
+            str(command.get("target_command_id") or ""),
+            str(command.get("target_position_id") or ""),
+        } - {""}
+        exact = [
+            row
+            for row in positions
+            if str(row.get("trade_id") or "") in exact_ids or str(row.get("position_id") or "") in exact_ids
+        ]
+        if len(exact) == 1:
+            return exact[0]
+        if len(exact) > 1:
+            return None
+
+        plan_id = str(command.get("strategy_plan_id") or "")
+        target_side = str(command.get("target_position_side") or "").lower()
+        entry_price = command.get("target_entry_price")
+        candidates = positions
+        if plan_id:
+            candidates = [row for row in candidates if str(row.get("strategy_plan_id") or "") == plan_id]
+        if target_side:
+            candidates = [row for row in candidates if str(row.get("side") or "").lower() == target_side]
+        if entry_price not in (None, ""):
+            expected = float(entry_price)
+            candidates = [
+                row for row in candidates
+                if abs(float(row.get("entry_price") or 0.0) - expected) <= max(1e-8, abs(expected) * 1e-8)
+            ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def cancel_orders(
+        self,
+        cycle_id: str,
+        *,
+        order_ids: list[str] | None = None,
+        strategy_plan_id: str | None = None,
+        ts: str | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        requested_ids = {str(value) for value in (order_ids or []) if str(value)}
+        rows = load_json(self._commands_path(cycle_id))
+        accepted_ids = {
+            str(row.get("order_id") or "")
+            for row in self.snapshot(cycle_id).get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        }
+        candidates: list[tuple[dict[str, Any], str]] = []
+        for row in rows:
+            command = row.get("command") if isinstance(row.get("command"), dict) else {}
+            if str(command.get("event") or "entry").lower() == "cancel":
+                continue
+            authoritative_id = str(command.get("authoritative_order_id") or "")
+            command_id = str(row.get("command_id") or "")
+            if command_id not in accepted_ids:
+                continue
+            match_id = authoritative_id or command_id
+            if requested_ids and authoritative_id not in requested_ids and command_id not in requested_ids:
+                continue
+            if strategy_plan_id and str(command.get("strategy_plan_id") or "") != str(strategy_plan_id):
+                continue
+            candidates.append((row, match_id))
+
+        cancelled_ids: list[str] = []
+        changed = False
+        timestamp = str(ts or "").strip()
+        if not timestamp:
+            raise ValueError("Nautilus cancellation timestamp is required")
+        existing_ids = {str(row.get("command_id") or "") for row in rows}
+        for source_row, match_id in candidates:
+            source_command = dict(source_row.get("command") or {})
+            target_command_id = str(source_row.get("command_id") or "")
+            cancel_source_id = f"nautilus-cancel:{target_command_id}:{timestamp}:{reason}"
+            cancel_payload = {
+                **source_command,
+                "event": "cancel",
+                "ts": timestamp,
+                "cancel_order_id": target_command_id,
+                "authoritative_order_id": match_id,
+                "reason": str(reason or ""),
+                "source_fill_id": cancel_source_id,
+            }
+            normalized = _canonical_command(cancel_payload)
+            if normalized["command_id"] not in existing_ids:
+                rows.append({
+                    "schema_version": "dualtrack-shadow-command-v1",
+                    "command_id": normalized["command_id"],
+                    "cycle_id": cycle_id,
+                    "command": normalized["command"],
+                })
+                existing_ids.add(normalized["command_id"])
+                changed = True
+            cancelled_ids.append(match_id)
+        if changed:
+            write_json(self._commands_path(cycle_id), rows)
+        return {
+            "status": "cancelled" if cancelled_ids else "idempotent",
+            "cycle_id": cycle_id,
+            "cancelled_order_ids": cancelled_ids,
+            "cancelled_order_count": len(cancelled_ids),
+        }
 
     def process_market_event(self, event: dict[str, Any]) -> dict[str, Any]:
         normalized = canonical_market_event(event)
@@ -80,12 +226,67 @@ class NautilusExecutionAdapter:
         if not any(row.get("event_id") == event_id for row in rows):
             rows.append(normalized)
             write_json(path, rows)
+        if self.defer_replay:
+            return {
+                "status": "queued",
+                "event_id": event_id,
+                "pending_event_count": sum(
+                    1 for row in rows if str(row.get("event_id") or "") not in processed_ids
+                ),
+            }
+        result = self.flush(cycle_id)
+        return {**result, "event_id": event_id}
+
+    def flush(self, cycle_id: str) -> dict[str, Any]:
+        rows = load_json(self._events_path(cycle_id))
+        processed_rows = load_json(self._processed_events_path(cycle_id))
+        processed_ids = {str(row.get("event_id") or "") for row in processed_rows}
+        pending_ids = [
+            str(row.get("event_id") or "")
+            for row in rows
+            if str(row.get("event_id") or "") not in processed_ids
+        ]
+        commands = load_json(self._commands_path(cycle_id))
+        processed_commands = load_json(self._processed_commands_path(cycle_id))
+        processed_command_ids = {str(row.get("command_id") or "") for row in processed_commands}
+        pending_command_ids = [
+            str(row.get("command_id") or "")
+            for row in commands
+            if str(row.get("command_id") or "") not in processed_command_ids
+        ]
+        current_snapshot = self.snapshot(cycle_id)
+        current_version = str((current_snapshot.get("capabilities") or {}).get("replay_version") or "")
+        requires_rebuild = bool(rows or commands) and current_version != REPLAY_VERSION
+        if not pending_ids and not pending_command_ids and not requires_rebuild:
+            return {
+                "status": "idempotent",
+                "processed_event_count": 0,
+                "processed_command_count": 0,
+                "snapshot": self.snapshot(cycle_id),
+            }
         snapshot = self._replay(cycle_id)
-        processed_rows.append({"cycle_id": cycle_id, "event_id": event_id})
+        processed_by_id = {str(row.get("event_id") or ""): row for row in processed_rows}
+        for persisted in rows:
+            persisted_id = str(persisted.get("event_id") or "")
+            if persisted_id and persisted_id not in processed_by_id:
+                processed_rows.append({"cycle_id": cycle_id, "event_id": persisted_id})
+                processed_by_id[persisted_id] = processed_rows[-1]
         write_json(self._processed_events_path(cycle_id), processed_rows)
+        processed_command_by_id = {
+            str(row.get("command_id") or ""): row for row in processed_commands
+        }
+        for command in commands:
+            command_id = str(command.get("command_id") or "")
+            if command_id and command_id not in processed_command_by_id:
+                processed_commands.append({"cycle_id": cycle_id, "command_id": command_id})
+                processed_command_by_id[command_id] = processed_commands[-1]
+        write_json(self._processed_commands_path(cycle_id), processed_commands)
         return {
             "status": "replayed",
-            "event_id": event_id,
+            "replay_version": REPLAY_VERSION,
+            "revision_rebuild": requires_rebuild,
+            "processed_event_count": len(pending_ids),
+            "processed_command_count": len(pending_command_ids),
             "orders": len(snapshot["orders"]),
             "fills": len(snapshot["fills"]),
             "positions": len(snapshot["positions"]),
@@ -104,14 +305,28 @@ class NautilusExecutionAdapter:
         if rows and isinstance(rows[-1], dict):
             return dict(rows[-1])
         commands = load_json(self._commands_path(cycle_id))
+        visible_commands = [
+            row
+            for row in commands
+            if str((row.get("command") or {}).get("event") or "entry").lower() != "cancel"
+        ]
         return {
             "schema_version": "dualtrack-execution-v1",
             "engine": self.name,
             "cycle_id": cycle_id,
-            "orders": [_order_receipt(row) for row in commands],
+            "orders": [_order_receipt(row) for row in visible_commands],
             "fills": [],
             "positions": [],
-            "account": {"margin": 0.0, "exposure": 0.0, "slippage": 0.0},
+            "account": {
+                "starting_cash": float(self.config["capital_per_track_usd"]),
+                "realized_pnl": 0.0,
+                "ending_cash": float(self.config["capital_per_track_usd"]),
+                "equity": float(self.config["capital_per_track_usd"]),
+                "margin": 0.0,
+                "exposure": 0.0,
+                "slippage": 0.0,
+                "fees": 0.0,
+            },
             "pnl": {"realized": 0.0, "unrealized": 0.0},
             "mark": {"price": None, "fresh": False, "source": ""},
             "capabilities": {
@@ -119,6 +334,7 @@ class NautilusExecutionAdapter:
                 "paper_only": True,
                 "event_sourced_restart": True,
                 "browser_mark_ignored": True,
+                "replay_version": REPLAY_VERSION,
             },
         }
 
@@ -142,6 +358,33 @@ class NautilusExecutionAdapter:
         duplicates = sorted({fill_id for fill_id in fill_ids if fill_id and fill_ids.count(fill_id) > 1})
         if duplicates:
             issues.append({"code": "duplicate_fill_id", "fill_ids": duplicates})
+        account = dict(snapshot.get("account") or {})
+        pnl = dict(snapshot.get("pnl") or {})
+        _check_account_identity(
+            issues,
+            account,
+            "ending_cash",
+            _sum_if_present(account, "starting_cash", "realized_pnl"),
+        )
+        _check_account_identity(
+            issues,
+            account,
+            "equity",
+            _sum_if_present(account, "ending_cash", None, extra=pnl.get("unrealized")),
+        )
+        if account.get("fees") not in (None, ""):
+            fill_fees = round(sum(float(row.get("cost") or 0.0) for row in snapshot.get("fills") or []), 8)
+            _check_account_identity(issues, account, "fees", fill_fees)
+        if account.get("margin") not in (None, "") and account.get("exposure") not in (None, ""):
+            expected_margin = round(float(account["exposure"]) / float(self.config["max_leverage"]), 8)
+            _check_account_identity(issues, account, "margin", expected_margin)
+        for position in snapshot.get("positions") or []:
+            if position.get("status") != "open":
+                continue
+            if not position.get("trade_id") or not position.get("position_id"):
+                issues.append({"code": "open_position_identity_missing"})
+            if position.get("strategy_plan_id") in (None, ""):
+                issues.append({"code": "open_position_strategy_plan_missing", "trade_id": position.get("trade_id")})
         return {
             "schema_version": "dualtrack-execution-reconciliation-v1",
             "engine": self.name,
@@ -152,6 +395,9 @@ class NautilusExecutionAdapter:
                 "orders": len(snapshot.get("orders") or []),
                 "fills": len(snapshot.get("fills") or []),
                 "positions": len(snapshot.get("positions") or []),
+                "open_positions": sum(
+                    1 for row in snapshot.get("positions") or [] if row.get("status") == "open"
+                ),
             },
         }
 
@@ -163,6 +409,10 @@ class NautilusExecutionAdapter:
             authoritative_snapshot={"cycle_id": cycle_id, "engine": self.name, "fills": []},
             market_events=events,
             commands=commands,
+            execution_settings={
+                "starting_cash": float(self.config["capital_per_track_usd"]),
+                "max_leverage": float(self.config["max_leverage"]),
+            },
         )
         input_path = self.root / "inputs" / f"{cycle_id}.json"
         output_path = self.root / "replays" / f"{cycle_id}.json"
@@ -180,6 +430,7 @@ class NautilusExecutionAdapter:
                 "paper_only": True,
                 "event_sourced_restart": True,
                 "browser_mark_ignored": True,
+                "replay_version": REPLAY_VERSION,
             },
         }
         self._persist_snapshot(cycle_id, normalized)
@@ -247,6 +498,11 @@ class NautilusExecutionAdapter:
         for field in ("maker_fee_rate", "taker_fee_rate", "funding_rate", "funding_time", "observed_at"):
             if fee_model.get(field) in (None, ""):
                 raise RuntimeError(f"Nautilus account cost evidence is missing {field}")
+        configured_fees = self.config.get("paper_fee_model") if isinstance(self.config.get("paper_fee_model"), dict) else {}
+        if configured_fees:
+            for field in ("maker_fee_rate", "taker_fee_rate"):
+                if float(configured_fees.get(field, -1)) != float(fee_model[field]):
+                    raise RuntimeError(f"legacy and Nautilus paper fee models differ for {field}")
         if self._replay_executor == self._subprocess_replay and not self.nautilus_python.exists():
             raise RuntimeError("isolated Nautilus Python runtime is missing")
 
@@ -258,6 +514,9 @@ class NautilusExecutionAdapter:
 
     def _processed_events_path(self, cycle_id: str) -> Path:
         return self.root / "processed_events" / f"{cycle_id}.json"
+
+    def _processed_commands_path(self, cycle_id: str) -> Path:
+        return self.root / "processed_commands" / f"{cycle_id}.json"
 
     def _orders_path(self, cycle_id: str) -> Path:
         return self.root / "orders" / f"{cycle_id}.json"
@@ -287,7 +546,7 @@ def _canonical_command(command: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Nautilus order requires cycle_id and timestamp")
     if side not in {"buy", "sell"}:
         raise ValueError("Nautilus order side must be buy or sell")
-    if event not in {"entry", "exit", "stop", "target", "flatten"}:
+    if event not in {"entry", "exit", "stop", "target", "flatten", "cancel"}:
         raise ValueError("Nautilus order event is unsupported")
     if order_type not in {"market", "limit"}:
         raise ValueError("Nautilus order type must be market or limit")
@@ -330,3 +589,33 @@ def _order_receipt(row: dict[str, Any]) -> dict[str, Any]:
         "quantity": float(command.get("quantity") or 0.0),
         "engine": "nautilus_paper",
     }
+
+
+def _sum_if_present(
+    values: dict[str, Any],
+    first: str,
+    second: str | None,
+    *,
+    extra: Any = None,
+) -> float | None:
+    operands = [values.get(first), values.get(second) if second else extra]
+    if any(value in (None, "") for value in operands):
+        return None
+    return round(sum(float(value) for value in operands), 8)
+
+
+def _check_account_identity(
+    issues: list[dict[str, Any]],
+    account: dict[str, Any],
+    field: str,
+    expected: float | None,
+) -> None:
+    if expected is None or account.get(field) in (None, ""):
+        return
+    actual = round(float(account[field]), 8)
+    if abs(actual - expected) > 1e-8:
+        issues.append({
+            "code": f"account_{field}_mismatch",
+            "expected": expected,
+            "actual": actual,
+        })
