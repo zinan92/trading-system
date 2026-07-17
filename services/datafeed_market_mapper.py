@@ -323,13 +323,22 @@ def _session_contract(
         {"continuous", "open", "closed", "unknown"},
     )
     session_checked_at = _required_text(payload, "session_checked_at")
-    _parse_timestamp(session_checked_at, timeframe, "session_checked_at")
+    parsed_session_checked_at = _parse_timestamp(
+        session_checked_at,
+        timeframe,
+        "session_checked_at",
+    )
     current_session_end = _optional_text(
         payload.get("current_session_end"),
         "current_session_end",
     )
+    parsed_session_end = None
     if current_session_end is not None:
-        _parse_timestamp(current_session_end, timeframe, "current_session_end")
+        parsed_session_end = _parse_timestamp(
+            current_session_end,
+            timeframe,
+            "current_session_end",
+        )
 
     if continuous_market:
         if market_open is not True or session_status != "continuous":
@@ -348,6 +357,10 @@ def _session_contract(
         if fresh is None or max_age_seconds is None:
             raise DatafeedContractError(
                 "open session requires an explicit freshness window"
+            )
+        if parsed_session_end is None or parsed_session_end <= parsed_session_checked_at:
+            raise DatafeedContractError(
+                "open session current_session_end must follow session_checked_at"
             )
     elif session_status == "closed":
         if (

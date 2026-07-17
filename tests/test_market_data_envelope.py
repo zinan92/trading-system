@@ -137,6 +137,12 @@ def test_v2_sessioned_execution_fails_closed_unless_open_and_fresh(
             ),
             "current_session_end=null",
         ),
+        (
+            lambda payload: payload.update(
+                current_session_end="2026-07-18T12:00:04+00:00",
+            ),
+            "must follow session_checked_at",
+        ),
     ],
 )
 def test_v2_rejects_missing_or_inconsistent_session_truth(mutate, message: str) -> None:

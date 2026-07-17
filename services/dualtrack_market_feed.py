@@ -6,7 +6,13 @@ from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.datafeed_market_client import DatafeedMarketClient, DatafeedUnavailable
+from services.datafeed_market_mapper import DatafeedContractError, map_candle_response
 from services.market_data_access import market_data_repository
+from services.market_data_envelope_projection import (
+    SHADOW_RECEIPT_SCHEMA,
+    compare_market_payloads,
+    project_dualtrack_market_payload,
+)
 
 
 class DualTrackMarketFeed:
@@ -29,6 +35,13 @@ class DualTrackMarketFeed:
         self.datafeed_enabled = bool(datafeed_config.get("enabled", False))
         self.datafeed_source = str(datafeed_config.get("source") or "binance_usdm_futures")
         self.datafeed_asset_class = str(datafeed_config.get("asset_class") or "commodity")
+        self.market_data_contract_mode = str(
+            datafeed_config.get("market_data_contract_mode") or "shadow"
+        ).strip().lower()
+        if self.market_data_contract_mode not in {"shadow", "authoritative"}:
+            raise ValueError(
+                "datafeed.market_data_contract_mode must be shadow or authoritative"
+            )
         self.datafeed_client = datafeed_client or DatafeedMarketClient(
             base_url=str(datafeed_config.get("base_url") or "http://127.0.0.1:8100"),
             timeout_seconds=float(datafeed_config.get("timeout_seconds", 10)),
@@ -149,7 +162,7 @@ class DualTrackMarketFeed:
                 require_execution_venue=True,
             )
         except DatafeedUnavailable as error:
-            return {
+            blocked = {
                 "schema_version": "dualtrack-market-bars-v1",
                 "status": "blocked",
                 "source_mode": "unavailable",
@@ -170,7 +183,77 @@ class DualTrackMarketFeed:
                 "datafeed": self.datafeed_client.base_url,
                 "safety": self._datafeed_safety(),
             }
+            if self.market_data_contract_mode == "shadow":
+                blocked["market_data_contract_shadow"] = self._blocked_shadow_receipt(
+                    error
+                )
+            else:
+                blocked["market_data_contract"] = self._blocked_contract_receipt(
+                    error,
+                    upstream_schema_version=None,
+                )
+            return blocked
 
+        checked_at = self._parse_as_of(as_of)
+        legacy = self._legacy_datafeed_payload(
+            response=response,
+            resolved_symbol=resolved_symbol,
+            resolved_timeframe=resolved_timeframe,
+            requested=requested,
+            checked_at=checked_at,
+        )
+        try:
+            envelope = map_candle_response(
+                response,
+                expected_asset_class=self.datafeed_asset_class,
+                expected_timeframe=resolved_timeframe,
+                expected_source=self.datafeed_source,
+                require_execution_venue=True,
+            )
+        except DatafeedContractError as error:
+            if self.market_data_contract_mode == "shadow":
+                legacy["market_data_contract_shadow"] = self._blocked_shadow_receipt(
+                    error
+                )
+                return legacy
+            return self._contract_blocked_payload(
+                error=error,
+                response=response,
+                resolved_symbol=resolved_symbol,
+                resolved_timeframe=resolved_timeframe,
+                requested=requested,
+            )
+
+        candidate = project_dualtrack_market_payload(
+            envelope,
+            requested=requested,
+            datafeed_url=self.datafeed_client.base_url,
+            checked_at=checked_at,
+        )
+        comparison = compare_market_payloads(legacy, candidate)
+        if self.market_data_contract_mode == "shadow":
+            legacy["market_data_contract_shadow"] = {
+                **comparison,
+                "authoritative": "legacy",
+                "envelope_schema_version": envelope.schema_version,
+                "upstream_schema_version": envelope.upstream_schema_version,
+            }
+            return legacy
+        candidate["market_data_contract_comparison"] = {
+            **comparison,
+            "authoritative": "envelope",
+        }
+        return candidate
+
+    def _legacy_datafeed_payload(
+        self,
+        *,
+        response: dict,
+        resolved_symbol: str,
+        resolved_timeframe: str,
+        requested: dict,
+        checked_at: datetime,
+    ) -> dict:
         bars = [
             {
                 "symbol": response.get("instrument_id") or resolved_symbol,
@@ -189,7 +272,7 @@ class DualTrackMarketFeed:
         ]
         freshness = self._freshness(
             bars[-1] if bars else {"timeframe": resolved_timeframe},
-            checked_at=self._parse_as_of(as_of),
+            checked_at=checked_at,
         )
         status = "ready" if bars and freshness["fresh"] else "stale" if bars else "blocked"
         return {
@@ -215,6 +298,75 @@ class DualTrackMarketFeed:
             "selection_reason": response.get("selection_reason"),
             "attempted_sources": response.get("attempted_sources") or [],
             "safety": self._datafeed_safety(),
+        }
+
+    def _contract_blocked_payload(
+        self,
+        *,
+        error: Exception,
+        response: dict,
+        resolved_symbol: str,
+        resolved_timeframe: str,
+        requested: dict,
+    ) -> dict:
+        access_issues = [f"market_data_contract: {error}"]
+        raw_issues = response.get("access_issues")
+        if isinstance(raw_issues, list):
+            access_issues.extend(str(issue) for issue in raw_issues)
+        return {
+            "schema_version": "dualtrack-market-bars-v1",
+            "status": "blocked",
+            "source_mode": "contract_blocked",
+            "symbol": response.get("instrument_id") or resolved_symbol,
+            "provider_symbol": response.get("provider_symbol") or response.get("ticker") or "",
+            "timeframe": resolved_timeframe,
+            "provider": response.get("provider") or "",
+            "quality_flags": ["market_contract_invalid"],
+            "is_synthetic": bool(response.get("is_synthetic", False)),
+            "requested": requested,
+            "bar_count": 0,
+            "latest_timestamp": "",
+            "latest_close": None,
+            "fresh": False,
+            "age_minutes": None,
+            "max_age_minutes": self._max_age_minutes(resolved_timeframe),
+            "bars": [],
+            "access_issues": access_issues,
+            "datafeed": self.datafeed_client.base_url,
+            "safety": self._datafeed_safety(),
+            "market_data_contract": self._blocked_contract_receipt(
+                error,
+                upstream_schema_version=response.get("schema_version"),
+            ),
+        }
+
+    @staticmethod
+    def _blocked_shadow_receipt(error: Exception) -> dict:
+        return {
+            "schema_version": SHADOW_RECEIPT_SCHEMA,
+            "status": "blocked",
+            "authoritative": "legacy",
+            "comparison_count": 0,
+            "difference_count": None,
+            "differences": [],
+            "differences_truncated": False,
+            "legacy_digest": None,
+            "candidate_digest": None,
+            "error": str(error),
+        }
+
+    @staticmethod
+    def _blocked_contract_receipt(
+        error: Exception,
+        *,
+        upstream_schema_version: object,
+    ) -> dict:
+        return {
+            "schema_version": "market-data-contract-cutover-v1",
+            "status": "blocked",
+            "mode": "authoritative",
+            "upstream_schema_version": upstream_schema_version,
+            "error": str(error),
         }
 
     @staticmethod
