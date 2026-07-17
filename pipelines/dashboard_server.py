@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 from services.run_date import utc_run_date
 from services.accounting_projection import project_execution_accounting
+from services.broker_adapter import PaperBrokerAdapter
+from services.broker_read_model import project_broker_read_model
 from services.code_reload import CodeReloadGuard
 from services.config_loader import ROOT, load_pipeline_config
 from services.command_center import build_command_center_state
@@ -49,6 +51,10 @@ from services.journal_store import load_json
 from services.production_accounting import build_production_accounting_history
 from services.replay_state import ReplayState
 from services.tiger_venue_status import TigerVenueStatus
+from services.trading_system_read_model import (
+    project_market_read_model,
+    project_trading_system_read_model,
+)
 
 from services.contracts.common import _CYCLE_ID_PATTERN, _DATE_PATTERN, _truthy  # noqa: F401 — re-exported for backward compatibility
 from services.contracts.system import build_market_view_intake_response, build_system_state_response, dashboard_output_root  # noqa: F401 — re-exported for backward compatibility
@@ -187,6 +193,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/strategy-console/current":
             self._handle_strategy_console_current(parsed.query)
             return
+        if parsed.path == "/api/trading-system/read-model":
+            self._handle_trading_system_read_model(parsed.query)
+            return
         if parsed.path == "/api/dualtrack/config":
             self._handle_dualtrack_config_get()
             return
@@ -291,6 +300,18 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_json(200, build_strategy_console_current_response(as_of=(params.get("as_of") or [None])[0]))
         except ValueError as exc:
             self._write_error(400, "strategy_console_unavailable", str(exc))
+
+    def _handle_trading_system_read_model(self, query: str) -> None:
+        params = parse_qs(query)
+        try:
+            self._write_json(
+                200,
+                build_trading_system_read_model_response(
+                    as_of=(params.get("as_of") or [None])[0],
+                ),
+            )
+        except ValueError as exc:
+            self._write_error(400, "trading_system_read_model_unavailable", str(exc))
 
     def _handle_strategy_console_control(self) -> None:
         try:
@@ -739,6 +760,41 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
     Legacy dual-track endpoints remain available for historical investigation;
     execution-engine shadow status is deliberately not a strategy shadow.
     """
+    return _assemble_strategy_console_snapshot(output_root=output_root, as_of=as_of)
+
+
+def build_trading_system_read_model_response(
+    *,
+    output_root: Path | None = None,
+    as_of: str | None = None,
+) -> dict:
+    """Stable operator projection over one observational console snapshot."""
+
+    output = _dualtrack_output_root(output_root)
+    source = _assemble_strategy_console_snapshot(output_root=output, as_of=as_of)
+    risk_rows = load_json(output / "dualtrack" / "risk_decisions" / "current.json")
+    risk = risk_rows[-1] if risk_rows and isinstance(risk_rows[-1], dict) else None
+    broker_adapter = PaperBrokerAdapter(output)
+    broker = project_broker_read_model(
+        broker_adapter,
+        readiness=broker_adapter.preflight(),
+        strategy_id="production_grid",
+    )
+    return project_trading_system_read_model(
+        source,
+        risk_decision=risk,
+        broker=broker,
+        generated_at=parse_utc(as_of).isoformat(),
+    ).to_dict()
+
+
+def _assemble_strategy_console_snapshot(
+    *,
+    output_root: Path | None = None,
+    as_of: str | None = None,
+) -> dict:
+    """Assemble all compatibility sources from one request-scoped market read."""
+
     output = _dualtrack_output_root(output_root)
     cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
     cycle_id = str(cycle["cycle_id"])
@@ -1411,11 +1467,13 @@ def build_dualtrack_market_bars_response(
     config: dict | None = None,
     as_of: str | None = None,
 ) -> dict:
-    return DualTrackMarketFeed(market_db=market_db, config=config).snapshot(
-        symbol=symbol,
-        timeframe=timeframe,
-        limit=limit,
-        as_of=as_of,
+    return project_market_read_model(
+        DualTrackMarketFeed(market_db=market_db, config=config).snapshot(
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=limit,
+            as_of=as_of,
+        )
     )
 
 

@@ -63,7 +63,7 @@ def project_trading_system_read_model(
 
     source = _mapping(console_snapshot)
     cycle = _json_copy(_mapping(source.get("cycle")))
-    market = _project_market(source.get("market"))
+    market = project_market_read_model(source.get("market"))
     plan = _json_copy(_mapping(source.get("production_plan")))
     proposals = _json_copy(_list(source.get("proposals")))
     execution_source = _mapping(source.get("production_execution"))
@@ -156,7 +156,9 @@ def project_trading_system_read_model(
     return TradingSystemReadModel(payload=_freeze(_json_copy(payload)))
 
 
-def _project_market(value: Any) -> dict[str, Any]:
+def project_market_read_model(value: Any) -> dict[str, Any]:
+    """Normalize one market envelope for display without selecting a provider."""
+
     source = _mapping(value)
     status = str(source.get("status") or "missing")
     fresh = source.get("fresh") is True
@@ -174,6 +176,8 @@ def _project_market(value: Any) -> dict[str, Any]:
 def _project_execution(source: Mapping[str, Any], accounting: Mapping[str, Any]) -> dict[str, Any]:
     orders = _json_copy(_list(source.get("orders")))
     open_orders = [row for row in orders if _is_open_order(row)]
+    canonical_trades = _json_copy(_list(accounting.get("trades")))
+    open_positions = [row for row in canonical_trades if str(_mapping(row).get("status") or "") == "open"]
     canonical_counts = _mapping(accounting.get("counts"))
     canonical_pnl = _json_copy(_mapping(accounting.get("pnl")))
     canonical_account = _json_copy(_mapping(accounting.get("account")))
@@ -203,10 +207,22 @@ def _project_execution(source: Mapping[str, Any], accounting: Mapping[str, Any])
         "cycle_id": source.get("cycle_id"),
         "orders": orders,
         "open_orders": open_orders,
+        "order_summary": {
+            "open_buy_order_count": sum(
+                1 for row in open_orders if str(_mapping(row).get("side") or "").lower() == "buy"
+            ),
+            "open_sell_order_count": sum(
+                1 for row in open_orders if str(_mapping(row).get("side") or "").lower() == "sell"
+            ),
+        },
         "positions": _json_copy(_list(accounting.get("positions"))),
-        "trades": _json_copy(_list(accounting.get("trades"))),
+        "open_positions": open_positions,
+        "trades": canonical_trades,
         "fills": _json_copy(_list(accounting.get("fills"))),
         "counts": counts,
+        "metrics": {
+            "total_notional": _mapping(source.get("trade_summary")).get("total_notional"),
+        },
         "pnl": {
             "currency": accounting.get("currency"),
             "gross_realized": canonical_pnl.get("gross_realized_pnl"),
@@ -292,14 +308,23 @@ def _project_runtime(
     if actual == "running" and market.get("trusted") is not True:
         inconsistent = True
         completeness_issues.append("running_with_untrusted_market")
-    status = "degraded" if inconsistent else ("running" if actual == "running" else "stopped")
+    del risk_status
+    known_statuses = {
+        "starting": "启动中",
+        "running": "运行中",
+        "replanning": "调整网格中",
+        "stopping": "停止中",
+        "stopped": "已停止",
+        "error": "运行异常",
+    }
+    status = "degraded" if inconsistent else (actual if actual in known_statuses else "stopped")
     return {
         **source,
         "status": status,
-        "status_label": {"running": "运行中", "stopped": "已停止", "degraded": "异常"}[status],
+        "status_label": "异常" if status == "degraded" else known_statuses[status],
         "open_order_count": open_order_count,
-        "can_start_when_authorized": actual != "running" and bool(plan_id) and risk_status == "current",
-        "can_stop_when_authorized": actual == "running",
+        "can_start_when_authorized": actual in {"stopped", "error"} and bool(plan_id) and market.get("trusted") is True,
+        "can_stop_when_authorized": actual in {"starting", "running", "replanning", "stopping"},
     }
 
 
