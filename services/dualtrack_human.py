@@ -625,6 +625,17 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(trades.values())
 
 
+def project_human_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project immutable Legacy human fills into trade lifecycles.
+
+    Legacy entry rows persist their current remaining quantity. This adapter
+    deliberately preserves that source semantic instead of subtracting exits a
+    second time in a generic historical-fill reconstruction.
+    """
+
+    return _build_trades(fills)
+
+
 def _protective_trigger(
     trade: dict[str, Any],
     mark_price: float,

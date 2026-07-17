@@ -26,6 +26,8 @@ def project_execution_accounting(
     source: Mapping[str, Any],
     *,
     currency: str | None = None,
+    source_type: str = "execution_engine",
+    scope: Mapping[str, Any] | None = None,
 ) -> AccountingSnapshot:
     """Project one Legacy or Nautilus execution snapshot without side effects."""
 
@@ -67,10 +69,10 @@ def project_execution_accounting(
     source_account = source.get("account") if isinstance(source.get("account"), Mapping) else {}
     resolved_currency = str(currency or source_account.get("currency") or "USDT").strip().upper()
     return build_accounting_snapshot(
-        source_type="execution_engine",
+        source_type=source_type,
         source_name=engine,
         source_schema_version=schema_version,
-        scope={"cycle_id": cycle_id},
+        scope=dict(scope or {"cycle_id": cycle_id}),
         currency=resolved_currency,
         orders=orders,
         fills=fills,
@@ -141,6 +143,8 @@ def _canonical_fills(rows: list[Mapping[str, Any]], issues: list[dict[str, Any]]
             "side": _side(row.get("side"), allow_blank=False),
             "price": price,
             "quantity": quantity,
+            "notional": _optional_number(row.get("notional"), "fill notional", decimals=_MONEY_DECIMALS)
+            or _money(price * quantity),
             "gross_realized_pnl": gross_realized,
             "fee": fee,
             "fee_observed": fee_present,
@@ -320,8 +324,14 @@ def _execution_pnl(
     )
     fill_realized_known = all(row.get("net_realized_pnl") is not None for row in fills)
     fill_realized = _money(sum(float(row.get("net_realized_pnl") or 0.0) for row in fills)) if fill_realized_known else None
+    position_realized_known = all(row.get("realized_pnl") is not None for row in positions)
+    position_realized = (
+        _money(sum(float(row.get("realized_pnl") or 0.0) for row in positions))
+        if position_realized_known
+        else None
+    )
     if realized is None:
-        realized = fill_realized
+        realized = fill_realized if fill_realized is not None else position_realized
     if realized is None:
         raise AccountingContractError("execution snapshot has no realized P&L evidence")
     if fill_realized is not None and fill_realized != realized:
@@ -331,28 +341,30 @@ def _execution_pnl(
     fill_fees = _money(sum(float(row.get("fee") or 0.0) for row in fills)) if fill_fees_known else None
     account_fees = _optional_number(source_account.get("fees"), "execution fees", decimals=_MONEY_DECIMALS)
     fees = account_fees if account_fees is not None else fill_fees
-    if fees is None:
-        fees = 0.0
     if account_fees is not None and fill_fees is not None and account_fees != fill_fees:
         issues.append({"code": "account_fees_mismatch", "account": account_fees, "fills": fill_fees})
 
     funding_present = "funding" in source_account and source_account.get("funding") not in (None, "")
     funding = _optional_number(source_account.get("funding"), "execution funding", decimals=_MONEY_DECIMALS)
-    funding = 0.0 if funding is None else funding
     fill_gross_known = all(row.get("gross_realized_pnl") is not None for row in fills)
     fill_gross = _money(sum(float(row.get("gross_realized_pnl") or 0.0) for row in fills)) if fill_gross_known else None
-    gross = fill_gross if fill_gross is not None else _money(realized + fees - funding)
-    formula_net = _money(gross - fees + funding)
-    if formula_net != realized:
-        issues.append({"code": "net_realized_pnl_formula_mismatch", "formula": formula_net, "snapshot": realized})
+    gross = fill_gross
+    if gross is None and fees is not None and funding is not None:
+        gross = _money(realized + fees - funding)
+    if gross is not None and fees is not None and funding is not None:
+        formula_net = _money(gross - fees + funding)
+        if formula_net != realized:
+            issues.append({"code": "net_realized_pnl_formula_mismatch", "formula": formula_net, "snapshot": realized})
 
     unrealized = _optional_number(source_pnl.get("unrealized"), "execution unrealized P&L", decimals=_MONEY_DECIMALS)
-    if unrealized is None and positions and all(row.get("unrealized_pnl") is not None for row in positions if row.get("status") == "open"):
+    unrealized_derived = False
+    if unrealized is None and all(row.get("unrealized_pnl") is not None for row in positions if row.get("status") == "open"):
         unrealized = _money(sum(
             float(row.get("unrealized_pnl") or 0.0)
             for row in positions
             if row.get("status") == "open"
         ))
+        unrealized_derived = True
     account_slippage = _optional_number(source_account.get("slippage"), "execution slippage", decimals=_MONEY_DECIMALS)
     fill_slippage_known = all(row.get("slippage") is not None for row in fills)
     fill_slippage = _money(sum(float(row.get("slippage") or 0.0) for row in fills)) if fill_slippage_known else None
@@ -370,8 +382,8 @@ def _execution_pnl(
             "slippage": slippage,
         },
         {
-            "realized_observed": source_pnl.get("realized") not in (None, "") or source_account.get("realized_pnl") not in (None, "") or fill_realized is not None,
-            "unrealized_observed": source_pnl.get("unrealized") is not None,
+            "realized_observed": source_pnl.get("realized") not in (None, "") or source_account.get("realized_pnl") not in (None, "") or fill_realized is not None or position_realized is not None,
+            "unrealized_observed": source_pnl.get("unrealized") is not None or unrealized_derived,
             "fees_observed": account_fees is not None or fill_fees is not None,
             "funding_observed": funding_present,
         },
@@ -604,4 +616,3 @@ def _stable_json(value: Any) -> str:
 
 def _sorted_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(issues, key=_stable_json)
-

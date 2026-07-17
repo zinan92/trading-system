@@ -37,6 +37,7 @@ from services.strategy_control_plane import StrategyControlPlane
 from services.strategy_recommendation import StrategyRecommendationService
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
+from services.production_accounting import build_production_accounting_history
 from services.replay_state import ReplayState
 from services.tiger_venue_status import TigerVenueStatus
 
@@ -797,104 +798,18 @@ def build_strategy_console_production_history(
     limit: int = 200,
     authoritative_engine: str = "legacy_paper",
 ) -> dict:
-    """Aggregate only versioned StrategyPlan fills into the production ledger.
+    """Return the compatibility view derived from canonical accounting truth."""
 
-    Legacy human/machine records remain available through their historical
-    endpoints, but are never silently mixed into production account totals.
-    """
     output = _dualtrack_output_root(output_root)
-    fills_dir = output / "dualtrack" / "fills"
-    production_fills: list[dict[str, Any]] = []
-    production_trades: list[dict[str, Any]] = []
-    if fills_dir.exists():
-        for path in sorted(fills_dir.glob("*_human.json")):
-            cycle_id = path.name.removesuffix("_human.json")
-            rows = [row for row in load_json(path) if isinstance(row, dict)]
-            production_trade_ids = {
-                str(row.get("trade_id") or "")
-                for row in rows
-                if row.get("strategy_plan_id") not in (None, "") and row.get("trade_id") not in (None, "")
-            }
-            selected = [row for row in rows if str(row.get("trade_id") or "") in production_trade_ids]
-            if not selected:
-                continue
-            entries = {
-                str(row.get("trade_id") or ""): row
-                for row in selected
-                if str(row.get("event") or "") == "entry"
-            }
-            for row in selected:
-                entry = entries.get(str(row.get("trade_id") or ""), {})
-                production_fills.append({
-                    **row,
-                    "strategy_plan_id": row.get("strategy_plan_id") or entry.get("strategy_plan_id"),
-                    "strategy_plan_version": row.get("strategy_plan_version") or entry.get("strategy_plan_version"),
-                    "source_cycle_id": cycle_id,
-                })
-            for trade in _trades_from_fills(selected, track="production"):
-                entry = entries.get(str(trade.get("trade_id") or ""), {})
-                production_trades.append({
-                    **trade,
-                    "strategy_plan_id": entry.get("strategy_plan_id"),
-                    "strategy_plan_version": entry.get("strategy_plan_version"),
-                    "source_cycle_id": cycle_id,
-                })
-    if str(authoritative_engine or "legacy_paper") == "nautilus_paper":
-        snapshots_dir = output / "dualtrack" / "nautilus_authoritative" / "snapshots"
-        if snapshots_dir.exists():
-            for path in sorted(snapshots_dir.glob("*.json")):
-                cycle_id = path.stem
-                snapshots = load_json(path)
-                snapshot = snapshots[-1] if snapshots and isinstance(snapshots[-1], dict) else {}
-                selected_fills = [
-                    row for row in snapshot.get("fills") or []
-                    if isinstance(row, dict) and row.get("strategy_plan_id") not in (None, "")
-                ]
-                selected_trades = [
-                    row for row in snapshot.get("positions") or []
-                    if isinstance(row, dict) and row.get("strategy_plan_id") not in (None, "")
-                ]
-                production_fills.extend({**row, "source_cycle_id": cycle_id} for row in selected_fills)
-                production_trades.extend({**row, "source_cycle_id": cycle_id} for row in selected_trades)
-    enriched = apply_unrealized(production_trades, mark_price, mark_fresh=mark_fresh)
-    enriched.sort(key=lambda trade: str(trade.get("exit_ts") or trade.get("entry_ts") or ""))
-    production_fills.sort(key=lambda fill: str(fill.get("ts") or ""))
-    summary = _trade_summary(enriched)
-    summary["fill_count"] = len(production_fills)
-    summary["total_notional"] = round(sum(
-        float(fill.get("notional") or 0.0)
-        or float(fill.get("price") or 0.0) * float(fill.get("pnl_units") or fill.get("quantity") or 0.0)
-        for fill in production_fills
-    ), 8)
     starting_cash = float(dualtrack_config().get("capital_per_track_usd") or 0.0)
-    realized = float(summary.get("realized_pnl") or 0.0)
-    unrealized = summary.get("unrealized_pnl")
-    ending_cash = round(starting_cash + realized, 8)
-    equity = None if unrealized is None else round(ending_cash + float(unrealized), 8)
-    return {
-        "schema_version": "strategy-production-history-v1",
-        "trades": enriched[-max(1, int(limit)):],
-        "fills": production_fills[-max(1, int(limit * 2)):],
-        "summary": summary,
-        "pnl": {"realized": round(realized, 8), "unrealized": unrealized},
-        "account": {
-            "starting_cash": starting_cash,
-            "realized_pnl": round(realized, 8),
-            "ending_cash": ending_cash,
-            "equity": equity,
-        },
-        "history_contract": {
-            "source": (
-                "versioned_strategy_plan_and_nautilus_authoritative"
-                if str(authoritative_engine or "legacy_paper") == "nautilus_paper"
-                else "versioned_strategy_plan_fills_only"
-            ),
-            "authoritative_engine": str(authoritative_engine or "legacy_paper"),
-            "nautilus_shadow_excluded": True,
-            "legacy_dualtrack_history_preserved": True,
-            "legacy_dualtrack_totals_mixed_into_production": False,
-        },
-    }
+    return build_production_accounting_history(
+        output_root=output,
+        mark_price=mark_price,
+        mark_fresh=mark_fresh,
+        starting_cash=starting_cash,
+        authoritative_engine=authoritative_engine,
+        limit=limit,
+    )
 
 
 def build_strategy_console_control_response(
