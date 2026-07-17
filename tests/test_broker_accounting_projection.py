@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from services.accounting_projection import project_broker_accounting
+import pytest
+
+from services import accounting_projection
+from services.accounting_projection import (
+    AccountingContractError,
+    broker_accounting_snapshot_payload,
+    project_broker_accounting,
+    project_broker_accounting_fail_honest,
+)
 
 
 def _binance_report() -> dict:
@@ -161,6 +169,63 @@ def test_failed_binance_observation_keeps_counts_and_money_unknown_not_zero() ->
     assert snapshot["completeness"]["unknown_is_not_zero"] is True
 
 
+def test_fail_honest_broker_projection_preserves_a_blocked_contract_for_malformed_rows() -> None:
+    report = _binance_report()
+    report["exchange_open_orders"][0]["order_id"] = ""
+
+    with pytest.raises(AccountingContractError, match="broker order_id is required"):
+        project_broker_accounting(report)
+
+    snapshot = project_broker_accounting_fail_honest(report).to_dict()
+
+    assert snapshot["schema_version"] == "accounting-snapshot-v1"
+    assert all(value is None for value in snapshot["counts"].values())
+    assert all(value is None for value in snapshot["pnl"].values())
+    assert all(value is None for value in snapshot["account"].values())
+    assert snapshot["completeness"]["status"] == "blocked"
+    assert snapshot["completeness"]["unknown_is_not_zero"] is True
+    assert snapshot["reconciliation"]["status"] == "blocked"
+    assert snapshot["reconciliation"]["issues"] == [
+        {
+            "code": "accounting_projection_failed",
+            "error_type": "AccountingContractError",
+            "detail": "broker order_id is required",
+        }
+    ]
+
+
+def test_broker_payload_has_a_versioned_emergency_receipt_if_snapshot_serialization_fails(monkeypatch) -> None:
+    class BrokenSnapshot:
+        def to_dict(self):
+            raise RuntimeError("must not escape into reconciliation persistence")
+
+    monkeypatch.setattr(
+        accounting_projection,
+        "project_broker_accounting_fail_honest",
+        lambda _source: BrokenSnapshot(),
+    )
+
+    payload = broker_accounting_snapshot_payload(_binance_report())
+
+    assert payload == {
+        "schema_version": "accounting-projection-unavailable-v1",
+        "status": "blocked",
+        "error_type": "RuntimeError",
+        "completeness": {
+            "status": "blocked",
+            "unknown_is_not_zero": True,
+        },
+        "reconciliation": {
+            "status": "blocked",
+            "issues": [{
+                "code": "accounting_projection_unavailable",
+                "error_type": "RuntimeError",
+            }],
+        },
+    }
+    assert "must not escape" not in str(payload)
+
+
 def test_exact_duplicate_broker_fill_is_collapsed_and_reported() -> None:
     report = _binance_report()
     report["exchange_fills"].append(dict(report["exchange_fills"][0]))
@@ -216,4 +281,3 @@ def test_tiger_aggregate_accounting_uses_same_contract_but_keeps_lifecycle_unkno
     assert snapshot["account"]["equity"] == 10_000.0
     assert snapshot["reconciliation"]["status"] == "pass"
     assert snapshot["completeness"]["status"] == "partial"
-

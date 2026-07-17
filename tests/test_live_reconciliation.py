@@ -675,6 +675,40 @@ def test_flat_exchange_reconciliation_marks_closed_order_reconciled(tmp_path, mo
     assert [item["to"] for item in lifecycle["transitions"]][-1] == "reconciled"
 
 
+def test_accounting_projection_failure_cannot_block_reconciliation_writes(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+    store = OrderLifecycleStore(root)
+    store.write_intent(
+        "2026-06-03",
+        order_id="order_closed",
+        ticket_id="ticket_closed",
+        idempotency_key="order_closed",
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="test",
+    )
+    for state in ["submitting", "accepted", "filled", "protective_attached", "closed"]:
+        store.transition("2026-06-03", "order_closed", state, reason=f"test_{state}")
+    monkeypatch.setattr(
+        "services.accounting_projection.build_accounting_snapshot",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot builder failed")),
+    )
+
+    report = LiveBrokerReconciliation(
+        root,
+        _CFG,
+        opener=_opener(0.0),
+    ).run("2026-06-03")
+
+    assert report["reconciled"] is True
+    assert report["accounting_snapshot"]["schema_version"] == "accounting-projection-unavailable-v1"
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "blocked"
+    assert report["accounting_snapshot"]["reconciliation"]["issues"][0]["code"] == "accounting_projection_unavailable"
+    assert load_json(root / "live_reconciliation" / "current.json")[0] == report
+    assert OrderLifecycleStore(root).current("2026-06-03", "order_closed")["state"] == "reconciled"
+
+
 def test_missing_credentials_records_error_not_crash(tmp_path, monkeypatch):
     monkeypatch.delenv("BINANCE_API_KEY", raising=False)
     monkeypatch.delenv("BINANCE_API_SECRET", raising=False)

@@ -92,6 +92,27 @@ def test_tiger_account_sync_records_cannot_sync_without_secret_material(tmp_path
     assert "secret" not in str(report).lower()
 
 
+def test_tiger_accounting_projection_failure_still_persists_sync_receipt(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "outputs"
+    sync = TigerOpenApiAccountSync(
+        root,
+        broker_config={"provider": "tiger_openapi", "base_currency": "USD"},
+        trade_client=_FakeAccountClient(_portfolio()),
+    )
+    monkeypatch.setattr(
+        "services.accounting_projection.build_accounting_snapshot",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot builder failed")),
+    )
+
+    report = sync.run("2026-06-09")
+
+    assert report["sync_status"] == "synced"
+    assert report["accounting_snapshot"]["schema_version"] == "accounting-projection-unavailable-v1"
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "blocked"
+    assert report["accounting_snapshot"]["reconciliation"]["issues"][0]["code"] == "accounting_projection_unavailable"
+    assert load_json(root / "tiger_account_sync" / "current.json")[0] == report
+
+
 def test_tiger_account_sync_merges_balance_and_accounting_into_reconciliation(tmp_path: Path):
     root = tmp_path / "outputs"
     sync = TigerOpenApiAccountSync(root, broker_config={"provider": "tiger_openapi"}, trade_client=_FakeAccountClient(_portfolio()))

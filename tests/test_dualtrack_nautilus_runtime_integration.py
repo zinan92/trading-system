@@ -13,7 +13,10 @@ RUNTIME = Path(os.environ.get(
     "TRADING_ORCHESTRATOR_NAUTILUS_TEST_PYTHON",
     "/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python",
 ))
-PREFLIGHT = ROOT / "outputs" / "dualtrack" / "nautilus" / "instrument_preflight.json"
+PREFLIGHT = Path(os.environ.get(
+    "TRADING_ORCHESTRATOR_NAUTILUS_PREFLIGHT",
+    str(ROOT / "outputs" / "dualtrack" / "nautilus" / "instrument_preflight.json"),
+))
 
 
 pytestmark = pytest.mark.skipif(
@@ -148,6 +151,19 @@ def test_real_runtime_cancels_pending_order_and_flattens_exact_hedged_position(t
     assert final["account"]["margin"] == 0.0
     assert final["account"]["exposure"] == 0.0
     assert final["account"]["equity"] == pytest.approx(final["account"]["ending_cash"])
+    closed = next(row for row in final["positions"] if row["status"] == "closed")
+    entry_fill = next(row for row in final["fills"] if row["event"] == "entry")
+    exit_fills = [row for row in final["fills"] if row["event"] in {"exit", "flatten"}]
+    gross_realized = sum(
+        (float(exit_fill["price"]) - float(entry_fill["price"]))
+        * float(exit_fill["quantity"])
+        for exit_fill in exit_fills
+    )
+    assert closed["realized_pnl"] == pytest.approx(
+        gross_realized - final["account"]["fees"] + final["account"]["funding"]
+    )
+    assert final["account"]["realized_pnl"] == pytest.approx(closed["realized_pnl"])
+    assert final["pnl"]["realized"] == pytest.approx(closed["realized_pnl"])
     assert not [
         row for row in final["orders"]
         if row["order_id"].endswith(("-SL", "-TP")) and row["state"] == "accepted"

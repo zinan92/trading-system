@@ -100,6 +100,128 @@ def project_broker_accounting(source: Mapping[str, Any]) -> AccountingSnapshot:
     raise AccountingContractError(f"unsupported broker accounting provider: {provider}")
 
 
+def project_broker_accounting_fail_honest(source: Mapping[str, Any]) -> AccountingSnapshot:
+    """Return a blocked canonical receipt when venue facts cannot be projected.
+
+    Broker reconciliation and account synchronization own safety-critical
+    persistence. Their additive accounting read model must never suppress that
+    write, while malformed evidence must never be converted into zeroes.
+    """
+
+    try:
+        return project_broker_accounting(source)
+    except Exception as exc:
+        return _blocked_broker_accounting(source, exc)
+
+
+def broker_accounting_snapshot_payload(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Serialize broker accounting without ever suppressing its source receipt."""
+
+    try:
+        return project_broker_accounting_fail_honest(source).to_dict()
+    except Exception as exc:
+        return {
+            "schema_version": "accounting-projection-unavailable-v1",
+            "status": "blocked",
+            "error_type": type(exc).__name__,
+            "completeness": {
+                "status": "blocked",
+                "unknown_is_not_zero": True,
+            },
+            "reconciliation": {
+                "status": "blocked",
+                "issues": [{
+                    "code": "accounting_projection_unavailable",
+                    "error_type": type(exc).__name__,
+                }],
+            },
+        }
+
+
+def _blocked_broker_accounting(
+    source: Mapping[str, Any],
+    error: Exception,
+) -> AccountingSnapshot:
+    provider = str(source.get("provider") or "unknown_broker").strip().lower() or "unknown_broker"
+    run_date = str(source.get("run_date") or "unknown").strip() or "unknown"
+    balance = source.get("exchange_balance") if isinstance(source.get("exchange_balance"), Mapping) else {}
+    observation = source.get("account_observation") if isinstance(source.get("account_observation"), Mapping) else {}
+    default_currency = "USD" if provider == "tiger_openapi" else "USDT"
+    currency = str(
+        balance.get("asset")
+        or observation.get("base_currency")
+        or default_currency
+    ).strip().upper() or default_currency
+    source_schema_version = (
+        "tiger-account-sync-v1"
+        if provider == "tiger_openapi"
+        else "broker-reconciliation-v1"
+    )
+    observed = {
+        "orders_observed": False,
+        "fills_observed": False,
+        "positions_observed": False,
+        "trade_lifecycles_observed": False,
+        "balance_observed": False,
+        "realized_observed": False,
+        "unrealized_observed": False,
+        "fees_observed": False,
+        "funding_observed": False,
+        "slippage_observed": False,
+    }
+    issue = {
+        "code": "accounting_projection_failed",
+        "error_type": type(error).__name__,
+    }
+    if isinstance(error, AccountingContractError):
+        issue["detail"] = str(error)[:500]
+    return build_accounting_snapshot(
+        source_type="broker_reconciliation",
+        source_name=provider,
+        source_schema_version=source_schema_version,
+        scope={
+            "run_date": run_date,
+            "provider": provider,
+            "mode": str(source.get("mode") or ""),
+        },
+        currency=currency,
+        orders=[],
+        fills=[],
+        positions=[],
+        trades=[],
+        counts=_broker_counts(),
+        pnl={
+            "gross_realized_pnl": None,
+            "fees": None,
+            "funding": None,
+            "net_realized_pnl": None,
+            "unrealized_pnl": None,
+            "net_pnl": None,
+            "slippage": None,
+        },
+        account={
+            "starting_balance": None,
+            "ending_cash": None,
+            "equity": None,
+            "available_balance": None,
+            "margin": None,
+            "exposure": None,
+            "leverage": None,
+        },
+        completeness={
+            "status": "blocked",
+            "observed": observed,
+            "limitations": sorted(key.removesuffix("_observed") for key in observed),
+            "unknown_is_not_zero": True,
+        },
+        reconciliation={
+            "status": "blocked",
+            "issues": [issue],
+            "identity_policy": "projection_failed_no_facts_admitted",
+        },
+    )
+
+
 def _project_binance_accounting(source: Mapping[str, Any], *, provider: str) -> AccountingSnapshot:
     run_date = _required_text(source.get("run_date"), "broker run_date")
     error = str(source.get("error") or "").strip()
@@ -164,6 +286,7 @@ def _project_binance_accounting(source: Mapping[str, Any], *, provider: str) -> 
         "unrealized_observed": unrealized is not None,
         "fees_observed": fees is not None,
         "funding_observed": funding is not None,
+        "slippage_observed": False,
         "trade_lifecycles_observed": False,
     }
     limitations = {
@@ -259,6 +382,7 @@ def _project_tiger_accounting(source: Mapping[str, Any]) -> AccountingSnapshot:
         "unrealized_observed": unrealized is not None,
         "fees_observed": False,
         "funding_observed": False,
+        "slippage_observed": False,
     }
     return build_accounting_snapshot(
         source_type="broker_reconciliation",
@@ -731,7 +855,7 @@ def _execution_pnl(
     account_slippage = _optional_number(source_account.get("slippage"), "execution slippage", decimals=_MONEY_DECIMALS)
     fill_slippage_known = all(row.get("slippage") is not None for row in fills)
     fill_slippage = _money(sum(float(row.get("slippage") or 0.0) for row in fills)) if fill_slippage_known else None
-    slippage = account_slippage if account_slippage is not None else fill_slippage if fill_slippage is not None else 0.0
+    slippage = account_slippage if account_slippage is not None else fill_slippage
     if account_slippage is not None and fill_slippage is not None and account_slippage != fill_slippage:
         issues.append({"code": "account_slippage_mismatch", "account": account_slippage, "fills": fill_slippage})
     return (
@@ -749,6 +873,7 @@ def _execution_pnl(
             "unrealized_observed": source_pnl.get("unrealized") is not None or unrealized_derived,
             "fees_observed": account_fees is not None or fill_fees is not None,
             "funding_observed": funding_present,
+            "slippage_observed": account_slippage is not None or fill_slippage is not None,
         },
     )
 

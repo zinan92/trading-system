@@ -296,6 +296,23 @@ def test_same_execution_facts_reproject_to_same_snapshot_id() -> None:
     assert project_execution_accounting(source).snapshot_id == project_execution_accounting(source).snapshot_id
 
 
+def test_unobserved_slippage_remains_unknown_instead_of_becoming_zero() -> None:
+    source = _snapshot(
+        fills=[_entry()],
+        positions=[_position(status="open", remaining=1.0, realized=-1.0)],
+        realized=-1.0,
+        unrealized=5.0,
+        fees=1.0,
+    )
+    del source["account"]["slippage"]
+
+    result = project_execution_accounting(source).to_dict()
+
+    assert result["pnl"]["slippage"] is None
+    assert result["completeness"]["observed"]["slippage_observed"] is False
+    assert "slippage" in result["completeness"]["limitations"]
+
+
 def test_legacy_and_nautilus_sources_share_one_economic_contract() -> None:
     legacy = _snapshot(
         fills=[_entry()],
