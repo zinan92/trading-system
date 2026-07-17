@@ -5844,3 +5844,66 @@ auditable datafeed port; broker execution remains a separate port.
 - Final post-review focused regression: `84 passed`.
 - Final post-review full repository regression: `1585 passed, 6 skipped in
   458.67s`.
+
+## 2026-07-18 - A1 same-response market-data shadow cutover
+
+### Decision
+
+- Keep datafeed as the owner of provider selection, quality, freshness, and
+  market-session truth. Trading Orchestrator accepts both `kline-candles-v1`
+  and `kline-candles-v2` during migration, but v2 must carry explicit
+  continuous/open/closed/unknown session evidence.
+- Migrate `DualTrackMarketFeed` as the first consumer by mapping the same raw
+  HTTP response twice. The HTTP client is called once; legacy and envelope
+  projections are compared field by field without a second market request.
+- Configure `datafeed.market_data_contract_mode=shadow`. Legacy remains the
+  authoritative dashboard payload and receives only an additive shadow
+  receipt. `authoritative` is implemented for testability but is not enabled.
+- Fail closed in authoritative mode on an unavailable upstream, invalid
+  schema, source mismatch, stale data, closed/unknown session, synthetic data,
+  access issue, or unexpected projection failure. In shadow mode, an
+  unexpected projection/comparison failure is sandboxed and cannot turn the
+  legacy dashboard read into a 500.
+- Revalidate session receipt age, current session end, and final-bar age at the
+  consumer boundary. `MarketDataEnvelope.execution_ready` is necessary but is
+  not by itself sufficient for a sessioned venue at a later wall-clock time.
+- Compare every safety-relevant field for all bars. For batches above 5,000
+  bars, skip only the duplicate diagnostic JSON digests; exact field comparison
+  still covers the complete batch to avoid two extra 60k-bar copies.
+
+### Gotchas
+
+- The running local datafeed still emits `kline-candles-v1`. Real same-response
+  parity is proven for v1 only; fixture coverage for v2 does not authorize a
+  production cutover. Runtime remains `shadow` until live v2 parity is observed.
+- Sessioned gap validation currently knows only the trading windows returned by
+  one adapter receipt. A multi-day Tiger batch can contain a prior-session gap
+  outside that receipt's coverage. Do not make Tiger/COMEX authoritative until
+  calendar coverage spans the candle batch or unknown coverage fails closed.
+- The legacy and datafeed freshness formulas currently match for supported
+  timeframes; the added 5m parity test proves this beyond the original 1m
+  fixture. A future policy change should intentionally surface as shadow drift,
+  not be excluded from the gate.
+- The primary Trading Orchestrator worktree still contains unrelated Debug and
+  grid-range work. A1 was implemented only in the isolated worktree and must
+  not be integrated by overwriting primary files.
+- This milestone changes a backend contract and adds receipts; it introduces no
+  new visible surface, so screenshot evidence is not applicable.
+
+### Verification
+
+- Datafeed post-review full suite: `86 passed`; Ruff: `All checks passed`.
+- Trading Orchestrator post-review focused market/dashboard/execution suite:
+  `152 passed`.
+- Trading Orchestrator final full suite: `1615 passed, 6 skipped in 360.87s`.
+- Read-only live probe against the running local datafeed returned real Binance
+  USD-M XAUUSDT 1m data. The post-review shadow receipt reported `pass`, compared
+  `40` fields, found `0` differences, and produced equal legacy/candidate
+  digests. The receipt explicitly identified upstream schema
+  `kline-candles-v1` and authority `legacy`.
+- Two focused Opus reviews found no P0/P1 blocker. Accepted fixes sandboxed
+  unexpected shadow/authoritative exceptions, removed session-blind response
+  recomputation, failed closed on unwrapped adapter errors and naive timezone
+  data, separated normal market closure from source health, and bounded large
+  diagnostic digest cost. The proposed claim that 5m freshness must drift was
+  rejected after formula inspection and an exact passing 5m parity test.

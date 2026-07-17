@@ -165,3 +165,19 @@ git commit -m "feat(data): shadow the DualTrack envelope projection"
 ## Completion boundary
 
 A1 is complete when session semantics are explicit, the first consumer has a tested authoritative path, and the configured runtime remains shadow until real same-response parity is observed. A1 does not require or authorize starting a strategy or switching the execution engine.
+
+## Execution record - 2026-07-18
+
+- Task 1 complete in datafeed commits `1845f8d` and `60282c0`: v2 session
+  truth, fail-closed adapter boundaries, timezone normalization, and source
+  health/state separation.
+- Task 2 complete in Trading Orchestrator commit `5b829ab`: v1/v2 envelope
+  mapping plus continuous and sessioned readiness checks.
+- Task 3 complete in commits `a346342` and `8000ee3`: one-request DualTrack
+  shadow comparison, tested authoritative failure path, exception sandbox, and
+  bounded diagnostic digest cost.
+- Task 4 complete: datafeed `86 passed` plus Ruff; Orchestrator focused
+  `152 passed`; full `1615 passed, 6 skipped`; two Opus reviews found no P0/P1.
+- Live v1 same-response shadow parity passed with 40 comparisons and zero
+  differences. Live v2 parity is not yet proven, so the rollout gate remains
+  `market_data_contract_mode=shadow` and legacy remains authoritative.
