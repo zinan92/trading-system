@@ -166,3 +166,33 @@ def test_binance_public_capability_methods_keep_provider_details_inside_adapter(
     assert recovery == {"status": "recovered"}
     assert recovery_calls[0][0] == "2026-07-18"
     assert recovery_calls[0][3] == "test_recovery"
+
+
+def test_tiger_cannot_gain_binance_cancel_by_inheritance_or_provider_mutation(tmp_path, monkeypatch):
+    from services.broker_adapter import LiveBrokerAdapter
+
+    adapter = LiveBrokerAdapter(
+        tmp_path / "outputs",
+        True,
+        {"provider": "tiger_openapi", "environment": "paper", "dry_run": True},
+    )
+    network_calls = []
+    monkeypatch.setattr(
+        adapter,
+        "_binance_signed_request",
+        lambda *args, **kwargs: network_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="does not support cancel_order"):
+        adapter.cancel_binance_order("XAUUSDT", orig_client_order_id="client-1")
+    adapter.provider = "binance_usdm"
+    with pytest.raises(RuntimeError, match="does not support cancel_order"):
+        adapter.cancel_order(
+            BrokerCancelRequest(
+                run_date="2026-07-18",
+                asset="GOLD",
+                client_order_id="client-1",
+            )
+        )
+
+    assert network_calls == []

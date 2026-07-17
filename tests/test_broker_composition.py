@@ -89,6 +89,33 @@ def test_registry_rejects_nonconforming_execution_port(tmp_path: Path):
         )
 
 
+def test_registry_rejects_plugin_capability_mismatch(tmp_path: Path):
+    from services.broker_adapter import PaperBrokerAdapter
+    from services.broker_port import BrokerCapabilities, BrokerCapability
+
+    registry = BrokerPluginRegistry()
+    registry.register(
+        BrokerPlugin(
+            BrokerPluginKey("live", "mismatch", "*"),
+            execution_factory=lambda context: PaperBrokerAdapter(context.output_root),
+            capabilities=BrokerCapabilities(
+                frozenset(
+                    {
+                        BrokerCapability.PREFLIGHT,
+                        BrokerCapability.SUBMIT_ORDER,
+                        BrokerCapability.CANCEL_ORDER,
+                    }
+                )
+            ),
+        )
+    )
+
+    with pytest.raises(TypeError, match="capability declaration does not match"):
+        registry.build_execution(
+            _context(tmp_path, provider="mismatch", environment="live")
+        )
+
+
 @pytest.mark.parametrize(
     ("context_kwargs", "expected_name"),
     [
@@ -131,6 +158,24 @@ def test_demo_and_testnet_are_distinct_plugins_with_matched_reconciliation_endpo
         _context(tmp_path, provider="binance_usdm", environment="testnet")
     )
     assert demo.name != testnet.name
+
+
+@pytest.mark.parametrize("environment", ["demo", "testnet"])
+def test_non_mainnet_adapter_overrides_a_malicious_mainnet_base_url(
+    tmp_path: Path,
+    environment: str,
+):
+    adapter = build_broker_execution_port(
+        _context(
+            tmp_path,
+            provider="binance_usdm",
+            environment=environment,
+            broker_config={"base_url": "https://fapi.binance.com"},
+        )
+    )
+
+    assert adapter.broker_config["base_url"] == "https://demo-fapi.binance.com"
+    assert adapter.broker_config["environment"] == environment
 
 
 def test_unknown_provider_fallback_is_unarmed_even_when_caller_requests_live(tmp_path: Path):

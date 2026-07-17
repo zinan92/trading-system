@@ -108,6 +108,7 @@ class BrokerPlugin:
             frozenset({BrokerCapability.PREFLIGHT, BrokerCapability.SUBMIT_ORDER})
         )
     )
+    demo_capable: bool = False
 
     def __post_init__(self) -> None:
         if not callable(self.execution_factory):
@@ -150,6 +151,17 @@ class BrokerPluginRegistry:
         if not isinstance(execution, BrokerExecutionPort):
             raise TypeError(
                 f"broker plugin {plugin.key} did not build a BrokerExecutionPort"
+            )
+        declared_execution = BrokerCapabilities(
+            frozenset(
+                capability
+                for capability in plugin.capabilities.values
+                if capability is not BrokerCapability.RECONCILIATION
+            )
+        )
+        if execution.capabilities != declared_execution:
+            raise TypeError(
+                f"broker plugin {plugin.key} capability declaration does not match its execution port"
             )
         return execution
 
@@ -196,6 +208,68 @@ def resolve_broker_profile_config(config: dict) -> dict:
         if key not in {"profile", "broker_profile"}
     }
     return {**dict(profiles[profile_name]), **overrides, "profile": profile_name}
+
+
+def resolve_active_demo_broker_config(
+    config: dict,
+    *,
+    strategy_id: str,
+) -> tuple[dict, dict] | None:
+    """Resolve the currently supported demo profile at the composition root."""
+
+    demo = config.get("demo_trading", {}) or {}
+    if demo.get("enabled") is not True or str(demo.get("active_strategy_id") or "") != str(strategy_id):
+        return None
+    profile_name = str(
+        demo.get("broker_profile")
+        or (config.get("broker", {}) or {}).get("provider")
+        or "binance_usdm"
+    )
+    broker_config = dict(
+        (config.get("broker_profiles", {}) or {}).get(profile_name)
+        or config.get("broker", {})
+        or {}
+    )
+    provider = str(broker_config.get("provider") or profile_name).strip().lower()
+    if provider == "tiger_openapi":
+        return (
+            {
+                **broker_config,
+                "provider": "tiger_openapi",
+                "environment": str(broker_config.get("environment") or "paper"),
+                "profile": profile_name,
+                "request_dir": str(broker_config.get("request_dir") or "tiger_order_requests"),
+            },
+            dict(demo),
+        )
+    if provider != "binance_usdm":
+        return None
+    from services.binance_demo_broker_adapter import DEMO_BASE_URL, DEMO_SYMBOL
+
+    return (
+        {
+            **broker_config,
+            "provider": "binance_usdm",
+            "environment": "demo",
+            "base_url": DEMO_BASE_URL,
+            "dry_run": False,
+            "request_dir": str(
+                demo.get("request_dir")
+                or broker_config.get("request_dir")
+                or "demo_order_requests"
+            ),
+            "protective_failure_action": str(
+                demo.get("protective_failure_action") or "reduce_only_close"
+            ),
+            "instrument_map": {
+                "GOLD": DEMO_SYMBOL,
+                "XAUUSD": DEMO_SYMBOL,
+                **(broker_config.get("instrument_map", {}) or {}),
+            },
+            "profile": profile_name,
+        },
+        dict(demo),
+    )
 
 
 def _paper_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
@@ -301,6 +375,7 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
                 execution_factory=execution_factory,
                 reconciliation_factory=_binance_reconciliation,
                 capabilities=_execution_capabilities("binance_usdm", reconciliation=True),
+                demo_capable=environment == "demo",
             )
         )
     registry.register(
@@ -317,6 +392,7 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
             execution_factory=_tiger_paper_execution,
             reconciliation_factory=_tiger_reconciliation,
             capabilities=_execution_capabilities("tiger_openapi", reconciliation=True),
+            demo_capable=True,
         )
     )
     for provider in ("manual_gateway", "mt5_file_bridge", "oanda_rest"):
@@ -342,6 +418,18 @@ def build_broker_execution_port(
     registry: BrokerPluginRegistry | None = None,
 ) -> BrokerExecutionPort:
     return (registry or default_broker_plugin_registry()).build_execution(context)
+
+
+def build_demo_broker_execution_port(
+    context: BrokerBuildContext,
+    *,
+    registry: BrokerPluginRegistry | None = None,
+) -> BrokerExecutionPort:
+    active_registry = registry or default_broker_plugin_registry()
+    plugin = active_registry.resolve(context)
+    if not plugin.demo_capable:
+        return _unarmed_unknown_execution(context)
+    return active_registry.build_execution(context)
 
 
 def build_configured_live_broker_execution_port(

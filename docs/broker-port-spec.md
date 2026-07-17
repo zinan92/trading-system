@@ -59,9 +59,10 @@ Capabilities are closed values:
 
 They default to absent except for the baseline execution pair. A capability is
 resolved from normalized provider identity, never from `hasattr` or inherited
-method presence. This matters because Tiger paper inherits the legacy class
-that contains Binance helpers: inheritance does not grant Tiger permission to
-call them.
+method presence, and is frozen when the adapter is constructed. This matters
+because Tiger paper inherits the legacy class that contains Binance helpers:
+inheritance or later mutation of `adapter.provider` does not grant Tiger
+permission to call them.
 
 Current matrix:
 
@@ -85,12 +86,19 @@ order is:
 3. explicit mode wildcard provider fallback.
 
 Duplicate keys fail construction. A factory result must structurally satisfy
-the relevant port or assembly fails.
+the relevant port, and its actual execution capabilities must exactly match the
+plugin declaration (excluding the separate reconciliation capability), or
+assembly fails.
 
 Paper, Binance demo, Binance testnet, Binance configured/live, Tiger paper,
 OANDA, MT5, and manual gateway are registered explicitly. The final unknown
 provider fallback is always `live_trading_enabled=False` and `dry_run=True`,
 even if its caller requests an armed adapter.
+
+The active-demo profile is also resolved at this composition boundary. Only a
+plugin explicitly marked demo-capable can be selected. Unsupported/OANDA/MT5
+profiles fall back to the paper strategy path rather than receiving a live
+adapter from a demo toggle.
 
 ## Environment invariants
 

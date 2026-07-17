@@ -71,9 +71,9 @@ class MultiStrategyRunner:
         active = self._active_demo_broker_config(strategy, config=config)
         if active is not None:
             broker_config, demo = active
-            from services.broker_composition import BrokerBuildContext, build_broker_execution_port
+            from services.broker_composition import BrokerBuildContext, build_demo_broker_execution_port
 
-            return build_broker_execution_port(
+            return build_demo_broker_execution_port(
                 BrokerBuildContext(
                     output_root=scoped,
                     execution_mode="live",
@@ -102,35 +102,12 @@ class MultiStrategyRunner:
 
     def _active_demo_broker_config(self, strategy, *, config: dict | None = None) -> tuple[dict, dict] | None:
         config = config or load_pipeline_config()
-        demo = config.get("demo_trading", {}) or {}
-        if demo.get("enabled") is True and str(demo.get("active_strategy_id", "")) == strategy.strategy_id:
-            profile_name = str(demo.get("broker_profile", config.get("broker", {}).get("provider", "binance_usdm")))
-            broker_config = dict((config.get("broker_profiles", {}) or {}).get(profile_name) or config.get("broker", {}) or {})
-            provider = str(broker_config.get("provider") or profile_name)
-            if provider == "tiger_openapi":
-                merged = {
-                    **broker_config,
-                    "provider": "tiger_openapi",
-                    "environment": str(broker_config.get("environment", "paper")),
-                    "profile": profile_name,
-                    "request_dir": str(broker_config.get("request_dir", "tiger_order_requests")),
-                }
-                return merged, demo
-            if provider != "binance_usdm":
-                return {**broker_config, "provider": provider, "profile": profile_name}, demo
-            merged = {
-                **broker_config,
-                "provider": "binance_usdm",
-                "environment": "demo",
-                "base_url": "https://demo-fapi.binance.com",
-                "dry_run": False,
-                "request_dir": str(demo.get("request_dir", broker_config.get("request_dir", "demo_order_requests"))),
-                "protective_failure_action": str(demo.get("protective_failure_action", "reduce_only_close")),
-                "instrument_map": {"GOLD": "XAUUSDT", "XAUUSD": "XAUUSDT", **broker_config.get("instrument_map", {})},
-                "profile": profile_name,
-            }
-            return merged, demo
-        return None
+        from services.broker_composition import resolve_active_demo_broker_config
+
+        return resolve_active_demo_broker_config(
+            config,
+            strategy_id=strategy.strategy_id,
+        )
 
     def _execution_profile_for(self, strategy) -> dict:
         config = load_pipeline_config()

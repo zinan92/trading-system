@@ -42,11 +42,12 @@ class PaperBrokerAdapter:
     def __init__(self, output_root: Path) -> None:
         self.output_root = Path(output_root)
         self.broker_config = {"provider": "paper", "environment": "paper", "dry_run": True}
+        self._capabilities = execution_capabilities_for(provider=self.provider, adapter_name=self.name)
         self.executor = PaperExecutor(output_root)
 
     @property
     def capabilities(self):
-        return execution_capabilities_for(provider=self.provider, adapter_name=self.name)
+        return self._capabilities
 
     @property
     def descriptor(self) -> BrokerPortDescriptor:
@@ -83,10 +84,11 @@ class LiveBrokerAdapter:
         self.provider = str(self.broker_config.get("provider", "manual_gateway"))
         self.dry_run = bool(self.broker_config.get("dry_run", True))
         self.opener = opener or urllib.request.urlopen
+        self._capabilities = execution_capabilities_for(provider=self.provider, adapter_name=self.name)
 
     @property
     def capabilities(self):
-        return execution_capabilities_for(provider=self.provider, adapter_name=self.name)
+        return self._capabilities
 
     @property
     def descriptor(self) -> BrokerPortDescriptor:
@@ -1619,6 +1621,7 @@ class LiveBrokerAdapter:
         return self._binance_signed_request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
 
     def cancel_binance_order(self, symbol: str, *, orig_client_order_id: str = "", order_id: str = "") -> dict:
+        require_broker_capability(self, BrokerCapability.CANCEL_ORDER)
         params = {"symbol": symbol}
         if orig_client_order_id:
             params["origClientOrderId"] = orig_client_order_id

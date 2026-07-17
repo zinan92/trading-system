@@ -6296,3 +6296,36 @@ auditable datafeed port; broker execution remains a separate port.
 - Accepted P2: provider-neutrality tests are function-scoped. Existing
   `_execution_profile_for` and `_demo_reconciliation_block_reason` are
   explicitly classified as diagnostic read-model debt deferred to A6.
+
+## 2026-07-18 - A5 final Opus review and hardening
+
+### Review result
+
+- Verified `claude-opus-4-8` review, session
+  `61281269-e0b5-4f29-b7d3-64bad1e6efe3`, receipt
+  `20260717T223756Z_79e46db2-2d1e-45be-925e-e43551447b1f.json`: explicit
+  `NO P0 / NO P1`.
+- Opus verified live activation, unknown-provider unarming, Tiger capability
+  isolation, demo/testnet endpoint binding, secret safety, facade compatibility,
+  and unchanged ambiguous-submit recovery.
+
+### Accepted hardening
+
+- Guard the legacy `cancel_binance_order` alias itself, not only the new public
+  `cancel_order` port. Tiger is rejected before any signed request.
+- Freeze adapter capabilities at construction so mutating `provider` later
+  cannot grant Binance cancel/protection authority.
+- Move active-demo profile normalization from the runner into broker
+  composition. Only explicitly demo-capable plugins can be selected; OANDA,
+  MT5, and unknown profiles fall back to the paper path instead of becoming
+  armed through a demo toggle.
+- Enforce equality between a plugin's declared execution capabilities and the
+  port returned by its factory. Reconciliation remains a separate capability.
+- Add hostile-config tests proving demo/testnet override a supplied Binance
+  mainnet URL with their fixed non-mainnet endpoint.
+
+### Verification so far
+
+- Post-review targeted hardening: `28 passed`.
+- Post-review focused broker/cycle regression: `131 passed`.
+- Ruff on every changed Python file: `All checks passed`.

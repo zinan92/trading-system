@@ -237,6 +237,34 @@ def test_configured_demo_strategy_can_route_to_tiger_profile_adapter(monkeypatch
     assert inactive is None
 
 
+def test_unsupported_demo_provider_falls_back_to_paper_instead_of_arming_live(monkeypatch, tmp_path: Path):
+    from services.strategy_registry import Strategy
+
+    config = {
+        "output_root": "outputs",
+        "live_trading_enabled": True,
+        "broker": {"provider": "oanda_rest", "environment": "live", "dry_run": False},
+        "demo_trading": {
+            "enabled": True,
+            "active_strategy_id": "gold_1m_macd",
+            "broker_profile": "oanda_live",
+        },
+        "broker_profiles": {
+            "oanda_live": {
+                "provider": "oanda_rest",
+                "environment": "live",
+                "dry_run": False,
+            }
+        },
+    }
+    monkeypatch.setattr("services.multi_strategy_runner.load_pipeline_config", lambda: config)
+    runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
+    strategy = Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False)
+
+    assert runner._active_demo_broker_config(strategy, config=config) is None
+    assert runner._broker_adapter_for(strategy, tmp_path / "out" / "s") is None
+
+
 def test_tiger_demo_execution_profile_is_guarded_and_secret_safe(monkeypatch, tmp_path: Path):
     from services.strategy_registry import Strategy
 
