@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from schemas.market_data import PaperOrder
+from services.broker_port import execution_capabilities_for
 from services.journal_store import load_json, write_json
 from services.multi_strategy_runner import MultiStrategyRunner
 from services.order_lifecycle import OrderLifecycleStore
@@ -736,17 +737,22 @@ def test_runner_expires_accepted_demo_limit_after_ttl_and_cancels_broker_order(m
 
     class CancelingAdapter:
         name = "binance_demo"
+        provider = "binance_usdm"
+        capabilities = execution_capabilities_for(provider=provider, adapter_name=name)
 
         def __init__(self) -> None:
             self.cancel_calls = []
 
-        def _binance_symbol(self, asset: str) -> str:
-            assert asset == "GOLD"
-            return "XAUUSDT"
-
-        def cancel_binance_order(self, symbol: str, *, orig_client_order_id: str = "", order_id: str = "") -> dict:
-            self.cancel_calls.append({"symbol": symbol, "orig_client_order_id": orig_client_order_id, "order_id": order_id})
-            return {"status": "CANCELED", "clientOrderId": orig_client_order_id}
+        def cancel_order(self, request) -> dict:
+            assert request.asset == "GOLD"
+            self.cancel_calls.append(
+                {
+                    "symbol": "XAUUSDT",
+                    "orig_client_order_id": request.client_order_id,
+                    "order_id": request.broker_order_id,
+                }
+            )
+            return {"status": "CANCELED", "clientOrderId": request.client_order_id}
 
     adapter = CancelingAdapter()
     monkeypatch.setattr(runner, "_broker_adapter_for", lambda *_args, **_kwargs: adapter)
@@ -763,6 +769,75 @@ def test_runner_expires_accepted_demo_limit_after_ttl_and_cancels_broker_order(m
     assert decisions[0]["ticket_id"] == ticket["ticket_id"]
     assert decisions[0]["decision_status"] == "rejected"
     assert decisions[0]["paper_order"]["status"] == "expired"
+
+
+def test_tiger_inherited_binance_cancel_method_is_blocked_before_network(monkeypatch, tmp_path: Path):
+    from services.broker_adapter import LiveBrokerAdapter
+
+    root = tmp_path / "outputs"
+    run_date = "2026-06-30"
+    runner = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(_ACTIVE_DEMO_LONG))
+    strategy = runner.registry.get("gold_1m_macd")
+    scoped = runner.strategy_root("gold_1m_macd")
+    ticket = _demo_limit_ticket(run_date, "tiger_expired")
+    order_id = "tiger_order_accepted_expired"
+    client_order_id = "tiger_client_accepted_expired"
+    write_json(scoped / "trade_tickets" / f"{run_date}.json", [ticket])
+    write_json(
+        scoped / "clean_bars" / run_date / "GOLD_1m.json",
+        [
+            {
+                "symbol": "GOLD",
+                "timeframe": "1m",
+                "timestamp": f"{run_date}T00:{minute:02d}:00+00:00",
+                "open": 100.0,
+                "high": 100.2,
+                "low": 99.9,
+                "close": 100.0,
+                "volume": 1000,
+                "provider": "mock",
+            }
+            for minute in range(11)
+        ],
+    )
+    store = OrderLifecycleStore(scoped)
+    store.write_intent(
+        run_date,
+        order_id=order_id,
+        ticket_id=ticket["ticket_id"],
+        idempotency_key=client_order_id,
+        requested_quantity=1.0,
+        requested_price=99.8,
+        source="tiger_openapi:paper",
+        metadata={"symbol": "MGC", "ticket": ticket},
+    )
+    store.transition(run_date, order_id, "submitting", reason="submit_started")
+    lifecycle = store.transition(
+        run_date,
+        order_id,
+        "accepted",
+        reason="entry_accepted",
+        metadata={"client_order_id": client_order_id},
+    )
+    adapter = LiveBrokerAdapter(
+        scoped,
+        True,
+        {"provider": "tiger_openapi", "environment": "paper", "dry_run": True},
+    )
+    network_calls = []
+    monkeypatch.setattr(
+        adapter,
+        "cancel_binance_order",
+        lambda *args, **kwargs: network_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(runner, "_broker_adapter_for", lambda *_args, **_kwargs: adapter)
+
+    report = runner._expire_demo_entry_orders(strategy, scoped, run_date, [lifecycle])
+
+    assert report["status"] == "blocked"
+    assert "does not support cancel_order" in report["block_reason"]
+    assert network_calls == []
+    assert OrderLifecycleStore(scoped).current(run_date, order_id)["state"] == "accepted"
 
 
 def test_runner_reprobes_blocked_submitting_intent_after_connectivity_recovers(monkeypatch, tmp_path: Path):
@@ -855,13 +930,22 @@ def test_runner_recovers_filled_intent_with_missing_protective_orders(monkeypatc
 
     class ProtectiveRecoveryAdapter:
         name = "binance_demo"
+        provider = "binance_usdm"
+        capabilities = execution_capabilities_for(provider=provider, adapter_name=name)
 
         def __init__(self) -> None:
             self.calls = []
 
-        def recover_missing_protective_orders(self, date, lifecycle, exchange_position, *, source):
-            self.calls.append((date, lifecycle, exchange_position, source))
-            OrderLifecycleStore(scoped).transition(date, order_id, "protective_attached", reason="recovered_missing_protective", protective_quantity=0.002)
+        def recover_protective_orders(self, request):
+            self.calls.append(
+                (
+                    request.run_date,
+                    request.lifecycle_record,
+                    request.exchange_position,
+                    request.source,
+                )
+            )
+            OrderLifecycleStore(scoped).transition(request.run_date, order_id, "protective_attached", reason="recovered_missing_protective", protective_quantity=0.002)
             return {
                 "status": "recovered",
                 "action": "attach_missing_protective_orders",
