@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.execution_conformance import (
     CANDIDATE_RECEIPT_SCHEMA,
     EXECUTION_SCENARIO_SCHEMA,
@@ -150,6 +151,8 @@ def _snapshot(scenario: dict) -> dict:
         "capabilities": {
             "native_order_lifecycle": True,
             "replay_version": "dualtrack-nautilus-replay-v6",
+            "nautilus_version": "1.230.0",
+            "platform_code_hash": platform_parity_code_hash(),
         },
     }
 
@@ -204,6 +207,18 @@ def test_scenario_rejects_preavailability_ohlc_and_nonchronological_events() -> 
         )
 
 
+def test_scenario_availability_cannot_predate_the_locked_plan() -> None:
+    with pytest.raises(ValueError, match="availability predates StrategyPlan lock"):
+        build_execution_scenario(
+            candidate_id="grid-candidate-a3",
+            plan=_plan(),
+            commands=_commands(),
+            market_events=_events(),
+            config=_config(),
+            available_at="2026-07-17T23:59:59+00:00",
+        )
+
+
 def test_scenario_rejects_commands_not_bound_to_the_versioned_plan() -> None:
     commands = _commands()
     commands[0]["strategy_plan_version"] = 2
@@ -239,6 +254,8 @@ def test_candidate_receipt_requires_nautilus_reconciliation_and_is_stable() -> N
     assert first["status"] == "pass"
     assert first["blockers"] == []
     assert first["scenario_id"] == scenario["scenario_id"]
+    assert first["nautilus_version"] == "1.230.0"
+    assert first["platform_code_hash"] == platform_parity_code_hash()
     assert first["accounting_snapshot_id"].startswith("accounting-")
     assert candidate_receipt_blockers(first, expected_scenario_id=scenario["scenario_id"]) == []
 
@@ -275,3 +292,31 @@ def test_candidate_receipt_blocks_snapshot_or_replay_identity_mismatch() -> None
     assert receipt["status"] == "blocked"
     assert "snapshot_cycle_mismatch" in receipt["blockers"]
     assert "replay_version_mismatch" in receipt["blockers"]
+
+
+def test_candidate_receipt_blocks_unbound_runtime_or_old_platform_code() -> None:
+    scenario = _scenario()
+    snapshot = deepcopy(_snapshot(scenario))
+    snapshot["capabilities"]["nautilus_version"] = ""
+    snapshot["capabilities"]["platform_code_hash"] = "sha256:old-code"
+
+    receipt = build_candidate_execution_receipt(
+        scenario=scenario,
+        snapshot=snapshot,
+        reconciliation=_reconciliation(),
+        storage_namespace=f"strategy_shadow_{scenario['scenario_id'][-12:]}",
+    )
+
+    assert receipt["status"] == "blocked"
+    assert "nautilus_runtime_version_missing" in receipt["blockers"]
+    assert "snapshot_platform_code_stale" in receipt["blockers"]
+
+    wrong_runtime = deepcopy(_snapshot(scenario))
+    wrong_runtime["capabilities"]["nautilus_version"] = "1.229.0"
+    receipt = build_candidate_execution_receipt(
+        scenario=scenario,
+        snapshot=wrong_runtime,
+        reconciliation=_reconciliation(),
+        storage_namespace=f"strategy_shadow_{scenario['scenario_id'][-12:]}",
+    )
+    assert "nautilus_runtime_version_mismatch" in receipt["blockers"]

@@ -15,6 +15,10 @@ from typing import Any
 from services.accounting_projection import project_execution_accounting
 from services.dualtrack_execution_contract import canonical_market_event, normalize_execution_command
 from services.dualtrack_nautilus_execution_adapter import REPLAY_VERSION
+from services.dualtrack_nautilus_parity_contract import (
+    EXPECTED_NAUTILUS_VERSION,
+    platform_parity_code_hash,
+)
 
 
 EXECUTION_SCENARIO_SCHEMA = "strategy-execution-scenario-v1"
@@ -43,11 +47,11 @@ def build_execution_scenario(
     plan_id = _required_text(frozen_plan.get("strategy_plan_id"), "strategy_plan_id")
     cycle_id = _required_text(frozen_plan.get("cycle_id"), "plan cycle_id")
     plan_version = _positive_integer(frozen_plan.get("version"), "strategy plan version")
-    available = _iso_utc(
-        available_at or frozen_plan.get("locked_at") or frozen_plan.get("created_at"),
-        "plan available_at",
-    )
+    locked_at = _iso_utc(frozen_plan.get("locked_at"), "StrategyPlan locked_at")
+    available = _iso_utc(available_at or locked_at, "plan available_at")
     available_dt = _parse_iso(available, "plan available_at")
+    if available_dt < _parse_iso(locked_at, "StrategyPlan locked_at"):
+        raise ValueError("execution scenario availability predates StrategyPlan lock")
 
     if not isinstance(commands, list) or not commands:
         raise ValueError("execution scenario requires at least one command")
@@ -179,9 +183,22 @@ def build_candidate_execution_receipt(
         blockers.append("snapshot_engine_not_nautilus")
     if str(snapshot.get("cycle_id") or "") != cycle_id:
         blockers.append("snapshot_cycle_mismatch")
-    replay_version = str((snapshot.get("capabilities") or {}).get("replay_version") or "")
+    capabilities = snapshot.get("capabilities") if isinstance(snapshot.get("capabilities"), dict) else {}
+    replay_version = str(capabilities.get("replay_version") or "")
     if replay_version != REPLAY_VERSION:
         blockers.append("replay_version_mismatch")
+    nautilus_version = str(capabilities.get("nautilus_version") or "").strip()
+    if not nautilus_version:
+        blockers.append("nautilus_runtime_version_missing")
+    elif nautilus_version != EXPECTED_NAUTILUS_VERSION:
+        blockers.append("nautilus_runtime_version_mismatch")
+    snapshot_code_hash = str(capabilities.get("platform_code_hash") or "")
+    try:
+        current_code_hash = platform_parity_code_hash()
+    except OSError:
+        current_code_hash = ""
+    if not current_code_hash or snapshot_code_hash != current_code_hash:
+        blockers.append("snapshot_platform_code_stale")
     blockers.extend(_snapshot_plan_trace_blockers(snapshot, plan_identity))
 
     if not isinstance(reconciliation, dict) or reconciliation.get("schema_version") != _RECONCILIATION_SCHEMA:
@@ -218,6 +235,8 @@ def build_candidate_execution_receipt(
         "input_hashes": dict(scenario.get("hashes") or {}),
         "engine": "nautilus_paper",
         "replay_version": replay_version,
+        "nautilus_version": nautilus_version,
+        "platform_code_hash": snapshot_code_hash,
         "storage_namespace": namespace,
         "execution_snapshot_hash": _hash(snapshot),
         "execution_reconciliation_hash": _hash(reconciliation),
@@ -249,6 +268,16 @@ def candidate_receipt_blockers(
         blockers.append("candidate_receipt_engine_not_nautilus")
     if str(receipt.get("replay_version") or "") != REPLAY_VERSION:
         blockers.append("candidate_receipt_replay_version_mismatch")
+    if not str(receipt.get("nautilus_version") or "").strip():
+        blockers.append("candidate_receipt_nautilus_version_missing")
+    elif str(receipt.get("nautilus_version") or "").strip() != EXPECTED_NAUTILUS_VERSION:
+        blockers.append("candidate_receipt_nautilus_version_mismatch")
+    try:
+        current_code_hash = platform_parity_code_hash()
+    except OSError:
+        current_code_hash = ""
+    if not current_code_hash or str(receipt.get("platform_code_hash") or "") != current_code_hash:
+        blockers.append("candidate_receipt_platform_code_stale")
     if expected_scenario_id is not None and str(receipt.get("scenario_id") or "") != str(expected_scenario_id):
         blockers.append("candidate_receipt_scenario_mismatch")
     safety = receipt.get("safety") if isinstance(receipt.get("safety"), dict) else {}

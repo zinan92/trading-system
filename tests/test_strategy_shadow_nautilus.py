@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
+import pytest
+
+from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.execution_conformance import build_execution_scenario
 from services.journal_store import load_json, write_json
 from services.strategy_shadow_nautilus import NautilusStrategyShadowReplay
@@ -126,7 +130,11 @@ def _fake_replay(_preflight_path: Path, input_path: Path, _output_path: Path) ->
         },
         "pnl": {"realized": 0.0, "unrealized": 0.0},
         "mark": {"price": 101.0, "fresh": True, "source": "test"},
-        "capabilities": {"native_order_lifecycle": True},
+        "capabilities": {
+            "native_order_lifecycle": True,
+            "nautilus_version": "1.230.0",
+            "platform_code_hash": platform_parity_code_hash(),
+        },
     }
 
 
@@ -163,3 +171,23 @@ def test_nautilus_shadow_replay_is_content_namespaced_and_restart_idempotent(tmp
         "dualtrack/positions",
     ):
         assert not (output / relative).exists()
+
+
+def test_nautilus_shadow_rejects_replay_config_drift_before_writing(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    drifted = deepcopy(_config())
+    drifted["execution_contract"]["execution_instrument_id"] = "WRONG-INSTRUMENT"
+    port = NautilusStrategyShadowReplay(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=_fake_replay,
+        config=drifted,
+    )
+
+    with pytest.raises(ValueError, match="does not match replay config"):
+        port.replay(_scenario())
+
+    assert not [path for path in (output / "dualtrack").glob("strategy_shadow_*")]

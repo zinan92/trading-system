@@ -30,11 +30,11 @@ def normalize_execution_command(command: dict[str, Any], config: dict[str, Any] 
     """
 
     normalized = dict(command)
-    settings = dict((config or {}).get("execution_contract") or {})
-    if not settings:
+    contract_evidence = execution_contract_evidence(config)
+    if not contract_evidence:
         return normalized
-    price_increment = _positive_decimal(settings.get("price_increment"), "execution price_increment")
-    quantity_increment = _positive_decimal(settings.get("quantity_increment"), "execution quantity_increment")
+    price_increment = _positive_decimal(contract_evidence["price_increment"], "execution price_increment")
+    quantity_increment = _positive_decimal(contract_evidence["quantity_increment"], "execution quantity_increment")
 
     raw_price = _decimal_or_none(normalized.get("price"))
     raw_market_price = _decimal_or_none(normalized.get("market_price"))
@@ -69,19 +69,38 @@ def normalize_execution_command(command: dict[str, Any], config: dict[str, Any] 
         if executable_price is not None:
             normalized["notional"] = float((executable_price * executable_quantity).quantize(Decimal("0.00000001")))
 
+    normalized["execution_contract"] = contract_evidence
+    return normalized
+
+
+def execution_contract_evidence(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the exact execution/fee fingerprint used by every adapter."""
+
+    settings = dict((config or {}).get("execution_contract") or {})
+    if not settings:
+        return {}
+    price_increment = _positive_decimal(settings.get("price_increment"), "execution price_increment")
+    quantity_increment = _positive_decimal(settings.get("quantity_increment"), "execution quantity_increment")
     contract_payload = {
         "schema_version": str(settings.get("schema_version") or EXECUTION_COMMAND_CONTRACT_SCHEMA),
         "execution_instrument_id": str(settings.get("execution_instrument_id") or ""),
         "price_increment": str(price_increment),
         "quantity_increment": str(quantity_increment),
     }
+    if (config or {}).get("capital_per_track_usd") not in (None, ""):
+        contract_payload["starting_cash"] = str(
+            _positive_decimal((config or {}).get("capital_per_track_usd"), "execution starting_cash")
+        )
+    if (config or {}).get("max_leverage") not in (None, ""):
+        contract_payload["max_leverage"] = str(
+            _positive_decimal((config or {}).get("max_leverage"), "execution max_leverage")
+        )
     fee_payload = dict((config or {}).get("paper_fee_model") or {})
-    normalized["execution_contract"] = {
+    return {
         **contract_payload,
         "contract_hash": _payload_hash(contract_payload),
         "fee_contract_hash": _payload_hash(fee_payload),
     }
-    return normalized
 
 
 def canonical_market_event(event: dict[str, Any]) -> dict[str, Any]:

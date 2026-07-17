@@ -31,6 +31,9 @@ rendering, market-data acquisition, and promotion policy remain separate.
    command timestamp.
 10. Candidate replay namespaces cannot write production ledgers or the
     reconciliation, parity, and cutover evidence that controls paper authority.
+11. Candidate and platform evidence must bind the exact source semantics,
+    Nautilus runtime version, fee/precision contracts, and evidence timestamp;
+    an old child fixture cannot be restamped as current evidence.
 
 ## Boundary
 
@@ -189,6 +192,14 @@ For every scenario, normalize both adapters and compare:
 Differences require a written model decision. They must not be hidden by
 tolerance changes or frontend formatting.
 
+Every child fixture and the historical residual check records its own platform
+code hash and generation time. The aggregate gate passes only when all child
+artifacts use the current execution, accounting, command-projection, and
+promotion semantics; the pinned Nautilus `1.230.0` runtime; one exact
+execution/fee contract pair; and evidence no older than seven days. Its
+`generated_at` is the oldest child timestamp, so rebuilding only the aggregate
+cannot make stale evidence fresh.
+
 ## Strategy Shadow execution
 
 `services/strategy_shadow.py` is now orchestration and read-model code only. It
@@ -204,6 +215,7 @@ The scenario binds:
 - chronological canonical market events whose bar start is not earlier than
   plan or command availability;
 - execution-precision and fee-contract hashes;
+- starting-cash and leverage settings used by the replay;
 - evaluation window and content-addressed scenario identity.
 
 `NautilusStrategyShadowReplay` persists only below a
@@ -212,6 +224,14 @@ snapshot, and emits `nautilus-candidate-execution-receipt-v1`. The Dashboard
 continues to read the latest row per variant: historical
 `strategy-shadow-run-v1` rows remain trace, while new runs use
 `strategy-shadow-run-v2`. A v1 row can never satisfy conformance.
+
+The candidate receipt also carries the runtime-reported Nautilus version and
+platform code hash from the replay subprocess. Promotion requires those values
+to match both the current source tree and the fixed platform parity gate; a
+receipt produced by old replay semantics cannot be combined with a newer gate.
+The promotion token retains the parity timestamp, code hash, runtime, and
+contracts and revalidates them at every call boundary, so persisting a once-pass
+token cannot extend its seven-day evidence window.
 
 Candidate conformance and platform parity are deliberately different claims:
 
@@ -257,3 +277,6 @@ money.
 - Funding rate and timestamp are now observed and persisted, but a rate sample
   is not itself a funding cash-flow. Settlement must only be booked from a
   timestamped position exposure at an actual funding boundary.
+- Historical `current.json` parity artifacts without child code, runtime,
+  contract, and timestamp binding are intentionally stale and fail closed until
+  the full ten-class fixture is rerun.

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from services.dualtrack_execution_contract import normalize_execution_command
 from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter, ReplayExecutor
 from services.execution_conformance import (
     EXECUTION_SCENARIO_SCHEMA,
@@ -37,7 +38,11 @@ class NautilusStrategyShadowReplay:
         cycle_id = str(scenario.get("cycle_id") or "")
         if not scenario_id or not cycle_id:
             raise ValueError("Nautilus Strategy Shadow scenario identity is missing")
-        namespace = f"strategy_shadow_{scenario_id.rsplit('-', 1)[-1][:20]}"
+        commands = [dict(command) for command in scenario.get("commands") or []]
+        for command in commands:
+            if normalize_execution_command(command, self.config) != command:
+                raise ValueError("Strategy Shadow scenario execution contract does not match replay config")
+        namespace = f"strategy_shadow_{scenario_id.rsplit('-', 1)[-1]}"
         adapter = NautilusExecutionAdapter(
             self.output_root,
             nautilus_python=self.nautilus_python,
@@ -47,8 +52,8 @@ class NautilusStrategyShadowReplay:
             defer_replay=True,
             config=self.config,
         )
-        for command in scenario.get("commands") or []:
-            adapter.submit_order(dict(command))
+        for command in commands:
+            adapter.submit_order(command)
         for event in scenario.get("market_events") or []:
             adapter.process_market_event(dict(event))
         adapter.flush(cycle_id)

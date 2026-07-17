@@ -1,5 +1,8 @@
 # A3 Unified Execution Semantics Implementation Plan
 
+**Status:** Complete on 2026-07-18. Legacy remains authoritative; A3 changes
+candidate evidence and promotion safety only.
+
 **Goal:** Make one frozen StrategyPlan plus one chronological trusted market-event
 stream produce one Nautilus execution meaning across Strategy Shadow, candidate
 promotion evidence, and restart replay, while the existing Legacy-to-Nautilus

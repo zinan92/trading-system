@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.dualtrack_scoring import _trades_from_fills
 from services.journal_store import load_json, write_json
 
 
 def build_residual_check(output_root: Path, *, cycle_id: str) -> dict:
     fills = load_json(Path(output_root) / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+    evidence = {
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "platform_code_hash": platform_parity_code_hash(),
+    }
     if not fills:
         return {
             "schema_version": "dualtrack-machine-residual-remediation-v1",
+            **evidence,
             "cycle_id": cycle_id,
             "status": "blocked",
             "blocker": "historical_machine_fills_missing",
@@ -28,6 +35,7 @@ def build_residual_check(output_root: Path, *, cycle_id: str) -> dict:
     ]
     return {
         "schema_version": "dualtrack-machine-residual-remediation-v1",
+        **evidence,
         "cycle_id": cycle_id,
         "status": "pass" if not residuals else "drift",
         "raw_fill_count": len(fills),

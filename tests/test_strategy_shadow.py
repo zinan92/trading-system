@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.execution_conformance import build_candidate_execution_receipt
 from services.journal_store import load_json, write_json
 from services.strategy_shadow import StrategyShadowRunner, load_strategy_shadow_runs
@@ -143,7 +144,11 @@ def _snapshot(scenario: dict) -> dict:
         },
         "pnl": {"realized": -0.02, "unrealized": 0.5},
         "mark": {"price": 100.5, "fresh": True, "source": "test"},
-        "capabilities": {"replay_version": "dualtrack-nautilus-replay-v6"},
+        "capabilities": {
+            "replay_version": "dualtrack-nautilus-replay-v6",
+            "nautilus_version": "1.230.0",
+            "platform_code_hash": platform_parity_code_hash(),
+        },
         "command_echo": command,
     }
 

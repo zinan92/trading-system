@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.dualtrack_config import dualtrack_config
 from services.journal_store import load_json, write_json
 from services.strategy_shadow import StrategyShadowRunner
@@ -105,6 +106,8 @@ def test_real_runtime_strategy_shadow_has_one_content_bound_execution_truth(tmp_
     assert first == second
     assert first["status"] == "pass"
     assert first["execution_receipt"]["status"] == "pass"
+    assert first["execution_receipt"]["nautilus_version"] == "1.230.0"
+    assert first["execution_receipt"]["platform_code_hash"] == platform_parity_code_hash()
     assert first["execution_receipt"]["accounting_snapshot_id"] == first["accounting_snapshot"]["snapshot_id"]
     assert first["accounting_snapshot"]["counts"] == {
         "order_count": 2,

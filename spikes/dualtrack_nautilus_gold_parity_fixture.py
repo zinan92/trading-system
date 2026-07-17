@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from services.dualtrack_execution_adapter import LegacyPaperExecutionAdapter
-from services.dualtrack_execution_contract import compare_execution_snapshots
+from services.dualtrack_execution_contract import compare_execution_snapshots, execution_contract_evidence
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_nautilus_instrument import build_nautilus_instrument
+from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.journal_store import write_json
 
 
@@ -135,6 +137,8 @@ def run_fixture(preflight_path: str | Path, *, scenario_name: str = "long_stop")
         maker_fee_rate=maker_fee,
         taker_fee_rate=taker_fee,
     )
+    fixture_config = dualtrack_config()
+    fixture_config["paper_fee_model"] = dict(fee_model)
     candidate = _nautilus_snapshot(instrument, cycle_id=cycle_id, scenario=scenario)
     legacy = _legacy_snapshot(cycle_id=cycle_id, scenario=scenario, fee_model=fee_model)
     parity = compare_execution_snapshots(legacy, candidate, cycle_id=cycle_id)
@@ -152,14 +156,24 @@ def run_fixture(preflight_path: str | Path, *, scenario_name: str = "long_stop")
     return {
         "schema_version": "dualtrack-nautilus-gold-parity-fixture-v1",
         "scope": "paper_shadow_only",
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "platform_code_hash": platform_parity_code_hash(),
         "scenario": scenario_name,
         "instrument_id": str(instrument.id),
+        "nautilus_version": _nautilus_version(),
         "fee_model": fee_model,
+        "execution_contract": execution_contract_evidence(fixture_config),
         "legacy": legacy,
         "candidate": candidate,
         "parity": parity,
         "restart_evidence": restart_evidence,
     }
+
+
+def _nautilus_version() -> str:
+    import nautilus_trader
+
+    return str(getattr(nautilus_trader, "__version__", ""))
 
 
 def _nautilus_snapshot(instrument, *, cycle_id: str, scenario: dict[str, Any]) -> dict[str, Any]:
@@ -289,6 +303,7 @@ def _nautilus_snapshot(instrument, *, cycle_id: str, scenario: dict[str, Any]) -
             "exposure": 0.0,
             "slippage": 0.0,
             "fees": round(sum(float(row["cost"]) for row in fills), 8),
+            "funding": 0.0,
             "equity": round(10_000.0 + realized, 8),
         } if position_rows else {
             "starting_cash": 10_000.0,
@@ -298,6 +313,7 @@ def _nautilus_snapshot(instrument, *, cycle_id: str, scenario: dict[str, Any]) -
             "exposure": 0.0,
             "slippage": 0.0,
             "fees": 0.0,
+            "funding": 0.0,
             "equity": 10_000.0,
         }),
         "pnl": {"realized": realized, "unrealized": 0.0},
@@ -431,7 +447,6 @@ def _nautilus_sequence_snapshot(instrument, *, cycle_id: str, scenario: dict[str
         for index, row in enumerate(fill_rows)
     ]
     realized = _money_number(position_rows[-1]["realized_pnl"]) if position_rows else 0.0
-    open_units = 2.0 if scenario["kind"] == "scale_in" else (1.0 if scenario["kind"] == "duplicate" else 0.0)
     positions = (
         [{
             "status": "open", "side": "long", "remaining_units": 2.0,
@@ -463,6 +478,7 @@ def _nautilus_sequence_snapshot(instrument, *, cycle_id: str, scenario: dict[str
             "margin": 19.8 if scenario["kind"] == "scale_in" else (10.0 if scenario["kind"] == "duplicate" else 0.0),
             "slippage": 0.0,
             "fees": round(sum(float(row["cost"]) for row in fills), 8),
+            "funding": 0.0,
             "equity": round(10_000.0 + realized + unrealized, 8),
         },
         "pnl": {"realized": realized, "unrealized": unrealized},

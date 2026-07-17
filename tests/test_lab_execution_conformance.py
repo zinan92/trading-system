@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from services.dualtrack_nautilus_parity_contract import FIXTURE_CLASSES, PLATFORM_PARITY_SCHEMA
+from services.dualtrack_nautilus_parity_contract import (
+    FIXTURE_CLASSES,
+    PLATFORM_PARITY_SCHEMA,
+    platform_parity_code_hash,
+)
 from services.execution_conformance import (
     CANDIDATE_RECEIPT_SCHEMA,
     EXECUTION_SCENARIO_SCHEMA,
@@ -97,7 +102,11 @@ def _candidate_receipt() -> dict:
             "funding": 0.0,
         },
         "pnl": {"realized": 0.0, "unrealized": 0.0},
-        "capabilities": {"replay_version": "dualtrack-nautilus-replay-v6"},
+        "capabilities": {
+            "replay_version": "dualtrack-nautilus-replay-v6",
+            "nautilus_version": "1.230.0",
+            "platform_code_hash": platform_parity_code_hash(),
+        },
     }
     reconciliation = {
         "schema_version": "dualtrack-execution-reconciliation-v1",
@@ -124,9 +133,23 @@ def _platform_parity() -> dict:
         "status": "pass",
         "blockers": [],
         "classes": [
-            {"class": name, "status": "pass", "scenarios": []}
-            for name in FIXTURE_CLASSES
+            {
+                "class": name,
+                "status": "pass",
+                "scenarios": [
+                    {"scenario": scenario, "status": "pass"}
+                    for scenario in scenarios
+                ],
+            }
+            for name, scenarios in FIXTURE_CLASSES.items()
         ],
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "platform_code_hash": platform_parity_code_hash(),
+        "nautilus_version": "1.230.0",
+        "contracts": {
+            "execution_contract_hash": "sha256:execution-a3",
+            "fee_contract_hash": "sha256:fees-a3",
+        },
         "real_money_eligible": False,
     }
 
@@ -181,6 +204,27 @@ def test_legacy_shadow_schema_is_never_execution_conformance() -> None:
     assert token["blockers"] == ["unsupported_candidate_receipt_schema"]
 
 
+def test_stale_or_contract_mismatched_platform_parity_is_blocked() -> None:
+    parity = _platform_parity()
+    parity["generated_at"] = (
+        datetime.now(timezone.utc) - timedelta(days=8)
+    ).replace(microsecond=0).isoformat()
+    parity["contracts"]["fee_contract_hash"] = "sha256:old-fees"
+    parity["nautilus_version"] = "1.229.0"
+
+    token = build_lab_execution_conformance_token(
+        entry=_entry(),
+        candidate_receipt=_candidate_receipt(),
+        platform_parity=parity,
+    )
+
+    assert token["status"] == "blocked"
+    assert "platform_parity_stale" in token["blockers"]
+    assert "platform_parity_contract_mismatch" in token["blockers"]
+    assert "platform_parity_nautilus_version_mismatch" in token["blockers"]
+    assert "platform_parity_runtime_mismatch" in token["blockers"]
+
+
 def test_loader_reads_only_canonical_candidate_receipt_and_current_parity(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     write_json(
@@ -201,5 +245,14 @@ def test_loader_reads_only_canonical_candidate_receipt_and_current_parity(tmp_pa
     tampered["candidate_receipt_id"] = "candidate-receipt-tampered"
     assert "lab_execution_conformance_integrity_mismatch" in lab_execution_conformance_token_blockers(
         tampered,
+        entry=_entry(),
+    )
+
+    stale_token = deepcopy(token)
+    stale_token["platform_evidence"]["generated_at"] = (
+        datetime.now(timezone.utc) - timedelta(days=8)
+    ).replace(microsecond=0).isoformat()
+    assert "lab_execution_conformance_stale" in lab_execution_conformance_token_blockers(
+        stale_token,
         entry=_entry(),
     )
