@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from schemas.market_data import Bar
+from schemas.market_data import Bar, MarketDataEnvelope
 from services.config_loader import load_pipeline_config
 from services.datafeed_market_client import DatafeedMarketClient
+from services.datafeed_market_mapper import map_candle_response
 
 
 class DatafeedMarketRepository:
@@ -30,6 +31,49 @@ class DatafeedMarketRepository:
                 "source": "tiger_openapi_comex",
             },
         }
+
+    def load_envelope(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> MarketDataEnvelope:
+        """Return the opt-in, versioned trust envelope for one datafeed read.
+
+        Existing compatibility readers intentionally continue through
+        ``_fetch`` during A0.  A1 can migrate them one at a time after shadow
+        comparisons prove the stricter contract against live payloads.
+        """
+
+        route = self._route(symbol)
+        source = str(route["source"])
+        require_execution_venue = bool(
+            route.get("require_execution_venue", False)
+        )
+        payload = self.client.candles(
+            asset_class=str(route["asset_class"]),
+            ticker=str(route.get("ticker") or symbol),
+            timeframe=timeframe,
+            limit=limit,
+            source=source,
+            cache_policy=str(route.get("cache_policy") or "require"),
+            quality=str(
+                route.get("quality_policy") or route.get("quality") or "standard"
+            ),
+            require_execution_venue=require_execution_venue,
+            start=start,
+            end=end,
+        )
+        return map_candle_response(
+            payload,
+            expected_asset_class=str(route["asset_class"]),
+            expected_timeframe=timeframe,
+            expected_source=source,
+            require_execution_venue=require_execution_venue,
+        )
 
     def load_bars(self, symbol: str, timeframe: str, limit: int) -> list[Bar]:
         return self._fetch(symbol, timeframe, limit=limit)
