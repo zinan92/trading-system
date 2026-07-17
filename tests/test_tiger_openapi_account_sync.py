@@ -64,6 +64,11 @@ def test_tiger_account_sync_normalizes_prime_assets_and_writes_artifacts(tmp_pat
         "end_time_ms": 1781049599999,
     }
     assert report["selected_segment"]["segment_key"] == "C"
+    assert report["accounting_snapshot"]["schema_version"] == "accounting-snapshot-v1"
+    assert report["accounting_snapshot"]["source_name"] == "tiger_openapi"
+    assert report["accounting_snapshot"]["pnl"]["net_realized_pnl"] == -12.75
+    assert report["accounting_snapshot"]["counts"]["trade_count"] is None
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "pass"
 
     current = load_json(root / "tiger_account_sync" / "current.json")[-1]
     dated = load_json(root / "tiger_account_sync" / "2026-06-09.json")[-1]
@@ -82,6 +87,8 @@ def test_tiger_account_sync_records_cannot_sync_without_secret_material(tmp_path
     assert "permission denied" in report["error"]
     assert report["account_observation"]["account_observed"] is False
     assert report["exchange_balance"]["balance_present"] is False
+    assert report["accounting_snapshot"]["pnl"]["net_realized_pnl"] is None
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "blocked"
     assert "secret" not in str(report).lower()
 
 

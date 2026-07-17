@@ -193,6 +193,11 @@ def test_exchange_accounting_uses_utc_run_date_window_for_daily_loss(tmp_path, m
     assert report["exchange_accounting"]["trade_count"] == 1
     assert report["exchange_accounting"]["income_count"] == 1
     assert report["exchange_accounting"]["net_realized_pnl_estimate"] == -3.5
+    assert report["accounting_snapshot"]["schema_version"] == "accounting-snapshot-v1"
+    assert report["accounting_snapshot"]["counts"]["fill_count"] == 1
+    assert report["accounting_snapshot"]["counts"]["trade_count"] is None
+    assert report["accounting_snapshot"]["pnl"]["net_realized_pnl"] == -3.5
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "pass"
 
     guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
         _RUN_DATE,
@@ -232,6 +237,9 @@ def test_account_history_non_list_response_is_not_observed_and_blocks_daily_loss
     assert report["account_observation"]["account_observed"] is False
     assert report["account_observation"]["balance_present"] is True
     assert "response was not a list" in report["error"]
+    assert all(value is None for value in report["accounting_snapshot"]["counts"].values())
+    assert report["accounting_snapshot"]["pnl"]["net_realized_pnl"] is None
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "blocked"
     guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
         _RUN_DATE,
         ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
