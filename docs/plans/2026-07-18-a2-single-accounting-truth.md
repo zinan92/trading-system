@@ -175,3 +175,25 @@ A2 is complete when all four source classes emit the same versioned accounting
 contract, the execution API and Strategy Console use it for read-side totals,
 broker gaps are fail-honest, and focused/full regression plus Opus review are
 clean. A2 does not authorize a real order, an engine switch, or a UI redesign.
+
+## Execution record
+
+- Task 1 complete: immutable `accounting-snapshot-v1`, deterministic identity,
+  lifecycle counts, duplicate/orphan/drift checks, and unknown-value semantics.
+- Task 2 complete: Legacy and Nautilus execution snapshots expose the canonical
+  contract without changing their source ledgers or attended cutover gates.
+- Task 3 complete: Strategy Console production history derives compatibility
+  totals from versioned Legacy plus explicitly authoritative Nautilus facts;
+  shadow and recovery artifacts remain excluded.
+- Task 4 complete: Binance and Tiger reconciliation receipts project honestly;
+  a projector or serializer failure cannot suppress authoritative persistence.
+- Accepted Opus fixes: fail-honest broker persistence, unknown slippage, a
+  versioned emergency projection receipt, and consistent broker observed-field
+  vocabulary. No P0/P1 remained after two reviews.
+- Empirical Nautilus gate: the pinned 1.230.0 runtime proved realized P&L is net
+  of observed commission and funding in the normalized adapter contract.
+- Final verification: `124` focused accounting/reconciliation/guardrail tests,
+  `5` pinned Nautilus runtime tests, Ruff, and the full repository suite
+  (`1638 passed, 6 skipped`) all passed.
+- No production order, strategy state, engine selection, external venue state,
+  or visible surface was changed by A2.
