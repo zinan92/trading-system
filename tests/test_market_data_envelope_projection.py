@@ -121,6 +121,7 @@ def test_exact_comparison_reports_pass_and_stable_digests() -> None:
     assert receipt["status"] == "pass"
     assert receipt["difference_count"] == 0
     assert receipt["differences"] == []
+    assert receipt["digest_status"] == "computed"
     assert receipt["legacy_digest"] == receipt["candidate_digest"]
 
 
@@ -140,3 +141,34 @@ def test_exact_comparison_reports_all_semantic_drift_without_float_tolerance() -
         "bars[0].close",
     }
     assert receipt["legacy_digest"] != receipt["candidate_digest"]
+
+
+def test_large_exact_comparison_skips_diagnostic_digests_without_skipping_fields() -> None:
+    row = {
+        "symbol": "GOLD",
+        "provider_symbol": "XAUUSDT",
+        "timeframe": "1m",
+        "timestamp": "2026-07-18T12:00:00+00:00",
+        "open": 4000.0,
+        "high": 4002.0,
+        "low": 3999.0,
+        "close": 4001.0,
+        "volume": 10.0,
+        "provider": "binance_usdm_futures",
+        "quality_flags": ["execution_venue"],
+    }
+    legacy = _project()
+    candidate = _project()
+    legacy.pop("market_data_contract")
+    candidate.pop("market_data_contract")
+    legacy["bars"] = [dict(row) for _ in range(5_001)]
+    candidate["bars"] = [dict(row) for _ in range(5_001)]
+    legacy["bar_count"] = candidate["bar_count"] = 5_001
+
+    receipt = compare_market_payloads(legacy, candidate)
+
+    assert receipt["status"] == "pass"
+    assert receipt["comparison_count"] == 55_029
+    assert receipt["digest_status"] == "skipped_large_batch"
+    assert receipt["legacy_digest"] is None
+    assert receipt["candidate_digest"] is None

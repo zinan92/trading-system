@@ -224,13 +224,30 @@ class DualTrackMarketFeed:
                 requested=requested,
             )
 
-        candidate = project_dualtrack_market_payload(
-            envelope,
-            requested=requested,
-            datafeed_url=self.datafeed_client.base_url,
-            checked_at=checked_at,
-        )
-        comparison = compare_market_payloads(legacy, candidate)
+        try:
+            candidate = project_dualtrack_market_payload(
+                envelope,
+                requested=requested,
+                datafeed_url=self.datafeed_client.base_url,
+                checked_at=checked_at,
+            )
+            comparison = compare_market_payloads(legacy, candidate)
+        except Exception as error:
+            # Shadow diagnostics must never be able to break the legacy read.
+            # In authoritative mode, an internal projection failure is still a
+            # contract failure and must not fall back to legacy interpretation.
+            if self.market_data_contract_mode == "shadow":
+                legacy["market_data_contract_shadow"] = self._blocked_shadow_receipt(
+                    error
+                )
+                return legacy
+            return self._contract_blocked_payload(
+                error=error,
+                response=response,
+                resolved_symbol=resolved_symbol,
+                resolved_timeframe=resolved_timeframe,
+                requested=requested,
+            )
         if self.market_data_contract_mode == "shadow":
             legacy["market_data_contract_shadow"] = {
                 **comparison,

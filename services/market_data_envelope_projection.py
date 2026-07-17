@@ -13,6 +13,7 @@ from schemas.market_data import MarketDataEnvelope
 SHADOW_RECEIPT_SCHEMA = "market-data-contract-shadow-v1"
 PROJECTION_RECEIPT_SCHEMA = "market-data-envelope-projection-v1"
 _MAX_REPORTED_DIFFERENCES = 50
+_MAX_DIGEST_BARS = 5_000
 _TOP_LEVEL_COMPARISON_FIELDS = (
     "status",
     "source_mode",
@@ -200,8 +201,17 @@ def compare_market_payloads(legacy: dict, candidate: dict) -> dict:
                 candidate_bar.get(field),
             )
 
-    legacy_contract = _comparison_contract(legacy)
-    candidate_contract = _comparison_contract(candidate)
+    digest_status = "computed"
+    legacy_digest = None
+    candidate_digest = None
+    if max(len(legacy_bars), len(candidate_bars)) <= _MAX_DIGEST_BARS:
+        legacy_digest = _digest(_comparison_contract(legacy))
+        candidate_digest = _digest(_comparison_contract(candidate))
+    else:
+        # Exact field comparison above still covers the complete batch.  The
+        # diagnostic digests are skipped to avoid two more full 60k-bar copies
+        # plus two large JSON serializations on every dashboard refresh.
+        digest_status = "skipped_large_batch"
     return {
         "schema_version": SHADOW_RECEIPT_SCHEMA,
         "status": "pass" if difference_count == 0 else "drift",
@@ -209,8 +219,9 @@ def compare_market_payloads(legacy: dict, candidate: dict) -> dict:
         "difference_count": difference_count,
         "differences": differences,
         "differences_truncated": difference_count > len(differences),
-        "legacy_digest": _digest(legacy_contract),
-        "candidate_digest": _digest(candidate_contract),
+        "digest_status": digest_status,
+        "legacy_digest": legacy_digest,
+        "candidate_digest": candidate_digest,
         "compared_top_level_fields": list(_TOP_LEVEL_COMPARISON_FIELDS),
         "compared_bar_fields": list(_BAR_COMPARISON_FIELDS),
     }

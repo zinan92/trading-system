@@ -122,6 +122,38 @@ def test_datafeed_shadow_reports_drift_but_keeps_legacy_authoritative(tmp_path: 
     assert client.calls == 1
 
 
+def test_datafeed_shadow_sandboxes_an_unexpected_comparison_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import services.dualtrack_market_feed as market_feed_module
+
+    client = _FakeDatafeedClient()
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+        "market_data_contract_mode": "shadow",
+    }
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("comparison exploded")
+
+    monkeypatch.setattr(market_feed_module, "compare_market_payloads", explode)
+    payload = market_feed_module.DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(as_of="2026-07-18T12:00:05+00:00")
+
+    assert payload["status"] == "ready"
+    assert payload["bar_count"] == 1
+    assert payload["market_data_contract_shadow"]["status"] == "blocked"
+    assert payload["market_data_contract_shadow"]["error"] == "comparison exploded"
+    assert client.calls == 1
+
+
 def test_datafeed_shadow_blocks_candidate_contract_without_changing_legacy(tmp_path: Path) -> None:
     raw = _trusted_v2_payload()
     raw.pop("schema_version")
@@ -219,6 +251,70 @@ def test_datafeed_authoritative_mode_never_falls_back_on_invalid_contract(tmp_pa
     assert client.calls == 1
 
 
+def test_datafeed_authoritative_mode_fails_closed_on_projection_bug(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import services.dualtrack_market_feed as market_feed_module
+
+    client = _FakeDatafeedClient()
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+        "market_data_contract_mode": "authoritative",
+    }
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("projection exploded")
+
+    monkeypatch.setattr(
+        market_feed_module,
+        "project_dualtrack_market_payload",
+        explode,
+    )
+    payload = market_feed_module.DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(as_of="2026-07-18T12:00:05+00:00")
+
+    assert payload["status"] == "blocked"
+    assert payload["bar_count"] == 0
+    assert payload["market_data_contract"]["status"] == "blocked"
+    assert payload["market_data_contract"]["error"] == "projection exploded"
+    assert client.calls == 1
+
+
+def test_datafeed_shadow_has_exact_policy_parity_for_five_minute_bars(tmp_path: Path) -> None:
+    raw = _trusted_v2_payload()
+    raw["timeframe"] = "5m"
+    raw["max_age_seconds"] = 900.0
+    client = _FakeDatafeedClient(raw)
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+        "market_data_contract_mode": "shadow",
+    }
+
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(
+        symbol="GOLD",
+        timeframe="5m",
+        as_of="2026-07-18T12:00:05+00:00",
+    )
+
+    assert payload["max_age_minutes"] == 15.0
+    assert payload["market_data_contract_shadow"]["status"] == "pass"
+    assert client.calls == 1
+
+
 def test_datafeed_authoritative_mode_blocks_a_closed_session(tmp_path: Path) -> None:
     raw = json.loads(
         (FIXTURES / "sessioned_execution_candles_v2.json").read_text(
@@ -253,6 +349,43 @@ def test_datafeed_authoritative_mode_blocks_a_closed_session(tmp_path: Path) -> 
     assert payload["status"] == "blocked"
     assert payload["bar_count"] == 1
     assert payload["market_data_contract"]["session_status"] == "closed"
+    assert client.calls == 1
+
+
+def test_datafeed_authoritative_mode_blocks_an_unknown_session(tmp_path: Path) -> None:
+    raw = json.loads(
+        (FIXTURES / "sessioned_execution_candles_v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw.update(
+        requested_source="binance_usdm_futures",
+        selected_source="binance_usdm_futures",
+        attempted_sources=["binance_usdm_futures"],
+        market_open=None,
+        session_status="unknown",
+        current_session_end=None,
+        fresh=None,
+        max_age_seconds=None,
+    )
+    client = _FakeDatafeedClient(raw)
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+        "market_data_contract_mode": "authoritative",
+    }
+
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(as_of="2026-07-18T12:00:05+00:00")
+
+    assert payload["status"] == "blocked"
+    assert payload["bar_count"] == 1
+    assert payload["market_data_contract"]["session_status"] == "unknown"
     assert client.calls == 1
 
 
