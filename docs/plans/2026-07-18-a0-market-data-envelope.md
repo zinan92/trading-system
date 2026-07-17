@@ -141,6 +141,7 @@ class DatafeedContractError(ValueError):
 def map_candle_response(
     payload: dict,
     *,
+    expected_asset_class: str,
     expected_timeframe: str,
     expected_source: str,
     require_execution_venue: bool,

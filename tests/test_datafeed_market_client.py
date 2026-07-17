@@ -1,8 +1,14 @@
 import json
+from io import BytesIO
+from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
 from services.datafeed_market_client import DatafeedMarketClient, DatafeedUnavailable
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "datafeed"
 
 
 class FakeResponse:
@@ -51,3 +57,26 @@ def test_client_fails_closed_when_datafeed_is_unavailable():
     client = DatafeedMarketClient(opener=opener)
     with pytest.raises(DatafeedUnavailable, match="connection refused"):
         client.health()
+
+
+def test_client_preserves_the_complete_upstream_502_contract():
+    raw = (FIXTURES / "upstream_error_v1.json").read_bytes()
+
+    def opener(request, timeout):
+        raise HTTPError(
+            request.full_url,
+            502,
+            "Bad Gateway",
+            hdrs=None,
+            fp=BytesIO(raw),
+        )
+
+    client = DatafeedMarketClient(opener=opener)
+    with pytest.raises(DatafeedUnavailable) as raised:
+        client.health()
+
+    message = str(raised.value)
+    assert message.startswith("datafeed HTTP 502:")
+    assert '"error": "upstream_error"' in message
+    assert '"reject_reason": "upstream_error"' in message
+    assert "Check network access to fapi.binance.com" in message

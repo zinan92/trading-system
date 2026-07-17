@@ -1,0 +1,50 @@
+{
+  "ticker": "GC=F",
+  "instrument_id": "GOLD",
+  "provider_symbol": "GC=F",
+  "asset_class": "commodity",
+  "timeframe": "1m",
+  "count": 1,
+  "schema_version": "kline-candles-v1",
+  "provider": "yahoo_finance",
+  "source_mode": "yahoo_finance_futures",
+  "requested_source": "yahoo_finance_futures",
+  "selected_source": "yahoo_finance_futures",
+  "selection_reason": "requested_or_default",
+  "attempted_sources": [
+    "yahoo_finance_futures"
+  ],
+  "cache_policy": "allow",
+  "quality_policy": "standard",
+  "fallback_policy": "none",
+  "require_execution_venue": false,
+  "quality_flags": [
+    "continuous_contract",
+    "market_hours",
+    "research_only"
+  ],
+  "is_synthetic": false,
+  "served_from": "cache",
+  "fresh": null,
+  "latest_timestamp": "2026-07-18T12:00:00+00:00",
+  "age_seconds": null,
+  "max_age_seconds": null,
+  "execution_venue": false,
+  "reject_reason": null,
+  "access_issues": [],
+  "candles": [
+    {
+      "timestamp": "2026-07-18T12:00:00+00:00",
+      "open": 3340.0,
+      "high": 3342.0,
+      "low": 3339.0,
+      "close": 3341.0,
+      "volume": 120.0,
+      "provider": "yahoo_finance",
+      "quality_flags": [
+        "continuous_contract",
+        "research_only"
+      ]
+    }
+  ]
+}
