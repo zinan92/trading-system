@@ -74,7 +74,7 @@ def test_research_fixture_is_real_but_not_execution_ready() -> None:
     assert envelope.execution_ready is False
 
 
-def test_envelope_collections_are_immutable_tuples() -> None:
+def test_envelope_header_and_batch_membership_are_immutable() -> None:
     envelope = _map(_trusted_payload())
 
     assert isinstance(envelope.bars, tuple)
@@ -82,6 +82,55 @@ def test_envelope_collections_are_immutable_tuples() -> None:
     assert isinstance(envelope.access_issues, tuple)
     with pytest.raises(FrozenInstanceError):
         envelope.provider = "tampered"  # type: ignore[misc]
+    envelope.bars[0].quality_flags.append("row-local-mutation")
+    assert "row-local-mutation" not in envelope.quality_flags
+
+
+def test_source_mode_is_preserved_as_a_distinct_path_label() -> None:
+    payload = _trusted_payload()
+    payload["source_mode"] = "binance_usdm_realtime_path"
+
+    envelope = _map(payload)
+
+    assert envelope.selected_source == "binance_usdm_futures"
+    assert envelope.source_mode == "binance_usdm_realtime_path"
+    assert envelope.execution_ready is True
+
+
+@pytest.mark.parametrize(
+    ("age_seconds", "max_age_seconds"),
+    [(181.0, 180.0), (None, 180.0), (5.0, None)],
+)
+def test_execution_readiness_cross_checks_the_reported_age_window(
+    age_seconds: float | None,
+    max_age_seconds: float | None,
+) -> None:
+    payload = _trusted_payload()
+    payload["age_seconds"] = age_seconds
+    payload["max_age_seconds"] = max_age_seconds
+
+    assert _map(payload).execution_ready is False
+
+
+def test_unknown_freshness_remains_fail_closed_for_a_sessioned_venue_contract() -> None:
+    payload = _trusted_payload()
+    payload["provider"] = "tiger_openapi"
+    payload["source_mode"] = "tiger_comex_session"
+    payload["requested_source"] = "tiger_openapi_comex"
+    payload["selected_source"] = "tiger_openapi_comex"
+    payload["attempted_sources"] = ["tiger_openapi_comex"]
+    payload["provider_symbol"] = "MGC2608"
+    payload["fresh"] = None
+    payload["age_seconds"] = None
+    payload["max_age_seconds"] = None
+    for candle in payload["candles"]:
+        candle["provider"] = "tiger_openapi"
+
+    envelope = _map(payload, source="tiger_openapi_comex")
+
+    assert envelope.execution_venue is True
+    assert envelope.fresh is None
+    assert envelope.execution_ready is False
 
 
 @pytest.mark.parametrize(
@@ -139,8 +188,35 @@ def test_unordered_or_duplicate_timestamps_fail_closed() -> None:
         _map(payload)
 
 
-def test_error_envelope_cannot_be_mapped_as_candles() -> None:
-    payload = _fixture("upstream_error_v1.json")
+def test_equivalent_latest_timestamp_encoding_is_accepted() -> None:
+    payload = _trusted_payload()
+    payload["latest_timestamp"] = "2026-07-18T12:01:00Z"
 
-    with pytest.raises(DatafeedContractError, match="schema"):
+    envelope = _map(payload)
+
+    assert envelope.latest_timestamp == "2026-07-18T12:01:00Z"
+    assert envelope.execution_ready is True
+
+
+def test_latest_timestamp_must_identify_the_final_candle() -> None:
+    payload = _trusted_payload()
+    payload["latest_timestamp"] = "2026-07-18T12:00:00+00:00"
+
+    with pytest.raises(DatafeedContractError, match="latest_timestamp"):
+        _map(payload)
+
+
+def test_requested_timeframe_must_match_the_response() -> None:
+    payload = _trusted_payload()
+    payload["timeframe"] = "5m"
+
+    with pytest.raises(DatafeedContractError, match="timeframe mismatch"):
+        _map(payload)
+
+
+def test_intraday_timestamps_must_include_timezone() -> None:
+    payload = _trusted_payload()
+    payload["candles"][0]["timestamp"] = "2026-07-18T12:00:00"
+
+    with pytest.raises(DatafeedContractError, match="timezone"):
         _map(payload)

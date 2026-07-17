@@ -62,11 +62,6 @@ def map_candle_response(
         raise DatafeedContractError(
             f"datafeed selected_source mismatch: expected {expected_source}, got {selected_source}"
         )
-    if source_mode != selected_source:
-        raise DatafeedContractError(
-            f"datafeed source_mode mismatch: {source_mode} != {selected_source}"
-        )
-
     is_synthetic = _required_bool(payload, "is_synthetic")
     if is_synthetic:
         raise DatafeedContractError("synthetic data cannot enter the trusted envelope")
@@ -163,8 +158,12 @@ def map_candle_response(
         "latest_timestamp",
     )
     if latest_timestamp is not None:
-        _parse_timestamp(latest_timestamp, timeframe, "latest")
-        if bars and latest_timestamp != bars[-1].timestamp:
+        parsed_latest_timestamp = _parse_timestamp(
+            latest_timestamp,
+            timeframe,
+            "latest",
+        )
+        if bars and parsed_latest_timestamp != previous_timestamp:
             raise DatafeedContractError(
                 "datafeed latest_timestamp does not match the final candle"
             )

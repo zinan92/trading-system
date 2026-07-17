@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add one versioned, immutable market-data trust envelope and a tested datafeed adapter path without changing any existing production reader, strategy, order, risk, dashboard, or Nautilus cutover behavior.
+**Goal:** Add one versioned market-data trust envelope with a frozen header and batch membership, plus a tested datafeed adapter path, without changing any existing production reader, strategy, order, risk, dashboard, or Nautilus cutover behavior.
 
 **Architecture:** Keep the existing `Bar` as the only in-process OHLCV value object and wrap batches in `MarketDataEnvelope`; do not add a fourth candle representation. Translate the upstream `kline-candles-v1` HTTP payload in one adapter mapper. Expose the new path as an opt-in repository method while the existing `load_bars()` compatibility path remains byte-for-byte behaviorally unchanged until A1.
 
@@ -13,10 +13,10 @@
 ## Invariants
 
 1. `MarketDataEnvelope.schema_version` belongs to the transport/domain boundary; individual `Bar` instances do not carry a schema version.
-2. The envelope preserves source selection, freshness, execution-venue, cache, quality, fallback, synthetic, rejection, and access-issue evidence.
+2. The envelope preserves all trust evidence from an accepted response. Synthetic or rejected responses remain structured HTTP errors and fail before a trusted envelope is created.
 3. Execution readiness is an explicit derived decision; research/display data is not silently promoted to executable data.
 4. Existing `DatafeedMarketRepository.load_bars*`, `load_latest_*`, `MarketStore`, strategy, execution, and dashboard behavior is unchanged in A0.
-5. Invalid contract payloads fail closed through a dedicated adapter error and never produce a partial envelope.
+5. Invalid HTTP-200 contract payloads fail closed through a dedicated adapter error and never produce a partial envelope; non-200 upstream errors remain `DatafeedUnavailable` with their complete response body.
 
 ### Task 1: Freeze success and rejection fixtures
 
@@ -63,7 +63,7 @@ The failing state is evidence during TDD but must not be left as a branch commit
 
 **Step 1: Implement the minimal frozen model**
 
-Add a `MarketDataEnvelope` frozen dataclass wrapping `tuple[Bar, ...]` plus the upstream trust header. Use tuples for `attempted_sources`, `quality_flags`, and `access_issues`.
+Add a `MarketDataEnvelope` frozen dataclass wrapping `tuple[Bar, ...]` plus the upstream trust header. Use tuples for `attempted_sources`, `quality_flags`, and `access_issues`. Existing `Bar.quality_flags` remains a compatibility list in A0; the immutable envelope-level flags are the authoritative trust evidence.
 
 Required public behavior:
 

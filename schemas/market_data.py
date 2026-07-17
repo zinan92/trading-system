@@ -95,6 +95,9 @@ class MarketDataEnvelope:
             and self.selection_reason == "requested_or_default"
             and self.served_from in {"upstream", "websocket"}
             and self.fresh is True
+            and self.age_seconds is not None
+            and self.max_age_seconds is not None
+            and self.age_seconds <= self.max_age_seconds
             and self.is_synthetic is False
             and not self.reject_reason
             and not self.access_issues
