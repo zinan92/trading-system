@@ -6329,3 +6329,15 @@ auditable datafeed port; broker execution remains a separate port.
 - Post-review targeted hardening: `28 passed`.
 - Post-review focused broker/cycle regression: `131 passed`.
 - Ruff on every changed Python file: `All checks passed`.
+
+### Final closure
+
+- Full repository regression after every hardening change:
+  `1719 passed, 7 skipped`.
+- Verified follow-up review used `claude-opus-4-8`, session
+  `421c1d8e-3041-4ddd-9fec-756c519f3394`, receipt
+  `20260717T230038Z_e68d8f4c-4bec-41c7-8805-e55909ce0064.json`: explicit
+  `NO P0/P1 findings`; all five earlier hardening items were independently
+  confirmed closed.
+- A5 therefore meets its completion boundary without changing any active
+  profile, credential, order semantics, live authority, or visible UI.

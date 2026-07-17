@@ -1,6 +1,6 @@
 # A5 Broker Port And Composition Roots Implementation Plan
 
-**Status:** In progress on 2026-07-18.
+**Status:** Implemented and verified on 2026-07-18.
 
 **Goal:** Make broker selection a composition concern and venue behavior an
 adapter concern, so a new broker can be added primarily through one adapter,
@@ -329,3 +329,16 @@ contract suite, unsupported capabilities fail before network I/O, all existing
 production safety gates remain exact, full regression passes, and verified
 Opus reports no unresolved P0/P1. A5 does not switch live authority, enable real
 money, add a venue, move every legacy wire helper, or change the Dashboard UI.
+
+## Final verification
+
+- Focused broker, composition, runner, control, risk, lifecycle, accounting,
+  reconciliation, and canary regression: `131 passed`.
+- Full repository suite: `1719 passed, 7 skipped`.
+- Ruff on every changed Python file: `All checks passed`.
+- Final verified Opus follow-up used `claude-opus-4-8`, session
+  `421c1d8e-3041-4ddd-9fec-756c519f3394`, receipt
+  `20260717T230038Z_e68d8f4c-4bec-41c7-8805-e55909ce0064.json`: all five
+  hardening items closed and explicit `NO P0/P1 findings`.
+- No visible product surface changed; visual Evidence is not applicable for
+  A5. The tests, review receipts, code, and documents are trace material.
