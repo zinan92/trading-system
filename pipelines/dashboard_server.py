@@ -847,7 +847,10 @@ def build_strategy_console_control_response(
             mark_price=trusted_market.get("latest_close"),
             mark_fresh=bool(trusted_market.get("fresh")),
         )
-        trusted_account = dict(history.get("account") or {})
+        trusted_account = {
+            **dict(history.get("account") or {}),
+            "accounting_snapshot": dict(history.get("accounting_snapshot") or {}),
+        }
     plane = StrategyControlPlane(output)
     if action == "refresh_recommendation":
         contexts = dict(trusted_market.get("strategy_timeframes") or {})

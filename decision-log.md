@@ -6111,3 +6111,64 @@ auditable datafeed port; broker execution remains a separate port.
   the original P1, accounting-code omission, runtime pin, and persisted-token
   freshness paths are closed. Its remaining config-coupling note is fail-closed
   with an explicit blocker; its structured-error P2 was fixed.
+
+## 2026-07-18 - A4 unified Risk Port kickoff
+
+### Decision
+
+- Treat risk as a mutation-time precondition, separate from pure grid geometry
+  and capital sizing. A range edit may recommend a lower per-grid notional, but
+  the system must never apply that recommendation silently.
+- Add one engine-neutral, content-bound `risk-decision-v1`. Strategy control,
+  manual production entry, and broker composition roots consume it; Legacy,
+  Nautilus, and venue adapters do not own separate risk meanings.
+- Bind each decision to the exact candidate commands, StrategyPlan, trusted
+  market, canonical account facts, current normalized execution state,
+  evaluator version, and resolved policy. Rebuild and match it immediately
+  before the first exposure-increasing submit.
+- Fail new exposure closed on unknown equity, accounting/reconciliation drift,
+  stale/tampered inputs, out-of-range market, unknown open-position protection,
+  plan-loss excess, leverage excess, or margin excess.
+- Preserve unconditional access to valid cancel, protective exit, flatten, and
+  reduce-only actions. Entry-risk blockers must not become an exit trap.
+- Bridge the mature `LiveMoneyGuardrails` implementation into the canonical
+  decision instead of rewriting its tested limits or blocker precedence.
+
+### Gotchas
+
+- Current default auto-sizing uses full leverage capacity and can show maximum
+  plan loss far above the 10% budget. A4 intentionally turns that diagnostic
+  into an execution blocker while keeping preview values unchanged.
+- `account_equity()` silently falls back to `$10,000`; mutation-time decisions
+  cannot use that fallback.
+- Local paper regrid stages new pending orders before cancelling old ones, but
+  processes no market event inside the critical section. That is not a live
+  venue atomic-replace guarantee and must stay explicitly out of scope.
+- Existing positions survive regrid and keep their TP/SL. New exposure is
+  allowed only when their remaining notional and stop risk are known.
+- A persisted risk decision is audit evidence, not authority. It cannot be
+  replayed as permission after market, account, execution state, code, or policy
+  changes.
+- A4 has no new visible UI surface; screenshot evidence is not applicable.
+  The primary worktree remains untouched because it contains unrelated Debug
+  and range-drag changes.
+
+### Verification
+
+- Focused pre-A4 baseline: `76 passed` across grid sizing, strategy control,
+  live money guardrails, and dashboard server.
+- Opus planning review completed with verified `claude-opus-4-8` receipt
+  `20260717T205342Z_c7dd8846-01a1-4fb7-8907-65a948cc1832.json`.
+- Accepted P0: never evaluate from preview/plan risk figures derived through the
+  `$10,000` fallback; recompute from canonical account equity and exact commands.
+- Accepted P0: primary risk gate precedes candidate-plan/runtime/order writes;
+  the under-lock pre-submit recheck raises into transaction restoration.
+- Accepted P1: derive action class server-side for every network entry, share
+  the production mutation lock with manual orders, normalize execution risk
+  state through canonical accounting, and keep live broker gates additive.
+- Accepted P2: forbid ungated running `grid`/`risk_budget` adjustment, test the
+  local-paper no-market-event regrid staging invariant, and bypass entry
+  guardrails for reduce-only actions.
+- Accepted P3: persisted receipts are audit-only and are never read as
+  authorization. Instead of accepting auto-lock before a rejected start, A4
+  requires an already-selected active StrategyPlan at the start boundary.
