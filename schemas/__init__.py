@@ -1,4 +1,5 @@
 from .asset import Asset
+from .accounting import AccountingSnapshot
 from .analysis import Analysis
 from .backtest import BacktestEvidence
 from .journal import JournalPending
@@ -8,6 +9,7 @@ from .trade_ticket import TradeTicket
 
 __all__ = [
     "Asset",
+    "AccountingSnapshot",
     "Analysis",
     "BacktestEvidence",
     "Bar",
