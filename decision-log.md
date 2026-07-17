@@ -6341,3 +6341,56 @@ auditable datafeed port; broker execution remains a separate port.
   confirmed closed.
 - A5 therefore meets its completion boundary without changing any active
   profile, credential, order semantics, live authority, or visible UI.
+
+## 2026-07-18 - A6 stable Trading System Read Model kickoff
+
+### Objective and value
+
+- Give the production Dashboard one versioned answer for the current strategy,
+  orders, positions, started trades, completed round trips, P&L, risk, broker,
+  market trust, and runtime state.
+- Make every GET observational: refreshing a page must never create a plan,
+  evaluate an exit, mark P&L, submit/cancel an order, or write trading state.
+- Keep the current visual design and all command/risk/broker authority intact;
+  A6 changes the read boundary, not trading behavior.
+
+### Decisions
+
+- Reuse the existing Market Data, Execution, Accounting, Risk, Broker, and
+  StrategyPlan contracts. Do not create a new P&L calculator, state database,
+  event store, or frontend business-rule layer.
+- Add `trading-system-read-model-v1` as a content-bound projection. Current
+  orders/positions and all-plan trade lifecycle counts keep explicit scopes.
+- Keep `GET /api/strategy-console/current` as a compatibility facade; switch
+  GridMind to the new stable endpoint and keep every control as POST.
+- Treat `trade_count` as started lifecycles and `completed_trade_count` as
+  completed round trips. Fill count is separate.
+- Remove hidden writes from `DashboardState.snapshot()` and
+  `StrategyControlPlane.read_model()` rather than hiding them behind another
+  GET helper.
+- Assemble display price and execution marking from one request-scoped market
+  observation.
+
+### Gotchas
+
+- The existing Dashboard GET masks stale scheduled state by evaluating exits
+  and marking positions. Removing this makes the architecture correct but can
+  reveal an operations/scheduling gap that must be reported honestly.
+- The legacy Strategy Control Plane read silently materializes a plan. Explicit
+  command paths already retain compatibility migration and must remain tested.
+- Canonical production-history counts and current-cycle execution counts have
+  different scopes; the schema must label both rather than adding unlike
+  values.
+- Risk `current.json` is display evidence only and cannot become reusable
+  authorization.
+- Browser code currently computes P&L, return, counts, and run consistency.
+  Moving them to the backend must not weaken control-button safety.
+- A6 has a visible GridMind change, so desktop and mobile visual Evidence is
+  required before completion.
+- The primary worktree contains unrelated Debug/range/product changes. A6 is
+  isolated and must not be integrated by copying whole files.
+
+### Baseline
+
+- Focused read/control/accounting/provider-neutrality suite: `93 passed`.
+- A5 full repository baseline: `1719 passed, 7 skipped`.
