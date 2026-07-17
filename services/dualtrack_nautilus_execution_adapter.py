@@ -327,6 +327,7 @@ class NautilusExecutionAdapter:
                 "exposure": 0.0,
                 "slippage": 0.0,
                 "fees": 0.0,
+                "funding": 0.0,
             },
             "pnl": {"realized": 0.0, "unrealized": 0.0},
             "mark": {"price": None, "fresh": False, "source": ""},

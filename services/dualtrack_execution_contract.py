@@ -155,7 +155,17 @@ def compare_execution_snapshots(
     _compare_fills(authoritative.get("fills") or [], candidate.get("fills") or [], differences, normalization)
     _compare_positions(authoritative.get("positions") or [], candidate.get("positions") or [], differences, normalization)
 
-    for field in ("starting_cash", "realized_pnl", "ending_cash", "equity", "margin", "exposure", "slippage", "fees"):
+    for field in (
+        "starting_cash",
+        "realized_pnl",
+        "ending_cash",
+        "equity",
+        "margin",
+        "exposure",
+        "slippage",
+        "fees",
+        "funding",
+    ):
         expected = _normalized_number((authoritative.get("account") or {}).get(field), normalization["money_decimals"])
         actual = _normalized_number((candidate.get("account") or {}).get(field), normalization["money_decimals"])
         if expected != actual:

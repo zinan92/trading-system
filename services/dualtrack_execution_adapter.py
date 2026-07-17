@@ -172,6 +172,7 @@ class LegacyPaperExecutionAdapter:
         account["margin"] = round(exposure / float(self.engine.config.get("max_leverage") or 1.0), 8)
         account["slippage"] = round(sum(float(fill.get("slippage") or 0.0) for fill in fills), 8)
         account["fees"] = round(sum(float(fill.get("cost") or 0.0) for fill in fills), 8)
+        account.setdefault("funding", 0.0)
         account["equity"] = round(float(account["ending_cash"]) + float(unrealized or 0.0), 8)
         return {
             "schema_version": "dualtrack-execution-v1",

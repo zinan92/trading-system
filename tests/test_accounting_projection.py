@@ -294,3 +294,22 @@ def test_same_execution_facts_reproject_to_same_snapshot_id() -> None:
     )
 
     assert project_execution_accounting(source).snapshot_id == project_execution_accounting(source).snapshot_id
+
+
+def test_legacy_and_nautilus_sources_share_one_economic_contract() -> None:
+    legacy = _snapshot(
+        fills=[_entry()],
+        positions=[_position(status="open", remaining=1.0, realized=-1.0)],
+        realized=-1.0,
+        unrealized=5.0,
+        fees=1.0,
+    )
+    nautilus = {**legacy, "engine": "nautilus_paper"}
+
+    legacy_view = project_execution_accounting(legacy).to_dict()
+    nautilus_view = project_execution_accounting(nautilus).to_dict()
+
+    assert legacy_view["source_name"] == "legacy_paper"
+    assert nautilus_view["source_name"] == "nautilus_paper"
+    for field in ("counts", "pnl", "account", "orders", "fills", "positions", "trades"):
+        assert legacy_view[field] == nautilus_view[field]

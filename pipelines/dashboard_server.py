@@ -14,6 +14,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 from services.run_date import utc_run_date
+from services.accounting_projection import project_execution_accounting
 from services.code_reload import CodeReloadGuard
 from services.config_loader import ROOT, load_pipeline_config
 from services.command_center import build_command_center_state
@@ -1340,6 +1341,7 @@ def build_dualtrack_execution_response(
         mark_fresh=mark["fresh"],
         mark_source=mark["source"],
     )
+    accounting_snapshot = project_execution_accounting(snapshot).to_dict()
     reconciliation_rows = load_json(output / "dualtrack" / "reconciliation" / f"{cycle_id}.json")
     latest_reconciliation = reconciliation_rows[-1] if reconciliation_rows else {
         "status": "missing",
@@ -1352,6 +1354,7 @@ def build_dualtrack_execution_response(
     }
     return {
         **snapshot,
+        "accounting_snapshot": accounting_snapshot,
         "reconciliation": adapter.reconcile(cycle_id),
         "execution_shadow_reconciliation": latest_reconciliation,
         "shadow_cutover": latest_cutover,
