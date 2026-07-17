@@ -67,6 +67,11 @@ class MarketDataEnvelope:
     age_seconds: float | None
     max_age_seconds: float | None
     execution_venue: bool
+    continuous_market: bool
+    market_open: bool | None
+    session_status: str
+    session_checked_at: str | None
+    current_session_end: str | None
     reject_reason: str | None
     access_issues: tuple[str, ...]
     bars: tuple[Bar, ...]
@@ -80,6 +85,19 @@ class MarketDataEnvelope:
         execution data and received that exact source without access warnings.
         """
 
+        session_ready = bool(
+            (
+                self.continuous_market
+                and self.market_open is True
+                and self.session_status == "continuous"
+            )
+            or (
+                not self.continuous_market
+                and self.market_open is True
+                and self.session_status == "open"
+                and self.current_session_end
+            )
+        )
         return bool(
             self.schema_version == MARKET_DATA_ENVELOPE_SCHEMA
             and self.instrument_id
@@ -89,6 +107,7 @@ class MarketDataEnvelope:
             and self.selected_source == self.requested_source
             and self.require_execution_venue
             and self.execution_venue
+            and session_ready
             and self.cache_policy == "bypass"
             and self.quality_policy == "strict"
             and self.fallback_policy == "none"
@@ -132,6 +151,11 @@ class MarketDataEnvelope:
             "age_seconds": self.age_seconds,
             "max_age_seconds": self.max_age_seconds,
             "execution_venue": self.execution_venue,
+            "continuous_market": self.continuous_market,
+            "market_open": self.market_open,
+            "session_status": self.session_status,
+            "session_checked_at": self.session_checked_at,
+            "current_session_end": self.current_session_end,
             "reject_reason": self.reject_reason,
             "access_issues": list(self.access_issues),
             "candles": [bar.to_dict() for bar in self.bars],

@@ -13,7 +13,7 @@ from schemas.market_data import (
 )
 
 
-UPSTREAM_CANDLE_SCHEMA = "kline-candles-v1"
+UPSTREAM_CANDLE_SCHEMAS = {"kline-candles-v1", "kline-candles-v2"}
 
 
 class DatafeedContractError(ValueError):
@@ -28,7 +28,7 @@ def map_candle_response(
     expected_source: str,
     require_execution_venue: bool,
 ) -> MarketDataEnvelope:
-    """Validate and map one ``kline-candles-v1`` response atomically.
+    """Validate and map one supported versioned candle response atomically.
 
     The mapper is deliberately stricter than a chart consumer.  It either
     returns the complete typed envelope or raises ``DatafeedContractError``;
@@ -38,7 +38,7 @@ def map_candle_response(
     if not isinstance(payload, dict):
         raise DatafeedContractError("datafeed payload must be an object")
     upstream_schema = _required_text(payload, "schema_version")
-    if upstream_schema != UPSTREAM_CANDLE_SCHEMA:
+    if upstream_schema not in UPSTREAM_CANDLE_SCHEMAS:
         raise DatafeedContractError(
             f"unsupported datafeed schema: {upstream_schema or '<missing>'}"
         )
@@ -206,6 +206,28 @@ def map_candle_response(
         {"cache", "upstream", "websocket"},
     )
 
+    age_seconds = _optional_non_negative_number(
+        payload.get("age_seconds"),
+        "age_seconds",
+    )
+    max_age_seconds = _optional_non_negative_number(
+        payload.get("max_age_seconds"),
+        "max_age_seconds",
+    )
+    (
+        continuous_market,
+        market_open,
+        session_status,
+        session_checked_at,
+        current_session_end,
+    ) = _session_contract(
+        payload,
+        upstream_schema=upstream_schema,
+        timeframe=timeframe,
+        fresh=fresh,
+        max_age_seconds=max_age_seconds,
+    )
+
     return MarketDataEnvelope(
         schema_version=MARKET_DATA_ENVELOPE_SCHEMA,
         upstream_schema_version=upstream_schema,
@@ -228,15 +250,14 @@ def map_candle_response(
         served_from=served_from,
         fresh=fresh,
         latest_timestamp=latest_timestamp,
-        age_seconds=_optional_non_negative_number(
-            payload.get("age_seconds"),
-            "age_seconds",
-        ),
-        max_age_seconds=_optional_non_negative_number(
-            payload.get("max_age_seconds"),
-            "max_age_seconds",
-        ),
+        age_seconds=age_seconds,
+        max_age_seconds=max_age_seconds,
         execution_venue=execution_venue,
+        continuous_market=continuous_market,
+        market_open=market_open,
+        session_status=session_status,
+        session_checked_at=session_checked_at,
+        current_session_end=current_session_end,
         reject_reason=reject_reason,
         access_issues=_string_tuple(payload.get("access_issues"), "access_issues"),
         bars=tuple(bars),
@@ -263,6 +284,104 @@ def _required_bool(payload: dict[str, Any], field: str) -> bool:
     if not isinstance(value, bool):
         raise DatafeedContractError(f"{field} must be a boolean")
     return value
+
+
+def _optional_bool(payload: dict[str, Any], field: str) -> bool | None:
+    if field not in payload or payload[field] is None:
+        return None
+    value = payload[field]
+    if not isinstance(value, bool):
+        raise DatafeedContractError(f"{field} must be true, false, or null")
+    return value
+
+
+def _session_contract(
+    payload: dict[str, Any],
+    *,
+    upstream_schema: str,
+    timeframe: str,
+    fresh: bool | None,
+    max_age_seconds: float | None,
+) -> tuple[bool, bool | None, str, str | None, str | None]:
+    if upstream_schema == "kline-candles-v1":
+        continuous_market = fresh is not None and max_age_seconds is not None
+        return (
+            continuous_market,
+            True if continuous_market else None,
+            "continuous" if continuous_market else "unknown",
+            None,
+            None,
+        )
+
+    continuous_market = _required_bool(payload, "continuous_market")
+    if "market_open" not in payload:
+        raise DatafeedContractError("market_open is required for kline-candles-v2")
+    market_open = _optional_bool(payload, "market_open")
+    session_status = _enum_text(
+        payload,
+        "session_status",
+        {"continuous", "open", "closed", "unknown"},
+    )
+    session_checked_at = _required_text(payload, "session_checked_at")
+    _parse_timestamp(session_checked_at, timeframe, "session_checked_at")
+    current_session_end = _optional_text(
+        payload.get("current_session_end"),
+        "current_session_end",
+    )
+    if current_session_end is not None:
+        _parse_timestamp(current_session_end, timeframe, "current_session_end")
+
+    if continuous_market:
+        if market_open is not True or session_status != "continuous":
+            raise DatafeedContractError(
+                "continuous market requires market_open=true and session_status=continuous"
+            )
+        if current_session_end is not None:
+            raise DatafeedContractError(
+                "continuous market must not declare current_session_end"
+            )
+    elif session_status == "open":
+        if market_open is not True or current_session_end is None:
+            raise DatafeedContractError(
+                "open session requires market_open=true and current_session_end"
+            )
+        if fresh is None or max_age_seconds is None:
+            raise DatafeedContractError(
+                "open session requires an explicit freshness window"
+            )
+    elif session_status == "closed":
+        if (
+            market_open is not False
+            or fresh is not None
+            or max_age_seconds is not None
+            or current_session_end is not None
+        ):
+            raise DatafeedContractError(
+                "closed session requires market_open=false, fresh=null, "
+                "max_age_seconds=null, and current_session_end=null"
+            )
+    elif session_status == "unknown":
+        if (
+            market_open is not None
+            or fresh is not None
+            or max_age_seconds is not None
+            or current_session_end is not None
+        ):
+            raise DatafeedContractError(
+                "unknown session requires market_open=null, fresh=null, "
+                "max_age_seconds=null, and current_session_end=null"
+            )
+    else:
+        raise DatafeedContractError(
+            "a sessioned market cannot use session_status=continuous"
+        )
+    return (
+        continuous_market,
+        market_open,
+        session_status,
+        session_checked_at,
+        current_session_end,
+    )
 
 
 def _enum_text(

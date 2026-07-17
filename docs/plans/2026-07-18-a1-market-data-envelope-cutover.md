@@ -66,7 +66,7 @@ Changing a market-data adapter no longer forces strategy, execution, or dashboar
 6. Run:
 
 ```bash
-python3 -m pytest tests/test_provenance.py tests/test_quality.py tests/test_envelope.py tests/test_live_api.py tests/test_tiger_adapter.py -q
+PYTHONPATH=src python3 -m pytest tests/test_provenance.py tests/test_quality.py tests/test_envelope.py tests/test_live_api.py tests/test_tiger_adapter.py -q
 ```
 
 7. Commit:

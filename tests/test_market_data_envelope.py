@@ -59,6 +59,94 @@ def test_trusted_execution_fixture_round_trips_without_losing_trust_fields() -> 
     assert envelope.to_dict()["candles"][1]["timestamp"] == "2026-07-18T12:01:00+00:00"
 
 
+def test_v2_continuous_market_preserves_explicit_session_truth() -> None:
+    envelope = _map(_fixture("trusted_execution_candles_v2.json"))
+
+    assert envelope.upstream_schema_version == "kline-candles-v2"
+    assert envelope.continuous_market is True
+    assert envelope.market_open is True
+    assert envelope.session_status == "continuous"
+    assert envelope.session_checked_at == "2026-07-18T12:00:05+00:00"
+    assert envelope.current_session_end is None
+    assert envelope.execution_ready is True
+
+
+def test_v2_open_sessioned_execution_venue_can_be_execution_ready() -> None:
+    envelope = _map(
+        _fixture("sessioned_execution_candles_v2.json"),
+        source="tiger_openapi_comex",
+    )
+
+    assert envelope.continuous_market is False
+    assert envelope.market_open is True
+    assert envelope.session_status == "open"
+    assert envelope.current_session_end == "2026-07-18T20:00:00+00:00"
+    assert envelope.execution_ready is True
+
+
+@pytest.mark.parametrize(
+    ("market_open", "session_status", "fresh"),
+    [
+        (False, "closed", None),
+        (None, "unknown", None),
+        (True, "open", False),
+    ],
+)
+def test_v2_sessioned_execution_fails_closed_unless_open_and_fresh(
+    market_open: bool | None,
+    session_status: str,
+    fresh: bool | None,
+) -> None:
+    payload = _fixture("sessioned_execution_candles_v2.json")
+    payload["market_open"] = market_open
+    payload["session_status"] = session_status
+    payload["fresh"] = fresh
+    if session_status in {"closed", "unknown"}:
+        payload["max_age_seconds"] = None
+        payload["current_session_end"] = None
+    elif fresh is False:
+        payload["age_seconds"] = 600.0
+        payload["max_age_seconds"] = 180.0
+
+    envelope = _map(payload, source="tiger_openapi_comex")
+
+    assert envelope.execution_ready is False
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda payload: payload.pop("continuous_market"), "continuous_market"),
+        (lambda payload: payload.pop("market_open"), "market_open"),
+        (lambda payload: payload.pop("session_checked_at"), "session_checked_at"),
+        (
+            lambda payload: payload.update(
+                continuous_market=False,
+                market_open=True,
+                session_status="continuous",
+            ),
+            "sessioned market",
+        ),
+        (
+            lambda payload: payload.update(
+                continuous_market=False,
+                market_open=False,
+                session_status="closed",
+                fresh=None,
+                max_age_seconds=None,
+            ),
+            "current_session_end=null",
+        ),
+    ],
+)
+def test_v2_rejects_missing_or_inconsistent_session_truth(mutate, message: str) -> None:
+    payload = _fixture("sessioned_execution_candles_v2.json")
+    mutate(payload)
+
+    with pytest.raises(DatafeedContractError, match=message):
+        _map(payload, source="tiger_openapi_comex")
+
+
 def test_research_fixture_is_real_but_not_execution_ready() -> None:
     envelope = _map(
         _fixture("research_candles_v1.json"),
@@ -136,7 +224,7 @@ def test_unknown_freshness_remains_fail_closed_for_a_sessioned_venue_contract() 
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (lambda payload: payload.update(schema_version="kline-candles-v2"), "schema"),
+        (lambda payload: payload.update(schema_version="kline-candles-v3"), "schema"),
         (lambda payload: payload.update(count=99), "count"),
         (lambda payload: payload.update(instrument_id=""), "instrument_id"),
         (lambda payload: payload.update(asset_class="crypto"), "asset_class"),
