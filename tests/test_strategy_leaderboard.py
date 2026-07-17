@@ -156,7 +156,8 @@ def test_leaderboard_includes_lab_expectation_when_present(tmp_path: Path):
 
     alpha = StrategyLeaderboard(root).build(rd)["strategies"][0]
 
-    assert alpha["lab_expectation"]["paper_eligible"] is True
+    assert alpha["lab_expectation"]["paper_eligible"] is False
+    assert "execution_candidate_identity_missing" in alpha["lab_expectation"]["blockers"]
     assert alpha["lab_expectation"]["source_exp_id"] == "e1"
 
 

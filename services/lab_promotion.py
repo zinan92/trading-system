@@ -9,16 +9,32 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.journal_store import load_json, write_json
+from services.lab_execution_conformance import (
+    lab_execution_conformance_token_blockers,
+    load_lab_execution_conformance,
+)
 
 
-def promotion_gate(entry: dict) -> dict:
+def promotion_gate(
+    entry: dict,
+    *,
+    execution_conformance: dict | None = None,
+) -> dict:
     objective = entry.get("objective", {}) if isinstance(entry.get("objective", {}), dict) else {}
     walkforward = objective.get("walkforward") if isinstance(objective.get("walkforward"), dict) else objective
     holdout = objective.get("holdout") if isinstance(objective.get("holdout"), dict) else {}
     walkforward_passed = bool(walkforward.get("passed", False))
     holdout_passed = bool(holdout.get("passed", False))
     holdout_consumed = bool(entry.get("holdout_consumed", False))
-    paper_eligible = entry.get("status") == "valid" and walkforward_passed and holdout_passed and holdout_consumed
+    conformance = dict(execution_conformance or {})
+    conformance_blockers = lab_execution_conformance_token_blockers(conformance, entry=entry)
+    paper_eligible = (
+        entry.get("status") == "valid"
+        and walkforward_passed
+        and holdout_passed
+        and holdout_consumed
+        and not conformance_blockers
+    )
     blockers = []
     if entry.get("status") != "valid":
         blockers.append("lab_entry_not_valid")
@@ -28,6 +44,7 @@ def promotion_gate(entry: dict) -> dict:
         blockers.append("holdout_not_consumed")
     if not holdout_passed:
         blockers.append("holdout_objective_not_passed")
+    blockers.extend(conformance_blockers)
     return {
         "paper_eligible": paper_eligible,
         "status": "paper_eligible" if paper_eligible else "blocked",
@@ -37,6 +54,7 @@ def promotion_gate(entry: dict) -> dict:
         "strategy_ref": entry.get("strategy_ref", {}),
         "metrics": walkforward.get("metrics", {}),
         "holdout_metrics": holdout.get("metrics", {}),
+        "execution_conformance": conformance,
         **_lab_expectation_fields(entry),
     }
 
@@ -50,7 +68,11 @@ def lab_expectation_for_strategy(output_root: Path, strategy_id: str) -> dict:
     if not candidates:
         return {"status": "missing", "paper_eligible": False, "blockers": ["no_lab_evidence"], "source_exp_id": ""}
     ranked = sorted(candidates, key=lambda item: str(item.get("updated_at", item.get("created_at", ""))), reverse=True)
-    return promotion_gate(ranked[0])
+    entry = ranked[0]
+    return promotion_gate(
+        entry,
+        execution_conformance=load_lab_execution_conformance(output_root, entry),
+    )
 
 
 def record_paper_eligibility(output_root: Path, strategy_id: str) -> dict:

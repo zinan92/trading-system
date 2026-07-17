@@ -116,6 +116,7 @@ class StrategyShadowRunner:
                 "storage_namespace": str(replay.get("storage_namespace") or ""),
             },
         }
+        _persist_candidate_receipt(self.output_root, scenario["scenario_id"], receipt)
         path = self.output_root / "dualtrack" / "strategy_shadows" / f"{cycle_id}_{variant_id}.json"
         rows = load_json(path)
         existing = next(
@@ -149,6 +150,28 @@ def load_strategy_shadow_runs(output_root: Path, cycle_id: str) -> list[dict[str
         if rows and isinstance(rows[-1], dict):
             result.append(dict(rows[-1]))
     return result
+
+
+def _persist_candidate_receipt(
+    output_root: Path,
+    scenario_id: str,
+    receipt: dict[str, Any],
+) -> None:
+    receipt_id = str(receipt.get("receipt_id") or "")
+    if not receipt_id:
+        return
+    path = (
+        Path(output_root)
+        / "dualtrack"
+        / "strategy_shadows"
+        / "receipts"
+        / f"{scenario_id}.json"
+    )
+    rows = load_json(path)
+    if any(isinstance(row, dict) and row.get("receipt_id") == receipt_id for row in rows):
+        return
+    rows.append(dict(receipt))
+    write_json(path, rows)
 
 
 def _metrics_from_accounting(accounting: dict[str, Any]) -> dict[str, Any]:

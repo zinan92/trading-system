@@ -193,6 +193,14 @@ def test_strategy_shadow_is_a_replay_read_model_and_append_idempotent(tmp_path: 
     assert first["safety"]["writes_production_ledger"] is False
     rows = load_json(output / "dualtrack" / "strategy_shadows" / f"{CYCLE_ID}_candidate.json")
     assert rows == [first]
+    receipt_rows = load_json(
+        output
+        / "dualtrack"
+        / "strategy_shadows"
+        / "receipts"
+        / f"{first['scenario_id']}.json"
+    )
+    assert receipt_rows == [first["execution_receipt"]]
     for relative in (
         "dualtrack/ledger",
         "dualtrack/reconciliation",

@@ -10,21 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.dualtrack_nautilus_parity_contract import FIXTURE_CLASSES, PLATFORM_PARITY_SCHEMA
 from services.journal_store import load_json, write_json
-
-
-FIXTURE_CLASSES: dict[str, tuple[str, ...]] = {
-    "market_entry_long_short": ("long_stop", "short_stop"),
-    "limit_entry_waits_for_touch": ("limit_entry_waits_for_touch",),
-    "scale_in_weighted_average": ("scale_in_weighted_average",),
-    "partial_reduction_then_close": ("partial_reduction_then_close",),
-    "stop_loss_and_take_profit": ("long_stop", "long_target", "short_stop", "short_target"),
-    "same_bar_conservative_priority": ("long_same_bar_stop_first",),
-    "fees_slippage_margin_exposure_pnl": ("scale_in_weighted_average", "partial_reduction_then_close"),
-    "duplicate_command_event_replay": ("duplicate_command_event_replay",),
-    "restart_and_reconciliation": ("restart_replay_and_reconciliation",),
-    "historical_machine_residual_units": (),
-}
 
 
 def build_fixture_gate(output_root: Path) -> dict[str, Any]:
@@ -48,7 +35,7 @@ def build_fixture_gate(output_root: Path) -> dict[str, Any]:
         classes.append({"class": name, "status": status, "scenarios": results})
     blockers = [row["class"] for row in classes if row["status"] != "pass"]
     return {
-        "schema_version": "dualtrack-nautilus-parity-fixture-gate-v1",
+        "schema_version": PLATFORM_PARITY_SCHEMA,
         "scope": "paper_shadow_only",
         "status": "pass" if not blockers else "blocked",
         "blockers": blockers,
@@ -91,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _blocked(blocker: str, *, detail: str = "") -> dict[str, Any]:
     result: dict[str, Any] = {
-        "schema_version": "dualtrack-nautilus-parity-fixture-gate-v1",
+        "schema_version": PLATFORM_PARITY_SCHEMA,
         "scope": "paper_shadow_only",
         "status": "blocked",
         "blockers": [blocker],
