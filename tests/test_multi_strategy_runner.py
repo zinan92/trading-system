@@ -296,7 +296,7 @@ def test_tiger_demo_execution_profile_is_guarded_and_secret_safe(monkeypatch, tm
     profile = runner._execution_profile_for(Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False))
 
     assert profile["adapter"] == "tiger_openapi_paper"
-    assert profile["mode"] == "tiger_paper_profile_gated"
+    assert profile["mode"] == "paper_broker_port"
     assert profile["provider"] == "tiger_openapi"
     assert profile["profile"] == "tiger_openapi_paper"
     assert profile["dry_run"] is True
@@ -348,7 +348,9 @@ def test_tiger_demo_reconciliation_uses_tiger_read_only_service(monkeypatch, tmp
 
     assert report["provider"] == "tiger_openapi"
     assert captured["broker_config"]["provider"] == "tiger_openapi"
-    assert "Tiger paper" in runner._demo_reconciliation_block_reason({"provider": "tiger_openapi", "drifts": [{"reason": "drift"}]})
+    assert runner._demo_reconciliation_block_reason(
+        {"provider": "tiger_openapi", "drifts": [{"reason": "drift"}]}
+    ) == "broker reconciliation drift: drift"
 
 
 def test_demo_execution_profile_surfaces_armed_state_without_secrets(tmp_path: Path, monkeypatch):
@@ -363,7 +365,7 @@ def test_demo_execution_profile_surfaces_armed_state_without_secrets(tmp_path: P
     inactive = runner._execution_profile_for(Strategy("gold_1m_macd_ungated", "GOLD", {"signal": {}}, live=False))
 
     assert active["adapter"] == "binance_demo"
-    assert active["mode"] == "binance_futures_demo"
+    assert active["mode"] == "demo_broker_port"
     assert active["armed"] is True
     assert active["credentials_present"] is True
     assert active["endpoint"] == "https://demo-fapi.binance.com"
@@ -526,10 +528,14 @@ def test_active_demo_reconciliation_drift_blocks_auto_execution_before_broker(mo
         },
     )
 
-    def fail_broker(*_args, **_kwargs):
-        raise AssertionError("broker adapter must not be called when demo reconciliation drifts")
+    original_broker_factory = runner._broker_adapter_for
+    broker_factory_calls = []
 
-    monkeypatch.setattr(runner, "_broker_adapter_for", fail_broker)
+    def diagnostic_broker(strategy, scoped):
+        broker_factory_calls.append(strategy.strategy_id)
+        return original_broker_factory(strategy, scoped)
+
+    monkeypatch.setattr(runner, "_broker_adapter_for", diagnostic_broker)
 
     summary = runner.run(run_date, paper_auto_approve=True)
     result = summary["strategies"][0]
@@ -541,6 +547,7 @@ def test_active_demo_reconciliation_drift_blocks_auto_execution_before_broker(mo
     assert "reconciliation drift" in result["execution_error"]
     assert result["demo_reconciliation_status"] == "drift"
     assert result["demo_reconciliation_drift_count"] == 1
+    assert broker_factory_calls == ["gold_1m_macd"]  # descriptor/preflight only; no execution call
 
 
 def test_runner_recovers_submitting_demo_intent_before_auto_approve(monkeypatch, tmp_path: Path):
