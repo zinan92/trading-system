@@ -5986,3 +5986,56 @@ auditable datafeed port; broker execution remains a separate port.
   `All checks passed`.
 - Final post-hardening full repository regression: `1638 passed, 6 skipped in
   326.73s`.
+
+## 2026-07-18 - A3 unified execution semantics kickoff
+
+### Decision
+
+- Keep Legacy as the current authoritative paper matcher. A3 removes the
+  self-made matcher inside Strategy Shadow and delegates executable candidate
+  replay to the existing Nautilus adapter; it does not switch paper authority.
+- Use two separate evidence layers. Candidate-specific evidence is one Nautilus
+  replay whose normalized inputs are content-bound and whose persisted snapshot
+  passes `reconcile()`. Platform compatibility remains the existing exact
+  Legacy-authoritative versus Nautilus-candidate parity gate. Comparing a
+  Nautilus snapshot with itself is not conformance evidence.
+- Extract the production StrategyPlan-to-command mapping once and reuse it in
+  Strategy Shadow. Keep the fast Lab simulators as research filters, not as
+  execution truth.
+- Make the active Lab-to-paper gate fail closed unless it receives a verifier-
+  approved candidate receipt token plus current platform parity evidence. Leave
+  the separate legacy daily `StrategyPromotionGate` out of A3 to avoid widening
+  the grid-only milestone.
+- Emit a new `strategy-shadow-run-v2` contract. Historical v1 artifacts stay
+  readable by the Dashboard but are permanently ineligible as promotion or
+  conformance evidence.
+
+### Gotchas
+
+- The current Strategy Shadow calculates touches, protective exits, positions,
+  P&L, and drawdown itself and hardcodes cost to zero. It must be replaced, not
+  wrapped as another execution engine.
+- At least one existing v1 artifact evaluates events before its plan `locked_at`
+  while claiming no future-function leakage. A v2 scenario must bind an explicit
+  `available_at` and reject every earlier event.
+- A candidate receipt proves that one candidate is internally executable under
+  Nautilus. It does not prove current Legacy paper equivalence by itself; the
+  separate platform parity receipt is mandatory.
+- A dedicated Shadow namespace is insufficient unless tests also prove no writes
+  reach `dualtrack/reconciliation`, `dualtrack/nautilus/parity`, or
+  `dualtrack/cutover`, because those directories control the attended seven-
+  cycle authority gate.
+- `pipelines/dashboard_server.py` reads the last row of each Strategy Shadow
+  artifact. New writes must remain append-safe and v1/v2 compatible without
+  rewriting historical files.
+- The primary worktree contains unrelated Debug and range-drag work. A3 remains
+  isolated and must not be integrated by overwriting primary files.
+
+### Verification
+
+- Focused pre-A3 Strategy Shadow, execution adapter/contract, parity, and
+  promotion baseline: `55 passed`.
+- Opus plan review verdict: sound direction with one P0 correction. The plan now
+  forbids tautological Nautilus-versus-Nautilus comparison, names both evidence
+  layers, protects the authority-gate directories, fails promotion closed, and
+  preserves v1 Dashboard compatibility.
