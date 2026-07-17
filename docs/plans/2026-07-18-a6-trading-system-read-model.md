@@ -136,7 +136,9 @@ Refreshing the page can never change an order, trade, plan, or P&L artifact.
 3. Production-console assembly shares one market snapshot with the execution
    mark and accounting projection.
 4. A filesystem fingerprint test proves repeated GET builders create and
-   modify no durable trading artifacts.
+   modify no durable trading artifacts. It covers `/api/dashboard`,
+   `/api/system/status`, `/api/trader/overview`, `/api/ops/status`, and the
+   un-migrated legacy-plan edge of `/api/strategy-console/current`.
 5. Existing POST command behavior, idempotency, risk checks, ambiguous-outcome
    reconciliation, and compatibility migration remain unchanged.
 
@@ -158,12 +160,16 @@ including understandable counts, without frontend trading arithmetic.
 
 1. `GET /api/trading-system/read-model` validates query inputs and returns the
    stable contract with `no-store` semantics.
-2. `GET /api/strategy-console/current` remains a compatibility facade over the
-   same pure source assembly.
+2. One named pure `_assemble_strategy_console_snapshot` builds request-scoped
+   sources. `GET /api/trading-system/read-model` and
+   `GET /api/strategy-console/current` both delegate to it; neither endpoint
+   calls the other.
 3. GridMind loads the new endpoint and binds strategy, runtime, execution,
    accounting, risk, and counts from their stable sections.
 4. Account cards no longer sum P&L or calculate return in JavaScript; current
    order/position/trade/round-trip counts come directly from the snapshot.
+   Static tests explicitly reject client-side trading arithmetic and
+   provider/engine display branches.
 5. The three operational tabs show authoritative counts in parentheses and the
    trade count follows lifecycle semantics rather than counting entry and exit
    as two trades.
@@ -195,6 +201,8 @@ runner presentation logic.
    P0/P1.
 5. Desktop and mobile browser captures prove the strategy summary and counts
    render from the new schema and are saved in the project Evidence folder.
+   One attended test capture also proves a safe POST control round trip is
+   reflected by the new GET without making GET itself authoritative.
 
 ### In scope / Out of scope
 
@@ -210,7 +218,8 @@ runner presentation logic.
 2. Implement the pure stable projector.
 3. Make Strategy Control Plane and legacy Dashboard snapshot reads pure.
 4. Thread one market snapshot through execution marking.
-5. Add durable filesystem fingerprint tests.
+5. Add durable filesystem fingerprint tests across all four legacy
+   `DashboardState.snapshot()` endpoints and the un-migrated console case.
 6. Run the focused baseline plus new read-side suite.
 
 ### Batch 2 — API and frontend cutover
@@ -220,8 +229,10 @@ runner presentation logic.
 3. Switch GridMind core rendering and uncertain-outcome reconciliation to the
    new endpoint.
 4. Render strategy/count/account/risk facts from backend fields.
-5. Add static and API compatibility tests.
-6. Run browser acceptance at desktop and mobile widths.
+5. Add static and API compatibility tests, including explicit rejection of
+   frontend P&L/count/strategy/provider/engine arithmetic branches.
+6. Run browser acceptance at desktop and mobile widths plus one safe
+   POST-to-GET control round trip.
 
 ### Batch 3 — Adapter-neutral diagnostics and closure
 
@@ -246,7 +257,9 @@ runner presentation logic.
   still migrate safely.
 - The current console obtains market data more than once per response. A price
   movement between reads can make displayed price and P&L internally
-  inconsistent even when each individual source is valid.
+  inconsistent even when each individual source is valid. The shared assembler
+  must pass its one market observation into execution marking and production
+  accounting; those builders may not re-read for the same response.
 - The AccountingSnapshot contains both current-cycle and all-plan views in
   different projections. Open orders/positions come from the selected current
   execution snapshot; started/completed lifecycle totals come from canonical
@@ -260,6 +273,9 @@ runner presentation logic.
 - The GridMind browser currently derives run inconsistency, counts, total P&L,
   return, and some strategy labels. Moving these fields backend-side must keep
   control availability fail-closed and cannot loosen POST authorization.
+- GridMind also branches on `binance_usdm`, `legacy_paper`, and
+  `nautilus_paper` for display labels. A6 projects normalized labels and removes
+  those branches; provider/engine identifiers remain data for diagnostics.
 - The primary worktree contains unrelated Debug, range-drag, and product
   changes. A6 remains isolated; integration must be commit-by-commit and never
   overwrite the primary HTML or server wholesale.
@@ -273,6 +289,23 @@ runner presentation logic.
 - Existing stable pieces to reuse: `accounting-snapshot-v1`,
   `risk-decision-v1`, `broker-port-descriptor-v1`, the configured
   `ExecutionEngineAdapter`, StrategyPlan versioning, and Market Data Envelope.
+
+## Opus planning review
+
+- Verified `claude-opus-4-8` review, session
+  `17644104-235a-4d4f-8080-9c523ba29b0b`, receipt
+  `20260717T230955Z_35299a00-c6e8-4993-930e-16903cd2ec33.json`: no P0; safe
+  to implement after the accepted corrections below.
+- Accepted P1: fingerprint all four snapshot-backed GET endpoints and seed the
+  conditional un-migrated legacy-plan case so purity cannot pass vacuously.
+- Accepted P1: thread one request-scoped market observation through display,
+  execution mark, and production accounting.
+- Accepted P1: both the new endpoint and compatibility facade delegate to one
+  pure named assembler; neither calls the other.
+- Accepted P1: pair screenshots with static tests proving client-side
+  P&L/count/strategy arithmetic is gone.
+- Accepted P2: project provider/engine labels instead of branching in GridMind,
+  and capture one safe POST-to-new-GET control round trip.
 
 ## Completion boundary
 

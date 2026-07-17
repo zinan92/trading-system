@@ -6394,3 +6394,20 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused read/control/accounting/provider-neutrality suite: `93 passed`.
 - A5 full repository baseline: `1719 passed, 7 skipped`.
+
+### Opus planning review
+
+- Verified `claude-opus-4-8`, session
+  `17644104-235a-4d4f-8080-9c523ba29b0b`, receipt
+  `20260717T230955Z_35299a00-c6e8-4993-930e-16903cd2ec33.json`: no P0 and
+  explicit `SAFE TO IMPLEMENT AFTER CORRECTIONS`.
+- Accepted P1: GET-purity fingerprinting covers `/api/dashboard`,
+  `/api/system/status`, `/api/trader/overview`, `/api/ops/status`, plus a
+  seeded un-migrated legacy plan for the console endpoint.
+- Accepted P1: one named pure assembler supplies both the new endpoint and the
+  compatibility facade and passes one market observation into execution and
+  accounting.
+- Accepted P1: static browser tests must prove P&L, return, strategy labels,
+  and authoritative counts are no longer calculated in JavaScript.
+- Accepted P2: project broker/engine display labels and capture one safe
+  control POST reflected through the new GET.
