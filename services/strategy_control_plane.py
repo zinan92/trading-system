@@ -171,8 +171,9 @@ class StrategyControlPlane:
         )
 
     def read_model(self, cycle_id: str, *, as_of: str | None = None) -> dict[str, Any]:
+        del as_of
         proposals = self.proposals(cycle_id)
-        plan = self.ensure_compatible_active_plan(cycle_id, as_of=as_of)
+        plan = self.active_plan(cycle_id)
         return {
             "schema_version": "strategy-production-console-v1",
             "cycle_id": cycle_id,
@@ -181,6 +182,7 @@ class StrategyControlPlane:
             "proposal_diff": self.proposal_diff(cycle_id),
             "migration": {
                 "legacy_compatible": bool(proposals),
+                "legacy_migration_required": bool(proposals) and plan is None,
                 "legacy_records_preserved": True,
                 "legacy_execution_shadow_separate": True,
             },

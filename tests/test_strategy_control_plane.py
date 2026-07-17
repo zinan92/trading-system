@@ -146,9 +146,16 @@ def test_legacy_plans_are_read_as_compatible_proposals_without_erasing_history(t
     result = plane.read_model(cycle_id, as_of="2026-07-05T01:01:00+00:00")
 
     assert result["migration"]["legacy_compatible"] is True
+    assert result["migration"]["legacy_migration_required"] is True
     assert result["proposals"][0]["source"] == "human"
-    assert result["production_plan"]["field_sources"]["direction"] == "human"
+    assert result["production_plan"] is None
+    assert not (output / "dualtrack" / "strategy_control" / "plans" / f"{cycle_id}.json").exists()
     assert (output / "dualtrack" / "plans" / f"{cycle_id}_human.json").exists()
+
+    migrated = plane.ensure_compatible_active_plan(cycle_id, as_of="2026-07-05T01:01:00+00:00")
+
+    assert migrated["field_sources"]["direction"] == "human"
+    assert plane.read_model(cycle_id)["migration"]["legacy_migration_required"] is False
 
 
 def test_production_controls_are_durable_and_preserve_history(tmp_path: Path) -> None:

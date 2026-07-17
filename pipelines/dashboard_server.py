@@ -744,8 +744,19 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
     cycle_id = str(cycle["cycle_id"])
     control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
     market = build_dualtrack_market_bars_response(limit=240, as_of=as_of)
-    trades = build_dualtrack_trades_response(cycle_id, track="human", output_root=output, as_of=as_of)
-    execution = build_dualtrack_execution_response(cycle_id, output_root=output, as_of=as_of)
+    trades = build_dualtrack_trades_response(
+        cycle_id,
+        track="human",
+        output_root=output,
+        as_of=as_of,
+        market_snapshot=market,
+    )
+    execution = build_dualtrack_execution_response(
+        cycle_id,
+        output_root=output,
+        as_of=as_of,
+        market_snapshot=market,
+    )
     production_history = build_strategy_console_production_history(
         output_root=output,
         mark_price=market.get("latest_close"),
@@ -1279,6 +1290,7 @@ def build_dualtrack_trades_response(
     as_of: str | None = None,
     mark_price: float | str | None = None,
     mark_source: str | None = None,
+    market_snapshot: dict | None = None,
 ) -> dict:
     del mark_price, mark_source
     if not _CYCLE_ID_PATTERN.match(cycle_id):
@@ -1288,7 +1300,13 @@ def build_dualtrack_trades_response(
         raise ValueError("track must be human or machine")
     closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
     output = _dualtrack_output_root(output_root)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
+    mark = _dualtrack_mark_price(
+        output,
+        cycle_id,
+        closed=closed,
+        as_of=as_of,
+        market_snapshot=market_snapshot,
+    )
     rows = _dualtrack_trade_rows_for_cycle(output, cycle_id, normalized_track, mark)
     enriched = rows["trades"]
     summary = _trade_summary(enriched)
@@ -1332,6 +1350,7 @@ def build_dualtrack_execution_response(
     *,
     output_root: Path | None = None,
     as_of: str | None = None,
+    market_snapshot: dict | None = None,
 ) -> dict:
     """Read-only execution/accounting view for the human paper track.
 
@@ -1344,7 +1363,13 @@ def build_dualtrack_execution_response(
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
     output = _dualtrack_output_root(output_root)
     closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
+    mark = _dualtrack_mark_price(
+        output,
+        cycle_id,
+        closed=closed,
+        as_of=as_of,
+        market_snapshot=market_snapshot,
+    )
     adapter = build_configured_execution_engine_adapter(output)
     snapshot = adapter.snapshot(
         cycle_id,
@@ -1413,6 +1438,7 @@ def _dualtrack_mark_price(
     *,
     closed: bool,
     as_of: str | None = None,
+    market_snapshot: dict | None = None,
 ) -> dict:
     if closed:
         cycle_rows = load_json(output_root / "dualtrack" / "cycles" / f"{cycle_id}.json")
@@ -1420,7 +1446,12 @@ def _dualtrack_mark_price(
         close_price = _finite_float(cycle.get("close_price"))
         if close_price is not None:
             return {"price": close_price, "fresh": True, "source": "cycle_close"}
-    market = DualTrackMarketFeed().snapshot(symbol="GOLD", timeframe="1m", limit=1, as_of=as_of)
+    market = market_snapshot or DualTrackMarketFeed().snapshot(
+        symbol="GOLD",
+        timeframe="1m",
+        limit=1,
+        as_of=as_of,
+    )
     latest_bar = (market.get("bars") or [{}])[-1] if isinstance(market.get("bars"), list) else {}
     price = _finite_float(market.get("latest_close"))
     if price is None:
