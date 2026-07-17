@@ -6172,3 +6172,52 @@ auditable datafeed port; broker execution remains a separate port.
 - Accepted P3: persisted receipts are audit-only and are never read as
   authorization. Instead of accepting auto-lock before a rejected start, A4
   requires an already-selected active StrategyPlan at the start boundary.
+
+## 2026-07-18 - A4 unified Risk Port complete
+
+### Value delivered
+
+- A grid whose exact stop risk exceeds budget now stops at the mutation
+  boundary. The preview still shows the requested geometry/notional and an
+  explicit recommendation; the system never applies a smaller position
+  silently.
+- Grid start, running regrid, and every server-received manual entry share one
+  content-bound decision contract and one in-process mutation lock. A changed
+  execution snapshot between evaluation and submit raises stale with zero new
+  submissions.
+- Manual entry action is derived from `event`, so client `source` cannot grant
+  a bypass. Valid close/flatten/reduce-only/cancel evaluates identity only and
+  remains available when account, market, daily loss, or HALT blocks entry.
+- Existing Binance/Tiger money guardrails remain policy authority. Their exact
+  blockers and limits are wrapped into `risk-decision-v1`; broker requests now
+  carry the canonical allow/block evidence without removing preflight,
+  activation, reconciliation, attended, or lifecycle gates.
+- Paper decisions persist under `dualtrack/risk_decisions`; venue decisions
+  persist under `risk_decisions`. No runtime reads these receipts as authority.
+
+### Gotchas
+
+- HTTP risk enforcement is explicit at `/api/dualtrack/orders` after trusted
+  server-market validation. The direct response builder keeps a compatibility
+  default for historical/internal tests and is not a network security boundary.
+- Local paper regrid is two-phase, not a live venue atomic replace. All new
+  orders are accepted before old pending entries are cancelled, and no local
+  market event occurs between those steps. Live grid routing remains out of
+  scope.
+- Risk policy percentages are fractions in `[0, 1]`. A display-style value such
+  as `5` fails closed as invalid instead of being interpreted as 5%.
+- The first final Opus attempt returned an API-error terminal state and failed
+  receipt verification; none of its output was used. The bounded retry is the
+  only final implementation-review evidence.
+- A4 has no visible UI change. Under the Evidence Contract, visual proof is not
+  applicable; test output, code, docs, and Claude receipts are trace only.
+
+### Verification
+
+- Focused risk/control/dashboard/broker suite: `223 passed, 1 skipped`.
+- Full repository suite: `1693 passed, 7 skipped in 347.20s`.
+- Ruff on all changed Python files: `All checks passed`.
+- Verified final Opus implementation review: actual model
+  `claude-opus-4-8`, session `e8e84226-e8c6-4430-8c09-29bb07e2722b`, receipt
+  `20260717T214429Z_dcf548a2-be9e-49bb-9923-e64236de976b.json`, verdict
+  `NO P0/P1`.

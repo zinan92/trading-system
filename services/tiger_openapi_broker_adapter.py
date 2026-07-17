@@ -8,10 +8,9 @@ from typing import Any
 
 from schemas.market_data import PaperOrder
 from services.broker_adapter import BrokerOrderRequest, LiveBrokerAdapter
-from services.journal_store import write_json
 from services.live_env import apply_live_env
-from services.live_money_guardrails import LiveMoneyGuardrails
 from services.order_lifecycle import OrderLifecycleStore
+from services.risk_port import LiveMoneyRiskDecisionAdapter, canonical_live_risk_allows_exposure
 from services.tiger_contracts import TigerContractResolver
 from services.tiger_openapi_account_sync import TigerOpenApiAccountSync
 
@@ -129,7 +128,7 @@ class TigerOpenApiPaperBrokerAdapter(LiveBrokerAdapter):
             raise RuntimeError(account_check.get("block_reason") or "Tiger account precheck failed")
         guardrails = self._live_money_guardrails_for_tiger_order(request, readiness, contract.execution_symbol)
         readiness = {**readiness, "live_money_guardrails": guardrails}
-        if guardrails and guardrails.get("allows_new_order") is False:
+        if not canonical_live_risk_allows_exposure(guardrails):
             self._record_blocked_tiger_request(request, readiness, "blocked")
             blocker = guardrails.get("primary_blocker", {}) if isinstance(guardrails.get("primary_blocker"), dict) else {}
             raise RuntimeError(f"Tiger live money guardrails block new order: {blocker.get('message') or guardrails.get('status')}")
@@ -370,13 +369,28 @@ class TigerOpenApiPaperBrokerAdapter(LiveBrokerAdapter):
         }
 
     def _live_money_guardrails_for_tiger_order(self, request: BrokerOrderRequest, readiness: dict, execution_symbol: str) -> dict:
-        if not bool(self.broker_config.get("require_live_money_guardrails_before_entry", True)):
-            return {"status": "SKIPPED", "allows_new_order": True, "reason": "require_live_money_guardrails_before_entry=false"}
         ticket = request.ticket
         requested_price = float(request.latest_price or self._entry_midpoint(ticket["entry_zone"]))
         quantity = self._tiger_contract_quantity(float(request.actual_size or self._quantity(ticket, requested_price)))
         side = "BUY" if self._is_buy_action(str(ticket.get("action", ""))) else "SELL"
-        return LiveMoneyGuardrails(self.output_root, broker_config=self.broker_config).evaluate_order(
+        if not bool(self.broker_config.get("require_live_money_guardrails_before_entry", True)):
+            return LiveMoneyRiskDecisionAdapter(self.output_root, broker_config=self.broker_config).record_legacy_result(
+                request.run_date,
+                ticket={**ticket, "asset": execution_symbol},
+                symbol=execution_symbol,
+                side=side,
+                requested_price=requested_price,
+                quantity=quantity,
+                source="tiger_openapi:paper",
+                reconciliation=readiness.get("tiger_reconciliation_raw", {}) if isinstance(readiness.get("tiger_reconciliation_raw"), dict) else {},
+                legacy={
+                    "status": "SKIPPED",
+                    "allows_new_order": True,
+                    "reason": "require_live_money_guardrails_before_entry=false",
+                    "blockers": [],
+                },
+            )
+        return LiveMoneyRiskDecisionAdapter(self.output_root, broker_config=self.broker_config).evaluate_order(
             request.run_date,
             ticket={**ticket, "asset": execution_symbol},
             symbol=execution_symbol,

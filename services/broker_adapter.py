@@ -19,9 +19,9 @@ from schemas.market_data import PaperOrder
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
-from services.live_money_guardrails import LiveMoneyGuardrails
 from services.order_lifecycle import IllegalOrderTransition, OrderLifecycleStore
 from services.paper_executor import PaperExecutor
+from services.risk_port import LiveMoneyRiskDecisionAdapter, canonical_live_risk_allows_exposure
 
 
 @dataclass(frozen=True)
@@ -555,7 +555,7 @@ class LiveBrokerAdapter:
             self._record_live_request(request, order_id, now, ticket, payloads, readiness, receipt, broker_response={})
             return receipt
         guardrails = self._live_money_guardrails_for_order(request, readiness, symbol, str(payloads["entry"].get("side") or ""), requested_price, quantity)
-        if guardrails and guardrails.get("allows_new_order") is False:
+        if guardrails and not canonical_live_risk_allows_exposure(guardrails):
             enriched_readiness = {**readiness, "live_money_guardrails": guardrails}
             receipt = PaperOrder(
                 order_id=order_id,
@@ -578,6 +578,8 @@ class LiveBrokerAdapter:
                 broker_response={"live_money_guardrails": guardrails},
             )
             raise RuntimeError(f"live money guardrails block order: {receipt.rejection_reason}")
+        if guardrails:
+            readiness = {**readiness, "live_money_guardrails": guardrails}
         lifecycle_store = OrderLifecycleStore(self.output_root)
         lifecycle, intent_created = lifecycle_store.write_intent(
             request.run_date,
@@ -834,7 +836,7 @@ class LiveBrokerAdapter:
         mode = str(readiness.get("mode") or self.broker_config.get("environment") or "live").lower()
         if self.provider != "binance_usdm" or mode not in {"live", "testnet"}:
             return {}
-        return LiveMoneyGuardrails(self.output_root, broker_config=self.broker_config).evaluate_order(
+        return LiveMoneyRiskDecisionAdapter(self.output_root, broker_config=self.broker_config).evaluate_order(
             request.run_date,
             ticket=request.ticket,
             symbol=symbol,
@@ -1763,7 +1765,6 @@ class LiveBrokerAdapter:
     ) -> dict:
         is_buy = self._is_buy_action(str(ticket.get("action", "")))
         side = "BUY" if is_buy else "SELL"
-        exit_side = "SELL" if is_buy else "BUY"
         raw_type = str(ticket.get("order_type", "market")).lower()
         order_type = "MARKET" if raw_type == "market" else "LIMIT"
         entry = {

@@ -1,6 +1,7 @@
 # A4 Unified Risk Port Implementation Plan
 
-**Status:** Opus-reviewed; P0/P1 corrections incorporated on 2026-07-18.
+**Status:** Implemented and verified on 2026-07-18; final Opus verdict is
+`NO P0/P1`.
 
 **Goal:** Make every exposure-increasing production mutation pass through one
 versioned, engine-neutral risk decision that is bound to the exact candidate,
@@ -175,8 +176,9 @@ contract, while exits remain available during stress.
 4. Broker network submission checks the canonical decision flag additively:
    existing activation, preflight, reconciliation, and attended gates remain
    mandatory and can never be weakened by translation.
-5. Canonical `allow_exposure_increase` is exactly `not legacy.blockers`; missing
-   or invalid bridge output fails new exposure closed.
+5. Canonical `allow_exposure_increase` is true only when the legacy result has
+   no blockers and explicitly grants entry; missing, contradictory, or invalid
+   bridge output fails new exposure closed.
 6. The bridge never calls entry guardrails for reduce-only/close actions.
 7. Existing live guardrail regression tests remain exact; new tests cover
    canonical receipt identity and exit/cancel non-blocking behavior.
@@ -244,6 +246,10 @@ selected execution engine.
   historical compatibility helper. The HTTP handler is the security boundary:
   it must enable risk enforcement explicitly after server market validation;
   caller `source` can never disable it.
+- Risk percentages are fractions in `[0, 1]`, not display percentages. A value
+  such as `5` is rejected as `risk_policy_invalid` and blocks exposure rather
+  than being silently interpreted as 5%; configuration schema hardening is a
+  later concern.
 - The primary worktree contains unrelated Debug/range work. A4 stays isolated
   and must never be integrated by copying whole files.
 
@@ -264,3 +270,19 @@ mutation, exit safety remains available, existing live limits remain exact,
 Legacy/Nautilus risk parity passes, full regression passes, and Opus reports no
 unresolved P0/P1. A4 does not change limits, auto-size positions, build the
 confirmation Card, or authorize real money.
+
+## Final verification
+
+- Focused risk/control/dashboard/broker suite: `223 passed, 1 skipped` after
+  adding the manual stale-state case.
+- Full repository regression: `1693 passed, 7 skipped in 347.20s`.
+- Ruff on every changed Python file: `All checks passed`.
+- First Opus implementation-review transport ended in a verified failure and
+  was not used as evidence. The bounded retry completed as verified success on
+  actual model `claude-opus-4-8`, session
+  `e8e84226-e8c6-4430-8c09-29bb07e2722b`, receipt
+  `20260717T214429Z_dcf548a2-be9e-49bb-9923-e64236de976b.json`, with verdict
+  `NO P0/P1`.
+- A4 changes no visible frontend surface. Under the project Evidence Contract,
+  screenshot/video proof is not applicable; code, tests, receipts, and docs are
+  trace material only.

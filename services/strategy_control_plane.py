@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,14 @@ PLAN_SCHEMA = "strategy-plan-v1"
 PLAN_FIELDS = ("direction", "style", "range", "key_levels", "grid", "signal", "tp_sl", "risk_budget", "intraday_rules")
 FIELD_SOURCES = {"human", "ai", "confirmed"}
 _CONTROL_LOCK = threading.RLock()
+
+
+@contextmanager
+def production_mutation_lock():
+    """Serialize every in-process plan, grid, and manual-order mutation."""
+
+    with _CONTROL_LOCK:
+        yield
 
 
 class StrategyControlPlane:

@@ -6,13 +6,17 @@ import pytest
 from schemas.accounting import build_accounting_snapshot
 from services.journal_store import load_json
 from services.risk_port import (
+    LiveMoneyRiskDecisionAdapter,
     PaperGridRiskDecisionPort,
     RiskDecisionStore,
     action_class_for_command,
     assert_matching_risk_decision,
     build_grid_risk_request,
+    build_manual_order_risk_request,
     canonical_account_risk_state,
     canonical_execution_risk_state,
+    canonical_live_risk_allows_exposure,
+    normalize_manual_order_command,
     require_exposure_permission,
 )
 
@@ -216,6 +220,40 @@ def request(
         execution_reconciliation=recon or reconciliation(),
         config=config_value or config(),
         replaced_order_ids=replaced_order_ids,
+    )
+
+
+def manual_command(*, notional: float = 500.0, source: str = "browser-supplied") -> dict:
+    return {
+        "cycle_id": CYCLE_ID,
+        "ts": CHECKED_AT,
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": notional,
+        "sl": 95.0,
+        "tp": 105.0,
+        "source": source,
+    }
+
+
+def manual_request(
+    command: dict,
+    *,
+    account: dict | None = None,
+    market_value: dict | None = None,
+    snapshot: dict | None = None,
+):
+    exact = normalize_manual_order_command(command, config=config())
+    return build_manual_order_risk_request(
+        checked_at=CHECKED_AT,
+        command=exact,
+        account_context=account if account is not None else accounting_context(),
+        market=market_value or market(),
+        execution_snapshot=snapshot or execution_snapshot(),
+        execution_reconciliation=reconciliation(),
+        config=config(),
     )
 
 
@@ -456,3 +494,176 @@ def test_canonical_execution_projection_preserves_only_thin_sl_tp_join() -> None
         "strategy_plan_id": "old-plan",
         "strategy_plan_version": 1,
     }]
+
+
+def test_manual_entry_uses_exact_quantity_and_cannot_bypass_risk_with_source() -> None:
+    command = manual_command(source="spoofed-non-production")
+    exact = normalize_manual_order_command(command, config=config())
+    decision = PaperGridRiskDecisionPort().evaluate(manual_request(command)).to_dict()
+
+    assert exact["quantity"] == 5.0
+    assert decision["request"]["action_class"] == "increase_exposure"
+    assert decision["request"]["candidate"]["kind"] == "manual_order"
+    assert decision["request"]["candidate"]["commands"][0]["quantity"] == 5.0
+    assert decision["outcome"] == "allow"
+
+
+def test_manual_entry_blocks_budget_breach_and_existing_pending_entry() -> None:
+    expensive = PaperGridRiskDecisionPort().evaluate(manual_request(manual_command(notional=50_000.0))).to_dict()
+    existing_order = {
+        "order_id": "working-grid-order",
+        "state": "accepted",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 90.0,
+        "quantity": 1.0,
+    }
+    layered = PaperGridRiskDecisionPort().evaluate(manual_request(
+        manual_command(),
+        snapshot=execution_snapshot(orders=[existing_order]),
+    )).to_dict()
+
+    assert "plan_loss_budget_exceeded" in {row["code"] for row in expensive["blockers"]}
+    assert "existing_entry_orders_present" in {row["code"] for row in layered["blockers"]}
+    assert expensive["recommendation"]["applied_automatically"] is False
+
+
+def test_manual_reduce_only_requires_position_identity_but_not_entry_risk_inputs() -> None:
+    close = {
+        "cycle_id": CYCLE_ID,
+        "ts": CHECKED_AT,
+        "event": "flatten",
+        "side": "sell",
+        "trade_id": "trade-to-close",
+    }
+    allowed = PaperGridRiskDecisionPort().evaluate(build_manual_order_risk_request(
+        checked_at=CHECKED_AT,
+        command=close,
+        account_context={},
+        market=market(fresh=False),
+        execution_snapshot={},
+        execution_reconciliation={},
+        config=config(),
+    ))
+    missing_identity = PaperGridRiskDecisionPort().evaluate(build_manual_order_risk_request(
+        checked_at=CHECKED_AT,
+        command={**close, "trade_id": ""},
+        account_context={},
+        market=market(fresh=False),
+        execution_snapshot={},
+        execution_reconciliation={},
+        config=config(),
+    ))
+
+    assert allowed.allow_reduce_only is True
+    assert missing_identity.to_dict()["primary_blocker"]["code"] == "close_identity_invalid"
+
+
+def test_live_money_bridge_preserves_blocker_order_and_never_grants_more_permission(tmp_path: Path) -> None:
+    class FakeLegacyGuardrails:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate_order(self, *_args, **_kwargs) -> dict:
+            self.calls += 1
+            return {
+                "checked_at": CHECKED_AT,
+                "status": "BLOCKED_DAILY_LOSS_LIMIT",
+                "allows_new_order": True,  # contradictory legacy flag cannot loosen blockers
+                "blockers": [
+                    {
+                        "status": "BLOCKED_DAILY_LOSS_LIMIT",
+                        "code": "daily_loss_limit",
+                        "source": "live_money_guardrails.daily_loss",
+                        "message": "daily loss reached limit",
+                        "evidence": {"loss_pct": 2.0},
+                    },
+                    {
+                        "status": "BLOCKED_DAILY_TRADE_LIMIT",
+                        "code": "daily_trade_limit",
+                        "source": "live_money_guardrails.daily_entry_orders",
+                        "message": "daily entries reached limit",
+                        "evidence": {"count": 2},
+                    },
+                ],
+                "limits": {"daily_loss_limit_pct": 1.25},
+                "candidate": {"notional": 10.0},
+                "daily_loss": {"known": True, "loss_pct": 2.0},
+                "exposure": {"projected_total_notional": 10.0},
+                "daily_entry_orders": {"count": 2},
+                "halt": {},
+            }
+
+    legacy = FakeLegacyGuardrails()
+    result = LiveMoneyRiskDecisionAdapter(
+        tmp_path / "outputs",
+        legacy_guardrails=legacy,
+    ).evaluate_order(
+        "2026-07-18",
+        ticket={"ticket_id": "ticket-live-1"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=100.0,
+        quantity=0.1,
+        source="binance_usdm:testnet",
+        reconciliation={"status": "pass"},
+        checked_at=CHECKED_AT,
+    )
+
+    assert legacy.calls == 1
+    assert canonical_live_risk_allows_exposure(result) is False
+    assert canonical_live_risk_allows_exposure({}) is False
+    assert [row["code"] for row in result["risk_decision"]["blockers"]] == [
+        "daily_loss_limit",
+        "daily_trade_limit",
+    ]
+
+
+def test_live_money_bridge_allows_clean_entry_and_skips_entry_guardrails_for_reduce_only(tmp_path: Path) -> None:
+    class FakeLegacyGuardrails:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate_order(self, *_args, **_kwargs) -> dict:
+            self.calls += 1
+            return {
+                "checked_at": CHECKED_AT,
+                "status": "READY",
+                "allows_new_order": True,
+                "blockers": [],
+                "limits": {},
+                "candidate": {"notional": 10.0},
+                "daily_loss": {"known": True, "loss_pct": 0.0},
+                "exposure": {"projected_total_notional": 10.0},
+                "daily_entry_orders": {"count": 0},
+                "halt": {},
+            }
+
+    legacy = FakeLegacyGuardrails()
+    bridge = LiveMoneyRiskDecisionAdapter(tmp_path / "outputs", legacy_guardrails=legacy)
+    allowed = bridge.evaluate_order(
+        "2026-07-18",
+        ticket={"ticket_id": "ticket-live-2"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=100.0,
+        quantity=0.1,
+        source="binance_usdm:testnet",
+        checked_at=CHECKED_AT,
+    )
+    reduced = bridge.evaluate_order(
+        "2026-07-18",
+        ticket={"event": "flatten", "trade_id": "venue-trade-1"},
+        symbol="XAUUSDT",
+        side="SELL",
+        requested_price=100.0,
+        quantity=0.1,
+        source="binance_usdm:testnet",
+        action_class="reduce_only",
+        checked_at=CHECKED_AT,
+    )
+
+    assert canonical_live_risk_allows_exposure(allowed) is True
+    assert reduced["risk_decision"]["allow_reduce_only"] is True
+    assert legacy.calls == 1

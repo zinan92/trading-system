@@ -170,6 +170,7 @@ def test_binance_usdm_testnet_adapter_hard_blocks_daily_loss_before_entry_post(t
     request = load_json(tmp_path / "outputs" / "testnet_order_requests" / "2026-06-09.json")[0]
     assert request["receipt"]["status"] == "blocked"
     assert request["broker_response"]["live_money_guardrails"]["status"] == "BLOCKED_DAILY_LOSS_LIMIT"
+    assert request["broker_response"]["live_money_guardrails"]["risk_decision"]["allow_exposure_increase"] is False
 
 
 def test_binance_usdm_testnet_adapter_uses_utc_run_date_during_utc_plus_8_next_day_window(tmp_path: Path, monkeypatch):
@@ -428,6 +429,7 @@ def test_binance_usdm_testnet_not_found_recovery_posts_once_with_stable_key(tmp_
     request = load_json(tmp_path / "outputs" / "testnet_order_requests" / "2026-06-09.json")[0]
     assert request["broker_response"]["entry_recovery"]["status"] == "not_found"
     assert request["request"]["entry"]["newClientOrderId"] == order_id[:36]
+    assert request["readiness"]["live_money_guardrails"]["risk_decision"]["allow_exposure_increase"] is True
 
 
 def test_binance_usdm_testnet_ambiguous_recovery_does_not_post_duplicate(tmp_path: Path, monkeypatch):

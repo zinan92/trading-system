@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -30,6 +31,7 @@ from services.journal_store import load_json, write_json
 
 GRID_RISK_POLICY_SCHEMA = "strategy-grid-risk-policy-v1"
 GRID_RISK_EVALUATOR_VERSION = "paper-grid-risk-v1"
+LIVE_MONEY_RISK_EVALUATOR_VERSION = "live-money-risk-bridge-v1"
 OPEN_ORDER_STATES = frozenset({"accepted", "new", "open", "pending", "submitted", "working", "partially_filled"})
 EXPOSURE_ACTIONS = frozenset({"increase_exposure", "replace_pending"})
 CLOSE_EVENTS = frozenset({"exit", "stop", "target", "flatten"})
@@ -131,21 +133,30 @@ class PaperGridRiskDecisionPort:
                 },
             ))
 
-        low = _finite_positive(candidate.get("range_low"))
-        high = _finite_positive(candidate.get("range_high"))
-        if low is None or high is None or high <= low:
+        candidate_kind = str(candidate.get("kind") or "")
+        if candidate_kind == "strategy_plan_grid":
+            low = _finite_positive(candidate.get("range_low"))
+            high = _finite_positive(candidate.get("range_high"))
+            if low is None or high is None or high <= low:
+                blockers.append(_blocker(
+                    "candidate_range_invalid",
+                    "strategy_plan.range",
+                    "candidate range is invalid",
+                    {"low": candidate.get("range_low"), "high": candidate.get("range_high")},
+                ))
+            elif price is not None and not (low <= price <= high):
+                blockers.append(_blocker(
+                    "market_price_outside_range",
+                    "strategy_plan.range",
+                    "current market price is outside the candidate range",
+                    {"price": price, "low": low, "high": high},
+                ))
+        elif candidate_kind != "manual_order":
             blockers.append(_blocker(
-                "candidate_range_invalid",
-                "strategy_plan.range",
-                "candidate range is invalid",
-                {"low": candidate.get("range_low"), "high": candidate.get("range_high")},
-            ))
-        elif price is not None and not (low <= price <= high):
-            blockers.append(_blocker(
-                "market_price_outside_range",
-                "strategy_plan.range",
-                "current market price is outside the candidate range",
-                {"price": price, "low": low, "high": high},
+                "candidate_kind_invalid",
+                "risk_request.candidate",
+                "exposure-increasing candidate kind is unsupported",
+                {"kind": candidate_kind},
             ))
 
         commands = candidate.get("commands") if isinstance(candidate.get("commands"), list) else []
@@ -336,6 +347,174 @@ class RiskDecisionStore:
         return self.output_root / "risk_decisions"
 
 
+class LiveMoneyRiskDecisionAdapter:
+    """Bridge the mature venue guardrails into the canonical risk contract.
+
+    The legacy guardrail remains the policy authority.  This adapter cannot
+    make its answer looser: any legacy blocker, malformed result, or explicit
+    denial becomes a canonical blocker in the same order.
+    """
+
+    name = "live_money_risk_bridge"
+
+    def __init__(
+        self,
+        output_root: Path,
+        *,
+        broker_config: Mapping[str, Any] | None = None,
+        legacy_guardrails=None,
+        store: RiskDecisionStore | None = None,
+    ) -> None:
+        self.output_root = Path(output_root)
+        self.broker_config = dict(broker_config or {})
+        if legacy_guardrails is None:
+            from services.live_money_guardrails import LiveMoneyGuardrails
+
+            legacy_guardrails = LiveMoneyGuardrails(self.output_root, broker_config=self.broker_config)
+        self.legacy_guardrails = legacy_guardrails
+        self.store = store or RiskDecisionStore(self.output_root)
+
+    def evaluate_order(
+        self,
+        run_date: str,
+        *,
+        ticket: Mapping[str, Any],
+        symbol: str,
+        side: str,
+        requested_price: float,
+        quantity: float,
+        source: str,
+        reconciliation: Mapping[str, Any] | None = None,
+        action_class: str = "increase_exposure",
+        checked_at: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_action = str(action_class or "").strip().lower()
+        timestamp = checked_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        if resolved_action != "increase_exposure":
+            return self._safe_action(
+                run_date,
+                ticket=ticket,
+                symbol=symbol,
+                source=source,
+                action_class=resolved_action,
+                checked_at=timestamp,
+            )
+
+        legacy = self.legacy_guardrails.evaluate_order(
+            run_date,
+            ticket=dict(ticket),
+            symbol=symbol,
+            side=side,
+            requested_price=requested_price,
+            quantity=quantity,
+            source=source,
+            reconciliation=dict(reconciliation or {}),
+        )
+        return self.record_legacy_result(
+            run_date,
+            ticket=ticket,
+            symbol=symbol,
+            side=side,
+            requested_price=requested_price,
+            quantity=quantity,
+            source=source,
+            reconciliation=reconciliation,
+            legacy=legacy,
+            checked_at=timestamp,
+        )
+
+    def record_legacy_result(
+        self,
+        run_date: str,
+        *,
+        ticket: Mapping[str, Any],
+        symbol: str,
+        side: str,
+        requested_price: float,
+        quantity: float,
+        source: str,
+        reconciliation: Mapping[str, Any] | None,
+        legacy: Mapping[str, Any] | None,
+        checked_at: str | None = None,
+    ) -> dict[str, Any]:
+        result = dict(legacy) if isinstance(legacy, Mapping) else {}
+        timestamp = str(
+            result.get("checked_at")
+            or checked_at
+            or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        )
+        request = _live_money_risk_request(
+            checked_at=timestamp,
+            run_date=run_date,
+            ticket=ticket,
+            symbol=symbol,
+            side=side,
+            requested_price=requested_price,
+            quantity=quantity,
+            source=source,
+            reconciliation=reconciliation or {},
+            legacy=result,
+            action_class="increase_exposure",
+        )
+        blockers = _canonical_live_blockers(result)
+        decision = build_risk_decision(
+            request,
+            blockers=blockers,
+            metrics={
+                "legacy_status": str(result.get("status") or ""),
+                "legacy_allows_new_order": result.get("allows_new_order") is True,
+                "candidate_notional": (result.get("candidate") or {}).get("notional"),
+                "projected_total_notional": (result.get("exposure") or {}).get("projected_total_notional"),
+                "daily_loss_pct": (result.get("daily_loss") or {}).get("loss_pct"),
+            },
+            limits=dict(result.get("limits") or {}),
+        )
+        persisted = self.store.persist(decision)
+        return {**result, "risk_decision": persisted}
+
+    def _safe_action(
+        self,
+        run_date: str,
+        *,
+        ticket: Mapping[str, Any],
+        symbol: str,
+        source: str,
+        action_class: str,
+        checked_at: str,
+    ) -> dict[str, Any]:
+        candidate = {
+            "kind": "venue_safe_action",
+            "run_date": str(run_date),
+            "cycle_id": str(ticket.get("cycle_id") or run_date),
+            "event": str(ticket.get("event") or "").lower(),
+            "trade_id": str(ticket.get("trade_id") or ""),
+            "position_id": str(ticket.get("position_id") or ""),
+            "symbol": str(symbol),
+            "source": str(source),
+        }
+        request = build_risk_request(
+            checked_at=checked_at,
+            scope="venue_safe_action",
+            action_class=action_class,
+            candidate=candidate,
+            account={"status": "not_required"},
+            market={"status": "not_required"},
+            execution={"status": "not_required"},
+            policy={"policy_id": "safe-action-identity-v1"},
+            evaluator=live_money_risk_evaluator(),
+        )
+        decision = PaperGridRiskDecisionPort().evaluate(request)
+        persisted = self.store.persist(decision)
+        return {
+            "run_date": run_date,
+            "status": "SAFE_ACTION_ALLOWED" if decision.to_dict()["outcome"] == "allow" else "SAFE_ACTION_BLOCKED",
+            "allows_new_order": False,
+            "blockers": decision.to_dict()["blockers"],
+            "primary_blocker": decision.to_dict()["primary_blocker"],
+            "risk_decision": persisted,
+        }
+
+
 def build_grid_risk_request(
     *,
     checked_at: str,
@@ -369,6 +548,76 @@ def build_grid_risk_request(
     )
 
 
+def normalize_manual_order_command(
+    command: Mapping[str, Any],
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve the exact linear paper quantity before risk and execution."""
+
+    from services.dualtrack_execution_contract import normalize_execution_command
+
+    normalized = normalize_execution_command(dict(command), dict(config or {}))
+    if action_class_for_command(normalized) != "increase_exposure":
+        return normalized
+    price = _finite_positive(normalized.get("price") or normalized.get("market_price"))
+    quantity = _finite_positive(normalized.get("quantity") or normalized.get("contracts"))
+    notional = _finite_positive(normalized.get("notional"))
+    if price is not None and quantity is None and notional is not None:
+        normalized["quantity"] = notional / price
+    elif price is not None and notional is None and quantity is not None:
+        normalized["notional"] = price * quantity
+    return normalized
+
+
+def build_manual_order_risk_request(
+    *,
+    checked_at: str,
+    command: Mapping[str, Any],
+    account_context: Mapping[str, Any],
+    market: Mapping[str, Any],
+    execution_snapshot: Mapping[str, Any],
+    execution_reconciliation: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> RiskRequest:
+    action_class = action_class_for_command(command)
+    if action_class in {"reduce_only", "cancel"}:
+        candidate = {
+            "kind": "manual_order",
+            "intent": "manual_safe_action",
+            "cycle_id": str(command.get("cycle_id") or ""),
+            "event": str(command.get("event") or "").lower(),
+            "trade_id": str(command.get("trade_id") or ""),
+            "position_id": str(command.get("position_id") or ""),
+        }
+    else:
+        exact = normalize_manual_order_command(command, config=config)
+        risk_command = _normalized_risk_command(exact)
+        candidate = {
+            "kind": "manual_order",
+            "intent": "manual_entry",
+            "cycle_id": str(exact.get("cycle_id") or ""),
+            "strategy_plan_id": str(exact.get("strategy_plan_id") or ""),
+            "strategy_plan_version": exact.get("strategy_plan_version"),
+            "direction": str(exact.get("side") or "").lower(),
+            "notional_per_grid": risk_command.get("notional"),
+            "leverage": _finite_positive(exact.get("leverage")) or _finite_positive(config.get("max_leverage")),
+            "commands": [risk_command],
+            "replaced_order_ids": [],
+        }
+    return build_risk_request(
+        checked_at=checked_at,
+        scope="paper_manual_order",
+        action_class=action_class,
+        candidate=candidate,
+        account=canonical_account_risk_state(account_context),
+        market=canonical_market_risk_state(market),
+        execution=canonical_execution_risk_state(execution_snapshot, execution_reconciliation),
+        policy=grid_risk_policy(config),
+        evaluator=grid_risk_evaluator(),
+    )
+
+
 def assert_matching_risk_decision(
     port: RiskDecisionPort,
     prior: RiskDecision | Mapping[str, Any],
@@ -383,9 +632,7 @@ def assert_matching_risk_decision(
     current = port.evaluate(request)
     if current.decision_id != prior_decision.decision_id:
         raise ValueError("risk decision stale: current evaluation changed")
-    if not current.allow_exposure_increase:
-        raise ValueError(_blocked_message(current))
-    return current
+    return require_risk_permission(current)
 
 
 def require_exposure_permission(decision: RiskDecision | Mapping[str, Any]) -> RiskDecision:
@@ -393,6 +640,29 @@ def require_exposure_permission(decision: RiskDecision | Mapping[str, Any]) -> R
     if not current.allow_exposure_increase:
         raise ValueError(_blocked_message(current))
     return current
+
+
+def require_risk_permission(decision: RiskDecision | Mapping[str, Any]) -> RiskDecision:
+    current = validate_risk_decision(decision)
+    allowed = {
+        "increase_exposure": current.allow_exposure_increase,
+        "replace_pending": current.allow_exposure_increase,
+        "reduce_only": current.allow_reduce_only,
+        "cancel": current.allow_cancel,
+    }.get(current.action_class, False)
+    if not allowed:
+        raise ValueError(_blocked_message(current))
+    return current
+
+
+def canonical_live_risk_allows_exposure(result: Mapping[str, Any] | None) -> bool:
+    if not isinstance(result, Mapping):
+        return False
+    try:
+        decision = validate_risk_decision(result.get("risk_decision") or {})
+    except (TypeError, ValueError):
+        return False
+    return decision.allow_exposure_increase
 
 
 def canonical_account_risk_state(context: Mapping[str, Any]) -> dict[str, Any]:
@@ -551,6 +821,22 @@ def grid_risk_evaluator() -> dict[str, Any]:
     }
 
 
+def live_money_risk_evaluator() -> dict[str, Any]:
+    root = Path(__file__).resolve().parents[1]
+    paths = (
+        root / "services" / "risk_port.py",
+        root / "schemas" / "risk.py",
+        root / "services" / "live_money_guardrails.py",
+    )
+    hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    return {
+        "name": "live_money_risk_bridge",
+        "version": LIVE_MONEY_RISK_EVALUATOR_VERSION,
+        "source_hashes": hashes,
+        "code_sha256": _digest(hashes),
+    }
+
+
 def action_class_for_command(command: Mapping[str, Any]) -> str:
     """Derive economic intent server-side; caller source never grants a bypass."""
 
@@ -560,6 +846,115 @@ def action_class_for_command(command: Mapping[str, Any]) -> str:
     if event in CLOSE_EVENTS:
         return "reduce_only"
     return "increase_exposure"
+
+
+def _normalized_risk_command(command: Mapping[str, Any]) -> dict[str, Any]:
+    identity_payload = {
+        "cycle_id": str(command.get("cycle_id") or ""),
+        "strategy_plan_id": str(command.get("strategy_plan_id") or ""),
+        "strategy_plan_version": command.get("strategy_plan_version"),
+        "side": str(command.get("side") or "").lower(),
+        "event": str(command.get("event") or "entry").lower(),
+        "order_type": str(command.get("order_type") or "").lower(),
+        "price": _finite_positive(command.get("price") or command.get("market_price")),
+        "quantity": _finite_positive(command.get("quantity") or command.get("contracts")),
+        "notional": _finite_positive(command.get("notional")),
+        "sl": _finite_positive(command.get("sl")),
+        "tp": _finite_positive(command.get("tp")),
+        "ts": str(command.get("ts") or ""),
+        "symbol": str(command.get("symbol") or ""),
+        "source": str(command.get("source") or ""),
+    }
+    identity = str(command.get("source_fill_id") or command.get("command_id") or "")
+    return {
+        "command_id": identity or f"manual-command-{_digest(identity_payload)}",
+        **identity_payload,
+    }
+
+
+def _live_money_risk_request(
+    *,
+    checked_at: str,
+    run_date: str,
+    ticket: Mapping[str, Any],
+    symbol: str,
+    side: str,
+    requested_price: float,
+    quantity: float,
+    source: str,
+    reconciliation: Mapping[str, Any],
+    legacy: Mapping[str, Any],
+    action_class: str,
+) -> RiskRequest:
+    candidate = dict(legacy.get("candidate") or {})
+    candidate.update({
+        "kind": "venue_entry",
+        "run_date": str(run_date),
+        "ticket_id": str(ticket.get("ticket_id") or candidate.get("ticket_id") or ""),
+        "symbol": str(symbol),
+        "side": str(side),
+        "requested_price": requested_price,
+        "quantity": quantity,
+        "source": str(source),
+    })
+    policy = {
+        "schema_version": "live-money-risk-policy-v1",
+        "limits": dict(legacy.get("limits") or {}),
+        "legacy_policy_authority": "LiveMoneyGuardrails",
+        "unknown_facts_block_new_exposure": True,
+    }
+    policy["policy_id"] = f"live-money-risk-policy-{_digest(policy)}"
+    return build_risk_request(
+        checked_at=checked_at,
+        scope="venue_entry",
+        action_class=action_class,
+        candidate=candidate,
+        account={
+            "daily_loss": dict(legacy.get("daily_loss") or {}),
+            "halt": dict(legacy.get("halt") or {}),
+        },
+        market={
+            "symbol": str(symbol),
+            "price": requested_price,
+            "source": str(source),
+        },
+        execution={
+            "exposure": dict(legacy.get("exposure") or {}),
+            "daily_entry_orders": dict(legacy.get("daily_entry_orders") or {}),
+            "reconciliation": dict(reconciliation),
+        },
+        policy=policy,
+        evaluator=live_money_risk_evaluator(),
+    )
+
+
+def _canonical_live_blockers(legacy: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows = legacy.get("blockers") if isinstance(legacy.get("blockers"), list) else []
+    blockers: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            blockers.append(_blocker(
+                "legacy_guardrail_blocker_invalid",
+                "LiveMoneyGuardrails",
+                "legacy live-money blocker is malformed",
+                {"index": index},
+            ))
+            continue
+        blockers.append({
+            "code": str(row.get("code") or "legacy_guardrail_blocked"),
+            "source": str(row.get("source") or "LiveMoneyGuardrails"),
+            "message": str(row.get("message") or row.get("status") or "legacy live-money guardrail blocked entry"),
+            "evidence": dict(row.get("evidence") or {}),
+            **({"legacy_status": str(row.get("status"))} if row.get("status") else {}),
+        })
+    if legacy.get("allows_new_order") is not True and not blockers:
+        blockers.append(_blocker(
+            "legacy_guardrail_denied_without_blocker",
+            "LiveMoneyGuardrails",
+            "legacy live-money guardrail did not grant entry permission",
+            {"status": legacy.get("status"), "allows_new_order": legacy.get("allows_new_order")},
+        ))
+    return blockers
 
 
 def _grid_candidate(
@@ -573,21 +968,9 @@ def _grid_candidate(
     price_range = plan.get("range") if isinstance(plan.get("range"), Mapping) else {}
     normalized_commands = []
     for command in commands:
-        normalized_commands.append({
-            "command_id": str(command.get("source_fill_id") or command.get("command_id") or ""),
-            "cycle_id": str(command.get("cycle_id") or ""),
-            "strategy_plan_id": str(command.get("strategy_plan_id") or ""),
-            "strategy_plan_version": command.get("strategy_plan_version"),
-            "side": str(command.get("side") or "").lower(),
-            "event": str(command.get("event") or "entry").lower(),
-            "order_type": str(command.get("order_type") or "").lower(),
-            "price": _finite_positive(command.get("price")),
-            "quantity": _finite_positive(command.get("quantity")),
-            "notional": _finite_positive(command.get("notional")),
-            "sl": _finite_positive(command.get("sl")),
-            "tp": _finite_positive(command.get("tp")),
-            "ts": str(command.get("ts") or ""),
-        })
+        normalized = _normalized_risk_command(command)
+        normalized["command_id"] = str(command.get("source_fill_id") or command.get("command_id") or "")
+        normalized_commands.append(normalized)
     normalized_commands.sort(key=lambda row: (row["command_id"], row["side"], row["price"] or 0.0))
     return {
         "kind": "strategy_plan_grid",

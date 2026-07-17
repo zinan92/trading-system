@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 
 import pipelines.dashboard_server as dashboard_server
+from schemas.accounting import build_accounting_snapshot
 from services.journal_store import load_json, write_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
@@ -18,7 +19,9 @@ def _isolate_legacy_execution_engine(monkeypatch: pytest.MonkeyPatch):
         "shadow": "none",
         "real_money_eligible": False,
     }
-    factory = lambda *args, **kwargs: deepcopy(config)
+    def factory(*_args, **_kwargs):
+        return deepcopy(config)
+
     monkeypatch.setattr("services.dualtrack_config.dualtrack_config", factory)
     monkeypatch.setattr(dashboard_server, "dualtrack_config", factory)
 
@@ -58,6 +61,49 @@ class FakeFreshMarketFeed:
             "latest_close": 105.0,
             "bars": [{"timestamp": "2026-07-05T02:00:00+00:00", "close": 105.0}],
         }
+
+
+def _canonical_account_context(equity: float = 10_000.0) -> dict:
+    snapshot = build_accounting_snapshot(
+        source_type="production_history",
+        source_name="production_history",
+        source_schema_version="dualtrack-execution-v1",
+        scope={"strategy_plan_scope": "manual-order-test"},
+        currency="USDT",
+        orders=[],
+        fills=[],
+        positions=[],
+        trades=[],
+        counts={},
+        pnl={"net_realized_pnl": 0.0, "unrealized_pnl": 0.0},
+        account={"starting_balance": equity, "ending_cash": equity, "equity": equity},
+        completeness={"status": "complete", "limitations": []},
+        reconciliation={"status": "pass", "issues": []},
+    ).to_dict()
+    return {"equity": equity, "ending_cash": equity, "accounting_snapshot": snapshot}
+
+
+def _empty_execution_snapshot(cycle_id: str) -> dict:
+    return {
+        "schema_version": "dualtrack-execution-v1",
+        "engine": "legacy_paper",
+        "cycle_id": cycle_id,
+        "orders": [],
+        "fills": [],
+        "positions": [],
+        "account": {
+            "starting_cash": 10_000.0,
+            "realized_pnl": 0.0,
+            "ending_cash": 10_000.0,
+            "equity": 10_000.0,
+            "margin": 0.0,
+            "exposure": 0.0,
+            "slippage": 0.0,
+            "fees": 0.0,
+            "funding": 0.0,
+        },
+        "pnl": {"realized": 0.0, "unrealized": 0.0},
+    }
 
 
 def test_dualtrack_mutations_require_same_local_origin() -> None:
@@ -261,6 +307,240 @@ def test_order_post_response_routes_through_execution_adapter(
 
     assert captured["side"] == "buy"
     assert response == {"status": "filled", "fill": {"fill_id": "adapter-fill", "event": "entry"}}
+
+
+def test_network_manual_entry_cannot_bypass_risk_with_client_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    submitted: list[dict] = []
+
+    class RecordingAdapter:
+        name = "legacy_paper"
+
+        def submit_order(self, command: dict) -> dict:
+            submitted.append(dict(command))
+            return {"fill_id": "manual-fill", "event": "entry"}
+
+        def snapshot(self, requested_cycle: str) -> dict:
+            return _empty_execution_snapshot(requested_cycle)
+
+        def reconcile(self, _requested_cycle: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+    cfg = deepcopy(TEST_CONFIG)
+    cfg["max_leverage"] = 2.0
+    cfg["strategy_grid"] = {"max_plan_loss_pct": 0.10, "capital_utilization_cap": 1.0}
+
+    def config_factory(*_args, **_kwargs):
+        return deepcopy(cfg)
+
+    monkeypatch.setattr(dashboard_server, "dualtrack_config", config_factory)
+    monkeypatch.setattr("services.dualtrack_config.dualtrack_config", config_factory)
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda _root: RecordingAdapter(),
+    )
+    trusted_market = {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "binance_usdm_futures",
+        "source_mode": "binance_usdm_futures",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "latest_close": 100.0,
+        "latest_timestamp": "2026-07-05T01:19:00+00:00",
+    }
+
+    with pytest.raises(ValueError, match="plan_loss_budget_exceeded"):
+        dashboard_server.build_dualtrack_order_post_response(
+            {
+                "cycle_id": cycle_id,
+                "ts": "2026-07-05T01:20:00+00:00",
+                "side": "buy",
+                "event": "entry",
+                "order_type": "limit",
+                "price": 100.0,
+                "notional": 50_000.0,
+                "sl": 50.0,
+                "tp": 110.0,
+                "source": "spoofed-browser-source",
+            },
+            output_root=output,
+            enforce_risk=True,
+            market=trusted_market,
+            account=_canonical_account_context(),
+        )
+
+    assert submitted == []
+    decision = load_json(output / "dualtrack" / "risk_decisions" / "current.json")[-1]
+    assert decision["outcome"] == "block"
+    assert decision["request"]["action_class"] == "increase_exposure"
+    assert not (output / "dualtrack" / "orders" / f"{cycle_id}.json").exists()
+
+
+def test_network_manual_entry_submits_same_exact_command_authorized_by_risk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    submitted: list[dict] = []
+
+    class RecordingAdapter:
+        name = "legacy_paper"
+
+        def submit_order(self, command: dict) -> dict:
+            submitted.append(dict(command))
+            return {"fill_id": "manual-fill", "event": "entry", "quantity": command["quantity"]}
+
+        def snapshot(self, requested_cycle: str) -> dict:
+            return _empty_execution_snapshot(requested_cycle)
+
+        def reconcile(self, _requested_cycle: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+    cfg = deepcopy(TEST_CONFIG)
+    cfg["max_leverage"] = 2.0
+    cfg["strategy_grid"] = {"max_plan_loss_pct": 0.10, "capital_utilization_cap": 1.0}
+
+    def config_factory(*_args, **_kwargs):
+        return deepcopy(cfg)
+
+    monkeypatch.setattr(dashboard_server, "dualtrack_config", config_factory)
+    monkeypatch.setattr("services.dualtrack_config.dualtrack_config", config_factory)
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda _root: RecordingAdapter(),
+    )
+    trusted_market = {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "binance_usdm_futures",
+        "source_mode": "binance_usdm_futures",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "latest_close": 100.0,
+        "latest_timestamp": "2026-07-05T01:19:00+00:00",
+    }
+
+    response = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:20:00+00:00",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 100.0,
+            "notional": 500.0,
+            "sl": 95.0,
+            "tp": 105.0,
+            "source": "manual-browser",
+        },
+        output_root=output,
+        enforce_risk=True,
+        market=trusted_market,
+        account=_canonical_account_context(),
+    )
+
+    authorized = response["risk_decision"]["request"]["candidate"]["commands"][0]
+    assert response["status"] == "filled"
+    assert response["risk_decision"]["allow_exposure_increase"] is True
+    assert len(submitted) == 1
+    assert submitted[0]["quantity"] == authorized["quantity"] == 5.0
+    assert submitted[0]["notional"] == authorized["notional"] == 500.0
+
+
+def test_network_manual_entry_recheck_rejects_concurrent_execution_drift_before_submit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+
+    class DriftingAdapter:
+        name = "legacy_paper"
+
+        def __init__(self) -> None:
+            self.snapshot_calls = 0
+            self.submissions = 0
+
+        def submit_order(self, _command: dict) -> dict:
+            self.submissions += 1
+            raise AssertionError("stale manual risk decision must fail before submit")
+
+        def snapshot(self, requested_cycle: str) -> dict:
+            self.snapshot_calls += 1
+            snapshot = _empty_execution_snapshot(requested_cycle)
+            if self.snapshot_calls >= 2:
+                snapshot["orders"] = [{
+                    "order_id": "concurrent-entry",
+                    "state": "accepted",
+                    "side": "buy",
+                    "event": "entry",
+                    "order_type": "limit",
+                    "price": 90.0,
+                    "quantity": 1.0,
+                    "notional": 90.0,
+                }]
+            return snapshot
+
+        def reconcile(self, _requested_cycle: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+    adapter = DriftingAdapter()
+    cfg = deepcopy(TEST_CONFIG)
+    cfg["max_leverage"] = 2.0
+    cfg["strategy_grid"] = {"max_plan_loss_pct": 0.10, "capital_utilization_cap": 1.0}
+
+    def config_factory(*_args, **_kwargs):
+        return deepcopy(cfg)
+
+    monkeypatch.setattr(dashboard_server, "dualtrack_config", config_factory)
+    monkeypatch.setattr("services.dualtrack_config.dualtrack_config", config_factory)
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda _root: adapter,
+    )
+
+    with pytest.raises(ValueError, match="risk decision stale"):
+        dashboard_server.build_dualtrack_order_post_response(
+            {
+                "cycle_id": cycle_id,
+                "ts": "2026-07-05T01:20:00+00:00",
+                "side": "buy",
+                "event": "entry",
+                "order_type": "limit",
+                "price": 100.0,
+                "notional": 500.0,
+                "sl": 95.0,
+                "tp": 105.0,
+                "source": "manual-browser",
+            },
+            output_root=output,
+            enforce_risk=True,
+            market={
+                "status": "ready",
+                "fresh": True,
+                "is_synthetic": False,
+                "provider": "binance_usdm_futures",
+                "source_mode": "binance_usdm_futures",
+                "symbol": "GOLD",
+                "timeframe": "1m",
+                "latest_close": 100.0,
+                "latest_timestamp": "2026-07-05T01:19:00+00:00",
+            },
+            account=_canonical_account_context(),
+        )
+
+    assert adapter.submissions == 0
 
 
 def test_nautilus_market_close_advances_with_server_validated_event(
