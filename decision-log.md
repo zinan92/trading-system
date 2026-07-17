@@ -5782,3 +5782,65 @@ auditable datafeed port; broker execution remains a separate port.
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-order-lifecycle-desktop.png`.
 - 390px position-time evidence (zero horizontal page overflow):
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-order-lifecycle-mobile.png`.
+
+## 2026-07-18 - A0 versioned market-data trust envelope
+
+### Decision
+
+- Keep `schemas.market_data.Bar` as the only in-process OHLCV value object.
+  Version the complete batch boundary with `market-data-envelope-v1` instead
+  of adding a schema field to every candle or creating a fourth candle model.
+- Translate the upstream `kline-candles-v1` response in exactly one adapter
+  mapper. The mapper validates source identity, asset class, timeframe,
+  response count, OHLC geometry, chronological timestamps, execution-venue
+  evidence, and all trust-policy enums before returning an envelope.
+- Define live execution readiness conservatively. Real data from an execution
+  venue is not enough: the request and response must also prove strict quality,
+  cache bypass, no fallback, exact source selection, freshness, no rejection,
+  and no access issue.
+- Add `DatafeedMarketRepository.load_envelope()` as an opt-in seam only. A0
+  does not route the existing `load_bars*`, strategy, execution, dashboard, or
+  Nautilus cutover paths through the new contract. Runtime migration belongs
+  to A1 after shadow comparison against current live responses.
+- Treat Binance XAUUSDT and Yahoo `GC=F` as structurally compatible market-data
+  batches but not semantically substitutable instruments. The research fixture
+  remains explicitly non-executable even though it contains real OHLCV data.
+
+### Gotchas
+
+- `fresh=null` is valid for some market-hours/research sources but can never
+  satisfy the live execution-ready predicate. Datafeed currently also reports
+  `fresh=null` for non-continuous sessioned execution venues, so A1 must add
+  session-aware freshness before Tiger/COMEX can use this gate; A0 remains
+  deliberately fail-closed.
+- `execution_venue=true` alone is insufficient. A relaxed, cached, fallback,
+  source-mismatched, rejected, or access-degraded response remains blocked.
+- `DatafeedMarketClient` intentionally still returns the raw HTTP dict. Only
+  `datafeed_market_mapper.map_candle_response` may convert that dict into the
+  versioned domain envelope.
+- `selected_source` is the registered adapter identity while `source_mode` is
+  a path label. They are both required and preserved but are not required to
+  have the same string value.
+- Envelope-level trust fields and batch membership are frozen. The legacy
+  `Bar.quality_flags` list remains mutable for compatibility in A0, so row
+  flags are not the authoritative execution-readiness evidence and mutating
+  them cannot alter the envelope header.
+- The primary worktree contains unrelated Debug and grid-range changes. A0 was
+  built in an isolated worktree and must not be merged by overwriting those
+  changes or by copying whole files from the branch.
+
+### Verification
+
+- Clean isolated baseline before implementation: `28 passed` across the
+  existing datafeed, market boundary, and execution-contract tests.
+- Envelope, client-level HTTP 502 body preservation, repository, and
+  architecture-boundary checks after implementation: `38 passed`.
+- Focused upstream regression before review: `76 passed`.
+- Full repository regression before review: `1577 passed, 6 skipped`.
+- Opus adversarial review found no P0/P1 issue. Follow-up fixes separated
+  `source_mode` from adapter identity, compared equivalent timestamp instants,
+  cross-checked `age_seconds <= max_age_seconds`, and added the missing
+  timeframe/latest/timezone contract tests.
+- Final post-review focused regression: `84 passed`.
+- Final post-review full repository regression: `1585 passed, 6 skipped in
+  458.67s`.
