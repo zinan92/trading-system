@@ -233,7 +233,7 @@ def test_default_rollback_precheck_requires_stopped_flat_reconciled_nautilus(tmp
             return {"status": "ok", "issues": []}
 
     monkeypatch.setattr(
-        "services.dualtrack_execution_adapter.build_configured_execution_engine_adapter",
+        "services.execution_plugin_composition.build_configured_execution_engine_adapter",
         lambda *args, **kwargs: FakeAdapter(),
     )
 

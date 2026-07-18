@@ -2,9 +2,9 @@
 
 ## Executive answer
 
-**Overall architecture progress: 90%**
+**Overall architecture progress: 91%**
 
-`██████████████████░░ 90%`
+`██████████████████▎░ 91%`
 
 The system now has a real hexagonal spine from trusted market facts through
 StrategyPlan, Risk, Execution, Accounting, Broker, and the Dashboard read model.
@@ -12,8 +12,8 @@ Changing a data source, paper execution engine, or broker no longer requires
 rewriting P&L, risk, or the UI.
 
 It is not yet a full plug-and-play system. Signal analysis, production grid
-proposal generation, and all three backtest use cases now resolve through
-frozen plugin registries. The largest remaining gaps are physical execution and
+proposal generation, all three backtest use cases, and paper execution now
+resolve through frozen plugin registries. The largest remaining gaps are
 accounting-adapter extraction, venue-package strangling, and the authoritative
 Market Envelope V2 cutover.
 
@@ -24,7 +24,8 @@ readiness, or whether the self-evolution loop has enough trades.
 
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
-is the arithmetic mean of the seven visible row totals: `630 / 7 = 90%`.
+is the rounded arithmetic mean of the seven visible row totals:
+`635 / 7 = 90.7%`, reported as `91%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
@@ -32,7 +33,7 @@ is the arithmetic mean of the seven visible row totals: `630 / 7 = 90%`.
 | Data cleaning / quality | 25 | 25 | 20 | 15 | 85 |
 | Analysis / strategy | 25 | 20 | 25 | 25 | 95 |
 | Backtest / replay | 25 | 20 | 25 | 20 | 90 |
-| Live execution / broker | 25 | 20 | 20 | 20 | 85 |
+| Live execution / broker | 25 | 20 | 25 | 20 | 90 |
 | Risk / accounting / reconciliation | 25 | 20 | 20 | 25 | 90 |
 | Dashboard / read model | 25 | 25 | 20 | 25 | 95 |
 
@@ -47,7 +48,7 @@ flowchart LR
     SA --> PP["StrategyProposalPort + frozen plugin registry"]
     PP --> SP["Validated StrategyPlan"]
     SP --> RP["RiskDecisionPort"]
-    RP --> EP["ExecutionEngineAdapter"]
+    RP --> EP["ExecutionEngineAdapter + frozen plugin registry"]
     EP --> AP["AccountingSnapshot"]
     EP --> BP["BrokerExecutionPort"]
     BP --> BR["Broker reconciliation"]
@@ -170,19 +171,25 @@ plug-compatible while plan safety remains invariant across plugins.
   callers. No production application imports it, but its retirement and the
   migration of legacy evidence readers remain contained cleanup debt.
 
-### 5. Live execution / broker — 85/100
+### 5. Live execution / broker — 90/100
 
-- Ports: `ExecutionEngineAdapter`, `BrokerExecutionPort`, explicit broker
-  capabilities, and a separate reconciliation port.
-- Composition: Legacy/Nautilus paper selection is gated; `BrokerPluginRegistry`
-  resolves `(mode, provider, environment)` and rejects unknown armed paths.
+- Ports: the provider-free `ExecutionEngineAdapter`, `BrokerExecutionPort`,
+  explicit broker capabilities, and a separate reconciliation port.
+- Isolation/composition: Legacy, Nautilus, and non-authoritative Shadowing live
+  in separate adapter modules. One explicit frozen execution registry publishes
+  role/capability/paper-only descriptors plus a stable fingerprint. Production
+  runner, Dashboard commands, control plane, and attended cutover resolve only
+  through the trusted composition root. `dualtrack_execution_adapter.py` is now
+  a re-export-only compatibility facade with no selection or execution logic.
+  `BrokerPluginRegistry` separately resolves `(mode, provider, environment)`
+  and rejects unknown armed paths.
 - Safety: risk, activation, preflight, reconciliation, attended approval,
-  idempotency, ambiguous-submit recovery, protective orders, and reduce-only
-  exits remain additive.
-- Remaining 15:
-  - `dualtrack_execution_adapter.py` contains both the protocol, Legacy
-    implementation, and hard-coded Legacy/Nautilus factory instead of a pure
-    execution plugin registry.
+  seven-cycle/parity gates, exact override acknowledgement, isolated-runtime
+  requirements, idempotency, ambiguous-submit recovery, protective orders, and
+  reduce-only exits remain core-owned and additive. A custom provider-free
+  paper engine can be registered without editing an application module; config
+  cannot grant real-money or cutover authority.
+- Remaining 10:
   - the large `LiveBrokerAdapter` compatibility class still owns several venue
     wire implementations; adding a broker is registered, but physical isolation
     is incomplete.
@@ -226,7 +233,7 @@ plug-compatible while plan safety remains invariant across plugins.
 | Replacement | Current answer | Required work |
 |---|---|---|
 | Market data provider | Yes, behind datafeed | Implement one datafeed adapter and pass the envelope conformance suite |
-| Paper execution engine | Mostly | Implement `ExecutionEngineAdapter`, exact accounting/conformance, then pass attended cutover gates |
+| Paper execution engine | Yes | Implement and register `ExecutionEngineAdapter`, pass exact accounting/conformance, then satisfy attended cutover gates |
 | Broker / venue | Yes at application boundary | Register execution + reconciliation plugins and pass venue/lifecycle/protection tests |
 | Risk policy evaluator | Yes for normalized requests | Implement `RiskDecisionPort`; preserve mutation-time identity and exit availability |
 | Dashboard client | Yes | Consume `trading-system-read-model-v1`; commands remain separate POSTs |
@@ -259,22 +266,19 @@ evolution yet.
 
 ## Shortest remaining architecture backlog
 
-1. **Execution plugin registry (medium):** move the protocol out of
-   `dualtrack_execution_adapter.py`; register Legacy/Nautilus/Shadow factories
-   without an engine-name branch in the application module.
-2. **Accounting adapter extraction (medium):** keep
+1. **Accounting adapter extraction (medium):** keep
    `accounting-snapshot-v1`, move broker-specific mappings out of
    `accounting_projection.py`, and register them by source contract.
-3. **Venue package strangler (large but incremental):** move Binance, Tiger,
+2. **Venue package strangler (large but incremental):** move Binance, Tiger,
    OANDA, and MT5 networking out of `LiveBrokerAdapter` one adapter at a time;
    retain the compatibility facade until every venue passes the same suite.
-4. **Market Envelope V2 cutover (small after evidence):** capture real
+3. **Market Envelope V2 cutover (small after evidence):** capture real
    session-aware same-response parity, switch authority explicitly, then delete
    the duplicate `load_bars()` interpretation and narrow SQLite seams.
-5. **Legacy read-surface retirement (medium):** migrate remaining consumers to
+4. **Legacy read-surface retirement (medium):** migrate remaining consumers to
    the stable read model, announce deprecation, then remove facade-only
    presentation code.
-6. **Backtest compatibility retirement (small):** migrate remaining direct
+5. **Backtest compatibility retirement (small):** migrate remaining direct
    `BacktestClient` callers to explicit plugins, then delete its fallback branch
    and narrow legacy `BacktestEvidence` readers to the V2 provenance contract.
 
@@ -283,11 +287,11 @@ evolution yet.
 The architecture is now strong enough that self-repair and grid evolution can
 be built without reworking market, strategy, backtest, risk, accounting, broker,
 and UI truth again. A new signal engine, production grid planner, signal
-backtester, historical ranker, or Strategy Shadow replay can be registered
-without editing its application pipeline. The honest state is a robust
-hexagonal spine with several contained compatibility monoliths still awaiting
-physical extraction.
+backtester, historical ranker, Strategy Shadow replay, or paper execution
+engine can be registered without editing its application pipeline. The honest
+state is a robust hexagonal spine with several contained compatibility
+monoliths still awaiting physical extraction.
 
 For the grid-only product focus, the next highest-leverage architecture change
-is the execution plugin registry, followed by broker-specific accounting
-adapter extraction—not another Dashboard or provider-specific integration.
+is broker-specific accounting adapter extraction, followed by incremental venue
+package isolation—not another Dashboard or provider-specific integration.
