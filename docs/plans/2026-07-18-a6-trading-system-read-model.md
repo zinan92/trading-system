@@ -1,6 +1,6 @@
 # A6 Trading System Read Model Implementation Plan
 
-**Status:** In progress on 2026-07-18.
+**Status:** Complete on 2026-07-18.
 
 **Goal:** Give every operator-facing GET and the production GridMind Dashboard
 one immutable, versioned snapshot of the running strategy, market trust,
@@ -192,7 +192,8 @@ runner presentation logic.
 ### Success criteria
 
 1. Runner execution-profile output is built from the selected Broker Port
-   descriptor/readiness, not provider-specific branches.
+   descriptor and local arming facts, not provider-specific branches or a
+   query-time venue preflight.
 2. Reconciliation status/block reason uses one normalized projection rather
    than Binance/Tiger labels in orchestration.
 3. Provider-neutrality tests cover the new read projector, GridMind endpoint,
@@ -267,9 +268,10 @@ runner presentation logic.
 - A RiskDecision `current.json` is observability only. It cannot authorize a
   new order and cannot be presented as current if its decision ID differs from
   runtime.
-- Broker preflight can inspect environment presence and file permissions but
-  must not open a network client. The read model must redact literal secret
-  values, credential paths, signatures, raw acknowledgements, and commands.
+- Broker preflight may inspect local state or contact a venue and therefore
+  remains command-side. The read model projects only descriptor/config facts
+  and must redact literal secret values, credential paths, signatures, raw
+  acknowledgements, and commands.
 - The GridMind browser currently derives run inconsistency, counts, total P&L,
   return, and some strategy labels. Moving these fields backend-side must keep
   control availability fail-closed and cannot loosen POST authorization.
@@ -306,6 +308,51 @@ runner presentation logic.
   P&L/count/strategy arithmetic is gone.
 - Accepted P2: project provider/engine labels instead of branching in GridMind,
   and capture one safe POST-to-new-GET control round trip.
+
+## Completion evidence
+
+- `GET /api/trading-system/read-model` now provides one content-bound
+  `trading-system-read-model-v1`; GridMind consumes it directly and performs no
+  authoritative P&L, return, count, spacing, strategy, provider, or engine
+  calculation in JavaScript.
+- Current orders and positions are explicitly scoped to the current execution
+  snapshot. Started/completed lifecycles, fills, cumulative notional, P&L, and
+  return are explicitly scoped to the canonical all-versioned-production-plan
+  accounting snapshot; both snapshot IDs are included in the response.
+- Durable fingerprint tests cover all four legacy Dashboard snapshots, the
+  legacy console edge, and the new stable GET. A query cannot create a plan,
+  evaluate an exit, mark P&L, call broker preflight, or write trading state.
+- Focused post-review accounting/read-model/broker/runner regression:
+  `91 passed`. Final full repository regression: `1735 passed, 7 skipped in
+  361.60s`. Ruff on every A6-changed Python file: `All checks passed`.
+- Repository-wide Ruff still reports `167` pre-existing findings outside A6;
+  no unrelated mechanical cleanup was mixed into this milestone.
+- Browser evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-18-a6-read-model-desktop.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-18-a6-read-model-mobile.png`.
+- The safe temporary-paper POST-to-GET integration test passed. A direct probe
+  of the primary worktree's configured Nautilus path was intentionally not
+  forced because attended approval was absent; no production config, broker
+  authority, order, or strategy state was changed.
+
+## Final Opus implementation review
+
+- Initial verified review used `claude-opus-4-8`, session
+  `7179b6e7-dbe1-4553-9712-d585e347f717`, receipt
+  `20260718T003143Z_50e6034f-a889-4a42-b983-5b28feb06fdf.json`. It correctly
+  blocked shipment on one P1 (current-cycle versus historical accounting scope)
+  and one P2 (query-time paper preflight destabilizing snapshot identity).
+- Both findings were fixed in `8b920cf` with explicit current/history scopes,
+  deterministic no-preflight GET behavior, a two-cycle accounting test, and
+  direct stable-GET purity coverage.
+- Verified follow-up used `claude-opus-4-8`, session
+  `fcf715f6-e860-4141-a9ca-f4e91720d208`, receipt
+  `20260718T005733Z_4e3cec78-a2e6-449a-a2e0-bb7a0eac0753.json`: `P1 CLOSED`,
+  `P2 CLOSED`, no new P0/P1, final verdict `SHIP for A6`.
+- The account view intentionally combines cumulative cash/equity/P&L with
+  current exposure/margin/slippage. These scopes are display facts only and do
+  not feed command authorization.
 
 ## Completion boundary
 

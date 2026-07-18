@@ -6411,3 +6411,72 @@ auditable datafeed port; broker execution remains a separate port.
   and authoritative counts are no longer calculated in JavaScript.
 - Accepted P2: project broker/engine display labels and capture one safe
   control POST reflected through the new GET.
+
+## 2026-07-18 - A6 stable Trading System Read Model complete
+
+### Value delivered
+
+- GridMind now reads one immutable `trading-system-read-model-v1` for the
+  running strategy summary, market trust, runtime, orders, positions, trade
+  lifecycles, fills, canonical P&L/return, risk, broker, and review/shadow
+  references.
+- Refreshing an operator GET no longer creates a compatibility plan, evaluates
+  an exit, marks a position, writes trading artifacts, or calls broker
+  preflight. The same request-scoped market observation feeds display,
+  execution marking, and accounting.
+- The operational tabs show authoritative counts. One entry starts one trade;
+  entry plus exit remains one trade and becomes one completed round trip.
+- The browser no longer calculates trading truth. Strategy direction/style,
+  grid geometry, spacing, per-grid notional, counts, P&L, return, provider, and
+  engine labels are backend projections.
+- Runner broker diagnostics are adapter-neutral and secret-safe. Changing
+  provider composition no longer requires Binance/Tiger presentation branches.
+
+### Decisions
+
+- Preserve the current execution snapshot for current orders, positions,
+  exposure, and margin. Use the all-versioned-production-plan accounting
+  snapshot for lifecycle totals, fills, cumulative notional, P&L, cash/equity,
+  and return; expose both snapshot IDs and scopes.
+- Treat `armed` as a local configuration fact only. Venue readiness remains a
+  command-side preflight immediately before submission and is never triggered
+  by a read model.
+- Keep `/api/strategy-console/current` as a compatibility facade and every
+  control as POST. Risk decisions displayed by GET remain non-authoritative
+  observations and are never reused as permission.
+
+### Gotchas
+
+- The first final Opus review found that the stable endpoint still consumed
+  current-cycle accounting for cumulative facts while the legacy facade showed
+  production history. The defect was real even though the one-cycle browser
+  fixture passed; a two-cycle regression now locks the scopes apart.
+- The same review found a paper `preflight()` call in the stable GET. Although
+  it was locally inert, its wall-clock `checked_at` changed the content hash and
+  was a latent venue-call trap. The GET now projects descriptor/config only.
+- Current cash/equity/P&L is cumulative while exposure/margin/slippage is the
+  current execution overlay. This is intentional operator presentation, not a
+  command or risk input.
+- Full-repository Ruff has 167 pre-existing findings. A6 changed-file Ruff is
+  clean; unrelated lint cleanup remains out of scope.
+- The primary worktree's configured Nautilus path requires attended approval,
+  so it was not forced for visual acceptance. Deterministic browser fixtures
+  and a real temporary-paper POST-to-GET integration test provide safe proof;
+  no production strategy, broker authority, credentials, or orders changed.
+
+### Verification and evidence
+
+- Focused post-review regression: `91 passed`.
+- Full repository regression: `1735 passed, 7 skipped in 361.60s`.
+- Ruff on all A6-changed Python files: `All checks passed`.
+- Desktop evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-18-a6-read-model-desktop.png`.
+- Mobile evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-18-a6-read-model-mobile.png`.
+- Initial verified Opus: actual model `claude-opus-4-8`, session
+  `7179b6e7-dbe1-4553-9712-d585e347f717`, receipt
+  `20260718T003143Z_50e6034f-a889-4a42-b983-5b28feb06fdf.json`.
+- Verified follow-up Opus: actual model `claude-opus-4-8`, session
+  `fcf715f6-e860-4141-a9ca-f4e91720d208`, receipt
+  `20260718T005733Z_4e3cec78-a2e6-449a-a2e0-bb7a0eac0753.json`; `P1 CLOSED`,
+  `P2 CLOSED`, no new P0/P1, `SHIP for A6`.
