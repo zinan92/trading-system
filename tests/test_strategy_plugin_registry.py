@@ -137,6 +137,13 @@ def test_registry_rejects_empty_duplicate_and_structurally_invalid_plugins() -> 
     registry.register("broken", lambda _params: object())
     with pytest.raises(InvalidStrategyPlugin, match=r"without generate\(\)"):
         registry.build("broken", {})
+    registry.register(
+        "lying",
+        CustomAnalysisEngine,
+        capabilities=("generate", "historical_signals"),
+    )
+    with pytest.raises(InvalidStrategyPlugin, match="missing declared capabilities: historical_signals"):
+        registry.build("lying", {})
 
     registry.freeze()
     with pytest.raises(InvalidStrategyPlugin, match="registry is frozen"):
@@ -157,6 +164,7 @@ def test_builtin_composition_registers_every_configured_engine_name() -> None:
     assert len(audit["registry_fingerprint"]) == 64
     assert audit["strategy_count"] == 25
     assert all(item["status"] == "pass" for item in audit["strategies"])
+    assert all(isinstance(strategy.signal_engine(), StrategyAnalysisPort) for strategy in registry.strategies())
 
 
 def test_descriptors_are_stable_sorted_and_do_not_expose_factories() -> None:

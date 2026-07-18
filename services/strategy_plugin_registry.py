@@ -93,6 +93,15 @@ class StrategyPluginRegistry:
             raise InvalidStrategyPlugin(
                 f"strategy plugin {descriptor.name} returned {type(engine).__name__} without generate()"
             )
+        missing = [
+            capability
+            for capability in descriptor.capabilities
+            if not callable(getattr(engine, capability, None))
+        ]
+        if missing:
+            raise InvalidStrategyPlugin(
+                f"strategy plugin {descriptor.name} is missing declared capabilities: {','.join(missing)}"
+            )
         return engine
 
     def names(self) -> tuple[str, ...]:
