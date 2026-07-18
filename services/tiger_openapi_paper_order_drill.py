@@ -4,9 +4,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
-from services.broker_adapter import BrokerOrderRequest
+from services.broker_port import BrokerOrderRequest
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.tiger_openapi_broker_adapter import TigerOpenApiPaperBrokerAdapter

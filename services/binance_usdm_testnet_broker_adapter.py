@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from schemas.market_data import PaperOrder
-from services.broker_adapter import BrokerOrderRequest, LiveBrokerAdapter
+from services.binance_usdm_broker_adapter import BinanceUsdmBrokerAdapter
+from services.broker_port import BrokerOrderRequest
 from services.journal_store import load_json, write_json
 from services.live_reconciliation import LiveBrokerReconciliation
 from services.order_lifecycle import IllegalOrderTransition, OrderLifecycleStore
@@ -19,12 +20,12 @@ TESTNET_BASE_URL = "https://demo-fapi.binance.com"
 TESTNET_SYMBOL = "XAUUSDT"
 
 
-class BinanceUsdmTestnetBrokerAdapter(LiveBrokerAdapter):
+class BinanceUsdmTestnetBrokerAdapter(BinanceUsdmBrokerAdapter):
     """Locked Binance USDM testnet adapter for XAUUSDT go-live drills.
 
     It deliberately bypasses the real-money activation gate only for Binance's
-    testnet endpoint. Mainnet remains blocked by the normal LiveBrokerAdapter
-    live_activation path.
+    testnet endpoint. Mainnet remains blocked by the venue adapter's normal
+    live-activation path.
     """
 
     name = "binance_usdm_testnet"

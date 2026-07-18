@@ -289,6 +289,17 @@ def _legacy_live_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
     )
 
 
+def _binance_mainnet_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
+    from services.binance_usdm_broker_adapter import BinanceUsdmBrokerAdapter
+
+    return BinanceUsdmBrokerAdapter(
+        context.output_root,
+        context.live_trading_enabled,
+        context.broker_config,
+        opener=context.opener,
+    )
+
+
 def _unarmed_unknown_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
     from services.broker_adapter import LiveBrokerAdapter
 
@@ -404,7 +415,7 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
     registry.register(
         BrokerPlugin(
             BrokerPluginKey("live", "binance_usdm", "*"),
-            execution_factory=_legacy_live_execution,
+            execution_factory=_binance_mainnet_execution,
             reconciliation_factory=_binance_reconciliation,
             capabilities=_execution_capabilities("binance_usdm", reconciliation=True),
         )

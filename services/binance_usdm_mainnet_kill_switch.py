@@ -7,7 +7,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.broker_adapter import LiveBrokerAdapter
+from services.binance_usdm_broker_adapter import BinanceUsdmBrokerAdapter
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
 from services.live_money_guardrails import LiveHaltStore
@@ -41,7 +41,12 @@ class BinanceUsdmMainnetKillSwitch:
         mainnet_approved: bool = False,
         reason: str = "operator_mainnet_kill_switch",
     ) -> dict:
-        adapter = LiveBrokerAdapter(self.output_root, live_trading_enabled=True, broker_config=self.broker_config, opener=self.opener)
+        adapter = BinanceUsdmBrokerAdapter(
+            self.output_root,
+            live_trading_enabled=True,
+            broker_config=self.broker_config,
+            opener=self.opener,
+        )
         report = {
             "run_date": run_date,
             "checked_at": _utcnow(),
@@ -138,7 +143,7 @@ class BinanceUsdmMainnetKillSwitch:
             "instrument_map": {"GOLD": MAINNET_SYMBOL, "XAUUSD": MAINNET_SYMBOL, **broker.get("instrument_map", {})},
         }
 
-    def _mainnet_static_guard(self, adapter: LiveBrokerAdapter) -> dict:
+    def _mainnet_static_guard(self, adapter: BinanceUsdmBrokerAdapter) -> dict:
         readiness = adapter.preflight()
         symbol = adapter._binance_symbol("GOLD")
         reasons = []
@@ -163,7 +168,7 @@ class BinanceUsdmMainnetKillSwitch:
             "checked_at": _utcnow(),
         }
 
-    def _cancel_all(self, adapter: LiveBrokerAdapter) -> dict:
+    def _cancel_all(self, adapter: BinanceUsdmBrokerAdapter) -> dict:
         result = {"status": "cancelled", "open_orders": {}, "algo_orders": {}}
         try:
             result["open_orders"] = adapter._delete_binance_open_orders(MAINNET_SYMBOL)
@@ -175,7 +180,7 @@ class BinanceUsdmMainnetKillSwitch:
             result.update({"status": "failed", "algo_orders_error": f"{type(exc).__name__}: {exc}"})
         return result
 
-    def _open_positions(self, adapter: LiveBrokerAdapter) -> list[dict]:
+    def _open_positions(self, adapter: BinanceUsdmBrokerAdapter) -> list[dict]:
         payload = adapter._binance_position_risk(MAINNET_SYMBOL)
         rows = payload if isinstance(payload, list) else [payload] if isinstance(payload, dict) else []
         positions = []
@@ -187,7 +192,12 @@ class BinanceUsdmMainnetKillSwitch:
                 positions.append(row)
         return positions
 
-    def _close_position(self, adapter: LiveBrokerAdapter, run_date: str, position: dict) -> dict:
+    def _close_position(
+        self,
+        adapter: BinanceUsdmBrokerAdapter,
+        run_date: str,
+        position: dict,
+    ) -> dict:
         amount = float(position.get("positionAmt", 0) or 0)
         payload = {
             "symbol": MAINNET_SYMBOL,
@@ -223,7 +233,12 @@ class BinanceUsdmMainnetKillSwitch:
         )
         return result
 
-    def _close_response_error(self, adapter: LiveBrokerAdapter, response: dict, payload: dict) -> dict:
+    def _close_response_error(
+        self,
+        adapter: BinanceUsdmBrokerAdapter,
+        response: dict,
+        payload: dict,
+    ) -> dict:
         safe_payload = adapter._safe_order_payload(payload)
         if not isinstance(response, dict):
             return {"payload": safe_payload, "error_type": "InvalidCloseResponse", "message": "close response is not a JSON object", "response": response}
@@ -238,7 +253,11 @@ class BinanceUsdmMainnetKillSwitch:
             return {"payload": safe_payload, "error_type": "BinanceCloseUnverified", "message": f"close order status is {status or 'missing'} with no executed quantity", "response": adapter._safe_order_payload(response)}
         return {}
 
-    def _confirm_flat(self, run_date: str, adapter: LiveBrokerAdapter) -> dict:
+    def _confirm_flat(
+        self,
+        run_date: str,
+        adapter: BinanceUsdmBrokerAdapter,
+    ) -> dict:
         report = LiveBrokerReconciliation(self.output_root, adapter.broker_config, opener=self.opener).run(run_date)
         return report
 

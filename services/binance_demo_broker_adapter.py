@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from schemas.market_data import PaperOrder
-from services.broker_adapter import BrokerOrderRequest, LiveBrokerAdapter
+from services.binance_usdm_broker_adapter import BinanceUsdmBrokerAdapter
+from services.broker_port import BrokerOrderRequest
 from services.config_loader import load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_reconciliation import LiveBrokerReconciliation
@@ -20,13 +21,12 @@ DEMO_SYMBOL = "XAUUSDT"
 _DEMO_FETCH_ERRORS = (OSError, urllib.error.URLError, TimeoutError, RuntimeError, json.JSONDecodeError, ValueError, KeyError)
 
 
-class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
+class BinanceDemoBrokerAdapter(BinanceUsdmBrokerAdapter):
     """Real Binance Futures Demo execution for one selected strategy.
 
-    This intentionally does not loosen the real-money `LiveBrokerAdapter`
-    activation gate. It only runs against Binance's demo endpoint, only for
-    XAUUSDT, and it caps order size before calling the shared Binance order
-    submission path.
+    This intentionally does not loosen the real-money mainnet activation gate.
+    It only runs against Binance's demo endpoint, only for XAUUSDT, and it caps
+    order size before calling the shared Binance order submission path.
     """
 
     name = "binance_demo"
