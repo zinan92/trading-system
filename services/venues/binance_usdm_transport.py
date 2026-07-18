@@ -28,6 +28,7 @@ class BinanceUsdmEndpoints:
     algo_open_orders: str = "/fapi/v1/algoOpenOrders"
     open_algo_orders: str = "/fapi/v1/openAlgoOrders"
     exchange_info: str = "/fapi/v1/exchangeInfo"
+    position_risk: str = "/fapi/v2/positionRisk"
 
 
 BINANCE_USDM_ENDPOINTS = BinanceUsdmEndpoints()

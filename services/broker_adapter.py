@@ -1721,6 +1721,12 @@ class LiveBrokerAdapter:
     def _binance_signed_get(self, endpoint: str, params: dict) -> dict:
         return self._binance_transport().signed_get(endpoint, params)
 
+    def _binance_position_risk(self, symbol: str) -> dict:
+        return self._binance_signed_get(
+            self._binance_transport().endpoints.position_risk,
+            {"symbol": symbol},
+        )
+
     def _binance_transport(self):
         transport = self._binance_transport_instance
         if (

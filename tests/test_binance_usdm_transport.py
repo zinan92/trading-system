@@ -191,7 +191,20 @@ def test_exchange_info_normalization_and_failure_are_unchanged() -> None:
             }
         ]
     }
-    transport = BinanceUsdmTransport({}, opener=lambda request, timeout: _FakeResponse(payload))
+    seen = {}
+
+    def public_opener(request, timeout):
+        seen.update(
+            url=request.full_url,
+            method=request.get_method(),
+            body=request.data,
+            api_key=request.get_header("X-mbx-apikey"),
+            authorization=request.get_header("Authorization"),
+            timeout=timeout,
+        )
+        return _FakeResponse(payload)
+
+    transport = BinanceUsdmTransport({}, opener=public_opener)
 
     assert transport.symbol_status("XAUUSDT") == {
         "symbol": "XAUUSDT",
@@ -206,6 +219,14 @@ def test_exchange_info_normalization_and_failure_are_unchanged() -> None:
             "min_notional": "5",
         },
         "truth_level": "official_binance_exchange_info",
+    }
+    assert seen == {
+        "url": "https://fapi.binance.com/fapi/v1/exchangeInfo?symbol=XAUUSDT",
+        "method": "GET",
+        "body": None,
+        "api_key": None,
+        "authorization": None,
+        "timeout": 10,
     }
     unavailable = BinanceUsdmTransport({}, opener=lambda request, timeout: (_ for _ in ()).throw(TimeoutError("late")))
     assert unavailable.symbol_status("XAUUSDT") == {
@@ -265,6 +286,7 @@ def test_binance_wire_code_is_absent_from_cross_venue_compatibility_adapter() ->
         "/fapi/v1/algoOpenOrders",
         "/fapi/v1/openAlgoOrders",
         "/fapi/v1/exchangeInfo",
+        "/fapi/v2/positionRisk",
     ):
         assert endpoint not in source
 

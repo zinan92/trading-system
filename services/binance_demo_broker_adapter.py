@@ -203,7 +203,7 @@ class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
 
     def _flat_position_check(self) -> dict:
         symbol = self._binance_symbol("GOLD")
-        response = self._binance_signed_get("/fapi/v2/positionRisk", {"symbol": symbol})
+        response = self._binance_position_risk(symbol)
         if not response.get("ok"):
             return {
                 "ready": False,
@@ -254,7 +254,7 @@ class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
         return {"ready": True, "block_reason": "", "report": report}
 
     def _demo_position_snapshot(self) -> dict:
-        response = self._binance_signed_get("/fapi/v2/positionRisk", {"symbol": DEMO_SYMBOL})
+        response = self._binance_position_risk(DEMO_SYMBOL)
         if not response.get("ok"):
             return {"ok": False, "response": self._safe_error(response)}
         item = self._position_item(response.get("body"))

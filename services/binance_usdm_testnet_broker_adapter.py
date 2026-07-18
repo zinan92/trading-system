@@ -240,7 +240,7 @@ class BinanceUsdmTestnetBrokerAdapter(LiveBrokerAdapter):
         return {"ready": True, "block_reason": "", "position": position}
 
     def _position_snapshot(self) -> dict:
-        payload = self._binance_signed_get("/fapi/v2/positionRisk", {"symbol": TESTNET_SYMBOL})
+        payload = self._binance_position_risk(TESTNET_SYMBOL)
         item = payload[0] if isinstance(payload, list) and payload else (payload if isinstance(payload, dict) else {})
         return {
             "ok": bool(item),
