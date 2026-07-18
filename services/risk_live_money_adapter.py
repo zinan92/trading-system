@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from schemas.risk import RiskRequest, build_risk_decision, build_risk_request
-from services.risk_decision_store import FileRiskDecisionStore
 from services.risk_policy_core import (
     blocker,
     digest,
@@ -32,7 +31,7 @@ class LiveMoneyRiskDecisionAdapter:
         *,
         broker_config: Mapping[str, Any] | None = None,
         legacy_guardrails=None,
-        store: RiskDecisionStorePort | None = None,
+        store: RiskDecisionStorePort,
     ) -> None:
         self.output_root = Path(output_root)
         self.broker_config = dict(broker_config or {})
@@ -44,7 +43,9 @@ class LiveMoneyRiskDecisionAdapter:
                 broker_config=self.broker_config,
             )
         self.legacy_guardrails = legacy_guardrails
-        self.store = store or FileRiskDecisionStore(self.output_root)
+        if not isinstance(store, RiskDecisionStorePort):
+            raise TypeError("live risk store does not implement RiskDecisionStorePort")
+        self.store = store
 
     def evaluate_order(
         self,
@@ -316,7 +317,27 @@ def _canonical_live_blockers(
                 ),
             }
         )
-    if legacy.get("allows_new_order") is not True and not blockers:
+    status = str(legacy.get("status") or "").strip().upper()
+    explicit_skip = (
+        status == "SKIPPED"
+        and str(legacy.get("reason") or "")
+        == "require_live_money_guardrails_before_entry=false"
+    )
+    if (
+        legacy.get("allows_new_order") is True
+        and not blockers
+        and status != "READY"
+        and not explicit_skip
+    ):
+        blockers.append(
+            blocker(
+                "legacy_guardrail_status_invalid",
+                "LiveMoneyGuardrails",
+                "legacy live-money guardrail returned permission with an invalid status",
+                {"status": legacy.get("status")},
+            )
+        )
+    elif legacy.get("allows_new_order") is not True and not blockers:
         blockers.append(
             blocker(
                 "legacy_guardrail_denied_without_blocker",

@@ -476,7 +476,6 @@ def grid_risk_evaluator() -> dict[str, Any]:
         root / "services" / "risk_policy_paper.py",
         root / "services" / "risk_policy_core.py",
         root / "schemas" / "risk.py",
-        root / "services" / "accounting_projection_core.py",
     )
     hashes = {
         str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()

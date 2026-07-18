@@ -69,18 +69,10 @@ class StrategyControlPlane:
         if risk_port is None:
             runtime = compose_grid_risk_policy(self.config)
             self.risk_port = runtime.port
-            self.risk_policy_descriptor = runtime.descriptor.to_dict()
-            self.risk_policy_registry_fingerprint = runtime.registry_fingerprint
         else:
             if not isinstance(risk_port, RiskDecisionPort):
                 raise TypeError("risk_port does not implement RiskDecisionPort")
             self.risk_port = risk_port
-            self.risk_policy_descriptor = {
-                "name": str(risk_port.name),
-                "evaluator": dict(risk_port.evaluator_metadata()),
-                "injected": True,
-            }
-            self.risk_policy_registry_fingerprint = "injected"
         self.risk_store = risk_store or build_risk_decision_store(self.output_root)
         if not isinstance(self.risk_store, RiskDecisionStorePort):
             raise TypeError("risk_store does not implement RiskDecisionStorePort")

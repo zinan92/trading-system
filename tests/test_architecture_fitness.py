@@ -539,6 +539,9 @@ def test_risk_selection_and_persistence_stay_behind_one_composition_root() -> No
     assert "class FileRiskDecisionStore" not in port_source
     assert "class LiveMoneyRiskDecisionAdapter" not in port_source
 
+    live_adapter = ROOT / "services" / "risk_live_money_adapter.py"
+    assert "services.risk_decision_store" not in _imported_modules(live_adapter)
+
     store = ROOT / "services" / "risk_decision_store.py"
     store_tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
     methods = {

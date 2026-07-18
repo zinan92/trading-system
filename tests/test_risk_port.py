@@ -611,6 +611,7 @@ def test_live_money_bridge_preserves_blocker_order_and_never_grants_more_permiss
     result = LiveMoneyRiskDecisionAdapter(
         tmp_path / "outputs",
         legacy_guardrails=legacy,
+        store=RiskDecisionStore(tmp_path / "outputs"),
     ).evaluate_order(
         "2026-07-18",
         ticket={"ticket_id": "ticket-live-1"},
@@ -629,6 +630,43 @@ def test_live_money_bridge_preserves_blocker_order_and_never_grants_more_permiss
     assert [row["code"] for row in result["risk_decision"]["blockers"]] == [
         "daily_loss_limit",
         "daily_trade_limit",
+    ]
+
+
+def test_live_money_bridge_fails_closed_when_legacy_status_is_not_ready(tmp_path: Path) -> None:
+    class FakeLegacyGuardrails:
+        def evaluate_order(self, *_args, **_kwargs) -> dict:
+            return {
+                "checked_at": CHECKED_AT,
+                "status": "ERROR",
+                "allows_new_order": True,
+                "blockers": [],
+                "limits": {},
+                "candidate": {"notional": 10.0},
+                "daily_loss": {"known": False},
+                "exposure": {},
+                "daily_entry_orders": {},
+                "halt": {},
+            }
+
+    result = LiveMoneyRiskDecisionAdapter(
+        tmp_path / "outputs",
+        legacy_guardrails=FakeLegacyGuardrails(),
+        store=RiskDecisionStore(tmp_path / "outputs"),
+    ).evaluate_order(
+        "2026-07-18",
+        ticket={"ticket_id": "ticket-live-invalid-status"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=100.0,
+        quantity=0.1,
+        source="binance_usdm:testnet",
+        checked_at=CHECKED_AT,
+    )
+
+    assert canonical_live_risk_allows_exposure(result) is False
+    assert [row["code"] for row in result["risk_decision"]["blockers"]] == [
+        "legacy_guardrail_status_invalid"
     ]
 
 
@@ -653,7 +691,11 @@ def test_live_money_bridge_allows_clean_entry_and_skips_entry_guardrails_for_red
             }
 
     legacy = FakeLegacyGuardrails()
-    bridge = LiveMoneyRiskDecisionAdapter(tmp_path / "outputs", legacy_guardrails=legacy)
+    bridge = LiveMoneyRiskDecisionAdapter(
+        tmp_path / "outputs",
+        legacy_guardrails=legacy,
+        store=RiskDecisionStore(tmp_path / "outputs"),
+    )
     allowed = bridge.evaluate_order(
         "2026-07-18",
         ticket={"ticket_id": "ticket-live-2"},

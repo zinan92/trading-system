@@ -87,6 +87,11 @@ def test_default_risk_policy_registry_is_frozen_deterministic_and_complete() -> 
         "services.risk_policy_paper.PaperGridRiskDecisionPort"
     )
     assert descriptor.to_dict()["evaluator"] == grid_risk_evaluator()
+    assert set(descriptor.to_dict()["evaluator"]["source_hashes"]) == {
+        "services/risk_policy_paper.py",
+        "services/risk_policy_core.py",
+        "schemas/risk.py",
+    }
     assert isinstance(port, RiskDecisionPort)
     assert isinstance(port, PaperGridRiskDecisionPort)
 
