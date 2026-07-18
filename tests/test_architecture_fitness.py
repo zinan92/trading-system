@@ -70,6 +70,7 @@ APPROVED_INLINE_PROVIDER_BRANCHES = {
     },
     "services/broker_port.py": {"binance_usdm"},
 }
+PROVIDER_SUBSCRIPT_DISPATCH = "<provider-subscript-dispatch>"
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -80,36 +81,59 @@ def _imported_modules(path: Path) -> set[str]:
             modules.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.add(node.module)
+            modules.update(f"{node.module}.{alias.name}" for alias in node.names)
     return modules
+
+
+def _references_provider(node: ast.AST) -> bool:
+    for item in ast.walk(node):
+        if isinstance(item, ast.Name) and "provider" in item.id.lower():
+            return True
+        if isinstance(item, ast.Attribute) and "provider" in item.attr.lower():
+            return True
+        if (
+            isinstance(item, ast.Call)
+            and isinstance(item.func, ast.Attribute)
+            and item.func.attr == "get"
+            and item.args
+            and isinstance(item.args[0], ast.Constant)
+            and isinstance(item.args[0].value, str)
+            and "provider" in item.args[0].value.lower()
+        ):
+            return True
+    return False
+
+
+def _string_literals(*nodes: ast.AST) -> set[str]:
+    return {
+        str(item.value)
+        for node in nodes
+        for item in ast.walk(node)
+        if isinstance(item, ast.Constant)
+        and isinstance(item.value, str)
+        and item.value.lower() != "provider"
+    }
 
 
 def _inline_provider_branch_literals(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Compare):
-            continue
-        compared = (node.left, *node.comparators)
-        names = {
-            item.id
-            for value in compared
-            for item in ast.walk(value)
-            if isinstance(item, ast.Name)
-        }
-        attributes = {
-            item.attr
-            for value in compared
-            for item in ast.walk(value)
-            if isinstance(item, ast.Attribute)
-        }
-        if not any("provider" in name.lower() for name in names | attributes):
-            continue
-        found.update(
-            str(item.value)
-            for value in compared
-            for item in ast.walk(value)
-            if isinstance(item, ast.Constant) and isinstance(item.value, str)
-        )
+        if isinstance(node, ast.Compare):
+            compared = (node.left, *node.comparators)
+            if any(_references_provider(value) for value in compared):
+                found.update(_string_literals(*compared))
+        elif isinstance(node, ast.Match) and _references_provider(node.subject):
+            found.update(_string_literals(*node.cases))
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"startswith", "endswith"}
+            and _references_provider(node.func.value)
+        ):
+            found.update(_string_literals(*node.args))
+        elif isinstance(node, ast.Subscript) and _references_provider(node.slice):
+            found.add(PROVIDER_SUBSCRIPT_DISPATCH)
     return found
 
 
@@ -131,6 +155,36 @@ def test_existing_inline_provider_branches_are_frozen_to_named_extraction_debt()
         if _inline_provider_branch_literals(ROOT / relative)
     }
     assert observed == APPROVED_INLINE_PROVIDER_BRANCHES
+
+
+def test_fitness_scanner_catches_alias_imports_and_common_provider_dispatch_forms(
+    tmp_path: Path,
+) -> None:
+    sample = tmp_path / "provider_dispatch.py"
+    sample.write_text(
+        """
+from services import oanda_adapter
+
+def select(provider, source, handlers):
+    if source.get("provider") == "mt5":
+        return None
+    if provider.startswith("binance_"):
+        return None
+    match provider:
+        case "tiger_openapi":
+            return None
+    return handlers[provider]
+""",
+        encoding="utf-8",
+    )
+
+    assert "services.oanda_adapter" in _imported_modules(sample)
+    assert _inline_provider_branch_literals(sample) == {
+        "mt5",
+        "binance_",
+        "tiger_openapi",
+        PROVIDER_SUBSCRIPT_DISPATCH,
+    }
 
 
 class GenericMarketPort:

@@ -1,6 +1,6 @@
 # A7 End-to-End Architecture Fitness Audit Plan
 
-**Status:** In progress on 2026-07-18.
+**Status:** Complete on 2026-07-18.
 
 **Goal:** Give Park one evidence-backed answer to “How close is the full trading
 system to a ports-and-adapters architecture?” and freeze the boundaries already
@@ -113,6 +113,37 @@ milestone does not imply a 100% architecture score.
 - A7 adds no visible product surface. Under the Evidence Contract, new visual
   proof is not applicable; A6 desktop/mobile captures remain the latest UI
   evidence, while A7 tests/docs are trace material.
+- The first audit draft scored 84%. Opus correctly identified that the legacy
+  `BacktestClient` mock fallback can still create paper evidence consumed by a
+  legacy decision/reporting path. The final whole-system score is therefore the
+  more conservative 83%; this is not a live-capital defect because the current
+  authoritative DualTrack/Nautilus path is independent and real money remains
+  disabled.
+- Import bans alone do not catch inline provider dispatch. A7 now freezes the
+  exact existing branch debt and regression-tests alias imports, comparisons,
+  `match`, prefix calls, mapping lookup, and `get("provider")` forms.
+
+## Completion evidence
+
+- Final architecture progress: `83%`, reproducible from the seven visible audit
+  rows; self-repair and strategy self-evolution remain separate at `58%` and
+  `62%`.
+- Final focused architecture/A0-A6 conformance pack: `118 passed`.
+- Final full repository regression after the last fitness-gate hardening:
+  `1741 passed, 7 skipped in 371.95s`.
+- A7 fitness tests: `6 passed`; changed-Python Ruff and `git diff --check` are
+  clean.
+- Initial verified Opus used `claude-opus-4-8`, session
+  `6a00e210-39c9-4119-b70a-94f37acc1baf`, receipt
+  `20260718T012149Z_0bf84316-62a6-4dd2-8a7d-97ca41329b67.json`; no P0/P1 and
+  `SHIP`, with two accepted P2 corrections.
+- Verified follow-up Opus used `claude-opus-4-8`, session
+  `36a1e86d-2935-4ac6-8007-ff8f56e0ead9`, receipt
+  `20260718T013959Z_52d4ea83-6332-44d0-a820-1731f0d07ab4.json`; both P2s
+  closed, no new P0/P1, and final `SHIP`. Its two test-only P3 coverage notes
+  were subsequently closed with explicit regression fixtures.
+- No runtime configuration, provider authority, credential, strategy, order,
+  account, or production state changed in A7.
 
 ## Completion boundary
 
