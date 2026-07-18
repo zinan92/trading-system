@@ -7132,6 +7132,7 @@ auditable datafeed port; broker execution remains a separate port.
   the Opus receipt are trace material only.
 - No strategy parameters, risk thresholds, credentials, live configuration,
   orders, positions, accounts, or production state were changed.
+
 ## 2026-07-18 - A14 OANDA and MT5 Broker Adapter extraction kickoff
 
 ### Decision
@@ -7175,3 +7176,73 @@ auditable datafeed port; broker execution remains a separate port.
 
 - A13 repository: `1822 passed, 7 skipped`.
 - OANDA/MT5/Broker/smoke/safety/audit pack: `63 passed`.
+
+## 2026-07-18 - A14 OANDA and MT5 Broker Adapter extraction complete
+
+### Outcome
+
+- OANDA REST and the MT5 file bridge are now standalone
+  `BrokerExecutionPort` adapters selected directly by the frozen broker
+  registry. Replacing either no longer requires editing the cross-venue live
+  broker implementation.
+- Operational smoke, activation-safety, and completion-audit consumers resolve
+  through composition. Existing `LiveBrokerAdapter` OANDA/MT5 construction and
+  private helper names remain compatibility delegates over the same concrete
+  instances, not duplicate implementations.
+- OANDA owns its credential checks, practice/live endpoint, account quoting,
+  instrument/payload/TIF translation, HTTP POST, response mapping, and durable
+  request artifact. MT5 owns root resolution, readiness docs/templates,
+  bridge-order creation, durable request artifact, and receipt correlation.
+
+### Decisions
+
+- Preserve activation, dry-run, idempotency, truthiness quantity fallback,
+  request/receipt, and provider response behavior exactly. A14 changes physical
+  ownership and composition authority, not trading semantics.
+- Keep one explicit adapter per provider instead of inventing a generic
+  transport abstraction: OANDA HTTP and MT5 executable filesystem intent have
+  different trust and failure models.
+- Keep legacy delegate seams until remaining callers are exhausted. AST tests
+  now prove each named OANDA/MT5 compatibility helper contains only one return
+  into its concrete adapter.
+
+### Opus adversarial review and hardening
+
+- Verified `claude-opus-4-8`, session
+  `5264e18c-30d7-453a-b0b1-8ac5c6fb1245`, receipt
+  `20260718T065100Z_e61f4fc6-a8f3-4404-b220-fff5a2d67a48.json`: verdict `SHIP`,
+  no P0/P1.
+- Closed P2 false confidence: the realistic OANDA fake response now includes
+  `accountID`. The test proves the bearer token never persists while explicitly
+  preserving the pre-existing verbatim broker-response contract instead of
+  claiming account-ID redaction that the system does not provide.
+- Closed P3: literal operational-import checks are now AST-based, all facade
+  compatibility methods are structurally pinned as thin delegates, and the
+  redundant outer live-env read was removed from provider-specific preflight.
+
+### Gotchas
+
+- OANDA's bearer token exists only in the Authorization header and is never
+  persisted. A real OANDA response may echo the non-secret account identifier,
+  and the durable request currently records that response verbatim. Redacting
+  account identifiers would be a deliberate privacy-contract change, not an
+  extraction parity fix.
+- MT5 preflight intentionally creates directories and documentation, but no
+  executable `*.json` order intent can be written before `real_money_ready`.
+- Cached facade delegates share the config dictionary for in-place mutation
+  visibility and rebuild on config/opener identity or live/dry state changes.
+- A14 has no visible product surface and deploys no service. Under the Evidence
+  Contract, Visual Evidence is not applicable; tests, commits, docs, diffs, and
+  the Opus receipt are trace material only.
+
+### Verification
+
+- Final repository regression after Opus hardening:
+  `1837 passed, 7 skipped in 401.49s`.
+- Focused OANDA/MT5/Broker/architecture pack: `78 passed`; wider cross-provider
+  broker/architecture pack: `171 passed`; post-review defense pack: `54 passed`.
+- Changed-file Ruff, architecture fitness, and `git diff --check`: clean.
+- Live execution/broker improves from `92/100` to `94/100`; overall architecture
+  progress remains the honest `92%` (`644 / 7 = 92.0%`).
+- No strategy parameters, risk thresholds, credentials, live configuration,
+  orders, positions, accounts, or production state were changed.

@@ -1,6 +1,6 @@
 # A14 OANDA and MT5 Broker Adapter Extraction Plan
 
-**Status:** In progress.
+**Status:** Complete.
 
 **Goal:** Make OANDA REST and the MT5 file bridge physically independent
 `BrokerExecutionPort` adapters selected directly by the frozen broker registry,
@@ -149,3 +149,34 @@ operational callers compose them without importing the legacy class, old direct
 calls still behave identically through thin delegates, and provider-specific
 I/O no longer lives in `broker_adapter.py`. Copying code while leaving registry
 authority or a second provider implementation in the facade does not count.
+
+## Completion evidence
+
+- The frozen registry now returns `OandaRestBrokerAdapter` and
+  `Mt5FileBridgeBrokerAdapter` directly. Manual/unknown compatibility remains
+  fail-closed, and the old OANDA/MT5 private names are AST-pinned one-return
+  delegates rather than a second implementation.
+- OANDA credentials, URL/account quoting, payload/TIF formatting, POST,
+  response mapping, and durable request recording are provider-owned. MT5 owns
+  root-relative inbox/outbox resolution, readiness templates, bridge intent,
+  durable request recording, and receipt correlation.
+- Negative tests prove missing credentials and missing activation block OANDA
+  before the opener, and missing activation blocks executable MT5 `*.json`
+  intent. Dry-run parity, order IDs, capabilities, descriptors, wire shape,
+  timeout, and runtime delegate refresh remain pinned.
+- Final repository regression after review hardening: `1837 passed, 7 skipped
+  in 401.49s`. Focused A14 regression: `78 passed`; wider cross-provider broker
+  and architecture regression: `171 passed`; post-review defense pack:
+  `54 passed`. Changed-file Ruff and `git diff --check` passed.
+- Verified Opus review: actual model `claude-opus-4-8`, session
+  `5264e18c-30d7-453a-b0b1-8ac5c6fb1245`, receipt
+  `20260718T065100Z_e61f4fc6-a8f3-4404-b220-fff5a2d67a48.json`; verdict `SHIP`,
+  no P0/P1. Its P2 false-confidence finding and both P3 hardening findings were
+  closed before the final regression.
+- Live execution/broker improves from `92/100` to `94/100`; overall progress
+  remains the reproducible `92%` (`644 / 7 = 92.0%`).
+- Evidence Contract result: Visual Evidence N/A. A14 changes no visible surface
+  and deploys no service; tests, commits, documents, diffs, and the Opus receipt
+  are trace material only.
+- No strategy parameters, risk thresholds, credentials, live configuration,
+  orders, positions, accounts, or production state were changed.
