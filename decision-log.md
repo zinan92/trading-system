@@ -6724,3 +6724,43 @@ auditable datafeed port; broker execution remains a separate port.
 - Architecture progress is now `87%`, reproducible from the canonical audit.
 - No strategy parameters, execution/risk/broker authority, credentials, orders,
   positions, accounts, or production state were changed.
+
+## 2026-07-18 - A10 Backtest Ports kickoff
+
+### Objective and value
+
+- Make backtest engine selection explicit across Daily signal evidence,
+  historical strategy ranking, and Nautilus Strategy Shadow without conflating
+  their different contracts.
+- Remove production Daily's implicit remote/mock fallback so an unavailable
+  service cannot fabricate historical-looking evidence.
+
+### Decisions
+
+- Use one frozen, kind-aware registry with three narrow ports rather than one
+  untyped universal backtest interface.
+- Preserve all simulation math. Wrap LocalBacktester, StrategyBacktester,
+  remote evaluation, synthetic context, and Nautilus Strategy Shadow as adapters.
+- Follow NautilusTrader's config/run separation. Keep Nautilus in its isolated
+  runtime and retain Strategy Shadow receipts, parity, causal boundaries,
+  accounting, and non-authoritative storage.
+- Keep synthetic evidence only as an explicit compatibility plugin. It is always
+  degraded and promotion-ineligible; production Daily selects Local explicitly.
+- Do not add Pluggy or automatic package discovery. Five trusted factories do
+  not justify a new dependency or arbitrary installed-code authority.
+
+### Gotchas
+
+- `analysis_fallback_to_mock` currently affects both Copilot and BacktestClient.
+  The cutover must stop using it for backtests without changing Copilot behavior.
+- Thin evidence remains context, not a paper-ticket blocker. This milestone must
+  not silently change trade frequency or risk policy.
+- Historical MA signals are an acknowledged price-only approximation and must
+  remain labelled `faithful_signals=false`.
+- The primary worktree is unrelated and active. A10 is isolated on top of the
+  clean A9 branch and changes no live configuration or state.
+
+### Baseline
+
+- A9 full suite: `1763 passed, 7 skipped`.
+- Backtest/local/ranking/Strategy Shadow behavior: `27 passed`.
