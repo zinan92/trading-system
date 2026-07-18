@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from schemas.market_data import PaperOrder
-from services.broker_adapter import BrokerOrderRequest, LiveBrokerAdapter
+from services.broker_port import (
+    BrokerOrderRequest,
+    BrokerPortDescriptor,
+    broker_port_descriptor,
+    execution_capabilities_for,
+)
+from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env
 from services.order_lifecycle import OrderLifecycleStore
 from services.risk_port import LiveMoneyRiskDecisionAdapter, canonical_live_risk_allows_exposure
@@ -15,7 +23,7 @@ from services.tiger_contracts import TigerContractResolver
 from services.tiger_openapi_account_sync import TigerOpenApiAccountSync
 
 
-class TigerOpenApiPaperBrokerAdapter(LiveBrokerAdapter):
+class TigerOpenApiPaperBrokerAdapter:
     """Tiger OpenAPI paper adapter, disabled unless explicitly armed.
 
     This adapter only supports Tiger paper/simulated trading. The repo defaults
@@ -24,12 +32,14 @@ class TigerOpenApiPaperBrokerAdapter(LiveBrokerAdapter):
     """
 
     name = "tiger_openapi_paper"
+    provider = "tiger_openapi"
 
     def __init__(
         self,
         output_root: Path,
         broker_config: dict,
         *,
+        live_trading_enabled: bool = True,
         trade_client: Any | None = None,
         sdk: Any | None = None,
     ) -> None:
@@ -39,9 +49,99 @@ class TigerOpenApiPaperBrokerAdapter(LiveBrokerAdapter):
             "environment": str(broker_config.get("environment", "paper")),
             "request_dir": str(broker_config.get("request_dir", "tiger_order_requests")),
         }
-        super().__init__(output_root, live_trading_enabled=True, broker_config=merged)
+        self.output_root = Path(output_root)
+        self.live_trading_enabled = live_trading_enabled
+        self.broker_config = merged
+        self.dry_run = bool(self.broker_config.get("dry_run", True))
+        self._source_broker_config = broker_config
+        self._source_config_snapshot = dict(broker_config)
+        self._capabilities = execution_capabilities_for(
+            provider=self.provider,
+            adapter_name=self.name,
+        )
         self._trade_client = trade_client
         self._sdk = sdk
+
+    @property
+    def capabilities(self):
+        return self._capabilities
+
+    @property
+    def descriptor(self) -> BrokerPortDescriptor:
+        return broker_port_descriptor(self)
+
+    def _tiger_preflight(self) -> dict:
+        env = apply_live_env()
+        props_path_env = str(
+            self.broker_config.get(
+                "props_path_env",
+                "TIGER_OPENAPI_CONFIG_PATH",
+            )
+        )
+        props_path = os.getenv(props_path_env, "")
+        props_exists = bool(props_path and Path(props_path).exists())
+        props_mode = ""
+        props_owner_only = False
+        if props_exists:
+            mode = stat.S_IMODE(Path(props_path).stat().st_mode)
+            props_mode = oct(mode)
+            props_owner_only = not bool(mode & 0o077)
+        missing = [] if props_exists else [props_path_env]
+        block_reason = ""
+        if not self.live_trading_enabled:
+            block_reason = "live_trading_enabled is false"
+        elif missing:
+            block_reason = (
+                f"missing Tiger OpenAPI config path env: {props_path_env}"
+            )
+        elif not props_owner_only:
+            block_reason = (
+                "Tiger OpenAPI config file must be owner-only (chmod 600)"
+            )
+        elif self.dry_run:
+            block_reason = (
+                "Tiger OpenAPI dry_run enabled; request artifact only"
+            )
+        else:
+            block_reason = (
+                "Tiger OpenAPI network order submission is not implemented; "
+                "fail-closed"
+            )
+        ready = bool(
+            self.live_trading_enabled
+            and not missing
+            and props_owner_only
+            and self.dry_run
+        )
+        return {
+            "provider": self.provider,
+            "mode": "live",
+            "environment": str(
+                self.broker_config.get("environment", "paper")
+            ),
+            "dry_run": self.dry_run,
+            "live_trading_enabled": self.live_trading_enabled,
+            "ready": ready,
+            "block_reason": block_reason,
+            "props_path_env": props_path_env,
+            "props_path_present": bool(props_path),
+            "props_path_exists": props_exists,
+            "props_path_owner_only": props_owner_only,
+            "props_path_mode": props_mode,
+            "missing_env": missing,
+            "env_file": env["path"],
+            "env_file_exists": env["exists"],
+            "allowed_symbols": list(
+                self.broker_config.get("allowed_symbols", [])
+            ),
+            "contract_map": dict(
+                self.broker_config.get("contract_map", {})
+            ),
+            "network_order_submission": "not_implemented",
+            "checked_at": datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat(),
+        }
 
     def preflight(self) -> dict:
         readiness = self._tiger_preflight()
@@ -133,6 +233,121 @@ class TigerOpenApiPaperBrokerAdapter(LiveBrokerAdapter):
             blocker = guardrails.get("primary_blocker", {}) if isinstance(guardrails.get("primary_blocker"), dict) else {}
             raise RuntimeError(f"Tiger live money guardrails block new order: {blocker.get('message') or guardrails.get('status')}")
         return self._submit_tradeclient_order(request, readiness, client)
+
+    def _submit_tiger_order(
+        self,
+        request: BrokerOrderRequest,
+        readiness: dict,
+    ) -> PaperOrder:
+        ticket = request.ticket
+        requested_price = float(
+            request.latest_price
+            or self._entry_midpoint(ticket["entry_zone"])
+        )
+        raw_quantity = float(
+            request.actual_size or self._quantity(ticket, requested_price)
+        )
+        quantity = self._tiger_contract_quantity(raw_quantity)
+        order_id = self._order_id(
+            ticket["ticket_id"],
+            request.run_date,
+            requested_price,
+        )
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        payload = self._tiger_order_payload(
+            ticket,
+            order_id,
+            requested_price,
+            quantity,
+        )
+        receipt = PaperOrder(
+            order_id=order_id,
+            ticket_id=ticket["ticket_id"],
+            status="dry_run",
+            requested_price=round(requested_price, 4),
+            fill_price=None,
+            quantity=quantity,
+            filled_at="",
+            rejection_reason=(
+                "Tiger OpenAPI dry-run request recorded locally; "
+                "no broker order sent"
+            ),
+        )
+        self._record_live_request(
+            request,
+            order_id,
+            now,
+            ticket,
+            payload,
+            readiness,
+            receipt,
+            broker_response={},
+        )
+        return receipt
+
+    def _tiger_contract_quantity(self, raw_quantity: float) -> int:
+        quantity = int(raw_quantity)
+        if quantity <= 0 or abs(raw_quantity - quantity) > 1e-9:
+            raise RuntimeError(
+                "Tiger futures quantity must be a positive whole-contract integer"
+            )
+        return quantity
+
+    def _tiger_order_payload(
+        self,
+        ticket: dict,
+        order_id: str,
+        requested_price: float,
+        quantity: int,
+    ) -> dict:
+        symbol = str(ticket.get("asset") or "")
+        allowed = {
+            str(item)
+            for item in self.broker_config.get("allowed_symbols", [])
+        }
+        if allowed and symbol not in allowed:
+            raise RuntimeError(
+                f"Tiger symbol {symbol} is not allowed by broker profile"
+            )
+        contract = str(
+            (self.broker_config.get("contract_map", {}) or {}).get(
+                symbol,
+                symbol,
+            )
+        )
+        order_type = (
+            "MARKET"
+            if str(ticket.get("order_type", "limit")).lower() == "market"
+            else "LIMIT"
+        )
+        side = (
+            "BUY"
+            if self._is_buy_action(str(ticket.get("action", "")))
+            else "SELL"
+        )
+        time_in_force = str(ticket.get("time_in_force", "day")).upper()
+        return {
+            "submission_intent": "tiger_tradeclient_future_order",
+            "network_order_created": False,
+            "environment": str(
+                self.broker_config.get("environment", "paper")
+            ),
+            "order_id": order_id,
+            "symbol": symbol,
+            "contract": contract,
+            "sec_type": "FUT",
+            "exchange": str(self.broker_config.get("exchange", "COMEX")),
+            "side": side,
+            "order_type": order_type,
+            "quantity": quantity,
+            "time_in_force": time_in_force,
+            "limit_price": (
+                None if order_type == "MARKET" else round(requested_price, 4)
+            ),
+            "stop_loss": ticket.get("stop_loss"),
+            "targets": ticket.get("targets", []),
+            "source_ticket_id": ticket.get("ticket_id"),
+        }
 
     def _submit_tradeclient_order(self, request: BrokerOrderRequest, readiness: dict, client: Any) -> PaperOrder:
         ticket = request.ticket
@@ -572,6 +787,67 @@ class TigerOpenApiPaperBrokerAdapter(LiveBrokerAdapter):
         if hasattr(item, "__dict__"):
             return {key: value for key, value in vars(item).items() if not key.startswith("_")}
         return str(item)
+
+    def _record_live_request(
+        self,
+        request: BrokerOrderRequest,
+        order_id: str,
+        requested_at: str,
+        ticket: dict,
+        order_payload: dict,
+        readiness: dict,
+        receipt: PaperOrder,
+        broker_response: dict,
+    ) -> None:
+        request_dir = str(
+            self.broker_config.get("request_dir", "live_order_requests")
+        )
+        path = self.output_root / request_dir / f"{request.run_date}.json"
+        rows = [
+            item
+            for item in load_json(path)
+            if item.get("order_id") != order_id
+        ]
+        rows.append(
+            {
+                "order_id": order_id,
+                "requested_at": requested_at,
+                "provider": self.provider,
+                "run_date": request.run_date,
+                "ticket": ticket,
+                "request": order_payload,
+                "readiness": readiness,
+                "broker_response": broker_response,
+                "receipt": receipt.to_dict(),
+            }
+        )
+        write_json(path, rows)
+
+    def _entry_midpoint(self, entry_zone: str) -> float:
+        low, high = [float(part) for part in entry_zone.split("-", 1)]
+        return (low + high) / 2
+
+    def _quantity(self, ticket: dict, price: float) -> float:
+        account_equity = float(
+            self.broker_config.get("dry_run_account_equity", 100_000)
+        )
+        notional = account_equity * (
+            float(ticket.get("position_size_pct", 0)) / 100
+        )
+        return notional / price if price else 0.0
+
+    def _order_id(
+        self,
+        ticket_id: str,
+        run_date: str,
+        requested_price: float,
+    ) -> str:
+        del requested_price
+        raw = f"{ticket_id}:{run_date}:{self.provider}:entry".encode("utf-8")
+        return f"live_dryrun_{hashlib.sha256(raw).hexdigest()[:10]}"
+
+    def _is_buy_action(self, action: str) -> bool:
+        return action.lower() in {"buy", "prepare_buy", "long", "open_long"}
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
