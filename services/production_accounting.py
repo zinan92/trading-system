@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from services.accounting_projection import project_execution_accounting
+from services.accounting_projection_core import project_execution_accounting
 from services.dualtrack_human import project_human_trades
 from services.dualtrack_scoring import _trades_from_fills, apply_unrealized
 from services.journal_store import load_json

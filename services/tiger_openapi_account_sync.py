@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from services.accounting_projection import broker_accounting_snapshot_payload
+from services.accounting_projection_composition import broker_accounting_snapshot_payload
 from services.broker_adapter import resolve_broker_config
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json

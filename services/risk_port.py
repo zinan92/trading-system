@@ -25,7 +25,7 @@ from schemas.risk import (
     validate_risk_decision,
     validate_risk_request,
 )
-from services.accounting_projection import AccountingContractError, project_execution_accounting
+from services.accounting_projection_core import AccountingContractError, project_execution_accounting
 from services.journal_store import load_json, write_json
 
 
@@ -810,7 +810,7 @@ def grid_risk_evaluator() -> dict[str, Any]:
     paths = (
         root / "services" / "risk_port.py",
         root / "schemas" / "risk.py",
-        root / "services" / "accounting_projection.py",
+        root / "services" / "accounting_projection_core.py",
     )
     hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
     return {

@@ -14,7 +14,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 from services.run_date import utc_run_date
-from services.accounting_projection import project_execution_accounting
+from services.accounting_projection_core import project_execution_accounting
 from services.broker_adapter import PaperBrokerAdapter
 from services.broker_read_model import project_broker_read_model
 from services.code_reload import CodeReloadGuard

@@ -12,7 +12,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from services.accounting_projection import project_execution_accounting
+from services.accounting_projection_core import project_execution_accounting
 from services.dualtrack_execution_contract import canonical_market_event, normalize_execution_command
 from services.dualtrack_nautilus_execution_adapter import REPLAY_VERSION
 from services.dualtrack_nautilus_parity_contract import (
