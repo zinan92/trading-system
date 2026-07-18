@@ -41,6 +41,11 @@ FORBIDDEN_KERNEL_IMPORTS = (
     "websocket",
     "services.binance_",
     "services.tiger_",
+    "services.oanda_",
+    "services.mt5_",
+    "services.ib_",
+    "services.ibkr_",
+    "services.broker_adapter",
     "services.dualtrack_human",
     "services.dualtrack_nautilus_",
     "services.dualtrack_shadow_execution_adapter",
@@ -51,10 +56,19 @@ EXPECTED_SCORE_ROWS = {
     "Data download": (25, 25, 25, 15, 90),
     "Data cleaning / quality": (25, 25, 20, 15, 85),
     "Analysis / strategy": (20, 15, 10, 20, 65),
-    "Backtest / replay": (20, 20, 15, 25, 80),
+    "Backtest / replay": (20, 20, 15, 15, 70),
     "Live execution / broker": (25, 20, 20, 20, 85),
     "Risk / accounting / reconciliation": (25, 20, 20, 25, 90),
     "Dashboard / read model": (25, 25, 20, 25, 95),
+}
+
+APPROVED_INLINE_PROVIDER_BRANCHES = {
+    "services/accounting_projection.py": {
+        "binance_usdm",
+        "binance_usdm_futures",
+        "tiger_openapi",
+    },
+    "services/broker_port.py": {"binance_usdm"},
 }
 
 
@@ -69,6 +83,36 @@ def _imported_modules(path: Path) -> set[str]:
     return modules
 
 
+def _inline_provider_branch_literals(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        compared = (node.left, *node.comparators)
+        names = {
+            item.id
+            for value in compared
+            for item in ast.walk(value)
+            if isinstance(item, ast.Name)
+        }
+        attributes = {
+            item.attr
+            for value in compared
+            for item in ast.walk(value)
+            if isinstance(item, ast.Attribute)
+        }
+        if not any("provider" in name.lower() for name in names | attributes):
+            continue
+        found.update(
+            str(item.value)
+            for value in compared
+            for item in ast.walk(value)
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        )
+    return found
+
+
 def test_contract_kernels_do_not_import_concrete_adapters_or_network_clients() -> None:
     violations: list[str] = []
     for relative in CONTRACT_KERNELS:
@@ -78,6 +122,15 @@ def test_contract_kernels_do_not_import_concrete_adapters_or_network_clients() -
             if any(module == prefix or module.startswith(prefix) for prefix in FORBIDDEN_KERNEL_IMPORTS):
                 violations.append(f"{relative} imports {module}")
     assert violations == []
+
+
+def test_existing_inline_provider_branches_are_frozen_to_named_extraction_debt() -> None:
+    observed = {
+        relative: _inline_provider_branch_literals(ROOT / relative)
+        for relative in CONTRACT_KERNELS
+        if _inline_provider_branch_literals(ROOT / relative)
+    }
+    assert observed == APPROVED_INLINE_PROVIDER_BRANCHES
 
 
 class GenericMarketPort:
@@ -137,7 +190,7 @@ class GenericReconciliationPort:
         return {"status": "pass"}
 
 
-def test_provider_free_plugins_structurally_fit_the_public_ports() -> None:
+def test_provider_free_fakes_expose_the_public_port_shapes() -> None:
     assert isinstance(GenericMarketPort(), TrustedMarketDataReadPort)
     assert isinstance(GenericExecutionPort(), ExecutionEngineAdapter)
     assert isinstance(GenericRiskPort(), RiskDecisionPort)
@@ -158,18 +211,19 @@ def test_architecture_progress_bar_is_reproducible_from_visible_scores() -> None
     for values in observed.values():
         assert sum(values[:4]) == values[4]
     overall = round(sum(values[4] for values in observed.values()) / len(observed))
-    assert overall == 84
-    assert "**Overall architecture progress: 84%**" in text
+    assert overall == 83
+    assert "**Overall architecture progress: 83%**" in text
 
 
 def test_audit_names_every_known_non_hexagonal_seam() -> None:
     text = AUDIT.read_text(encoding="utf-8")
+    backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
         "Strategy._base_engine",
         "Backtest Port",
         "dualtrack_execution_adapter.py",
         "accounting_projection.py",
         "LiveBrokerAdapter",
-        "market_data_contract_mode=shadow",
     ):
-        assert seam in text
+        assert seam in backlog
+    assert "market_data_contract_mode=shadow" in text

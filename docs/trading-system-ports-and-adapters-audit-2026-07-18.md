@@ -2,9 +2,9 @@
 
 ## Executive answer
 
-**Overall architecture progress: 84%**
+**Overall architecture progress: 83%**
 
-`█████████████████░░░ 84%`
+`████████████████▋░░░ 83%`
 
 The system now has a real hexagonal spine from trusted market facts through
 StrategyPlan, Risk, Execution, Accounting, Broker, and the Dashboard read model.
@@ -23,15 +23,15 @@ readiness, or whether the self-evolution loop has enough trades.
 
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
-is the arithmetic mean of the seven visible row totals: `590 / 7 = 84.3`,
-rounded to `84%`.
+is the arithmetic mean of the seven visible row totals: `580 / 7 = 82.9`,
+rounded to `83%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
 | Data download | 25 | 25 | 25 | 15 | 90 |
 | Data cleaning / quality | 25 | 25 | 20 | 15 | 85 |
 | Analysis / strategy | 20 | 15 | 10 | 20 | 65 |
-| Backtest / replay | 20 | 20 | 15 | 25 | 80 |
+| Backtest / replay | 20 | 20 | 15 | 15 | 70 |
 | Live execution / broker | 25 | 20 | 20 | 20 | 85 |
 | Risk / accounting / reconciliation | 25 | 20 | 20 | 25 | 90 |
 | Dashboard / read model | 25 | 25 | 20 | 25 | 95 |
@@ -113,7 +113,7 @@ validation is correctly rejected.
 Conclusion: configuration is modular; analysis implementation selection is
 only partially hexagonal.
 
-### 4. Backtest / replay — 80/100
+### 4. Backtest / replay — 70/100
 
 - Contracts: `BacktestEvidence`, normalized StrategyPlan commands, execution
   snapshots, and canonical AccountingSnapshot results.
@@ -122,6 +122,12 @@ only partially hexagonal.
   parity before promotion evidence is usable.
 - Proof: ten execution classes, repeat/restart identity, fee/accounting parity,
   candidate conformance, and stale/tampered receipt rejection.
+- Legacy caveat: `BacktestClient` still defaults to mock fallback and can turn
+  signal strength/confidence into fabricated paper `BacktestEvidence` consumed
+  by the legacy TradeTicket/reporting pipeline. The current authoritative
+  DualTrack grid/Nautilus path does not consume that mock evidence and real
+  money remains disabled, so this is not a live-capital safety defect; it does
+  prevent awarding full production-cutover points to the system-wide row.
 - Main gap: there is no formal Backtest Port. `BacktestClient` chooses remote,
   local, or mock behavior internally, while `LocalBacktester`,
   `strategy_backtester.py`, and Nautilus Shadow serve different research
@@ -220,7 +226,9 @@ evolution yet.
    from `Strategy._base_engine` into registered factories.
 2. **Backtest composition (medium):** define a Backtest Port over versioned
    scenario + normalized result; register Nautilus, local research, and remote
-   implementations; remove mock fallback from production decision paths.
+   implementations; remove mock fallback from every execution-eligible legacy
+   paper path before that family can ever be promoted. The current authoritative
+   DualTrack/Nautilus grid path is already independent of this fallback.
 3. **Execution plugin registry (medium):** move the protocol out of
    `dualtrack_execution_adapter.py`; register Legacy/Nautilus/Shadow factories
    without an engine-name branch in the application module.
