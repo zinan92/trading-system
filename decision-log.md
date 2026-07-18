@@ -7040,3 +7040,44 @@ auditable datafeed port; broker execution remains a separate port.
   progress remains the honest rounded `91%` (`640 / 7 = 91.4%`).
 - No strategy parameters, risk thresholds, credentials, live configuration,
   orders, positions, accounts, or production state were changed.
+## 2026-07-18 - A13 Binance USD-M transport extraction kickoff
+
+### Decision
+
+- Start the venue-package strangler with the highest-value, lowest-semantic-
+  churn Binance boundary: endpoint resolution, instrument mapping, signing,
+  public ExchangeInfo, HTTP request construction, and response decoding.
+- Keep execution lifecycle, activation, canonical risk, same-cycle
+  reconciliation, local accounting mirrors, protective policy, and ambiguous
+  submission recovery in the proven adapter for this milestone.
+- Preserve every existing private compatibility method as a thin delegate.
+  Demo, testnet, canary, kill-switch, and direct operational callers therefore
+  keep the same behavior while networking becomes venue-owned.
+- Inject the existing opener and a clock into the transport. Do not introduce
+  a second HTTP stack, background client, retry policy, or new plug-in system.
+
+### User value
+
+- Binance networking can be replaced or tested without editing the Broker Port
+  or cross-venue orchestration, while the currently running grid's money and
+  order-safety semantics remain unchanged.
+
+### Gotchas
+
+- HMAC input depends on parameter insertion order; signing parity includes the
+  exact query/body shape, not only decoded values.
+- Signed GET and signed mutation requests deliberately use different wire
+  placement. The extraction must preserve both.
+- `BinanceDemoBrokerAdapter` has a deliberate signed-GET response envelope and
+  override. Base transport delegation must not shadow subclass overrides.
+- Demo/testnet/mainnet share call names but not authority or default endpoint.
+- The opener also serves reconciliation and is an established test seam.
+- A13 is transport isolation, not complete Binance execution extraction. The
+  remaining lifecycle/protection body stays explicit follow-on debt.
+- No visible product surface changes in A13; Visual Evidence is not applicable
+  unless the scope changes.
+
+### Baseline
+
+- A12 full repository: `1813 passed, 7 skipped`.
+- Broker Port plus Binance mainnet/demo/testnet regression: `100 passed`.
