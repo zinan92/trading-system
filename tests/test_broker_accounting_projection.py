@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from services import accounting_projection
+from services import accounting_projection_composition
 from services.accounting_projection import (
     AccountingContractError,
     broker_accounting_snapshot_payload,
@@ -103,6 +103,37 @@ def _binance_report() -> dict:
     }
 
 
+def _tiger_report() -> dict:
+    return {
+        "run_date": "2026-07-18",
+        "provider": "tiger_openapi",
+        "mode": "paper",
+        "sync_status": "synced",
+        "error": "",
+        "account_observation": {
+            "account_observed": True,
+            "balance_present": True,
+            "accounting_observed": True,
+            "base_currency": "USD",
+        },
+        "exchange_balance": {
+            "asset": "USD",
+            "balance": 10_000.0,
+            "available": 8_500.0,
+            "balance_present": True,
+            "source": "tiger_openapi.get_prime_assets.selected_segment.net_liquidation",
+        },
+        "exchange_accounting": {
+            "net_realized_pnl_estimate": -12.75,
+            "unrealized_pnl_estimate": 3.5,
+            "realized_pnl_present": True,
+            "unrealized_pnl_present": True,
+            "utc_trading_day": {"run_date": "2026-07-18"},
+            "source": "tiger_openapi.get_prime_assets.selected_segment.realized_pl",
+        },
+    }
+
+
 def test_binance_receipt_projects_account_economics_without_inventing_round_trips() -> None:
     snapshot = project_broker_accounting(_binance_report()).to_dict()
 
@@ -200,9 +231,9 @@ def test_broker_payload_has_a_versioned_emergency_receipt_if_snapshot_serializat
             raise RuntimeError("must not escape into reconciliation persistence")
 
     monkeypatch.setattr(
-        accounting_projection,
+        accounting_projection_composition,
         "project_broker_accounting_fail_honest",
-        lambda _source: BrokenSnapshot(),
+        lambda *_args, **_kwargs: BrokenSnapshot(),
     )
 
     payload = broker_accounting_snapshot_payload(_binance_report())
@@ -238,34 +269,7 @@ def test_exact_duplicate_broker_fill_is_collapsed_and_reported() -> None:
 
 
 def test_tiger_aggregate_accounting_uses_same_contract_but_keeps_lifecycle_unknown() -> None:
-    report = {
-        "run_date": "2026-07-18",
-        "provider": "tiger_openapi",
-        "mode": "paper",
-        "sync_status": "synced",
-        "error": "",
-        "account_observation": {
-            "account_observed": True,
-            "balance_present": True,
-            "accounting_observed": True,
-            "base_currency": "USD",
-        },
-        "exchange_balance": {
-            "asset": "USD",
-            "balance": 10_000.0,
-            "available": 8_500.0,
-            "balance_present": True,
-            "source": "tiger_openapi.get_prime_assets.selected_segment.net_liquidation",
-        },
-        "exchange_accounting": {
-            "net_realized_pnl_estimate": -12.75,
-            "unrealized_pnl_estimate": 3.5,
-            "realized_pnl_present": True,
-            "unrealized_pnl_present": True,
-            "utc_trading_day": {"run_date": "2026-07-18"},
-            "source": "tiger_openapi.get_prime_assets.selected_segment.realized_pl",
-        },
-    }
+    report = _tiger_report()
 
     snapshot = project_broker_accounting(report).to_dict()
 

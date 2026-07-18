@@ -15,6 +15,7 @@ from services.backtest_port import (
     SignalBacktestPort,
     StrategyShadowReplayPort,
 )
+from services.accounting_projection_port import BrokerAccountingProjectionPort
 from services.execution_engine_port import ExecutionEngineAdapter
 from services.market_data_access import TrustedMarketDataReadPort
 from services.risk_port import RiskDecisionPort
@@ -42,7 +43,10 @@ CONTRACT_KERNELS = (
     "services/dualtrack_execution_contract.py",
     "services/execution_engine_port.py",
     "services/execution_engine_plugin_registry.py",
-    "services/accounting_projection.py",
+    "services/accounting_projection_core.py",
+    "services/accounting_projection_port.py",
+    "services/accounting_projection_registry.py",
+    "services/accounting_broker_common.py",
     "services/risk_port.py",
     "services/broker_port.py",
     "services/trading_system_read_model.py",
@@ -84,11 +88,6 @@ EXPECTED_SCORE_ROWS = {
 }
 
 APPROVED_INLINE_PROVIDER_BRANCHES = {
-    "services/accounting_projection.py": {
-        "binance_usdm",
-        "binance_usdm_futures",
-        "tiger_openapi",
-    },
     "services/broker_port.py": {"binance_usdm"},
 }
 PROVIDER_SUBSCRIPT_DISPATCH = "<provider-subscript-dispatch>"
@@ -232,6 +231,14 @@ class GenericExecutionPort:
         return {}
 
 
+class GenericBrokerAccountingPort:
+    name = "generic_accounting"
+    source_names = ("generic_broker",)
+
+    def project(self, source):
+        return source
+
+
 class GenericStrategyAnalysisPort:
     def generate(self, asset, candles, events=None, run_date="", factor_context=None):
         return None
@@ -293,6 +300,7 @@ class GenericReconciliationPort:
 def test_provider_free_fakes_expose_the_public_port_shapes() -> None:
     assert isinstance(GenericMarketPort(), TrustedMarketDataReadPort)
     assert isinstance(GenericExecutionPort(), ExecutionEngineAdapter)
+    assert isinstance(GenericBrokerAccountingPort(), BrokerAccountingProjectionPort)
     assert isinstance(GenericStrategyAnalysisPort(), StrategyAnalysisPort)
     assert isinstance(GenericStrategyProposalPort(), StrategyProposalPort)
     assert isinstance(GenericSignalBacktestPort(), SignalBacktestPort)
@@ -434,6 +442,51 @@ def test_execution_compatibility_module_is_a_reexport_only_facade() -> None:
     )
     assert "services.execution_plugin_composition" in _imported_modules(path)
     assert "services.legacy_paper_execution_adapter" in _imported_modules(path)
+
+
+def test_accounting_selection_stays_in_one_explicit_composition_root() -> None:
+    execution_consumers = (
+        ROOT / "pipelines" / "dashboard_server.py",
+        ROOT / "services" / "risk_port.py",
+        ROOT / "services" / "execution_conformance.py",
+        ROOT / "services" / "production_accounting.py",
+        ROOT / "services" / "strategy_shadow.py",
+    )
+    broker_consumers = (
+        ROOT / "services" / "live_reconciliation.py",
+        ROOT / "services" / "tiger_openapi_account_sync.py",
+    )
+    concrete_modules = {
+        "services.accounting_binance_adapter",
+        "services.accounting_tiger_adapter",
+    }
+    for path in execution_consumers:
+        imports = _imported_modules(path)
+        assert "services.accounting_projection_core" in imports, path
+        assert "services.accounting_projection" not in imports, path
+        assert "services.accounting_projection_composition" not in imports, path
+        assert not (imports & concrete_modules), path
+    for path in broker_consumers:
+        imports = _imported_modules(path)
+        assert "services.accounting_projection_composition" in imports, path
+        assert "services.accounting_projection" not in imports, path
+        assert not (imports & concrete_modules), path
+
+    composition = ROOT / "services" / "accounting_projection_composition.py"
+    imported = _imported_modules(composition)
+    assert concrete_modules.issubset(imported)
+
+
+def test_accounting_compatibility_module_is_a_reexport_only_facade() -> None:
+    path = ROOT / "services" / "accounting_projection.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    assert not any(
+        isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in tree.body
+    )
+    assert "services.accounting_projection_core" in _imported_modules(path)
+    assert "services.accounting_projection_composition" in _imported_modules(path)
 
 
 def test_production_backtest_plugins_are_explicit_and_non_synthetic() -> None:
