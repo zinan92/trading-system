@@ -13,6 +13,7 @@ from services.broker_port import (
 from services.dualtrack_execution_adapter import ExecutionEngineAdapter
 from services.market_data_access import TrustedMarketDataReadPort
 from services.risk_port import RiskDecisionPort
+from services.strategy_analysis_port import StrategyAnalysisPort
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,8 @@ CONTRACT_KERNELS = (
     "services/datafeed_market_mapper.py",
     "services/market_data_envelope_projection.py",
     "services/strategy_plan_execution.py",
+    "services/strategy_analysis_port.py",
+    "services/strategy_plugin_registry.py",
     "services/dualtrack_execution_contract.py",
     "services/accounting_projection.py",
     "services/risk_port.py",
@@ -50,12 +53,16 @@ FORBIDDEN_KERNEL_IMPORTS = (
     "services.dualtrack_nautilus_",
     "services.dualtrack_shadow_execution_adapter",
     "services.market_store",
+    "services.signal_engine",
+    "services.chan_signal_engine",
+    "services.macd_signal_engine",
+    "services.technical_rule_signal_engine",
 )
 
 EXPECTED_SCORE_ROWS = {
     "Data download": (25, 25, 25, 15, 90),
     "Data cleaning / quality": (25, 25, 20, 15, 85),
-    "Analysis / strategy": (20, 15, 10, 20, 65),
+    "Analysis / strategy": (25, 20, 20, 20, 85),
     "Backtest / replay": (20, 20, 15, 15, 70),
     "Live execution / broker": (25, 20, 20, 20, 85),
     "Risk / accounting / reconciliation": (25, 20, 20, 25, 90),
@@ -211,6 +218,11 @@ class GenericExecutionPort:
         return {}
 
 
+class GenericStrategyAnalysisPort:
+    def generate(self, asset, candles, events=None, run_date="", factor_context=None):
+        return None
+
+
 class GenericRiskPort:
     name = "generic_risk"
 
@@ -247,6 +259,7 @@ class GenericReconciliationPort:
 def test_provider_free_fakes_expose_the_public_port_shapes() -> None:
     assert isinstance(GenericMarketPort(), TrustedMarketDataReadPort)
     assert isinstance(GenericExecutionPort(), ExecutionEngineAdapter)
+    assert isinstance(GenericStrategyAnalysisPort(), StrategyAnalysisPort)
     assert isinstance(GenericRiskPort(), RiskDecisionPort)
     assert isinstance(GenericBrokerPort(), BrokerExecutionPort)
     assert isinstance(GenericReconciliationPort(), BrokerReconciliationPort)
@@ -265,19 +278,41 @@ def test_architecture_progress_bar_is_reproducible_from_visible_scores() -> None
     for values in observed.values():
         assert sum(values[:4]) == values[4]
     overall = round(sum(values[4] for values in observed.values()) / len(observed))
-    assert overall == 83
-    assert "**Overall architecture progress: 83%**" in text
+    assert overall == 86
+    assert "**Overall architecture progress: 86%**" in text
+
+
+def test_strategy_selection_stays_in_the_explicit_plugin_composition_root() -> None:
+    application_paths = (
+        ROOT / "services" / "strategy_registry.py",
+        ROOT / "pipelines" / "daily.py",
+    )
+    concrete_modules = {
+        "services.signal_engine",
+        "services.chan_signal_engine",
+        "services.macd_signal_engine",
+        "services.technical_rule_signal_engine",
+    }
+    for path in application_paths:
+        source = path.read_text(encoding="utf-8")
+        assert "_base_engine" not in source
+        assert not (_imported_modules(path) & concrete_modules)
+
+    composition = (ROOT / "services" / "strategy_plugin_composition.py").read_text(encoding="utf-8")
+    for module in concrete_modules:
+        assert module in composition
 
 
 def test_audit_names_every_known_non_hexagonal_seam() -> None:
     text = AUDIT.read_text(encoding="utf-8")
     backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
-        "Strategy._base_engine",
+        "DualTrackMachinePlanner",
         "Backtest Port",
         "dualtrack_execution_adapter.py",
         "accounting_projection.py",
         "LiveBrokerAdapter",
     ):
         assert seam in backlog
+    assert "Strategy._base_engine" not in backlog
     assert "market_data_contract_mode=shadow" in text

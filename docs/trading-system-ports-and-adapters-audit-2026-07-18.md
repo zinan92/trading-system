@@ -2,19 +2,19 @@
 
 ## Executive answer
 
-**Overall architecture progress: 83%**
+**Overall architecture progress: 86%**
 
-`████████████████▋░░░ 83%`
+`█████████████████▏░░ 86%`
 
 The system now has a real hexagonal spine from trusted market facts through
 StrategyPlan, Risk, Execution, Accounting, Broker, and the Dashboard read model.
 Changing a data source, paper execution engine, or broker no longer requires
 rewriting P&L, risk, or the UI.
 
-It is not yet a full plug-and-play system. The largest remaining gap is above
-StrategyPlan: strategy analysis and backtest selection still branch inside
-application classes instead of resolving registered plugins. Several proven
-compatibility implementations also remain physically bundled with their ports.
+It is not yet a full plug-and-play system. Signal analysis now resolves through
+a frozen Strategy Plugin Registry, but the production grid proposal planner and
+backtest selection still lack equivalent ports. Several proven compatibility
+implementations also remain physically bundled with their ports.
 
 This percentage measures modular architecture, not profitability, live-money
 readiness, or whether the self-evolution loop has enough trades.
@@ -23,14 +23,14 @@ readiness, or whether the self-evolution loop has enough trades.
 
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
-is the arithmetic mean of the seven visible row totals: `580 / 7 = 82.9`,
-rounded to `83%`.
+is the arithmetic mean of the seven visible row totals: `600 / 7 = 85.7`,
+rounded to `86%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
 | Data download | 25 | 25 | 25 | 15 | 90 |
 | Data cleaning / quality | 25 | 25 | 20 | 15 | 85 |
-| Analysis / strategy | 20 | 15 | 10 | 20 | 65 |
+| Analysis / strategy | 25 | 20 | 20 | 20 | 85 |
 | Backtest / replay | 20 | 20 | 15 | 15 | 70 |
 | Live execution / broker | 25 | 20 | 20 | 20 | 85 |
 | Risk / accounting / reconciliation | 25 | 20 | 20 | 25 | 90 |
@@ -42,8 +42,9 @@ rounded to `83%`.
 flowchart LR
     S["External market sources"] --> DA["Datafeed adapters"]
     DA --> ME["MarketDataEnvelope"]
-    ME --> SA["Strategy analysis — partial plugin boundary"]
-    SA --> SP["Versioned StrategyPlan"]
+    ME --> SA["StrategyAnalysisPort + frozen plugin registry"]
+    SA --> GP["Grid proposal planner — partial boundary"]
+    GP --> SP["Versioned StrategyPlan"]
     SP --> RP["RiskDecisionPort"]
     RP --> EP["ExecutionEngineAdapter"]
     EP --> AP["AccountingSnapshot"]
@@ -96,22 +97,33 @@ validation is correctly rejected.
   health compatibility seams remain frozen rather than deleted; production V2
   envelope authority is still shadow-gated.
 
-### 3. Analysis / strategy — 65/100
+### 3. Analysis / strategy — 85/100
 
-- Stable output: the running grid reaches execution as a versioned
-  `strategy-plan-v1`; one pure projection builds normalized grid commands.
-- Existing adapters: MA, MACD, Chan, and technical-rule engines share common
-  `Signal` output, classification, isolated strategy namespaces, and Shadow
-  evaluation.
-- Main gap: `Strategy._base_engine` still selects implementations through an
-  engine-name `if` chain, and many technical families share another internal
-  dispatcher. A new analysis engine therefore requires editing application
-  code, not only registering a plugin.
-- There is no first-class `StrategyAnalysisPort` plus composition registry for
-  the current grid planner, Signal engines, and future strategy families.
+- Contract: `strategy-analysis-plugin-v1` describes a provider-neutral
+  `StrategyAnalysisPort`, stable plugin descriptors/capabilities, and one
+  content fingerprint for the frozen startup registry. Signal output and the
+  running grid's downstream `strategy-plan-v1` remain unchanged.
+- Isolation/composition: MA, MACD, Chan, and every technical-rule name are lazy
+  factories in `strategy_plugin_composition.py`. `Strategy`, the daily
+  pipeline, runner, Lab, and backtest callers import no concrete engine to
+  select an implementation.
+- Cutover: the legacy global report cycle, enabled multi-strategy fleet, filters,
+  and injected custom engines all resolve through the same registry. Missing
+  `engine` explicitly means MA; empty, duplicate, unknown, late-mutated, or
+  structurally invalid plugins fail closed. The runner exposes plugin audit
+  evidence and skips unresolved strategies before their trading namespace is
+  created.
+- Proof: all 25 configured strategies resolve through 20 registered names;
+  behavioral suites preserve MA/MACD/Chan/technical/filter results, custom
+  injection, Lab replay, backtest, and runner behavior.
+- Remaining 15: the production `DualTrackMachinePlanner` is still constructed
+  directly by the cycle runner rather than through a proposal/planner port;
+  `TechnicalRuleSignalEngine` and the small filter registry also retain
+  internal family dispatch. Those are contained implementation seams, not
+  application-level engine selection.
 
-Conclusion: configuration is modular; analysis implementation selection is
-only partially hexagonal.
+Conclusion: signal analysis is plug-compatible; production grid proposal
+generation is the remaining partial strategy boundary.
 
 ### 4. Backtest / replay — 70/100
 
@@ -193,7 +205,8 @@ only partially hexagonal.
 | Broker / venue | Yes at application boundary | Register execution + reconciliation plugins and pass venue/lifecycle/protection tests |
 | Risk policy evaluator | Yes for normalized requests | Implement `RiskDecisionPort`; preserve mutation-time identity and exit availability |
 | Dashboard client | Yes | Consume `trading-system-read-model-v1`; commands remain separate POSTs |
-| Strategy analysis engine | Not yet | Must still edit `Strategy._base_engine` or technical dispatcher |
+| Strategy analysis engine | Yes | Implement `StrategyAnalysisPort`, explicitly register before startup freeze, and pass behavior/replay tests |
+| Production grid proposal planner | Not yet | Extract `DualTrackMachinePlanner` behind a versioned proposal/planner port and explicit composition root |
 | Backtest engine | Not yet | Must still edit `BacktestClient`/pipeline composition |
 
 ## Self-repair and self-evolution are separate axes
@@ -221,9 +234,10 @@ evolution yet.
 
 ## Shortest remaining architecture backlog
 
-1. **Strategy Plugin Registry (medium):** define a real
-   `StrategyAnalysisPort`; move MA/MACD/Chan/technical/grid planner selection
-   from `Strategy._base_engine` into registered factories.
+1. **Strategy proposal/planner port (medium):** keep `strategy-plan-v1`, move
+   `DualTrackMachinePlanner` construction out of the cycle runner, and register
+   deterministic/manual/AI proposal implementations with identical validation
+   and provenance evidence.
 2. **Backtest composition (medium):** define a Backtest Port over versioned
    scenario + normalized result; register Nautilus, local research, and remote
    implementations; remove mock fallback from every execution-eligible legacy
@@ -249,10 +263,12 @@ evolution yet.
 
 The architecture is now strong enough that self-repair and grid evolution can
 be built without reworking market, execution, risk, accounting, broker, and UI
-truth again. It is not yet true that “any strategy or backtester can be dropped
-in without editing application code.” The honest state is a robust hexagonal
-spine with two weak upper-layer boundaries—analysis and backtest—and several
-contained compatibility monoliths.
+truth again. A new signal-analysis engine can now be dropped in without editing
+application code. A new production grid planner or backtester cannot yet make
+that claim. The honest state is a robust hexagonal spine with a completed
+signal-plugin boundary, two weaker upper-layer planning/replay boundaries, and
+several contained compatibility monoliths.
 
-The next highest-leverage change is the Strategy Plugin Registry, not another
-Dashboard or another provider-specific integration.
+For the grid-only product focus, the next highest-leverage change is the
+Strategy proposal/planner port, followed by Backtest composition—not another
+Dashboard or provider-specific integration.
