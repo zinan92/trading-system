@@ -10,6 +10,11 @@ from services.broker_port import (
     BrokerPortDescriptor,
     BrokerReconciliationPort,
 )
+from services.backtest_port import (
+    HistoricalStrategyBacktestPort,
+    SignalBacktestPort,
+    StrategyShadowReplayPort,
+)
 from services.dualtrack_execution_adapter import ExecutionEngineAdapter
 from services.market_data_access import TrustedMarketDataReadPort
 from services.risk_port import RiskDecisionPort
@@ -31,6 +36,9 @@ CONTRACT_KERNELS = (
     "services/strategy_plugin_registry.py",
     "services/strategy_proposal_port.py",
     "services/strategy_proposal_registry.py",
+    "services/backtest_port.py",
+    "services/backtest_plugin_registry.py",
+    "services/backtest_service.py",
     "services/dualtrack_execution_contract.py",
     "services/accounting_projection.py",
     "services/risk_port.py",
@@ -67,7 +75,7 @@ EXPECTED_SCORE_ROWS = {
     "Data download": (25, 25, 25, 15, 90),
     "Data cleaning / quality": (25, 25, 20, 15, 85),
     "Analysis / strategy": (25, 20, 25, 25, 95),
-    "Backtest / replay": (20, 20, 15, 15, 70),
+    "Backtest / replay": (25, 20, 25, 20, 90),
     "Live execution / broker": (25, 20, 20, 20, 85),
     "Risk / accounting / reconciliation": (25, 20, 20, 25, 90),
     "Dashboard / read model": (25, 25, 20, 25, 95),
@@ -232,6 +240,21 @@ class GenericStrategyProposalPort:
         return {"cycle_id": request.cycle_id}
 
 
+class GenericSignalBacktestPort:
+    def evaluate(self, request):
+        return request
+
+
+class GenericHistoricalBacktestPort:
+    def run(self, request):
+        return {"request": request}
+
+
+class GenericStrategyShadowReplayPort:
+    def replay(self, scenario):
+        return {"scenario": scenario}
+
+
 class GenericRiskPort:
     name = "generic_risk"
 
@@ -270,6 +293,9 @@ def test_provider_free_fakes_expose_the_public_port_shapes() -> None:
     assert isinstance(GenericExecutionPort(), ExecutionEngineAdapter)
     assert isinstance(GenericStrategyAnalysisPort(), StrategyAnalysisPort)
     assert isinstance(GenericStrategyProposalPort(), StrategyProposalPort)
+    assert isinstance(GenericSignalBacktestPort(), SignalBacktestPort)
+    assert isinstance(GenericHistoricalBacktestPort(), HistoricalStrategyBacktestPort)
+    assert isinstance(GenericStrategyShadowReplayPort(), StrategyShadowReplayPort)
     assert isinstance(GenericRiskPort(), RiskDecisionPort)
     assert isinstance(GenericBrokerPort(), BrokerExecutionPort)
     assert isinstance(GenericReconciliationPort(), BrokerReconciliationPort)
@@ -288,8 +314,8 @@ def test_architecture_progress_bar_is_reproducible_from_visible_scores() -> None
     for values in observed.values():
         assert sum(values[:4]) == values[4]
     overall = round(sum(values[4] for values in observed.values()) / len(observed))
-    assert overall == 87
-    assert "**Overall architecture progress: 87%**" in text
+    assert overall == 90
+    assert "**Overall architecture progress: 90%**" in text
 
 
 def test_strategy_selection_stays_in_the_explicit_plugin_composition_root() -> None:
@@ -330,11 +356,58 @@ def test_strategy_proposal_selection_stays_in_the_explicit_composition_root() ->
     assert concrete_module in composition
 
 
+def test_backtest_selection_stays_in_one_explicit_composition_root() -> None:
+    application_paths = (
+        ROOT / "pipelines" / "daily.py",
+        ROOT / "pipelines" / "backtest_strategies.py",
+        ROOT / "pipelines" / "strategy_shadow_replay.py",
+    )
+    concrete_modules = {
+        "services.backtest_client",
+        "services.local_backtester",
+        "services.strategy_backtester",
+        "services.strategy_shadow_nautilus",
+        "services.backtest_signal_adapters",
+        "services.backtest_historical_adapter",
+    }
+    for path in application_paths:
+        source = path.read_text(encoding="utf-8")
+        assert not (_imported_modules(path) & concrete_modules)
+        assert "BacktestClient" not in source
+        assert "local_backtest_enabled" not in source
+        assert "NautilusStrategyShadowReplay" not in source
+
+    composition = (ROOT / "services" / "backtest_plugin_composition.py").read_text(
+        encoding="utf-8"
+    )
+    for module in {
+        "services.backtest_signal_adapters",
+        "services.backtest_historical_adapter",
+        "services.strategy_shadow_nautilus",
+    }:
+        assert module in composition
+    assert "services.local_backtester" in (
+        ROOT / "services" / "backtest_signal_adapters.py"
+    ).read_text(encoding="utf-8")
+    assert "services.strategy_backtester" in (
+        ROOT / "services" / "backtest_historical_adapter.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_production_backtest_plugins_are_explicit_and_non_synthetic() -> None:
+    pipeline = (ROOT / "configs" / "pipeline.yaml").read_text(encoding="utf-8")
+    dualtrack = (ROOT / "configs" / "dualtrack.yaml").read_text(encoding="utf-8")
+
+    assert '"signal": "local_signal"' in pipeline
+    assert '"historical_strategy": "event_driven_strategy"' in pipeline
+    assert '"strategy_shadow": "nautilus_strategy_shadow"' in dualtrack
+    assert '"signal": "synthetic_signal_context"' not in pipeline
+
+
 def test_audit_names_every_known_non_hexagonal_seam() -> None:
     text = AUDIT.read_text(encoding="utf-8")
     backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
-        "Backtest Port",
         "dualtrack_execution_adapter.py",
         "accounting_projection.py",
         "LiveBrokerAdapter",
@@ -342,5 +415,6 @@ def test_audit_names_every_known_non_hexagonal_seam() -> None:
         assert seam in backlog
     assert "DualTrackMachinePlanner" not in backlog
     assert "Strategy._base_engine" not in backlog
+    assert "Backtest composition" not in backlog
     assert "strategy-proposal-request-v1" in text
     assert "market_data_contract_mode=shadow" in text
