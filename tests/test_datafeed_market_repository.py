@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from services.datafeed_market_client import DatafeedUnavailable
 from services.datafeed_market_mapper import DatafeedContractError
 from services.datafeed_market_repository import DatafeedMarketRepository
 
@@ -57,7 +58,7 @@ class EnvelopeClient:
 
     def candles(self, **kwargs):
         self.calls.append(kwargs)
-        return deepcopy(
+        payload = deepcopy(
             self.payload
             or json.loads(
                 (FIXTURES / "trusted_execution_candles_v1.json").read_text(
@@ -65,9 +66,36 @@ class EnvelopeClient:
                 )
             )
         )
+        candles = payload.get("candles", [])
+        if kwargs.get("start"):
+            candles = [
+                row
+                for row in candles
+                if row["timestamp"] >= kwargs["start"]
+            ]
+        if kwargs.get("end"):
+            candles = [
+                row for row in candles if row["timestamp"] <= kwargs["end"]
+            ]
+        candles = candles[-int(kwargs["limit"]) :]
+        payload["candles"] = candles
+        payload["count"] = len(candles)
+        payload["latest_timestamp"] = (
+            candles[-1]["timestamp"] if candles else None
+        )
+        return payload
 
 
-def _trusted_repository(client: EnvelopeClient) -> DatafeedMarketRepository:
+class UnavailableClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def candles(self, **_kwargs):
+        self.calls += 1
+        raise DatafeedUnavailable("datafeed HTTP 502: upstream_error")
+
+
+def _trusted_repository(client) -> DatafeedMarketRepository:
     return DatafeedMarketRepository(
         client=client,
         config={
@@ -127,6 +155,16 @@ def test_repository_bar_reads_reject_an_invalid_success_payload() -> None:
         repo.load_bars("GOLD", "1m", 2)
 
 
+def test_repository_propagates_upstream_failure_without_fallback() -> None:
+    client = UnavailableClient()
+    repo = _trusted_repository(client)
+
+    with pytest.raises(DatafeedUnavailable, match="HTTP 502"):
+        repo.load_bars("GOLD", "1m", 2)
+
+    assert client.calls == 1
+
+
 @pytest.mark.parametrize(
     "upstream_schema",
     ["kline-candles-v1", "kline-candles-v2"],
@@ -171,17 +209,17 @@ def test_repository_range_and_point_reads_preserve_request_boundaries() -> None:
     point = repo.load_bar_at_or_before(
         "GOLD",
         "1m",
-        "2026-07-18T12:01:00+00:00",
+        "2026-07-18T12:00:30+00:00",
     )
 
     assert len(ranged) == 2
-    assert point["close"] == 4003.0
+    assert point["close"] == 4001.0
     assert client.calls[0]["limit"] == 60_000
     assert client.calls[0]["start"] == "2026-07-18T12:00:00+00:00"
     assert client.calls[0]["end"] == "2026-07-18T12:01:00+00:00"
     assert client.calls[1]["limit"] == 1
     assert client.calls[1]["start"] is None
-    assert client.calls[1]["end"] == "2026-07-18T12:01:00+00:00"
+    assert client.calls[1]["end"] == "2026-07-18T12:00:30+00:00"
 
 
 def test_repository_contains_no_second_raw_candle_interpreter() -> None:
