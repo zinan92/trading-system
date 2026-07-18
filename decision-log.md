@@ -6933,3 +6933,38 @@ auditable datafeed port; broker execution remains a separate port.
   (`635 / 7 = 90.7%`, rounded to `91%`).
 - No strategy parameters, risk rules, credentials, live configuration, orders,
   positions, accounts, or production state were changed.
+
+## 2026-07-18 - A12 Accounting Adapter Registry kickoff
+
+### Objective and value
+
+- Extract Binance USD-M and Tiger accounting interpretation from the generic
+  P&L core, then register each source explicitly behind one canonical snapshot
+  port.
+- Make a new broker/account source an adapter-plus-conformance change rather
+  than a provider branch inside risk, Dashboard, or reconciliation code.
+
+### Decisions
+
+- Preserve `accounting-snapshot-v1`, exact snapshot IDs, rounding, issue order,
+  completeness, and unknown-is-not-zero behavior.
+- Reuse the explicit frozen-registry pattern already proven in A8-A11; do not
+  add Pluggy or entry-point discovery.
+- Keep execution-engine accounting provider-free and separate from broker
+  source composition. Retain the old module as a compatibility facade only.
+
+### Gotchas
+
+- Binance user trades do not prove round-trip lifecycle, so trade and
+  entry/exit counts must remain unknown.
+- Tiger is aggregate account evidence; missing orders, fills, fees, funding,
+  exposure, and ending cash must never become zero.
+- Fail-honest accounting is additive to source persistence. Projection failure
+  must remain visible without suppressing the reconciliation or sync receipt.
+- The primary worktree remains unrelated and active. A12 is isolated on top of
+  completed A11 and changes no live config or production state.
+
+### Baseline
+
+- A11 full suite: `1800 passed, 7 skipped`.
+- Accounting/risk/reconciliation/Dashboard pack: `113 passed`.
