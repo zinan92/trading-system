@@ -124,6 +124,9 @@ def test_registry_rejects_plugin_capability_mismatch(tmp_path: Path):
         ({"provider": "binance_usdm", "environment": "demo"}, "binance_demo"),
         ({"provider": "binance_usdm", "environment": "testnet"}, "binance_usdm_testnet"),
         ({"provider": "binance_usdm", "environment": "live"}, "live"),
+        ({"provider": "oanda_rest", "environment": "practice"}, "oanda_rest"),
+        ({"provider": "mt5_file_bridge", "environment": "live"}, "mt5_file_bridge"),
+        ({"provider": "manual_gateway", "environment": "live"}, "live"),
     ],
 )
 def test_default_registry_builds_expected_adapter(

@@ -329,6 +329,29 @@ def _tiger_paper_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
     return TigerOpenApiPaperBrokerAdapter(context.output_root, context.broker_config)
 
 
+def _oanda_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
+    from services.oanda_rest_broker_adapter import OandaRestBrokerAdapter
+
+    return OandaRestBrokerAdapter(
+        context.output_root,
+        context.live_trading_enabled,
+        context.broker_config,
+        opener=context.opener,
+    )
+
+
+def _mt5_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
+    from services.mt5_file_bridge_broker_adapter import (
+        Mt5FileBridgeBrokerAdapter,
+    )
+
+    return Mt5FileBridgeBrokerAdapter(
+        context.output_root,
+        context.live_trading_enabled,
+        context.broker_config,
+    )
+
+
 def _binance_reconciliation(context: BrokerBuildContext) -> BrokerReconciliationPort:
     from services.live_reconciliation import LiveBrokerReconciliation
 
@@ -395,11 +418,15 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
             demo_capable=True,
         )
     )
-    for provider in ("manual_gateway", "mt5_file_bridge", "oanda_rest"):
+    for provider, execution_factory in (
+        ("oanda_rest", _oanda_execution),
+        ("mt5_file_bridge", _mt5_execution),
+        ("manual_gateway", _legacy_live_execution),
+    ):
         registry.register(
             BrokerPlugin(
                 BrokerPluginKey("live", provider, "*"),
-                execution_factory=_legacy_live_execution,
+                execution_factory=execution_factory,
                 capabilities=_execution_capabilities(provider),
             )
         )

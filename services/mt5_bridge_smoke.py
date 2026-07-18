@@ -4,7 +4,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.broker_adapter import BrokerOrderRequest, LiveBrokerAdapter
+from services.broker_composition import BrokerBuildContext, build_broker_execution_port
+from services.broker_port import BrokerOrderRequest
 from services.broker_receipts import BrokerReceiptImporter
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
@@ -27,7 +28,14 @@ class Mt5BridgeSmoke:
             "outbox_dir": str(self.outbox),
             "inbox_dir": str(self.inbox),
         }
-        adapter = LiveBrokerAdapter(self.output_root, True, broker_config)
+        adapter = build_broker_execution_port(
+            BrokerBuildContext(
+                output_root=self.output_root,
+                execution_mode="live",
+                live_trading_enabled=True,
+                broker_config=broker_config,
+            )
+        )
         ticket = self._ticket(run_date)
         order = adapter.submit_order(BrokerOrderRequest(run_date, ticket, latest_price=4571.3))
         receipt_file = self._write_mock_receipt(order.order_id)
