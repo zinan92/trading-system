@@ -6834,3 +6834,37 @@ auditable datafeed port; broker execution remains a separate port.
 - Architecture progress: `90%`, reproducible from the canonical audit table.
 - No strategy parameters, risk rules, execution/broker authority, credentials,
   orders, positions, accounts, or production state were changed.
+
+## 2026-07-18 - A11 Execution Plugin Registry kickoff
+
+### Objective and value
+
+- Make Legacy, Nautilus, and continuous Shadow execution composition replaceable
+  through explicit factories without moving cutover or money authority into
+  plugins.
+- Remove concrete engine selection from production applications while preserving
+  every current paper-execution and reconciliation behavior.
+
+### Decisions
+
+- Follow NautilusTrader's configuration-plus-factory registration pattern.
+- Extract the port and Legacy adapter physically; retain the old module only as
+  a compatibility facade.
+- Keep attended approval, runtime path, parity/shadow gate, override
+  acknowledgement, and paper-only policy in trusted composition.
+- Register factories explicitly and freeze before use; do not auto-load installed
+  packages.
+
+### Gotchas
+
+- Shadow is non-authoritative decoration and must never replace the Legacy return
+  value or account truth when its runtime fails.
+- Registry metadata is not cutover evidence and cannot bypass the existing
+  seven-cycle/parity/fee/precision gates.
+- The primary worktree remains unrelated and active. A11 is isolated on top of
+  completed A10 and changes no live config or state.
+
+### Baseline
+
+- A10 full suite: `1788 passed, 7 skipped`.
+- Execution boundary pack: `69 passed, 1 skipped`.
