@@ -7132,3 +7132,46 @@ auditable datafeed port; broker execution remains a separate port.
   the Opus receipt are trace material only.
 - No strategy parameters, risk thresholds, credentials, live configuration,
   orders, positions, accounts, or production state were changed.
+## 2026-07-18 - A14 OANDA and MT5 Broker Adapter extraction kickoff
+
+### Decision
+
+- Extract OANDA REST and MT5 file bridge as standalone
+  `BrokerExecutionPort` adapters before moving the much larger Binance
+  lifecycle/protection body. Removing the small cross-venue branches first
+  reduces the final compatibility monolith with lower semantic risk.
+- Give each provider an explicit lazy registry factory. Manual and unknown
+  gateways alone retain the legacy factory; config still cannot grant an armed
+  unknown path.
+- Keep `LiveBrokerAdapter` direct/private seams as lazy compatibility delegates
+  until operational callers have moved through composition. Do not keep a
+  second OANDA or MT5 implementation in the facade.
+- Preserve current gates and artifacts exactly. A14 changes dependency
+  direction and physical ownership, not venue authority, order types, retries,
+  risk, accounting, or reconciliation.
+
+### User value
+
+- OANDA and MT5 can be replaced independently without changing strategy, risk,
+  Binance/Tiger, accounting, or Dashboard code, while existing safety runbooks
+  keep working during migration.
+
+### Gotchas
+
+- OANDA dry-run intentionally needs no credentials; real submission needs both
+  non-placeholder env values and `real_money_ready` before network I/O.
+- OANDA bearer values must never enter descriptors, receipts, repr, or logs.
+- MT5 non-dry outbox files are executable intent and remain activation-gated.
+- MT5 preflight writes directories/templates and relative paths resolve from
+  repository `ROOT`.
+- Existing order IDs and truthiness-based quantity fallback are compatibility
+  contracts in this milestone.
+- Cached facade delegates must follow config/opener object replacement and
+  in-place config mutation.
+- No visible surface changes; Visual Evidence is not applicable unless scope
+  changes.
+
+### Baseline
+
+- A13 repository: `1822 passed, 7 skipped`.
+- OANDA/MT5/Broker/smoke/safety/audit pack: `63 passed`.
