@@ -1,6 +1,10 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 
+import pytest
+
+from services.datafeed_market_mapper import DatafeedContractError
 from services.datafeed_market_repository import DatafeedMarketRepository
 
 
@@ -10,21 +14,17 @@ FIXTURES = Path(__file__).parent / "fixtures" / "datafeed"
 class FakeClient:
     def candles(self, **kwargs):
         assert kwargs["cache_policy"] == "require"
-        return {
-            "instrument_id": "GOLD",
-            "provider": "binance_usdm_futures",
-            "quality_flags": ["execution_venue"],
-            "candles": [
-                {
-                    "timestamp": "2026-07-15T10:00:00+00:00",
-                    "open": 4000,
-                    "high": 4002,
-                    "low": 3999,
-                    "close": 4001,
-                    "volume": 10,
-                }
-            ],
-        }
+        payload = json.loads(
+            (FIXTURES / "trusted_execution_candles_v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        payload.update(
+            cache_policy=kwargs["cache_policy"],
+            quality_policy=kwargs["quality"],
+            require_execution_venue=kwargs["require_execution_venue"],
+        )
+        return payload
 
     def health(self):
         return {
@@ -46,40 +46,50 @@ def test_repository_preserves_trading_bar_contract_over_datafeed():
     bars = repo.load_bars("GOLD", "1m", 1)
     assert bars[0].symbol == "GOLD"
     assert bars[0].provider == "binance_usdm_futures"
-    assert repo.load_latest_quote("GOLD")["close"] == 4001
+    assert repo.load_latest_quote("GOLD")["close"] == 4003
     assert repo.coverage()[0]["provider"] == "binance_usdm_futures"
 
 
 class EnvelopeClient:
-    def __init__(self) -> None:
+    def __init__(self, payload: dict | None = None) -> None:
         self.calls = []
+        self.payload = payload
 
     def candles(self, **kwargs):
         self.calls.append(kwargs)
-        return json.loads(
-            (FIXTURES / "trusted_execution_candles_v1.json").read_text(
-                encoding="utf-8"
+        return deepcopy(
+            self.payload
+            or json.loads(
+                (FIXTURES / "trusted_execution_candles_v1.json").read_text(
+                    encoding="utf-8"
+                )
             )
         )
 
 
-def test_repository_exposes_opt_in_trusted_envelope_without_changing_old_reads():
-    client = EnvelopeClient()
-    config = {
-        "datafeed": {
-            "instrument_routes": {
-                "GOLD": {
-                    "asset_class": "commodity",
-                    "ticker": "GOLD",
-                    "source": "binance_usdm_futures",
-                    "cache_policy": "bypass",
-                    "quality_policy": "strict",
-                    "require_execution_venue": True,
+def _trusted_repository(client: EnvelopeClient) -> DatafeedMarketRepository:
+    return DatafeedMarketRepository(
+        client=client,
+        config={
+            "datafeed": {
+                "instrument_routes": {
+                    "GOLD": {
+                        "asset_class": "commodity",
+                        "ticker": "GOLD",
+                        "source": "binance_usdm_futures",
+                        "cache_policy": "bypass",
+                        "quality_policy": "strict",
+                        "require_execution_venue": True,
+                    }
                 }
             }
-        }
-    }
-    repo = DatafeedMarketRepository(client=client, config=config)
+        },
+    )
+
+
+def test_repository_exposes_authoritative_trusted_envelope():
+    client = EnvelopeClient()
+    repo = _trusted_repository(client)
 
     envelope = repo.load_envelope("GOLD", "1m", 2)
 
@@ -101,3 +111,84 @@ def test_repository_exposes_opt_in_trusted_envelope_without_changing_old_reads()
             "end": None,
         }
     ]
+
+
+def test_repository_bar_reads_reject_an_invalid_success_payload() -> None:
+    payload = json.loads(
+        (FIXTURES / "trusted_execution_candles_v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    payload.pop("schema_version")
+    client = EnvelopeClient(payload)
+    repo = _trusted_repository(client)
+
+    with pytest.raises(DatafeedContractError, match="schema"):
+        repo.load_bars("GOLD", "1m", 2)
+
+
+@pytest.mark.parametrize(
+    "upstream_schema",
+    ["kline-candles-v1", "kline-candles-v2"],
+)
+def test_repository_bar_projection_has_v1_v2_envelope_parity(
+    upstream_schema: str,
+) -> None:
+    payload = json.loads(
+        (FIXTURES / "trusted_execution_candles_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if upstream_schema == "kline-candles-v2":
+        payload.update(
+            schema_version=upstream_schema,
+            continuous_market=True,
+            market_open=True,
+            session_status="continuous",
+            session_checked_at="2026-07-18T12:01:05+00:00",
+            current_session_end=None,
+        )
+    client = EnvelopeClient(payload)
+    repo = _trusted_repository(client)
+
+    bars = repo.load_bars("GOLD", "1m", 2)
+
+    assert [bar.close for bar in bars] == [4001.0, 4003.0]
+    assert all(bar.symbol == "GOLD" for bar in bars)
+    assert all(bar.provider == "binance_usdm_futures" for bar in bars)
+
+
+def test_repository_range_and_point_reads_preserve_request_boundaries() -> None:
+    client = EnvelopeClient()
+    repo = _trusted_repository(client)
+
+    ranged = repo.load_bars_between(
+        "GOLD",
+        "1m",
+        "2026-07-18T12:00:00+00:00",
+        "2026-07-18T12:01:00+00:00",
+    )
+    point = repo.load_bar_at_or_before(
+        "GOLD",
+        "1m",
+        "2026-07-18T12:01:00+00:00",
+    )
+
+    assert len(ranged) == 2
+    assert point["close"] == 4003.0
+    assert client.calls[0]["limit"] == 60_000
+    assert client.calls[0]["start"] == "2026-07-18T12:00:00+00:00"
+    assert client.calls[0]["end"] == "2026-07-18T12:01:00+00:00"
+    assert client.calls[1]["limit"] == 1
+    assert client.calls[1]["start"] is None
+    assert client.calls[1]["end"] == "2026-07-18T12:01:00+00:00"
+
+
+def test_repository_contains_no_second_raw_candle_interpreter() -> None:
+    source = (
+        Path(__file__).parents[1] / "services" / "datafeed_market_repository.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _fetch(" not in source
+    assert 'row["open"]' not in source
+    assert 'payload.get("candles"' not in source

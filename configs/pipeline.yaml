@@ -8,7 +8,7 @@
     "base_url": "http://127.0.0.1:8100",
     "source": "binance_usdm_futures",
     "asset_class": "commodity",
-    "market_data_contract_mode": "shadow",
+    "market_data_contract_mode": "authoritative",
     "timeout_seconds": 10,
     "instrument_routes": {
       "GOLD": {

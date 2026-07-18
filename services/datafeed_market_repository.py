@@ -41,12 +41,7 @@ class DatafeedMarketRepository:
         start: str | None = None,
         end: str | None = None,
     ) -> MarketDataEnvelope:
-        """Return the opt-in, versioned trust envelope for one datafeed read.
-
-        Existing compatibility readers intentionally continue through
-        ``_fetch`` during A0.  A1 can migrate them one at a time after shadow
-        comparisons prove the stricter contract against live payloads.
-        """
+        """Return the authoritative versioned trust envelope for one read."""
 
         route = self._route(symbol)
         source = str(route["source"])
@@ -76,7 +71,7 @@ class DatafeedMarketRepository:
         )
 
     def load_bars(self, symbol: str, timeframe: str, limit: int) -> list[Bar]:
-        return self._fetch(symbol, timeframe, limit=limit)
+        return list(self.load_envelope(symbol, timeframe, limit).bars)
 
     def load_bars_between(
         self,
@@ -85,12 +80,14 @@ class DatafeedMarketRepository:
         start_timestamp: str,
         end_timestamp: str,
     ) -> list[Bar]:
-        return self._fetch(
-            symbol,
-            timeframe,
-            limit=60_000,
-            start=start_timestamp,
-            end=end_timestamp,
+        return list(
+            self.load_envelope(
+                symbol,
+                timeframe,
+                60_000,
+                start=start_timestamp,
+                end=end_timestamp,
+            ).bars
         )
 
     def load_latest_bar(
@@ -118,7 +115,12 @@ class DatafeedMarketRepository:
         }
 
     def load_bar_at_or_before(self, symbol: str, timeframe: str, timestamp: str) -> dict:
-        bars = self._fetch(symbol, timeframe, limit=1, end=timestamp)
+        bars = self.load_envelope(
+            symbol,
+            timeframe,
+            1,
+            end=timestamp,
+        ).bars
         return {**bars[-1].to_dict(), "record_type": "bar"} if bars else {}
 
     def load_aggregated_bars_between(
@@ -184,47 +186,6 @@ class DatafeedMarketRepository:
 
     def health(self) -> dict:
         return self.client.health()
-
-    def _fetch(
-        self,
-        symbol: str,
-        timeframe: str,
-        *,
-        limit: int,
-        start: str | None = None,
-        end: str | None = None,
-    ) -> list[Bar]:
-        route = self._route(symbol)
-        payload = self.client.candles(
-            asset_class=str(route["asset_class"]),
-            ticker=str(route.get("ticker") or symbol),
-            timeframe=timeframe,
-            limit=limit,
-            source=str(route["source"]),
-            cache_policy=str(route.get("cache_policy") or "require"),
-            quality="standard",
-            require_execution_venue=bool(route.get("require_execution_venue", False)),
-            start=start,
-            end=end,
-        )
-        canonical_symbol = str(payload.get("instrument_id") or symbol)
-        provider = str(payload.get("provider") or payload.get("selected_source") or "")
-        response_flags = list(payload.get("quality_flags") or [])
-        return [
-            Bar(
-                symbol=canonical_symbol,
-                timeframe=timeframe,
-                timestamp=str(row["timestamp"]),
-                open=float(row["open"]),
-                high=float(row["high"]),
-                low=float(row["low"]),
-                close=float(row["close"]),
-                volume=float(row.get("volume") or 0),
-                provider=provider,
-                quality_flags=list(row.get("quality_flags") or response_flags),
-            )
-            for row in payload.get("candles", [])
-        ]
 
     def _route(self, symbol: str) -> dict[str, Any]:
         route = self.routes.get(symbol)

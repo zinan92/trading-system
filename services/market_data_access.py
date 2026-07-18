@@ -26,7 +26,7 @@ class MarketDataReadPort(Protocol):
 
 @runtime_checkable
 class TrustedMarketDataReadPort(Protocol):
-    """Opt-in port for versioned market-data trust envelopes."""
+    """Port for authoritative versioned market-data trust envelopes."""
 
     def load_envelope(
         self,

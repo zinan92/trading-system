@@ -73,6 +73,7 @@ def test_dualtrack_market_feed_consumes_datafeed_port_without_private_db(tmp_pat
         "base_url": "http://datafeed.test",
         "source": "binance_usdm_futures",
         "asset_class": "commodity",
+        "market_data_contract_mode": "shadow",
     }
     client = _FakeDatafeedClient()
     payload = DualTrackMarketFeed(
@@ -93,6 +94,69 @@ def test_dualtrack_market_feed_consumes_datafeed_port_without_private_db(tmp_pat
     assert payload["safety"]["reads_private_market_db"] is False
     assert payload["market_data_contract_shadow"]["status"] == "pass"
     assert payload["market_data_contract_shadow"]["authoritative"] == "legacy"
+    assert client.calls == 1
+
+
+def test_datafeed_contract_defaults_to_authoritative_after_cutover(
+    tmp_path: Path,
+) -> None:
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "base_url": "http://datafeed.test",
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+    }
+    client = _FakeDatafeedClient()
+
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(as_of="2026-07-18T12:00:05+00:00")
+
+    assert "market_data_contract_shadow" not in payload
+    assert payload["market_data_contract"]["execution_ready"] is True
+    assert payload["market_data_contract_comparison"]["authoritative"] == (
+        "envelope"
+    )
+    assert client.calls == 1
+
+
+def test_canonical_pipeline_selects_authoritative_market_envelope() -> None:
+    pipeline = json.loads(
+        (Path(__file__).parents[1] / "configs" / "pipeline.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert pipeline["datafeed"]["market_data_contract_mode"] == (
+        "authoritative"
+    )
+
+
+def test_default_authority_blocks_upstream_failure_without_legacy_fallback(
+    tmp_path: Path,
+) -> None:
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+    }
+    client = _UnavailableDatafeedClient()
+
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot()
+
+    assert payload["status"] == "blocked"
+    assert payload["bar_count"] == 0
+    assert "market_data_contract_shadow" not in payload
+    assert payload["market_data_contract"]["mode"] == "authoritative"
+    assert "HTTP 502" in payload["market_data_contract"]["error"]
     assert client.calls == 1
 
 
