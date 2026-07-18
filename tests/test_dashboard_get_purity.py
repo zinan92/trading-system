@@ -87,6 +87,7 @@ def test_unmigrated_console_get_is_pure_and_threads_one_market_snapshot(
             "fills": [],
             "positions": [],
             "account": {},
+            "accounting_snapshot": {"snapshot_id": "current-accounting"},
             "shadow_cutover": {},
         }
 
@@ -101,6 +102,7 @@ def test_unmigrated_console_get_is_pure_and_threads_one_market_snapshot(
             "trades": [],
             "fills": [],
             "summary": {},
+            "accounting_snapshot": {"snapshot_id": "history-accounting"},
             "history_contract": {},
         },
     )
@@ -116,9 +118,21 @@ def test_unmigrated_console_get_is_pure_and_threads_one_market_snapshot(
         output_root=output,
         as_of="2026-07-18T01:02:00+00:00",
     )
+    stable = dashboard_server.build_trading_system_read_model_response(
+        output_root=output,
+        as_of="2026-07-18T01:02:00+00:00",
+    )
 
     assert first["production_plan"] is None
     assert second["migration"]["legacy_migration_required"] is True
-    assert received_market_ids == [id(market), id(market), id(market), id(market)]
+    assert first["production_execution"]["accounting_snapshot"]["snapshot_id"] == "current-accounting"
+    assert (
+        first["production_execution"]["production_history_accounting_snapshot"]["snapshot_id"]
+        == "history-accounting"
+    )
+    assert stable["contract"]["schema_version"] == "trading-system-read-model-v1"
+    assert stable["contract"]["source_identities"]["accounting_snapshot_id"] == "history-accounting"
+    assert stable["contract"]["source_identities"]["current_accounting_snapshot_id"] == "current-accounting"
+    assert received_market_ids == [id(market), id(market), id(market), id(market), id(market), id(market)]
     assert not (output / "dualtrack" / "strategy_control" / "plans" / f"{cycle_id}.json").exists()
     assert _fingerprint(output) == before

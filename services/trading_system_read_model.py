@@ -67,7 +67,13 @@ def project_trading_system_read_model(
     plan = _json_copy(_mapping(source.get("production_plan")))
     proposals = _json_copy(_list(source.get("proposals")))
     execution_source = _mapping(source.get("production_execution"))
-    accounting = _json_copy(_mapping(execution_source.get("accounting_snapshot")))
+    current_accounting = _json_copy(_mapping(execution_source.get("accounting_snapshot")))
+    history_accounting_value = execution_source.get("production_history_accounting_snapshot")
+    accounting = _json_copy(
+        _mapping(history_accounting_value)
+        if "production_history_accounting_snapshot" in execution_source
+        else current_accounting
+    )
     completeness_issues: list[str] = []
 
     if not plan:
@@ -81,7 +87,11 @@ def project_trading_system_read_model(
     if market.get("trusted") is not True:
         completeness_issues.append("market_not_trusted")
 
-    execution = _project_execution(execution_source, accounting)
+    execution = _project_execution(
+        execution_source,
+        history_accounting=accounting,
+        current_accounting=current_accounting,
+    )
     risk = _project_risk(
         source.get("runtime"),
         risk_decision,
@@ -144,6 +154,7 @@ def project_trading_system_read_model(
                 "strategy_plan_id": plan.get("strategy_plan_id"),
                 "strategy_plan_version": plan.get("version"),
                 "accounting_snapshot_id": accounting.get("snapshot_id"),
+                "current_accounting_snapshot_id": current_accounting.get("snapshot_id"),
                 "risk_decision_id": risk.get("displayed_decision_id"),
             },
         },
@@ -173,14 +184,25 @@ def project_market_read_model(value: Any) -> dict[str, Any]:
     }
 
 
-def _project_execution(source: Mapping[str, Any], accounting: Mapping[str, Any]) -> dict[str, Any]:
+def _project_execution(
+    source: Mapping[str, Any],
+    *,
+    history_accounting: Mapping[str, Any],
+    current_accounting: Mapping[str, Any],
+) -> dict[str, Any]:
     orders = _json_copy(_list(source.get("orders")))
     open_orders = [row for row in orders if _is_open_order(row)]
-    canonical_trades = _json_copy(_list(accounting.get("trades")))
-    open_positions = [row for row in canonical_trades if str(_mapping(row).get("status") or "") == "open"]
-    canonical_counts = _mapping(accounting.get("counts"))
-    canonical_pnl = _json_copy(_mapping(accounting.get("pnl")))
-    canonical_account = _json_copy(_mapping(accounting.get("account")))
+    current_positions = _json_copy(_list(current_accounting.get("positions")))
+    open_positions = [
+        row
+        for row in current_positions
+        if str(_mapping(row).get("status") or "") == "open"
+    ]
+    canonical_trades = _json_copy(_list(history_accounting.get("trades")))
+    canonical_counts = _mapping(history_accounting.get("counts"))
+    current_counts = _mapping(current_accounting.get("counts"))
+    canonical_pnl = _json_copy(_mapping(history_accounting.get("pnl")))
+    canonical_account = _json_copy(_mapping(history_accounting.get("account")))
     current_account = _json_copy(_mapping(source.get("account")))
     total_pnl = _finite_or_none(canonical_pnl.get("total_pnl"))
     starting_balance = _finite_or_none(canonical_account.get("starting_balance"))
@@ -190,7 +212,7 @@ def _project_execution(source: Mapping[str, Any], accounting: Mapping[str, Any])
 
     counts = {
         "open_order_count": len(open_orders),
-        "open_position_count": _integer_or_none(canonical_counts.get("open_position_count")),
+        "open_position_count": _integer_or_none(current_counts.get("open_position_count")),
         "trade_count": _integer_or_none(canonical_counts.get("trade_count")),
         "open_trade_count": _integer_or_none(canonical_counts.get("open_trade_count")),
         "completed_trade_count": _integer_or_none(canonical_counts.get("completed_trade_count")),
@@ -215,16 +237,27 @@ def _project_execution(source: Mapping[str, Any], accounting: Mapping[str, Any])
                 1 for row in open_orders if str(_mapping(row).get("side") or "").lower() == "sell"
             ),
         },
-        "positions": _json_copy(_list(accounting.get("positions"))),
+        "positions": current_positions,
         "open_positions": open_positions,
         "trades": canonical_trades,
-        "fills": _json_copy(_list(accounting.get("fills"))),
+        "fills": _json_copy(_list(history_accounting.get("fills"))),
         "counts": counts,
+        "scopes": {
+            "orders_and_positions": {
+                "kind": "current_execution_cycle",
+                "cycle_id": source.get("cycle_id"),
+                "accounting_snapshot_id": current_accounting.get("snapshot_id"),
+            },
+            "trades_fills_and_pnl": {
+                "kind": "all_versioned_production_plans",
+                "accounting_snapshot_id": history_accounting.get("snapshot_id"),
+            },
+        },
         "metrics": {
             "total_notional": _mapping(source.get("trade_summary")).get("total_notional"),
         },
         "pnl": {
-            "currency": accounting.get("currency"),
+            "currency": history_accounting.get("currency"),
             "gross_realized": canonical_pnl.get("gross_realized_pnl"),
             "commission": canonical_pnl.get("commission"),
             "funding": canonical_pnl.get("funding"),
@@ -239,7 +272,8 @@ def _project_execution(source: Mapping[str, Any], accounting: Mapping[str, Any])
             "margin": current_account.get("margin"),
             "slippage": current_account.get("slippage"),
         },
-        "accounting": _json_copy(accounting),
+        "accounting": _json_copy(history_accounting),
+        "current_accounting": _json_copy(current_accounting),
         "reconciliation": _json_copy(_mapping(source.get("reconciliation"))),
     }
 

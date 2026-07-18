@@ -5,12 +5,76 @@ from copy import deepcopy
 
 import pipelines.dashboard_server as dashboard_server
 import services.strategy_control_plane as strategy_control_plane_module
+from schemas.accounting import build_accounting_snapshot
 from services.dualtrack_config import dualtrack_config as load_dualtrack_test_config
 from services.journal_store import write_json
 from services.strategy_control_plane import StrategyControlPlane
 from services.trading_system_read_model import project_market_read_model
 from tests.test_strategy_control_plane import account_context, market, proposal, safe_grid
-from tests.test_trading_system_read_model import _risk, _source
+from tests.test_trading_system_read_model import _accounting, _risk, _source
+
+
+def _two_cycle_history_accounting() -> dict:
+    trades = [
+        {
+            "trade_id": f"history-trade-{index}",
+            "status": "closed",
+            "side": "long",
+            "entry_price": 4000.0 + index,
+            "remaining_units": 0.0,
+            "strategy_plan_id": f"plan-{index}",
+            "strategy_plan_version": index,
+        }
+        for index in (6, 7)
+    ]
+    fills = [
+        {
+            "fill_id": f"history-fill-{index}-{event}",
+            "trade_id": trade["trade_id"],
+            "event": event,
+            "price": trade["entry_price"] + (3.0 if event == "target" else 0.0),
+        }
+        for index, trade in enumerate(trades, start=1)
+        for event in ("entry", "target")
+    ]
+    return build_accounting_snapshot(
+        source_type="production_history",
+        source_name="versioned_strategy_plan_fills_only",
+        source_schema_version="dualtrack-execution-v1",
+        scope={"strategy_plan_scope": "all_versioned_production_plans"},
+        currency="USD",
+        orders=[],
+        fills=fills,
+        positions=trades,
+        trades=trades,
+        counts={
+            "order_count": 0,
+            "open_order_count": 0,
+            "fill_count": 4,
+            "entry_fill_count": 2,
+            "exit_fill_count": 2,
+            "position_count": 2,
+            "open_position_count": 0,
+            "trade_count": 2,
+            "open_trade_count": 0,
+            "completed_trade_count": 2,
+        },
+        pnl={
+            "gross_realized_pnl": 6.0,
+            "commission": 0.4,
+            "funding": 0.0,
+            "net_realized_pnl": 5.6,
+            "unrealized_pnl": 0.0,
+            "total_pnl": 5.6,
+        },
+        account={
+            "starting_balance": 10_000.0,
+            "ending_cash": 10_005.6,
+            "equity": 10_005.6,
+        },
+        completeness={"status": "complete", "limitations": []},
+        reconciliation={"status": "pass", "issues": []},
+    ).to_dict()
 
 
 def test_stable_and_legacy_gets_delegate_to_the_same_named_assembler(
@@ -25,7 +89,11 @@ def test_stable_and_legacy_gets_delegate_to_the_same_named_assembler(
         calls.append((output_root, as_of))
         return source
 
+    def fail_preflight(*_args, **_kwargs):
+        raise AssertionError("stable GET must not preflight a broker")
+
     monkeypatch.setattr(dashboard_server, "_assemble_strategy_console_snapshot", assemble)
+    monkeypatch.setattr(dashboard_server.PaperBrokerAdapter, "preflight", fail_preflight)
     write_json(output / "dualtrack" / "risk_decisions" / "current.json", [_risk()])
 
     legacy = dashboard_server.build_strategy_console_current_response(
@@ -36,16 +104,68 @@ def test_stable_and_legacy_gets_delegate_to_the_same_named_assembler(
         output_root=output,
         as_of="2026-07-18T01:02:04+00:00",
     )
+    repeated = dashboard_server.build_trading_system_read_model_response(
+        output_root=output,
+        as_of="2026-07-18T01:02:04+00:00",
+    )
 
     assert legacy is source
     assert stable["contract"]["schema_version"] == "trading-system-read-model-v1"
     assert stable["strategy"]["summary"]["plan_id"] == "plan-7"
     assert stable["execution"]["counts"]["open_order_count"] == 25
     assert stable["risk"]["status"] == "current"
+    assert stable["contract"]["snapshot_id"] == repeated["contract"]["snapshot_id"]
     assert calls == [
         (output, "2026-07-18T01:02:04+00:00"),
         (output, "2026-07-18T01:02:04+00:00"),
+        (output, "2026-07-18T01:02:04+00:00"),
     ]
+
+
+def test_new_endpoint_uses_history_for_lifecycle_and_pnl_but_current_cycle_for_positions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    source = _source(open_trade=True)
+    current_accounting = _accounting(open_trade=True)
+    history_accounting = _two_cycle_history_accounting()
+    source["production_execution"]["accounting_snapshot"] = current_accounting
+    source["production_execution"]["production_history_accounting_snapshot"] = history_accounting
+    monkeypatch.setattr(
+        dashboard_server,
+        "_assemble_strategy_console_snapshot",
+        lambda **_kwargs: source,
+    )
+    write_json(output / "dualtrack" / "risk_decisions" / "current.json", [_risk()])
+
+    response = dashboard_server.build_trading_system_read_model_response(
+        output_root=output,
+        as_of="2026-07-18T01:02:04+00:00",
+    )
+
+    assert response["execution"]["counts"] == {
+        "open_order_count": 25,
+        "open_position_count": 1,
+        "trade_count": 2,
+        "open_trade_count": 0,
+        "completed_trade_count": 2,
+        "completed_round_trip_count": 2,
+        "fill_count": 4,
+        "entry_fill_count": 2,
+        "exit_fill_count": 2,
+    }
+    assert len(response["execution"]["positions"]) == 1
+    assert len(response["execution"]["trades"]) == 2
+    assert response["execution"]["pnl"]["total"] == 5.6
+    assert response["execution"]["pnl"]["return_pct"] == 0.056
+    assert response["execution"]["scopes"]["orders_and_positions"]["kind"] == "current_execution_cycle"
+    assert response["execution"]["scopes"]["trades_fills_and_pnl"]["kind"] == "all_versioned_production_plans"
+    assert response["contract"]["source_identities"]["accounting_snapshot_id"] == history_accounting["snapshot_id"]
+    assert (
+        response["contract"]["source_identities"]["current_accounting_snapshot_id"]
+        == current_accounting["snapshot_id"]
+    )
 
 
 def test_new_route_and_handler_use_no_store_json_boundary(monkeypatch) -> None:

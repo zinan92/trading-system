@@ -241,6 +241,8 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     }
     assert model["execution"]["pnl"]["total"] == 2.8
     assert model["execution"]["pnl"]["return_pct"] == 0.028
+    assert model["execution"]["scopes"]["orders_and_positions"]["kind"] == "current_execution_cycle"
+    assert model["execution"]["scopes"]["trades_fills_and_pnl"]["kind"] == "all_versioned_production_plans"
     assert model["risk"]["status"] == "current"
     assert model["risk"]["metrics"]["projected_max_loss"] == 77.0
     assert model["runtime"]["status"] == "running"

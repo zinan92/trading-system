@@ -777,7 +777,6 @@ def build_trading_system_read_model_response(
     broker_adapter = PaperBrokerAdapter(output)
     broker = project_broker_read_model(
         broker_adapter,
-        readiness=broker_adapter.preflight(),
         strategy_id="production_grid",
     )
     return project_trading_system_read_model(
@@ -838,6 +837,7 @@ def _assemble_strategy_console_snapshot(
             "trades": production_history["trades"],
             "fills": production_history["fills"],
             "trade_summary": production_history["summary"],
+            "production_history_accounting_snapshot": production_history.get("accounting_snapshot", {}),
             "current_cycle_fills": execution.get("fills", []),
             "current_cycle_trades": (
                 execution.get("positions", [])
