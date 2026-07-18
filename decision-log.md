@@ -7040,6 +7040,7 @@ auditable datafeed port; broker execution remains a separate port.
   progress remains the honest rounded `91%` (`640 / 7 = 91.4%`).
 - No strategy parameters, risk thresholds, credentials, live configuration,
   orders, positions, accounts, or production state were changed.
+
 ## 2026-07-18 - A13 Binance USD-M transport extraction kickoff
 
 ### Decision
@@ -7246,3 +7247,40 @@ auditable datafeed port; broker execution remains a separate port.
   progress remains the honest `92%` (`644 / 7 = 92.0%`).
 - No strategy parameters, risk thresholds, credentials, live configuration,
   orders, positions, accounts, or production state were changed.
+
+## 2026-07-18 - A15 Binance execution adapter extraction kickoff
+
+### Decision
+
+- Finish the broker-facade strangler in dependency-safe order: first remove
+  Tiger's inheritance from `LiveBrokerAdapter`, then move the shared Binance
+  mainnet/demo/testnet lifecycle and protection body into a venue-owned adapter.
+- Reuse the frozen Broker Port registry, Binance transport, canonical risk,
+  lifecycle store, and compatibility-facade pattern. Introduce no second
+  service locator, transport stack, or generic broker abstraction.
+- Keep direct/private call seams during migration because canaries, kill
+  switches, demo/testnet subclasses, and tests use them as operational seams.
+  Production composition must nevertheless construct the concrete adapter.
+
+### User value
+
+- Binance and Tiger become independently replaceable without weakening the
+  exact real-money, demo, testnet, protection, reconciliation, or recovery
+  behavior already proven in production-facing workflows.
+
+### Gotchas
+
+- Tiger is physically separate by filename but still inherits the whole live
+  broker facade and ten deterministic/helper behaviors from it.
+- Direct legacy Tiger non-dry mode must remain fail-closed even though the
+  explicitly armed Tiger paper adapter supports TradeClient submission.
+- Demo/testnet share the Binance lifecycle but deliberately differ from
+  mainnet authority and activation. Relocation must not collapse those gates.
+- Private monkeypatch seams are part of current test and runbook compatibility.
+- No visible surface changes are planned; Visual Evidence is not applicable
+  unless scope changes.
+
+### Baseline
+
+- A14 repository: `1837 passed, 7 skipped`.
+- Tiger/Binance/Broker/architecture pack: `159 passed in 167.63s`.
