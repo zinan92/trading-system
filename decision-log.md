@@ -7472,3 +7472,51 @@ auditable datafeed port; broker execution remains a separate port.
   (`663 / 7 = 94.7%`).
 - No strategy parameters, risk thresholds, credentials, production process,
   order, position, account, or live state was changed.
+
+## 2026-07-18 - A17 Risk policy and decision store extraction kickoff
+
+### Decision
+
+- Separate the canonical risk port, paper policy adapter, live guardrail bridge,
+  and file audit store into distinct ownership boundaries.
+- Select normalized risk policy through the same explicit frozen-registry and
+  composition-root pattern already proven by strategy, backtest, execution,
+  accounting, and broker modules.
+- Bind every request to the actually composed evaluator metadata. An explicit
+  empty, unknown, duplicate, late-mutated, or identity-mismatched plugin fails
+  closed; there is no fallback from bad explicit configuration.
+- Keep the audit store deliberately narrower than a repository: it may persist
+  a validated decision but may never return reusable permission.
+
+### User value
+
+- A risk policy can be swapped without editing Strategy Control or execution,
+  while a storage change cannot alter whether money is allowed to move.
+
+### Mature pattern
+
+- Official Nautilus execution documentation confirms its RiskEngine sits on
+  submit/modify and owns order-level validation such as precision, balance,
+  reduce-only, rate limits, and trading state. A17 keeps this mature defense and
+  does not rebuild it; the application port remains responsible for grid and
+  portfolio policy above execution.
+- Reuse the repository's frozen plugin registries. Do not add a framework,
+  service locator, event bus, or store registry with only one real adapter.
+
+### Testing decision
+
+- Focused baseline: `143 passed` across risk contract/port, Strategy Control,
+  Binance/Tiger broker, Dashboard risk API, and architecture fitness.
+- This is a money-safety composition change. Run targeted tests during work,
+  obtain Opus review, then run at most one final full suite after valid core
+  findings are closed. Test/document-only closure changes do not justify a
+  second full run.
+
+### Gotchas
+
+- Moving the evaluator intentionally changes its source hash and derived IDs;
+  this must not change metrics, limits, blockers, outcomes, or permissions.
+- Safe reduce-only/cancel actions and stale-state rechecks are non-negotiable.
+- `current.json` remains observability evidence and never authorization.
+- A17 changes no visible UI and no production state. Visual Evidence is not
+  applicable unless scope changes.
