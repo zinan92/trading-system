@@ -87,6 +87,7 @@ class StrategyProposalPluginDescriptor:
     plan_source: str
     default_decision_mode: str
     capabilities: tuple[str, ...] = ("propose",)
+    required_context: tuple[str, ...] = ()
     schema_version: str = STRATEGY_PROPOSAL_PLUGIN_SCHEMA
 
     def to_dict(self) -> dict[str, Any]:
@@ -97,6 +98,23 @@ class StrategyProposalPluginDescriptor:
             "plan_source": self.plan_source,
             "default_decision_mode": self.default_decision_mode,
             "capabilities": list(self.capabilities),
+            "required_context": list(self.required_context),
+        }
+
+
+@dataclass(frozen=True)
+class StrategyProposalRuntime:
+    """Selected proposal port plus safe provenance supplied by composition."""
+
+    port: StrategyProposalPort
+    descriptor: StrategyProposalPluginDescriptor
+    registry_fingerprint: str
+
+    def audit_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": STRATEGY_PROPOSAL_PLUGIN_AUDIT_SCHEMA,
+            "plugin": self.descriptor.to_dict(),
+            "registry_fingerprint": self.registry_fingerprint,
         }
 
 

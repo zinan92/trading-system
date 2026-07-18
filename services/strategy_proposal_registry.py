@@ -51,6 +51,7 @@ class StrategyProposalPluginRegistry:
         plan_source: str = "",
         default_decision_mode: str = "",
         capabilities: Iterable[str] = ("propose",),
+        required_context: Iterable[str] = (),
     ) -> StrategyProposalPluginDescriptor:
         if self._frozen:
             raise InvalidStrategyProposalPlugin("strategy proposal plugin registry is frozen")
@@ -68,12 +69,20 @@ class StrategyProposalPluginRegistry:
             raise InvalidStrategyProposalPlugin(
                 f"strategy proposal plugin must declare propose capability: {normalized}"
             )
+        normalized_context = tuple(sorted({str(item).strip() for item in required_context if str(item).strip()}))
+        unsupported_context = sorted(set(normalized_context) - {"newsletter"})
+        if unsupported_context:
+            raise InvalidStrategyProposalPlugin(
+                f"strategy proposal plugin {normalized} requires unsupported context: "
+                f"{','.join(unsupported_context)}"
+            )
         descriptor = StrategyProposalPluginDescriptor(
             name=normalized,
             implementation=implementation.strip() or _callable_name(factory),
             plan_source=plan_source.strip() or f"machine_strategy_proposal:{normalized}",
             default_decision_mode=default_decision_mode.strip() or normalized,
             capabilities=normalized_capabilities,
+            required_context=normalized_context,
         )
         self._factories[normalized] = factory
         self._descriptors[normalized] = descriptor

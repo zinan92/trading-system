@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from types import MappingProxyType
 
 import pytest
@@ -73,6 +74,35 @@ def test_codex_newsletter_adapter_preserves_prompt_and_rejects_non_object() -> N
         invalid.propose(request)
 
 
+def test_codex_newsletter_prompt_is_byte_compatible_with_pre_port_planner() -> None:
+    request = StrategyProposalRequest(
+        cycle_id="2026-07-10_NIGHT",
+        cycle_hours=12,
+        market={
+            "symbol": "GOLD",
+            "timeframe": "1m",
+            "provider": "binance_usdm",
+            "bar_count": 1,
+            "start": "2026-07-10T13:00:00+00:00",
+            "end": "2026-07-10T13:00:00+00:00",
+            "open": 4115.0,
+            "high": 4118.0,
+            "low": 4110.0,
+            "close": 4114.0,
+            "recent_closes": [4114.0],
+        },
+        prev_cycle_range=40.0,
+        volatility_context={"status": "ready", "minimum_plan_range": 60.0},
+        previous_review={"status": "missing"},
+        replan_context={"status": "confirmed"},
+        newsletter_text="## 黄金\n区间震荡。",
+    )
+
+    digest = hashlib.sha256(build_codex_newsletter_prompt(request).encode()).hexdigest()
+
+    assert digest == "c62aef4a4e745cf4e0c4c024c7cca350e5c6cf55d178657b62d38ca35ea94618"
+
+
 def test_strategy_proposal_registry_is_explicit_frozen_and_fail_closed() -> None:
     class Proposal:
         def propose(self, request: StrategyProposalRequest) -> dict:
@@ -85,6 +115,7 @@ def test_strategy_proposal_registry_is_explicit_frozen_and_fail_closed() -> None
     registry.freeze()
 
     assert descriptor.plan_source == "machine_strategy_proposal:fake"
+    assert descriptor.required_context == ()
     assert registry.build("fake", {}).propose(_request())["cycle_id"] == "2026-07-10_NIGHT"
     assert len(registry.fingerprint) == 64
     with pytest.raises(UnknownStrategyProposalPlugin, match="unknown strategy proposal plugin"):
@@ -115,6 +146,7 @@ def test_configured_strategy_proposal_composition_defaults_compatibly_and_reject
 
     assert composition.descriptor.name == "codex_newsletter"
     assert composition.descriptor.plan_source == "machine_ai_newsletter"
+    assert composition.descriptor.required_context == ("newsletter",)
     assert len(composition.registry_fingerprint) == 64
     assert composition.audit_dict()["plugin"]["default_decision_mode"] == "ai_newsletter"
 

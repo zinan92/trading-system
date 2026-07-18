@@ -18,6 +18,11 @@ from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_store import DualTrackPlanStore, validate_plan
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
+from services.strategy_proposal_port import StrategyProposalRequest
+from services.strategy_proposal_registry import (
+    StrategyProposalPluginRegistry,
+    UnknownStrategyProposalPlugin,
+)
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
@@ -409,6 +414,96 @@ def test_d8_2_missing_machine_research_records_error_neutral_and_stands_down(tmp
     assert load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_machine.json") == []
     audit_events = [row["event"] for row in load_json(output / "dualtrack" / "audit" / "2026-07-05_DAY.json")]
     assert "machine_plan_decision_error" in audit_events
+
+
+def test_cycle_runner_uses_custom_proposal_plugin_through_trusted_planner_core(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+    captured: dict[str, StrategyProposalRequest] = {}
+
+    class DeterministicProposal:
+        def propose(self, request: StrategyProposalRequest) -> dict:
+            captured["request"] = request
+            decision = _neutral_machine_plan(request.cycle_id)
+            decision.pop("decision_mode")
+            decision.pop("source")
+            return decision
+
+    registry = StrategyProposalPluginRegistry()
+    registry.register(
+        "deterministic_grid",
+        lambda _params: DeterministicProposal(),
+        plan_source="machine_deterministic_grid",
+        default_decision_mode="deterministic_grid",
+    )
+    config = deepcopy(TEST_CONFIG)
+    config["machine_planner"] = {"plugin": "deterministic_grid"}
+
+    runner = DualTrackCycleRunner(
+        output_root=output,
+        market_db=db,
+        config=config,
+        proposal_registry=registry,
+    )
+    result = runner.pre_cycle("2026-07-05_DAY", as_of="2026-07-05T01:00:00+00:00")
+    plan = DualTrackPlanStore(output, config=config).machine_plan("2026-07-05_DAY")
+    trace = load_json(output / "dualtrack" / "planning" / "2026-07-05_DAY_machine.json")[-1]
+
+    assert result["status"] == "ai_plan_ready"
+    assert result["proposal_plugin"]["plugin"]["name"] == "deterministic_grid"
+    assert result["proposal_plugin"]["registry_fingerprint"] == registry.fingerprint
+    assert plan is not None
+    assert plan["source"] == "machine_deterministic_grid"
+    assert plan["decision_mode"] == "deterministic_grid"
+    assert captured["request"].market["symbol"] == "GOLD"
+    assert captured["request"].newsletter_text == ""
+    assert trace["proposal_plugin"] == result["proposal_plugin"]
+
+
+def test_cycle_runner_rejects_unknown_proposal_plugin_before_artifact_creation(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    config = deepcopy(TEST_CONFIG)
+    config["machine_planner"] = {"plugin": "typo"}
+
+    with pytest.raises(UnknownStrategyProposalPlugin, match="typo"):
+        DualTrackCycleRunner(
+            output_root=output,
+            market_db=tmp_path / "market.db",
+            config=config,
+        )
+
+    assert not output.exists()
+
+
+def test_invalid_custom_proposal_result_is_persisted_as_no_trade_degraded_plan(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+
+    class InvalidProposal:
+        def propose(self, _request: StrategyProposalRequest) -> dict:
+            return []  # type: ignore[return-value]
+
+    registry = StrategyProposalPluginRegistry()
+    registry.register("invalid", lambda _params: InvalidProposal())
+    config = deepcopy(TEST_CONFIG)
+    config["machine_planner"] = {"plugin": "invalid"}
+    runner = DualTrackCycleRunner(
+        output_root=output,
+        market_db=db,
+        config=config,
+        proposal_registry=registry,
+    )
+
+    result = runner.pre_cycle("2026-07-05_DAY", as_of="2026-07-05T01:00:00+00:00")
+    plan = DualTrackPlanStore(output, config=config).machine_plan("2026-07-05_DAY")
+
+    assert result["status"] == "ai_plan_error_neutral"
+    assert plan is not None
+    assert plan["degraded"] is True
+    assert plan["grid_orders"] == []
+    assert "must return a JSON object" in plan["planning_error"]
 
 
 def test_explicit_obsidian_plan_sync_keeps_next_cycle_as_draft(tmp_path: Path) -> None:

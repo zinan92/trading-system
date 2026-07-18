@@ -37,6 +37,7 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
     },
     "plan_lock_deadline_min_before_cycle": 0,
     "machine_planner": {
+        "plugin": "codex_newsletter",
         "command": "/opt/homebrew/bin/codex",
         "model": "gpt-5.4",
         "timeout_seconds": 240,
