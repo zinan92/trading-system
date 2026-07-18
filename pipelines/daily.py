@@ -8,7 +8,9 @@ from services.run_date import utc_run_date
 
 from schemas.journal import JournalPending
 from schemas.market_data import Bar, CleanDatasetManifest
-from services.backtest_client import BacktestClient
+from services.backtest_plugin_composition import compose_signal_backtest
+from services.backtest_port import SignalBacktestRequest
+from services.backtest_service import SignalBacktestService
 from services.broker_feed_bridge import BrokerFeedBridge
 from services.config_loader import ROOT, load_assets, load_pipeline_config, load_risk_rules, load_strategy_config
 from services.copilot_client import CopilotClient
@@ -53,6 +55,12 @@ def run_daily_pipeline(run_date: str, strategy=None, output_root=None) -> dict[s
         output_root = Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / pipeline_config.get("output_root", "outputs"))))
     else:
         output_root = Path(output_root)
+    backtest_service = SignalBacktestService(
+        compose_signal_backtest(
+            pipeline_config,
+            strategy_config=strategy_config,
+        )
+    )
     _sync_market_view_from_obsidian(run_date, output_root)
     if not uses_independent_datafeed(local_db_path):
         BrokerFeedBridge(output_root=output_root, market_db=local_db_path).import_pending(run_date)
@@ -84,12 +92,6 @@ def run_daily_pipeline(run_date: str, strategy=None, output_root=None) -> dict[s
     copilot = CopilotClient(
         base_url=pipeline_config["copilot_base_url"],
         fallback_to_mock=bool(pipeline_config.get("analysis_fallback_to_mock", True)),
-    )
-    backtest_client = BacktestClient(
-        base_url=pipeline_config["backtest_base_url"],
-        fallback_to_mock=bool(pipeline_config.get("analysis_fallback_to_mock", True)),
-        local_enabled=bool(pipeline_config.get("local_backtest_enabled", True)),
-        strategy_config=strategy_config,
     )
     cleaner = DataCleaner()
     data_quality_gate = DataQualityGate(pipeline_config.get("data_quality_gate", {}))
@@ -249,7 +251,20 @@ def run_daily_pipeline(run_date: str, strategy=None, output_root=None) -> dict[s
             )
         analysis = copilot.analyze(signal)
         backtest_bars = candles[-int(pipeline_config.get("backtest_lookback_bars", len(candles))) :]
-        backtest = backtest_client.evaluate(signal, analysis, backtest_bars)
+        backtest = backtest_service.evaluate(
+            SignalBacktestRequest.from_domain(
+                signal,
+                analysis,
+                backtest_bars,
+                backtest_config=strategy_config,
+                run_context={
+                    "run_date": run_date,
+                    "strategy_id": _strategy_id(active_strategy),
+                    "symbol": asset.symbol,
+                    "timeframe": signal_timeframe,
+                },
+            )
+        )
         signal = signal.__class__(
             **{
                 **signal.to_dict(),

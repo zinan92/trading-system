@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
+import pytest
+
+import pipelines.daily as daily_pipeline
 from pipelines.daily import run_daily_pipeline
+from services.backtest_plugin_registry import UnknownBacktestPlugin
 from services.market_view import OBSIDIAN_DAILY_TRADE_ANALYSIS_DIR
 
 
@@ -46,3 +50,26 @@ timeframes:
     market_view = json.loads((tmp_path / "outputs" / "market_views" / "current.json").read_text(encoding="utf-8"))[0]
     assert market_view["intake"]["parser"] == "market_view_obsidian_v1"
     assert market_view["direction_score"] == 35
+    backtests = json.loads(Path(paths["backtests"]).read_text(encoding="utf-8"))
+    assert backtests
+    assert backtests[0]["backtest_plugin"] == "local_signal"
+    assert backtests[0]["evidence_tier"] == "local_historical_signal"
+    assert len(backtests[0]["input_hash"]) == 64
+    assert backtests[0]["degraded"] is False
+
+
+def test_unknown_daily_backtest_plugin_fails_before_output_creation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    monkeypatch.setattr(
+        daily_pipeline,
+        "load_pipeline_config",
+        lambda: {"backtest_plugins": {"signal": "typo"}},
+    )
+
+    with pytest.raises(UnknownBacktestPlugin, match="typo"):
+        run_daily_pipeline("2026-07-18", output_root=output)
+
+    assert not output.exists()

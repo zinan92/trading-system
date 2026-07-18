@@ -51,12 +51,15 @@
   },
   "copilot_base_url": "http://localhost:8200",
   "backtest_base_url": "http://localhost:8300",
+  "backtest_plugins": {
+    "signal": "local_signal",
+    "historical_strategy": "event_driven_strategy"
+  },
   "timeframes": ["5m"],
   "factor_timeframes": ["1d"],
   "signal_lookback_bars": 240,
   "backtest_lookback_bars": 1000,
   "chart_display_bars": 3500,
-  "local_backtest_enabled": true,
   "data_quality_gate": {
     "enabled": true,
     "min_clean_rows": 200,
