@@ -83,7 +83,7 @@ EXPECTED_SCORE_ROWS = {
     "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (25, 20, 25, 20, 90),
     "Live execution / broker": (25, 20, 25, 20, 90),
-    "Risk / accounting / reconciliation": (25, 20, 20, 25, 90),
+    "Risk / accounting / reconciliation": (25, 20, 25, 25, 95),
     "Dashboard / read model": (25, 25, 20, 25, 95),
 }
 
@@ -503,12 +503,13 @@ def test_audit_names_every_known_non_hexagonal_seam() -> None:
     text = AUDIT.read_text(encoding="utf-8")
     backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
-        "accounting_projection.py",
         "LiveBrokerAdapter",
         "Market Envelope V2",
+        "Risk policy/store extraction",
         "BacktestClient",
     ):
         assert seam in backlog
+    assert "accounting_projection.py" not in backlog
     assert "dualtrack_execution_adapter.py" not in backlog
     assert "DualTrackMachinePlanner" not in backlog
     assert "Strategy._base_engine" not in backlog
