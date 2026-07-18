@@ -139,6 +139,19 @@ def test_missing_credentials_fail_before_network_io(tmp_path: Path, monkeypatch)
     }
 
 
+def test_transport_repr_never_exposes_config_or_injected_clients() -> None:
+    transport = BinanceUsdmTransport(
+        {"api_key": "must-not-leak", "api_secret": "must-not-leak"},
+        opener=lambda request, timeout: _FakeResponse({}),
+        clock_ms=lambda: 1,
+    )
+
+    rendered = repr(transport)
+    assert "must-not-leak" not in rendered
+    assert "opener" not in rendered
+    assert "clock_ms" not in rendered
+
+
 def test_demo_envelope_preserves_http_error_body(tmp_path: Path, monkeypatch) -> None:
     _credentials(monkeypatch, tmp_path)
 

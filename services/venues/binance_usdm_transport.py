@@ -37,9 +37,9 @@ BINANCE_USDM_ENDPOINTS = BinanceUsdmEndpoints()
 class BinanceUsdmTransport:
     """Binance USD-M wire protocol with no execution or money authority."""
 
-    broker_config: Mapping[str, Any]
-    opener: Callable[..., Any] = urllib.request.urlopen
-    clock_ms: Callable[[], int] = _epoch_milliseconds
+    broker_config: Mapping[str, Any] = field(repr=False)
+    opener: Callable[..., Any] = field(default=urllib.request.urlopen, repr=False)
+    clock_ms: Callable[[], int] = field(default=_epoch_milliseconds, repr=False)
     endpoints: BinanceUsdmEndpoints = field(default=BINANCE_USDM_ENDPOINTS)
 
     USER_AGENT: ClassVar[str] = "TradingOrchestrator/1.0"
