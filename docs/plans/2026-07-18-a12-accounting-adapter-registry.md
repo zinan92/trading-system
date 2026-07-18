@@ -1,6 +1,6 @@
 # A12 Accounting Adapter Registry Plan
 
-**Status:** In progress on 2026-07-18.
+**Status:** Complete on 2026-07-18.
 
 **Goal:** Make broker accounting normalization replaceable by explicit source
 registration while preserving one canonical `accounting-snapshot-v1` truth and
@@ -124,3 +124,22 @@ A12 is complete only when a custom source adapter can be selected through the
 registry, all production selection flows through the new composition root, and
 the exact Binance/Tiger canonical snapshots remain unchanged. Moving functions
 without removing the provider branch from core does not count.
+
+## Completion evidence
+
+- A custom provider-free broker source projects through a supplied frozen
+  registry; unknown sources fail before any adapter factory is constructed.
+- Binance aliases and Tiger aggregate evidence resolve through separate
+  read-only adapters. Production execution consumers use the provider-free
+  core, while reconciliation/account sync use the sole composition root.
+- Frozen A11 snapshot IDs remain exact for both Binance and Tiger. Git
+  verbatim-relocation diffs for execution core, Binance, Tiger, and broker
+  counts all returned `exit=0` with no differences.
+- The platform parity hash covers every core/registry/composition/adapter
+  semantic file; risk evaluator identity now hashes the provider-free core.
+- Final repository regression: `1813 passed, 7 skipped in 400.54s`.
+- Verified Opus review: `SHIP`, no P0-P2. Its one actionable P3 architecture
+  guardrail was applied and reverified.
+- Evidence Contract result: Visual Evidence N/A. A12 changes no visible surface
+  and deploys no local service; tests, commits, documents, diffs, and the Opus
+  receipt are trace material only.
