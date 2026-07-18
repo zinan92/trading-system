@@ -110,7 +110,9 @@ validation is correctly rejected.
   select an implementation. `DualTrackCycleRunner` composes one frozen proposal
   runtime before creating stores or execution services; the trusted planner core
   imports no Codex adapter and retains range-floor policy, validation, degraded
-  no-trade fallback, persistence, revisions, traces, and audit.
+  no-trade fallback, persistence, revisions, traces, and audit. Proposal output
+  is copied through a field allowlist, so plugins cannot forge lifecycle,
+  provenance, revision, or fallback metadata.
 - Cutover: the configured `codex_newsletter` adapter preserves the exact prompt
   and read-only/ephemeral subprocess restrictions. A deterministic planner can
   replace it by registry selection without editing the runner or core. Missing
@@ -120,9 +122,9 @@ validation is correctly rejected.
   artifacts exist.
 - Proof: all 25 signal strategies resolve through 20 names. Proposal acceptance
   additionally covers deeply immutable input, byte-identical legacy prompt,
-  custom provider-free `pre_cycle`, optional newsletter context, safe audit
-  fingerprint, degraded initial failure, and preserved locked plan on forced
-  replan failure.
+  custom provider-free `pre_cycle`, least-privilege newsletter context, safe
+  audit fingerprint, hostile reserved-field injection, degraded initial
+  failure, and preserved locked plan on forced replan failure.
 - Remaining 5: `TechnicalRuleSignalEngine` and the small filter registry retain
   internal family dispatch. These are contained implementation seams, not
   application-level engine or production-planner selection.

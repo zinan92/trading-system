@@ -1,6 +1,6 @@
 # A9 Strategy Proposal Port Plan
 
-**Status:** In progress on 2026-07-18.
+**Status:** Complete on 2026-07-18.
 
 **Goal:** Make the current production grid planner genuinely replaceable while
 keeping validation, persistence, revision history, review provenance, and
@@ -117,3 +117,40 @@ A9 is complete only when a custom proposal adapter can replace the configured
 adapter without changing planner/core/runner code, while identical core
 validation and persistence remain authoritative and all current failure/replan
 semantics pass. A registry wrapped around the unchanged monolith does not count.
+
+## Completion evidence
+
+- `StrategyProposalRequest` is versioned, bounded, and deeply immutable.
+  Proposal plugins receive market/review/volatility/replan context and only the
+  external context they explicitly declare; they receive no broker, order,
+  risk, persistence, or promotion authority.
+- The explicit proposal registry is frozen before cycle construction and emits
+  safe descriptors plus a 64-character content fingerprint. Empty, duplicate,
+  unknown, late-mutated, unsupported-context, invalid factory, invalid result,
+  and reserved lifecycle-field injection paths fail closed.
+- The configured `codex_newsletter` adapter preserves the exact pre-A9 prompt
+  hash and the same approval-never, ignore-user-config, ephemeral, read-only,
+  bounded-timeout subprocess restrictions.
+- A provider-free deterministic grid plugin completes the real `pre_cycle`
+  path without a newsletter, core edit, runner edit, or alternate validation
+  path. Unknown configuration is rejected before output artifacts exist.
+- `DualTrackMachinePlanner` retains range-floor policy, machine-plan
+  validation, degraded no-trade fallback, forced-replan preservation,
+  persistence, revision history, traces, and audit. Untrusted proposals are
+  copied through an explicit field allowlist before these rules run.
+- Focused proposal/planner/fitness regression after review: `76 passed`.
+  Focused A0-A9 architecture/conformance regression: `212 passed`.
+- Final repository regression after the Opus finding was fixed:
+  `1763 passed, 7 skipped in 378.62s`.
+- Changed-file Ruff and `git diff --check`: clean. Canonical architecture
+  progress is `87%`; Backtest composition is now the highest-value remaining
+  architecture boundary.
+- Verified Opus review used `claude-opus-4-8`, session
+  `114afe14-6c34-4355-baa6-f6d9d56e8221`, receipt
+  `20260718T030459Z_fac8bdbd-56f5-4c7d-9546-54fd629e2eab.json`. It found no
+  P0/P1 and returned `SHIP`. Its P2 reserved-metadata finding was accepted,
+  fixed with an allowlist, and covered by a hostile-plugin regression.
+- A9 changes no strategy parameters, execution/risk/broker authority,
+  credentials, orders, positions, accounts, or production state. It adds no
+  visible UI/report surface, so new visual Evidence is not applicable under the
+  trading-system Evidence Contract.
