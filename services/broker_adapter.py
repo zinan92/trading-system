@@ -159,7 +159,6 @@ class LiveBrokerAdapter:
         return {"ready": True, "block_reason": "", "report": report}
 
     def preflight(self) -> dict:
-        env = apply_live_env()
         if self.provider == "mt5_file_bridge":
             return self._mt5_file_bridge_preflight()
         if self.provider == "oanda_rest":
@@ -168,6 +167,7 @@ class LiveBrokerAdapter:
             return self._binance_preflight()
         if self.provider == "tiger_openapi":
             return self._tiger_preflight()
+        env = apply_live_env()
         api_key_env = str(self.broker_config.get("api_key_env", "BROKER_API_KEY"))
         account_id_env = str(self.broker_config.get("account_id_env", "BROKER_ACCOUNT_ID"))
         missing = [name for name in [api_key_env, account_id_env] if not live_env_value_present(name)]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import urllib.parse
@@ -96,7 +97,7 @@ def test_registry_builds_concrete_venue_adapters(
     assert adapter.descriptor.provider == provider
 
 
-def test_oanda_real_submission_preserves_wire_contract_and_redacts_credentials(
+def test_oanda_real_submission_preserves_wire_contract_and_redacts_bearer_token(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -123,7 +124,10 @@ def test_oanda_real_submission_preserves_wire_contract_and_redacts_credentials(
         )
         return _FakeResponse(
             {
-                "orderCreateTransaction": {"id": "broker-order-42"},
+                "orderCreateTransaction": {
+                    "id": "broker-order-42",
+                    "accountID": account_id,
+                },
                 "lastTransactionID": "42",
             }
         )
@@ -186,8 +190,13 @@ def test_oanda_real_submission_preserves_wire_contract_and_redacts_credentials(
         output_root / "oanda_requests" / "2026-07-18.json"
     ).read_text(encoding="utf-8")
     assert token not in durable_text
-    assert account_id not in durable_text
     assert token not in json.dumps(adapter.descriptor.to_dict(), sort_keys=True)
+    durable_record = load_json(
+        output_root / "oanda_requests" / "2026-07-18.json"
+    )[0]
+    assert durable_record["broker_response"]["orderCreateTransaction"][
+        "accountID"
+    ] == account_id
 
 
 @pytest.mark.parametrize("with_credentials", [False, True])
@@ -369,6 +378,48 @@ def test_legacy_facade_contains_no_oanda_or_mt5_provider_io_implementation():
     )
 
     assert all(value not in facade_source for value in forbidden)
+    tree = ast.parse(facade_source)
+    facade = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "LiveBrokerAdapter"
+    )
+    methods = {
+        node.name: node
+        for node in facade.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    thin_delegates = {
+        "_oanda_preflight": "self._oanda_adapter().preflight()",
+        "_mt5_file_bridge_preflight": "self._mt5_adapter().preflight()",
+        "_record_mt5_file_bridge_request": (
+            "self._mt5_adapter()._submit_with_readiness(request, readiness)"
+        ),
+        "_submit_oanda_order": (
+            "self._oanda_adapter()._submit_with_readiness(request, readiness)"
+        ),
+        "_oanda_order_payload": (
+            "self._oanda_adapter()._order_payload(ticket, order_id, "
+            "requested_price, quantity)"
+        ),
+        "_post_oanda_order": "self._oanda_adapter()._post_order(payload)",
+        "_oanda_base_url": "self._oanda_adapter()._base_url()",
+        "_oanda_instrument": "self._oanda_adapter()._instrument(asset)",
+        "_oanda_time_in_force": (
+            "self._oanda_adapter()._time_in_force(order_type, raw)"
+        ),
+        "_format_price": "self._oanda_adapter()._format_price(value)",
+        "_mt5_outbox_dir": "self._mt5_adapter()._outbox_dir()",
+        "_mt5_inbox_dir": "self._mt5_adapter()._inbox_dir()",
+        "_ensure_mt5_bridge_docs": (
+            "self._mt5_adapter()._ensure_bridge_docs(outbox_dir, inbox_dir)"
+        ),
+    }
+    for method_name, expected_call in thin_delegates.items():
+        body = methods[method_name].body
+        assert len(body) == 1
+        assert isinstance(body[0], ast.Return)
+        assert ast.unparse(body[0].value) == expected_call
 
 
 def test_operational_consumers_resolve_adapters_through_composition():
@@ -379,5 +430,17 @@ def test_operational_consumers_resolve_adapters_through_composition():
         "completion_audit.py",
     ):
         source = (service_root / filename).read_text(encoding="utf-8")
-        assert "from services.broker_adapter import" not in source
-        assert "build_broker_execution_port" in source
+        tree = ast.parse(source)
+        imports = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        }
+        imported_names = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+        assert "services.broker_adapter" not in imports
+        assert "build_broker_execution_port" in imported_names
