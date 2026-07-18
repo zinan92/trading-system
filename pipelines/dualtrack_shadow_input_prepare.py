@@ -9,7 +9,7 @@ from pathlib import Path
 from pipelines.dualtrack_cycle_runner import DualTrackCycleRunner
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_clock import cycle_window_from_id, parse_utc
-from services.dualtrack_execution_adapter import build_execution_engine_adapter
+from services.execution_plugin_composition import build_execution_engine_adapter
 from services.dualtrack_shadow_input import build_shadow_input
 from services.dualtrack_config import dualtrack_config
 from services.journal_store import load_json, write_json

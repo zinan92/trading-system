@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
+from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_store import DualTrackPlanStore
 from services.control_audit import append_control_event, build_control_event, read_last_control_event

@@ -25,7 +25,7 @@ from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
-from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
+from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_scoring import (
