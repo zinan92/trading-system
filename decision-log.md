@@ -7400,3 +7400,75 @@ auditable datafeed port; broker execution remains a separate port.
   progress is now the reproducible rounded `93%` (`648 / 7 = 92.6%`).
 - No strategy parameters, risk thresholds, credentials, live configuration,
   orders, positions, accounts, or production state were changed.
+
+## 2026-07-18 - A16 Market Envelope authority cutover complete
+
+### Outcome
+
+- The canonical pipeline and omitted-mode default now make the versioned
+  `MarketDataEnvelope` authoritative. Shadow remains an explicit diagnostic
+  mode and cannot silently become production authority.
+- `DatafeedMarketRepository` bar, range, latest, quote, and point-in-time reads
+  all project through `load_envelope()` and the sole v1/v2 mapper. The duplicate
+  raw candle-to-`Bar` interpreter was deleted.
+- Invalid HTTP-200 contracts and upstream 502 failures propagate closed with one
+  request and no local fallback. Existing provider, quality, ordering, and
+  start/end behavior remains frozen by behavior-aware tests.
+
+### Opus adversarial review and hardening
+
+- The first Opus attempt ended in `api_error` and was not counted: actual model
+  `claude-opus-4-8`, session `1593c5f8-d53e-404e-bc02-27d51f92b095`, receipt
+  `20260718T083010Z_9f45d7ad-f84a-461c-a515-356f37828399.json`.
+- Verified retry used `claude-opus-4-8`, session
+  `70a1bdef-d104-4a01-9092-eacd5ced5958`, receipt
+  `20260718T083929Z_466da7a5-defb-47ff-bb38-d82d9d624fa8.json`; verdict
+  `SHIP WITH FIXES`, no P0/P1.
+- Closed the in-scope proof gaps: the repository fake now honors range/end/limit
+  semantics, point reads prove the last eligible bar rather than merely echoed
+  request arguments, and a direct 502 test proves one-call/no-fallback behavior.
+
+### Testing scope decision
+
+- A16 had a small diff but medium/high semantic blast radius: it changed the
+  default authority and every production datafeed bar projection. One full
+  regression was proportionate and passed.
+- Opus hardening changed tests and documentation only. A second full regression
+  would have been over-testing, so closure used the 81-test market/envelope/
+  DualTrack defense pack plus architecture fitness, Ruff, and diff checks.
+- Future small compatibility or documentation changes in this area should keep
+  using targeted upstream/downstream tests. Repeat the full suite only when a
+  core authority, mapper, fail-closed, or cross-application behavior changes.
+
+### Gotchas
+
+- Production datafeed port 8100 still served V1 during the isolated rehearsal;
+  datafeed A1 V2 deployment is a separate operational change. The consumer
+  safely accepts both frozen versions.
+- `load_bars_between()` still asks for one page capped at 60,000 bars. Opus
+  correctly identified possible silent truncation for longer windows. Fix it
+  with a versioned cross-repository continuation/pagination contract; do not
+  hide a second fetch/mapping path in this repository.
+- V1 infers continuous-market semantics when freshness is present. Keep that
+  migration behavior only until V2 deployment is established, then retire it
+  explicitly.
+- The live V2 rehearsal proved contract parity on successful Binance reads, not
+  upstream availability. The separate Binance 502 remained blocked and is not
+  reclassified as a contract failure.
+- A16 has no visible surface. Under the Evidence Contract, Visual Evidence is
+  not applicable; tests, receipts, commits, and logs are trace material only.
+
+### Verification
+
+- Real isolated V2 rehearsal: six shadow responses and one authoritative
+  response, 458 same-response comparisons each, `3,206` total with zero drift.
+- Pre-review focused cutover pack: `168 passed`; datafeed A1 suite: `86 passed`.
+- One full repository regression after production semantics changed:
+  `1860 passed, 7 skipped in 390.67s`.
+- Post-review defense pack: `81 passed in 0.34s`; changed-test Ruff and
+  `git diff --check`: clean.
+- Data download improves from `90/100` to `95/100`; data cleaning/quality from
+  `85/100` to `95/100`. Overall architecture is the reproducible rounded `95%`
+  (`663 / 7 = 94.7%`).
+- No strategy parameters, risk thresholds, credentials, production process,
+  order, position, account, or live state was changed.

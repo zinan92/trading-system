@@ -1,6 +1,6 @@
 # A16 Market Envelope Authority Cutover Plan
 
-**Status:** In progress.
+**Status:** Complete (2026-07-18).
 
 **Goal:** Make the versioned `MarketDataEnvelope` the authoritative production
 interpretation for market reads, remove the duplicate raw-candle mapping path,
@@ -82,7 +82,8 @@ availability/deployment risk.
 
 - Run focused market, Dashboard, architecture, and full repository suites.
 - Run the datafeed session-contract suite against its A1 worktree.
-- Obtain verified Opus review and close every valid P0-P2.
+- Obtain verified Opus review, close every in-scope P0-P2, and explicitly
+  backlog any cross-repository contract debt.
 - Update the progress audit, decision log, Gotchas, and exact remaining gaps.
 - Keep Visual Evidence N/A because no visible surface changes.
 
@@ -111,10 +112,14 @@ contract cutover.
 - Datafeed A1 code lives at commit `92e5e8c`; production port 8100 still served
   v1 during the rehearsal. Authority can accept v1 and v2, but v2 deployment is
   tracked separately from the consumer cutover.
+- `load_bars_between()` still requests one page capped at 60,000 bars. A longer
+  interval can be incomplete if datafeed caps the response. Correct closure is
+  a versioned pagination/continuation contract across both repositories, not a
+  second local fetch interpretation hidden inside A16.
 - No order, position, strategy, risk threshold, credential, or live process is
   mutated by A16.
 
-## Baseline and live evidence
+## Verification evidence
 
 - A15 full repository: `1852 passed, 7 skipped`.
 - Focused market/envelope/DualTrack/architecture baseline: `99 passed`.
@@ -123,6 +128,23 @@ contract cutover.
 - One independent request returned the known Binance upstream 502 and the
   authoritative path stayed blocked before projection. This is availability
   evidence, not a contract failure.
+- Post-cutover focused market/repository/DualTrack pack: `168 passed`.
+- Session-aware datafeed A1 repository: `86 passed`.
+- One full repository regression after the authority and sole-mapper change:
+  `1860 passed, 7 skipped in 390.67s`.
+- Post-review behavior/fail-closed defense pack: `81 passed`; changed-test Ruff
+  and diff checks passed.
+- Verified Opus retry: `claude-opus-4-8`, session
+  `70a1bdef-d104-4a01-9092-eacd5ced5958`, receipt
+  `20260718T083929Z_466da7a5-defb-47ff-bb38-d82d9d624fa8.json`; verdict
+  `SHIP WITH FIXES`, no P0/P1. The valid ordering/boundary and direct-502 proof
+  gaps were closed with behavior-aware tests. The 60,000-bar pagination limit
+  is the explicit cross-repository follow-up above.
+- The first Opus invocation ended in `api_error` and was not counted as review:
+  session `1593c5f8-d53e-404e-bc02-27d51f92b095`, receipt
+  `20260718T083010Z_9f45d7ad-f84a-461c-a515-356f37828399.json`.
+- No second full suite was run after review because the only post-review changes
+  were tests and documentation. Targeted regression was the proportionate gate.
 
 ## Completion boundary
 
@@ -130,3 +152,8 @@ A16 is complete only when canonical authority is the envelope, every production
 datafeed bar projection uses the sole mapper, explicit shadow rollback still
 works, malformed or unavailable upstream data fails closed, and review/full
 regression/audit pass. Fixture-only parity or a config-only flip does not count.
+
+That boundary is satisfied for the consumer cutover. Runtime deployment of
+datafeed V2, versioned long-window pagination, and eventual retirement of v1
+continuous-market inference remain named follow-ups; none restores a parallel
+candle interpreter or implicit shadow authority.

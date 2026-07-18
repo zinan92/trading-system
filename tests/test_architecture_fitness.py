@@ -81,8 +81,8 @@ FORBIDDEN_KERNEL_IMPORTS = (
 )
 
 EXPECTED_SCORE_ROWS = {
-    "Data download": (25, 25, 25, 15, 90),
-    "Data cleaning / quality": (25, 25, 20, 15, 85),
+    "Data download": (25, 25, 25, 20, 95),
+    "Data cleaning / quality": (25, 25, 25, 20, 95),
     "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (25, 20, 25, 20, 90),
     "Live execution / broker": (25, 25, 25, 23, 98),
@@ -336,8 +336,8 @@ def test_architecture_progress_bar_is_reproducible_from_visible_scores() -> None
     for values in observed.values():
         assert sum(values[:4]) == values[4]
     overall = round(sum(values[4] for values in observed.values()) / len(observed))
-    assert overall == 93
-    assert "**Overall architecture progress: 93%**" in text
+    assert overall == 95
+    assert "**Overall architecture progress: 95%**" in text
 
 
 def test_strategy_selection_stays_in_the_explicit_plugin_composition_root() -> None:
@@ -516,7 +516,7 @@ def test_audit_names_every_known_non_hexagonal_seam() -> None:
     backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
         "LiveBrokerAdapter",
-        "Market Envelope V2",
+        "Market data contract cleanup",
         "Risk policy/store extraction",
         "BacktestClient",
     ):
@@ -527,4 +527,4 @@ def test_audit_names_every_known_non_hexagonal_seam() -> None:
     assert "Strategy._base_engine" not in backlog
     assert "Backtest composition" not in backlog
     assert "strategy-proposal-request-v1" in text
-    assert "market_data_contract_mode=shadow" in text
+    assert "market_data_contract_mode=authoritative" in text
