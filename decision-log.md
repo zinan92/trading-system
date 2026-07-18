@@ -6538,3 +6538,38 @@ auditable datafeed port; broker execution remains a separate port.
   closed, no new P0/P1, `SHIP`.
 - A7 changed no runtime config, execution authority, credentials, orders,
   positions, accounts, or production state.
+
+## 2026-07-18 - A8 Strategy Plugin Registry kickoff
+
+### Objective and value
+
+- Remove the last application-level strategy engine branch so new grid variants
+  and analysis engines plug into one explicit factory boundary.
+- Preserve every current strategy's signal/filter behavior while making unknown
+  plugins fail closed before a multi-strategy run creates trading artifacts.
+
+### Decisions
+
+- Follow NautilusTrader's configuration/factory separation with a repository-
+  local `StrategyAnalysisPort` and explicit plugin composition root.
+- Do not add Pluggy or auto-discover PyPA entry points. One factory call does
+  not justify a new dependency, and loading arbitrary installed packages would
+  expand trading-process code authority.
+- Preserve missing `engine` as the legacy `ma` default. Reject explicitly
+  unknown names instead of silently routing them to MA.
+- Keep Chan imports lazy and keep filter composition outside the base-plugin
+  registry.
+
+### Gotchas
+
+- Protocol shape is not semantic parity; all existing engine suites remain in
+  the acceptance pack.
+- Production config contains 25 strategies and 20 distinct engine names when
+  the implicit MA default is included; every name must resolve before cutover.
+- The primary worktree remains on an unrelated active branch. A8 is stacked on
+  the clean A7 worktree and must not change live configuration or order state.
+
+### Baseline
+
+- A7 full suite: `1741 passed, 7 skipped`.
+- Focused A8 baseline: `46 passed in 227.70s`.
