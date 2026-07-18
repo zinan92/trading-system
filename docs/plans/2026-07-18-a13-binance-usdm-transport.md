@@ -1,6 +1,6 @@
 # A13 Binance USD-M Transport Extraction Plan
 
-**Status:** In progress.
+**Status:** Complete on 2026-07-18.
 
 **Goal:** Move Binance USD-M endpoint selection, request signing, public
 exchange metadata, and HTTP I/O out of the legacy `LiveBrokerAdapter` while
@@ -134,3 +134,33 @@ A13 is complete only when no Binance wire implementation remains in
 transport, and mainnet/demo/testnet safety suites plus the full repository pass.
 Moving helper names without removing signing/endpoints/HTTP from the legacy
 module does not count.
+
+## Completion evidence
+
+- `services/venues/binance_usdm_transport.py` now owns the immutable endpoint
+  catalog, base URL and symbol mapping, public ExchangeInfo normalization,
+  credentials, HMAC, signed GET/mutation construction, timeout, and JSON
+  decoding. `broker_adapter.py` contains no Binance endpoint literal, signing,
+  timestamp, signature, or Binance base URL.
+- Existing private method names remain thin delegates. Demo signed GET keeps
+  its `{ok,status,body|error}` contract, and transport construction observes
+  in-place config mutation plus config/opener replacement without wrapping the
+  established opener.
+- Contract tests pin signed body versus URL placement, exact signed query,
+  headers, timeout, missing-credential no-I/O, HTTP error bodies, public
+  credential-free ExchangeInfo, failure fallback, secret-safe representation,
+  and static wire-code isolation.
+- Final mainnet/demo/testnet/kill-switch/Broker Port defense pack passed; final
+  repository regression after review hardening: `1822 passed, 7 skipped in
+  419.51s`. Changed-file Ruff and `git diff --check` passed.
+- Verified Opus review: actual model `claude-opus-4-8`, session
+  `d855d5a4-6301-432f-ae49-a43c8d1bf452`, receipt
+  `20260718T060856Z_99325593-7454-4b5e-a18c-4d98548de002.json`; verdict `SHIP`,
+  no P0-P2. Both P3 hardening suggestions were applied and covered by the final
+  regression.
+- Live execution/broker isolation improves from `90/100` to `92/100`; overall
+  architecture progress moves from `91%` to the reproducible rounded `92%`
+  (`642 / 7 = 91.7%`).
+- Evidence Contract result: Visual Evidence N/A. A13 changes no visible surface
+  and deploys no service; tests, commits, documents, diffs, and the Opus receipt
+  are trace material only.
