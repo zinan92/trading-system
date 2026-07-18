@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
-import os
-import time
 import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +12,6 @@ from services.broker_adapter import BrokerOrderRequest, LiveBrokerAdapter
 from services.config_loader import load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_reconciliation import LiveBrokerReconciliation
-from services.live_env import apply_live_env, live_env_value_present
 from services.paper_executor import PaperExecutor
 
 
@@ -267,34 +261,7 @@ class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
         return {"ok": True, **self._safe_position_item(item)}
 
     def _binance_signed_get(self, endpoint: str, params: dict) -> dict:
-        apply_live_env()
-        api_key_env = str(self.broker_config.get("api_key_env", "BINANCE_API_KEY"))
-        secret_env = str(self.broker_config.get("api_secret_env", "BINANCE_API_SECRET"))
-        api_key = os.getenv(api_key_env)
-        api_secret = os.getenv(secret_env)
-        if not live_env_value_present(api_key_env) or not live_env_value_present(secret_env):
-            return {"ok": False, "status": None, "error": {"message": f"missing Binance environment variables: {api_key_env}, {secret_env}"}}
-        signed = {**params, "timestamp": int(time.time() * 1000), "recvWindow": int(self.broker_config.get("recv_window_ms", 5000))}
-        query = urllib.parse.urlencode(signed)
-        signature = hmac.new(str(api_secret).encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
-        request = urllib.request.Request(
-            f"{self._binance_base_url()}{endpoint}?{query}&signature={signature}",
-            method="GET",
-            headers={"X-MBX-APIKEY": str(api_key), "User-Agent": "TradingOrchestrator/1.0"},
-        )
-        try:
-            with self.opener(request, timeout=int(self.broker_config.get("timeout_seconds", 10))) as response:
-                text = response.read().decode("utf-8")
-                return {"ok": True, "status": getattr(response, "status", 200), "body": json.loads(text) if text else {}}
-        except urllib.error.HTTPError as exc:
-            text = exc.read().decode("utf-8", errors="replace")
-            try:
-                error = json.loads(text)
-            except json.JSONDecodeError:
-                error = {"raw": text[:500]}
-            return {"ok": False, "status": exc.code, "error": error}
-        except (OSError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
-            return {"ok": False, "status": None, "error": {"error_type": type(exc).__name__, "message": str(exc)}}
+        return self._binance_transport().signed_get_envelope(endpoint, params)
 
     def _position_item(self, body) -> dict:
         if isinstance(body, list):
@@ -321,7 +288,7 @@ class BinanceDemoBrokerAdapter(LiveBrokerAdapter):
         if direct.get("filled"):
             return direct
         status_payload = self._binance_signed_get(
-            "/fapi/v1/order",
+            self._binance_transport().endpoints.order,
             {"symbol": DEMO_SYMBOL, "origClientOrderId": str(close_payload.get("newClientOrderId") or "")},
         )
         if status_payload.get("ok") and isinstance(status_payload.get("body"), dict):

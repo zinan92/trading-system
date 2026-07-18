@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import os
 import stat
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -84,6 +82,7 @@ class LiveBrokerAdapter:
         self.provider = str(self.broker_config.get("provider", "manual_gateway"))
         self.dry_run = bool(self.broker_config.get("dry_run", True))
         self.opener = opener or urllib.request.urlopen
+        self._binance_transport_instance = None
         self._capabilities = execution_capabilities_for(provider=self.provider, adapter_name=self.name)
 
     @property
@@ -929,7 +928,10 @@ class LiveBrokerAdapter:
 
     def _recover_binance_entry(self, symbol: str, client_order_id: str) -> dict:
         try:
-            payload = self._binance_signed_get("/fapi/v1/order", {"symbol": symbol, "origClientOrderId": client_order_id})
+            payload = self._binance_signed_get(
+                self._binance_transport().endpoints.order,
+                {"symbol": symbol, "origClientOrderId": client_order_id},
+            )
         except urllib.error.HTTPError as exc:
             error = self._http_error_payload(exc)
             return self._classify_binance_recovery_payload({"ok": False, "status": exc.code, "error": error})
@@ -1478,10 +1480,11 @@ class LiveBrokerAdapter:
         }
 
     def _binance_open_orders_for_symbol(self, symbol: str) -> list[dict]:
-        payload = self._binance_signed_get("/fapi/v1/openOrders", {"symbol": symbol})
+        transport = self._binance_transport()
+        payload = self._binance_signed_get(transport.endpoints.open_orders, {"symbol": symbol})
         orders = self._normalize_binance_open_order_payload(payload, source="open_orders")
         if self._binance_uses_algo_protective_orders():
-            algo_payload = self._binance_signed_get("/fapi/v1/openAlgoOrders", {"symbol": symbol})
+            algo_payload = self._binance_signed_get(transport.endpoints.open_algo_orders, {"symbol": symbol})
             orders.extend(self._normalize_binance_open_order_payload(algo_payload, source="open_algo_orders"))
         return orders
 
@@ -1607,18 +1610,26 @@ class LiveBrokerAdapter:
             return json.loads(response.read().decode("utf-8"))
 
     def _post_binance_order(self, payload: dict) -> dict:
-        return self._binance_signed_request("POST", "/fapi/v1/order", payload)
+        return self._binance_signed_request("POST", self._binance_transport().endpoints.order, payload)
 
     def _post_binance_protective_order(self, payload: dict) -> dict:
-        endpoint = str(payload.get("_endpoint") or "/fapi/v1/order")
+        endpoint = str(payload.get("_endpoint") or self._binance_transport().endpoints.order)
         body = {key: value for key, value in payload.items() if not str(key).startswith("_")}
         return self._binance_signed_request("POST", endpoint, body)
 
     def _delete_binance_open_orders(self, symbol: str) -> dict:
-        return self._binance_signed_request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol})
+        return self._binance_signed_request(
+            "DELETE",
+            self._binance_transport().endpoints.all_open_orders,
+            {"symbol": symbol},
+        )
 
     def _delete_binance_algo_open_orders(self, symbol: str) -> dict:
-        return self._binance_signed_request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
+        return self._binance_signed_request(
+            "DELETE",
+            self._binance_transport().endpoints.algo_open_orders,
+            {"symbol": symbol},
+        )
 
     def cancel_binance_order(self, symbol: str, *, orig_client_order_id: str = "", order_id: str = "") -> dict:
         require_broker_capability(self, BrokerCapability.CANCEL_ORDER)
@@ -1629,7 +1640,7 @@ class LiveBrokerAdapter:
             params["orderId"] = order_id
         else:
             raise ValueError("orig_client_order_id or order_id is required to cancel a Binance order")
-        return self._binance_signed_request("DELETE", "/fapi/v1/order", params)
+        return self._binance_signed_request("DELETE", self._binance_transport().endpoints.order, params)
 
     def cancel_order(self, request: BrokerCancelRequest) -> dict:
         require_broker_capability(self, BrokerCapability.CANCEL_ORDER)
@@ -1705,48 +1716,26 @@ class LiveBrokerAdapter:
         return result
 
     def _binance_signed_request(self, method: str, endpoint: str, params: dict) -> dict:
-        apply_live_env()
-        api_key_env = str(self.broker_config.get("api_key_env", "BINANCE_API_KEY"))
-        secret_env = str(self.broker_config.get("api_secret_env", "BINANCE_API_SECRET"))
-        api_key = os.getenv(api_key_env)
-        api_secret = os.getenv(secret_env)
-        if not live_env_value_present(api_key_env) or not live_env_value_present(secret_env):
-            raise RuntimeError(f"missing Binance environment variables: {api_key_env}, {secret_env}")
-        signed = {**params, "timestamp": int(time.time() * 1000), "recvWindow": int(self.broker_config.get("recv_window_ms", 5000))}
-        query = urllib.parse.urlencode(signed)
-        signature = hmac.new(str(api_secret).encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
-        body = f"{query}&signature={signature}".encode("utf-8")
-        request = urllib.request.Request(
-            f"{self._binance_base_url()}{endpoint}",
-            data=body,
-            method=method,
-            headers={
-                "X-MBX-APIKEY": str(api_key),
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "TradingOrchestrator/1.0",
-            },
-        )
-        with self.opener(request, timeout=int(self.broker_config.get("timeout_seconds", 10))) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return self._binance_transport().signed_request(method, endpoint, params)
 
     def _binance_signed_get(self, endpoint: str, params: dict) -> dict:
-        apply_live_env()
-        api_key_env = str(self.broker_config.get("api_key_env", "BINANCE_API_KEY"))
-        secret_env = str(self.broker_config.get("api_secret_env", "BINANCE_API_SECRET"))
-        api_key = os.getenv(api_key_env)
-        api_secret = os.getenv(secret_env)
-        if not live_env_value_present(api_key_env) or not live_env_value_present(secret_env):
-            raise RuntimeError(f"missing Binance environment variables: {api_key_env}, {secret_env}")
-        signed = {**params, "timestamp": int(time.time() * 1000), "recvWindow": int(self.broker_config.get("recv_window_ms", 5000))}
-        query = urllib.parse.urlencode(signed)
-        signature = hmac.new(str(api_secret).encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
-        request = urllib.request.Request(
-            f"{self._binance_base_url()}{endpoint}?{query}&signature={signature}",
-            method="GET",
-            headers={"X-MBX-APIKEY": str(api_key), "User-Agent": "TradingOrchestrator/1.0"},
-        )
-        with self.opener(request, timeout=int(self.broker_config.get("timeout_seconds", 10))) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return self._binance_transport().signed_get(endpoint, params)
+
+    def _binance_transport(self):
+        transport = self._binance_transport_instance
+        if (
+            transport is None
+            or transport.broker_config is not self.broker_config
+            or transport.opener is not self.opener
+        ):
+            from services.venues.binance_usdm_transport import BinanceUsdmTransport
+
+            transport = BinanceUsdmTransport(
+                broker_config=self.broker_config,
+                opener=self.opener,
+            )
+            self._binance_transport_instance = transport
+        return transport
 
     def _oanda_base_url(self) -> str:
         if self.broker_config.get("base_url"):
@@ -1755,51 +1744,17 @@ class LiveBrokerAdapter:
         return "https://api-fxtrade.oanda.com" if environment == "live" else "https://api-fxpractice.oanda.com"
 
     def _binance_base_url(self) -> str:
-        if self.broker_config.get("base_url"):
-            return str(self.broker_config["base_url"]).rstrip("/")
-        environment = str(self.broker_config.get("environment", "live")).lower()
-        return "https://testnet.binancefuture.com" if environment == "testnet" else "https://fapi.binance.com"
+        return self._binance_transport().base_url()
 
     def _oanda_instrument(self, asset: str) -> str:
         mapping = self.broker_config.get("instrument_map", {"GOLD": "XAU_USD", "XAUUSD": "XAU_USD"})
         return str(mapping.get(asset, asset))
 
     def _binance_symbol(self, asset: str) -> str:
-        mapping = self.broker_config.get("instrument_map", {"GOLD": "XAUUSDT", "XAUUSD": "XAUUSDT"})
-        return str(mapping.get(asset, asset)).upper()
+        return self._binance_transport().symbol(asset)
 
     def _binance_symbol_status(self, symbol: str) -> dict:
-        try:
-            params = urllib.parse.urlencode({"symbol": symbol})
-            request = urllib.request.Request(
-                f"{self._binance_base_url()}/fapi/v1/exchangeInfo?{params}",
-                headers={"User-Agent": "TradingOrchestrator/1.0"},
-            )
-            with self.opener(request, timeout=int(self.broker_config.get("timeout_seconds", 10))) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (OSError, TimeoutError, json.JSONDecodeError, KeyError, ValueError):
-            return {"symbol": symbol, "status": "UNKNOWN", "filters": {}, "truth_level": "exchange_info_unavailable"}
-        symbols = payload.get("symbols") or []
-        item = next((row for row in symbols if row.get("symbol") == symbol), symbols[0] if symbols else {})
-        filters = {row.get("filterType"): row for row in item.get("filters", []) if row.get("filterType")}
-        lot = filters.get("LOT_SIZE", {})
-        market_lot = filters.get("MARKET_LOT_SIZE", {})
-        price_filter = filters.get("PRICE_FILTER", {})
-        min_notional = filters.get("MIN_NOTIONAL", {})
-        return {
-            "symbol": item.get("symbol", symbol),
-            "status": item.get("status", "UNKNOWN"),
-            "contract_type": item.get("contractType", ""),
-            "underlying_type": item.get("underlyingType", ""),
-            "margin_asset": item.get("marginAsset", ""),
-            "filters": {
-                "tick_size": price_filter.get("tickSize", "0.01"),
-                "step_size": market_lot.get("stepSize") or lot.get("stepSize", "0.001"),
-                "min_qty": market_lot.get("minQty") or lot.get("minQty", "0.001"),
-                "min_notional": min_notional.get("notional", "5"),
-            },
-            "truth_level": "official_binance_exchange_info",
-        }
+        return self._binance_transport().symbol_status(symbol)
 
     def _binance_order_payloads(
         self,
@@ -1853,8 +1808,7 @@ class LiveBrokerAdapter:
         return protective
 
     def _binance_uses_algo_protective_orders(self) -> bool:
-        value = str(self.broker_config.get("protective_order_endpoint", "order")).lower()
-        return value in {"algo", "algo_order", "algoorder", "/fapi/v1/algoorder"}
+        return self._binance_transport().uses_algo_protective_orders()
 
     def _binance_protective_payload(
         self,
@@ -1870,7 +1824,7 @@ class LiveBrokerAdapter:
     ) -> dict:
         if use_algo_orders:
             return {
-                "_endpoint": "/fapi/v1/algoOrder",
+                "_endpoint": self._binance_transport().protective_order_endpoint(use_algo_orders=True),
                 "symbol": symbol,
                 "side": side,
                 "algoType": "CONDITIONAL",
