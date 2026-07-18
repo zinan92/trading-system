@@ -93,7 +93,7 @@ EXPECTED_SCORE_ROWS = {
     "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (25, 20, 25, 20, 90),
     "Live execution / broker": (25, 25, 25, 23, 98),
-    "Risk / accounting / reconciliation": (25, 20, 25, 25, 95),
+    "Risk / accounting / reconciliation": (25, 25, 25, 25, 100),
     "Dashboard / read model": (25, 25, 20, 25, 95),
 }
 
@@ -585,7 +585,7 @@ def test_audit_names_every_known_non_hexagonal_seam() -> None:
     for seam in (
         "LiveBrokerAdapter",
         "Market data contract cleanup",
-        "Risk policy/store extraction",
+        "Safe-action market-gate audit",
         "BacktestClient",
     ):
         assert seam in backlog

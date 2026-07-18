@@ -7520,3 +7520,76 @@ auditable datafeed port; broker execution remains a separate port.
 - `current.json` remains observability evidence and never authorization.
 - A17 changes no visible UI and no production state. Visual Evidence is not
   applicable unless scope changes.
+
+## 2026-07-18 - A17 Risk policy and decision store extraction closure
+
+### Outcome
+
+- `RiskDecisionPort` is now a canonical contract rather than a policy/store
+  implementation container. Paper-grid policy, pure economics helpers,
+  live-money translation, and file audit persistence have distinct ownership.
+- One frozen `risk-policy-plugin-v1` registry binds configured name,
+  implementation, capabilities, evaluator version, code hash, and source hashes.
+  Production composes `paper_grid_risk`; explicit bad configuration and runtime
+  descriptor drift fail before trading mutation.
+- The file decision store implements validated append-only persistence only.
+  It has no evaluate, authorize, or reusable-permission read surface.
+- Strategy Control, Binance, and Tiger obtain policies, stores, and the live
+  bridge from one composition root. Every grid request binds the policy and
+  evaluator metadata returned by the actually selected port.
+
+### Opus adversarial review and hardening
+
+- Verified `claude-opus-4-8`, session
+  `08a6d7b7-4cfe-4856-82e8-c06da714a9ea`, receipt
+  `20260718T102007Z_5f754f88-a4d5-4dae-9b92-2a395686d314.json`; verdict
+  `SHIP WITH FIXES`, no P0/P1/P2.
+- Limited evaluator identity to files that actually determine evaluation,
+  removed inert runtime descriptor copies, and required the live bridge to
+  receive its store from composition instead of constructing a concrete store.
+- Closed the suggested fail-open edge: `allows_new_order=true` grants exposure
+  only with legacy `READY`, or the exact intentional paper-route `SKIPPED`
+  reason. Any other status becomes `legacy_guardrail_status_invalid`.
+- Kept the explicit capability-callability check. Runtime Protocol conformance
+  checks structural presence; the registry additionally verifies that every
+  capability promised by the descriptor is executable.
+
+### Testing scope decision
+
+- Focused implementation validation reached `150 passed`; a narrower
+  intermediate subset reached `144 passed`. The repetition was more
+  conservative than necessary and is recorded as light over-testing.
+- Post-Opus core changes used the minimum affected pack: `41 passed`; the
+  architecture/document score update used `17 passed`. No full suite was run
+  during either small-fix iteration.
+- Because A17 changes the composition that authorizes exposure across Strategy
+  Control and both live brokers, exactly one final repository suite is allowed
+  after all core hardening. Documentation-only closure after that suite does
+  not trigger another full run.
+
+### Gotchas
+
+- A custom policy must register source-bound evaluator identity before registry
+  freeze. Supplying a structurally valid object with a different implementation
+  or evaluator is deliberately rejected.
+- The live bridge's exact `SKIPPED` exception preserves the existing
+  guardrail-disabled paper route. Broadly accepting `SKIPPED` would reopen the
+  fail-open condition.
+- Opus identified a pre-existing debug concern outside this extraction:
+  Dashboard network-order preparation reads market state before canonical
+  action classification. A stale market may therefore block cancel or flatten
+  too early. Cancellation and flatten pricing have different needs, so resolve
+  this through a dedicated safe-action market-gate audit, not an incidental
+  risk-policy edit.
+- No visible surface changed. Under the Evidence Contract, Visual Evidence is
+  not applicable; commits, tests, docs, and the Opus receipt are trace material.
+
+### Verification
+
+- The one final repository suite passed: `1869 passed, 7 skipped in 389.50s`.
+  It was not repeated after documentation-only closure.
+- Changed-file Ruff and `git diff --check`: clean before the final suite.
+- Risk/accounting/reconciliation improves from `95/100` to `100/100`; overall
+  architecture is `668 / 7 = 95.4%`, still reported as `95%`.
+- No strategy parameter, risk threshold, credential, production process,
+  order, position, account, or live state changed.

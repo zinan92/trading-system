@@ -1,6 +1,6 @@
 # A17 Risk Policy and Decision Store Extraction Plan
 
-**Status:** In progress.
+**Status:** Complete.
 
 **Goal:** Make risk policy selection an explicit frozen plugin composition and
 separate append-only audit persistence from evaluation, without changing one
@@ -133,6 +133,12 @@ create a new way to bypass risk.
   decision as reusable permission.
 - Live bridge results remain additive to every existing broker activation,
   preflight, reconciliation, attended, and lifecycle gate.
+- Opus found a pre-existing cross-layer concern outside A17: the Dashboard
+  network-order preparation reads market state before canonical action
+  classification, so stale market data may block cancel/flatten. Do not change
+  this casually: cancellation needs no price, while flatten may require current
+  venue pricing. It is recorded as the next debug-priority audit rather than
+  hidden inside this policy extraction.
 - The primary worktree has unrelated user work. A17 stays in this isolated
   worktree and never copies whole files from the primary tree.
 
@@ -142,6 +148,26 @@ create a new way to bypass risk.
 - A17 focused risk/control/broker/architecture baseline: `143 passed`.
 - Overall formal architecture baseline: `95%`; Risk/accounting/reconciliation
   is `95/100` because evaluator and store still share one module.
+
+## Pre-final verification
+
+- Implementation-focused pack: `150 passed`; a narrower post-change subset:
+  `144 passed`.
+- Opus review: verified `claude-opus-4-8`, session
+  `08a6d7b7-4cfe-4856-82e8-c06da714a9ea`, receipt
+  `20260718T102007Z_5f754f88-a4d5-4dae-9b92-2a395686d314.json`; verdict
+  `SHIP WITH FIXES`, no P0/P1/P2.
+- Post-review hardening removed an unrelated source hash, removed inert runtime
+  descriptor fields, required store injection in the live bridge, and made
+  contradictory legacy success status fail closed. The minimal affected pack
+  passed: `41 passed`; changed-file Ruff and `git diff --check` were clean.
+- Registry capability callability remains explicit even though the runtime
+  Protocol also checks shape: the descriptor declares executable capabilities,
+  so composition validates both protocol presence and callable behavior.
+- Architecture score after extraction is `668 / 7 = 95.4%`, still reported as
+  `95%`; the risk/accounting/reconciliation row is now `100/100`.
+- The one final repository regression passed: `1869 passed, 7 skipped in
+  389.50s`. It was not repeated after documentation-only closure.
 
 ## Completion boundary
 
