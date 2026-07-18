@@ -1,6 +1,6 @@
 # A11 Execution Plugin Registry Plan
 
-**Status:** In progress on 2026-07-18.
+**Status:** Complete on 2026-07-18.
 
 **Goal:** Make Legacy, Nautilus, and continuous Shadow execution composition
 replaceable by registration without moving attended cutover, parity, risk,
@@ -138,3 +138,22 @@ selected through the registry, all production selection flows through the new
 composition root, and every existing cutover and accounting invariant remains
 verified. Re-exporting the old hard-coded factory under a new name does not
 count.
+
+## Completion evidence
+
+- A custom provider-free paper adapter composes through a supplied frozen
+  registry with `shadow=none`; unknown names fail before output creation.
+- Production runner, Dashboard commands, strategy control plane, and attended
+  cutover select only through `execution_plugin_composition.py`.
+- Core policy independently rejects a misregistered Nautilus implementation
+  unless attended approval, isolated runtime, and cutover-gate requirements are
+  all declared. Shadow failure remains non-authoritative.
+- The platform parity hash now covers the port, registry, composition, Legacy
+  adapter, compatibility facade, Shadow adapter, Shadow reconciliation, and
+  cutover-status semantics.
+- Final repository regression: `1800 passed, 7 skipped in 404.82s`.
+- Verified Opus review: `SHIP`, no P0-P2; three useful P3 defenses were applied
+  and reverified.
+- Evidence Contract result: Visual Evidence N/A. A11 changes no visible surface
+  and no local service was deployed; tests, commits, documents, and the Opus
+  receipt are trace material only.
