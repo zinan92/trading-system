@@ -420,6 +420,12 @@ def test_cycle_runner_uses_custom_proposal_plugin_through_trusted_planner_core(t
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
     output = tmp_path / "outputs"
+    newsletter_root = tmp_path / "newsletter"
+    newsletter_root.mkdir()
+    (newsletter_root / "2026-07-05-finance-daily-newsletter.md").write_text(
+        "## 黄金\n不应暴露给未声明 newsletter context 的插件。\n",
+        encoding="utf-8",
+    )
     captured: dict[str, StrategyProposalRequest] = {}
 
     class DeterministicProposal:
@@ -438,7 +444,10 @@ def test_cycle_runner_uses_custom_proposal_plugin_through_trusted_planner_core(t
         default_decision_mode="deterministic_grid",
     )
     config = deepcopy(TEST_CONFIG)
-    config["machine_planner"] = {"plugin": "deterministic_grid"}
+    config["machine_planner"] = {
+        "plugin": "deterministic_grid",
+        "newsletter_root": str(newsletter_root),
+    }
 
     runner = DualTrackCycleRunner(
         output_root=output,
@@ -504,6 +513,55 @@ def test_invalid_custom_proposal_result_is_persisted_as_no_trade_degraded_plan(t
     assert plan["degraded"] is True
     assert plan["grid_orders"] == []
     assert "must return a JSON object" in plan["planning_error"]
+
+
+def test_proposal_cannot_forge_core_lifecycle_fields_or_bypass_grid_validation(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    _seed_previous_and_day(db)
+    output = tmp_path / "outputs"
+
+    class ForgedLifecycleProposal:
+        def propose(self, request: StrategyProposalRequest) -> dict:
+            decision = _neutral_machine_plan(request.cycle_id)
+            decision["grid_orders"] = []
+            decision["sources"] = []
+            decision["degraded"] = True
+            decision["planning_error"] = "forged plugin error"
+            decision["execution_start"] = "2026-07-05T12:00:00+00:00"
+            decision["review_change"] = {
+                "change_id": "forged",
+                "mode": "paper_challenger",
+                "dimension": "range",
+                "summary": "forged",
+                "expected_metric": "forged",
+            }
+            return decision
+
+    registry = StrategyProposalPluginRegistry()
+    registry.register("forged", lambda _params: ForgedLifecycleProposal())
+    config = deepcopy(TEST_CONFIG)
+    config["machine_planner"] = {"plugin": "forged"}
+    runner = DualTrackCycleRunner(
+        output_root=output,
+        market_db=db,
+        config=config,
+        proposal_registry=registry,
+    )
+
+    result = runner.pre_cycle("2026-07-05_DAY", as_of="2026-07-05T01:00:00+00:00")
+    plan = DualTrackPlanStore(output, config=config).machine_plan("2026-07-05_DAY")
+    audit = load_json(output / "dualtrack" / "audit" / "2026-07-05_DAY.json")
+
+    assert result["status"] == "ai_plan_error_neutral"
+    assert plan is not None
+    assert plan["source"] == "machine_ai_decision_error"
+    assert plan["degraded"] is True
+    assert plan["grid_orders"] == []
+    assert "executable machine plans require explicit grid_orders" in plan["planning_error"]
+    assert "forged plugin error" not in plan["planning_error"]
+    assert "execution_start" not in plan
+    assert "review_change" not in plan
+    assert audit[-1]["event"] == "machine_plan_decision_error"
 
 
 def test_explicit_obsidian_plan_sync_keeps_next_cycle_as_draft(tmp_path: Path) -> None:

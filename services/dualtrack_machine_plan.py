@@ -20,6 +20,20 @@ from services.strategy_proposal_port import (
 
 
 DEFAULT_NEWSLETTER_ROOT = Path("/Users/wendy/park-io/007_finance daily newsletter")
+PROPOSABLE_DECISION_FIELDS = frozenset({
+    "direction",
+    "range",
+    "key_levels",
+    "grid_orders",
+    "invalidation",
+    "confidence",
+    "rationale",
+    "sources",
+    "decision_mode",
+    "review_adjustment",
+    "review_change",
+})
+CORE_HANDLED_PROPOSAL_FIELDS = frozenset({"sources", "decision_mode", "review_change"})
 
 
 class DualTrackMachinePlanner:
@@ -75,9 +89,10 @@ class DualTrackMachinePlanner:
             raise ValueError("trusted market bars are required for machine planning")
         now = parse_utc(as_of)
         newsletter_path = self._newsletter_path(cycle_id)
+        requires_newsletter = "newsletter" in self.proposal.descriptor.required_context
         newsletter_text = ""
         source: dict[str, str] | None = None
-        if newsletter_path.exists():
+        if requires_newsletter and newsletter_path.exists():
             newsletter_text = newsletter_path.read_text(encoding="utf-8")
             source = {
                 "kind": "newsletter",
@@ -96,7 +111,6 @@ class DualTrackMachinePlanner:
             replan_context=replan_context or {},
             newsletter_text=newsletter_text[:MAX_NEWSLETTER_CHARS],
         )
-        requires_newsletter = "newsletter" in self.proposal.descriptor.required_context
         error = ""
         try:
             if requires_newsletter and not newsletter_text:
@@ -104,9 +118,13 @@ class DualTrackMachinePlanner:
             decision = self.proposal.port.propose(request)
             if not isinstance(decision, dict):
                 raise ValueError("machine decision provider must return a JSON object")
-            decision = _apply_range_floor(decision, volatility_context or {})
+            decision = _apply_range_floor(_proposable_decision(decision), volatility_context or {})
             candidate = {
-                **decision,
+                **{
+                    key: value
+                    for key, value in decision.items()
+                    if key not in CORE_HANDLED_PROPOSAL_FIELDS
+                },
                 "cycle_id": cycle_id,
                 "author": "ai",
                 "status": "locked",
@@ -308,6 +326,15 @@ def _review_change_for_next_cycle(decision: dict[str, Any], expected: dict[str, 
     if not str(change.get("summary") or "").strip():
         raise ValueError("review_change.summary is required")
     return dict(change)
+
+
+def _proposable_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    """Copy only fields the untrusted proposal contract is allowed to own."""
+    return {
+        key: deepcopy(value)
+        for key, value in decision.items()
+        if key in PROPOSABLE_DECISION_FIELDS
+    }
 
 
 def _market_summary(bars: tuple[Bar, ...]) -> dict[str, Any]:

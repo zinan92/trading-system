@@ -100,6 +100,7 @@ def test_codex_newsletter_prompt_is_byte_compatible_with_pre_port_planner() -> N
 
     digest = hashlib.sha256(build_codex_newsletter_prompt(request).encode()).hexdigest()
 
+    # Captured from the pre-A9 DualTrackMachinePlanner._prompt for this exact fixture.
     assert digest == "c62aef4a4e745cf4e0c4c024c7cca350e5c6cf55d178657b62d38ca35ea94618"
 
 
