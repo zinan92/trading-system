@@ -167,17 +167,37 @@ class MultiStrategyRunner:
 
     def run(self, run_date: str, paper_auto_approve: bool = False) -> dict:
         classification_audit = self.registry.classification_audit()
+        analysis_plugin_audit = self.registry.analysis_plugin_audit()
         runnable = self.registry.enabled_for_runner()
-        skipped = [
-            {
-                "strategy_id": item.get("strategy_id"),
-                "status": "skipped",
-                "reason": "classification_incomplete",
-                "classification_audit": item,
-            }
+        runnable_ids = {strategy.strategy_id for strategy in runnable}
+        classification_by_id = {
+            str(item.get("strategy_id") or ""): item
             for item in classification_audit.get("strategies", [])
-            if item.get("status") != "pass" and self.registry.get(str(item.get("strategy_id") or "")) and self.registry.get(str(item.get("strategy_id") or "")).enabled
-        ]
+        }
+        plugin_by_id = {
+            str(item.get("strategy_id") or ""): item
+            for item in analysis_plugin_audit.get("strategies", [])
+        }
+        skipped = []
+        for strategy in self.registry.enabled():
+            if strategy.strategy_id in runnable_ids:
+                continue
+            classification = classification_by_id.get(strategy.strategy_id, {})
+            plugin = plugin_by_id.get(strategy.strategy_id, {})
+            reasons = []
+            if classification.get("status") != "pass":
+                reasons.append("classification_incomplete")
+            if plugin.get("status") != "pass":
+                reasons.append("analysis_plugin_unavailable")
+            skipped.append(
+                {
+                    "strategy_id": strategy.strategy_id,
+                    "status": "skipped",
+                    "reason": "+".join(reasons) or "strategy_not_runnable",
+                    "classification_audit": classification,
+                    "analysis_plugin_audit": plugin,
+                }
+            )
         results = [self._run_one(run_date, strategy, paper_auto_approve) for strategy in runnable] + skipped
         leaderboard = StrategyLeaderboard(self.base_output_root).build(run_date)
         config = load_pipeline_config()
@@ -199,6 +219,7 @@ class MultiStrategyRunner:
             "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "strategy_count": len(results),
             "classification_audit": classification_audit,
+            "analysis_plugin_audit": analysis_plugin_audit,
             "reconciled": sum(1 for r in results if r.get("reconciliation_status") == "pass"),
             "errors": sum(1 for r in results if r.get("status") == "error"),
             "strategies": results,
