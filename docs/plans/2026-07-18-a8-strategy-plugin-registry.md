@@ -1,6 +1,6 @@
 # A8 Strategy Plugin Registry Plan
 
-**Status:** In progress on 2026-07-18.
+**Status:** Complete on 2026-07-18.
 
 **Goal:** Make strategy analysis genuinely plug-and-play: a new signal engine
 must enter through one explicit, testable factory registry without editing
@@ -123,3 +123,33 @@ through the same port/registry, no core engine-name branch remains, unknown
 plugins are blocked before execution, every configured name is proven, and the
 final full suite is green. A registry class without production cutover does not
 count as completion.
+
+## Completion evidence
+
+- `Strategy._base_engine` is removed. Strategy selection in
+  `strategy_registry.py` and `pipelines/daily.py` imports no concrete analysis
+  engine; only the trusted composition root owns those lazy imports.
+- The startup registry is frozen and content-fingerprinted. It contains 20
+  registered engine names, and all 25 configured strategies resolve with zero
+  audit failures.
+- Explicit custom-plugin injection, missing-engine MA compatibility, empty and
+  unknown names, duplicate registration, post-freeze mutation, invalid return
+  shape, declared capability mismatch, filter wrapping, and runner preflight
+  each have regression coverage.
+- A compatibility discovery during implementation was preserved explicitly:
+  the legacy global report still selects disabled `gold_5m_v1`, but now resolves
+  it through the same plugin registry instead of directly constructing
+  `SignalEngine`.
+- Focused A0-A8 architecture/conformance pack: `139 passed`.
+- Strategy/Daily/Runner/Lab/Backtest/Chan behavior pack: `88 passed`; dedicated
+  signal/filter/backtest behavior pack: `42 passed`.
+- Final repository regression: `1752 passed, 7 skipped in 491.24s`.
+- Ruff on every changed Python file and `git diff --check`: clean.
+- Canonical architecture progress is now `86%`; signal analysis is
+  plug-compatible, while production grid proposal/planner composition remains
+  the next named boundary.
+- A8 changes no strategy parameters, enablement, runtime profile, data source,
+  risk policy, broker authority, credentials, orders, positions, or production
+  state.
+- A8 adds no visible UI/report surface. Under the Evidence Contract, new visual
+  proof is not applicable; code, tests, and documents are trace material only.
