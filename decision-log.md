@@ -7041,6 +7041,52 @@ auditable datafeed port; broker execution remains a separate port.
 - No strategy parameters, risk thresholds, credentials, live configuration,
   orders, positions, accounts, or production state were changed.
 
+## 2026-07-18 - A16 Market Envelope authority cutover kickoff
+
+### Decision
+
+- Promote the existing versioned `MarketDataEnvelope` from shadow comparison to
+  production authority only after real V2 same-response evidence, then route
+  all `DatafeedMarketRepository` bar reads through the same mapper.
+- Preserve explicit shadow mode as a diagnostic rollback, but make envelope
+  authority the canonical and default path after cutover.
+- Keep v1/v2 compatibility at the adapter boundary. Datafeed owns session and
+  source truth; Trading Orchestrator validates and projects it without a second
+  candle representation or duplicate HTTP request.
+
+### User value
+
+- A conforming datafeed adapter can replace Binance without changing strategy,
+  backtest, risk, execution, or Dashboard interpretation of market bars.
+
+### Live evidence
+
+- Started datafeed commit `92e5e8c` on isolated port 8101 with a temporary DB;
+  production port 8100 and trading processes were untouched.
+- Six real Binance USD-M XAUUSDT 1m shadow responses passed 458 same-response
+  comparisons each with zero differences. One real authoritative rehearsal
+  also passed: `3,206` compared fields, zero drift in total.
+- One separate authoritative request returned the known Binance upstream 502;
+  the consumer returned `blocked` with zero bars. Availability remains a
+  separate Debug concern and was not reclassified as contract success.
+
+### Gotchas
+
+- Historical and session-closed envelopes can be valid but not
+  execution-ready; the repository must validate them without inventing
+  freshness.
+- A successful V2 sample proves schema/session compatibility, not continuous
+  Binance uptime.
+- Datafeed A1 is not deployed by this milestone; consumer v1/v2 compatibility
+  and deployment sequencing remain explicit.
+- A16 has no visible UI surface. Visual Evidence is not applicable unless the
+  scope changes.
+
+### Baseline
+
+- A15 repository: `1852 passed, 7 skipped`.
+- Market/envelope/DualTrack/architecture pack: `99 passed`.
+
 ## 2026-07-18 - A13 Binance USD-M transport extraction kickoff
 
 ### Decision
