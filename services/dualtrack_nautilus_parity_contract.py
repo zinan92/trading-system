@@ -26,6 +26,7 @@ FIXTURE_CLASSES: dict[str, tuple[str, ...]] = {
 PLATFORM_CODE_PATHS = (
     "pipelines/dualtrack_machine_residual_check.py",
     "pipelines/dualtrack_nautilus_parity_gate.py",
+    "pipelines/dualtrack_shadow_cutover_status.py",
     "schemas/accounting.py",
     "services/accounting_projection.py",
     "services/dualtrack_config.py",
@@ -35,7 +36,9 @@ PLATFORM_CODE_PATHS = (
     "services/dualtrack_nautilus_instrument.py",
     "services/dualtrack_nautilus_parity_contract.py",
     "services/dualtrack_scoring.py",
+    "services/dualtrack_shadow_execution_adapter.py",
     "services/dualtrack_shadow_input.py",
+    "services/dualtrack_shadow_reconciliation.py",
     "services/execution_engine_plugin_registry.py",
     "services/execution_engine_port.py",
     "services/execution_conformance.py",

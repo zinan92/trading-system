@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from services.dualtrack_nautilus_parity_contract import PLATFORM_CODE_PATHS
 from services.execution_engine_plugin_registry import ExecutionEnginePluginRegistry
 from services.execution_engine_port import (
     EXECUTION_ENGINE_CAPABILITIES,
@@ -12,17 +13,20 @@ from services.execution_engine_port import (
 )
 from services.execution_plugin_composition import (
     EXECUTION_ENGINE_PLUGINS,
+    NAUTILUS_EXECUTION_IMPLEMENTATION,
     build_default_execution_engine_registry,
     compose_configured_execution_engine,
     execution_engine_selection,
+    inspect_execution_engine_state,
 )
-from services.dualtrack_nautilus_parity_contract import PLATFORM_CODE_PATHS
 
 
 class ProviderFreePaperEngine:
     name = "provider_free_paper"
+    submit_calls = 0
 
     def submit_order(self, command):
+        type(self).submit_calls += 1
         return {"status": "accepted", "command": dict(command)}
 
     def cancel_orders(self, cycle_id, *, order_ids=None, strategy_plan_id=None, ts=None, reason=""):
@@ -137,6 +141,26 @@ def test_unknown_configured_plugin_fails_before_creating_output_artifacts(tmp_pa
     assert not output.exists()
 
 
+def test_inspection_returns_read_model_without_exposing_or_calling_order_port(tmp_path: Path) -> None:
+    ProviderFreePaperEngine.submit_calls = 0
+    output = tmp_path / "must-not-exist"
+
+    inspected = inspect_execution_engine_state(
+        output,
+        engine="provider_free_paper",
+        cycle_id="2026-07-18_DAY",
+        config={},
+        registry=_provider_free_registry(),
+    )
+
+    assert ProviderFreePaperEngine.submit_calls == 0
+    assert inspected["snapshot"]["engine"] == "provider_free_paper"
+    assert inspected["reconciliation"]["status"] == "ok"
+    assert "port" not in inspected
+    assert "adapter" not in inspected
+    assert not output.exists()
+
+
 def test_missing_shadow_runtime_stays_non_authoritative_and_explicit(tmp_path: Path) -> None:
     runtime = compose_configured_execution_engine(
         tmp_path / "outputs",
@@ -207,6 +231,36 @@ def test_registry_rejects_empty_duplicate_malformed_and_non_paper_plugins() -> N
         )
 
 
+def test_known_nautilus_implementation_cannot_be_misregistered_without_core_gates() -> None:
+    unsafe = (
+        ExecutionEnginePluginRegistry()
+        .register(
+            ExecutionEnginePluginDescriptor(
+                name="unsafe_nautilus",
+                implementation=NAUTILUS_EXECUTION_IMPLEMENTATION,
+                roles=("authoritative",),
+                requires_attended_authority=False,
+                requires_runtime_path=False,
+                requires_cutover_gate=False,
+            ),
+            lambda _request: ProviderFreePaperEngine(),
+        )
+        .freeze()
+    )
+
+    with pytest.raises(RuntimeError, match="restricted execution plugin policy mismatch"):
+        execution_engine_selection(
+            {
+                "execution_engine": {
+                    "authoritative": "unsafe_nautilus",
+                    "shadow": "none",
+                }
+            },
+            environ={},
+            registry=unsafe,
+        )
+
+
 def test_registry_rejects_wrong_role_and_invalid_factory_product(tmp_path: Path) -> None:
     registry = _provider_free_registry()
 
@@ -269,7 +323,10 @@ def test_unfrozen_registry_cannot_resolve_or_build(tmp_path: Path) -> None:
 
 def test_nautilus_parity_hash_covers_every_execution_plugin_semantic_file() -> None:
     assert {
+        "pipelines/dualtrack_shadow_cutover_status.py",
         "services/dualtrack_execution_adapter.py",
+        "services/dualtrack_shadow_execution_adapter.py",
+        "services/dualtrack_shadow_reconciliation.py",
         "services/execution_engine_plugin_registry.py",
         "services/execution_engine_port.py",
         "services/execution_plugin_composition.py",

@@ -24,6 +24,9 @@ NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT = (
     "I_UNDERSTAND_NAUTILUS_PAPER_CUTOVER_BYPASSES_7_CYCLE_SHADOW_GATE"
 )
 EXECUTION_ENGINE_ALIASES = {"nautilus": "nautilus_paper"}
+NAUTILUS_EXECUTION_IMPLEMENTATION = (
+    "services.dualtrack_nautilus_execution_adapter.NautilusExecutionAdapter"
+)
 
 
 def _legacy_factory(request: ExecutionEngineBuildRequest) -> ExecutionEngineAdapter:
@@ -69,7 +72,7 @@ def build_default_execution_engine_registry() -> ExecutionEnginePluginRegistry:
         .register(
             ExecutionEnginePluginDescriptor(
                 name="nautilus_paper",
-                implementation="services.dualtrack_nautilus_execution_adapter.NautilusExecutionAdapter",
+                implementation=NAUTILUS_EXECUTION_IMPLEMENTATION,
                 roles=("authoritative", "shadow"),
                 requires_attended_authority=True,
                 requires_runtime_path=True,
@@ -110,6 +113,7 @@ def execution_engine_selection(
         authoritative_descriptor = registry.descriptor(authoritative, role="authoritative")
     except (KeyError, ValueError) as exc:
         raise ValueError(f"unsupported authoritative execution engine: {authoritative}") from exc
+    _require_restricted_authoritative_policy(authoritative_descriptor)
     if shadow != "none":
         try:
             registry.descriptor(shadow, role="shadow")
@@ -158,6 +162,7 @@ def build_execution_engine_adapter(
         descriptor = registry.descriptor(normalized, role="authoritative")
     except (KeyError, ValueError) as exc:
         raise ValueError(f"unknown execution engine: {engine}") from exc
+    _require_restricted_authoritative_policy(descriptor)
     if descriptor.requires_attended_authority and not allow_paper_switch:
         raise RuntimeError("Nautilus paper switch requires attended approval")
     if descriptor.requires_cutover_gate:
@@ -329,3 +334,21 @@ def _require_cutover_gate(output_root: Path, *, allow_shadow_gate_override: bool
 
 def _provider_prefix(name: str) -> str:
     return str(name).removesuffix("_paper")
+
+
+def _require_restricted_authoritative_policy(
+    descriptor: ExecutionEnginePluginDescriptor,
+) -> None:
+    """Prevent a future registration edit from weakening known cutover policy."""
+
+    if descriptor.implementation != NAUTILUS_EXECUTION_IMPLEMENTATION:
+        return
+    if not (
+        descriptor.requires_attended_authority
+        and descriptor.requires_runtime_path
+        and descriptor.requires_cutover_gate
+    ):
+        raise RuntimeError(
+            "restricted execution plugin policy mismatch: Nautilus paper authority "
+            "requires attended approval, isolated runtime, and cutover gate"
+        )
