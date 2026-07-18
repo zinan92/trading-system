@@ -175,13 +175,19 @@ Official Nautilus execution clients can satisfy this port in a future
 milestone. A5 does not switch live authority or bypass the existing seven-cycle
 cutover and reconciliation gates.
 
-## Known A6 debt
+## A6 diagnostic closure
 
-`MultiStrategyRunner._execution_profile_for` and
-`_demo_reconciliation_block_reason` still contain provider-specific labels for
-diagnostic presentation. They do not select or execute orders. A6 will replace
-them with the stable `TradingSystemReadModel`; A5 neutrality tests deliberately
-target mutation functions rather than those read-only diagnostics.
+`MultiStrategyRunner._execution_profile_for`, reconciliation diagnostics, and
+GridMind presentation now consume provider-neutral broker/read-model
+projections. They contain no Binance/Tiger selection branch, do not invoke
+venue preflight from a query, and expose only local descriptor/config facts.
+
+The remaining Broker Port debt is physical rather than directional: the large
+`LiveBrokerAdapter` compatibility class still contains multiple venue wire
+implementations. New application code composes through `BrokerPluginRegistry`;
+future work can move one venue at a time into isolated adapter packages without
+changing normalized intent, risk, accounting, reconciliation, or Dashboard
+contracts.
 
 ## Reference architecture
 
