@@ -146,9 +146,9 @@ plug-compatible while plan safety remains invariant across plugins.
 - Isolation/composition: Local signal evidence, remote signal evidence,
   synthetic context, event-driven historical ranking, and Nautilus Strategy
   Shadow are five explicit adapters in one kind-aware frozen registry. Daily,
-  the historical leaderboard, and Strategy Shadow import no concrete backtest
-  engine and reject unknown, empty, wrong-kind, late-mutated, or invalid plugin
-  selections before output.
+  the historical leaderboard, the parameter experiment queue, and Strategy
+  Shadow import no concrete backtest engine and reject unknown, empty,
+  wrong-kind, late-mutated, or invalid plugin selections before output.
 - Cutover: production Daily explicitly selects `local_signal`; it no longer
   reads `local_backtest_enabled` or routes backtest failure through
   `analysis_fallback_to_mock`. Empty history remains transparent `thin` evidence
@@ -156,7 +156,9 @@ plug-compatible while plan safety remains invariant across plugins.
   available only by the explicit `synthetic_signal_context` name, always marked
   degraded and promotion-ineligible. Historical ranking and Strategy Shadow
   preserve their existing simulation/replay behavior apart from additive,
-  content-bound plugin audit fields.
+  content-bound plugin audit fields. The paper-only parameter experiment queue
+  now sends each variant's exact stop/target/hold/verdict config through the
+  same signal port instead of constructing `LocalBacktester` directly.
 - Safety/proof: core normalization rejects identity mismatch, unknown verdicts,
   negative/non-finite metrics, invalid result shapes, and plugin attempts to
   overwrite provenance or report identity. Strategy Shadow still requires

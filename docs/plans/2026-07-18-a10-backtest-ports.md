@@ -1,6 +1,6 @@
 # A10 Backtest Ports Plan
 
-**Status:** In progress on 2026-07-18.
+**Status:** Complete on 2026-07-18.
 
 **Goal:** Make every backtest use case explicitly replaceable and provenance-
 bound without pretending that signal context, strategy ranking, and exchange
@@ -22,8 +22,9 @@ Daily, the strategy leaderboard pipeline, or Strategy Shadow orchestration.
 ## Observable success criteria
 
 1. `pipelines/daily.py`, `pipelines/backtest_strategies.py`, and
-   `pipelines/strategy_shadow_replay.py` select no concrete backtest engine.
-   They consume three narrow runtime-checked ports from one frozen registry.
+   `pipelines/strategy_shadow_replay.py`, plus the paper-only parameter
+   experiment queue, select no concrete backtest engine. They consume three
+   narrow runtime-checked ports from one frozen registry.
 2. Signal evaluation uses a versioned, immutable, content-hashed request and a
    normalized `BacktestEvidence` carrying engine, evidence tier, input identity,
    degradation, and promotion-eligibility metadata.
@@ -49,8 +50,8 @@ never fabricates historical evidence because a remote service is down.
 
 **Success criteria:**
 
-- Immutable `signal-backtest-request-v1` binds signal, analysis, bars, run
-  context, and input hash.
+- Immutable `signal-backtest-request-v1` binds signal, analysis, bars, exact
+  backtest config, run context, and input hash.
 - Local, remote, and synthetic-context adapters implement the same narrow port.
 - Core normalization rejects identity mismatch, negative/non-finite metrics,
   unknown verdicts, and adapter-forged provenance.
@@ -162,6 +163,9 @@ References:
   those gates.
 - A10 adds no visible product surface unless backtest provenance is exposed in
   the Dashboard. If that scope changes, visual Evidence becomes mandatory.
+- The parameter experiment queue was a fourth caller of the signal-evidence use
+  case, not a fourth semantic. Each variant now sends its exact config through
+  `SignalBacktestPort` rather than constructing `LocalBacktester` directly.
 
 ## Baseline
 
@@ -178,3 +182,21 @@ implementations through the frozen registry, evidence tier and input identity
 are explicit, production Daily cannot enter mock fallback, and current Local,
 ranking, and Nautilus behavior remains verified. A generic registry around the
 unchanged `BacktestClient` branch does not count.
+
+## Completion evidence
+
+- Production config explicitly selects `local_signal`,
+  `event_driven_strategy`, and `nautilus_strategy_shadow`; synthetic context is
+  not selected.
+- Daily empty-history, custom historical plugin, custom Strategy Shadow,
+  wrong-kind/unknown/invalid plugins, reserved-field injection, variant-config
+  parity, infinite profit factor, and Shadow safety-field defenses pass.
+- Final repository regression: `1788 passed, 7 skipped in 435.68s`.
+- Changed-file Ruff, JSON config validation, architecture fitness, and diff
+  checks are clean.
+- Verified Opus review: `claude-opus-4-8`, session
+  `7fa956ce-3649-4397-9339-b2eac5a22e6d`, receipt
+  `20260718T035024Z_9dfbdc05-b3c7-4dc1-b349-8833b83ef345.json`; `SHIP`, no
+  P0-P2. Its three P3 defense suggestions were covered, and its remaining direct
+  Local caller was migrated into the signal port.
+- A10 has no visible product surface. Visual Evidence is not applicable.
