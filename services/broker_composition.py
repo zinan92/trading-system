@@ -478,11 +478,17 @@ def build_configured_live_broker_execution_port(
     opener: Any = None,
     registry: BrokerPluginRegistry | None = None,
 ) -> BrokerExecutionPort:
-    """Compatibility-preserving composition for the configured live path.
+    """Compatibility-preserving composition for the production control path.
 
-    The historical configured path selects Tiger paper explicitly but keeps a
-    Binance config labelled demo/testnet on the activation-gated base adapter.
-    Dedicated demo/testnet runners use ``BrokerBuildContext`` directly.
+    This is deliberately *not* the Binance demo/testnet composition root.  A
+    historical config may retain either label while its dedicated non-mainnet
+    runner is disabled; this path still selects the venue base adapter and
+    retains the ``real_money_ready`` activation gate.  Call
+    :func:`build_demo_broker_execution_port` or pass an explicit
+    :class:`BrokerBuildContext` to start demo/testnet execution.  Never use a
+    stored environment label as authority to bypass production activation.
+
+    Tiger paper remains the sole explicit compatibility exception.
     """
 
     provider = str(broker_config.get("provider") or "").strip().lower()

@@ -4,6 +4,8 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
 from services.binance_demo_broker_adapter import BinanceDemoBrokerAdapter
 from services.binance_usdm_broker_adapter import BinanceUsdmBrokerAdapter
 from services.binance_usdm_testnet_broker_adapter import (
@@ -119,7 +121,7 @@ def test_all_binance_variants_share_only_the_venue_owned_base():
     assert BinanceUsdmTestnetBrokerAdapter.__bases__ == (
         BinanceUsdmBrokerAdapter,
     )
-    assert LiveBrokerAdapter.__bases__ == (BinanceUsdmBrokerAdapter,)
+    assert LiveBrokerAdapter.__bases__ == (object,)
 
 
 def test_binance_adapter_has_no_cross_venue_or_facade_dependency():
@@ -147,7 +149,7 @@ def test_binance_adapter_has_no_cross_venue_or_facade_dependency():
     assert all(value not in source for value in forbidden_text)
 
 
-def test_legacy_facade_contains_no_binance_lifecycle_implementation():
+def test_legacy_facade_contains_only_thin_binance_compatibility_delegates():
     source = (
         Path(__file__).parents[1] / "services" / "broker_adapter.py"
     ).read_text(encoding="utf-8")
@@ -166,13 +168,15 @@ def test_legacy_facade_contains_no_binance_lifecycle_implementation():
         "_live_reconciliation_check",
         "_live_money_guardrails_for_order",
         "_recover_binance_entry",
-        "recover_missing_protective_orders",
         "_post_binance_order",
-        "cancel_binance_order",
-        "cancel_order",
-        "recover_protective_orders",
         "_binance_order_payloads",
         "_binance_protective_payloads",
+    }
+    compatibility_delegates = {
+        "cancel_binance_order",
+        "cancel_order",
+        "recover_missing_protective_orders",
+        "recover_protective_orders",
     }
     forbidden_text = (
         "OrderLifecycleStore",
@@ -183,6 +187,7 @@ def test_legacy_facade_contains_no_binance_lifecycle_implementation():
     )
 
     assert method_names.isdisjoint(forbidden_methods)
+    assert compatibility_delegates <= method_names
     assert all(value not in source for value in forbidden_text)
 
 
@@ -246,3 +251,43 @@ def test_legacy_facade_preserves_binance_dry_run_parity(tmp_path: Path):
     )[0]
     assert direct_record["request"] == facade_record["request"]
     assert direct_record["receipt"] == facade_record["receipt"]
+
+
+def test_legacy_facade_preserves_binance_real_money_activation_gate_parity(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
+    seen: list[str] = []
+
+    def opener(request, timeout):
+        seen.append(request.get_method())
+        return _opener(request, timeout)
+
+    config = {**_config(), "dry_run": False}
+    adapters = (
+        BinanceUsdmBrokerAdapter(
+            tmp_path / "direct",
+            True,
+            dict(config),
+            opener=opener,
+        ),
+        LiveBrokerAdapter(
+            tmp_path / "facade",
+            True,
+            dict(config),
+            opener=opener,
+        ),
+    )
+    messages = []
+    for adapter in adapters:
+        with pytest.raises(
+            RuntimeError,
+            match="live activation gate is not real_money_ready",
+        ) as exc_info:
+            adapter.submit_order(_request())
+        messages.append(str(exc_info.value))
+
+    assert messages[0] == messages[1]
+    assert seen == ["GET", "GET"]

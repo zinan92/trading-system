@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 from schemas.market_data import PaperOrder
 from services.binance_usdm_broker_adapter import BinanceUsdmBrokerAdapter
 from services.broker_port import (
+    BrokerCancelRequest,
+    BrokerCapability,
     BrokerExecutionPort,
     BrokerOrderRequest,
     BrokerPortDescriptor,
+    BrokerProtectiveRecoveryRequest,
     broker_port_descriptor,
     execution_capabilities_for,
+    require_broker_capability,
 )
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
@@ -69,7 +75,7 @@ class PaperBrokerAdapter:
         )
 
 
-class LiveBrokerAdapter(BinanceUsdmBrokerAdapter):
+class LiveBrokerAdapter:
     """Legacy multi-provider facade retained for direct-call compatibility."""
 
     name = "live"
@@ -81,26 +87,34 @@ class LiveBrokerAdapter(BinanceUsdmBrokerAdapter):
         broker_config: dict | None = None,
         opener=None,
     ) -> None:
-        super().__init__(
-            output_root,
-            live_trading_enabled,
-            broker_config,
-            opener=opener,
-        )
+        self.output_root = output_root
+        self.live_trading_enabled = live_trading_enabled
+        self.broker_config = broker_config or {}
         self.provider = str(
             self.broker_config.get("provider", "manual_gateway")
         )
+        self.dry_run = bool(self.broker_config.get("dry_run", True))
+        self.opener = opener or urllib.request.urlopen
         self._capabilities = execution_capabilities_for(
             provider=self.provider,
             adapter_name=self.name,
         )
+        self._binance_adapter_instance = None
         self._oanda_adapter_instance = None
         self._mt5_adapter_instance = None
         self._tiger_adapter_instance = None
 
+    @property
+    def capabilities(self):
+        return self._capabilities
+
+    @property
+    def descriptor(self) -> BrokerPortDescriptor:
+        return broker_port_descriptor(self)
+
     def submit_order(self, request: BrokerOrderRequest) -> PaperOrder:
         if self.provider == "binance_usdm":
-            return super().submit_order(request)
+            return self._binance_adapter().submit_order(request)
         if not self.live_trading_enabled:
             raise RuntimeError(
                 "live trading is disabled; set live_trading_enabled only "
@@ -142,7 +156,7 @@ class LiveBrokerAdapter(BinanceUsdmBrokerAdapter):
         if self.provider == "oanda_rest":
             return self._oanda_preflight()
         if self.provider == "binance_usdm":
-            return super().preflight()
+            return self._binance_adapter().preflight()
         if self.provider == "tiger_openapi":
             return self._tiger_preflight()
         env = apply_live_env()
@@ -188,6 +202,56 @@ class LiveBrokerAdapter(BinanceUsdmBrokerAdapter):
             .replace(microsecond=0)
             .isoformat(),
         }
+
+    def cancel_binance_order(
+        self,
+        symbol: str,
+        *,
+        orig_client_order_id: str = "",
+        order_id: str = "",
+    ) -> dict:
+        require_broker_capability(self, BrokerCapability.CANCEL_ORDER)
+        return self._binance_adapter().cancel_binance_order(
+            symbol,
+            orig_client_order_id=orig_client_order_id,
+            order_id=order_id,
+        )
+
+    def cancel_order(self, request: BrokerCancelRequest) -> dict:
+        require_broker_capability(self, BrokerCapability.CANCEL_ORDER)
+        return self.cancel_binance_order(
+            self._binance_adapter()._binance_symbol(request.asset),
+            orig_client_order_id=request.client_order_id,
+            order_id=request.broker_order_id,
+        )
+
+    def recover_missing_protective_orders(
+        self,
+        run_date: str,
+        lifecycle_record: dict,
+        exchange_position: dict | None = None,
+        *,
+        source: str = "order_recovery",
+    ) -> dict:
+        require_broker_capability(self, BrokerCapability.PROTECTIVE_RECOVERY)
+        return self._binance_adapter().recover_missing_protective_orders(
+            run_date,
+            lifecycle_record,
+            exchange_position,
+            source=source,
+        )
+
+    def recover_protective_orders(
+        self,
+        request: BrokerProtectiveRecoveryRequest,
+    ) -> dict:
+        require_broker_capability(self, BrokerCapability.PROTECTIVE_RECOVERY)
+        return self.recover_missing_protective_orders(
+            request.run_date,
+            request.lifecycle_record,
+            request.exchange_position,
+            source=request.source,
+        )
 
     def _record_dry_run_request(
         self,
@@ -340,6 +404,67 @@ class LiveBrokerAdapter(BinanceUsdmBrokerAdapter):
         inbox_dir: Path,
     ) -> dict:
         return self._mt5_adapter()._ensure_bridge_docs(outbox_dir, inbox_dir)
+
+    def _entry_midpoint(self, entry_zone: str) -> float:
+        low, high = [float(part) for part in entry_zone.split("-", 1)]
+        return (low + high) / 2
+
+    def _quantity(self, ticket: dict, price: float) -> float:
+        account_equity = float(
+            self.broker_config.get("dry_run_account_equity", 100_000)
+        )
+        notional = account_equity * (
+            float(ticket.get("position_size_pct", 0)) / 100
+        )
+        return notional / price if price else 0.0
+
+    def _order_id(
+        self,
+        ticket_id: str,
+        run_date: str,
+        requested_price: float,
+    ) -> str:
+        del requested_price
+        raw = f"{ticket_id}:{run_date}:{self.provider}:entry".encode("utf-8")
+        return f"live_dryrun_{hashlib.sha256(raw).hexdigest()[:10]}"
+
+    def _live_activation(self, run_date: str) -> dict:
+        rows = load_json(
+            self.output_root / "live_activation" / f"{run_date}.json"
+        )
+        if not rows:
+            rows = load_json(
+                self.output_root / "live_activation" / "current.json"
+            )
+        return rows[-1] if rows else {}
+
+    def _binance_adapter(self) -> BinanceUsdmBrokerAdapter:
+        adapter = self._binance_adapter_instance
+        if (
+            adapter is None
+            or adapter.broker_config is not self.broker_config
+            or adapter.opener is not self.opener
+            or adapter.live_trading_enabled != self.live_trading_enabled
+            or adapter.dry_run != self.dry_run
+        ):
+            adapter = BinanceUsdmBrokerAdapter(
+                self.output_root,
+                self.live_trading_enabled,
+                self.broker_config,
+                opener=self.opener,
+            )
+            self._binance_adapter_instance = adapter
+        for name, value in self.__dict__.items():
+            if callable(value) and hasattr(BinanceUsdmBrokerAdapter, name):
+                setattr(adapter, name, value)
+        return adapter
+
+    def __getattr__(self, name: str):
+        if hasattr(BinanceUsdmBrokerAdapter, name):
+            return getattr(self._binance_adapter(), name)
+        raise AttributeError(
+            f"{type(self).__name__!s} object has no attribute {name!r}"
+        )
 
     def _oanda_adapter(self):
         adapter = self._oanda_adapter_instance
