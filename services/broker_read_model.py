@@ -51,7 +51,10 @@ def project_broker_read_model(
     environment = str(descriptor_dict.get("environment") or "")
     instrument_map = config.get("instrument_map") if isinstance(config.get("instrument_map"), Mapping) else {}
     symbol = instrument_map.get(asset) if asset else None
-    armed = bool(ready is True and not dry_run and live_enabled and credentials_present)
+    # ``armed`` is deliberately a local configuration fact.  Remote venue
+    # readiness belongs to the command-side preflight immediately before an
+    # order; a read model must never turn an operator query into network I/O.
+    armed = bool(not dry_run and live_enabled and credentials_present)
     return {
         "schema_version": BROKER_READ_MODEL_SCHEMA,
         "adapter": str(descriptor_dict.get("adapter_name") or adapter.__class__.__name__),

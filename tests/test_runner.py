@@ -29,7 +29,7 @@ def test_runner_once_writes_status(tmp_path: Path, monkeypatch):
 
     status = run_runner_once("2026-07-02", paper_auto_approve=False, interval_seconds=60)
 
-    assert status["state"] == "ok"
+    assert status["state"] == "ok", status
     assert status["collector_count"] == 5
     assert status["oanda_feed_status"] == "skipped"
     assert status["oanda_feed_imported_rows"] == 0

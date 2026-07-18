@@ -359,6 +359,11 @@ def test_demo_execution_profile_surfaces_armed_state_without_secrets(tmp_path: P
     _enable_binance_demo(monkeypatch)
     monkeypatch.setenv("BINANCE_API_KEY", "demo-key")
     monkeypatch.setenv("BINANCE_API_SECRET", "demo-secret")
+
+    def fail_remote_preflight(*_args, **_kwargs):
+        raise AssertionError("read model must not preflight the venue")
+
+    monkeypatch.setattr("services.binance_demo_broker_adapter.BinanceDemoBrokerAdapter.preflight", fail_remote_preflight)
     runner = MultiStrategyRunner(output_root=tmp_path / "out", registry=StrategyRegistry(_DIVERGENT))
 
     active = runner._execution_profile_for(Strategy("gold_1m_macd", "GOLD", {"signal": {}}, live=False))

@@ -124,17 +124,8 @@ class MultiStrategyRunner:
             if demo.get("enabled") is True and str(demo.get("active_strategy_id") or "") == strategy.strategy_id:
                 selection_status = "configured_profile_unresolved"
             adapter = PaperBrokerAdapter(scoped)
-        try:
-            readiness = adapter.preflight()
-        except Exception as exc:  # noqa: BLE001 - diagnostics fail closed without breaking the runner.
-            readiness = {
-                "ready": False,
-                "status": "preflight_unavailable",
-                "block_reason": f"broker preflight unavailable: {type(exc).__name__}",
-            }
         profile = project_broker_read_model(
             adapter,
-            readiness=readiness,
             strategy_id=strategy.strategy_id,
             profile=str(getattr(adapter, "broker_config", {}).get("profile") or ""),
             asset=str(getattr(strategy, "symbol", "") or ""),
@@ -142,7 +133,7 @@ class MultiStrategyRunner:
         return {
             **profile,
             "selection_status": selection_status,
-            "note": "Execution diagnostics are projected from the selected Broker Port descriptor and local preflight.",
+            "note": "Execution diagnostics are projected from local Broker Port configuration; venue preflight remains command-side.",
         }
 
     def _demo_reconciliation_for(self, strategy, scoped: Path, run_date: str) -> dict | None:
