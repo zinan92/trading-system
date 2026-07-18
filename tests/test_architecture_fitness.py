@@ -61,6 +61,8 @@ FORBIDDEN_KERNEL_IMPORTS = (
     "websocket",
     "services.binance_",
     "services.tiger_",
+    "services.accounting_binance_adapter",
+    "services.accounting_tiger_adapter",
     "services.oanda_",
     "services.mt5_",
     "services.ib_",
@@ -166,6 +168,11 @@ def test_contract_kernels_do_not_import_concrete_adapters_or_network_clients() -
             if any(module == prefix or module.startswith(prefix) for prefix in FORBIDDEN_KERNEL_IMPORTS):
                 violations.append(f"{relative} imports {module}")
     assert violations == []
+
+
+def test_concrete_accounting_adapters_remain_forbidden_kernel_dependencies() -> None:
+    assert "services.accounting_binance_adapter" in FORBIDDEN_KERNEL_IMPORTS
+    assert "services.accounting_tiger_adapter" in FORBIDDEN_KERNEL_IMPORTS
 
 
 def test_existing_inline_provider_branches_are_frozen_to_named_extraction_debt() -> None:
