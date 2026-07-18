@@ -23,7 +23,8 @@ from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
 from services.order_lifecycle import IllegalOrderTransition, OrderLifecycleStore
 from services.paper_executor import PaperExecutor
-from services.risk_port import LiveMoneyRiskDecisionAdapter, canonical_live_risk_allows_exposure
+from services.risk_policy_composition import build_live_money_risk_adapter
+from services.risk_port import canonical_live_risk_allows_exposure
 
 class BinanceUsdmBrokerAdapter:
     """Binance USD-M execution, lifecycle, and protection adapter."""
@@ -451,7 +452,7 @@ class BinanceUsdmBrokerAdapter:
         mode = str(readiness.get("mode") or self.broker_config.get("environment") or "live").lower()
         if self.provider != "binance_usdm" or mode not in {"live", "testnet"}:
             return {}
-        return LiveMoneyRiskDecisionAdapter(self.output_root, broker_config=self.broker_config).evaluate_order(
+        return build_live_money_risk_adapter(self.output_root, broker_config=self.broker_config).evaluate_order(
             request.run_date,
             ticket=request.ticket,
             symbol=symbol,

@@ -37,8 +37,6 @@ from services.dualtrack_scoring import (
 from services.dualtrack_store import DualTrackPlanStore
 from services.strategy_control_plane import StrategyControlPlane, production_mutation_lock
 from services.risk_port import (
-    PaperGridRiskDecisionPort,
-    RiskDecisionStore,
     assert_matching_risk_decision,
     build_manual_order_risk_request,
     normalize_manual_order_command,
@@ -1172,7 +1170,7 @@ def _build_dualtrack_order_post_response_locked(
     if production_plan:
         command["strategy_plan_id"] = production_plan["strategy_plan_id"]
         command["strategy_plan_version"] = production_plan["version"]
-    cfg = dualtrack_config()
+    cfg = plane.config
     if enforce_risk:
         command = normalize_manual_order_command(command, config=cfg)
     adapter = build_configured_execution_engine_adapter(root)
@@ -1203,12 +1201,14 @@ def _build_dualtrack_order_post_response_locked(
                 execution_snapshot=adapter.snapshot(cycle_id),
                 execution_reconciliation=adapter.reconcile(cycle_id),
                 config=cfg,
+                policy=plane.risk_port.resolve_policy(cfg),
+                evaluator=plane.risk_port.evaluator_metadata(),
             )
 
-        risk_port = PaperGridRiskDecisionPort()
+        risk_port = plane.risk_port
         initial_request = risk_request()
         initial_decision = risk_port.evaluate(initial_request)
-        RiskDecisionStore(root).persist(initial_decision)
+        plane.risk_store.persist(initial_decision)
         require_risk_permission(initial_decision)
         risk_decision_payload = assert_matching_risk_decision(
             risk_port,

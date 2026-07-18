@@ -24,6 +24,9 @@
     "real_money_eligible": false,
     "switch_requires_attended_approval": true
   },
+  "risk_policy": {
+    "paper_grid": "paper_grid_risk"
+  },
   "market_session": {
     "enabled": false,
     "venue": "",

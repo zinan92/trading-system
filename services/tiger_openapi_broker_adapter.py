@@ -18,7 +18,8 @@ from services.broker_port import (
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env
 from services.order_lifecycle import OrderLifecycleStore
-from services.risk_port import LiveMoneyRiskDecisionAdapter, canonical_live_risk_allows_exposure
+from services.risk_policy_composition import build_live_money_risk_adapter
+from services.risk_port import canonical_live_risk_allows_exposure
 from services.tiger_contracts import TigerContractResolver
 from services.tiger_openapi_account_sync import TigerOpenApiAccountSync
 
@@ -589,7 +590,7 @@ class TigerOpenApiPaperBrokerAdapter:
         quantity = self._tiger_contract_quantity(float(request.actual_size or self._quantity(ticket, requested_price)))
         side = "BUY" if self._is_buy_action(str(ticket.get("action", ""))) else "SELL"
         if not bool(self.broker_config.get("require_live_money_guardrails_before_entry", True)):
-            return LiveMoneyRiskDecisionAdapter(self.output_root, broker_config=self.broker_config).record_legacy_result(
+            return build_live_money_risk_adapter(self.output_root, broker_config=self.broker_config).record_legacy_result(
                 request.run_date,
                 ticket={**ticket, "asset": execution_symbol},
                 symbol=execution_symbol,
@@ -605,7 +606,7 @@ class TigerOpenApiPaperBrokerAdapter:
                     "blockers": [],
                 },
             )
-        return LiveMoneyRiskDecisionAdapter(self.output_root, broker_config=self.broker_config).evaluate_order(
+        return build_live_money_risk_adapter(self.output_root, broker_config=self.broker_config).evaluate_order(
             request.run_date,
             ticket={**ticket, "asset": execution_symbol},
             symbol=execution_symbol,

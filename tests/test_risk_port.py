@@ -5,10 +5,14 @@ import pytest
 
 from schemas.accounting import build_accounting_snapshot
 from services.journal_store import load_json
-from services.risk_port import (
-    LiveMoneyRiskDecisionAdapter,
+from services.risk_decision_store import FileRiskDecisionStore as RiskDecisionStore
+from services.risk_live_money_adapter import LiveMoneyRiskDecisionAdapter
+from services.risk_policy_paper import (
     PaperGridRiskDecisionPort,
-    RiskDecisionStore,
+    grid_risk_evaluator,
+    grid_risk_policy,
+)
+from services.risk_port import (
     action_class_for_command,
     assert_matching_risk_decision,
     build_grid_risk_request,
@@ -208,6 +212,7 @@ def request(
     replaced_order_ids: list[str] | None = None,
     config_value: dict | None = None,
 ):
+    resolved_config = config_value or config()
     return build_grid_risk_request(
         checked_at=CHECKED_AT,
         action_class=action_class,
@@ -218,7 +223,8 @@ def request(
         market=market_value or market(),
         execution_snapshot=snapshot or execution_snapshot(),
         execution_reconciliation=recon or reconciliation(),
-        config=config_value or config(),
+        policy=grid_risk_policy(resolved_config),
+        evaluator=grid_risk_evaluator(),
         replaced_order_ids=replaced_order_ids,
     )
 
@@ -254,6 +260,8 @@ def manual_request(
         execution_snapshot=snapshot or execution_snapshot(),
         execution_reconciliation=reconciliation(),
         config=config(),
+        policy=grid_risk_policy(config()),
+        evaluator=grid_risk_evaluator(),
     )
 
 
@@ -545,6 +553,8 @@ def test_manual_reduce_only_requires_position_identity_but_not_entry_risk_inputs
         execution_snapshot={},
         execution_reconciliation={},
         config=config(),
+        policy=grid_risk_policy(config()),
+        evaluator=grid_risk_evaluator(),
     ))
     missing_identity = PaperGridRiskDecisionPort().evaluate(build_manual_order_risk_request(
         checked_at=CHECKED_AT,
@@ -554,6 +564,8 @@ def test_manual_reduce_only_requires_position_identity_but_not_entry_risk_inputs
         execution_snapshot={},
         execution_reconciliation={},
         config=config(),
+        policy=grid_risk_policy(config()),
+        evaluator=grid_risk_evaluator(),
     ))
 
     assert allowed.allow_reduce_only is True
