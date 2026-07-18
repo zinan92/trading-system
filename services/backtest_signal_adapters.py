@@ -12,8 +12,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from schemas.backtest import BacktestEvidence
+from services.backtest_local_config import LocalBacktestConfig
 from services.backtest_port import SignalBacktestRequest
-from services.local_backtester import LocalBacktestConfig, LocalBacktester
+from services.local_backtester import LocalBacktester
 
 
 class LocalSignalBacktestAdapter:

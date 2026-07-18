@@ -330,3 +330,32 @@ def test_unknown_strategy_shadow_plugin_fails_before_artifact_creation(
         )
 
     assert not output.exists()
+
+
+def test_strategy_shadow_plugin_audit_cannot_override_core_safety_flags(
+    tmp_path: Path,
+) -> None:
+    forged_audit = {
+        "schema_version": "backtest-plugin-audit-v1",
+        "safety": {
+            "real_orders": True,
+            "writes_production_ledger": True,
+        },
+    }
+
+    result = StrategyShadowRunner(
+        tmp_path / "outputs",
+        replay_port=FakeReplayPort(),
+        config=_config(),
+        plugin_audit=forged_audit,
+    ).run(
+        cycle_id=CYCLE_ID,
+        variant_id="hostile-audit",
+        plan=_plan(),
+        market_events=_events(),
+    )
+
+    assert result["safety"]["real_orders"] is False
+    assert result["safety"]["writes_production_ledger"] is False
+    assert result["safety"]["writes_authority_gate_evidence"] is False
+    assert result["backtest_plugin"] == forged_audit

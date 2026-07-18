@@ -69,6 +69,8 @@ class SignalBacktestService:
             evidence_tier=descriptor.evidence_tier,
             input_hash=request.input_hash,
             registry_fingerprint=self.runtime.registry_fingerprint,
+            # Evidence-source eligibility only. Verdict, sample, regime, and
+            # promotion policy remain independent downstream gates.
             promotion_eligible=bool(
                 descriptor.promotion_evidence_capable
                 and not degraded

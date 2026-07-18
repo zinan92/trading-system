@@ -8,6 +8,7 @@ from schemas.analysis import Analysis
 from schemas.backtest import BACKTEST_EVIDENCE_SCHEMA, BacktestEvidence
 from schemas.market_data import Bar
 from schemas.signal import Signal
+from services.backtest_local_config import LocalBacktestConfig
 from services.backtest_plugin_composition import (
     build_backtest_plugin_registry,
     compose_historical_strategy_backtest,
@@ -30,6 +31,7 @@ from services.backtest_service import (
     HistoricalStrategyBacktestService,
     SignalBacktestService,
 )
+from services.local_backtester import LocalBacktester
 
 
 def _signal() -> Signal:
@@ -296,6 +298,47 @@ def test_local_empty_history_stays_thin_and_never_falls_through_to_synthetic() -
     assert evidence.degraded is False
 
 
+def test_local_adapter_preserves_variant_config_and_simulation_metrics() -> None:
+    config = LocalBacktestConfig(
+        stop_pct=0.004,
+        target_pct=0.009,
+        max_hold_bars=12,
+        min_sample_size=5,
+        supportive_min_win_rate=0.51,
+        supportive_min_avg_r=-0.01,
+        supportive_min_profit_factor=1.05,
+        supportive_max_drawdown_pct=6.0,
+        mixed_min_profit_factor=0.95,
+        mixed_min_avg_r=-0.1,
+    )
+    assert LocalBacktestConfig.from_strategy_config(config.to_strategy_config()) == config
+    bars = [_bar(index) for index in range(30)]
+    expected = LocalBacktester(config).evaluate(_signal(), _analysis(), bars)
+    request = SignalBacktestRequest.from_domain(
+        _signal(),
+        _analysis(),
+        bars,
+        backtest_config=config.to_strategy_config(),
+    )
+    actual = SignalBacktestService(
+        compose_signal_backtest({"backtest_plugins": {"signal": "local_signal"}})
+    ).evaluate(request)
+
+    for field in (
+        "backtest_id",
+        "sample_size",
+        "win_rate",
+        "avg_r",
+        "max_drawdown_pct",
+        "verdict",
+        "profit_factor",
+        "evaluated_bars",
+        "setup_count",
+        "skipped_reason",
+    ):
+        assert getattr(actual, field) == getattr(expected, field)
+
+
 def test_explicit_synthetic_plugin_is_always_degraded_and_promotion_ineligible() -> None:
     runtime = compose_signal_backtest(
         {"backtest_plugins": {"signal": "synthetic_signal_context"}}
@@ -308,6 +351,32 @@ def test_explicit_synthetic_plugin_is_always_degraded_and_promotion_ineligible()
     assert evidence.degraded is True
     assert evidence.promotion_eligible is False
     assert evidence.skipped_reason == "synthetic_context_not_historical_evidence"
+
+
+def test_degraded_by_design_overrides_capable_high_sample_plugin() -> None:
+    class CapableButDegradedPort:
+        def evaluate(self, _request):
+            return _valid_evidence(sample_size=100, verdict="supportive")
+
+    registry = BacktestPluginRegistry()
+    registry.register(
+        "capable_but_degraded",
+        lambda _context: CapableButDegradedPort(),
+        kind=SIGNAL_EVIDENCE_KIND,
+        evidence_tier="degraded_research",
+        promotion_evidence_capable=True,
+        degraded_by_design=True,
+    )
+    runtime = compose_signal_backtest(
+        {"backtest_plugins": {"signal": "capable_but_degraded"}},
+        registry=registry,
+    )
+
+    evidence = SignalBacktestService(runtime).evaluate(_request())
+
+    assert evidence.sample_size == 100
+    assert evidence.degraded is True
+    assert evidence.promotion_eligible is False
 
 
 def test_historical_service_rejects_invalid_plugin_result_before_callers_write() -> None:
@@ -336,3 +405,32 @@ def test_historical_service_rejects_invalid_plugin_result_before_callers_write()
 
     with pytest.raises(ValueError, match="missing metrics"):
         HistoricalStrategyBacktestService(runtime).run(request)
+
+
+def test_historical_service_preserves_infinite_profit_factor_for_zero_loss_runs() -> None:
+    class ZeroLossHistoricalPort:
+        def run(self, _request):
+            return {**_historical_metrics(), "profit_factor": float("inf")}
+
+    registry = BacktestPluginRegistry()
+    registry.register(
+        "zero_loss",
+        lambda _context: ZeroLossHistoricalPort(),
+        kind=HISTORICAL_STRATEGY_KIND,
+        evidence_tier="test",
+    )
+    runtime = compose_historical_strategy_backtest(
+        {"backtest_plugins": {"historical_strategy": "zero_loss"}},
+        registry=registry,
+    )
+    request = HistoricalStrategyBacktestRequest(
+        strategy={"strategy_id": "test"},
+        bars=(_bar().to_dict(),),
+        signals=({"index": 0, "direction": "long"},),
+        backtest_config={},
+        cost_rules={},
+    )
+
+    result = HistoricalStrategyBacktestService(runtime).run(request)
+
+    assert result["profit_factor"] == float("inf")

@@ -361,6 +361,7 @@ def test_backtest_selection_stays_in_one_explicit_composition_root() -> None:
         ROOT / "pipelines" / "daily.py",
         ROOT / "pipelines" / "backtest_strategies.py",
         ROOT / "pipelines" / "strategy_shadow_replay.py",
+        ROOT / "services" / "strategy_experiment_queue.py",
     )
     concrete_modules = {
         "services.backtest_client",

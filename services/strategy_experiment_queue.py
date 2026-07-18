@@ -8,16 +8,31 @@ from pathlib import Path
 from schemas.analysis import Analysis
 from schemas.market_data import Bar
 from schemas.signal import Signal
+from services.backtest_local_config import LocalBacktestConfig
+from services.backtest_plugin_composition import compose_signal_backtest
+from services.backtest_plugin_registry import BacktestPluginRegistry
+from services.backtest_port import SignalBacktestRequest
+from services.backtest_service import SignalBacktestService
 from services.config_loader import ROOT, load_pipeline_config, load_strategy_config
 from services.journal_store import load_json, write_json
-from services.local_backtester import LocalBacktestConfig, LocalBacktester
 
 
 class StrategyExperimentQueue:
-    def __init__(self, output_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        output_root: Path | None = None,
+        *,
+        backtest_plugin_registry: BacktestPluginRegistry | None = None,
+    ) -> None:
         config = load_pipeline_config()
         self.config = config
         self.output_root = output_root or ROOT / config.get("output_root", "outputs")
+        self.backtest_service = SignalBacktestService(
+            compose_signal_backtest(
+                config,
+                registry=backtest_plugin_registry,
+            )
+        )
 
     def build(self, run_date: str) -> dict:
         strategy_config = load_strategy_config()
@@ -61,6 +76,7 @@ class StrategyExperimentQueue:
             "signal_id": signal.signal_id,
             "signal_direction": signal.direction,
             "signal_regime": signal.regime,
+            "backtest_plugin": self.backtest_service.runtime.audit_dict(),
             "baseline": baseline,
             "experiments": ranked,
             "review_hypotheses": hypotheses,
@@ -88,7 +104,20 @@ class StrategyExperimentQueue:
 
     def _evaluate(self, variant_id: str, config: LocalBacktestConfig, signal: Signal, analysis: Analysis, bars: list[Bar], rationale: str) -> dict:
         variant_signal = replace(signal, signal_id=f"{signal.signal_id}_{variant_id}")
-        evidence = LocalBacktester(config).evaluate(variant_signal, analysis, bars)
+        variant_analysis = replace(analysis, signal_id=variant_signal.signal_id)
+        evidence = self.backtest_service.evaluate(
+            SignalBacktestRequest.from_domain(
+                variant_signal,
+                variant_analysis,
+                bars,
+                backtest_config=config.to_strategy_config(),
+                run_context={
+                    "strategy_experiment": True,
+                    "variant_id": variant_id,
+                    "paper_only": True,
+                },
+            )
+        )
         score = self._score(evidence.to_dict())
         return {
             "experiment_id": self._experiment_id(variant_id, config),
@@ -108,6 +137,11 @@ class StrategyExperimentQueue:
             "max_drawdown_pct": evidence.max_drawdown_pct,
             "evaluated_bars": evidence.evaluated_bars,
             "setup_count": evidence.setup_count,
+            "backtest_plugin": evidence.backtest_plugin,
+            "evidence_tier": evidence.evidence_tier,
+            "input_hash": evidence.input_hash,
+            "promotion_eligible": evidence.promotion_eligible,
+            "degraded": evidence.degraded,
             "score": score,
         }
 
