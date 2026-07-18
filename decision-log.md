@@ -6627,3 +6627,36 @@ auditable datafeed port; broker execution remains a separate port.
 - Architecture progress: `86%`, reproducible from the canonical audit table.
 - No config, strategy parameter, execution authority, credential, order,
   position, account, or production-state mutation occurred.
+
+## 2026-07-18 - A9 Strategy Proposal Port kickoff
+
+### Objective and value
+
+- Make current production grid proposal generation replaceable without letting
+  a new model/provider replace plan validation, persistence, or risk semantics.
+- Enable deterministic and What-if planners to consume the same trusted context
+  and produce the same validated machine-plan contract.
+
+### Decisions
+
+- Keep `DualTrackMachinePlanner` as the trusted lifecycle service. Extract only
+  untrusted proposal generation behind `StrategyProposalPort`.
+- The core owns range-floor policy, validation, degraded fallback, plan writes,
+  revisions, traces, and audit. Plugins receive no broker/order/risk authority.
+- Use an explicit frozen registry; do not auto-load installed Python packages.
+- Preserve `decision_provider` injection by wrapping it in the same newsletter
+  adapter used by the configured production path.
+
+### Gotchas
+
+- A superficial registry around the whole stateful planner would make plugins
+  own persistence and safety. A9 must instead isolate proposal generation.
+- Forced replan failure preserves the existing locked plan; initial failure
+  creates a transparent degraded no-trade plan.
+- The primary worktree remains unrelated and active. A9 is isolated on top of
+  the clean A8 branch and changes no live configuration or state.
+
+### Baseline
+
+- A8 full suite: `1752 passed, 7 skipped`.
+- Planner/DT8 baseline: `58 passed`.
