@@ -7284,3 +7284,73 @@ auditable datafeed port; broker execution remains a separate port.
 
 - A14 repository: `1837 passed, 7 skipped`.
 - Tiger/Binance/Broker/architecture pack: `159 passed in 167.63s`.
+
+## 2026-07-18 - A15 Binance execution adapter extraction complete
+
+### Outcome
+
+- Tiger paper, Binance USD-M, OANDA REST, and MT5 file bridge now have
+  independent concrete `BrokerExecutionPort` adapters. No venue inherits the
+  cross-provider facade or another venue's implementation.
+- `BinanceUsdmBrokerAdapter` owns mainnet/demo/testnet preflight, canonical
+  risk and reconciliation gates, order lifecycle, ambiguous-submit recovery,
+  TP/SL protection, emergency close, cancellation, and protective recovery.
+  Mainnet composition returns it directly; demo/testnet inherit only this
+  venue-owned base.
+- `LiveBrokerAdapter` now uses composition instead of inheritance. It retains
+  manual behavior and thin compatibility delegates only; it contains no
+  Binance endpoint, signing, payload, lifecycle, protection, or recovery body.
+
+### Decisions
+
+- Preserve every order, receipt, journal, config/opener mutation, private
+  monkeypatch, and direct-call compatibility seam while moving ownership.
+  A15 changes dependency direction, not execution semantics or authority.
+- Keep configured live composition separate from explicit demo/testnet
+  composition. A stored non-mainnet environment label cannot authorize a
+  non-dry order: the production base still requires `real_money_ready` before
+  any POST.
+- Freeze capabilities at facade construction. Mutating a provider label later
+  cannot grant Tiger a Binance cancellation or protective-recovery capability.
+
+### Opus adversarial review and hardening
+
+- Verified `claude-opus-4-8`, session
+  `abd8ceef-e3bd-4a07-8f7d-4d2a8e570339`, receipt
+  `20260718T074050Z_7564bd48-7c30-461a-8b1a-5bb2d48c7c2e.json`: verdict
+  `SHIP`, no P0/P1.
+- Closed P2 architecture honesty: `LiveBrokerAdapter` no longer inherits
+  `BinanceUsdmBrokerAdapter`; MRO and AST tests prove true composition and no
+  lifecycle implementation in the facade.
+- Closed P2 configured-path ambiguity with an explicit security contract and
+  demo/testnet-label tests that prove the production activation gate blocks
+  before network POST.
+- Closed P3 proof gaps with both dry-run artifact parity and non-dry activation
+  parity between the concrete adapter and legacy facade.
+
+### Gotchas
+
+- The configured live factory is a production control path, not a shortcut for
+  starting demo/testnet. Dedicated non-mainnet runners must use explicit
+  composition context.
+- Legacy callers monkeypatch private Binance methods on facade instances. The
+  compatibility adapter intentionally mirrors callable overrides into its
+  cached concrete delegate until those callers migrate to public ports.
+- `LiveBrokerAdapter` remains as cleanup debt, but it is now a facade rather
+  than a cross-venue implementation owner. Deleting it is a separate low-risk
+  consumer migration, not unfinished venue isolation.
+- A15 has no visible product surface and deploys no service. Under the Evidence
+  Contract, Visual Evidence is not applicable; tests, commits, docs, diffs, and
+  the Opus receipt are trace material only.
+
+### Verification
+
+- Pre-review full repository: `1849 passed, 7 skipped in 390.89s`.
+- Post-review cross-provider safety pack: `192 passed in 164.04s`.
+- Final repository after all review hardening:
+  `1852 passed, 7 skipped in 386.35s`.
+- Changed-file Ruff and `git diff --check`: clean.
+- Live execution/broker improves from `94/100` to `98/100`; overall architecture
+  progress is now the reproducible rounded `93%` (`648 / 7 = 92.6%`).
+- No strategy parameters, risk thresholds, credentials, live configuration,
+  orders, positions, accounts, or production state were changed.

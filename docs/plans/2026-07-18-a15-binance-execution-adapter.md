@@ -1,6 +1,6 @@
 # A15 Binance Execution Adapter Extraction Plan
 
-**Status:** In progress.
+**Status:** Complete.
 
 **Goal:** Remove the remaining cross-venue inheritance and move Binance USD-M
 order lifecycle, protection, cancellation, recovery, and mainnet authority into
@@ -150,3 +150,30 @@ variants inherit a venue-owned implementation, the mainnet registry constructs
 that implementation directly, and `broker_adapter.py` contains only manual and
 thin compatibility behavior. Moving method names while retaining cross-venue
 inheritance or a second lifecycle implementation does not count.
+
+## Completion evidence
+
+- `TigerOpenApiPaperBrokerAdapter` is standalone and imports no facade.
+- `BinanceUsdmBrokerAdapter` owns the complete shared Binance execution,
+  lifecycle, protection, cancellation, and recovery behavior. Mainnet
+  composition returns it directly; demo and testnet inherit only this
+  venue-owned base.
+- `LiveBrokerAdapter` is composition-only: it inherits from `object`, owns no
+  Binance wire/lifecycle/protection implementation, and preserves legacy seams
+  through thin delegates over the same concrete adapter.
+- The configured production path cannot interpret a stored Binance
+  demo/testnet label as authority: non-dry submission still fails at the
+  production `real_money_ready` gate before any POST.
+- Verified Opus review used `claude-opus-4-8`, session
+  `abd8ceef-e3bd-4a07-8f7d-4d2a8e570339`, receipt
+  `20260718T074050Z_7564bd48-7c30-461a-8b1a-5bb2d48c7c2e.json`: verdict
+  `SHIP`, no P0/P1. All valid P2/P3 findings were closed with true facade
+  composition, authority documentation/tests, and dry/non-dry parity proof.
+- Post-review cross-provider safety pack: `192 passed`. Final full repository:
+  `1852 passed, 7 skipped in 386.35s`. Changed-file Ruff and
+  `git diff --check`: clean.
+- Live execution/broker improves from `94/100` to `98/100`; overall architecture
+  progress is the reproducible rounded `93%` (`648 / 7 = 92.6%`).
+- A15 changes no visible surface and deploys no service. Under the Evidence
+  Contract, Visual Evidence is not applicable; tests, commits, docs, diffs, and
+  the Opus receipt are trace material only.

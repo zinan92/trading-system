@@ -85,7 +85,7 @@ EXPECTED_SCORE_ROWS = {
     "Data cleaning / quality": (25, 25, 20, 15, 85),
     "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (25, 20, 25, 20, 90),
-    "Live execution / broker": (25, 24, 25, 20, 94),
+    "Live execution / broker": (25, 25, 25, 23, 98),
     "Risk / accounting / reconciliation": (25, 20, 25, 25, 95),
     "Dashboard / read model": (25, 25, 20, 25, 95),
 }
@@ -336,8 +336,8 @@ def test_architecture_progress_bar_is_reproducible_from_visible_scores() -> None
     for values in observed.values():
         assert sum(values[:4]) == values[4]
     overall = round(sum(values[4] for values in observed.values()) / len(observed))
-    assert overall == 92
-    assert "**Overall architecture progress: 92%**" in text
+    assert overall == 93
+    assert "**Overall architecture progress: 93%**" in text
 
 
 def test_strategy_selection_stays_in_the_explicit_plugin_composition_root() -> None:

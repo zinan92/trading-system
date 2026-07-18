@@ -2,9 +2,9 @@
 
 ## Executive answer
 
-**Overall architecture progress: 92%**
+**Overall architecture progress: 93%**
 
-`██████████████████▍░ 92%`
+`██████████████████▌░ 93%`
 
 The system now has a real hexagonal spine from trusted market facts through
 StrategyPlan, Risk, Execution, Accounting, Broker, and the Dashboard read model.
@@ -12,11 +12,11 @@ Changing a data source, paper execution engine, or broker no longer requires
 rewriting P&L, risk, or the UI.
 
 It is not yet a full plug-and-play system. Signal analysis, production grid
-proposal generation, all three backtest use cases, paper execution, and broker
-accounting normalization now resolve through frozen plugin registries. The
-largest remaining gaps are completion of the venue-adapter strangler, the
-authoritative Market Envelope V2 cutover, and physical risk evaluator/store
-separation.
+proposal generation, all three backtest use cases, paper execution, broker
+execution, and broker accounting normalization now resolve through frozen
+plugin registries and venue-owned adapters. The largest remaining gaps are the
+authoritative Market Envelope V2 cutover, physical risk evaluator/store
+separation, and retirement of contained compatibility facades.
 
 This percentage measures modular architecture, not profitability, live-money
 readiness, or whether the self-evolution loop has enough trades.
@@ -26,7 +26,7 @@ readiness, or whether the self-evolution loop has enough trades.
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
 is the rounded arithmetic mean of the seven visible row totals:
-`644 / 7 = 92.0%`, reported as `92%`.
+`648 / 7 = 92.6%`, reported as `93%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
@@ -34,7 +34,7 @@ is the rounded arithmetic mean of the seven visible row totals:
 | Data cleaning / quality | 25 | 25 | 20 | 15 | 85 |
 | Analysis / strategy | 25 | 20 | 25 | 25 | 95 |
 | Backtest / replay | 25 | 20 | 25 | 20 | 90 |
-| Live execution / broker | 25 | 24 | 25 | 20 | 94 |
+| Live execution / broker | 25 | 25 | 25 | 23 | 98 |
 | Risk / accounting / reconciliation | 25 | 20 | 25 | 25 | 95 |
 | Dashboard / read model | 25 | 25 | 20 | 25 | 95 |
 
@@ -172,7 +172,7 @@ plug-compatible while plan safety remains invariant across plugins.
   callers. No production application imports it, but its retirement and the
   migration of legacy evidence readers remain contained cleanup debt.
 
-### 5. Live execution / broker — 94/100
+### 5. Live execution / broker — 98/100
 
 - Ports: the provider-free `ExecutionEngineAdapter`, `BrokerExecutionPort`,
   explicit broker capabilities, and a separate reconciliation port.
@@ -183,17 +183,17 @@ plug-compatible while plan safety remains invariant across plugins.
   through the trusted composition root. `dualtrack_execution_adapter.py` is now
   a re-export-only compatibility facade with no selection or execution logic.
   `BrokerPluginRegistry` separately resolves `(mode, provider, environment)`
-  and rejects unknown armed paths. Binance USD-M base URL/instrument mapping,
-  immutable endpoint catalog, public ExchangeInfo normalization, credentials,
-  HMAC signing, request construction, timeout, and response decoding now live
-  in the venue-owned `services/venues/binance_usdm_transport.py`. OANDA REST
-  credentials, endpoint/instrument selection, payload translation, HTTP,
-  response mapping, and durable recording now live in its concrete adapter;
-  MT5 outbox/inbox, templates, executable-intent creation, and receipt
-  correlation live in a separate filesystem adapter. Both are selected
-  directly by the registry. The legacy class retains only thin compatibility
-  delegates for OANDA/MT5 and existing Binance demo, testnet, mainnet, canary,
-  and kill-switch call seams.
+  and rejects unknown armed paths. `BinanceUsdmBrokerAdapter` owns mainnet
+  preflight, risk/reconciliation gates, order payloads and lifecycle,
+  ambiguous-submit recovery, TP/SL validation, emergency close, cancellation,
+  and protective recovery; demo and testnet inherit only that venue-owned
+  lineage. Its base URL/instrument mapping, immutable endpoint catalog, public
+  ExchangeInfo normalization, credentials, HMAC signing, request construction,
+  timeout, and response decoding remain in the separate Binance transport.
+  Tiger paper, OANDA REST, and MT5 file bridge are independent concrete
+  adapters selected directly by the registry. `LiveBrokerAdapter` no longer
+  inherits any venue and retains only manual behavior plus thin compatibility
+  delegates that compose those concrete adapters.
 - Safety: risk, activation, preflight, reconciliation, attended approval,
   seven-cycle/parity gates, exact override acknowledgement, isolated-runtime
   requirements, idempotency, ambiguous-submit recovery, protective orders, and
@@ -202,14 +202,14 @@ plug-compatible while plan safety remains invariant across plugins.
   cannot grant real-money or cutover authority. The public ExchangeInfo request
   is proven credential-free; missing/placeholder credentials block signed I/O
   before the opener is called.
-- Remaining 6:
-  - `LiveBrokerAdapter` still owns Binance order lifecycle/payload/protection
-    policy plus Tiger/manual compatibility behavior. Binance wire I/O and the
-    complete OANDA/MT5 implementations are isolated, but full concrete
-    venue-adapter extraction is incomplete.
+- Remaining 2:
   - configured Nautilus authority is paper-only and attended; real-money
     eligibility remains correctly false. That is an operational gate, not an
     architecture failure, but it prevents claiming full cutover proof.
+  - old direct/private callers still keep `LiveBrokerAdapter` alive as a thin
+    compatibility facade. It no longer owns cross-venue implementation, but
+    retiring those call seams remains cleanup before the broker layer is
+    literally facade-free.
 
 ### 6. Risk / accounting / reconciliation — 95/100
 
@@ -290,23 +290,21 @@ evolution yet.
 
 ## Shortest remaining architecture backlog
 
-1. **Venue package strangler (large but incremental):** Binance wire transport
-   and the complete OANDA/MT5 adapters are now venue-owned. Move the remaining
-   Binance lifecycle/protection body and Tiger implementation out of
-   `LiveBrokerAdapter`; retain the facade until every venue passes the same
-   suite.
-2. **Market Envelope V2 cutover (small after evidence):** capture real
+1. **Market Envelope V2 cutover (small after evidence):** capture real
    session-aware same-response parity, switch authority explicitly, then delete
    the duplicate `load_bars()` interpretation and narrow SQLite seams.
-3. **Risk policy/store extraction (medium):** keep `risk-request-v1` and
+2. **Risk policy/store extraction (medium):** keep `risk-request-v1` and
    `risk-decision-v1`, register policy evaluators explicitly, and separate
    immutable decision persistence from evaluation.
-4. **Legacy read-surface retirement (medium):** migrate remaining consumers to
+3. **Legacy read-surface retirement (medium):** migrate remaining consumers to
    the stable read model, announce deprecation, then remove facade-only
    presentation code.
-5. **Backtest compatibility retirement (small):** migrate remaining direct
+4. **Backtest compatibility retirement (small):** migrate remaining direct
    `BacktestClient` callers to explicit plugins, then delete its fallback branch
    and narrow legacy `BacktestEvidence` readers to the V2 provenance contract.
+5. **Broker compatibility retirement (small):** migrate old direct/private
+   callers to `BrokerExecutionPort`, then delete the now-thin
+   `LiveBrokerAdapter` facade without changing venue behavior.
 
 ## Final judgment
 
@@ -315,10 +313,10 @@ be built without reworking market, strategy, backtest, risk, accounting, broker,
 and UI truth again. A new signal engine, production grid planner, signal
 backtester, historical ranker, Strategy Shadow replay, paper execution engine,
 or broker accounting source can be registered without editing its application
-pipeline. The honest state is a robust hexagonal spine with several contained
-compatibility monoliths still awaiting physical extraction.
+pipeline. The honest state is a robust hexagonal spine with a few contained
+compatibility facades still awaiting retirement.
 
 For the grid-only product focus, the next highest-leverage architecture change
-is finishing incremental venue-adapter isolation, followed by the
-evidence-gated Market Envelope V2 cutover—not another Dashboard or
-provider-specific integration.
+is the evidence-gated Market Envelope V2 cutover, followed by physical risk
+policy/store separation—not another Dashboard or provider-specific
+integration.
