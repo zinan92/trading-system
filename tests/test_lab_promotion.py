@@ -24,7 +24,9 @@ def _entry(**overrides) -> dict:
 
 
 def test_promotion_gate_requires_walkforward_and_holdout():
-    assert promotion_gate(_entry())["paper_eligible"] is True
+    missing_execution = promotion_gate(_entry())
+    assert missing_execution["paper_eligible"] is False
+    assert "nautilus_execution_conformance_missing" in missing_execution["blockers"]
 
     blocked = promotion_gate(_entry(holdout_consumed=False))
     assert blocked["paper_eligible"] is False
@@ -44,8 +46,9 @@ def test_lab_expectation_reads_latest_strategy_entry(tmp_path: Path):
 
     result = lab_expectation_for_strategy(root, "gold_1m_macd")
 
-    assert result["paper_eligible"] is True
+    assert result["paper_eligible"] is False
     assert result["source_exp_id"] == "e1"
+    assert "execution_candidate_identity_missing" in result["blockers"]
 
 
 def test_record_paper_eligibility_writes_lab_scoped_flag(tmp_path: Path):

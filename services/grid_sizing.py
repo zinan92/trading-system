@@ -284,6 +284,7 @@ def build_grid_preview(
         "style": style,
         "market": {
             "price": latest,
+            "symbol": str(market.get("symbol") or "GOLD"),
             "timestamp": market.get("latest_timestamp"),
             "provider": market.get("provider"),
             "timeframe": market.get("timeframe"),

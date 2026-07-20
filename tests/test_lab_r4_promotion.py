@@ -43,7 +43,9 @@ def test_r4_consumes_holdout_only_for_phase1_passers(monkeypatch, tmp_path):
     psych_entry = load_json(tmp_path / "lab" / "experiments" / "R4_gold_5m_psych_level_rejection_swing.json")[0]
     assert ema_entry["holdout_consumed"] is True
     assert psych_entry["holdout_consumed"] is False
-    assert load_json(tmp_path / "lab" / "promotion" / "gold_5m_ema50_position_swing.json")[0]["paper_eligible"] is True
+    promotion = load_json(tmp_path / "lab" / "promotion" / "gold_5m_ema50_position_swing.json")[0]
+    assert promotion["paper_eligible"] is False
+    assert "execution_candidate_identity_missing" in promotion["blockers"]
 
 
 def test_r4_anchor_check_detects_exact_mismatch():

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from services.dualtrack_nautilus_instrument import build_nautilus_instrument
+from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.journal_store import write_json
 
 
@@ -81,6 +82,8 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
             "native_order_lifecycle": True,
             "paper_shadow": True,
             "market_replay": True,
+            "nautilus_version": _nautilus_version(),
+            "platform_code_hash": platform_parity_code_hash(),
             "comparison_normalization": {
                 "mode": "venue_precision",
                 "price_decimals": int(preflight["instrument"]["price_precision"]),
@@ -98,6 +101,12 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
             "qualifies_for_cutover": command_count > 0,
         },
     }
+
+
+def _nautilus_version() -> str:
+    import nautilus_trader
+
+    return str(getattr(nautilus_trader, "__version__", ""))
 
 
 def _run_market_replay(

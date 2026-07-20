@@ -25,6 +25,7 @@ from services.grid_sizing import (
     positive_number as _positive_number,
 )
 from services.journal_store import load_json, write_json
+from services.strategy_plan_execution import build_plan_grid_entry_commands
 
 
 PROPOSAL_SCHEMA = "strategy-plan-proposal-v1"
@@ -402,7 +403,7 @@ class StrategyControlPlane:
         self._write_runtime(starting)
         adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
         try:
-            receipts = self._submit_preview_orders(adapter, cycle_id, adjusted, preview, market=market, timestamp=timestamp)
+            receipts = self._submit_plan_orders(adapter, adjusted, timestamp=timestamp)
             submitted_ids = {str(row.get("order_id") or "") for row in receipts}
             accepted_before_market = self._accepted_orders(cycle_id, adapter=adapter)
             if {str(row.get("order_id") or "") for row in accepted_before_market} != submitted_ids:
@@ -588,14 +589,7 @@ class StrategyControlPlane:
             # Two-phase paper replacement: the old grid stays live until every
             # replacement order is accepted. A failed stage is removed without
             # pretending that an engine cancellation can be rolled back.
-            receipts = self._submit_preview_orders(
-                adapter,
-                cycle_id,
-                adjusted,
-                preview,
-                market=market,
-                timestamp=timestamp,
-            )
+            receipts = self._submit_plan_orders(adapter, adjusted, timestamp=timestamp)
             cancel_receipt = adapter.cancel_orders(
                 cycle_id,
                 order_ids=old_order_ids,
@@ -678,36 +672,16 @@ class StrategyControlPlane:
             "idempotent": False,
         }
 
-    def _submit_preview_orders(
+    def _submit_plan_orders(
         self,
         adapter,
-        cycle_id: str,
         plan: dict[str, Any],
-        preview: dict[str, Any],
         *,
-        market: dict[str, Any],
         timestamp: str,
     ) -> list[dict[str, Any]]:
         receipts: list[dict[str, Any]] = []
-        for order in preview["orders"]:
-            receipt = adapter.submit_order({
-                "cycle_id": cycle_id,
-                "ts": timestamp,
-                "symbol": str(market.get("symbol") or "GOLD"),
-                "side": order["side"],
-                "event": "entry",
-                "order_type": "limit",
-                "price": order["price"],
-                "market_price": preview["market"]["price"],
-                "quantity": order["quantity"],
-                "notional": order["notional"],
-                "sl": order["sl"],
-                "tp": order["tp"],
-                "source": "strategy_production_console",
-                "source_fill_id": f"strategy-grid:{plan['strategy_plan_id']}:{order['preview_order_id']}",
-                "strategy_plan_id": plan["strategy_plan_id"],
-                "strategy_plan_version": plan["version"],
-            })
+        for command in build_plan_grid_entry_commands(plan, timestamp=timestamp):
+            receipt = adapter.submit_order(command)
             if str(receipt.get("state") or receipt.get("status") or "") != "accepted":
                 raise ValueError("paper execution did not accept a grid order")
             receipts.append(receipt)
@@ -842,6 +816,7 @@ class StrategyControlPlane:
             "style": preview["style"],
             "range": dict(preview["range"]),
             "grid": {**preview["grid"], "orders": [dict(order) for order in preview["orders"]]},
+            "execution_context": {"market": dict(preview["market"])},
             "tp_sl": {
                 "mode": "per_grid",
                 "take_profit": "next_grid_level",

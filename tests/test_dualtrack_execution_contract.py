@@ -160,6 +160,8 @@ def test_execution_parity_catches_fee_equity_timing_and_plan_trace_drift() -> No
 
 def test_execution_command_uses_one_venue_precision_and_versions_fee_contract() -> None:
     config = {
+        "capital_per_track_usd": 10_000,
+        "max_leverage": 10,
         "execution_contract": {
             "schema_version": "dualtrack-execution-contract-v1",
             "execution_instrument_id": "XAUUSDT",
@@ -198,6 +200,8 @@ def test_execution_command_uses_one_venue_precision_and_versions_fee_contract() 
     assert normalized["requested_quantity"] == 0.17772282
     assert normalized["execution_contract"]["fee_contract_hash"].startswith("sha256:")
     assert normalized["execution_contract"]["contract_hash"].startswith("sha256:")
+    assert normalized["execution_contract"]["starting_cash"] == "10000"
+    assert normalized["execution_contract"]["max_leverage"] == "10"
 
 
 def test_execution_parity_applies_only_declared_venue_precision() -> None:

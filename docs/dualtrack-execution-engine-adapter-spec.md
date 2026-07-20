@@ -1,9 +1,10 @@
 # DualTrack Execution Engine Adapter Spec
 
 Status: compatibility and persistent Nautilus paper adapters implemented;
-fixed parity suite passed; Nautilus paper adapter not selected because the
-seven command-bearing cycle gate is incomplete
-Date: 2026-07-10
+Strategy Shadow delegates to isolated Nautilus replay; fixed parity suite
+passed; Nautilus paper adapter not selected because the seven command-bearing
+cycle gate is incomplete
+Date: 2026-07-18
 
 ## Objective
 
@@ -12,7 +13,7 @@ underlying paper engine to move from the local ledger to NautilusTrader without
 rewriting the frontend.
 
 This boundary owns execution and accounting only. Strategy plans, chart
-rendering, and market-data acquisition remain separate.
+rendering, market-data acquisition, and promotion policy remain separate.
 
 ## Non-negotiable invariants
 
@@ -26,6 +27,13 @@ rendering, and market-data acquisition remain separate.
 7. Raw historical fills are immutable. Migrations rebuild derived positions and
    PnL rather than rewriting source events.
 8. Engine-specific fields do not leak into frontend widgets.
+9. A Strategy Shadow bar cannot start before its StrategyPlan availability or
+   command timestamp.
+10. Candidate replay namespaces cannot write production ledgers or the
+    reconciliation, parity, and cutover evidence that controls paper authority.
+11. Candidate and platform evidence must bind the exact source semantics,
+    Nautilus runtime version, fee/precision contracts, and evidence timestamp;
+    an old child fixture cannot be restamped as current evidence.
 
 ## Boundary
 
@@ -39,17 +47,24 @@ datafeed -> canonical MarketEvent -> ExecutionEngineAdapter
 
 standard-kline <- market data + normalized overlays
 DualTrack widgets <- normalized execution snapshot
+Strategy Shadow -> content-bound scenario -> Nautilus replay -> accounting snapshot
+Lab promotion <- candidate receipt + current platform parity
 ```
 
 ## Adapter protocol
 
-`services/dualtrack_execution_adapter.py` defines four operations:
+`services/dualtrack_execution_adapter.py` defines five operations:
 
 ### `submit_order(command)`
 
 Accepts an order command and returns the resulting fill or engine receipt.
 Network callers must already have passed same-origin, server-clock, current
 cycle, canonical-market, and TP/SL geometry validation.
+
+### `cancel_orders(cycle_id, order_ids, strategy_plan_id, ts, reason)`
+
+Cancels only the selected accepted orders and returns an idempotent normalized
+receipt. It never infers a whole-plan cancellation from an empty identity.
 
 ### `process_market_event(event)`
 
@@ -128,8 +143,8 @@ The factory still fails closed. Creating this adapter requires all three:
 - `shadow_gate_current.status=ready_for_attended_paper_switch`;
 - an explicit isolated Nautilus Python path.
 
-The current real gate is blocked at `0/7`, so `legacy_paper` remains
-authoritative and no configured engine has changed.
+The current real gate is blocked at `0/7` by the latest reconciliation drift,
+so `legacy_paper` remains authoritative and no configured engine has changed.
 
 The isolated 1.230.0 bracket fixture is recorded in
 `docs/dualtrack-nautilus-spike-result.md`. It proves market entry, stop fill,
@@ -177,6 +192,61 @@ For every scenario, normalize both adapters and compare:
 Differences require a written model decision. They must not be hidden by
 tolerance changes or frontend formatting.
 
+Every child fixture and the historical residual check records its own platform
+code hash and generation time. The aggregate gate passes only when all child
+artifacts use the current execution, accounting, command-projection, and
+promotion semantics; the pinned Nautilus `1.230.0` runtime; one exact
+execution/fee contract pair; and evidence no older than seven days. Its
+`generated_at` is the oldest child timestamp, so rebuilding only the aggregate
+cannot make stale evidence fresh.
+
+## Strategy Shadow execution
+
+`services/strategy_shadow.py` is now orchestration and read-model code only. It
+does not calculate grid touches, protective exits, positions, fees, or P&L.
+The exact grid command projection used by the production control plane lives in
+`services/strategy_plan_execution.py` and is reused to create one
+`strategy-execution-scenario-v1` bundle.
+
+The scenario binds:
+
+- the versioned StrategyPlan and its `available_at`;
+- the exact normalized command batch and start-market context;
+- chronological canonical market events whose bar start is not earlier than
+  plan or command availability;
+- execution-precision and fee-contract hashes;
+- starting-cash and leverage settings used by the replay;
+- evaluation window and content-addressed scenario identity.
+
+`NautilusStrategyShadowReplay` persists only below a
+`strategy_shadow_<scenario-hash>` namespace, flushes once, reconciles the final
+snapshot, and emits `nautilus-candidate-execution-receipt-v1`. The Dashboard
+continues to read the latest row per variant: historical
+`strategy-shadow-run-v1` rows remain trace, while new runs use
+`strategy-shadow-run-v2`. A v1 row can never satisfy conformance.
+
+The candidate receipt also carries the runtime-reported Nautilus version and
+platform code hash from the replay subprocess. Promotion requires those values
+to match both the current source tree and the fixed platform parity gate; a
+receipt produced by old replay semantics cannot be combined with a newer gate.
+The promotion token retains the parity timestamp, code hash, runtime, and
+contracts and revalidates them at every call boundary, so persisting a once-pass
+token cannot extend its seven-day evidence window.
+
+Candidate conformance and platform parity are deliberately different claims:
+
+1. Candidate evidence proves that this plan/input bundle replayed under
+   Nautilus, preserved plan trace, passed adapter reconciliation, and projected
+   to one `accounting-snapshot-v1`.
+2. Platform evidence compares Legacy-authoritative and Nautilus-candidate
+   semantics across the fixed ten-class parity suite.
+
+Nautilus is never compared with itself as a parity proof. The active Lab
+promotion boundary requires a content-valid candidate receipt and the current
+passing platform fixture gate. Missing, mismatched, blocked, or legacy evidence
+keeps `paper_eligible=false`; it never enables automatic application or real
+money.
+
 ## Cutover
 
 1. Run both adapters in shadow mode from the same immutable event stream.
@@ -207,3 +277,6 @@ tolerance changes or frontend formatting.
 - Funding rate and timestamp are now observed and persisted, but a rate sample
   is not itself a funding cash-flow. Settlement must only be booked from a
   timestamped position exposure at an actual funding boundary.
+- Historical `current.json` parity artifacts without child code, runtime,
+  contract, and timestamp binding are intentionally stale and fail closed until
+  the full ten-class fixture is rerun.

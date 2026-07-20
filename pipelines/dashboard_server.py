@@ -35,6 +35,7 @@ from services.dualtrack_scoring import (
 from services.dualtrack_store import DualTrackPlanStore
 from services.strategy_control_plane import StrategyControlPlane
 from services.strategy_recommendation import StrategyRecommendationService
+from services.strategy_shadow import load_strategy_shadow_runs
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
 from services.production_accounting import build_production_accounting_history
@@ -745,8 +746,7 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
         "margin": (execution.get("account") or {}).get("margin", 0),
         "slippage": (execution.get("account") or {}).get("slippage", 0),
     }
-    folder = output / "dualtrack" / "strategy_shadows"
-    shadows = [rows[-1] for path in sorted(folder.glob(f"{cycle_id}_*.json")) if (rows := load_json(path))] if folder.exists() else []
+    shadows = load_strategy_shadow_runs(output, cycle_id)
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,

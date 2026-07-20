@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
+from services.dualtrack_config import dualtrack_config
+from services.journal_store import load_json, write_json
+from services.strategy_shadow import StrategyShadowRunner
+from services.strategy_shadow_nautilus import NautilusStrategyShadowReplay
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +29,114 @@ pytestmark = pytest.mark.skipif(
     not RUNTIME.exists() or not PREFLIGHT.exists(),
     reason="isolated Nautilus paper runtime evidence is not installed",
 )
+
+
+def test_real_runtime_strategy_shadow_has_one_content_bound_execution_truth(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    settings = deepcopy(dualtrack_config())
+    preflight = deepcopy(load_json(PREFLIGHT)[-1])
+    preflight["fee_model"] = {
+        **dict(preflight.get("fee_model") or {}),
+        "mode": "account_observed",
+        "maker_fee_rate": "0.0002",
+        "taker_fee_rate": "0.0004",
+        "funding_rate": "0",
+        "real_money_eligible": False,
+    }
+    settings["paper_fee_model"] = dict(preflight["fee_model"])
+    golden_preflight = tmp_path / "golden-instrument-preflight.json"
+    write_json(golden_preflight, [preflight])
+    plan = {
+        "schema_version": "strategy-plan-v1",
+        "strategy_plan_id": "plan-runtime-strategy-shadow",
+        "cycle_id": "2026-07-10_DAY",
+        "version": 1,
+        "locked_at": "2026-07-10T01:00:00+00:00",
+        "status": "active",
+        "direction": "long",
+        "range": {"low": 95.0, "high": 101.0},
+        "execution_context": {
+            "market": {
+                "price": 100.0,
+                "symbol": "GOLD",
+                "provider": "binance_usdm_futures",
+            },
+        },
+        "grid": {
+            "count": 1,
+            "notional_per_grid": 99.0,
+            "orders": [{
+                "preview_order_id": "preview-01-buy",
+                "side": "buy",
+                "price": 99.0,
+                "quantity": 1.0,
+                "notional": 99.0,
+                "sl": 95.0,
+                "tp": 101.0,
+            }],
+        },
+    }
+    events = [
+        _event(0, price=100.0, low=100.0, high=100.0),
+        _event(1, price=100.0, low=98.5, high=100.5),
+        _event(2, price=101.0, low=100.0, high=101.5),
+    ]
+
+    def run() -> dict:
+        port = NautilusStrategyShadowReplay(
+                output,
+                nautilus_python=RUNTIME,
+                preflight_path=golden_preflight,
+            config=settings,
+        )
+        return StrategyShadowRunner(
+            output,
+            replay_port=port,
+            config=settings,
+        ).run(
+            cycle_id="2026-07-10_DAY",
+            variant_id="runtime-golden-grid",
+            plan=plan,
+            market_events=events,
+        )
+
+    first = run()
+    second = run()
+
+    assert first == second
+    assert first["status"] == "pass"
+    assert first["execution_receipt"]["status"] == "pass"
+    assert first["execution_receipt"]["nautilus_version"] == "1.230.0"
+    assert first["execution_receipt"]["platform_code_hash"] == platform_parity_code_hash()
+    assert first["execution_receipt"]["accounting_snapshot_id"] == first["accounting_snapshot"]["snapshot_id"]
+    assert first["accounting_snapshot"]["counts"] == {
+        "order_count": 2,
+        "open_order_count": 0,
+        "fill_count": 2,
+        "entry_fill_count": 1,
+        "exit_fill_count": 1,
+        "trade_count": 1,
+        "open_trade_count": 0,
+        "completed_trade_count": 1,
+        "position_count": 1,
+        "open_position_count": 0,
+    }
+    assert first["metrics"]["trade_count"] == 1
+    assert first["metrics"]["cost"] == pytest.approx(0.04)
+    pnl = first["accounting_snapshot"]["pnl"]
+    assert pnl["net_realized_pnl"] == pytest.approx(
+        pnl["gross_realized_pnl"] - pnl["fees"] + pnl["funding"]
+    )
+    assert first["accounting_snapshot"]["account"]["margin"] == 0.0
+    assert first["accounting_snapshot"]["account"]["exposure"] == 0.0
+    assert first["review"]["available_at"] == plan["locked_at"]
+    assert first["safety"]["writes_authority_gate_evidence"] is False
+    for relative in (
+        "dualtrack/reconciliation",
+        "dualtrack/nautilus/parity",
+        "dualtrack/cutover",
+    ):
+        assert not (output / relative).exists()
 
 
 def _event(index: int, *, price: float, low: float, high: float) -> dict:
