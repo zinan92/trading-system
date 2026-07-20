@@ -2,9 +2,9 @@
 
 ## Executive answer
 
-**Overall architecture progress: 91%**
+**Overall architecture progress: 92%**
 
-`██████████████████▎░ 91%`
+`██████████████████▍░ 92%`
 
 The system now has a real hexagonal spine from trusted market facts through
 StrategyPlan, Risk, Execution, Accounting, Broker, and the Dashboard read model.
@@ -14,8 +14,9 @@ rewriting P&L, risk, or the UI.
 It is not yet a full plug-and-play system. Signal analysis, production grid
 proposal generation, all three backtest use cases, paper execution, and broker
 accounting normalization now resolve through frozen plugin registries. The
-largest remaining gaps are venue-package strangling, the authoritative Market
-Envelope V2 cutover, and physical risk evaluator/store separation.
+largest remaining gaps are completion of the venue-adapter strangler, the
+authoritative Market Envelope V2 cutover, and physical risk evaluator/store
+separation.
 
 This percentage measures modular architecture, not profitability, live-money
 readiness, or whether the self-evolution loop has enough trades.
@@ -25,7 +26,7 @@ readiness, or whether the self-evolution loop has enough trades.
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
 is the rounded arithmetic mean of the seven visible row totals:
-`640 / 7 = 91.4%`, reported as `91%`.
+`642 / 7 = 91.7%`, reported as `92%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
@@ -33,7 +34,7 @@ is the rounded arithmetic mean of the seven visible row totals:
 | Data cleaning / quality | 25 | 25 | 20 | 15 | 85 |
 | Analysis / strategy | 25 | 20 | 25 | 25 | 95 |
 | Backtest / replay | 25 | 20 | 25 | 20 | 90 |
-| Live execution / broker | 25 | 20 | 25 | 20 | 90 |
+| Live execution / broker | 25 | 22 | 25 | 20 | 92 |
 | Risk / accounting / reconciliation | 25 | 20 | 25 | 25 | 95 |
 | Dashboard / read model | 25 | 25 | 20 | 25 | 95 |
 
@@ -171,7 +172,7 @@ plug-compatible while plan safety remains invariant across plugins.
   callers. No production application imports it, but its retirement and the
   migration of legacy evidence readers remain contained cleanup debt.
 
-### 5. Live execution / broker — 90/100
+### 5. Live execution / broker — 92/100
 
 - Ports: the provider-free `ExecutionEngineAdapter`, `BrokerExecutionPort`,
   explicit broker capabilities, and a separate reconciliation port.
@@ -182,17 +183,24 @@ plug-compatible while plan safety remains invariant across plugins.
   through the trusted composition root. `dualtrack_execution_adapter.py` is now
   a re-export-only compatibility facade with no selection or execution logic.
   `BrokerPluginRegistry` separately resolves `(mode, provider, environment)`
-  and rejects unknown armed paths.
+  and rejects unknown armed paths. Binance USD-M base URL/instrument mapping,
+  immutable endpoint catalog, public ExchangeInfo normalization, credentials,
+  HMAC signing, request construction, timeout, and response decoding now live
+  in the venue-owned `services/venues/binance_usdm_transport.py`. The legacy
+  class retains only thin compatibility delegates for existing demo, testnet,
+  mainnet, canary, and kill-switch call seams.
 - Safety: risk, activation, preflight, reconciliation, attended approval,
   seven-cycle/parity gates, exact override acknowledgement, isolated-runtime
   requirements, idempotency, ambiguous-submit recovery, protective orders, and
   reduce-only exits remain core-owned and additive. A custom provider-free
   paper engine can be registered without editing an application module; config
-  cannot grant real-money or cutover authority.
-- Remaining 10:
-  - the large `LiveBrokerAdapter` compatibility class still owns several venue
-    wire implementations; adding a broker is registered, but physical isolation
-    is incomplete.
+  cannot grant real-money or cutover authority. The public ExchangeInfo request
+  is proven credential-free; missing/placeholder credentials block signed I/O
+  before the opener is called.
+- Remaining 8:
+  - `LiveBrokerAdapter` still owns Binance order lifecycle/payload/protection
+    policy and the Tiger/OANDA/MT5 compatibility implementations. Binance wire
+    I/O is isolated, but full concrete venue-adapter extraction is incomplete.
   - configured Nautilus authority is paper-only and attended; real-money
     eligibility remains correctly false. That is an operational gate, not an
     architecture failure, but it prevents claiming full cutover proof.
@@ -276,9 +284,11 @@ evolution yet.
 
 ## Shortest remaining architecture backlog
 
-1. **Venue package strangler (large but incremental):** move Binance, Tiger,
-   OANDA, and MT5 networking out of `LiveBrokerAdapter` one adapter at a time;
-   retain the compatibility facade until every venue passes the same suite.
+1. **Venue package strangler (large but incremental):** Binance signing,
+   endpoints, ExchangeInfo, and HTTP are now venue-owned. Move the remaining
+   Binance lifecycle/protection body, then Tiger, OANDA, and MT5 implementations
+   out of `LiveBrokerAdapter`; retain the facade until every venue passes the
+   same suite.
 2. **Market Envelope V2 cutover (small after evidence):** capture real
    session-aware same-response parity, switch authority explicitly, then delete
    the duplicate `load_bars()` interpretation and narrow SQLite seams.
@@ -303,5 +313,6 @@ pipeline. The honest state is a robust hexagonal spine with several contained
 compatibility monoliths still awaiting physical extraction.
 
 For the grid-only product focus, the next highest-leverage architecture change
-is incremental venue package isolation, followed by the evidence-gated Market
-Envelope V2 cutover—not another Dashboard or provider-specific integration.
+is finishing incremental venue-adapter isolation, followed by the
+evidence-gated Market Envelope V2 cutover—not another Dashboard or
+provider-specific integration.

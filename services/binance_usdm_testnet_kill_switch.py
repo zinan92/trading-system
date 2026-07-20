@@ -126,7 +126,7 @@ class BinanceUsdmTestnetKillSwitch:
         return result
 
     def _open_positions(self, adapter: BinanceUsdmTestnetBrokerAdapter) -> list[dict]:
-        payload = adapter._binance_signed_get("/fapi/v2/positionRisk", {"symbol": TESTNET_SYMBOL})
+        payload = adapter._binance_position_risk(TESTNET_SYMBOL)
         rows = payload if isinstance(payload, list) else [payload] if isinstance(payload, dict) else []
         positions = []
         for row in rows:

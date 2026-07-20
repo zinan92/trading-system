@@ -7040,3 +7040,95 @@ auditable datafeed port; broker execution remains a separate port.
   progress remains the honest rounded `91%` (`640 / 7 = 91.4%`).
 - No strategy parameters, risk thresholds, credentials, live configuration,
   orders, positions, accounts, or production state were changed.
+## 2026-07-18 - A13 Binance USD-M transport extraction kickoff
+
+### Decision
+
+- Start the venue-package strangler with the highest-value, lowest-semantic-
+  churn Binance boundary: endpoint resolution, instrument mapping, signing,
+  public ExchangeInfo, HTTP request construction, and response decoding.
+- Keep execution lifecycle, activation, canonical risk, same-cycle
+  reconciliation, local accounting mirrors, protective policy, and ambiguous
+  submission recovery in the proven adapter for this milestone.
+- Preserve every existing private compatibility method as a thin delegate.
+  Demo, testnet, canary, kill-switch, and direct operational callers therefore
+  keep the same behavior while networking becomes venue-owned.
+- Inject the existing opener and a clock into the transport. Do not introduce
+  a second HTTP stack, background client, retry policy, or new plug-in system.
+
+### User value
+
+- Binance networking can be replaced or tested without editing the Broker Port
+  or cross-venue orchestration, while the currently running grid's money and
+  order-safety semantics remain unchanged.
+
+### Gotchas
+
+- HMAC input depends on parameter insertion order; signing parity includes the
+  exact query/body shape, not only decoded values.
+- Signed GET and signed mutation requests deliberately use different wire
+  placement. The extraction must preserve both.
+- `BinanceDemoBrokerAdapter` has a deliberate signed-GET response envelope and
+  override. Base transport delegation must not shadow subclass overrides.
+- Demo/testnet/mainnet share call names but not authority or default endpoint.
+- The opener also serves reconciliation and is an established test seam.
+- A13 is transport isolation, not complete Binance execution extraction. The
+  remaining lifecycle/protection body stays explicit follow-on debt.
+- No visible product surface changes in A13; Visual Evidence is not applicable
+  unless the scope changes.
+
+### Baseline
+
+- A12 full repository: `1813 passed, 7 skipped`.
+- Broker Port plus Binance mainnet/demo/testnet regression: `100 passed`.
+
+## 2026-07-18 - A13 Binance USD-M transport extraction closure
+
+### Outcome
+
+- Binance USD-M endpoint ownership, base URL and instrument mapping, public
+  ExchangeInfo normalization, credentials, HMAC signing, signed GET/mutation
+  construction, timeouts, and response decoding now live in the isolated
+  venue transport.
+- `LiveBrokerAdapter` and `BinanceDemoBrokerAdapter` retain the old private call
+  names only as compatibility delegates. No activation, risk, reconciliation,
+  lifecycle, protective-order, emergency-close, or accounting behavior was
+  moved or relaxed.
+- Transport construction preserves the original dynamic seams: in-place
+  config changes remain visible, while config or opener replacement rebuilds
+  the immutable transport. The injected opener is never wrapped.
+- Provider-free contract kernels explicitly forbid `services.venues` imports.
+  Static tests also prevent Binance HMAC, timestamp/signature construction,
+  base URLs, and broker endpoints from returning to the cross-venue facade.
+
+### Opus adversarial review and hardening
+
+- Verified `claude-opus-4-8`, session
+  `d855d5a4-6301-432f-ae49-a43c8d1bf452`, receipt
+  `20260718T060856Z_99325593-7454-4b5e-a18c-4d98548de002.json`: `SHIP`, no
+  P0-P2.
+- Closed P3: the public ExchangeInfo contract now proves its GET carries no
+  API-key or Authorization header.
+- Closed P3: position-risk endpoint ownership moved into the transport catalog;
+  demo, testnet, and both operational kill switches call the semantic
+  compatibility method rather than repeating the literal.
+- Exact A12 parameter insertion-order parity is documented as inferred rather
+  than independently byte-proved. Correctness is construction-safe because the
+  transport signs the exact same query string it transmits; pre-A13 end-to-end
+  tests independently anchor endpoints, methods, body-vs-URL placement,
+  routing, and timeout.
+
+### Verification
+
+- Final repository regression after Opus hardening:
+  `1822 passed, 7 skipped in 419.51s`.
+- Pre-review transport/broker/Binance/architecture pack: `124 passed`;
+  post-review mainnet/demo/testnet/kill-switch defense pack: `101 passed`.
+- Changed-file Ruff and `git diff --check`: clean.
+- Live execution/broker improves from `90/100` to `92/100`; overall architecture
+  progress is now the reproducible rounded `92%` (`642 / 7 = 91.7%`).
+- A13 has no visible product surface and deploys no service. Under the Evidence
+  Contract, Visual Evidence is not applicable; tests, commits, docs, diffs, and
+  the Opus receipt are trace material only.
+- No strategy parameters, risk thresholds, credentials, live configuration,
+  orders, positions, accounts, or production state were changed.
