@@ -6480,3 +6480,61 @@ auditable datafeed port; broker execution remains a separate port.
   `fcf715f6-e860-4141-a9ca-f4e91720d208`, receipt
   `20260718T005733Z_4e3cec78-a2e6-449a-a2e0-bb7a0eac0753.json`; `P1 CLOSED`,
   `P2 CLOSED`, no new P0/P1, `SHIP for A6`.
+
+## 2026-07-18 - A7 end-to-end architecture fitness audit complete
+
+### Value delivered
+
+- The full trading system now has one evidence-backed ports-and-adapters map
+  covering data download, cleaning/quality, analysis/strategy, backtest/replay,
+  live execution/broker, risk/accounting/reconciliation, and dashboard/read
+  model.
+- The visible architecture score is `83%`. It measures modularity only; it does
+  not claim real-money readiness, self-repair closure, or strategy evolution.
+- Stable contract kernels now have executable dependency gates. Known inline
+  Binance/Tiger projection debt is frozen so new provider imports or branches
+  cannot silently enter those kernels.
+
+### Decisions
+
+- Score all seven product lines against the same four 25-point gates: contract,
+  isolation, composition, and proof/cutover. Keep named seams visible instead
+  of adding cosmetic interfaces.
+- Use the conservative whole-system interpretation of backtest proof. Legacy
+  mock `BacktestEvidence` prevents awarding full cutover points even though it
+  is outside the authoritative DualTrack/Nautilus grid path and real money is
+  disabled.
+- Keep self-repair (`58%`) and strategy self-evolution (`62%`) outside the core
+  architecture score. The shortest next architectural step is a Strategy
+  Plugin Registry, followed by a first-class Backtest Port.
+
+### Gotchas
+
+- The first draft's `84%` overstated Backtest/replay proof. Opus found the
+  `fallback_to_mock=True` legacy route; the final score is `83%` and the caveat
+  is machine-frozen in the score test.
+- The first fitness gate caught concrete imports but not all import aliases or
+  inline dispatch forms. Follow-up hardening covers `from services import …`,
+  direct comparisons, `match`, `startswith`/`endswith`, provider-key `get`, and
+  provider-indexed mapping lookup.
+- Passing a runtime-checkable Protocol proves public shape, not semantic
+  conformance. Existing specialized A0-A6 suites remain the behavioral proof.
+- A7 creates no visible product surface. Visual Evidence is not applicable;
+  A6 desktop/mobile captures remain the latest UI proof.
+
+### Verification
+
+- Focused architecture and A0-A6 conformance pack: `118 passed`.
+- Final repository regression: `1741 passed, 7 skipped in 371.95s`.
+- Architecture-fitness tests: `6 passed`; changed-file Ruff and diff checks are
+  clean.
+- Initial verified Opus: `claude-opus-4-8`, session
+  `6a00e210-39c9-4119-b70a-94f37acc1baf`, receipt
+  `20260718T012149Z_0bf84316-62a6-4dd2-8a7d-97ca41329b67.json`; no P0/P1,
+  `SHIP`, two accepted P2s.
+- Verified follow-up Opus: `claude-opus-4-8`, session
+  `36a1e86d-2935-4ac6-8007-ff8f56e0ead9`, receipt
+  `20260718T013959Z_52d4ea83-6332-44d0-a820-1731f0d07ab4.json`; both P2s
+  closed, no new P0/P1, `SHIP`.
+- A7 changed no runtime config, execution authority, credentials, orders,
+  positions, accounts, or production state.
