@@ -81,7 +81,7 @@ def test_gridmind_positions_show_lifecycle_times_and_keeps_immutable_fill_trace(
     assert 'table("#positions",["状态","方向","数量","开仓时间（北京）","平仓时间（北京）"' in html
     assert 'fills=execution.fills||[]' in html
     assert 'fillAction(fill)' in html
-    assert 'beijingDateTime(order.ts)' in html
+    assert 'beijingDateTime(order.updated_at??order.cancelled_at??order.ts)' in html
     assert 'trades.slice().reverse().map(trade=>' in html
 
 
@@ -119,9 +119,53 @@ def test_gridmind_tabs_show_authoritative_lifecycle_counts() -> None:
     for element_id in ("positionsCount", "ordersCount", "tradesCount"):
         assert f'id="{element_id}"' in html
     assert 'counts?.open_position_count' in html
-    assert 'counts?.open_order_count' in html
+    assert 'renderTabCounts(counts,lifecycleOrders.length)' in html
+    assert 'openOrderCount=counts.open_order_count' in html
     assert 'counts?.trade_count' in html
     assert 'counts.completed_round_trip_count' in html
+
+
+def test_gridmind_uses_revision_for_same_phase_lifecycle_recovery() -> None:
+    html = _html()
+
+    assert "revision=Number(order?.state_revision)" in html
+    assert "previousRevision=Number(previous?.state_revision)" in html
+    assert "hasRevision=Number.isInteger(revision)&&revision>0" in html
+    assert "hasPreviousRevision=Number.isInteger(previousRevision)&&previousRevision>0" in html
+    assert "revision>previousRevision" in html
+    assert "revision>=previousRevision" in html
+
+
+def test_gridmind_order_table_preserves_terminal_lifecycle_rows() -> None:
+    html = _html()
+
+    assert "订单状态" in html
+    assert "reconcileOrderLifecycle(data)" in html
+    assert "rank>previousRank" in html
+    assert "renderTables(execution,lifecycleOrders)" in html
+    assert 'orders.slice().reverse().map(order=>[esc(order.state_label||"未知状态")' in html
+    assert "openOrders.map(order=>" not in html
+    assert '["挂单中",side(order.side)' not in html
+
+
+def test_gridmind_lifecycle_retention_cannot_change_controls_or_chart_truth() -> None:
+    html = _html()
+
+    assert "orderLifecycle:{cycleId:null,byId:new Map(),anonymous:[]}" in html
+    assert "state.orderLifecycle.byId.get(orderId)" in html
+    assert "state.orderLifecycle.cycleId!==cycleId" in html
+    assert "applyReadModel(data)" in html
+    assert "applyReadModel(latest)" in html
+    assert "renderRobotControls(data,fresh,execution)" in html
+    assert "visibleOrders=previewing?state.preview.orders:(execution.open_orders||[])" in html
+    assert "accepted=counts.open_order_count" in html
+
+
+def test_gridmind_order_state_is_always_escaped_as_text() -> None:
+    html = _html()
+
+    assert 'esc(order.state_label||"未知状态")' in html
+    assert "order.state_label||order.state" not in html
 
 
 def test_v5_route_serves_gridmind_without_removing_legacy_console() -> None:

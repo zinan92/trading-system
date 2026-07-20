@@ -8,6 +8,7 @@ import services.strategy_control_plane as strategy_control_plane_module
 from schemas.accounting import build_accounting_snapshot
 from services.dualtrack_config import dualtrack_config as load_dualtrack_test_config
 from services.journal_store import write_json
+from services.order_lifecycle import OrderLifecycleStore
 from services.strategy_control_plane import StrategyControlPlane
 from services.trading_system_read_model import project_market_read_model
 from tests.test_strategy_control_plane import account_context, market, proposal, safe_grid
@@ -145,7 +146,9 @@ def test_new_endpoint_uses_history_for_lifecycle_and_pnl_but_current_cycle_for_p
     )
 
     assert response["execution"]["counts"] == {
+        "order_count": 25,
         "open_order_count": 25,
+        "unknown_order_count": 0,
         "open_position_count": 1,
         "trade_count": 2,
         "open_trade_count": 0,
@@ -166,6 +169,81 @@ def test_new_endpoint_uses_history_for_lifecycle_and_pnl_but_current_cycle_for_p
         response["contract"]["source_identities"]["current_accounting_snapshot_id"]
         == current_accounting["snapshot_id"]
     )
+
+
+def test_order_lifecycle_store_advances_through_stable_api_without_row_loss(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    run_date = "2026-07-18"
+    order_id = "order-lifecycle-api-1"
+    store = OrderLifecycleStore(output)
+    store.write_intent(
+        run_date,
+        order_id=order_id,
+        ticket_id="ticket-1",
+        idempotency_key="order-lifecycle-api-1",
+        requested_quantity=1.5,
+        requested_price=3999.0,
+        source="read_model_acceptance",
+    )
+    store.transition(run_date, order_id, "submitting", reason="safe_test_submit")
+    store.transition(run_date, order_id, "accepted", reason="safe_test_accept")
+
+    def assemble(**_kwargs):
+        source = _source()
+        lifecycle = store.current(run_date, order_id)
+        source["production_execution"]["orders"] = [{
+            **lifecycle,
+            "quantity": lifecycle["requested_quantity"],
+            "price": lifecycle["requested_price"],
+            "side": "buy",
+            "order_type": "limit",
+        }]
+        return source
+
+    monkeypatch.setattr(dashboard_server, "_assemble_strategy_console_snapshot", assemble)
+    write_json(output / "dualtrack" / "risk_decisions" / "current.json", [_risk()])
+
+    observed = []
+    for state in ("accepted", "partially_filled", "cancelled"):
+        if state == "partially_filled":
+            store.transition(
+                run_date,
+                order_id,
+                state,
+                reason="safe_test_partial_fill",
+                filled_quantity=0.5,
+            )
+        elif state == "cancelled":
+            store.transition(run_date, order_id, state, reason="safe_test_cancel")
+        response = dashboard_server.build_trading_system_read_model_response(
+            output_root=output,
+            as_of="2026-07-18T01:02:04+00:00",
+        )
+        order = response["execution"]["orders"][0]
+        observed.append({
+            "order_id": order["order_id"],
+            "state": order["state"],
+            "label": order["state_label"],
+            "rank": order["state_rank"],
+            "revision": order["state_revision"],
+            "order_count": response["execution"]["counts"]["order_count"],
+            "open_count": response["execution"]["counts"]["open_order_count"],
+        })
+
+    assert [row["order_id"] for row in observed] == [order_id, order_id, order_id]
+    assert [row["state"] for row in observed] == [
+        "accepted",
+        "partially_filled",
+        "cancelled",
+    ]
+    assert [row["label"] for row in observed] == ["已接受", "部分成交", "已撤单"]
+    assert [row["rank"] for row in observed] == sorted(row["rank"] for row in observed)
+    assert [row["revision"] for row in observed] == [3, 4, 5]
+    assert [row["order_count"] for row in observed] == [1, 1, 1]
+    assert [row["open_count"] for row in observed] == [1, 1, 0]
 
 
 def test_new_route_and_handler_use_no_store_json_boundary(monkeypatch) -> None:

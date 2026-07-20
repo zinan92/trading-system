@@ -4,6 +4,8 @@ import json
 from copy import deepcopy
 
 from schemas.accounting import build_accounting_snapshot
+from services.accounting_projection_core import OPEN_ORDER_STATES
+from services.order_lifecycle import LEGAL_TRANSITIONS, ORDER_STATES, TERMINAL_STATES
 from services.trading_system_read_model import (
     TRADING_SYSTEM_READ_MODEL_SCHEMA,
     project_trading_system_read_model,
@@ -229,7 +231,9 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
         "display_label": "中性 · 稳健 · 等价差 · 3900–4100 · 50 格 · 每格 2800 USD",
     }
     assert model["execution"]["counts"] == {
+        "order_count": 25,
         "open_order_count": 25,
+        "unknown_order_count": 0,
         "open_position_count": 0,
         "trade_count": 1,
         "open_trade_count": 0,
@@ -249,6 +253,162 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     assert model["runtime"]["open_order_count"] == 25
     assert model["runtime"]["can_stop_when_authorized"] is True
     assert source == before
+
+
+def test_read_model_projects_only_authoritative_order_rows_without_fill_inference() -> None:
+    source = _source()
+    source["production_execution"]["orders"] = []
+    source["production_execution"]["current_cycle_fills"] = [{
+        "fill_id": "full-fill-1",
+        "order_id": "order-1",
+        "quantity": 1.5,
+    }]
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    assert model["execution"]["orders"] == []
+    assert model["execution"]["counts"]["order_count"] == 0
+    assert model["execution"]["counts"]["open_order_count"] == 0
+    assert model["execution"]["scopes"]["orders_and_positions"]["order_state_source"] == (
+        "current_execution_snapshot"
+    )
+
+
+def test_order_state_aliases_share_canonical_lifecycle_metadata() -> None:
+    source = _source()
+    source["production_execution"]["orders"] = [
+        {"order_id": "order-partial", "state": "partiallyfilled"},
+        {"order_id": "order-cancel", "state": "canceled"},
+    ]
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    assert [(row["state"], row["state_label"]) for row in model["execution"]["orders"]] == [
+        ("partially_filled", "部分成交"),
+        ("cancelled", "已撤单"),
+    ]
+    assert model["execution"]["counts"]["open_order_count"] == 1
+    assert [row["is_terminal"] for row in model["execution"]["orders"]] == [False, True]
+
+
+def test_all_canonical_order_states_have_safe_presentation_metadata() -> None:
+    source = _source()
+    states = sorted(ORDER_STATES | OPEN_ORDER_STATES)
+    source["production_execution"]["orders"] = [
+        {"order_id": f"order-{state}", "state": state} for state in states
+    ]
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    projected = model["execution"]["orders"]
+    assert [row["state"] for row in projected] == states
+    assert all(row["state_known"] is True for row in projected)
+    assert all(row["state_rank"] > 0 for row in projected)
+    assert all(row["state_revision"] is None for row in projected)
+    assert all(row["state_label"] != "未知状态" for row in projected)
+    assert {
+        row["state"] for row in projected if row["is_open"]
+    } == OPEN_ORDER_STATES
+    assert {
+        row["state"] for row in projected if row["is_terminal"]
+    } == TERMINAL_STATES
+    ranks = {row["state"]: row["state_rank"] for row in projected}
+    assert all(
+        ranks[next_state] >= ranks[state]
+        for state, next_states in LEGAL_TRANSITIONS.items()
+        for next_state in next_states
+    )
+
+
+def test_transition_history_exposes_revision_for_bidirectional_protection_recovery() -> None:
+    source = _source()
+    source["production_execution"]["orders"] = [{
+        "order_id": "protected-order",
+        "state": "protective_attached",
+        "transitions": [
+            {"from": "", "to": "entry"},
+            {"from": "entry", "to": "submitting"},
+            {"from": "submitting", "to": "accepted"},
+            {"from": "accepted", "to": "filled"},
+            {"from": "filled", "to": "protective_attached"},
+            {"from": "protective_attached", "to": "protective_failed"},
+            {"from": "protective_failed", "to": "protective_attached"},
+        ],
+    }]
+
+    order = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()["execution"]["orders"][0]
+
+    assert order["state_rank"] == 60
+    assert order["state_revision"] == 7
+
+
+def test_state_revision_is_withheld_when_history_does_not_match_current_state() -> None:
+    source = _source()
+    source["production_execution"]["orders"] = [{
+        "order_id": "unproven-order",
+        "state": "protective_attached",
+        "transitions": [{"from": "protective_attached", "to": "protective_failed"}],
+    }]
+
+    order = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()["execution"]["orders"][0]
+
+    assert order["state_revision"] is None
+
+
+def test_unknown_order_state_uses_text_only_fallback_label() -> None:
+    source = _source()
+    source["runtime"].update({"desired_state": "stopped", "actual_state": "stopped"})
+    source["production_execution"]["orders"] = [{
+        "order_id": "hostile-order",
+        "state": '<img src=x onerror="globalThis.pwned=true">',
+    }]
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    order = model["execution"]["orders"][0]
+    assert order["state_known"] is False
+    assert order["state_label"] == "未知状态"
+    assert order["state_rank"] == 0
+    assert order["is_open"] is False
+    assert model["execution"]["counts"]["unknown_order_count"] == 1
+    assert model["completeness"] == {
+        "status": "degraded",
+        "issues": ["execution_order_state_unknown"],
+    }
+    assert model["runtime"]["can_start_when_authorized"] is False
+    assert model["runtime"]["can_stop_when_authorized"] is True
+    assert model["runtime"]["status"] == "degraded"
+    assert model["runtime"]["status_label"] == "异常"
 
 
 def test_one_open_and_one_open_then_close_are_each_one_trade() -> None:

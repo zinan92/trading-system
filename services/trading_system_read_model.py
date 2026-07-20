@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any
 
+from services.accounting_projection_core import OPEN_ORDER_STATES
+from services.order_lifecycle import LEGAL_TRANSITIONS, ORDER_STATES, TERMINAL_STATES
+
 
 TRADING_SYSTEM_READ_MODEL_SCHEMA = "trading-system-read-model-v1"
 
@@ -32,14 +35,29 @@ _GRID_MODE_LABELS = {
     "arithmetic": "等价差",
     "geometric": "等比例",
 }
-_OPEN_ORDER_STATES = {
-    "accepted",
-    "open",
-    "partially_filled",
-    "pending",
-    "submitted",
-    "working",
+_ORDER_STATE_PRESENTATION = {
+    "entry": (10, "已创建"),
+    "submitting": (20, "提交中"),
+    "submitted": (21, "提交中"),
+    "new": (22, "待接受"),
+    "pending": (22, "待接受"),
+    "accepted": (30, "已接受"),
+    "open": (30, "已接受"),
+    "working": (30, "已接受"),
+    "partially_filled": (40, "部分成交"),
+    "filled": (50, "已成交"),
+    "cancelled": (50, "已撤单"),
+    "rejected": (50, "已拒绝"),
+    "expired": (50, "已过期"),
+    # Protection can legally recover in either direction.  Keep both states in
+    # one presentation phase and use the authoritative transition revision to
+    # distinguish a real recovery from a delayed snapshot.
+    "protective_attached": (60, "保护已挂"),
+    "protective_failed": (60, "保护异常"),
+    "closed": (70, "已关闭"),
+    "reconciled": (80, "已对账"),
 }
+_KNOWN_ORDER_STATES = ORDER_STATES | OPEN_ORDER_STATES
 
 
 @dataclass(frozen=True)
@@ -92,6 +110,9 @@ def project_trading_system_read_model(
         history_accounting=accounting,
         current_accounting=current_accounting,
     )
+    unknown_order_count = execution["counts"]["unknown_order_count"]
+    if unknown_order_count:
+        completeness_issues.append("execution_order_state_unknown")
     risk = _project_risk(
         source.get("runtime"),
         risk_decision,
@@ -103,6 +124,7 @@ def project_trading_system_read_model(
         plan=plan,
         market=market,
         open_order_count=execution["counts"]["open_order_count"],
+        unknown_order_count=unknown_order_count,
         risk_status=risk["status"],
         completeness_issues=completeness_issues,
     )
@@ -190,8 +212,8 @@ def _project_execution(
     history_accounting: Mapping[str, Any],
     current_accounting: Mapping[str, Any],
 ) -> dict[str, Any]:
-    orders = _json_copy(_list(source.get("orders")))
-    open_orders = [row for row in orders if _is_open_order(row)]
+    orders = _project_orders(source.get("orders"))
+    open_orders = [row for row in orders if row["is_open"]]
     current_positions = _json_copy(_list(current_accounting.get("positions")))
     open_positions = [
         row
@@ -211,7 +233,9 @@ def _project_execution(
         return_pct = round(total_pnl / starting_balance * 100.0, 8)
 
     counts = {
+        "order_count": len(orders),
         "open_order_count": len(open_orders),
+        "unknown_order_count": sum(1 for row in orders if not row["state_known"]),
         "open_position_count": _integer_or_none(current_counts.get("open_position_count")),
         "trade_count": _integer_or_none(canonical_counts.get("trade_count")),
         "open_trade_count": _integer_or_none(canonical_counts.get("open_trade_count")),
@@ -247,6 +271,7 @@ def _project_execution(
                 "kind": "current_execution_cycle",
                 "cycle_id": source.get("cycle_id"),
                 "accounting_snapshot_id": current_accounting.get("snapshot_id"),
+                "order_state_source": "current_execution_snapshot",
             },
             "trades_fills_and_pnl": {
                 "kind": "all_versioned_production_plans",
@@ -321,6 +346,7 @@ def _project_runtime(
     plan: Mapping[str, Any],
     market: Mapping[str, Any],
     open_order_count: int | None,
+    unknown_order_count: int,
     risk_status: str,
     completeness_issues: list[str],
 ) -> dict[str, Any]:
@@ -329,7 +355,7 @@ def _project_runtime(
     actual = str(source.get("actual_state") or desired)
     plan_id = str(plan.get("strategy_plan_id") or "")
     runtime_plan_id = str(source.get("strategy_plan_id") or "")
-    inconsistent = False
+    inconsistent = unknown_order_count > 0
     if desired != actual:
         inconsistent = True
         completeness_issues.append("runtime_desired_actual_mismatch")
@@ -357,8 +383,17 @@ def _project_runtime(
         "status": status,
         "status_label": "异常" if status == "degraded" else known_statuses[status],
         "open_order_count": open_order_count,
-        "can_start_when_authorized": actual in {"stopped", "error"} and bool(plan_id) and market.get("trusted") is True,
-        "can_stop_when_authorized": actual in {"starting", "running", "replanning", "stopping"},
+        "unknown_order_count": unknown_order_count,
+        "can_start_when_authorized": (
+            actual in {"stopped", "error"}
+            and bool(plan_id)
+            and market.get("trusted") is True
+            and unknown_order_count == 0
+        ),
+        "can_stop_when_authorized": (
+            actual in {"starting", "running", "replanning", "stopping"}
+            or unknown_order_count > 0
+        ),
     }
 
 
@@ -422,10 +457,56 @@ def _project_strategy_summary(
     }
 
 
-def _is_open_order(value: Any) -> bool:
-    row = _mapping(value)
-    state = str(row.get("state") or row.get("status") or "").lower()
-    return state in _OPEN_ORDER_STATES
+def _project_orders(value: Any) -> list[dict[str, Any]]:
+    return [_project_order(_mapping(row)) for row in _list(value)]
+
+
+def _project_order(row: Mapping[str, Any]) -> dict[str, Any]:
+    state = _normalize_order_state(row.get("state") or row.get("status"))
+    rank, label = _ORDER_STATE_PRESENTATION.get(state, (0, "未知状态"))
+    return {
+        **_json_copy(row),
+        "state": state or "unknown",
+        "state_label": label,
+        "state_rank": rank,
+        "state_revision": _order_state_revision(row, state),
+        "state_known": state in _KNOWN_ORDER_STATES,
+        "state_source": "current_execution_snapshot",
+        "is_open": state in OPEN_ORDER_STATES,
+        "is_terminal": state in TERMINAL_STATES,
+    }
+
+
+def _order_state_revision(row: Mapping[str, Any], state: str) -> int | None:
+    """Return a comparable revision only when transition history proves it."""
+
+    transitions = row.get("transitions")
+    if not isinstance(transitions, (list, tuple)) or not transitions:
+        return None
+    previous = ""
+    for index, transition in enumerate(transitions):
+        if not isinstance(transition, Mapping):
+            return None
+        from_state = _normalize_order_state(transition.get("from"))
+        to_state = _normalize_order_state(transition.get("to"))
+        if index == 0:
+            if from_state or to_state != "entry":
+                return None
+        elif from_state != previous or to_state not in LEGAL_TRANSITIONS.get(from_state, set()):
+            return None
+        previous = to_state
+    if previous != state:
+        return None
+    return len(transitions)
+
+
+def _normalize_order_state(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "canceled": "cancelled",
+        "partiallyfilled": "partially_filled",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _snapshot_id(payload: Mapping[str, Any]) -> str:
