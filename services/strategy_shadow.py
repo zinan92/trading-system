@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from services.accounting_projection import project_execution_accounting
+from services.backtest_port import StrategyShadowReplayPort
 from services.execution_conformance import (
     build_execution_scenario,
     candidate_receipt_blockers,
@@ -17,12 +19,6 @@ from services.strategy_plan_execution import build_plan_grid_entry_commands
 STRATEGY_SHADOW_SCHEMA = "strategy-shadow-run-v2"
 
 
-@runtime_checkable
-class StrategyShadowReplayPort(Protocol):
-    def replay(self, scenario: dict[str, Any]) -> dict[str, Any]:
-        ...
-
-
 class StrategyShadowRunner:
     """Build immutable inputs and project engine facts; never match orders."""
 
@@ -32,10 +28,12 @@ class StrategyShadowRunner:
         *,
         replay_port: StrategyShadowReplayPort,
         config: dict[str, Any],
+        plugin_audit: dict[str, Any] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.replay_port = replay_port
         self.config = dict(config)
+        self.plugin_audit = deepcopy(plugin_audit or {})
 
     def run(
         self,
@@ -116,6 +114,8 @@ class StrategyShadowRunner:
                 "storage_namespace": str(replay.get("storage_namespace") or ""),
             },
         }
+        if self.plugin_audit:
+            payload["backtest_plugin"] = deepcopy(self.plugin_audit)
         _persist_candidate_receipt(self.output_root, scenario["scenario_id"], receipt)
         path = self.output_root / "dualtrack" / "strategy_shadows" / f"{cycle_id}_{variant_id}.json"
         rows = load_json(path)

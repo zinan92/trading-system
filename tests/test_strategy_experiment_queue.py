@@ -44,7 +44,10 @@ def test_strategy_experiment_queue_builds_paper_only_candidates(tmp_path: Path):
     assert result["paper_only"] is True
     assert result["auto_apply"] is False
     assert result["sample_bars"] == 260
+    assert result["backtest_plugin"]["plugin"]["name"] == "local_signal"
     assert len(result["experiments"]) == 4
+    assert all(item["backtest_plugin"] == "local_signal" for item in result["experiments"])
+    assert all(len(item["input_hash"]) == 64 for item in result["experiments"])
     assert result["review_hypotheses"][0]["hypothesis_id"] == "hyp_20260526_1_position_filter_blocked"
     assert result["shadow_hypotheses"][0]["status"] == "queued_shadow"
     assert result["shadow_hypotheses"][0]["auto_apply"] is False

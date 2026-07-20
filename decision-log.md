@@ -6724,3 +6724,113 @@ auditable datafeed port; broker execution remains a separate port.
 - Architecture progress is now `87%`, reproducible from the canonical audit.
 - No strategy parameters, execution/risk/broker authority, credentials, orders,
   positions, accounts, or production state were changed.
+
+## 2026-07-18 - A10 Backtest Ports kickoff
+
+### Objective and value
+
+- Make backtest engine selection explicit across Daily signal evidence,
+  historical strategy ranking, and Nautilus Strategy Shadow without conflating
+  their different contracts.
+- Remove production Daily's implicit remote/mock fallback so an unavailable
+  service cannot fabricate historical-looking evidence.
+
+### Decisions
+
+- Use one frozen, kind-aware registry with three narrow ports rather than one
+  untyped universal backtest interface.
+- Preserve all simulation math. Wrap LocalBacktester, StrategyBacktester,
+  remote evaluation, synthetic context, and Nautilus Strategy Shadow as adapters.
+- Follow NautilusTrader's config/run separation. Keep Nautilus in its isolated
+  runtime and retain Strategy Shadow receipts, parity, causal boundaries,
+  accounting, and non-authoritative storage.
+- Keep synthetic evidence only as an explicit compatibility plugin. It is always
+  degraded and promotion-ineligible; production Daily selects Local explicitly.
+- Do not add Pluggy or automatic package discovery. Five trusted factories do
+  not justify a new dependency or arbitrary installed-code authority.
+
+### Gotchas
+
+- `analysis_fallback_to_mock` currently affects both Copilot and BacktestClient.
+  The cutover must stop using it for backtests without changing Copilot behavior.
+- Thin evidence remains context, not a paper-ticket blocker. This milestone must
+  not silently change trade frequency or risk policy.
+- Historical MA signals are an acknowledged price-only approximation and must
+  remain labelled `faithful_signals=false`.
+- The primary worktree is unrelated and active. A10 is isolated on top of the
+  clean A9 branch and changes no live configuration or state.
+
+### Baseline
+
+- A9 full suite: `1763 passed, 7 skipped`.
+- Backtest/local/ranking/Strategy Shadow behavior: `27 passed`.
+
+## 2026-07-18 - A10 Backtest Ports complete
+
+### Value delivered
+
+- Signal evidence, historical strategy ranking, and Strategy Shadow execution
+  replay now have three distinct versioned ports behind one kind-aware frozen
+  registry. A replacement backtester no longer requires editing Daily, the
+  leaderboard, Strategy Shadow, or the paper-only parameter experiment queue.
+- Production Daily explicitly selects local historical evidence. Empty history
+  stays transparent `thin`/`no_trade`; it cannot silently fall through to a
+  remote service or fabricated sample.
+- Every result records trusted plugin identity, evidence tier, content-bound
+  input identity, registry fingerprint, degradation, and source eligibility for
+  promotion. Core services discard plugin attempts to forge these fields or
+  historical report identity.
+
+### Decisions
+
+- Keep three narrow contracts rather than a universal `run(dict)` interface:
+  signal context, historical ranking, and execution replay have different
+  inputs, outputs, and authority.
+- Keep Local, remote, synthetic context, event-driven ranking, and Nautilus
+  Shadow as explicit adapters. Do not add Pluggy or arbitrary installed-package
+  discovery for five trusted factories.
+- Preserve `BacktestClient` only as a compatibility facade. It may retain its
+  explicit remote-to-synthetic fallback for old test/legacy callers, but no
+  production application imports it.
+- Treat `promotion_eligible` as evidence-source eligibility, not promotion
+  approval. Verdict, sample threshold, regime, out-of-sample comparison, and
+  human/automatic promotion policy remain independent gates.
+- Preserve all Local, StrategyBacktester, cost, MA approximation, and Nautilus
+  Shadow math. A10 changes selection and provenance, not strategy behavior.
+
+### Gotchas
+
+- `analysis_fallback_to_mock` still configures Copilot compatibility. Its name is
+  historical; A10 removes it only from backtest selection and must not silently
+  change Copilot behavior.
+- An input hash that omitted local stop/target/hold settings would not reproduce
+  a result. `SignalBacktestRequest` therefore binds the exact backtest config as
+  well as signal, analysis, bars, and run context.
+- Historical plugin output must be allowlisted. Spreading an arbitrary result
+  mapping after core fields would let a plugin relabel strategy identity or
+  provenance even without changing metrics.
+- Opus found that `StrategyExperimentQueue` still constructed
+  `LocalBacktester` directly. It is the same signal-evidence semantic, so its
+  variant config was moved through the signal port rather than inventing a
+  fourth port.
+- A capable plugin can still be degraded by design; degradation always wins and
+  prevents source eligibility. Zero-loss historical runs intentionally preserve
+  infinite profit factor instead of treating it as malformed.
+- A10 has no visible product surface. Visual Evidence is not applicable; tests,
+  commits, documents, and the Opus receipt are trace material only.
+
+### Verification
+
+- Final repository regression: `1788 passed, 7 skipped in 435.68s`.
+- Post-review Backtest/Shadow/fitness defense pack: `36 passed`; Local variant
+  config round-trip and simulation parity are included.
+- Changed-file Ruff, JSON config validation, architecture fitness, and diff
+  checks: clean.
+- Verified Opus: `claude-opus-4-8`, session
+  `7fa956ce-3649-4397-9339-b2eac5a22e6d`, receipt
+  `20260718T035024Z_9dfbdc05-b3c7-4dc1-b349-8833b83ef345.json`; no P0-P2,
+  `SHIP`. Three P3 defense tests were added and the remaining direct Local caller
+  was migrated before the final full regression.
+- Architecture progress: `90%`, reproducible from the canonical audit table.
+- No strategy parameters, risk rules, execution/broker authority, credentials,
+  orders, positions, accounts, or production state were changed.

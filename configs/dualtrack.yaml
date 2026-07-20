@@ -36,6 +36,9 @@
     "refresh_order_sync_before_import": false,
     "require_success_before_close": true
   },
+  "backtest_plugins": {
+    "strategy_shadow": "nautilus_strategy_shadow"
+  },
   "plan_lock_deadline_min_before_cycle": 0,
   "machine_planner": {
     "plugin": "codex_newsletter",

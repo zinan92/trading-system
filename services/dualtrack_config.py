@@ -35,6 +35,9 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "refresh_order_sync_before_import": False,
         "require_success_before_close": True,
     },
+    "backtest_plugins": {
+        "strategy_shadow": "nautilus_strategy_shadow",
+    },
     "plan_lock_deadline_min_before_cycle": 0,
     "machine_planner": {
         "plugin": "codex_newsletter",

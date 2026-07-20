@@ -4,6 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from pipelines.strategy_shadow_replay import run_strategy_shadow_replay
+from services.backtest_plugin_registry import BacktestPluginRegistry, UnknownBacktestPlugin
+from services.backtest_port import STRATEGY_SHADOW_KIND
 from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.execution_conformance import build_candidate_execution_receipt
 from services.journal_store import load_json, write_json
@@ -261,3 +264,98 @@ def test_dashboard_shadow_loader_reads_last_v1_or_v2_row_per_variant(tmp_path: P
         {"schema_version": "strategy-shadow-run-v2", "variant_id": "a"},
         {"schema_version": "strategy-shadow-run-v1", "variant_id": "b"},
     ]
+
+
+def test_strategy_shadow_pipeline_uses_custom_replay_plugin_and_persists_audit(
+    tmp_path: Path,
+) -> None:
+    registry = BacktestPluginRegistry()
+    registry.register(
+        "fake_shadow",
+        lambda _context: FakeReplayPort(),
+        kind=STRATEGY_SHADOW_KIND,
+        evidence_tier="execution_replay_test",
+        promotion_evidence_capable=True,
+    )
+    config = {
+        **_config(),
+        "backtest_plugins": {"strategy_shadow": "fake_shadow"},
+    }
+
+    result = run_strategy_shadow_replay(
+        output_root=tmp_path / "outputs",
+        cycle_id=CYCLE_ID,
+        variant_id="custom",
+        plan=_plan(),
+        market_events=_events(),
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=tmp_path / "unused-preflight.json",
+        config=config,
+        backtest_plugin_registry=registry,
+    )
+
+    assert result["status"] == "pass"
+    assert result["backtest_plugin"]["plugin"]["name"] == "fake_shadow"
+    assert result["backtest_plugin"]["plugin"]["kind"] == STRATEGY_SHADOW_KIND
+    assert result["backtest_plugin"]["registry_fingerprint"] == registry.fingerprint
+    rows = load_json(
+        tmp_path
+        / "outputs"
+        / "dualtrack"
+        / "strategy_shadows"
+        / f"{CYCLE_ID}_custom.json"
+    )
+    assert rows[-1]["backtest_plugin"] == result["backtest_plugin"]
+
+
+def test_unknown_strategy_shadow_plugin_fails_before_artifact_creation(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    config = {
+        **_config(),
+        "backtest_plugins": {"strategy_shadow": "typo"},
+    }
+
+    with pytest.raises(UnknownBacktestPlugin, match="typo"):
+        run_strategy_shadow_replay(
+            output_root=output,
+            cycle_id=CYCLE_ID,
+            variant_id="custom",
+            plan=_plan(),
+            market_events=_events(),
+            nautilus_python=tmp_path / "unused-python",
+            preflight_path=tmp_path / "unused-preflight.json",
+            config=config,
+        )
+
+    assert not output.exists()
+
+
+def test_strategy_shadow_plugin_audit_cannot_override_core_safety_flags(
+    tmp_path: Path,
+) -> None:
+    forged_audit = {
+        "schema_version": "backtest-plugin-audit-v1",
+        "safety": {
+            "real_orders": True,
+            "writes_production_ledger": True,
+        },
+    }
+
+    result = StrategyShadowRunner(
+        tmp_path / "outputs",
+        replay_port=FakeReplayPort(),
+        config=_config(),
+        plugin_audit=forged_audit,
+    ).run(
+        cycle_id=CYCLE_ID,
+        variant_id="hostile-audit",
+        plan=_plan(),
+        market_events=_events(),
+    )
+
+    assert result["safety"]["real_orders"] is False
+    assert result["safety"]["writes_production_ledger"] is False
+    assert result["safety"]["writes_authority_gate_evidence"] is False
+    assert result["backtest_plugin"] == forged_audit

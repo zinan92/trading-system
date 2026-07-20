@@ -16,11 +16,14 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.config_loader import ROOT, load_pipeline_config
+from services.backtest_plugin_composition import compose_historical_strategy_backtest
+from services.backtest_plugin_registry import BacktestPluginRegistry
+from services.backtest_port import HistoricalStrategyBacktestRequest
+from services.backtest_service import HistoricalStrategyBacktestService
+from services.config_loader import ROOT, load_pipeline_config, load_risk_rules
 from services.journal_store import write_json
 from services.market_data_access import market_data_repository
 from services.run_date import utc_run_date
-from services.strategy_backtester import BacktestConfig, StrategyBacktester
 from services.strategy_registry import StrategyRegistry
 
 
@@ -64,9 +67,30 @@ def enumerate_signals(strategy, bars: list) -> tuple[list[dict], bool]:
     return _ma_cross_signals(strategy, bars), False
 
 
-def backtest_strategy(strategy, bars: list) -> dict:
+def backtest_strategy(
+    strategy,
+    bars: list,
+    *,
+    backtest_service: HistoricalStrategyBacktestService,
+    cost_rules: dict,
+) -> dict:
     signals, faithful = enumerate_signals(strategy, bars)
-    metrics = StrategyBacktester(BacktestConfig.from_strategy(strategy)).run(bars, signals)
+    request = HistoricalStrategyBacktestRequest(
+        strategy={
+            "strategy_id": strategy.strategy_id,
+            "symbol": strategy.symbol,
+            "timeframe": strategy.timeframe,
+            "engine": str(strategy.params.get("engine", "ma")),
+        },
+        bars=tuple(bar.to_dict() for bar in bars),
+        signals=tuple(dict(signal) for signal in signals),
+        backtest_config={
+            "strategy_backtest": dict(strategy.params.get("backtest") or {}),
+            "starting_equity": float(strategy.starting_equity),
+        },
+        cost_rules=cost_rules,
+    )
+    metrics = backtest_service.run(request)
     return {
         "strategy_id": strategy.strategy_id,
         "symbol": strategy.symbol,
@@ -77,6 +101,8 @@ def backtest_strategy(strategy, bars: list) -> dict:
         "last_timestamp": bars[-1].timestamp if bars else "",
         "signal_count": len(signals),
         "faithful_signals": faithful,
+        "backtest_plugin": backtest_service.runtime.audit_dict(),
+        "backtest_input_hash": request.input_hash,
         **metrics,
     }
 
@@ -87,18 +113,33 @@ def backtest_all(
     market_db: Path | None = None,
     registry: StrategyRegistry | None = None,
     max_bars: int | None = None,
+    backtest_plugin_registry: BacktestPluginRegistry | None = None,
 ) -> dict:
     run_date = run_date or utc_run_date()
     config = load_pipeline_config()
+    backtest_service = HistoricalStrategyBacktestService(
+        compose_historical_strategy_backtest(
+            config,
+            registry=backtest_plugin_registry,
+        )
+    )
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
     registry = registry or StrategyRegistry()
     store = market_data_repository(market_db)
+    cost_rules = dict(
+        load_risk_rules().get("default", {}).get("paper_execution_costs", {})
+    )
 
     results = []
     for strategy in registry.enabled():
         bars = store.load_bars(strategy.symbol, strategy.timeframe, max_bars or 1_000_000)
-        report = backtest_strategy(strategy, bars)
+        report = backtest_strategy(
+            strategy,
+            bars,
+            backtest_service=backtest_service,
+            cost_rules=cost_rules,
+        )
         write_json(output_root / "backtests" / f"{strategy.strategy_id}.json", [report])
         results.append(report)
 
@@ -109,6 +150,7 @@ def backtest_all(
         "run_date": run_date,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "exit_model": "fixed stop/target/timeout",
+        "backtest_plugin": backtest_service.runtime.audit_dict(),
         "strategy_count": len(results),
         "strategies": ranked,
     }

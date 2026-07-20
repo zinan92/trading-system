@@ -7,12 +7,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from services.backtest_plugin_composition import compose_strategy_shadow_backtest
+from services.backtest_plugin_registry import BacktestPluginRegistry
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_nautilus_execution_adapter import ReplayExecutor
 from services.journal_store import load_json
 from services.strategy_shadow import StrategyShadowRunner
-from services.strategy_shadow_nautilus import NautilusStrategyShadowReplay
 
 
 def run_strategy_shadow_replay(
@@ -26,19 +27,22 @@ def run_strategy_shadow_replay(
     preflight_path: str | Path,
     config: dict[str, Any] | None = None,
     replay_executor: ReplayExecutor | None = None,
+    backtest_plugin_registry: BacktestPluginRegistry | None = None,
 ) -> dict[str, Any]:
     settings = dict(config or dualtrack_config())
-    replay_port = NautilusStrategyShadowReplay(
-        output_root,
+    runtime = compose_strategy_shadow_backtest(
+        settings,
+        output_root=output_root,
         nautilus_python=nautilus_python,
         preflight_path=preflight_path,
-        config=settings,
         replay_executor=replay_executor,
+        registry=backtest_plugin_registry,
     )
     return StrategyShadowRunner(
         output_root,
-        replay_port=replay_port,
+        replay_port=runtime.port,
         config=settings,
+        plugin_audit=runtime.audit_dict(),
     ).run(
         cycle_id=cycle_id,
         variant_id=variant_id,
