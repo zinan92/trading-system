@@ -9,6 +9,7 @@ from services.dualtrack_execution_adapter import (
     LegacyPaperExecutionAdapter,
     build_execution_engine_adapter,
 )
+from services.accounting_projection import project_execution_accounting
 from services.journal_store import load_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
@@ -67,6 +68,13 @@ def test_legacy_adapter_exposes_canonical_execution_snapshot(tmp_path: Path) -> 
     assert command_rows[0]["command_id"] == order["order_id"]
     assert command_rows[0]["command"]["order_type"] == "limit"
 
+    accounting = project_execution_accounting(snapshot).to_dict()
+    assert accounting["source_name"] == "legacy_paper"
+    assert accounting["counts"]["order_count"] == 1
+    assert accounting["counts"]["trade_count"] == 0
+    assert accounting["counts"]["completed_trade_count"] == 0
+    assert accounting["pnl"]["net_realized_pnl"] == 0.0
+
 
 def test_empty_snapshot_keeps_configured_paper_account_equity(tmp_path: Path) -> None:
     adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
@@ -76,6 +84,7 @@ def test_empty_snapshot_keeps_configured_paper_account_equity(tmp_path: Path) ->
     assert snapshot["account"]["starting_cash"] == TEST_CONFIG["capital_per_track_usd"]
     assert snapshot["account"]["ending_cash"] == TEST_CONFIG["capital_per_track_usd"]
     assert snapshot["account"]["equity"] == TEST_CONFIG["capital_per_track_usd"]
+    assert snapshot["account"]["funding"] == 0.0
 
 
 def test_protective_exit_inherits_strategy_plan_traceability(tmp_path: Path) -> None:

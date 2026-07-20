@@ -193,6 +193,11 @@ def test_exchange_accounting_uses_utc_run_date_window_for_daily_loss(tmp_path, m
     assert report["exchange_accounting"]["trade_count"] == 1
     assert report["exchange_accounting"]["income_count"] == 1
     assert report["exchange_accounting"]["net_realized_pnl_estimate"] == -3.5
+    assert report["accounting_snapshot"]["schema_version"] == "accounting-snapshot-v1"
+    assert report["accounting_snapshot"]["counts"]["fill_count"] == 1
+    assert report["accounting_snapshot"]["counts"]["trade_count"] is None
+    assert report["accounting_snapshot"]["pnl"]["net_realized_pnl"] == -3.5
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "pass"
 
     guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
         _RUN_DATE,
@@ -232,6 +237,9 @@ def test_account_history_non_list_response_is_not_observed_and_blocks_daily_loss
     assert report["account_observation"]["account_observed"] is False
     assert report["account_observation"]["balance_present"] is True
     assert "response was not a list" in report["error"]
+    assert all(value is None for value in report["accounting_snapshot"]["counts"].values())
+    assert report["accounting_snapshot"]["pnl"]["net_realized_pnl"] is None
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "blocked"
     guardrail = LiveMoneyGuardrails(root, broker_config={"request_dir": "testnet_order_requests"}).evaluate_order(
         _RUN_DATE,
         ticket={"ticket_id": "ticket_guard", "asset": "GOLD", "action": "prepare_buy"},
@@ -665,6 +673,40 @@ def test_flat_exchange_reconciliation_marks_closed_order_reconciled(tmp_path, mo
     lifecycle = load_json(root / "order_lifecycle" / "2026-06-03.json")[0]
     assert lifecycle["state"] == "reconciled"
     assert [item["to"] for item in lifecycle["transitions"]][-1] == "reconciled"
+
+
+def test_accounting_projection_failure_cannot_block_reconciliation_writes(tmp_path, monkeypatch):
+    _creds(monkeypatch)
+    root = tmp_path / "outputs"
+    store = OrderLifecycleStore(root)
+    store.write_intent(
+        "2026-06-03",
+        order_id="order_closed",
+        ticket_id="ticket_closed",
+        idempotency_key="order_closed",
+        requested_quantity=0.002,
+        requested_price=4525.5,
+        source="test",
+    )
+    for state in ["submitting", "accepted", "filled", "protective_attached", "closed"]:
+        store.transition("2026-06-03", "order_closed", state, reason=f"test_{state}")
+    monkeypatch.setattr(
+        "services.accounting_projection.build_accounting_snapshot",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot builder failed")),
+    )
+
+    report = LiveBrokerReconciliation(
+        root,
+        _CFG,
+        opener=_opener(0.0),
+    ).run("2026-06-03")
+
+    assert report["reconciled"] is True
+    assert report["accounting_snapshot"]["schema_version"] == "accounting-projection-unavailable-v1"
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "blocked"
+    assert report["accounting_snapshot"]["reconciliation"]["issues"][0]["code"] == "accounting_projection_unavailable"
+    assert load_json(root / "live_reconciliation" / "current.json")[0] == report
+    assert OrderLifecycleStore(root).current("2026-06-03", "order_closed")["state"] == "reconciled"
 
 
 def test_missing_credentials_records_error_not_crash(tmp_path, monkeypatch):

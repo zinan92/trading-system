@@ -7,6 +7,7 @@ import pytest
 
 import pipelines.dashboard_server as dashboard_server
 import pipelines.dualtrack_execution_reconcile as reconcile_pipeline
+from services.accounting_projection import AccountingContractError
 from services.journal_store import load_json, write_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
@@ -52,12 +53,63 @@ def test_execution_endpoint_separates_authoritative_and_shadow_reconciliation(tm
         "blocker": "instrument_definition_missing",
     }
     assert payload["shadow_cutover"] == {"status": "blocked", "blocker": "candidate_snapshot_missing"}
+    assert payload["accounting_snapshot"]["schema_version"] == "accounting-snapshot-v1"
+    assert payload["accounting_snapshot"]["source_name"] == "legacy_paper"
+    assert payload["accounting_snapshot"]["counts"] == {
+        "order_count": 0,
+        "open_order_count": 0,
+        "fill_count": 0,
+        "entry_fill_count": 0,
+        "exit_fill_count": 0,
+        "trade_count": 0,
+        "open_trade_count": 0,
+        "completed_trade_count": 0,
+        "position_count": 0,
+        "open_position_count": 0,
+    }
     assert payload["safety"] == {
         "read_only": True,
         "execution_control": False,
         "machine_track_disclosed": False,
     }
     assert "/api/dualtrack/execution/" not in dashboard_server._DUALTRACK_POST_ENDPOINTS
+
+
+def test_execution_accounting_projection_failure_is_not_silently_recomputed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenAdapter:
+        name = "broken"
+
+        def snapshot(self, *_args, **_kwargs):
+            return {
+                "schema_version": "dualtrack-execution-v1",
+                "engine": "broken",
+                "cycle_id": "2026-07-10_DAY",
+                "orders": [],
+                "fills": [{"fill_id": "missing-economic-fields"}],
+                "positions": [],
+                "account": {},
+                "pnl": {"realized": 0.0, "unrealized": 0.0},
+            }
+
+        def reconcile(self, _cycle_id):
+            return {"status": "ok"}
+
+    monkeypatch.setattr(dashboard_server, "build_configured_execution_engine_adapter", lambda *_args, **_kwargs: BrokenAdapter())
+    monkeypatch.setattr(
+        dashboard_server,
+        "_dualtrack_mark_price",
+        lambda *_args, **_kwargs: {"price": 100.0, "fresh": True, "source": "test"},
+    )
+
+    with pytest.raises(AccountingContractError, match="fill price"):
+        dashboard_server.build_dualtrack_execution_response(
+            "2026-07-10_DAY",
+            output_root=tmp_path / "outputs",
+            as_of="2026-07-10T02:00:00+00:00",
+        )
 
 
 def test_reconciliation_pipeline_records_blocked_without_candidate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -90,6 +142,7 @@ def test_reconciliation_pipeline_passes_exact_matching_candidate(tmp_path: Path)
                 "exposure": 0.0,
                 "slippage": 0.0,
                 "fees": 0.0,
+                "funding": 0.0,
             },
         "reconciliation": {"status": "ok"},
     }

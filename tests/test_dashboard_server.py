@@ -1337,13 +1337,21 @@ def test_strategy_console_production_history_keeps_prior_versioned_trades(tmp_pa
     )
 
     assert result["summary"]["trade_count"] == 1
+    assert result["summary"]["completed_trade_count"] == 1
     assert result["summary"]["fill_count"] == 2
+    assert result["summary"]["entry_fill_count"] == 1
+    assert result["summary"]["exit_fill_count"] == 1
     assert result["summary"]["total_notional"] == 2010.0
     assert result["summary"]["realized_pnl"] == 9.9
     assert result["account"]["starting_cash"] == 10_000
     assert result["account"]["ending_cash"] == 10_009.9
     assert result["trades"][0]["strategy_plan_version"] == 2
     assert result["trades"][0]["source_cycle_id"] == cycle_id
+    assert result["accounting_snapshot"]["schema_version"] == "accounting-snapshot-v1"
+    assert result["accounting_snapshot"]["counts"]["trade_count"] == 1
+    assert result["accounting_snapshot"]["counts"]["completed_trade_count"] == 1
+    assert result["accounting_projection_receipt"]["status"] == "pass"
+    assert result["accounting_projection_receipt"]["compatibility_fields_source"] == "accounting-snapshot-v1"
 
 
 def test_strategy_console_history_combines_legacy_archive_with_authoritative_nautilus_only(tmp_path: Path):
@@ -1435,6 +1443,8 @@ def test_strategy_console_history_combines_legacy_archive_with_authoritative_nau
     )
 
     assert result["summary"]["trade_count"] == 2
+    assert result["summary"]["completed_trade_count"] == 1
+    assert result["summary"]["open_trade_count"] == 1
     assert result["summary"]["fill_count"] == 3
     assert result["summary"]["realized_pnl"] == 13.8
     assert result["summary"]["unrealized_pnl"] == 10.0
@@ -1445,6 +1455,60 @@ def test_strategy_console_history_combines_legacy_archive_with_authoritative_nau
     }
     assert result["history_contract"]["source"] == "versioned_strategy_plan_and_nautilus_authoritative"
     assert result["history_contract"]["nautilus_shadow_excluded"] is True
+
+
+def test_strategy_console_production_accounting_keeps_partial_close_open_and_unknown_mark_unknown(tmp_path: Path):
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-04_NIGHT"
+    write_json(output / "dualtrack" / "fills" / f"{cycle_id}_human.json", [
+        {
+            "fill_id": "entry-1",
+            "cycle_id": cycle_id,
+            "trade_id": "trade-1",
+            "event": "entry",
+            "side": "buy",
+            "ts": "2026-07-04T13:10:00+00:00",
+            "price": 100.0,
+            "pnl_units": 2.0,
+            "notional": 200.0,
+            "cost": 0.2,
+            "realized_pnl": -0.2,
+            "remaining_units": 1.0,
+            "position_status": "open",
+            "strategy_plan_id": "plan-1",
+            "strategy_plan_version": 1,
+        },
+        {
+            "fill_id": "exit-1",
+            "cycle_id": cycle_id,
+            "trade_id": "trade-1",
+            "event": "exit",
+            "side": "sell",
+            "ts": "2026-07-04T13:20:00+00:00",
+            "price": 105.0,
+            "pnl_units": 1.0,
+            "notional": 105.0,
+            "cost": 0.1,
+            "gross_pnl": 5.0,
+            "realized_pnl": 4.9,
+            "matched_entries": [{"trade_id": "trade-1", "units": 1.0, "gross_pnl": 5.0, "realized_pnl": 4.9}],
+        },
+    ])
+
+    result = dashboard_server.build_strategy_console_production_history(
+        output_root=output,
+        mark_price=None,
+        mark_fresh=False,
+    )
+
+    assert result["summary"]["trade_count"] == 1
+    assert result["summary"]["open_trade_count"] == 1
+    assert result["summary"]["completed_trade_count"] == 0
+    assert result["summary"]["fill_count"] == 2
+    assert result["summary"]["unrealized_pnl"] is None
+    assert result["account"]["equity"] is None
+    assert result["accounting_snapshot"]["pnl"]["unrealized_pnl"] is None
+    assert result["accounting_snapshot"]["completeness"]["status"] == "partial"
 
 
 def test_compact_strategy_payload_keeps_replay_fields_and_drops_ops_bulk():

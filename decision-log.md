@@ -5907,3 +5907,82 @@ auditable datafeed port; broker execution remains a separate port.
   data, separated normal market closure from source health, and bounded large
   diagnostic digest cost. The proposed claim that 5m freshness must drift was
   rejected after formula inspection and an exact passing 5m parity test.
+
+## 2026-07-18 - A2 single accounting truth
+
+### Decision
+
+- Make `accounting-snapshot-v1` the immutable, content-addressed read contract
+  for orders, fills, positions, trade lifecycles, P&L, account values,
+  completeness, and reconciliation. Execution engines and venue adapters keep
+  ownership of their source facts; the accounting projector has no order or
+  ledger write capability.
+- Count one started position lifecycle as one trade. An entry is one trade;
+  entry plus exit is still one trade; only a fully closed lifecycle increments
+  `completed_trade_count`. Entry and exit executions remain separately visible
+  in fill counts.
+- Derive production-history compatibility totals from the canonical snapshot.
+  Admit only versioned StrategyPlan Legacy facts and, when explicitly selected,
+  Nautilus authoritative snapshots. Execution shadow, recovery replay, and
+  unversioned Legacy records remain outside production P&L.
+- Preserve unavailable venue facts as `null`, never zero. Binance user-trade
+  evidence currently supports fill and account economics but not reliable
+  entry/exit round-trip classification. Tiger prime-assets evidence supports
+  aggregate account values but not order, fill, position, or trade counts.
+- Keep broker accounting additive to reconciliation safety decisions. A
+  malformed projection emits a full blocked canonical snapshot. If even the
+  snapshot builder or serializer fails, a separate versioned unavailable
+  receipt is attached so the authoritative reconciliation, closed-order
+  reconciliation mark, and account-sync artifact still persist.
+- Treat unobserved slippage as unknown. Explicit zero remains valid only when
+  the engine supplies zero or an observed empty fill set proves it.
+- Verify the Nautilus realized-P&L basis empirically rather than infer it from
+  framework documentation. The pinned Nautilus 1.230.0 runtime produced
+  `net realized = gross realized - commissions + funding`; this identity is now
+  an integration-test gate.
+
+### Gotchas
+
+- Legacy entry fees are already represented in each fill's net realized P&L.
+  Subtracting the same fee again would understate production results.
+- Modern partially closed Legacy entries persist remaining units. Rebuilding
+  those rows with the historical fill-only reducer double-counts the partial
+  exit; the canonical path therefore uses `project_human_trades` for modern
+  state and retains the historical reducer only for old row shapes.
+- A blocked accounting projection must be visible but cannot silently rewrite
+  the pre-existing broker confirmation, daily-loss, exposure, or order-routing
+  decision. The outer unavailable receipt exists only to protect persistence.
+- Nautilus authoritative history currently relies on the execution-contract
+  invariant that fill IDs are globally idempotent within an engine ledger.
+  A3 must include cross-cycle identity in the golden execution conformance
+  scenarios before any broader authority change.
+- Binance `userTrades` cannot distinguish every zero-realized entry from a
+  breakeven exit using the current normalized fields. Do not manufacture
+  round-trip counts from side or realized-P&L heuristics.
+- This milestone adds backend/read-side contracts only. It has no new visible
+  surface, so screenshot evidence is not applicable under the project Evidence
+  Contract.
+- The primary worktree still contains unrelated Debug and grid-range changes.
+  A2 remains isolated and must not be integrated by overwriting primary files.
+
+### Verification
+
+- Clean A2 baseline: `115 passed, 5 skipped`.
+- Canonical snapshot, execution, production-history, and broker implementation
+  suite before review: `188 passed, 5 skipped`; related broker/guardrail suite:
+  `94 passed`.
+- Full repository suite before Opus review: `1633 passed, 6 skipped in 343.50s`.
+- A read-only projection against existing production artifacts returned 26
+  fills, 13 entry fills, 13 exit fills, 13 completed trade lifecycles, net
+  realized P&L `5.34624747`, zero open trades, and a stable snapshot ID. No
+  strategy, order, or external venue state was changed.
+- The first Opus adversarial review found no P0/P1. Its valid P2 persistence
+  finding was fixed; the claimed Nautilus gross/net ambiguity was rejected only
+  after a real pinned-runtime replay proved net-of-commission semantics. The
+  unknown-slippage inconsistency was fixed; cross-cycle ID hardening is carried
+  into A3.
+- The final focused accounting/reconciliation/guardrail suite after both Opus
+  reviews: `124 passed`; pinned Nautilus runtime integration: `5 passed`; Ruff:
+  `All checks passed`.
+- Final post-hardening full repository regression: `1638 passed, 6 skipped in
+  326.73s`.

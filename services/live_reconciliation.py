@@ -20,6 +20,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from services.accounting_projection import broker_accounting_snapshot_payload
 from services.config_loader import load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
@@ -322,6 +323,7 @@ class LiveBrokerReconciliation:
             "known_protective_order_ids": sorted(self._known_protective_order_ids()),
             "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         }
+        report["accounting_snapshot"] = broker_accounting_snapshot_payload(report)
         if report["reconciled"] and not exchange_positions:
             OrderLifecycleStore(self.output_root).mark_closed_orders_reconciled(
                 run_date,

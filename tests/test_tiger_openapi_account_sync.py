@@ -64,6 +64,11 @@ def test_tiger_account_sync_normalizes_prime_assets_and_writes_artifacts(tmp_pat
         "end_time_ms": 1781049599999,
     }
     assert report["selected_segment"]["segment_key"] == "C"
+    assert report["accounting_snapshot"]["schema_version"] == "accounting-snapshot-v1"
+    assert report["accounting_snapshot"]["source_name"] == "tiger_openapi"
+    assert report["accounting_snapshot"]["pnl"]["net_realized_pnl"] == -12.75
+    assert report["accounting_snapshot"]["counts"]["trade_count"] is None
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "pass"
 
     current = load_json(root / "tiger_account_sync" / "current.json")[-1]
     dated = load_json(root / "tiger_account_sync" / "2026-06-09.json")[-1]
@@ -82,7 +87,30 @@ def test_tiger_account_sync_records_cannot_sync_without_secret_material(tmp_path
     assert "permission denied" in report["error"]
     assert report["account_observation"]["account_observed"] is False
     assert report["exchange_balance"]["balance_present"] is False
+    assert report["accounting_snapshot"]["pnl"]["net_realized_pnl"] is None
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "blocked"
     assert "secret" not in str(report).lower()
+
+
+def test_tiger_accounting_projection_failure_still_persists_sync_receipt(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "outputs"
+    sync = TigerOpenApiAccountSync(
+        root,
+        broker_config={"provider": "tiger_openapi", "base_currency": "USD"},
+        trade_client=_FakeAccountClient(_portfolio()),
+    )
+    monkeypatch.setattr(
+        "services.accounting_projection.build_accounting_snapshot",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot builder failed")),
+    )
+
+    report = sync.run("2026-06-09")
+
+    assert report["sync_status"] == "synced"
+    assert report["accounting_snapshot"]["schema_version"] == "accounting-projection-unavailable-v1"
+    assert report["accounting_snapshot"]["reconciliation"]["status"] == "blocked"
+    assert report["accounting_snapshot"]["reconciliation"]["issues"][0]["code"] == "accounting_projection_unavailable"
+    assert load_json(root / "tiger_account_sync" / "current.json")[0] == report
 
 
 def test_tiger_account_sync_merges_balance_and_accounting_into_reconciliation(tmp_path: Path):

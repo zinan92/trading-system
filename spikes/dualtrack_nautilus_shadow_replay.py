@@ -536,6 +536,7 @@ def _account(
         "exposure": exposure,
         "slippage": slippage,
         "fees": fees,
+        "funding": 0.0,
     }
 
 

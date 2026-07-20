@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from services.accounting_projection import broker_accounting_snapshot_payload
 from services.broker_adapter import resolve_broker_config
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
@@ -57,6 +58,7 @@ class TigerOpenApiAccountSync:
             "selected_segment": self._redact_segment(selected),
             "checked_at": self._now(),
         }
+        report["accounting_snapshot"] = broker_accounting_snapshot_payload(report)
         write_json(self.output_root / "tiger_account_sync" / "current.json", [report])
         write_json(self.output_root / "tiger_account_sync" / f"{run_date}.json", [report])
         return report

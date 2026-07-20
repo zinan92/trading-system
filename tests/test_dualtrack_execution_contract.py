@@ -131,14 +131,14 @@ def test_execution_parity_treats_cancelled_and_canceled_as_the_same_terminal_sta
 
 def test_execution_parity_catches_fee_equity_timing_and_plan_trace_drift() -> None:
     authoritative = _snapshot()
-    authoritative["account"] = {"fees": 0.04, "equity": 9999.96}
+    authoritative["account"] = {"fees": 0.04, "funding": -0.01, "equity": 9999.96}
     authoritative["fills"] = [{
         "side": "buy", "event": "entry", "price": 100, "quantity": 1,
         "cost": 0.04, "ts": "2026-07-10T01:00:00Z",
         "strategy_plan_id": "plan-1", "strategy_plan_version": 1,
     }]
     candidate = _snapshot("nautilus")
-    candidate["account"] = {"fees": 0.05, "equity": 9999.95}
+    candidate["account"] = {"fees": 0.05, "funding": 0.0, "equity": 9999.95}
     candidate["fills"] = [{
         "side": "buy", "event": "entry", "price": 100, "quantity": 1,
         "cost": 0.05, "ts": "2026-07-10T01:01:00+00:00",
@@ -149,6 +149,7 @@ def test_execution_parity_catches_fee_equity_timing_and_plan_trace_drift() -> No
 
     assert {row["path"] for row in report["differences"]} == {
         "account.fees",
+        "account.funding",
         "account.equity",
         "fills[0].cost",
         "fills[0].ts",

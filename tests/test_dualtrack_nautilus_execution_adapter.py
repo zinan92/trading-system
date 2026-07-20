@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from services.accounting_projection import project_execution_accounting
 from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
 from services.journal_store import load_json, write_json
 
@@ -31,23 +32,57 @@ def _candidate(cycle_id: str) -> dict:
         "schema_version": "dualtrack-execution-v1",
         "engine": "nautilus_shadow",
         "cycle_id": cycle_id,
-        "orders": [{"order_id": "n-1", "state": "filled"}],
-        "fills": [{"fill_id": "n-fill-1", "side": "buy", "price": 100.0, "quantity": 1.0}],
+        "orders": [{
+            "order_id": "n-1", "state": "filled", "side": "buy", "event": "entry",
+            "order_type": "market", "price": 100.0, "quantity": 1.0,
+            "ts": "2026-07-10T01:00:00+00:00",
+        }],
+        "fills": [{
+            "fill_id": "n-fill-1", "order_id": "n-1", "trade_id": "n-entry-1",
+            "event": "entry", "side": "buy", "price": 100.0, "quantity": 1.0,
+            "cost": 0.005, "gross_pnl": 0.0, "realized_pnl": -0.005,
+            "ts": "2026-07-10T01:00:00+00:00",
+        }],
         "positions": [{
             "trade_id": "n-entry-1",
             "position_id": "POS-n-entry-1",
             "status": "open",
             "side": "long",
             "remaining_units": 1.0,
+            "entry_price": 100.0,
+            "entry_ts": "2026-07-10T01:00:00+00:00",
+            "realized_pnl": -0.005,
+            "unrealized_pnl": 0.0,
             "strategy_plan_id": "plan-test",
             "strategy_plan_version": 1,
         }],
-        "account": {"margin": 10.0, "exposure": 100.0, "slippage": 0.0},
+        "account": {
+            "starting_cash": 10_000.0,
+            "realized_pnl": -0.005,
+            "ending_cash": 9_999.995,
+            "equity": 9_999.995,
+            "margin": 10.0,
+            "exposure": 100.0,
+            "slippage": 0.0,
+            "fees": 0.005,
+            "funding": 0.0,
+        },
         "pnl": {"realized": -0.005, "unrealized": 0.0},
         "mark": {"price": 100.0, "fresh": True, "source": "test"},
         "capabilities": {"native_order_lifecycle": True},
         "reconciliation": {"status": "ok", "issues": []},
     }
+
+
+def test_nautilus_normalized_snapshot_projects_to_canonical_accounting() -> None:
+    accounting = project_execution_accounting(_candidate(CYCLE_ID)).to_dict()
+
+    assert accounting["source_name"] == "nautilus_shadow"
+    assert accounting["counts"]["fill_count"] == 1
+    assert accounting["counts"]["trade_count"] == 1
+    assert accounting["counts"]["completed_trade_count"] == 0
+    assert accounting["pnl"]["net_realized_pnl"] == -0.005
+    assert accounting["reconciliation"]["status"] == "pass"
 
 
 def test_persists_orders_fills_positions_and_restarts_idempotently(tmp_path: Path) -> None:
