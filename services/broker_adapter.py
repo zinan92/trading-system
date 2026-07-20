@@ -5,7 +5,6 @@ import json
 import os
 import stat
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
@@ -83,6 +82,8 @@ class LiveBrokerAdapter:
         self.dry_run = bool(self.broker_config.get("dry_run", True))
         self.opener = opener or urllib.request.urlopen
         self._binance_transport_instance = None
+        self._oanda_adapter_instance = None
+        self._mt5_adapter_instance = None
         self._capabilities = execution_capabilities_for(provider=self.provider, adapter_name=self.name)
 
     @property
@@ -158,7 +159,6 @@ class LiveBrokerAdapter:
         return {"ready": True, "block_reason": "", "report": report}
 
     def preflight(self) -> dict:
-        env = apply_live_env()
         if self.provider == "mt5_file_bridge":
             return self._mt5_file_bridge_preflight()
         if self.provider == "oanda_rest":
@@ -167,6 +167,7 @@ class LiveBrokerAdapter:
             return self._binance_preflight()
         if self.provider == "tiger_openapi":
             return self._tiger_preflight()
+        env = apply_live_env()
         api_key_env = str(self.broker_config.get("api_key_env", "BROKER_API_KEY"))
         account_id_env = str(self.broker_config.get("account_id_env", "BROKER_ACCOUNT_ID"))
         missing = [name for name in [api_key_env, account_id_env] if not live_env_value_present(name)]
@@ -242,93 +243,10 @@ class LiveBrokerAdapter:
         }
 
     def _oanda_preflight(self) -> dict:
-        env = apply_live_env()
-        token_env = str(self.broker_config.get("api_key_env") or self.broker_config.get("token_env") or "OANDA_API_TOKEN")
-        account_id_env = str(self.broker_config.get("account_id_env", "OANDA_ACCOUNT_ID"))
-        missing = [name for name in [token_env, account_id_env] if not live_env_value_present(name)]
-        ready = bool(self.live_trading_enabled and (self.dry_run or not missing))
-        block_reason = ""
-        if not self.live_trading_enabled:
-            block_reason = "live_trading_enabled is false"
-        elif missing and not self.dry_run:
-            block_reason = f"missing OANDA environment variables: {', '.join(missing)}"
-        elif self.dry_run:
-            block_reason = "OANDA dry_run enabled; request artifact only"
-        else:
-            block_reason = "OANDA REST broker ready; real orders can be submitted"
-        return {
-            "provider": self.provider,
-            "mode": "live",
-            "dry_run": self.dry_run,
-            "live_trading_enabled": self.live_trading_enabled,
-            "ready": ready,
-            "block_reason": block_reason,
-            "api_key_env": token_env,
-            "account_id_env": account_id_env,
-            "missing_env": missing,
-            "env_file": env["path"],
-            "env_file_exists": env["exists"],
-            "allowed_symbols": list(self.broker_config.get("allowed_symbols", [])),
-            "base_url": self._oanda_base_url(),
-            "account_id_present": live_env_value_present(account_id_env),
-            "instrument": self._oanda_instrument("GOLD"),
-            "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        }
+        return self._oanda_adapter().preflight()
 
     def _mt5_file_bridge_preflight(self) -> dict:
-        outbox_dir = self._mt5_outbox_dir()
-        inbox_dir = self._mt5_inbox_dir()
-        docs = {}
-        missing = []
-        writable = False
-        inbox_writable = False
-        try:
-            outbox_dir.mkdir(parents=True, exist_ok=True)
-            probe = outbox_dir / ".write_test"
-            probe.write_text("ok\n", encoding="utf-8")
-            probe.unlink(missing_ok=True)
-            writable = True
-        except OSError as exc:
-            missing.append(f"outbox_not_writable:{exc}")
-        try:
-            inbox_dir.mkdir(parents=True, exist_ok=True)
-            probe = inbox_dir / ".write_test"
-            probe.write_text("ok\n", encoding="utf-8")
-            probe.unlink(missing_ok=True)
-            inbox_writable = True
-        except OSError as exc:
-            missing.append(f"inbox_not_writable:{exc}")
-        if writable or inbox_writable:
-            docs = self._ensure_mt5_bridge_docs(outbox_dir, inbox_dir)
-        ready = bool(self.live_trading_enabled and writable and inbox_writable)
-        block_reason = ""
-        if not self.live_trading_enabled:
-            block_reason = "live_trading_enabled is false"
-        elif not writable:
-            block_reason = "MT5 outbox directory is not writable"
-        elif not inbox_writable:
-            block_reason = "MT5 inbox directory is not writable"
-        elif self.dry_run:
-            block_reason = "MT5 file bridge dry_run enabled; request artifact only"
-        else:
-            block_reason = "MT5 file bridge outbox ready; external MT5 EA must consume files"
-        return {
-            "provider": self.provider,
-            "mode": "live",
-            "dry_run": self.dry_run,
-            "live_trading_enabled": self.live_trading_enabled,
-            "ready": ready,
-            "block_reason": block_reason,
-            "missing_env": [],
-            "allowed_symbols": list(self.broker_config.get("allowed_symbols", [])),
-            "outbox_dir": str(outbox_dir),
-            "inbox_dir": str(inbox_dir),
-            "outbox_writable": writable,
-            "inbox_writable": inbox_writable,
-            **docs,
-            "errors": missing,
-            "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        }
+        return self._mt5_adapter().preflight()
 
     def _record_dry_run_request(self, request: BrokerOrderRequest, readiness: dict) -> PaperOrder:
         ticket = request.ticket
@@ -429,95 +347,10 @@ class LiveBrokerAdapter:
         return payload
 
     def _record_mt5_file_bridge_request(self, request: BrokerOrderRequest, readiness: dict) -> PaperOrder:
-        ticket = request.ticket
-        requested_price = float(request.latest_price or self._entry_midpoint(ticket["entry_zone"]))
-        quantity = float(request.actual_size or self._quantity(ticket, requested_price))
-        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        order_id = self._order_id(ticket["ticket_id"], request.run_date, requested_price)
-        status = "bridge_dry_run" if self.dry_run else "submitted_to_bridge"
-        rejection = "MT5 bridge dry-run request recorded locally; no EA should execute it" if self.dry_run else "submitted to MT5 file bridge outbox; execution depends on external EA"
-        receipt = PaperOrder(
-            order_id=order_id,
-            ticket_id=ticket["ticket_id"],
-            status=status,
-            requested_price=round(requested_price, 4),
-            fill_price=None,
-            quantity=round(quantity, 6),
-            filled_at="",
-            rejection_reason=rejection,
-        )
-        bridge_payload = {
-            "order_id": order_id,
-            "created_at": now,
-            "dry_run": self.dry_run,
-            "symbol": ticket.get("asset"),
-            "action": ticket.get("action"),
-            "order_type": ticket.get("order_type", "limit"),
-            "time_in_force": ticket.get("time_in_force", "day"),
-            "requested_price": receipt.requested_price,
-            "quantity": receipt.quantity,
-            "stop_loss": ticket.get("stop_loss"),
-            "targets": ticket.get("targets", []),
-            "source_ticket_id": ticket.get("ticket_id"),
-            "manual_execution_required": ticket.get("manual_execution_required", True),
-        }
-        outbox_file = self._mt5_outbox_dir() / f"{order_id}.json"
-        outbox_file.write_text(json.dumps(bridge_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        payload = {
-            "order_id": order_id,
-            "requested_at": now,
-            "provider": self.provider,
-            "run_date": request.run_date,
-            "ticket": ticket,
-            "request": bridge_payload,
-            "readiness": readiness,
-            "outbox_file": str(outbox_file),
-            "receipt": receipt.to_dict(),
-        }
-        request_dir = str(self.broker_config.get("request_dir", "live_order_requests"))
-        path = self.output_root / request_dir / f"{request.run_date}.json"
-        rows = [item for item in load_json(path) if item.get("order_id") != order_id]
-        rows.append(payload)
-        write_json(path, rows)
-        return receipt
+        return self._mt5_adapter()._submit_with_readiness(request, readiness)
 
     def _submit_oanda_order(self, request: BrokerOrderRequest, readiness: dict) -> PaperOrder:
-        ticket = request.ticket
-        requested_price = float(request.latest_price or self._entry_midpoint(ticket["entry_zone"]))
-        quantity = float(request.actual_size or self._quantity(ticket, requested_price))
-        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        order_id = self._order_id(ticket["ticket_id"], request.run_date, requested_price)
-        oanda_payload = self._oanda_order_payload(ticket, order_id, requested_price, quantity)
-        if self.dry_run:
-            receipt = PaperOrder(
-                order_id=order_id,
-                ticket_id=ticket["ticket_id"],
-                status="oanda_dry_run",
-                requested_price=round(requested_price, 4),
-                fill_price=None,
-                quantity=round(quantity, 6),
-                filled_at="",
-                rejection_reason="OANDA dry-run request recorded locally; no broker order sent",
-            )
-            self._record_live_request(request, order_id, now, ticket, oanda_payload, readiness, receipt, broker_response={})
-            return receipt
-        broker_response = self._post_oanda_order(oanda_payload)
-        fill = broker_response.get("orderFillTransaction") or {}
-        create = broker_response.get("orderCreateTransaction") or {}
-        fill_price = float(fill["price"]) if fill.get("price") else None
-        status = "filled" if fill_price is not None else "submitted_to_oanda"
-        receipt = PaperOrder(
-            order_id=order_id,
-            ticket_id=ticket["ticket_id"],
-            status=status,
-            requested_price=round(requested_price, 4),
-            fill_price=fill_price,
-            quantity=round(quantity, 6),
-            filled_at=fill.get("time", ""),
-            rejection_reason=str(create.get("id") or broker_response.get("lastTransactionID") or "submitted to OANDA REST"),
-        )
-        self._record_live_request(request, order_id, now, ticket, oanda_payload, readiness, receipt, broker_response=broker_response)
-        return receipt
+        return self._oanda_adapter()._submit_with_readiness(request, readiness)
 
     def _binance_preflight(self) -> dict:
         env = apply_live_env()
@@ -1561,53 +1394,15 @@ class LiveBrokerAdapter:
         write_json(path, rows)
 
     def _oanda_order_payload(self, ticket: dict, order_id: str, requested_price: float, quantity: float) -> dict:
-        raw_type = str(ticket.get("order_type", "limit")).lower()
-        order_type = "MARKET" if raw_type == "market" else "LIMIT"
-        units = quantity if self._is_buy_action(str(ticket.get("action", ""))) else -quantity
-        order = {
-            "type": order_type,
-            "instrument": self._oanda_instrument(str(ticket.get("asset", "GOLD"))),
-            "units": self._format_decimal(units),
-            "timeInForce": self._oanda_time_in_force(order_type, str(ticket.get("time_in_force", ""))),
-            "positionFill": str(self.broker_config.get("position_fill", "DEFAULT")),
-            "clientExtensions": {
-                "id": order_id[:128],
-                "tag": "trading_orchestrator",
-                "comment": str(ticket.get("ticket_id", ""))[:128],
-            },
-        }
-        if order_type == "LIMIT":
-            order["price"] = self._format_price(requested_price)
-        if ticket.get("stop_loss") is not None:
-            order["stopLossOnFill"] = {"price": self._format_price(float(ticket["stop_loss"]))}
-        targets = ticket.get("targets") or []
-        if targets:
-            order["takeProfitOnFill"] = {"price": self._format_price(float(targets[0]))}
-        return {"order": order}
+        return self._oanda_adapter()._order_payload(
+            ticket,
+            order_id,
+            requested_price,
+            quantity,
+        )
 
     def _post_oanda_order(self, payload: dict) -> dict:
-        apply_live_env()
-        token_env = str(self.broker_config.get("api_key_env") or self.broker_config.get("token_env") or "OANDA_API_TOKEN")
-        account_id_env = str(self.broker_config.get("account_id_env", "OANDA_ACCOUNT_ID"))
-        token = os.getenv(token_env)
-        account_id = os.getenv(account_id_env)
-        if not live_env_value_present(token_env) or not live_env_value_present(account_id_env):
-            raise RuntimeError(f"missing OANDA environment variables: {token_env}, {account_id_env}")
-        url = f"{self._oanda_base_url()}/v3/accounts/{urllib.parse.quote(account_id, safe='')}/orders"
-        body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept-Datetime-Format": "RFC3339",
-                "Content-Type": "application/json",
-                "User-Agent": "TradingOrchestrator/1.0",
-            },
-        )
-        with self.opener(request, timeout=int(self.broker_config.get("timeout_seconds", 10))) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return self._oanda_adapter()._post_order(payload)
 
     def _post_binance_order(self, payload: dict) -> dict:
         return self._binance_signed_request("POST", self._binance_transport().endpoints.order, payload)
@@ -1743,18 +1538,54 @@ class LiveBrokerAdapter:
             self._binance_transport_instance = transport
         return transport
 
+    def _oanda_adapter(self):
+        adapter = self._oanda_adapter_instance
+        if (
+            adapter is None
+            or adapter.broker_config is not self.broker_config
+            or adapter.opener is not self.opener
+            or adapter.live_trading_enabled != self.live_trading_enabled
+            or adapter.dry_run != self.dry_run
+        ):
+            from services.oanda_rest_broker_adapter import OandaRestBrokerAdapter
+
+            adapter = OandaRestBrokerAdapter(
+                self.output_root,
+                self.live_trading_enabled,
+                self.broker_config,
+                opener=self.opener,
+            )
+            self._oanda_adapter_instance = adapter
+        return adapter
+
+    def _mt5_adapter(self):
+        adapter = self._mt5_adapter_instance
+        if (
+            adapter is None
+            or adapter.broker_config is not self.broker_config
+            or adapter.live_trading_enabled != self.live_trading_enabled
+            or adapter.dry_run != self.dry_run
+        ):
+            from services.mt5_file_bridge_broker_adapter import (
+                Mt5FileBridgeBrokerAdapter,
+            )
+
+            adapter = Mt5FileBridgeBrokerAdapter(
+                self.output_root,
+                self.live_trading_enabled,
+                self.broker_config,
+            )
+            self._mt5_adapter_instance = adapter
+        return adapter
+
     def _oanda_base_url(self) -> str:
-        if self.broker_config.get("base_url"):
-            return str(self.broker_config["base_url"]).rstrip("/")
-        environment = str(self.broker_config.get("environment", "practice")).lower()
-        return "https://api-fxtrade.oanda.com" if environment == "live" else "https://api-fxpractice.oanda.com"
+        return self._oanda_adapter()._base_url()
 
     def _binance_base_url(self) -> str:
         return self._binance_transport().base_url()
 
     def _oanda_instrument(self, asset: str) -> str:
-        mapping = self.broker_config.get("instrument_map", {"GOLD": "XAU_USD", "XAUUSD": "XAU_USD"})
-        return str(mapping.get(asset, asset))
+        return self._oanda_adapter()._instrument(asset)
 
     def _binance_symbol(self, asset: str) -> str:
         return self._binance_transport().symbol(asset)
@@ -1885,11 +1716,7 @@ class LiveBrokerAdapter:
         return value or None
 
     def _oanda_time_in_force(self, order_type: str, raw: str) -> str:
-        value = raw.strip().upper()
-        if order_type == "MARKET":
-            return value if value in {"FOK", "IOC"} else "FOK"
-        mapping = {"DAY": "GFD", "GTC": "GTC", "GFD": "GFD", "GTD": "GTD"}
-        return mapping.get(value, "GTC")
+        return self._oanda_adapter()._time_in_force(order_type, raw)
 
     def _is_buy_action(self, action: str) -> bool:
         return action.lower() in {"buy", "prepare_buy", "long", "open_long"}
@@ -1898,100 +1725,16 @@ class LiveBrokerAdapter:
         return f"{value:.6f}".rstrip("0").rstrip(".")
 
     def _format_price(self, value: float) -> str:
-        return f"{value:.3f}".rstrip("0").rstrip(".")
+        return self._oanda_adapter()._format_price(value)
 
     def _mt5_outbox_dir(self) -> Path:
-        raw = Path(str(self.broker_config.get("outbox_dir", "data/broker_outbox/mt5")))
-        return raw if raw.is_absolute() else ROOT / raw
+        return self._mt5_adapter()._outbox_dir()
 
     def _mt5_inbox_dir(self) -> Path:
-        raw = Path(str(self.broker_config.get("inbox_dir", "data/broker_inbox/mt5")))
-        return raw if raw.is_absolute() else ROOT / raw
+        return self._mt5_adapter()._inbox_dir()
 
     def _ensure_mt5_bridge_docs(self, outbox_dir: Path, inbox_dir: Path) -> dict:
-        request_template = outbox_dir / "ORDER_REQUEST.json.template"
-        receipt_template = inbox_dir / "ORDER_RECEIPT.json.template"
-        outbox_readme = outbox_dir / "README_MT5_FILE_BRIDGE.md"
-        inbox_readme = inbox_dir / "README_MT5_FILE_BRIDGE.md"
-        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        request_example = {
-            "order_id": "live_dryrun_example",
-            "created_at": now,
-            "dry_run": True,
-            "symbol": "GOLD",
-            "action": "prepare_buy",
-            "order_type": "limit",
-            "time_in_force": "day",
-            "requested_price": 4571.3,
-            "quantity": 0.25,
-            "stop_loss": 4480.0,
-            "targets": [4750.0],
-            "source_ticket_id": "ticket_gold_YYYYMMDD_example",
-            "manual_execution_required": True,
-        }
-        receipt_example = {
-            "order_id": "live_dryrun_example",
-            "broker_order_id": "mt5-ticket-id",
-            "status": "filled",
-            "fill_price": 4571.3,
-            "filled_quantity": 0.25,
-            "timestamp": now,
-            "message": "executed by external MT5 EA or manual bridge",
-        }
-        request_template.write_text(json.dumps(request_example, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        receipt_template.write_text(json.dumps(receipt_example, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        outbox_readme.write_text(
-            "\n".join(
-                [
-                    "# MT5 File Bridge Outbox",
-                    "",
-                    "The trading bot writes one JSON order request per order into this directory.",
-                    "An external MT5 Expert Advisor, script, or manual bridge may consume these files.",
-                    "",
-                    "Contract:",
-                    "- Treat `dry_run: true` as a non-executable test artifact.",
-                    "- Execute only when live mode is intentionally enabled and `dry_run: false`.",
-                    "- Preserve `order_id`; it is the correlation key for broker receipts.",
-                    "- Do not modify request files in place after consuming them.",
-                    "",
-                    "Order request fields are shown in `ORDER_REQUEST.json.template`.",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        inbox_readme.write_text(
-            "\n".join(
-                [
-                    "# MT5 File Bridge Inbox",
-                    "",
-                    "Write broker execution receipts here as JSON files matching `*.json`.",
-                    "The bot imports receipts with `python3 -m pipelines.broker_receipts --date YYYY-MM-DD`.",
-                    "",
-                    "Required receipt fields:",
-                    "- `order_id` or `client_order_id`",
-                    "- `status` such as `filled`, `rejected`, `partial`, or `pending`",
-                    "",
-                    "Recommended receipt fields:",
-                    "- `broker_order_id` or `ticket`",
-                    "- `fill_price`",
-                    "- `filled_quantity` or `quantity`",
-                    "- `timestamp` or `filled_at`",
-                    "- `message` or `reason`",
-                    "",
-                    "Receipt examples are shown in `ORDER_RECEIPT.json.template`.",
-                    "Templates use `.json.template` so they are ignored by the `*.json` importer.",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return {
-            "outbox_readme": str(outbox_readme),
-            "inbox_readme": str(inbox_readme),
-            "request_template": str(request_template),
-            "receipt_template": str(receipt_template),
-        }
+        return self._mt5_adapter()._ensure_bridge_docs(outbox_dir, inbox_dir)
 
     def _entry_midpoint(self, entry_zone: str) -> float:
         low, high = [float(part) for part in entry_zone.split("-", 1)]

@@ -85,7 +85,7 @@ EXPECTED_SCORE_ROWS = {
     "Data cleaning / quality": (25, 25, 20, 15, 85),
     "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (25, 20, 25, 20, 90),
-    "Live execution / broker": (25, 22, 25, 20, 92),
+    "Live execution / broker": (25, 24, 25, 20, 94),
     "Risk / accounting / reconciliation": (25, 20, 25, 25, 95),
     "Dashboard / read model": (25, 25, 20, 25, 95),
 }

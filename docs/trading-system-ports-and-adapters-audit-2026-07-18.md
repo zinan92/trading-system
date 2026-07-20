@@ -26,7 +26,7 @@ readiness, or whether the self-evolution loop has enough trades.
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
 is the rounded arithmetic mean of the seven visible row totals:
-`642 / 7 = 91.7%`, reported as `92%`.
+`644 / 7 = 92.0%`, reported as `92%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
@@ -34,7 +34,7 @@ is the rounded arithmetic mean of the seven visible row totals:
 | Data cleaning / quality | 25 | 25 | 20 | 15 | 85 |
 | Analysis / strategy | 25 | 20 | 25 | 25 | 95 |
 | Backtest / replay | 25 | 20 | 25 | 20 | 90 |
-| Live execution / broker | 25 | 22 | 25 | 20 | 92 |
+| Live execution / broker | 25 | 24 | 25 | 20 | 94 |
 | Risk / accounting / reconciliation | 25 | 20 | 25 | 25 | 95 |
 | Dashboard / read model | 25 | 25 | 20 | 25 | 95 |
 
@@ -172,7 +172,7 @@ plug-compatible while plan safety remains invariant across plugins.
   callers. No production application imports it, but its retirement and the
   migration of legacy evidence readers remain contained cleanup debt.
 
-### 5. Live execution / broker — 92/100
+### 5. Live execution / broker — 94/100
 
 - Ports: the provider-free `ExecutionEngineAdapter`, `BrokerExecutionPort`,
   explicit broker capabilities, and a separate reconciliation port.
@@ -186,9 +186,14 @@ plug-compatible while plan safety remains invariant across plugins.
   and rejects unknown armed paths. Binance USD-M base URL/instrument mapping,
   immutable endpoint catalog, public ExchangeInfo normalization, credentials,
   HMAC signing, request construction, timeout, and response decoding now live
-  in the venue-owned `services/venues/binance_usdm_transport.py`. The legacy
-  class retains only thin compatibility delegates for existing demo, testnet,
-  mainnet, canary, and kill-switch call seams.
+  in the venue-owned `services/venues/binance_usdm_transport.py`. OANDA REST
+  credentials, endpoint/instrument selection, payload translation, HTTP,
+  response mapping, and durable recording now live in its concrete adapter;
+  MT5 outbox/inbox, templates, executable-intent creation, and receipt
+  correlation live in a separate filesystem adapter. Both are selected
+  directly by the registry. The legacy class retains only thin compatibility
+  delegates for OANDA/MT5 and existing Binance demo, testnet, mainnet, canary,
+  and kill-switch call seams.
 - Safety: risk, activation, preflight, reconciliation, attended approval,
   seven-cycle/parity gates, exact override acknowledgement, isolated-runtime
   requirements, idempotency, ambiguous-submit recovery, protective orders, and
@@ -197,10 +202,11 @@ plug-compatible while plan safety remains invariant across plugins.
   cannot grant real-money or cutover authority. The public ExchangeInfo request
   is proven credential-free; missing/placeholder credentials block signed I/O
   before the opener is called.
-- Remaining 8:
+- Remaining 6:
   - `LiveBrokerAdapter` still owns Binance order lifecycle/payload/protection
-    policy and the Tiger/OANDA/MT5 compatibility implementations. Binance wire
-    I/O is isolated, but full concrete venue-adapter extraction is incomplete.
+    policy plus Tiger/manual compatibility behavior. Binance wire I/O and the
+    complete OANDA/MT5 implementations are isolated, but full concrete
+    venue-adapter extraction is incomplete.
   - configured Nautilus authority is paper-only and attended; real-money
     eligibility remains correctly false. That is an operational gate, not an
     architecture failure, but it prevents claiming full cutover proof.
@@ -284,11 +290,11 @@ evolution yet.
 
 ## Shortest remaining architecture backlog
 
-1. **Venue package strangler (large but incremental):** Binance signing,
-   endpoints, ExchangeInfo, and HTTP are now venue-owned. Move the remaining
-   Binance lifecycle/protection body, then Tiger, OANDA, and MT5 implementations
-   out of `LiveBrokerAdapter`; retain the facade until every venue passes the
-   same suite.
+1. **Venue package strangler (large but incremental):** Binance wire transport
+   and the complete OANDA/MT5 adapters are now venue-owned. Move the remaining
+   Binance lifecycle/protection body and Tiger implementation out of
+   `LiveBrokerAdapter`; retain the facade until every venue passes the same
+   suite.
 2. **Market Envelope V2 cutover (small after evidence):** capture real
    session-aware same-response parity, switch authority explicitly, then delete
    the duplicate `load_bars()` interpretation and narrow SQLite seams.

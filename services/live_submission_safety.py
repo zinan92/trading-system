@@ -4,7 +4,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.broker_adapter import BrokerOrderRequest, LiveBrokerAdapter
+from services.broker_composition import BrokerBuildContext, build_broker_execution_port
+from services.broker_port import BrokerOrderRequest
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
 
@@ -22,15 +23,18 @@ class LiveSubmissionSafetySmoke:
         try:
             os.environ["OANDA_API_TOKEN"] = "dummy-token-for-safety-smoke"
             os.environ["OANDA_ACCOUNT_ID"] = "dummy-account-for-safety-smoke"
-            adapter = LiveBrokerAdapter(
-                self.output_root,
-                live_trading_enabled=True,
-                broker_config={
-                    "provider": "oanda_rest",
-                    "dry_run": False,
-                    "allowed_symbols": ["GOLD", "XAUUSD"],
-                },
-                opener=self._forbidden_opener,
+            adapter = build_broker_execution_port(
+                BrokerBuildContext(
+                    output_root=self.output_root,
+                    execution_mode="live",
+                    live_trading_enabled=True,
+                    broker_config={
+                        "provider": "oanda_rest",
+                        "dry_run": False,
+                        "allowed_symbols": ["GOLD", "XAUUSD"],
+                    },
+                    opener=self._forbidden_opener,
+                )
             )
             adapter.submit_order(BrokerOrderRequest(run_date, self._ticket(), latest_price=4530.0, actual_size=0.01))
         except RuntimeError as exc:

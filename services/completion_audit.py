@@ -6,7 +6,6 @@ from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config, load_risk_rules, load_strategy_config
 from services.bias_ledger import BiasLedger
-from services.broker_adapter import LiveBrokerAdapter
 from services.data_source_preflight import DataSourcePreflight
 from services.data_archive_manifest import DataArchiveManifest
 from services.dualtrack_cycle_heartbeat import DualTrackCycleHeartbeat
@@ -626,14 +625,22 @@ class CompletionAudit:
         feed_rows = load_json(self.output_root / "oanda_feed" / "current.json")
         feed = feed_rows[-1] if feed_rows else {}
         account = OandaAccountPreflight(output_root=self.output_root).run(run_date)
-        preflight = LiveBrokerAdapter(
-            self.output_root,
-            live_trading_enabled=True,
-            broker_config={
-                "provider": "oanda_rest",
-                "dry_run": True,
-                "allowed_symbols": ["GOLD", "XAUUSD"],
-            },
+        from services.broker_composition import (
+            BrokerBuildContext,
+            build_broker_execution_port,
+        )
+
+        preflight = build_broker_execution_port(
+            BrokerBuildContext(
+                output_root=self.output_root,
+                execution_mode="live",
+                live_trading_enabled=True,
+                broker_config={
+                    "provider": "oanda_rest",
+                    "dry_run": True,
+                    "allowed_symbols": ["GOLD", "XAUUSD"],
+                },
+            )
         ).preflight()
         evidence = {
             "feed": feed,
