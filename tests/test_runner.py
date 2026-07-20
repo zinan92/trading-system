@@ -17,19 +17,43 @@ def test_runner_once_writes_status(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("OANDA_ACCOUNT_ID", raising=False)
 
     # This test exercises the no-public-data cold start (public_5m_rows == 0,
-    # data_source_status == "fail"). Block outbound HTTP so the binance_usdm /
-    # yahoo feeds cannot populate real bars and the scenario stays deterministic
-    # regardless of whether the test host has network access. The env gold price
-    # (read from TRADING_ORCHESTRATOR_GOLD_PRICE) is unaffected and is kept as a
-    # quote, never a bar.
+    # data_source_status == "fail"). Mock the Binance-backed calls at the
+    # runner's imported boundaries: DatafeedMarketClient captures its opener when
+    # its module is imported, so patching urllib.request.urlopen alone does not
+    # stop those requests. Keep a generic HTTP blocker for the remaining public
+    # collectors.
+    binance_calls = []
+    data_health_calls = []
+
+    def _offline_binance(run_date: str) -> dict:
+        binance_calls.append(run_date)
+        return {
+            "status": "fail",
+            "ready": False,
+            "imported_rows": 0,
+            "latest_timestamp": "",
+            "latest_price": None,
+        }
+
+    def _offline_data_health(run_date: str) -> dict:
+        data_health_calls.append(run_date)
+        return {"status": "error", "summary": {}}
+
     def _no_network(*args, **kwargs):
         raise OSError("network disabled for deterministic offline runner test")
 
+    monkeypatch.setattr("pipelines.bot.run_binance_usdm_feed_import", _offline_binance)
+    monkeypatch.setattr("pipelines.bot.run_data_health", _offline_data_health)
     monkeypatch.setattr("urllib.request.urlopen", _no_network)
 
     status = run_runner_once("2026-07-02", paper_auto_approve=False, interval_seconds=60)
 
     assert status["state"] == "ok", status
+    assert binance_calls == ["2026-07-02"]
+    assert data_health_calls == ["2026-07-02"]
+    assert status["binance_feed_status"] == "fail"
+    assert status["binance_feed_ready"] is False
+    assert status["binance_feed_imported_rows"] == 0
     assert status["collector_count"] == 5
     assert status["oanda_feed_status"] == "skipped"
     assert status["oanda_feed_imported_rows"] == 0
