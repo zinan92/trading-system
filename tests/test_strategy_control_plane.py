@@ -1,9 +1,11 @@
+import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
 import pytest
 
+import pipelines.dashboard_server as dashboard_server
 from schemas.accounting import build_accounting_snapshot
 from services.dualtrack_execution_adapter import build_execution_engine_adapter
 from services.dualtrack_config import dualtrack_config as load_test_config
@@ -70,8 +72,8 @@ def market(*, close: float = 110.0, fresh: bool = True) -> dict:
         "status": "ready" if fresh else "stale",
         "fresh": fresh,
         "is_synthetic": False,
-        "provider": "binance_usdm",
-        "source_mode": "binance_usdm",
+        "provider": "binance_usdm_futures",
+        "source_mode": "binance_usdm_futures",
         "symbol": "GOLD",
         "timeframe": "1m",
         "latest_close": close,
@@ -954,6 +956,223 @@ def test_stop_cancels_pending_orders_flattens_position_and_reconciles(tmp_path: 
     assert stopped["reconciliation"]["status"] == "ok"
     assert not [order for order in snapshot["orders"] if order["state"] == "accepted"]
     assert not [position for position in snapshot["positions"] if position["status"] == "open"]
+
+
+def test_stale_market_safe_controls_cancel_and_flatten_with_audit_evidence(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("long", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    adapter = build_execution_engine_adapter(output)
+    adapter.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:41:00+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "market",
+        "price": 110.0,
+        "market_price": 110.0,
+        "quantity": 2.0,
+        "notional": 220.0,
+        "sl": 105.0,
+        "tp": 115.0,
+        "strategy_plan_id": started["plan"]["strategy_plan_id"],
+        "strategy_plan_version": started["plan"]["version"],
+        "source": "strategy_production_console",
+    })
+    invalid_market = {
+        **market(close=109.0, fresh=False),
+        "status": "blocked",
+        "source_mode": "unavailable",
+        "provider": "",
+        "latest_close": None,
+        "latest_timestamp": "",
+    }
+
+    cancelled = plane.control(
+        cycle_id,
+        "cancel_all",
+        {},
+        market=invalid_market,
+        now="2026-07-05T01:45:00+00:00",
+    )
+    after_cancel = adapter.snapshot(cycle_id)
+    stopped = plane.control(
+        cycle_id,
+        "stop",
+        {},
+        market=invalid_market,
+        now="2026-07-05T01:46:00+00:00",
+    )
+    terminal = adapter.snapshot(cycle_id)
+
+    assert cancelled["cancelled_orders"] > 0
+    assert cancelled["safe_action_market_gates"][0]["action_class"] == "cancel"
+    assert cancelled["safe_action_market_gates"][0]["market_fresh"] is False
+    assert not [row for row in after_cancel["orders"] if row["state"] == "accepted"]
+    assert [row for row in after_cancel["positions"] if row["status"] == "open"]
+    assert stopped["runtime"]["actual_state"] == "stopped"
+    assert stopped["flattened_positions"] == 1
+    assert stopped["safe_action_market_gates"][1]["action_class"] == "reduce_only"
+    assert stopped["safe_action_market_gates"][1]["pricing_source"] == "last_known_execution_fill"
+    assert not [row for row in terminal["positions"] if row["status"] == "open"]
+    event_rows = []
+    event_root = output / "dualtrack" / "strategy_control" / "control_events"
+    for path in sorted(event_root.glob("*.jsonl")):
+        event_rows.extend(json.loads(line) for line in path.read_text().splitlines() if line.strip())
+    cancel_event = next(row for row in event_rows if row["action"] == "cancel_all")
+    stop_event = next(row for row in event_rows if row["action"] == "stop")
+    assert cancel_event["evidence"]["safe_action_market_gates"][0]["market_fresh"] is False
+    assert stop_event["evidence"]["safe_action_market_gates"][1]["pricing_source"] == (
+        "last_known_execution_fill"
+    )
+
+
+def test_safe_control_api_skips_planning_timeframes_and_account_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("safe controls must not depend on planning or account read models")
+
+    monkeypatch.setattr(dashboard_server, "build_strategy_timeframes_response", forbidden)
+    monkeypatch.setattr(dashboard_server, "build_strategy_console_production_history", forbidden)
+
+    result = dashboard_server.build_strategy_console_control_response(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "action": "cancel_all",
+            "as_of": "2026-07-05T01:45:00+00:00",
+        },
+        output_root=tmp_path / "outputs",
+        market={
+            "status": "blocked",
+            "fresh": False,
+            "is_synthetic": False,
+            "provider": "",
+            "latest_close": None,
+            "latest_timestamp": "",
+        },
+    )
+
+    assert result["action"] == "cancel_all"
+    assert result["safe_action_market_gates"][0]["market_status"] == "blocked"
+    assert result["safe_action_market_gates"][0]["pricing_required"] is False
+
+
+def test_stop_rejects_wrong_provider_mark_and_uses_target_ledger_price(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    adapter = build_execution_engine_adapter(output)
+    cycle_id = "2026-07-05_DAY"
+    entry = adapter.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:41:00+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "market",
+        "price": 110.0,
+        "quantity": 1.0,
+        "notional": 110.0,
+        "position_id": "wrong-provider-stop",
+        "strategy_plan_id": "plan-safe-stop",
+        "strategy_plan_version": 1,
+        "source": "test_setup",
+    })
+    wrong_provider_market = {
+        "status": "ready",
+        "source_mode": "evil_provider",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "evil_provider",
+        "latest_timestamp": "2026-07-05T01:45:00+00:00",
+        "latest_close": 777.0,
+    }
+
+    stopped = StrategyControlPlane(output).control(
+        cycle_id,
+        "stop",
+        {},
+        market=wrong_provider_market,
+        now="2026-07-05T01:46:00+00:00",
+    )
+    close = next(
+        row
+        for row in adapter.snapshot(cycle_id)["fills"]
+        if row["event"] == "flatten" and row["trade_id"] == entry["trade_id"]
+    )
+
+    assert stopped["runtime"]["actual_state"] == "stopped"
+    assert stopped["safe_action_market_gates"][1]["pricing_source"] == (
+        "last_known_execution_fill"
+    )
+    assert stopped["safe_action_market_gates"][1]["pricing_provider"] == (
+        "paper_execution_ledger"
+    )
+    assert close["price"] == pytest.approx(110.0)
+    assert close["price"] != 777.0
+
+
+def test_blocked_stop_prices_each_hedged_position_from_its_own_ledger(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    adapter = build_execution_engine_adapter(output)
+    cycle_id = "2026-07-05_DAY"
+    entries = []
+    for index, (side, price) in enumerate((("buy", 100.0), ("sell", 200.0)), start=1):
+        entries.append(adapter.submit_order({
+            "cycle_id": cycle_id,
+            "ts": f"2026-07-05T01:4{index}:00+00:00",
+            "side": side,
+            "event": "entry",
+            "order_type": "market",
+            "price": price,
+            "quantity": 1.0,
+            "notional": price,
+            "position_id": f"hedged-stop-{index}",
+            "strategy_plan_id": "plan-hedged-stop",
+            "strategy_plan_version": 1,
+            "source": "test_setup",
+        }))
+    blocked_market = {
+        "status": "blocked",
+        "source_mode": "unavailable",
+        "fresh": False,
+        "is_synthetic": False,
+        "provider": "",
+        "latest_timestamp": "",
+        "latest_close": None,
+    }
+
+    stopped = StrategyControlPlane(output).control(
+        cycle_id,
+        "stop",
+        {},
+        market=blocked_market,
+        now="2026-07-05T01:46:00+00:00",
+    )
+    fills = adapter.snapshot(cycle_id)["fills"]
+    closes = {
+        row["trade_id"]: row
+        for row in fills
+        if row["event"] == "flatten"
+    }
+
+    assert len(stopped["safe_action_market_gates"]) == 3
+    assert {
+        gate["pricing_price"] for gate in stopped["safe_action_market_gates"][1:]
+    } == {100.0, 200.0}
+    for entry in entries:
+        close = closes[entry["trade_id"]]
+        assert close["price"] == pytest.approx(entry["price"])
+        assert close["gross_pnl"] == pytest.approx(0.0)
 
 
 def test_running_adjustment_replaces_pending_grid_without_stopping_runtime(tmp_path: Path) -> None:

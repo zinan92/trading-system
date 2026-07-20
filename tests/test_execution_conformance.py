@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+from services.dualtrack_nautilus_execution_adapter import REPLAY_VERSION
 from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.execution_conformance import (
     CANDIDATE_RECEIPT_SCHEMA,
@@ -150,7 +151,7 @@ def _snapshot(scenario: dict) -> dict:
         "mark": {"price": 101.0, "fresh": True, "source": "test"},
         "capabilities": {
             "native_order_lifecycle": True,
-            "replay_version": "dualtrack-nautilus-replay-v6",
+            "replay_version": REPLAY_VERSION,
             "nautilus_version": "1.230.0",
             "platform_code_hash": platform_parity_code_hash(),
         },

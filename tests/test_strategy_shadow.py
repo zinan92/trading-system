@@ -7,6 +7,7 @@ import pytest
 from pipelines.strategy_shadow_replay import run_strategy_shadow_replay
 from services.backtest_plugin_registry import BacktestPluginRegistry, UnknownBacktestPlugin
 from services.backtest_port import STRATEGY_SHADOW_KIND
+from services.dualtrack_nautilus_execution_adapter import REPLAY_VERSION
 from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.execution_conformance import build_candidate_execution_receipt
 from services.journal_store import load_json, write_json
@@ -148,7 +149,7 @@ def _snapshot(scenario: dict) -> dict:
         "pnl": {"realized": -0.02, "unrealized": 0.5},
         "mark": {"price": 100.5, "fresh": True, "source": "test"},
         "capabilities": {
-            "replay_version": "dualtrack-nautilus-replay-v6",
+            "replay_version": REPLAY_VERSION,
             "nautilus_version": "1.230.0",
             "platform_code_hash": platform_parity_code_hash(),
         },

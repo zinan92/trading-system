@@ -581,14 +581,19 @@ def test_production_backtest_plugins_are_explicit_and_non_synthetic() -> None:
 
 def test_audit_names_every_known_non_hexagonal_seam() -> None:
     text = AUDIT.read_text(encoding="utf-8")
+    completed = text.split("## Completed debug audit", 1)[1].split(
+        "## Shortest remaining architecture backlog",
+        1,
+    )[0]
     backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
         "LiveBrokerAdapter",
         "Market data contract cleanup",
-        "Safe-action market-gate audit",
         "BacktestClient",
     ):
         assert seam in backlog
+    assert "Safe-action market-gate audit (completed" in completed
+    assert "Safe-action market-gate audit" not in backlog
     assert "accounting_projection.py" not in backlog
     assert "dualtrack_execution_adapter.py" not in backlog
     assert "DualTrackMachinePlanner" not in backlog

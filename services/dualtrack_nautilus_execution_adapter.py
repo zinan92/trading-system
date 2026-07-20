@@ -12,10 +12,11 @@ from services.dualtrack_execution_contract import canonical_market_event, normal
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_shadow_input import build_shadow_input
 from services.journal_store import load_json, write_json
+from services.risk_port import action_class_for_command, build_paper_safe_action_market_gate
 
 
 ReplayExecutor = Callable[[Path, Path, Path], dict[str, Any]]
-REPLAY_VERSION = "dualtrack-nautilus-replay-v6"
+REPLAY_VERSION = "dualtrack-nautilus-replay-v7"
 
 
 class NautilusExecutionAdapter:
@@ -84,6 +85,12 @@ class NautilusExecutionAdapter:
         target = self._resolve_open_position(cycle_id, prepared)
         if target is None:
             raise ValueError("Nautilus close command could not resolve exactly one open position")
+        target_side = str(target.get("side") or "").lower()
+        if target_side not in {"buy", "long", "sell", "short"}:
+            raise ValueError("Nautilus target position side is invalid")
+        expected_side = "sell" if target_side in {"buy", "long"} else "buy"
+        if str(prepared.get("side") or "").lower() != expected_side:
+            raise ValueError("Nautilus close side does not reduce the target position")
         prepared["target_position_id"] = str(target.get("position_id") or "")
         prepared["target_command_id"] = str(target.get("trade_id") or "")
         remaining_before = float(target.get("remaining_units") or 0.0)
@@ -102,17 +109,19 @@ class NautilusExecutionAdapter:
             for row in self.snapshot(cycle_id).get("positions") or []
             if str(row.get("status") or "") == "open"
         ]
-        exact_ids = {
+        trade_ids = {
             str(command.get("trade_id") or ""),
-            str(command.get("position_id") or ""),
             str(command.get("target_command_id") or ""),
+        } - {""}
+        position_ids = {
+            str(command.get("position_id") or ""),
             str(command.get("target_position_id") or ""),
         } - {""}
-        exact = [
-            row
-            for row in positions
-            if str(row.get("trade_id") or "") in exact_ids or str(row.get("position_id") or "") in exact_ids
-        ]
+        exact = []
+        if trade_ids:
+            exact = [row for row in positions if str(row.get("trade_id") or "") in trade_ids]
+        if not exact and position_ids:
+            exact = [row for row in positions if str(row.get("position_id") or "") in position_ids]
         if len(exact) == 1:
             return exact[0]
         if len(exact) > 1:
@@ -184,6 +193,11 @@ class NautilusExecutionAdapter:
                 "authoritative_order_id": match_id,
                 "reason": str(reason or ""),
                 "source_fill_id": cancel_source_id,
+                "safe_action_market_gate": build_paper_safe_action_market_gate(
+                    action_class_for_command({"event": "cancel"}),
+                    None,
+                    pricing_source="not_required",
+                ),
             }
             normalized = _canonical_command(cancel_payload)
             if normalized["command_id"] not in existing_ids:
@@ -237,6 +251,14 @@ class NautilusExecutionAdapter:
             }
         result = self.flush(cycle_id)
         return {**result, "event_id": event_id}
+
+    def last_market_event(self, cycle_id: str) -> dict[str, Any] | None:
+        """Return the latest persisted canonical paper event without replaying it."""
+
+        rows = load_json(self._events_path(cycle_id))
+        if not rows:
+            return None
+        return dict(max(rows, key=_market_event_sort_key))
 
     def flush(self, cycle_id: str) -> dict[str, Any]:
         rows = load_json(self._events_path(cycle_id))

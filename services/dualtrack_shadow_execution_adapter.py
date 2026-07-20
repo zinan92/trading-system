@@ -328,13 +328,17 @@ class ShadowingExecutionEngineAdapter:
 def _target_position(positions: list[dict[str, Any]], command: dict[str, Any]) -> dict[str, Any] | None:
     trade_id = str(command.get("trade_id") or "")
     position_id = str(command.get("position_id") or "")
-    for row in positions:
-        if row.get("status") != "open":
-            continue
-        if trade_id and str(row.get("trade_id") or "") == trade_id:
-            return row
-        if position_id and str(row.get("position_id") or "") == position_id:
-            return row
+    open_positions = [row for row in positions if row.get("status") == "open"]
+    if trade_id:
+        matches = [row for row in open_positions if str(row.get("trade_id") or "") == trade_id]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return None
+    if position_id:
+        matches = [row for row in open_positions if str(row.get("position_id") or "") == position_id]
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 

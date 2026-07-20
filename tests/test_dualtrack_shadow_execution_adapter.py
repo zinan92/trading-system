@@ -5,6 +5,7 @@ from pathlib import Path
 from services.dualtrack_nautilus_execution_adapter import REPLAY_VERSION
 from services.dualtrack_shadow_execution_adapter import ShadowingExecutionEngineAdapter
 from services.journal_store import load_json, write_json
+from services.strategy_control_plane import settle_paper_safe_action_commands
 
 
 class FakeAdapter:
@@ -13,6 +14,7 @@ class FakeAdapter:
         self.failure = failure
         self.commands: list[dict] = []
         self.events: list[dict] = []
+        self.flush_count = 0
 
     def submit_order(self, command: dict) -> dict:
         self.commands.append(dict(command))
@@ -47,6 +49,7 @@ class FakeAdapter:
         return {"status": "cancelled", "cancelled_order_ids": list(kwargs.get("order_ids") or [])}
 
     def flush(self, cycle_id: str) -> dict:
+        self.flush_count += 1
         if self.failure == "flush":
             raise RuntimeError("shadow flush failed")
         return {"status": "replayed", "cycle_id": cycle_id}
@@ -172,16 +175,44 @@ def test_cancel_is_mirrored_but_authoritative_receipt_remains_the_result(tmp_pat
     assert authoritative.commands[-1]["order_ids"] == ["legacy-order-1"]
 
 
+def test_safe_action_settlement_flushes_nautilus_shadow_behind_legacy_authority(
+    tmp_path: Path,
+) -> None:
+    authoritative = FakeAdapter("legacy_paper")
+    shadow = FakeAdapter("nautilus_paper")
+    adapter = ShadowingExecutionEngineAdapter(
+        tmp_path / "outputs",
+        authoritative=authoritative,
+        shadow=shadow,
+    )
+
+    result = settle_paper_safe_action_commands(adapter, "2026-07-16_DAY")
+
+    assert result["status"] == "shadow_flushed"
+    assert authoritative.flush_count == 0
+    assert shadow.flush_count == 1
+
+
 def test_close_mirror_carries_pre_close_position_identity_for_hedged_replay(tmp_path: Path) -> None:
     authoritative = FakeAdapter("legacy_paper")
-    authoritative.positions = [{
-        "trade_id": "legacy-trade-1",
-        "position_id": "manual",
-        "status": "open",
-        "side": "long",
-        "remaining_units": 0.25,
-        "entry_price": 4000.0,
-    }]
+    authoritative.positions = [
+        {
+            "trade_id": "legacy-decoy",
+            "position_id": "manual",
+            "status": "open",
+            "side": "short",
+            "remaining_units": 0.5,
+            "entry_price": 4100.0,
+        },
+        {
+            "trade_id": "legacy-trade-1",
+            "position_id": "manual",
+            "status": "open",
+            "side": "long",
+            "remaining_units": 0.25,
+            "entry_price": 4000.0,
+        },
+    ]
     shadow = FakeAdapter("nautilus_paper")
     adapter = ShadowingExecutionEngineAdapter(tmp_path / "outputs", authoritative=authoritative, shadow=shadow)
     command = {
