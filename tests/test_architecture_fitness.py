@@ -48,6 +48,8 @@ CONTRACT_KERNELS = (
     "services/accounting_projection_registry.py",
     "services/accounting_broker_common.py",
     "services/risk_port.py",
+    "services/risk_policy_core.py",
+    "services/risk_policy_registry.py",
     "services/broker_port.py",
     "services/trading_system_read_model.py",
 )
@@ -78,6 +80,11 @@ FORBIDDEN_KERNEL_IMPORTS = (
     "services.macd_signal_engine",
     "services.technical_rule_signal_engine",
     "services.codex_newsletter_strategy_proposal",
+    "services.risk_policy_paper",
+    "services.risk_decision_store",
+    "services.risk_live_money_adapter",
+    "services.live_money_guardrails",
+    "services.journal_store",
 )
 
 EXPECTED_SCORE_ROWS = {
@@ -86,7 +93,7 @@ EXPECTED_SCORE_ROWS = {
     "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (25, 20, 25, 20, 90),
     "Live execution / broker": (25, 25, 25, 23, 98),
-    "Risk / accounting / reconciliation": (25, 20, 25, 25, 95),
+    "Risk / accounting / reconciliation": (25, 25, 25, 25, 100),
     "Dashboard / read model": (25, 25, 20, 25, 95),
 }
 
@@ -278,6 +285,17 @@ class GenericStrategyShadowReplayPort:
 
 class GenericRiskPort:
     name = "generic_risk"
+
+    def evaluator_metadata(self):
+        return {
+            "name": self.name,
+            "version": "generic-v1",
+            "source_hashes": {"generic.py": "test"},
+            "code_sha256": "test",
+        }
+
+    def resolve_policy(self, config):
+        return {"policy_id": "generic-policy", "config": config}
 
     def evaluate(self, request):
         return None
@@ -489,6 +507,56 @@ def test_accounting_selection_stays_in_one_explicit_composition_root() -> None:
     assert concrete_modules.issubset(imported)
 
 
+def test_risk_selection_and_persistence_stay_behind_one_composition_root() -> None:
+    concrete_modules = {
+        "services.risk_policy_paper",
+        "services.risk_decision_store",
+        "services.risk_live_money_adapter",
+    }
+    strategy_control = ROOT / "services" / "strategy_control_plane.py"
+    dashboard = ROOT / "pipelines" / "dashboard_server.py"
+    risk_port = ROOT / "services" / "risk_port.py"
+    composition = ROOT / "services" / "risk_policy_composition.py"
+
+    control_imports = _imported_modules(strategy_control)
+    dashboard_imports = _imported_modules(dashboard)
+    port_imports = _imported_modules(risk_port)
+    composition_imports = _imported_modules(composition)
+
+    assert "services.risk_policy_composition" in control_imports
+    assert not (control_imports & concrete_modules)
+    assert not (dashboard_imports & concrete_modules)
+    assert not (port_imports & concrete_modules)
+    assert "services.journal_store" not in port_imports
+    assert {
+        "services.risk_policy_paper",
+        "services.risk_decision_store",
+        "services.risk_live_money_adapter",
+    }.issubset(composition_imports)
+
+    port_source = risk_port.read_text(encoding="utf-8")
+    assert "class PaperGridRiskDecisionPort" not in port_source
+    assert "class FileRiskDecisionStore" not in port_source
+    assert "class LiveMoneyRiskDecisionAdapter" not in port_source
+
+    live_adapter = ROOT / "services" / "risk_live_money_adapter.py"
+    assert "services.risk_decision_store" not in _imported_modules(live_adapter)
+
+    store = ROOT / "services" / "risk_decision_store.py"
+    store_tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
+    methods = {
+        node.name
+        for node in ast.walk(store_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "persist" in methods
+    assert "authorize" not in methods
+    assert "evaluate" not in methods
+
+    config = (ROOT / "configs" / "dualtrack.yaml").read_text(encoding="utf-8")
+    assert '"paper_grid": "paper_grid_risk"' in config
+
+
 def test_accounting_compatibility_module_is_a_reexport_only_facade() -> None:
     path = ROOT / "services" / "accounting_projection.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -517,7 +585,7 @@ def test_audit_names_every_known_non_hexagonal_seam() -> None:
     for seam in (
         "LiveBrokerAdapter",
         "Market data contract cleanup",
-        "Risk policy/store extraction",
+        "Safe-action market-gate audit",
         "BacktestClient",
     ):
         assert seam in backlog

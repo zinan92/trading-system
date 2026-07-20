@@ -14,9 +14,9 @@ rewriting P&L, risk, or the UI.
 It is not yet a full plug-and-play system. Signal analysis, production grid
 proposal generation, all three backtest use cases, paper execution, broker
 execution, and broker accounting normalization now resolve through frozen
-plugin registries and venue-owned adapters. The largest remaining gaps are the
-physical risk evaluator/store separation, retirement of contained compatibility
-facades, and bounded market-contract deployment cleanup.
+plugin registries and venue-owned adapters. The largest remaining gaps are
+retirement of contained compatibility facades, bounded market-contract
+deployment cleanup, and one debug-priority safe-action market-gate audit.
 
 This percentage measures modular architecture, not profitability, live-money
 readiness, or whether the self-evolution loop has enough trades.
@@ -26,7 +26,7 @@ readiness, or whether the self-evolution loop has enough trades.
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
 is the rounded arithmetic mean of the seven visible row totals:
-`663 / 7 = 94.7%`, reported as `95%`.
+`668 / 7 = 95.4%`, reported as `95%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
@@ -35,7 +35,7 @@ is the rounded arithmetic mean of the seven visible row totals:
 | Analysis / strategy | 25 | 20 | 25 | 25 | 95 |
 | Backtest / replay | 25 | 20 | 25 | 20 | 90 |
 | Live execution / broker | 25 | 25 | 25 | 23 | 98 |
-| Risk / accounting / reconciliation | 25 | 20 | 25 | 25 | 95 |
+| Risk / accounting / reconciliation | 25 | 25 | 25 | 25 | 100 |
 | Dashboard / read model | 25 | 25 | 20 | 25 | 95 |
 
 ## Current end-to-end shape
@@ -216,11 +216,18 @@ plug-compatible while plan safety remains invariant across plugins.
     retiring those call seams remains cleanup before the broker layer is
     literally facade-free.
 
-### 6. Risk / accounting / reconciliation — 95/100
+### 6. Risk / accounting / reconciliation — 100/100
 
 - Risk: `risk-request-v1` and `risk-decision-v1` bind exact plan commands,
   trusted market, canonical account, current execution, policy, and evaluator
   identity. Every exposure-increasing mutation rechecks under the command lock.
+- Risk isolation/composition: the public port, pure policy helpers, paper-grid
+  evaluator, live-money bridge, and append-only file store have separate module
+  ownership. One frozen registry verifies plugin implementation, capabilities,
+  evaluator metadata, source hashes, and deterministic identity before the
+  composition root selects `risk_policy.paper_grid`. The store exposes only
+  validated `persist()` and no authorization read; the live bridge requires an
+  injected store and fails closed on contradictory legacy success status.
 - Accounting: `accounting-snapshot-v1` is the only P&L/count/account truth for
   Legacy, Nautilus, production history, and broker observations. The
   provider-free execution projector and immutable snapshot contract import no
@@ -236,9 +243,10 @@ plug-compatible while plan safety remains invariant across plugins.
   Binance and Tiger economic payloads did not change.
 - Reconciliation: execution and broker truth are compared explicitly; stale or
   drifted evidence cannot authorize money.
-- Remaining 5: risk evaluator and decision-store responsibilities still share
-  one module. Their public port and content-bound decision contract are stable,
-  but physical policy/store composition has not yet been extracted.
+- Conformance proof covers unknown/empty/duplicate/late policy selection,
+  runtime identity mismatch, source-bound evaluator metadata, store
+  non-authority, broker parity, stale-state recheck, safe exits, and malformed
+  legacy permission. No risk threshold or production gate changed.
 
 ### 7. Dashboard / read model — 95/100
 
@@ -264,7 +272,7 @@ plug-compatible while plan safety remains invariant across plugins.
 | Paper execution engine | Yes | Implement and register `ExecutionEngineAdapter`, pass exact accounting/conformance, then satisfy attended cutover gates |
 | Broker / venue | Yes at application boundary | Register execution + reconciliation plugins and pass venue/lifecycle/protection tests |
 | Broker accounting source | Yes | Register one read-only projection adapter and pass exact snapshot/completeness/reconciliation conformance |
-| Risk policy evaluator | Yes for normalized requests | Implement `RiskDecisionPort`; preserve mutation-time identity and exit availability |
+| Risk policy evaluator | Yes | Implement and register `RiskDecisionPort` before registry freeze; preserve evaluator identity, mutation-time recheck, and exit availability |
 | Dashboard client | Yes | Consume `trading-system-read-model-v1`; commands remain separate POSTs |
 | Strategy analysis engine | Yes | Implement `StrategyAnalysisPort`, explicitly register before startup freeze, and pass behavior/replay tests |
 | Production grid proposal planner | Yes | Implement `StrategyProposalPort`, explicitly register before startup freeze, declare required context, and pass core validation/failure conformance |
@@ -295,9 +303,10 @@ evolution yet.
 
 ## Shortest remaining architecture backlog
 
-1. **Risk policy/store extraction (medium):** keep `risk-request-v1` and
-   `risk-decision-v1`, register policy evaluators explicitly, and separate
-   immutable decision persistence from evaluation.
+1. **Safe-action market-gate audit (small, debug priority):** prove that stale
+   entry market data cannot block a correctly identified cancel, reduce-only,
+   or emergency flatten before the canonical risk action classifier runs;
+   preserve any pricing facts genuinely required by the venue command.
 2. **Legacy read-surface retirement (medium):** migrate remaining consumers to
    the stable read model, announce deprecation, then remove facade-only
    presentation code.
@@ -323,6 +332,7 @@ pipeline. The honest state is a robust hexagonal spine with a few contained
 compatibility facades still awaiting retirement.
 
 For the grid-only product focus, the next highest-leverage architecture change
-is physical risk policy/store separation. Market V2 deployment and long-window
-pagination are now bounded contract follow-ups—not reasons to add another
+is no longer another port extraction. Debug the stale-market safe-action gate
+first; then retire the legacy read surface. Market V2 deployment and long-window
+pagination remain bounded contract follow-ups—not reasons to add another
 Dashboard or provider-specific interpretation.

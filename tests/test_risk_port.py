@@ -5,10 +5,14 @@ import pytest
 
 from schemas.accounting import build_accounting_snapshot
 from services.journal_store import load_json
-from services.risk_port import (
-    LiveMoneyRiskDecisionAdapter,
+from services.risk_decision_store import FileRiskDecisionStore as RiskDecisionStore
+from services.risk_live_money_adapter import LiveMoneyRiskDecisionAdapter
+from services.risk_policy_paper import (
     PaperGridRiskDecisionPort,
-    RiskDecisionStore,
+    grid_risk_evaluator,
+    grid_risk_policy,
+)
+from services.risk_port import (
     action_class_for_command,
     assert_matching_risk_decision,
     build_grid_risk_request,
@@ -208,6 +212,7 @@ def request(
     replaced_order_ids: list[str] | None = None,
     config_value: dict | None = None,
 ):
+    resolved_config = config_value or config()
     return build_grid_risk_request(
         checked_at=CHECKED_AT,
         action_class=action_class,
@@ -218,7 +223,8 @@ def request(
         market=market_value or market(),
         execution_snapshot=snapshot or execution_snapshot(),
         execution_reconciliation=recon or reconciliation(),
-        config=config_value or config(),
+        policy=grid_risk_policy(resolved_config),
+        evaluator=grid_risk_evaluator(),
         replaced_order_ids=replaced_order_ids,
     )
 
@@ -254,6 +260,8 @@ def manual_request(
         execution_snapshot=snapshot or execution_snapshot(),
         execution_reconciliation=reconciliation(),
         config=config(),
+        policy=grid_risk_policy(config()),
+        evaluator=grid_risk_evaluator(),
     )
 
 
@@ -545,6 +553,8 @@ def test_manual_reduce_only_requires_position_identity_but_not_entry_risk_inputs
         execution_snapshot={},
         execution_reconciliation={},
         config=config(),
+        policy=grid_risk_policy(config()),
+        evaluator=grid_risk_evaluator(),
     ))
     missing_identity = PaperGridRiskDecisionPort().evaluate(build_manual_order_risk_request(
         checked_at=CHECKED_AT,
@@ -554,6 +564,8 @@ def test_manual_reduce_only_requires_position_identity_but_not_entry_risk_inputs
         execution_snapshot={},
         execution_reconciliation={},
         config=config(),
+        policy=grid_risk_policy(config()),
+        evaluator=grid_risk_evaluator(),
     ))
 
     assert allowed.allow_reduce_only is True
@@ -599,6 +611,7 @@ def test_live_money_bridge_preserves_blocker_order_and_never_grants_more_permiss
     result = LiveMoneyRiskDecisionAdapter(
         tmp_path / "outputs",
         legacy_guardrails=legacy,
+        store=RiskDecisionStore(tmp_path / "outputs"),
     ).evaluate_order(
         "2026-07-18",
         ticket={"ticket_id": "ticket-live-1"},
@@ -617,6 +630,43 @@ def test_live_money_bridge_preserves_blocker_order_and_never_grants_more_permiss
     assert [row["code"] for row in result["risk_decision"]["blockers"]] == [
         "daily_loss_limit",
         "daily_trade_limit",
+    ]
+
+
+def test_live_money_bridge_fails_closed_when_legacy_status_is_not_ready(tmp_path: Path) -> None:
+    class FakeLegacyGuardrails:
+        def evaluate_order(self, *_args, **_kwargs) -> dict:
+            return {
+                "checked_at": CHECKED_AT,
+                "status": "ERROR",
+                "allows_new_order": True,
+                "blockers": [],
+                "limits": {},
+                "candidate": {"notional": 10.0},
+                "daily_loss": {"known": False},
+                "exposure": {},
+                "daily_entry_orders": {},
+                "halt": {},
+            }
+
+    result = LiveMoneyRiskDecisionAdapter(
+        tmp_path / "outputs",
+        legacy_guardrails=FakeLegacyGuardrails(),
+        store=RiskDecisionStore(tmp_path / "outputs"),
+    ).evaluate_order(
+        "2026-07-18",
+        ticket={"ticket_id": "ticket-live-invalid-status"},
+        symbol="XAUUSDT",
+        side="BUY",
+        requested_price=100.0,
+        quantity=0.1,
+        source="binance_usdm:testnet",
+        checked_at=CHECKED_AT,
+    )
+
+    assert canonical_live_risk_allows_exposure(result) is False
+    assert [row["code"] for row in result["risk_decision"]["blockers"]] == [
+        "legacy_guardrail_status_invalid"
     ]
 
 
@@ -641,7 +691,11 @@ def test_live_money_bridge_allows_clean_entry_and_skips_entry_guardrails_for_red
             }
 
     legacy = FakeLegacyGuardrails()
-    bridge = LiveMoneyRiskDecisionAdapter(tmp_path / "outputs", legacy_guardrails=legacy)
+    bridge = LiveMoneyRiskDecisionAdapter(
+        tmp_path / "outputs",
+        legacy_guardrails=legacy,
+        store=RiskDecisionStore(tmp_path / "outputs"),
+    )
     allowed = bridge.evaluate_order(
         "2026-07-18",
         ticket={"ticket_id": "ticket-live-2"},

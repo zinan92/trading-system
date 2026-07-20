@@ -24,6 +24,30 @@ same application-level decision contract. See the official Nautilus
 [risk API](https://nautilustrader.io/docs/python-api-latest/risk.html), and
 [order semantics](https://nautilustrader.io/docs/latest/concepts/orders/).
 
+## Composition and plugin identity
+
+- `risk_port.py` owns only the public evaluator/store protocols, canonical fact
+  projection, request construction, permission checks, and stale-decision
+  matching.
+- `risk_policy_paper.py` owns the current grid economics and ordered blockers;
+  `risk_policy_core.py` contains its provider-free pure helpers.
+- `risk_policy_registry.py` registers evaluator implementations by explicit
+  name, validates their implementation and source-bound evaluator identity,
+  publishes a deterministic fingerprint, and freezes before use.
+- `risk_policy_composition.py` is the only production construction boundary for
+  the selected paper policy, live bridge, and file audit store. Explicit empty
+  or unknown policy configuration fails before a runtime can mutate trading
+  state.
+- `risk_decision_store.py` and `risk_live_money_adapter.py` are separate
+  adapters. The live bridge requires an injected store and cannot construct a
+  concrete persistence implementation by itself.
+
+Production currently selects `risk_policy.paper_grid=paper_grid_risk`. A new
+policy must implement `RiskDecisionPort`, register a matching descriptor before
+freeze, and return evaluator metadata identical to that descriptor. Every
+request receives policy and evaluator metadata from that exact composed port;
+callers cannot pair a custom evaluator with the built-in identity.
+
 ## Contract
 
 `risk-request-v1` content-binds:
@@ -85,6 +109,12 @@ legacy blocker or denial into permission. Broker submission consumes the
 canonical flag in addition to all existing preflight, activation,
 reconciliation, attended, and lifecycle gates.
 
+The bridge grants new exposure only for legacy status `READY`, or the exact
+intentional paper-route status `SKIPPED` with reason
+`require_live_money_guardrails_before_entry=false`. A contradictory success
+flag paired with any other status is converted into the canonical
+`legacy_guardrail_status_invalid` blocker.
+
 Dry-run/demo behavior is unchanged. Reduce-only and close operations do not
 call entry money guardrails.
 
@@ -100,7 +130,8 @@ New exposure is blocked when any required money fact is unknown or when:
 - a regrid replacement set differs from current pending entries;
 - exact projected loss, leverage, or margin exceeds policy;
 - the pre-submit request differs from the evaluated request;
-- the live guardrail bridge is malformed or denies entry.
+- the live guardrail bridge is malformed, has an invalid success status, or
+  denies entry.
 
 Valid close, flatten, reduce-only, and cancel actions do not depend on entry
 permission. Their position/order identity must still be valid.

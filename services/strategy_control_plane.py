@@ -26,10 +26,13 @@ from services.grid_sizing import (
     positive_number as _positive_number,
 )
 from services.journal_store import load_json, write_json
+from services.risk_policy_composition import (
+    build_risk_decision_store,
+    compose_grid_risk_policy,
+)
 from services.risk_port import (
-    PaperGridRiskDecisionPort,
     RiskDecisionPort,
-    RiskDecisionStore,
+    RiskDecisionStorePort,
     assert_matching_risk_decision,
     build_grid_risk_request,
     require_exposure_permission,
@@ -58,13 +61,21 @@ class StrategyControlPlane:
         output_root: Path,
         *,
         risk_port: RiskDecisionPort | None = None,
-        risk_store: RiskDecisionStore | None = None,
+        risk_store: RiskDecisionStorePort | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "strategy_control"
         self.config = dualtrack_config()
-        self.risk_port = risk_port or PaperGridRiskDecisionPort()
-        self.risk_store = risk_store or RiskDecisionStore(self.output_root)
+        if risk_port is None:
+            runtime = compose_grid_risk_policy(self.config)
+            self.risk_port = runtime.port
+        else:
+            if not isinstance(risk_port, RiskDecisionPort):
+                raise TypeError("risk_port does not implement RiskDecisionPort")
+            self.risk_port = risk_port
+        self.risk_store = risk_store or build_risk_decision_store(self.output_root)
+        if not isinstance(self.risk_store, RiskDecisionStorePort):
+            raise TypeError("risk_store does not implement RiskDecisionStorePort")
 
     def upsert_proposal(self, payload: dict[str, Any], *, now: str | None = None) -> dict[str, Any]:
         proposal = normalize_proposal(payload, now=now)
@@ -829,7 +840,8 @@ class StrategyControlPlane:
             market=market,
             execution_snapshot=adapter.snapshot(cycle_id),
             execution_reconciliation=adapter.reconcile(cycle_id),
-            config=self.config,
+            policy=self.risk_port.resolve_policy(self.config),
+            evaluator=self.risk_port.evaluator_metadata(),
             replaced_order_ids=replaced_order_ids,
         )
 
