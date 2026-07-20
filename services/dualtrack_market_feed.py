@@ -36,7 +36,7 @@ class DualTrackMarketFeed:
         self.datafeed_source = str(datafeed_config.get("source") or "binance_usdm_futures")
         self.datafeed_asset_class = str(datafeed_config.get("asset_class") or "commodity")
         self.market_data_contract_mode = str(
-            datafeed_config.get("market_data_contract_mode") or "shadow"
+            datafeed_config.get("market_data_contract_mode") or "authoritative"
         ).strip().lower()
         if self.market_data_contract_mode not in {"shadow", "authoritative"}:
             raise ValueError(

@@ -2,9 +2,9 @@
 
 ## Executive answer
 
-**Overall architecture progress: 93%**
+**Overall architecture progress: 95%**
 
-`██████████████████▌░ 93%`
+`███████████████████░ 95%`
 
 The system now has a real hexagonal spine from trusted market facts through
 StrategyPlan, Risk, Execution, Accounting, Broker, and the Dashboard read model.
@@ -15,8 +15,8 @@ It is not yet a full plug-and-play system. Signal analysis, production grid
 proposal generation, all three backtest use cases, paper execution, broker
 execution, and broker accounting normalization now resolve through frozen
 plugin registries and venue-owned adapters. The largest remaining gaps are the
-authoritative Market Envelope V2 cutover, physical risk evaluator/store
-separation, and retirement of contained compatibility facades.
+physical risk evaluator/store separation, retirement of contained compatibility
+facades, and bounded market-contract deployment cleanup.
 
 This percentage measures modular architecture, not profitability, live-money
 readiness, or whether the self-evolution loop has enough trades.
@@ -26,12 +26,12 @@ readiness, or whether the self-evolution loop has enough trades.
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
 is the rounded arithmetic mean of the seven visible row totals:
-`648 / 7 = 92.6%`, reported as `93%`.
+`663 / 7 = 94.7%`, reported as `95%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
-| Data download | 25 | 25 | 25 | 15 | 90 |
-| Data cleaning / quality | 25 | 25 | 20 | 15 | 85 |
+| Data download | 25 | 25 | 25 | 20 | 95 |
+| Data cleaning / quality | 25 | 25 | 25 | 20 | 95 |
 | Analysis / strategy | 25 | 20 | 25 | 25 | 95 |
 | Backtest / replay | 25 | 20 | 25 | 20 | 90 |
 | Live execution / broker | 25 | 25 | 25 | 23 | 98 |
@@ -67,7 +67,7 @@ boundary. The exceptions are named below.
 
 ## Line-by-line audit
 
-### 1. Data download — 90/100
+### 1. Data download — 95/100
 
 - Port/contract: `MarketDataReadPort`, `TrustedMarketDataReadPort`, and
   `market-data-envelope-v1`.
@@ -76,18 +76,19 @@ boundary. The exceptions are named below.
 - Composition: `market_data_repository()` is the sole production construction
   point; instrument routes select source adapters by config.
 - Proof: strict mapper/envelope, source boundary, same-response parity, session,
-  freshness, and failure-path suites.
-- Remaining 10: current config still says
-  `market_data_contract_mode=shadow`. V1 same-response parity passed, but real
-  V2 session-aware parity has not yet justified authoritative cutover and
-  removal of the `load_bars()` compatibility interpretation.
+  freshness, and failure-path suites. Six real V2 shadow reads plus one
+  authoritative read compared 3,206 fields with zero drift; canonical and
+  omitted-mode composition now use `market_data_contract_mode=authoritative`.
+- Remaining 5: production datafeed still served V1 during the isolated
+  rehearsal. Deploying its session-aware V2 contract and proving versioned
+  long-window pagination remain operational/contract follow-ups.
 
 Swap truth: replacing Binance with Yahoo/FRED/Tiger is plug-compatible only
 after the new datafeed adapter emits the same versioned envelope. Swapping a URL
 without satisfying source, timeframe, OHLCV, session, freshness, and trust
 validation is correctly rejected.
 
-### 2. Data cleaning / quality — 85/100
+### 2. Data cleaning / quality — 95/100
 
 - Contract/core: `Bar`, `MarketDataEnvelope`, and
   `datafeed_market_mapper.map_candle_response()` validate types, chronology,
@@ -95,11 +96,15 @@ validation is correctly rejected.
   session state, age, quality, and fallback policy atomically.
 - Isolation: source cleaning belongs to datafeed adapters; the trading repo
   independently rechecks execution freshness at its consumer boundary.
+- Composition: every production repository bar, range, latest, quote, and
+  point-in-time read now projects from `load_envelope()` through the sole
+  mapper. There is no second raw-candle-to-`Bar` interpreter.
 - Proof: invalid/malformed/duplicate/out-of-order/session-closed fixtures fail
-  closed; exact projection parity covers every safety field.
-- Remaining 15: legacy list-of-`Bar` readers and some historical SQLite/data
-  health compatibility seams remain frozen rather than deleted; production V2
-  envelope authority is still shadow-gated.
+  closed; exact projection parity covers every safety field. Boundary-aware
+  point reads and direct 502 propagation prove ordering and no fallback.
+- Remaining 5: V1 continuous-market inference, the 60,000-bar single-page range
+  cap, and some historical SQLite/test-replay seams remain explicit migration
+  debt. They do not own production candle interpretation.
 
 ### 3. Analysis / strategy — 95/100
 
@@ -290,15 +295,16 @@ evolution yet.
 
 ## Shortest remaining architecture backlog
 
-1. **Market Envelope V2 cutover (small after evidence):** capture real
-   session-aware same-response parity, switch authority explicitly, then delete
-   the duplicate `load_bars()` interpretation and narrow SQLite seams.
-2. **Risk policy/store extraction (medium):** keep `risk-request-v1` and
+1. **Risk policy/store extraction (medium):** keep `risk-request-v1` and
    `risk-decision-v1`, register policy evaluators explicitly, and separate
    immutable decision persistence from evaluation.
-3. **Legacy read-surface retirement (medium):** migrate remaining consumers to
+2. **Legacy read-surface retirement (medium):** migrate remaining consumers to
    the stable read model, announce deprecation, then remove facade-only
    presentation code.
+3. **Market data contract cleanup (small/medium):** deploy the session-aware V2
+   datafeed, add a versioned continuation/pagination contract for ranges beyond
+   60,000 bars, then retire V1 continuous-market inference and narrow remaining
+   SQLite compatibility seams.
 4. **Backtest compatibility retirement (small):** migrate remaining direct
    `BacktestClient` callers to explicit plugins, then delete its fallback branch
    and narrow legacy `BacktestEvidence` readers to the V2 provenance contract.
@@ -317,6 +323,6 @@ pipeline. The honest state is a robust hexagonal spine with a few contained
 compatibility facades still awaiting retirement.
 
 For the grid-only product focus, the next highest-leverage architecture change
-is the evidence-gated Market Envelope V2 cutover, followed by physical risk
-policy/store separation—not another Dashboard or provider-specific
-integration.
+is physical risk policy/store separation. Market V2 deployment and long-window
+pagination are now bounded contract follow-ups—not reasons to add another
+Dashboard or provider-specific interpretation.
