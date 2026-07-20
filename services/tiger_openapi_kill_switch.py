@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from services.broker_adapter import resolve_broker_config
+from services.broker_composition import resolve_broker_profile_config
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_money_guardrails import LiveHaltStore
@@ -330,7 +330,7 @@ class TigerOpenApiPaperKillSwitch:
         return str(item)
 
     def _default_tiger_broker_config(self, config: dict) -> dict:
-        resolved = resolve_broker_config(config)
+        resolved = resolve_broker_profile_config(config)
         if str(resolved.get("provider") or "") == "tiger_openapi":
             return resolved
         profile = (config.get("broker_profiles", {}) or {}).get("tiger_openapi_paper")

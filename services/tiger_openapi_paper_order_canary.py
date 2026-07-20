@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from services.broker_adapter import BrokerOrderRequest
+from services.broker_port import BrokerOrderRequest
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_money_guardrails import LiveMoneyGuardrails

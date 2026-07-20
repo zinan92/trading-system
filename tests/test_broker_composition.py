@@ -9,6 +9,7 @@ from services.broker_composition import (
     BrokerPluginKey,
     BrokerPluginRegistry,
     build_broker_execution_port,
+    build_configured_live_broker_execution_port,
     build_broker_reconciliation_port,
 )
 from services.broker_port import BrokerOrderRequest
@@ -243,6 +244,87 @@ def test_live_binance_registry_path_keeps_real_money_activation_gate(tmp_path: P
                 "2026-07-18",
                 {
                     "ticket_id": "ticket-live-gate",
+                    "asset": "GOLD",
+                    "action": "prepare_buy",
+                    "entry_zone": "3999-4001",
+                    "stop_loss": 3990,
+                    "targets": [4010],
+                    "position_size_pct": 1,
+                    "order_type": "market",
+                },
+                latest_price=4000,
+                actual_size=0.001,
+            )
+        )
+
+    assert not [item for item in seen if item["method"] == "POST"]
+
+
+@pytest.mark.parametrize("stored_environment", ["demo", "testnet"])
+def test_configured_live_path_does_not_treat_stored_binance_environment_as_authority(
+    tmp_path: Path,
+    monkeypatch,
+    stored_environment: str,
+):
+    from services.binance_usdm_broker_adapter import BinanceUsdmBrokerAdapter
+
+    seen: list[dict] = []
+    monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
+
+    def opener(request, timeout):
+        seen.append({"method": request.get_method(), "url": request.full_url})
+        if "/fapi/v1/exchangeInfo" in request.full_url:
+            return _FakeResponse(
+                {
+                    "symbols": [
+                        {
+                            "symbol": "XAUUSDT",
+                            "status": "TRADING",
+                            "filters": [
+                                {
+                                    "filterType": "PRICE_FILTER",
+                                    "tickSize": "0.01",
+                                },
+                                {
+                                    "filterType": "MARKET_LOT_SIZE",
+                                    "stepSize": "0.001",
+                                    "minQty": "0.001",
+                                },
+                                {
+                                    "filterType": "MIN_NOTIONAL",
+                                    "notional": "5",
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+        raise AssertionError(f"unexpected network call: {request.full_url}")
+
+    adapter = build_configured_live_broker_execution_port(
+        tmp_path / "outputs",
+        True,
+        {
+            "provider": "binance_usdm",
+            "environment": stored_environment,
+            "dry_run": False,
+            "allowed_symbols": ["GOLD"],
+            "instrument_map": {"GOLD": "XAUUSDT"},
+        },
+        opener=opener,
+    )
+
+    assert type(adapter) is BinanceUsdmBrokerAdapter
+    with pytest.raises(
+        RuntimeError,
+        match="live activation gate is not real_money_ready",
+    ):
+        adapter.submit_order(
+            BrokerOrderRequest(
+                "2026-07-18",
+                {
+                    "ticket_id": f"configured-{stored_environment}",
                     "asset": "GOLD",
                     "action": "prepare_buy",
                     "entry_zone": "3999-4001",

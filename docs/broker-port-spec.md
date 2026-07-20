@@ -113,14 +113,14 @@ Binance demo and testnet currently share
 - reconciliation receives the effective config from the selected execution
   adapter, so it cannot observe mainnet while execution targets demo/testnet.
 
-The Binance configured/live plugin always uses the base
-`LiveBrokerAdapter.submit_order`. It therefore retains the
+The Binance configured/live plugin always uses the concrete
+`BinanceUsdmBrokerAdapter.submit_order`. It therefore retains the
 `real_money_ready` activation gate. The registry does not force
 `live_trading_enabled=True` or `dry_run=False` for mainnet.
 
 The legacy configured factory has one compatibility nuance: a broker config
 may say `environment=demo` while the dedicated demo strategy is disabled. That
-path continues to build the activation-gated legacy adapter. Only an explicit
+path continues to build the activation-gated venue adapter. Only an explicit
 demo composition context selects `BinanceDemoBrokerAdapter`.
 
 ## Ambiguous outcomes

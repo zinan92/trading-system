@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from services.accounting_projection_composition import broker_accounting_snapshot_payload
-from services.broker_adapter import resolve_broker_config
+from services.broker_composition import resolve_broker_profile_config
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
 from services.live_env import apply_live_env
@@ -99,7 +99,7 @@ class TigerOpenApiAccountSync:
         return TradeClient(TigerOpenClientConfig(props_path=props_path))
 
     def _default_tiger_broker_config(self, config: dict) -> dict:
-        resolved = resolve_broker_config(config)
+        resolved = resolve_broker_profile_config(config)
         if str(resolved.get("provider") or "") == "tiger_openapi":
             return resolved
         profile = (config.get("broker_profiles", {}) or {}).get("tiger_openapi_paper")
