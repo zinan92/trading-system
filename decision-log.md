@@ -6627,3 +6627,100 @@ auditable datafeed port; broker execution remains a separate port.
 - Architecture progress: `86%`, reproducible from the canonical audit table.
 - No config, strategy parameter, execution authority, credential, order,
   position, account, or production-state mutation occurred.
+
+## 2026-07-18 - A9 Strategy Proposal Port kickoff
+
+### Objective and value
+
+- Make current production grid proposal generation replaceable without letting
+  a new model/provider replace plan validation, persistence, or risk semantics.
+- Enable deterministic and What-if planners to consume the same trusted context
+  and produce the same validated machine-plan contract.
+
+### Decisions
+
+- Keep `DualTrackMachinePlanner` as the trusted lifecycle service. Extract only
+  untrusted proposal generation behind `StrategyProposalPort`.
+- The core owns range-floor policy, validation, degraded fallback, plan writes,
+  revisions, traces, and audit. Plugins receive no broker/order/risk authority.
+- Use an explicit frozen registry; do not auto-load installed Python packages.
+- Preserve `decision_provider` injection by wrapping it in the same newsletter
+  adapter used by the configured production path.
+
+### Gotchas
+
+- A superficial registry around the whole stateful planner would make plugins
+  own persistence and safety. A9 must instead isolate proposal generation.
+- Forced replan failure preserves the existing locked plan; initial failure
+  creates a transparent degraded no-trade plan.
+- The primary worktree remains unrelated and active. A9 is isolated on top of
+  the clean A8 branch and changes no live configuration or state.
+
+### Baseline
+
+- A8 full suite: `1752 passed, 7 skipped`.
+- Planner/DT8 baseline: `58 passed`.
+
+## 2026-07-18 - A9 Strategy Proposal Port complete
+
+### Value delivered
+
+- Production grid proposal generation is now replaceable through a versioned,
+  authority-limited `StrategyProposalPort`. A deterministic planner, another
+  model, or a What-if challenger can enter without editing the cycle runner or
+  trusted plan lifecycle core.
+- Safety semantics do not move with the plugin. The core still owns range-floor
+  policy, validation, degraded no-trade fallback, persistence, forced-replan
+  preservation, revisions, traces, and audit.
+- The configured Codex/newsletter implementation is now one explicit adapter;
+  prompt bytes, subprocess restrictions, and current trading behavior remain
+  unchanged.
+
+### Decisions
+
+- Keep proposal generation separate from the A8 signal-analysis port. A signal
+  engine explains market state; a proposal plugin drafts a production grid;
+  neither gets execution, risk, persistence, or promotion authority.
+- Use an explicit frozen registry and safe content fingerprint. Do not load
+  arbitrary installed Python packages into the trading process.
+- Preserve the direct `decision_provider` compatibility seam through the same
+  adapter/composition path, while production construction selects the frozen
+  runtime before stores or execution services are created.
+- Treat every proposal result as untrusted. Copy only prompt-declared proposal
+  fields; core lifecycle, provenance, revision, execution-start, review-change,
+  and fallback metadata are not plugin-owned.
+- Give plugins only declared external context. A deterministic plugin that does
+  not require newsletter research neither reads nor receives it.
+
+### Gotchas
+
+- A registry around the entire stateful planner would have made adapters own
+  validation and persistence; the extracted boundary is proposal-only.
+- Opus found that a raw dictionary merge could preserve plugin-supplied
+  `degraded`, `planning_error`, `execution_start`, or unrelated review metadata.
+  This could not create a trade, but it could mislabel lifecycle/provenance and
+  bypass the explicit-grid error path. The final core now uses a proposal-field
+  allowlist before range policy and validation.
+- `force=True` proposal failure must preserve the previous locked plan and write
+  no revision; initial failure must persist an explicit no-trade degraded plan.
+  Both behaviors remain covered.
+- A frozen Protocol proves shape, not strategy correctness. New planners still
+  require behavioral, replay, risk, and promotion evidence before production
+  selection.
+- A9 has no visible product surface. Visual Evidence is not applicable; tests,
+  commits, documents, and the Opus receipt are trace material only.
+
+### Verification
+
+- Focused proposal/planner/fitness regression after review: `76 passed`.
+- Focused A0-A9 architecture/conformance regression: `212 passed`.
+- Final repository regression after the accepted review fix:
+  `1763 passed, 7 skipped in 378.62s`.
+- Changed-file Ruff and diff checks: clean.
+- Verified Opus: `claude-opus-4-8`, session
+  `114afe14-6c34-4355-baa6-f6d9d56e8221`, receipt
+  `20260718T030459Z_fac8bdbd-56f5-4c7d-9546-54fd629e2eab.json`; no P0/P1,
+  `SHIP`. One valid P2 was fixed and regression-tested before completion.
+- Architecture progress is now `87%`, reproducible from the canonical audit.
+- No strategy parameters, execution/risk/broker authority, credentials, orders,
+  positions, accounts, or production state were changed.

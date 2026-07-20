@@ -28,6 +28,8 @@ from services.dualtrack_tiger_human_sync import DualTrackTigerHumanSync
 from services.journal_store import load_json, write_json
 from services.datafeed_market_repository import DatafeedMarketRepository
 from services.market_store import MarketStore
+from services.strategy_proposal_composition import compose_strategy_proposal
+from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
 
 
@@ -66,19 +68,29 @@ class DualTrackCycleRunner:
         config: dict[str, Any] | None = None,
         symbol: str | None = None,
         timeframe: str | None = None,
+        proposal_registry: StrategyProposalPluginRegistry | None = None,
     ) -> None:
         pipeline_config = load_pipeline_config()
         self.output_root = Path(output_root) if output_root else ROOT / pipeline_config.get("output_root", "outputs")
         env_market_db = os.getenv("TRADING_ORCHESTRATOR_MARKET_DB")
         self.market_db = Path(market_db or env_market_db or ROOT / pipeline_config.get("local_market_db", "data/market_data.db"))
         self.config = config or dualtrack_config()
+        proposal_runtime = compose_strategy_proposal(
+            self.config,
+            registry=proposal_registry,
+        )
+        self.proposal_plugin = proposal_runtime.audit_dict()
         market_data = self.config.get("market_data") if isinstance(self.config.get("market_data"), dict) else {}
         self.symbol = symbol or str(market_data.get("symbol") or "GOLD")
         self.timeframe = timeframe or str(market_data.get("timeframe") or "1m")
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
         self.execution = build_configured_execution_engine_adapter(self.output_root, config=self.config)
         self.machine = DualTrackMachineRunner(self.output_root, config=self.config)
-        self.machine_planner = DualTrackMachinePlanner(self.output_root, config=self.config)
+        self.machine_planner = DualTrackMachinePlanner(
+            self.output_root,
+            config=self.config,
+            proposal_runtime=proposal_runtime,
+        )
         self.scorer = DualTrackScorer(self.output_root, config=self.config)
         # Explicit market_db remains a test/replay compatibility seam. Normal
         # production construction consumes the independent datafeed only.
@@ -126,6 +138,7 @@ class DualTrackCycleRunner:
             "prev_range": prev_range,
             "bar_count": len(bars),
             "trend_gate_armed": trend_gate_armed,
+            "proposal_plugin": self.proposal_plugin,
         }
 
     def intraday_tick(self, cycle_id: str | None = None, *, as_of: str | datetime | None = None) -> dict[str, Any]:
@@ -387,14 +400,15 @@ class DualTrackCycleRunner:
             **payload,
         }
         latest = rows[-1] if rows else {}
-        signature = lambda item: (
-            item.get("status"),
-            item.get("plan_locked_at"),
-            (item.get("trigger") or {}).get("confirmed_at"),
-            (item.get("touch") or {}).get("touched_at"),
-            item.get("retry_at"),
-            ((item.get("replacement_plan") or {}).get("locked_at")),
-        )
+        def signature(item: dict[str, Any]) -> tuple[Any, ...]:
+            return (
+                item.get("status"),
+                item.get("plan_locked_at"),
+                (item.get("trigger") or {}).get("confirmed_at"),
+                (item.get("touch") or {}).get("touched_at"),
+                item.get("retry_at"),
+                ((item.get("replacement_plan") or {}).get("locked_at")),
+            )
         if signature(latest) == signature(row):
             return latest
         rows.append(row)

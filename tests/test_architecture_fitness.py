@@ -14,6 +14,7 @@ from services.dualtrack_execution_adapter import ExecutionEngineAdapter
 from services.market_data_access import TrustedMarketDataReadPort
 from services.risk_port import RiskDecisionPort
 from services.strategy_analysis_port import StrategyAnalysisPort
+from services.strategy_proposal_port import StrategyProposalPort
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,8 @@ CONTRACT_KERNELS = (
     "services/strategy_plan_execution.py",
     "services/strategy_analysis_port.py",
     "services/strategy_plugin_registry.py",
+    "services/strategy_proposal_port.py",
+    "services/strategy_proposal_registry.py",
     "services/dualtrack_execution_contract.py",
     "services/accounting_projection.py",
     "services/risk_port.py",
@@ -57,12 +60,13 @@ FORBIDDEN_KERNEL_IMPORTS = (
     "services.chan_signal_engine",
     "services.macd_signal_engine",
     "services.technical_rule_signal_engine",
+    "services.codex_newsletter_strategy_proposal",
 )
 
 EXPECTED_SCORE_ROWS = {
     "Data download": (25, 25, 25, 15, 90),
     "Data cleaning / quality": (25, 25, 20, 15, 85),
-    "Analysis / strategy": (25, 20, 20, 20, 85),
+    "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (20, 20, 15, 15, 70),
     "Live execution / broker": (25, 20, 20, 20, 85),
     "Risk / accounting / reconciliation": (25, 20, 20, 25, 90),
@@ -223,6 +227,11 @@ class GenericStrategyAnalysisPort:
         return None
 
 
+class GenericStrategyProposalPort:
+    def propose(self, request):
+        return {"cycle_id": request.cycle_id}
+
+
 class GenericRiskPort:
     name = "generic_risk"
 
@@ -260,6 +269,7 @@ def test_provider_free_fakes_expose_the_public_port_shapes() -> None:
     assert isinstance(GenericMarketPort(), TrustedMarketDataReadPort)
     assert isinstance(GenericExecutionPort(), ExecutionEngineAdapter)
     assert isinstance(GenericStrategyAnalysisPort(), StrategyAnalysisPort)
+    assert isinstance(GenericStrategyProposalPort(), StrategyProposalPort)
     assert isinstance(GenericRiskPort(), RiskDecisionPort)
     assert isinstance(GenericBrokerPort(), BrokerExecutionPort)
     assert isinstance(GenericReconciliationPort(), BrokerReconciliationPort)
@@ -278,8 +288,8 @@ def test_architecture_progress_bar_is_reproducible_from_visible_scores() -> None
     for values in observed.values():
         assert sum(values[:4]) == values[4]
     overall = round(sum(values[4] for values in observed.values()) / len(observed))
-    assert overall == 86
-    assert "**Overall architecture progress: 86%**" in text
+    assert overall == 87
+    assert "**Overall architecture progress: 87%**" in text
 
 
 def test_strategy_selection_stays_in_the_explicit_plugin_composition_root() -> None:
@@ -303,16 +313,34 @@ def test_strategy_selection_stays_in_the_explicit_plugin_composition_root() -> N
         assert module in composition
 
 
+def test_strategy_proposal_selection_stays_in_the_explicit_composition_root() -> None:
+    application_paths = (
+        ROOT / "services" / "dualtrack_machine_plan.py",
+        ROOT / "pipelines" / "dualtrack_cycle_runner.py",
+    )
+    concrete_module = "services.codex_newsletter_strategy_proposal"
+    for path in application_paths:
+        source = path.read_text(encoding="utf-8")
+        assert concrete_module not in _imported_modules(path)
+        assert "CodexNewsletterStrategyProposal" not in source
+        assert "def _codex_decision" not in source
+        assert "def _prompt" not in source
+
+    composition = (ROOT / "services" / "strategy_proposal_composition.py").read_text(encoding="utf-8")
+    assert concrete_module in composition
+
+
 def test_audit_names_every_known_non_hexagonal_seam() -> None:
     text = AUDIT.read_text(encoding="utf-8")
     backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
-        "DualTrackMachinePlanner",
         "Backtest Port",
         "dualtrack_execution_adapter.py",
         "accounting_projection.py",
         "LiveBrokerAdapter",
     ):
         assert seam in backlog
+    assert "DualTrackMachinePlanner" not in backlog
     assert "Strategy._base_engine" not in backlog
+    assert "strategy-proposal-request-v1" in text
     assert "market_data_contract_mode=shadow" in text
