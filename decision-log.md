@@ -7632,3 +7632,64 @@ auditable datafeed port; broker execution remains a separate port.
   venue receipt or authority to trade.
 - No grid spacing, sizing, exchange key, live runtime configuration, risk-port
   behavior, production process, order, position, account, or live state changes.
+
+## 2026-07-20 - Issue 40 paper-start readback race
+
+### User outcome
+
+- A paper grid start reflects the execution engine's real order state even when
+  an order fills between submission and the first verification readback.
+
+### Success criteria
+
+- Every submitted order must still be present on the first readback.
+- A submitted order may be `accepted` or already `filled` without causing a
+  false startup failure.
+- Missing orders, invalid states, or unrelated accepted orders still fail
+  closed with diagnostic IDs.
+- The submit-to-readback race has a deterministic regression test.
+- The repository suite remains at or above the `1889 passed` issue baseline.
+
+### Scope
+
+- In scope: paper Strategy Control startup verification and its regression test.
+- Out of scope: live/broker money paths, matching semantics, credentials,
+  branch protection, and unrelated regrid behavior.
+
+### Decision
+
+- Verify submitted IDs against a single complete execution snapshot instead of
+  comparing them only with the `accepted` projection. Preserve the prior
+  fail-closed check for unexpected accepted orders.
+
+### Gotchas
+
+- A fill is evidence of forward progress, not evidence that submission failed.
+- Historical terminal orders may coexist in a snapshot; only unrelated active
+  `accepted` orders are startup blockers.
+- This backend-only change has no visible surface; visual evidence is not
+  applicable. Test output and the PR diff are trace evidence.
+
+### Adversarial review
+
+- Two independent read-only reviews checked race correctness, fail-closed
+  behavior, scope, and test realism.
+- The safety review reproduced ambiguous receipt identities and a late
+  unrelated accepted order. Closure now rejects empty, whitespace-only, and
+  duplicate IDs; validates both readbacks through one invariant; and derives
+  counts from the same terminal snapshot.
+- Duplicate detection uses a linear `Counter` pass so large historical
+  snapshots do not create quadratic validation work.
+- Final review found no remaining P0-P3 actionable findings and confirmed no
+  live/broker, matching, credential, or branch-protection change.
+
+### Verification
+
+- Strategy Control plus Nautilus upstream/downstream pack: `39 passed`;
+  independent reviewer expansion: `43 passed`.
+- Changed-file Ruff and `git diff --check`: clean.
+- Final repository suite: `1874 passed, 7 skipped in 402.65s`.
+- The current `main` closure records `1869 passed, 7 skipped`; this issue adds
+  five passing cases and removes none. The issue text's `1889 passed` baseline
+  is not reproducible from the accessible remote, so the PR reports both the
+  exact result and the positive delta instead of claiming that absolute count.

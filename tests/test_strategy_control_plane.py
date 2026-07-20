@@ -627,6 +627,274 @@ def test_start_accepts_complete_grid_before_processing_a_legitimate_fill(
     assert started["runtime"]["actual_state"] == "running"
 
 
+def test_start_accepts_order_filled_between_submit_and_first_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    class ReadbackRaceAdapter:
+        name = "nautilus_paper"
+
+        def __init__(self) -> None:
+            self.orders: list[dict] = []
+            self.advanced_on_readback = False
+
+        def submit_order(self, command: dict) -> dict:
+            row = {
+                "order_id": command["source_fill_id"],
+                "state": "accepted",
+                "side": command["side"],
+                "price": command["price"],
+                "quantity": command["quantity"],
+                "strategy_plan_id": command["strategy_plan_id"],
+                "strategy_plan_version": command["strategy_plan_version"],
+            }
+            self.orders.append(row)
+            return dict(row)
+
+        def snapshot(self, requested_cycle: str, **_kwargs) -> dict:
+            if self.orders and not self.advanced_on_readback:
+                self.orders[0]["state"] = "filled"
+                self.advanced_on_readback = True
+            return {
+                "schema_version": "dualtrack-execution-v1",
+                "engine": self.name,
+                "cycle_id": requested_cycle,
+                "orders": [dict(row) for row in self.orders],
+                "fills": ([{"fill_id": "fill-during-readback"}] if self.advanced_on_readback else []),
+                "positions": [],
+                "account": {
+                    "starting_cash": 10_000.0,
+                    "realized_pnl": 0.0,
+                    "ending_cash": 10_000.0,
+                    "equity": 10_000.0,
+                    "margin": 0.0,
+                    "exposure": 0.0,
+                    "slippage": 0.0,
+                    "fees": 0.0,
+                    "funding": 0.0,
+                },
+                "pnl": {"realized": 0.0, "unrealized": 0.0},
+            }
+
+        def process_market_event(self, _event: dict) -> dict:
+            return {"status": "replayed"}
+
+        def reconcile(self, _cycle_id: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+        def cancel_orders(self, _cycle_id: str, **_kwargs) -> dict:
+            return {"cancelled_order_count": 0, "cancelled_order_ids": []}
+
+    adapter = ReadbackRaceAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("long", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+
+    assert adapter.advanced_on_readback is True
+    assert started["created_orders"] > 1
+    assert started["filled_orders"] == 1
+    assert started["accepted_orders"] == started["created_orders"] - 1
+    assert started["runtime"]["actual_state"] == "running"
+
+
+@pytest.mark.parametrize("ambiguous_order_id", ["", "   ", "duplicate-order"])
+def test_start_rejects_empty_or_duplicate_submission_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ambiguous_order_id: str,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    class AmbiguousIdentityAdapter:
+        name = "legacy_paper"
+
+        def __init__(self) -> None:
+            self.orders: list[dict] = []
+
+        def submit_order(self, command: dict) -> dict:
+            row = {
+                "order_id": ambiguous_order_id,
+                "state": "accepted",
+                "side": command["side"],
+                "price": command["price"],
+                "quantity": command["quantity"],
+            }
+            self.orders.append(row)
+            return dict(row)
+
+        def snapshot(self, requested_cycle: str, **_kwargs) -> dict:
+            return {
+                "schema_version": "dualtrack-execution-v1",
+                "engine": self.name,
+                "cycle_id": requested_cycle,
+                "orders": [dict(row) for row in self.orders],
+                "fills": [],
+                "positions": [],
+                "account": {
+                    "starting_cash": 10_000.0,
+                    "realized_pnl": 0.0,
+                    "ending_cash": 10_000.0,
+                    "equity": 10_000.0,
+                    "margin": 0.0,
+                    "exposure": 0.0,
+                    "slippage": 0.0,
+                    "fees": 0.0,
+                    "funding": 0.0,
+                },
+                "pnl": {"realized": 0.0, "unrealized": 0.0},
+            }
+
+        def cancel_orders(self, _cycle_id: str, **_kwargs) -> dict:
+            cancelled = 0
+            for row in self.orders:
+                if row["state"] == "accepted":
+                    row["state"] = "cancelled"
+                    cancelled += 1
+            return {"cancelled_order_count": cancelled, "cancelled_order_ids": []}
+
+        def reconcile(self, _cycle_id: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+    adapter = AmbiguousIdentityAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+
+    with pytest.raises(ValueError, match="receipts require valid unique order IDs"):
+        plane.control(
+            cycle_id,
+            "start",
+            safe_grid("long", "steady"),
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    assert plane.runtime_state(cycle_id)["actual_state"] == "error"
+    assert not [row for row in adapter.orders if row["state"] == "accepted"]
+
+
+def test_start_rejects_unexpected_active_order_on_terminal_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    class LateOrderAdapter:
+        name = "nautilus_paper"
+
+        def __init__(self) -> None:
+            self.orders: list[dict] = []
+            self.injected = False
+
+        def submit_order(self, command: dict) -> dict:
+            row = {
+                "order_id": command["source_fill_id"],
+                "state": "accepted",
+                "side": command["side"],
+                "price": command["price"],
+                "quantity": command["quantity"],
+            }
+            self.orders.append(row)
+            return dict(row)
+
+        def snapshot(self, requested_cycle: str, **_kwargs) -> dict:
+            return {
+                "schema_version": "dualtrack-execution-v1",
+                "engine": self.name,
+                "cycle_id": requested_cycle,
+                "orders": [dict(row) for row in self.orders],
+                "fills": [],
+                "positions": [],
+                "account": {
+                    "starting_cash": 10_000.0,
+                    "realized_pnl": 0.0,
+                    "ending_cash": 10_000.0,
+                    "equity": 10_000.0,
+                    "margin": 0.0,
+                    "exposure": 0.0,
+                    "slippage": 0.0,
+                    "fees": 0.0,
+                    "funding": 0.0,
+                },
+                "pnl": {"realized": 0.0, "unrealized": 0.0},
+            }
+
+        def process_market_event(self, _event: dict) -> dict:
+            if not self.injected:
+                self.orders.append({
+                    "order_id": "concurrent-order",
+                    "state": "accepted",
+                    "side": "buy",
+                    "price": 90.0,
+                    "quantity": 1.0,
+                })
+                self.injected = True
+            return {"status": "replayed"}
+
+        def cancel_orders(self, _cycle_id: str, **_kwargs) -> dict:
+            cancelled_ids = []
+            for row in self.orders:
+                if row["state"] == "accepted":
+                    row["state"] = "cancelled"
+                    cancelled_ids.append(row["order_id"])
+            return {
+                "cancelled_order_count": len(cancelled_ids),
+                "cancelled_order_ids": cancelled_ids,
+            }
+
+        def reconcile(self, _cycle_id: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+    adapter = LateOrderAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+
+    with pytest.raises(ValueError, match="unexpected_accepted=\\['concurrent-order'\\]"):
+        plane.control(
+            cycle_id,
+            "start",
+            safe_grid("long", "steady"),
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    assert adapter.injected is True
+    assert plane.runtime_state(cycle_id)["actual_state"] == "error"
+    assert not [row for row in adapter.orders if row["state"] == "accepted"]
+
+
 def test_runtime_state_is_scoped_to_the_requested_cycle(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     plane = StrategyControlPlane(output)
