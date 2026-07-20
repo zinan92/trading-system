@@ -24,7 +24,12 @@ from services.config_loader import ROOT, load_pipeline_config, load_risk_rules
 from services.data_source_preflight import DataSourcePreflight
 from services.decision_trace import DecisionTrace
 from services.journal_store import JournalStore, load_json, write_json
-from services.live_env import apply_live_env, live_env_value_present
+from services.broker_adapter import PaperBrokerAdapter
+from services.broker_read_model import (
+    broker_reconciliation_block_reason,
+    broker_reconciliation_status,
+    project_broker_read_model,
+)
 from services.order_lifecycle import OrderLifecycleStore
 from services.pending_auto_resolver import resolve_pending_cycle, sweep_stale_pending
 from services.pending_entry_guard import evaluate_limit_entry_status, load_entry_candles
@@ -111,88 +116,24 @@ class MultiStrategyRunner:
 
     def _execution_profile_for(self, strategy) -> dict:
         config = load_pipeline_config()
-        active = self._active_demo_broker_config(strategy, config=config)
-        if active is not None:
-            broker_config, demo = active
-            provider = str(broker_config.get("provider") or "")
-            if provider == "tiger_openapi":
-                apply_live_env()
-                props_env = str(broker_config.get("props_path_env", "TIGER_OPENAPI_CONFIG_PATH"))
-                credentials_present = live_env_value_present(props_env)
-                network_armed = bool(
-                    credentials_present
-                    and not broker_config.get("dry_run", True)
-                    and str(broker_config.get("network_order_submission") or "") == "paper_tradeclient"
-                    and broker_config.get("confirm_tiger_paper_orders") is True
-                )
-                return {
-                    "adapter": "tiger_openapi_paper",
-                    "mode": "tiger_paper_profile_gated",
-                    "strategy_id": strategy.strategy_id,
-                    "armed": network_armed,
-                    "credentials_present": credentials_present,
-                    "credential_env_names": [props_env],
-                    "provider": provider,
-                    "profile": str(broker_config.get("profile") or ""),
-                    "environment": str(broker_config.get("environment", "paper")),
-                    "dry_run": bool(broker_config.get("dry_run", True)),
-                    "network_order_submission": str(broker_config.get("network_order_submission") or "not_implemented_fail_closed"),
-                    "confirm_tiger_paper_orders": broker_config.get("confirm_tiger_paper_orders") is True,
-                    "live_endpoint_allowed": False,
-                    "requires_operator_authorization": True,
-                    "request_dir": str(broker_config.get("request_dir", "tiger_order_requests")),
-                    "note": "Automatic execution is routed through the Tiger paper adapter profile, but network submission remains guarded by Tiger paper profile flags.",
-                }
-            from services.binance_demo_broker_adapter import DEMO_BASE_URL, DEMO_SYMBOL
-
-            apply_live_env()
-            key_env = str(broker_config.get("api_key_env", "BINANCE_API_KEY"))
-            secret_env = str(broker_config.get("api_secret_env", "BINANCE_API_SECRET"))
-            credentials_present = bool(live_env_value_present(key_env) and live_env_value_present(secret_env))
-            return {
-                "adapter": "binance_demo",
-                "mode": "binance_futures_demo",
-                "strategy_id": strategy.strategy_id,
-                "armed": bool(credentials_present),
-                "credentials_present": credentials_present,
-                "credential_env_names": [key_env, secret_env],
-                "endpoint": DEMO_BASE_URL,
-                "symbol": DEMO_SYMBOL,
-                "live_endpoint_allowed": False,
-                "max_order_quantity": float(demo.get("max_order_quantity", 0.002)),
-                "require_flat_before_entry": bool(demo.get("require_flat_before_entry", True)),
-                "protective_failure_action": str(demo.get("protective_failure_action", "reduce_only_close")),
-                "request_dir": str(demo.get("request_dir", "demo_order_requests")),
-                "note": "Automatic execution uses Binance Futures Demo only; no live Binance endpoint is allowed by this adapter.",
-            }
-        demo = config.get("demo_trading", {}) or {}
-        if demo.get("enabled") is True and str(demo.get("active_strategy_id", "")) == strategy.strategy_id:
-            return {
-                "adapter": "demo_profile",
-                "mode": "demo_profile_unresolved",
-                "strategy_id": strategy.strategy_id,
-                "armed": False,
-                "note": "Active demo strategy is configured, but no broker profile could be resolved.",
-            }
-        if getattr(strategy, "live", False):
-            from services.broker_adapter import resolve_broker_config
-
-            broker = resolve_broker_config(config)
-            return {
-                "adapter": "live",
-                "mode": "live_adapter_gated",
-                "strategy_id": strategy.strategy_id,
-                "armed": bool(config.get("live_trading_enabled", False) and not broker.get("dry_run", True)),
-                "provider": broker.get("provider", ""),
-                "dry_run": bool(broker.get("dry_run", True)),
-                "note": "Live adapter remains behind live readiness and approval gates.",
-            }
+        scoped = self.strategy_root(strategy.strategy_id)
+        adapter = self._broker_adapter_for(strategy, scoped)
+        selection_status = "resolved"
+        if adapter is None:
+            demo = config.get("demo_trading", {}) if isinstance(config.get("demo_trading"), dict) else {}
+            if demo.get("enabled") is True and str(demo.get("active_strategy_id") or "") == strategy.strategy_id:
+                selection_status = "configured_profile_unresolved"
+            adapter = PaperBrokerAdapter(scoped)
+        profile = project_broker_read_model(
+            adapter,
+            strategy_id=strategy.strategy_id,
+            profile=str(getattr(adapter, "broker_config", {}).get("profile") or ""),
+            asset=str(getattr(strategy, "symbol", "") or ""),
+        )
         return {
-            "adapter": "paper",
-            "mode": "paper_sim",
-            "strategy_id": strategy.strategy_id,
-            "armed": False,
-            "note": "Paper simulator only; no broker network order is submitted.",
+            **profile,
+            "selection_status": selection_status,
+            "note": "Execution diagnostics are projected from local Broker Port configuration; venue preflight remains command-side.",
         }
 
     def _demo_reconciliation_for(self, strategy, scoped: Path, run_date: str) -> dict | None:
@@ -219,30 +160,10 @@ class MultiStrategyRunner:
         return reconciliation.run(run_date)
 
     def _demo_reconciliation_block_reason(self, report: dict) -> str:
-        provider = str(report.get("provider") or "binance_usdm")
-        label = "Tiger paper" if provider == "tiger_openapi" else "Binance demo"
-        if report.get("suspected_naked_position"):
-            return f"{label} suspected naked position: {report.get('escalation_action') or report.get('reason_code')}"
-        if report.get("confirmation_status") == "cannot_confirm":
-            return f"{label} reconciliation cannot confirm venue state: {report.get('error')}"
-        if report.get("error"):
-            return f"{label} reconciliation failed: {report['error']}"
-        reasons = sorted({str(item.get("reason", "reconciliation drift")) for item in report.get("drifts", [])})
-        suffix = "; ".join(reasons) if reasons else "unknown drift"
-        return f"{label} reconciliation drift: {suffix}"
+        return broker_reconciliation_block_reason(report)
 
     def _reconciliation_status(self, report: dict | None) -> str:
-        if report is None:
-            return ""
-        if report.get("confirmation_status") == "cannot_confirm":
-            return "cannot_confirm"
-        if report.get("suspected_naked_position"):
-            return "naked_position_suspected"
-        if report.get("reconciled"):
-            return "pass"
-        if report.get("error"):
-            return "error"
-        return "drift"
+        return broker_reconciliation_status(report)
 
     def run(self, run_date: str, paper_auto_approve: bool = False) -> dict:
         classification_audit = self.registry.classification_audit()

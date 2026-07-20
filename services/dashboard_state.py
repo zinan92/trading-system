@@ -10,7 +10,6 @@ from pathlib import Path
 from services.config_loader import ROOT, load_pipeline_config, load_risk_rules, load_strategy_config
 from services.journal_store import load_json
 from services.market_data_access import market_data_repository
-from services.paper_executor import PaperExecutor
 from services.runner_status import RunnerStatusStore
 from services.system_vitals import SystemVitals
 from services.dashboard.market_view import MarketViewMixin
@@ -51,9 +50,6 @@ class DashboardState(
     def snapshot(self, run_date: str) -> dict:
         strategy_id = self._strategy_id_from_output_root()
         strategy_config = load_strategy_config()
-        executor = PaperExecutor(self.output_root)
-        executor.evaluate_exits(run_date)
-        executor.mark_to_market(run_date)
         bars, bar_timeframe = self._load_primary_bars(run_date, strategy_id, strategy_config)
         latest = bars[-1] if bars else {}
         latest_quote = market_data_repository(self.market_db).load_latest_quote("GOLD")

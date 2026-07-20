@@ -6341,3 +6341,142 @@ auditable datafeed port; broker execution remains a separate port.
   confirmed closed.
 - A5 therefore meets its completion boundary without changing any active
   profile, credential, order semantics, live authority, or visible UI.
+
+## 2026-07-18 - A6 stable Trading System Read Model kickoff
+
+### Objective and value
+
+- Give the production Dashboard one versioned answer for the current strategy,
+  orders, positions, started trades, completed round trips, P&L, risk, broker,
+  market trust, and runtime state.
+- Make every GET observational: refreshing a page must never create a plan,
+  evaluate an exit, mark P&L, submit/cancel an order, or write trading state.
+- Keep the current visual design and all command/risk/broker authority intact;
+  A6 changes the read boundary, not trading behavior.
+
+### Decisions
+
+- Reuse the existing Market Data, Execution, Accounting, Risk, Broker, and
+  StrategyPlan contracts. Do not create a new P&L calculator, state database,
+  event store, or frontend business-rule layer.
+- Add `trading-system-read-model-v1` as a content-bound projection. Current
+  orders/positions and all-plan trade lifecycle counts keep explicit scopes.
+- Keep `GET /api/strategy-console/current` as a compatibility facade; switch
+  GridMind to the new stable endpoint and keep every control as POST.
+- Treat `trade_count` as started lifecycles and `completed_trade_count` as
+  completed round trips. Fill count is separate.
+- Remove hidden writes from `DashboardState.snapshot()` and
+  `StrategyControlPlane.read_model()` rather than hiding them behind another
+  GET helper.
+- Assemble display price and execution marking from one request-scoped market
+  observation.
+
+### Gotchas
+
+- The existing Dashboard GET masks stale scheduled state by evaluating exits
+  and marking positions. Removing this makes the architecture correct but can
+  reveal an operations/scheduling gap that must be reported honestly.
+- The legacy Strategy Control Plane read silently materializes a plan. Explicit
+  command paths already retain compatibility migration and must remain tested.
+- Canonical production-history counts and current-cycle execution counts have
+  different scopes; the schema must label both rather than adding unlike
+  values.
+- Risk `current.json` is display evidence only and cannot become reusable
+  authorization.
+- Browser code currently computes P&L, return, counts, and run consistency.
+  Moving them to the backend must not weaken control-button safety.
+- A6 has a visible GridMind change, so desktop and mobile visual Evidence is
+  required before completion.
+- The primary worktree contains unrelated Debug/range/product changes. A6 is
+  isolated and must not be integrated by copying whole files.
+
+### Baseline
+
+- Focused read/control/accounting/provider-neutrality suite: `93 passed`.
+- A5 full repository baseline: `1719 passed, 7 skipped`.
+
+### Opus planning review
+
+- Verified `claude-opus-4-8`, session
+  `17644104-235a-4d4f-8080-9c523ba29b0b`, receipt
+  `20260717T230955Z_35299a00-c6e8-4993-930e-16903cd2ec33.json`: no P0 and
+  explicit `SAFE TO IMPLEMENT AFTER CORRECTIONS`.
+- Accepted P1: GET-purity fingerprinting covers `/api/dashboard`,
+  `/api/system/status`, `/api/trader/overview`, `/api/ops/status`, plus a
+  seeded un-migrated legacy plan for the console endpoint.
+- Accepted P1: one named pure assembler supplies both the new endpoint and the
+  compatibility facade and passes one market observation into execution and
+  accounting.
+- Accepted P1: static browser tests must prove P&L, return, strategy labels,
+  and authoritative counts are no longer calculated in JavaScript.
+- Accepted P2: project broker/engine display labels and capture one safe
+  control POST reflected through the new GET.
+
+## 2026-07-18 - A6 stable Trading System Read Model complete
+
+### Value delivered
+
+- GridMind now reads one immutable `trading-system-read-model-v1` for the
+  running strategy summary, market trust, runtime, orders, positions, trade
+  lifecycles, fills, canonical P&L/return, risk, broker, and review/shadow
+  references.
+- Refreshing an operator GET no longer creates a compatibility plan, evaluates
+  an exit, marks a position, writes trading artifacts, or calls broker
+  preflight. The same request-scoped market observation feeds display,
+  execution marking, and accounting.
+- The operational tabs show authoritative counts. One entry starts one trade;
+  entry plus exit remains one trade and becomes one completed round trip.
+- The browser no longer calculates trading truth. Strategy direction/style,
+  grid geometry, spacing, per-grid notional, counts, P&L, return, provider, and
+  engine labels are backend projections.
+- Runner broker diagnostics are adapter-neutral and secret-safe. Changing
+  provider composition no longer requires Binance/Tiger presentation branches.
+
+### Decisions
+
+- Preserve the current execution snapshot for current orders, positions,
+  exposure, and margin. Use the all-versioned-production-plan accounting
+  snapshot for lifecycle totals, fills, cumulative notional, P&L, cash/equity,
+  and return; expose both snapshot IDs and scopes.
+- Treat `armed` as a local configuration fact only. Venue readiness remains a
+  command-side preflight immediately before submission and is never triggered
+  by a read model.
+- Keep `/api/strategy-console/current` as a compatibility facade and every
+  control as POST. Risk decisions displayed by GET remain non-authoritative
+  observations and are never reused as permission.
+
+### Gotchas
+
+- The first final Opus review found that the stable endpoint still consumed
+  current-cycle accounting for cumulative facts while the legacy facade showed
+  production history. The defect was real even though the one-cycle browser
+  fixture passed; a two-cycle regression now locks the scopes apart.
+- The same review found a paper `preflight()` call in the stable GET. Although
+  it was locally inert, its wall-clock `checked_at` changed the content hash and
+  was a latent venue-call trap. The GET now projects descriptor/config only.
+- Current cash/equity/P&L is cumulative while exposure/margin/slippage is the
+  current execution overlay. This is intentional operator presentation, not a
+  command or risk input.
+- Full-repository Ruff has 167 pre-existing findings. A6 changed-file Ruff is
+  clean; unrelated lint cleanup remains out of scope.
+- The primary worktree's configured Nautilus path requires attended approval,
+  so it was not forced for visual acceptance. Deterministic browser fixtures
+  and a real temporary-paper POST-to-GET integration test provide safe proof;
+  no production strategy, broker authority, credentials, or orders changed.
+
+### Verification and evidence
+
+- Focused post-review regression: `91 passed`.
+- Full repository regression: `1735 passed, 7 skipped in 361.60s`.
+- Ruff on all A6-changed Python files: `All checks passed`.
+- Desktop evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-18-a6-read-model-desktop.png`.
+- Mobile evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-18-a6-read-model-mobile.png`.
+- Initial verified Opus: actual model `claude-opus-4-8`, session
+  `7179b6e7-dbe1-4553-9712-d585e347f717`, receipt
+  `20260718T003143Z_50e6034f-a889-4a42-b983-5b28feb06fdf.json`.
+- Verified follow-up Opus: actual model `claude-opus-4-8`, session
+  `fcf715f6-e860-4141-a9ca-f4e91720d208`, receipt
+  `20260718T005733Z_4e3cec78-a2e6-449a-a2e0-bb7a0eac0753.json`; `P1 CLOSED`,
+  `P2 CLOSED`, no new P0/P1, `SHIP for A6`.
