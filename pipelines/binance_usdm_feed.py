@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date
 from services.run_date import utc_run_date
 
-from services.binance_futures_feed import run_binance_usdm_backfill, run_binance_usdm_feed_import
+from services.market_data_refresh import refresh_market_data, refresh_market_data_range
 
 
 def main() -> None:
@@ -25,9 +24,9 @@ def main() -> None:
         from datetime import datetime, timezone
 
         end = args.backfill_end or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        result = run_binance_usdm_backfill(args.backfill_start, end, replace_providers=args.replace_provider)
+        result = refresh_market_data_range(run_date=args.backfill_start[:10], symbol="GOLD", timeframe="5m", output_kind="binance_usdm_backfill", start=args.backfill_start, end=end, chunk_days=30)
     else:
-        result = run_binance_usdm_feed_import(args.date)
+        result = refresh_market_data(run_date=args.date, symbol="GOLD", timeframe="5m", output_kind="binance_usdm_feed")
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
 

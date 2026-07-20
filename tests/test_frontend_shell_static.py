@@ -67,6 +67,9 @@ def test_shell_primary_nav_starts_with_command_center_and_hides_legacy_cockpit()
 def test_shell_status_copy_never_renders_unknown_to_operator() -> None:
     shell = _read("assets/shell.js")
 
-    assert 'UNKNOWN: { label: "未连接", tone: "unknown" }' in shell
+    assert 'UNKNOWN: { label: "状态待确认", tone: "unknown" }' in shell
+    assert 'schedule: { label: "调度待确认", detail: "调度状态已过期，请检查调度" }' in shell
+    assert "unknownStatusMeta(" in shell
+    assert 'status.title = displayMeta.detail || displayMeta.label;' in shell
     assert '<span id="gbShellStatusText">读取状态</span>' in shell
     assert "未知" not in shell

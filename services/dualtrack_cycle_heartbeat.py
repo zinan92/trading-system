@@ -12,17 +12,19 @@ from services.journal_store import load_json
 
 
 CLOSE_GRACE_MINUTES = 120
-DUALTRACK_CYCLE_LABEL = "com.wendy.trading-orchestrator.dualtrack-cycle"
+DUALTRACK_CYCLE_LABEL = "com.wendy.trading-orchestrator.dualtrack-live-tick"
 
 
 @dataclass(frozen=True)
 class CycleSchedule:
     day_start: int
     night_start: int
+    daily_start: int | None = None
+    cutover_at: datetime | None = None
 
     @property
     def hours(self) -> list[int]:
-        return sorted([self.day_start, self.night_start])
+        return sorted(set([self.day_start, self.night_start, *([] if self.daily_start is None else [self.daily_start])]))
 
     def kind_for_start_hour(self, hour: int) -> str:
         if hour == self.day_start:
@@ -66,10 +68,15 @@ class DualTrackCycleHeartbeat:
         coverage = self._coverage(schedule)
         latest = max((item for item in coverage["covered"] if item <= expected), default=None)
         if latest and latest >= expected:
-            return self._payload("fresh", checked_at, expected, latest, [], "latest_required_boundary_is_covered")
+            return self._payload("fresh", checked_at, expected, latest, [], "latest_required_boundary_is_covered", [])
         missed = self._missed_boundaries(schedule, latest, expected, coverage["covered"])
-        reason = self._stale_reason(coverage)
-        return self._payload("stale", checked_at, expected, latest, missed, reason)
+        declared_gaps = [
+            record
+            for boundary, record in coverage["evidence_gaps"].items()
+            if boundary in missed
+        ]
+        reason = self._stale_reason(coverage, missed)
+        return self._payload("stale", checked_at, expected, latest, missed, reason, declared_gaps)
 
     def _dualtrack_cycle_scheduled(self) -> bool:
         rows = load_json(self.output_root / "schedules" / "current.json")
@@ -88,7 +95,29 @@ class DualTrackCycleHeartbeat:
             return None, "config_cycle_hours_utc_invalid"
         if day_start == night_start or not all(0 <= hour <= 23 for hour in (day_start, night_start)):
             return None, "config_cycle_hours_utc_invalid"
-        return CycleSchedule(day_start=day_start, night_start=night_start), ""
+        cadence = self.config.get("cycle_cadence") if isinstance(self.config, dict) else None
+        if not isinstance(cadence, dict):
+            return CycleSchedule(day_start=day_start, night_start=night_start), ""
+        try:
+            cadence_hours = int(cadence["hours"])
+        except (KeyError, TypeError, ValueError):
+            return None, "config_cycle_cadence_invalid"
+        if cadence_hours == 12:
+            return CycleSchedule(day_start=day_start, night_start=night_start), ""
+        try:
+            daily_start = int(cadence["start_hour_utc"])
+            cutover_date = str(cadence["cutover_date_cst"])
+            cutover_at = datetime.fromisoformat(f"{cutover_date}T00:00:00+08:00").astimezone(timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            return None, "config_cycle_cadence_invalid"
+        if cadence_hours != 24 or not 0 <= daily_start <= 23:
+            return None, "config_cycle_cadence_invalid"
+        return CycleSchedule(
+            day_start=day_start,
+            night_start=night_start,
+            daily_start=daily_start,
+            cutover_at=cutover_at,
+        ), ""
 
     def _latest_required_boundary(self, checked_at: datetime, schedule: CycleSchedule) -> datetime | None:
         cutoff = checked_at - self.close_grace
@@ -102,8 +131,10 @@ class DualTrackCycleHeartbeat:
         parse_errors: list[str] = []
         attribution_boundaries = self._attribution_boundaries(attribution_dir, schedule, parse_errors)
         daily_boundaries = self._daily_boundaries(daily_dir, schedule, parse_errors)
+        evidence_gaps = self._evidence_gap_boundaries(self.output_root / "dualtrack" / "evidence_gaps", schedule, parse_errors)
         return {
             "covered": attribution_boundaries & daily_boundaries,
+            "evidence_gaps": evidence_gaps,
             "missing_dirs": missing_dirs,
             "parse_errors": parse_errors,
         }
@@ -146,9 +177,17 @@ class DualTrackCycleHeartbeat:
     def _boundary_from_cycle_id(self, cycle_id: str, schedule: CycleSchedule) -> datetime | None:
         try:
             date_part, kind = cycle_id.rsplit("_", 1)
-            utc_hour = schedule.start_hour_for_kind(kind)
             bj_date = datetime.fromisoformat(date_part).date()
         except (ValueError, TypeError):
+            return None
+        if schedule.cutover_at and bj_date >= schedule.cutover_at.astimezone(BJ_TZ).date():
+            if kind != "DAY":
+                return None
+            start = datetime.combine(bj_date, datetime.min.time(), tzinfo=BJ_TZ).astimezone(timezone.utc)
+            return start + timedelta(hours=24)
+        try:
+            utc_hour = schedule.start_hour_for_kind(kind)
+        except ValueError:
             return None
         bj_hour = (utc_hour + 8) % 24
         utc_date = bj_date - timedelta(days=1) if utc_hour + 8 >= 24 else bj_date
@@ -156,7 +195,7 @@ class DualTrackCycleHeartbeat:
         return self._next_boundary_after(start, schedule)
 
     def _cycle_id_for_start(self, start: datetime, schedule: CycleSchedule) -> str:
-        kind = schedule.kind_for_start_hour(start.hour)
+        kind = "DAY" if schedule.cutover_at and start >= schedule.cutover_at else schedule.kind_for_start_hour(start.hour)
         date_part = start.astimezone(BJ_TZ).date().isoformat()
         return f"{date_part}_{kind}"
 
@@ -191,6 +230,11 @@ class DualTrackCycleHeartbeat:
             day = first_day + timedelta(days=offset)
             for hour in schedule.hours:
                 boundary = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc).replace(hour=hour)
+                if schedule.cutover_at:
+                    if boundary >= schedule.cutover_at and hour != schedule.daily_start:
+                        continue
+                    if boundary < schedule.cutover_at and hour not in {schedule.day_start, schedule.night_start}:
+                        continue
                 if start <= boundary <= end:
                     boundaries.append(boundary)
         return sorted(boundaries)
@@ -206,11 +250,32 @@ class DualTrackCycleHeartbeat:
             return []
         return rows if isinstance(rows, list) else []
 
-    def _stale_reason(self, coverage: dict[str, Any]) -> str:
+    def _evidence_gap_boundaries(
+        self,
+        root: Path,
+        schedule: CycleSchedule,
+        parse_errors: list[str],
+    ) -> dict[datetime, dict[str, Any]]:
+        if not root.exists():
+            return {}
+        gaps: dict[datetime, dict[str, Any]] = {}
+        for path in sorted(root.glob("*.json")):
+            boundary = self._boundary_from_cycle_id(path.stem, schedule)
+            rows = self._read_json_rows(path, parse_errors)
+            if boundary is None or not rows or not isinstance(rows[-1], dict):
+                continue
+            record = rows[-1]
+            if record.get("status") == "evidence_gap":
+                gaps[boundary] = record
+        return gaps
+
+    def _stale_reason(self, coverage: dict[str, Any], missed: list[datetime]) -> str:
         if coverage["parse_errors"]:
             return "artifact_timestamp_parse_error"
         if coverage["missing_dirs"]:
             return "artifact_dir_missing"
+        if missed and all(boundary in coverage["evidence_gaps"] for boundary in missed):
+            return "declared_evidence_gap"
         return "latest_required_boundary_missing"
 
     def _payload(
@@ -221,6 +286,7 @@ class DualTrackCycleHeartbeat:
         latest: datetime | None,
         missed: list[datetime],
         reason: str,
+        evidence_gaps: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         return {
             "status": status,
@@ -229,6 +295,14 @@ class DualTrackCycleHeartbeat:
             "latest_artifact_at": latest.isoformat() if latest else None,
             "missed_boundaries": [item.isoformat() for item in missed],
             "reason": reason,
+            "evidence_gaps": [
+                {
+                    "cycle_id": row.get("cycle_id"),
+                    "reason": row.get("reason"),
+                    "counts_as_closed_loop": bool(row.get("counts_as_closed_loop")),
+                }
+                for row in (evidence_gaps or [])
+            ],
             "close_grace_minutes": int(self.close_grace.total_seconds() // 60),
         }
 

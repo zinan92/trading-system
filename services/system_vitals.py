@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from services.journal_store import write_json
+from services.market_data_access import market_data_repository
 
 
 def _utcnow() -> datetime:
@@ -139,16 +139,14 @@ class SystemVitals:
         return self._vital("data_feed", "up", "GOLD feed is fresh", detail)
 
     def _latest_bar(self) -> datetime | None:
-        if not self.market_db.exists():
-            return None
         try:
-            with sqlite3.connect(self.market_db) as con:
-                row = con.execute(
-                    "SELECT timestamp FROM bars WHERE symbol='GOLD' ORDER BY timestamp DESC LIMIT 1"
-                ).fetchone()
-        except sqlite3.Error:
+            repository = market_data_repository(self.market_db)
+            row = repository.load_latest_bar("GOLD", "1m") or repository.load_latest_bar(
+                "GOLD", "5m"
+            )
+        except Exception:
             return None
-        return _parse_ts(row[0]) if row else None
+        return _parse_ts(row.get("timestamp")) if row else None
 
     def _runner_liveness_vital(self) -> dict:
         heartbeat = _latest_record(self.output_root / "runner_status" / "current.json")

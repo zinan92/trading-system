@@ -1,72 +1,48 @@
 {
   "golden_oscillation_DAY": {
-    "machine_realized_pnl": 7.61603206,
+    "machine_realized_pnl": 7.61563126,
     "stop_hit": false,
     "rearms": 0,
     "events": [
       {"event": "entry", "side": "buy", "price": 3992.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "target", "side": "sell", "price": 4000.0, "notional": 1000.0, "rung": 0, "realized_pnl": 1.95400802},
+      {"event": "target", "side": "sell", "price": 4000.0, "notional": 1002.00400802, "rung": 0, "realized_pnl": 1.95390782},
       {"event": "entry", "side": "buy", "price": 3992.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "target", "side": "sell", "price": 4000.0, "notional": 1000.0, "rung": 0, "realized_pnl": 1.95400802},
+      {"event": "target", "side": "sell", "price": 4000.0, "notional": 1002.00400802, "rung": 0, "realized_pnl": 1.95390782},
       {"event": "entry", "side": "buy", "price": 3992.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "target", "side": "sell", "price": 4000.0, "notional": 1000.0, "rung": 0, "realized_pnl": 1.95400802},
+      {"event": "target", "side": "sell", "price": 4000.0, "notional": 1002.00400802, "rung": 0, "realized_pnl": 1.95390782},
       {"event": "entry", "side": "buy", "price": 3992.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "target", "side": "sell", "price": 4000.0, "notional": 1000.0, "rung": 0, "realized_pnl": 1.95400802}
+      {"event": "target", "side": "sell", "price": 4000.0, "notional": 1002.00400802, "rung": 0, "realized_pnl": 1.95390782}
     ]
   },
   "golden_stop_DAY": {
-    "machine_realized_pnl": -21.18775902,
+    "machine_realized_pnl": -18.36337011,
     "stop_hit": true,
-    "rearms": 1,
+    "rearms": 0,
     "events": [
       {"event": "entry", "side": "buy", "price": 3992.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
       {"event": "entry", "side": "buy", "price": 3984.0, "notional": 1000.0, "rung": 1, "realized_pnl": -0.05},
       {"event": "entry", "side": "buy", "price": 3976.0, "notional": 1000.0, "rung": 2, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3968.0, "notional": 1000.0, "rung": 3, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3960.0, "notional": 1000.0, "rung": 4, "realized_pnl": -0.05},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 0, "realized_pnl": -8.06603206},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 1, "realized_pnl": -6.07409639},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 2, "realized_pnl": -4.07414487},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 3, "realized_pnl": -2.06612903},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 4, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3942.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "flatten", "side": "sell", "price": 3940.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.55735667}
+      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 991.98396794, "rung": 0, "realized_pnl": -8.06563126},
+      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 993.97590361, "rung": 1, "realized_pnl": -6.07379518},
+      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 995.97585513, "rung": 2, "realized_pnl": -4.07394366}
     ]
   },
   "golden_rearm_DAY": {
-    "machine_realized_pnl": -14.79983483,
+    "machine_realized_pnl": -8.11563126,
     "stop_hit": true,
-    "rearms": 1,
+    "rearms": 0,
     "events": [
       {"event": "entry", "side": "buy", "price": 3992.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3984.0, "notional": 1000.0, "rung": 1, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3976.0, "notional": 1000.0, "rung": 2, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3968.0, "notional": 1000.0, "rung": 3, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3960.0, "notional": 1000.0, "rung": 4, "realized_pnl": -0.05},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 0, "realized_pnl": -8.06603206},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 1, "realized_pnl": -6.07409639},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 2, "realized_pnl": -4.07414487},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 3, "realized_pnl": -2.06612903},
-      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 1000.0, "rung": 4, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3947.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "target", "side": "sell", "price": 3955.0, "notional": 1000.0, "rung": 0, "realized_pnl": 1.97685584},
-      {"event": "entry", "side": "buy", "price": 3947.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "target", "side": "sell", "price": 3955.0, "notional": 1000.0, "rung": 0, "realized_pnl": 1.97685584},
-      {"event": "entry", "side": "buy", "price": 3947.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "target", "side": "sell", "price": 3955.0, "notional": 1000.0, "rung": 0, "realized_pnl": 1.97685584}
+      {"event": "stop", "side": "sell", "price": 3960.0, "notional": 991.98396794, "rung": 0, "realized_pnl": -8.06563126}
     ]
   },
   "golden_tight_floor_DAY": {
-    "machine_realized_pnl": -6.31604816,
+    "machine_realized_pnl": -4.10781563,
     "stop_hit": true,
-    "rearms": 1,
+    "rearms": 0,
     "events": [
       {"event": "entry", "side": "buy", "price": 3992.0, "notional": 1000.0, "rung": 0, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3984.0, "notional": 1000.0, "rung": 1, "realized_pnl": -0.05},
-      {"event": "entry", "side": "buy", "price": 3976.0, "notional": 1000.0, "rung": 2, "realized_pnl": -0.05},
-      {"event": "stop", "side": "sell", "price": 3976.0, "notional": 1000.0, "rung": 0, "realized_pnl": -4.05801603},
-      {"event": "stop", "side": "sell", "price": 3976.0, "notional": 1000.0, "rung": 1, "realized_pnl": -2.05803213},
-      {"event": "stop", "side": "sell", "price": 3976.0, "notional": 1000.0, "rung": 2, "realized_pnl": -0.05}
+      {"event": "stop", "side": "sell", "price": 3976.0, "notional": 995.99198397, "rung": 0, "realized_pnl": -4.05781563}
     ]
   }
 }

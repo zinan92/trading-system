@@ -11,7 +11,7 @@ from services.dualtrack_config import dualtrack_config
 from services.journal_store import load_json, write_json
 from services.market_view import MarketViewStore
 
-PLAN_DIRECTIONS = {"long", "short", "flat"}
+PLAN_DIRECTIONS = {"long", "short", "flat", "neutral"}
 PLAN_AUTHORS = {"human", "ai"}
 PLAN_STATUSES = {"draft", "locked", "fallback_active", "absent"}
 INVALIDATION_SIDES = {"below", "above"}
@@ -49,8 +49,47 @@ class DualTrackPlanStore:
     def save_ai_plan(self, plan: dict[str, Any], *, now: str | datetime | None = None) -> dict[str, Any]:
         normalized = validate_plan(plan, author="ai", status=plan.get("status") or "fallback_active", now=now)
         write_json(self._plan_path(normalized["cycle_id"], "ai"), [normalized])
-        self.audit(normalized["cycle_id"], "ai_plan_ingested", {"author": "ai"})
+        self.audit(
+            normalized["cycle_id"],
+            "ai_plan_ingested",
+            {"author": "ai", "decision_mode": normalized.get("decision_mode", "")},
+        )
         return normalized
+
+    def record_ai_plan_revision(
+        self,
+        previous: dict[str, Any],
+        replacement: dict[str, Any],
+        *,
+        now: str | datetime | None = None,
+        reason: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cycle_id = str(replacement.get("cycle_id") or previous.get("cycle_id") or "")
+        if not cycle_id:
+            raise ValueError("cycle_id is required for plan revision history")
+        path = self.root / "plan_revisions" / f"{cycle_id}_ai.json"
+        rows = load_json(path)
+        record = {
+            "schema_version": "dualtrack-ai-plan-revision-v1",
+            "cycle_id": cycle_id,
+            "revision_number": len(rows) + 1,
+            "revised_at": parse_utc(now).isoformat(),
+            "reason": str(reason or "machine_plan_revision"),
+            "previous_plan": dict(previous),
+            "replacement_plan": dict(replacement),
+            "context": dict(context or {}),
+        }
+        rows.append(record)
+        write_json(path, rows)
+        return record
+
+    def machine_plan(self, cycle_id: str) -> dict[str, Any] | None:
+        """Return the machine-owned plan without consulting the human track."""
+        plan = self.load_plan(cycle_id, "ai")
+        if not plan:
+            return None
+        return {**plan, "effective_author": "ai"}
 
     def ensure_ai_plan(
         self,
@@ -65,7 +104,7 @@ class DualTrackPlanStore:
             return existing
         run_date = cycle_id.split("_", 1)[0]
         try:
-            view = MarketViewStore(self.output_root).latest(run_date)
+            view = MarketViewStore(self.output_root).load_active(run_date, as_of=now)
         except Exception as exc:  # noqa: BLE001 - unreadable AI source must fail closed.
             self.audit(cycle_id, "ai_plan_ingest_failed", {"reason": str(exc)})
             return None
@@ -93,15 +132,16 @@ class DualTrackPlanStore:
         cycle_open: float,
         prev_cycle_range: float,
         now: str | datetime | None = None,
+        allow_lock: bool = True,
     ) -> dict[str, Any] | None:
         existing = self.load_plan(cycle_id, "human")
         if existing and existing.get("status") == "locked":
             return existing
         window = self._window(cycle_id)
-        status = "locked" if parse_utc(now) <= window.lock_deadline else "draft"
+        status = "locked" if allow_lock and parse_utc(now) <= window.lock_deadline else "draft"
         run_date = cycle_id.split("_", 1)[0]
         try:
-            view = MarketViewStore(self.output_root).latest(run_date)
+            view = MarketViewStore(self.output_root).load_active(run_date, as_of=now)
         except Exception as exc:  # noqa: BLE001 - unreadable operator source must fail closed.
             self.audit(cycle_id, "human_plan_import_failed", {"reason": str(exc), "source": "obsidian"})
             return None
@@ -140,6 +180,7 @@ class DualTrackPlanStore:
         payload: dict[str, Any] = {
             "cycle_id": cycle_id,
             "human_plan": self.load_plan(cycle_id, "human"),
+            "machine_plan": self.machine_plan(cycle_id),
             "ai_plan_revealed": False,
         }
         if self.reveal_allowed(cycle_id, as_of=as_of):
@@ -203,6 +244,8 @@ class DualTrackPlanStore:
             "confidence": confidence,
             "locked_at": parse_utc(now).isoformat() if status != "draft" else None,
             "source": "obsidian",
+            "source_run_date": str(view.get("run_date") or ""),
+            "source_generated_at": str(view.get("generated_at") or ""),
             "status": status,
         }
 
@@ -230,7 +273,7 @@ def validate_plan(
         raise ValueError("cycle_id is required")
     direction = str(payload.get("direction") or "").lower()
     if direction not in PLAN_DIRECTIONS:
-        raise ValueError("direction must be long, short, or flat")
+        raise ValueError("direction must be long, short, neutral, or flat")
     invalidation = [_normalize_invalidation(row) for row in (payload.get("invalidation") or [])]
     range_payload = payload.get("range") if isinstance(payload.get("range"), dict) else {}
     key_levels = _float_list(payload.get("key_levels"))
@@ -255,15 +298,95 @@ def validate_plan(
         "source": str(payload.get("source") or ("console" if author == "human" else "obsidian")),
         "status": status,
     }
+    grid_orders = _normalize_grid_orders(
+        payload.get("grid_orders"),
+        direction=direction,
+        low=low,
+        high=high,
+        invalidation=invalidation,
+    )
+    if grid_orders or "grid_orders" in payload:
+        normalized["grid_orders"] = grid_orders
+    for key in (
+        "rationale",
+        "decision_mode",
+        "planning_error",
+        "source_run_date",
+        "source_generated_at",
+        "revision_reason",
+        "replaces_locked_at",
+        "previous_review_cycle_id",
+        "review_adjustment",
+    ):
+        if payload.get(key) not in (None, ""):
+            normalized[key] = str(payload[key]).strip()
+    if payload.get("execution_start") not in (None, ""):
+        execution_start = parse_utc(payload["execution_start"])
+        window = cycle_window_from_id(cycle_id)
+        if execution_start < window.start or execution_start > window.end:
+            raise ValueError("execution_start must stay inside the plan cycle")
+        normalized["execution_start"] = execution_start.isoformat()
+    if "degraded" in payload:
+        normalized["degraded"] = bool(payload.get("degraded"))
+    if "sources" in payload:
+        normalized["sources"] = _normalize_sources(payload.get("sources"))
+    for key in ("planning_context", "range_adjustment", "replan_context"):
+        if isinstance(payload.get(key), dict):
+            normalized[key] = dict(payload[key])
+    if "review_change" in payload:
+        normalized["review_change"] = _normalize_review_change(payload.get("review_change"))
     bracket = _normalize_bracket(payload, direction=direction)
     if bracket is not None:
         normalized["bracket"] = bracket
     return normalized
 
 
+def _normalize_review_change(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError("review_change must be one structured object")
+    required = ("change_id", "mode", "dimension", "summary", "expected_metric")
+    normalized = {key: str(value.get(key) or "").strip() for key in required}
+    missing = [key for key, item in normalized.items() if not item]
+    if missing:
+        raise ValueError(f"review_change missing required fields: {', '.join(missing)}")
+    if normalized["mode"] != "paper_challenger":
+        raise ValueError("machine review_change mode must be paper_challenger")
+    if normalized["dimension"] not in {"direction", "range", "levels", "signal", "tpsl", "execution"}:
+        raise ValueError("invalid review_change dimension")
+    return normalized
+
+
+def validate_machine_plan(payload: dict[str, Any], *, now: str | datetime | None = None) -> dict[str, Any]:
+    """Validate the stricter contract required by autonomous machine execution."""
+    normalized = validate_plan(payload, author="ai", status="locked", now=now)
+    direction = normalized["direction"]
+    low = normalized["range"]["low"]
+    high = normalized["range"]["high"]
+    if low is None or high is None:
+        raise ValueError("machine plans require a complete range.low and range.high")
+    grid_orders = normalized.get("grid_orders") or []
+    if direction in {"long", "short", "neutral"} and not normalized.get("degraded") and not grid_orders:
+        raise ValueError("executable machine plans require explicit grid_orders")
+    if direction == "neutral" and grid_orders:
+        sides = {str(order.get("side") or "") for order in grid_orders}
+        if sides != {"long", "short"}:
+            raise ValueError("neutral machine plans require both long and short grid orders")
+    if not normalized.get("rationale"):
+        raise ValueError("machine plans require rationale")
+    if not normalized.get("sources") and not normalized.get("planning_error"):
+        raise ValueError("machine plans require at least one source or an explicit planning_error")
+    return normalized
+
+
 def _normalize_range(direction: str, range_payload: dict[str, Any], invalidation: list[dict[str, Any]]) -> tuple[float | None, float | None]:
     if direction == "flat":
         return None, None
+    if direction == "neutral":
+        low = _optional_float(range_payload.get("low"), "range.low")
+        high = _optional_float(range_payload.get("high"), "range.high")
+        if low is None or high is None or low >= high:
+            raise ValueError("neutral plans require range.low below range.high")
+        return low, high
     if not invalidation:
         raise ValueError("directional plans require at least one structured invalidation condition")
     low = _optional_float(range_payload.get("low"), "range.low")
@@ -283,6 +406,80 @@ def _normalize_range(direction: str, range_payload: dict[str, Any], invalidation
     if high is not None and not _same_price(high, ceiling):
         raise ValueError("range.high must match the above invalidation ceiling")
     return low, ceiling
+
+
+def _normalize_grid_orders(
+    value: Any,
+    *,
+    direction: str,
+    low: float | None,
+    high: float | None,
+    invalidation: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("grid_orders must be a list")
+    if direction == "flat" and value:
+        raise ValueError("flat plans cannot contain grid_orders")
+    rows: list[dict[str, Any]] = []
+    seen_entries: set[float] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError("grid_orders entries must be objects")
+        entry = _required_float(item.get("entry"), f"grid_orders[{index}].entry")
+        take_profit = _required_float(item.get("take_profit"), f"grid_orders[{index}].take_profit")
+        weight = _required_float(item.get("weight", 1.0), f"grid_orders[{index}].weight")
+        order_side = direction if direction in {"long", "short"} else str(item.get("side") or "").lower()
+        if order_side not in {"long", "short"}:
+            raise ValueError("neutral grid orders require side long or short")
+        if direction in {"long", "short"} and item.get("side") not in (None, "", direction):
+            raise ValueError("directional grid order side must match plan direction")
+        stop_side = "below" if order_side == "long" else "above"
+        stop = _matching_invalidation_price(invalidation, stop_side)
+        if weight <= 0:
+            raise ValueError("grid_orders weight must be positive")
+        if entry in seen_entries:
+            raise ValueError("grid_orders entry prices must be unique")
+        seen_entries.add(entry)
+        if low is not None and entry < low or high is not None and entry > high:
+            raise ValueError("grid_orders entry must stay inside the declared range")
+        if order_side == "long" and (stop is None or not (stop < entry < take_profit)):
+            raise ValueError("long grid orders require stop < entry < take_profit")
+        if order_side == "short" and (stop is None or not (take_profit < entry < stop)):
+            raise ValueError("short grid orders require take_profit < entry < stop")
+        row = {"entry": entry, "take_profit": take_profit, "weight": weight}
+        if direction == "neutral":
+            row["side"] = order_side
+        if item.get("notional") not in (None, ""):
+            notional = _required_float(item.get("notional"), f"grid_orders[{index}].notional")
+            if notional <= 0:
+                raise ValueError("grid_orders notional must be positive")
+            row["notional"] = notional
+        rows.append(row)
+    if sum(row["weight"] for row in rows) > 1.00000001:
+        raise ValueError("grid_orders weights cannot exceed 1.0 in total")
+    return rows
+
+
+def _normalize_sources(value: Any) -> list[dict[str, str]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError("sources must be a list")
+    rows: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("sources entries must be objects")
+        normalized = {
+            str(key): str(item[key]).strip()
+            for key in ("kind", "path", "url", "title", "published_at")
+            if item.get(key) not in (None, "")
+        }
+        if not normalized.get("kind"):
+            raise ValueError("sources entries require kind")
+        rows.append(normalized)
+    return rows
 
 
 def _matching_invalidation_price(invalidation: list[dict[str, Any]], side: str) -> float | None:

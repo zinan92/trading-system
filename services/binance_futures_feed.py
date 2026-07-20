@@ -13,6 +13,8 @@ from schemas.market_data import Bar
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
 from services.market_store import MarketStore
+from services.market_data_access import uses_independent_datafeed
+from services.market_data_refresh import refresh_market_data, refresh_market_data_range
 
 # Transient network/TLS failures worth retrying. The long 1m history backfill
 # makes hundreds of back-to-back calls and occasionally hits a dropped TLS
@@ -259,6 +261,8 @@ def run_binance_usdm_feed_import(run_date: str, output_root: Path | None = None,
     config = load_pipeline_config()
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
+    if opener is None and uses_independent_datafeed(market_db):
+        return refresh_market_data(run_date=run_date, symbol="GOLD", timeframe="5m", output_kind="binance_usdm_feed", output_root=output_root)
     result = BinanceFuturesFeedClient(MarketStore(market_db), config.get("binance_usdm_feed", {}), opener=opener).fetch_and_store()
     result["run_date"] = run_date
     result["market_db"] = str(market_db)
@@ -274,6 +278,8 @@ def run_binance_usdm_1m_feed_import(run_date: str, output_root: Path | None = No
     config = load_pipeline_config()
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
+    if opener is None and uses_independent_datafeed(market_db):
+        return refresh_market_data(run_date=run_date, symbol="GOLD", timeframe="1m", output_kind="binance_usdm_1m_feed", output_root=output_root)
     result = BinanceFuturesFeedClient(MarketStore(market_db), config.get("binance_usdm_1m_feed", {}), opener=opener).fetch_and_store()
     result["run_date"] = run_date
     result["market_db"] = str(market_db)
@@ -303,6 +309,8 @@ def run_binance_usdm_backfill(
     config = load_pipeline_config()
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
+    if opener is None and uses_independent_datafeed(market_db):
+        return refresh_market_data_range(run_date=start[:10], symbol="GOLD", timeframe="5m", output_kind="binance_usdm_backfill", start=start, end=end, chunk_days=30, output_root=output_root)
     client = BinanceFuturesFeedClient(MarketStore(market_db), config.get("binance_usdm_feed", {}), opener=opener)
     result = client.backfill_and_store(_iso_to_ms(start), _iso_to_ms(end), replace_providers=replace_providers)
     result["start"] = start
@@ -338,6 +346,8 @@ def run_binance_usdm_1m_backfill(
     config = load_pipeline_config()
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
+    if opener is None and uses_independent_datafeed(market_db):
+        return refresh_market_data_range(run_date=start[:10], symbol="GOLD", timeframe="1m", output_kind="binance_usdm_1m_backfill", start=start, end=end, chunk_days=chunk_days, output_root=output_root)
     client = BinanceFuturesFeedClient(MarketStore(market_db), config.get("binance_usdm_1m_feed", {}), opener=opener, sleeper=sleeper)
 
     start_ms, end_ms = _iso_to_ms(start), _iso_to_ms(end)

@@ -8,6 +8,7 @@ from services.binance_futures_feed import (
     run_binance_usdm_feed_import,
 )
 from services.journal_store import load_json
+from services.config_loader import load_pipeline_config
 from services.market_store import MarketStore
 
 
@@ -37,6 +38,15 @@ def _exchange_info() -> dict:
             }
         ]
     }
+
+
+def test_default_binance_price_feeds_use_mainnet_futures() -> None:
+    config = load_pipeline_config()
+
+    for name in ("binance_usdm_feed", "binance_usdm_1m_feed"):
+        feed = config[name]
+        assert feed["environment"] == "mainnet"
+        assert feed["base_url"] == "https://fapi.binance.com"
 
 
 def test_binance_usdm_feed_imports_xauusdt_5m_bars(tmp_path: Path):

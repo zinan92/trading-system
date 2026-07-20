@@ -7,7 +7,7 @@ from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 
 
 class DataSourcePreflight:
@@ -39,12 +39,12 @@ class DataSourcePreflight:
     def run(self, run_date: str) -> dict:
         checked_at = (self.checked_at or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
         clean_bars = load_json(self.output_root / "clean_bars" / run_date / f"{self.symbol}_{self.timeframe}.json")
-        store = MarketStore(self.market_db) if self.market_db.exists() else None
-        latest = clean_bars[-1] if clean_bars else (store.load_latest_bar(self.symbol, self.timeframe) if store else {})
+        store = market_data_repository(self.market_db)
+        latest = clean_bars[-1] if clean_bars else store.load_latest_bar(self.symbol, self.timeframe)
         data_quality = self._load_gold_data_quality(run_date)
         data_quality_allows_trading = data_quality.get("allows_trading") if data_quality else None
         data_quality_reasons = data_quality.get("reasons", []) if data_quality else []
-        coverage = store.coverage() if store else []
+        coverage = store.coverage()
         gold_coverage = [item for item in coverage if item["symbol"] == self.symbol and item["timeframe"] == self.timeframe]
         official_providers = set(self.source_config.get("official_broker_providers", ["broker_csv", "mt5_csv", "ibkr", "oanda"]))
         public_providers = set(self.source_config.get("public_providers", ["gold-api.com", "yahoo_chart:GC=F"]))
@@ -55,7 +55,7 @@ class DataSourcePreflight:
         public_rows = sum(item["rows"] for item in gold_coverage if item["provider"] in public_providers)
         latest_provider = str(latest.get("provider", ""))
         latest_price = latest.get("close")
-        latest_quote = store.load_latest_quote(self.symbol) if store else {}
+        latest_quote = store.load_latest_quote(self.symbol)
         price_sanity = self._price_sanity(latest, latest_quote)
         execution_venue_readiness_gate = self._execution_venue_readiness_gate(execution_venue_providers, latest_provider)
         max_live_bar_lag_minutes = float(self.source_config.get("max_live_bar_lag_minutes", 15))
@@ -73,7 +73,7 @@ class DataSourcePreflight:
             else latest_record_age_minutes is not None and latest_record_age_minutes <= max_public_quote_age_minutes
         )
         price_sanity_passes = bool(price_sanity.get("passes", True))
-        base_ready_for_paper = bool(latest and self.market_db.exists() and latest_record_is_fresh and price_sanity_passes)
+        base_ready_for_paper = bool(latest and latest_record_is_fresh and price_sanity_passes)
         ready_for_paper = bool(base_ready_for_paper and data_quality_allows_trading is not False)
         official_live_ready = bool(official_rows > 0 and latest_provider in official_providers and live_bar_is_fresh and latest_record_is_fresh and price_sanity_passes)
         execution_venue_live_ready = bool(

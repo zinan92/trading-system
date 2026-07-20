@@ -9,7 +9,7 @@ from schemas.market_data import Bar
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_store import DualTrackPlanStore
-from services.journal_store import load_json
+from services.journal_store import load_json, write_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG, _mgc_config
 
 
@@ -114,6 +114,53 @@ def test_in_plan_human_order_is_not_flagged(tmp_path: Path) -> None:
     assert fill["out_of_plan"] is False
 
 
+@pytest.mark.parametrize(
+    ("side", "sl", "tp", "message"),
+    [
+        ("buy", 4000.0, 4020.0, "long stop must be below entry"),
+        ("buy", 3980.0, 4000.0, "long target must be above entry"),
+        ("sell", 4000.0, 3980.0, "short stop must be above entry"),
+        ("sell", 4020.0, 4000.0, "short target must be below entry"),
+    ],
+)
+def test_human_entry_rejects_invalid_protective_geometry(
+    tmp_path: Path,
+    side: str,
+    sl: float,
+    tp: float,
+    message: str,
+) -> None:
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+
+    with pytest.raises(ValueError, match=message):
+        human.submit_order({
+            "cycle_id": "2026-07-05_DAY",
+            "ts": "2026-07-05T01:02:00+00:00",
+            "side": side,
+            "event": "entry",
+            "order_type": "limit",
+            "price": 4000.0,
+            "notional": 1000.0,
+            "sl": sl,
+            "tp": tp,
+        })
+
+
+def test_human_order_rejects_timestamp_outside_requested_cycle(tmp_path: Path) -> None:
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+
+    with pytest.raises(ValueError, match="order timestamp does not belong to cycle"):
+        human.submit_order({
+            "cycle_id": "2026-07-05_DAY",
+            "ts": "2026-07-05T13:02:00+00:00",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "market",
+            "price": 4000.0,
+            "notional": 1000.0,
+        })
+
+
 def test_human_entry_exit_pair_realizes_price_pnl_and_writes_trade(tmp_path: Path) -> None:
     cycle_id = "2026-07-05_DAY"
     store = DualTrackPlanStore(tmp_path / "outputs", config=TEST_CONFIG)
@@ -195,6 +242,165 @@ def test_human_protective_sweep_executes_short_stop_once_at_sl_price(tmp_path: P
     assert trades[0]["status"] == "closed"
     assert trades[0]["remaining_units"] == 0.0
     assert trades[0]["realized_pnl"] == pytest.approx(-50.1025)
+
+
+def test_human_exit_rejects_timestamp_at_or_before_entry(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+    entry = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+
+    with pytest.raises(ValueError, match="exit timestamp must be after entry timestamp"):
+        human.submit_order({
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:01:00+00:00",
+            "side": "sell",
+            "event": "target",
+            "order_type": "limit",
+            "price": 105.0,
+            "trade_id": entry["trade_id"],
+            "position_id": "manual",
+        })
+
+    assert len(load_json(tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json")) == 1
+
+
+def test_human_repairs_pre_entry_protective_exit_idempotently(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+    entry = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+    fills_path = tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json"
+    rows = load_json(fills_path)
+    rows[0]["remaining_units"] = 0.0
+    rows[0]["position_status"] = "closed"
+    rows[0]["closed_units"] = rows[0]["pnl_units"]
+    rows.append({
+        "fill_id": f"{cycle_id}_human_0002",
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:01:00+00:00",
+        "event": "target",
+        "trade_id": entry["trade_id"],
+        "source_fill_id": f"dualtrack-protective:{cycle_id}:{entry['trade_id']}:target:105.0000",
+    })
+    write_json(fills_path, rows)
+
+    repaired = human.repair_pre_entry_protective_exits(cycle_id)
+    repeated = human.repair_pre_entry_protective_exits(cycle_id)
+    fills = load_json(fills_path)
+    trades = load_json(tmp_path / "outputs" / "dualtrack" / "trades" / f"{cycle_id}_human.json")
+
+    assert repaired["status"] == "repaired"
+    assert repaired["removed_fill_ids"] == [f"{cycle_id}_human_0002"]
+    assert repeated["status"] == "ok"
+    assert len(fills) == 1
+    assert fills[0]["remaining_units"] == pytest.approx(fills[0]["pnl_units"])
+    assert fills[0]["position_status"] == "open"
+    assert "closed_units" not in fills[0]
+    assert trades[0]["status"] == "open"
+
+
+def test_human_fill_id_advances_past_highest_suffix_after_recovery_gap(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=TEST_CONFIG)
+    human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:01:00+00:00",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+    second = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 99.0,
+        "notional": 1000.0,
+        "sl": 94.0,
+        "tp": 104.0,
+    })
+    fills_path = tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json"
+    rows = load_json(fills_path)
+    rows[-1]["fill_id"] = f"{cycle_id}_human_0003"
+    write_json(fills_path, rows)
+
+    target = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:03:00+00:00",
+        "side": "sell",
+        "event": "target",
+        "order_type": "limit",
+        "price": 104.0,
+        "trade_id": second["trade_id"],
+        "position_id": "manual",
+    })
+    fill_ids = [row["fill_id"] for row in load_json(fills_path)]
+
+    assert target["fill_id"] == f"{cycle_id}_human_0004"
+    assert len(fill_ids) == len(set(fill_ids))
+
+
+def test_human_paper_fee_model_charges_taker_entry_and_maker_target(tmp_path: Path) -> None:
+    cycle_id = "2026-07-05_DAY"
+    config = {
+        **TEST_CONFIG,
+        "paper_fee_model": {
+            "maker_fee_rate": "0",
+            "taker_fee_rate": "0.0004",
+            "source": "account_observed_test",
+            "real_money_eligible": False,
+        },
+    }
+    human = DualTrackHumanEngine(tmp_path / "outputs", config=config)
+
+    entry = human.submit_order({
+        "cycle_id": cycle_id,
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "order_type": "market",
+        "price": 100.0,
+        "notional": 100.0,
+        "sl": 95.0,
+        "tp": 105.0,
+    })
+    human.sweep_protective_exits(
+        cycle_id,
+        mark_price=106.0,
+        mark_open=100.0,
+        mark_high=106.0,
+        mark_low=99.0,
+        event_started_at="2026-07-05T01:03:00+00:00",
+        ts="2026-07-05T01:03:00+00:00",
+    )
+    target = load_json(tmp_path / "outputs" / "dualtrack" / "fills" / f"{cycle_id}_human.json")[-1]
+
+    assert entry["cost"] == pytest.approx(0.04)
+    assert entry["cost_model"]["liquidity"] == "taker"
+    assert target["event"] == "target"
+    assert target["order_type"] == "limit"
+    assert target["cost"] == 0.0
+    assert target["cost_model"]["liquidity"] == "maker"
+    assert target["realized_pnl"] == pytest.approx(5.0)
 
 
 def test_human_protective_sweep_filters_by_trade_id_when_position_id_is_shared(tmp_path: Path) -> None:

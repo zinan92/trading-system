@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository, uses_independent_datafeed
 
 
 class DataGapDoctor:
@@ -24,9 +24,14 @@ class DataGapDoctor:
     def run(self, run_date: str, symbol: str = "GOLD", timeframe: str = "5m") -> dict:
         bars = load_json(self.output_root / "clean_bars" / run_date / f"{symbol}_{timeframe}.json")
         source = "clean_bars"
-        if not bars and self.market_db and self.market_db.exists():
-            bars = [bar.to_dict() for bar in MarketStore(self.market_db).load_bars(symbol, timeframe, self.max_market_db_bars)]
-            source = "market_db"
+        if not bars and self.market_db:
+            bars = [
+                bar.to_dict()
+                for bar in market_data_repository(self.market_db).load_bars(
+                    symbol, timeframe, self.max_market_db_bars
+                )
+            ]
+            source = "datafeed" if uses_independent_datafeed(self.market_db) else "market_db"
         manifest_rows = load_json(self.output_root / "clean_bars" / run_date / "manifest.json")
         manifest = next((item for item in manifest_rows if item.get("symbol") == symbol and item.get("timeframe") == timeframe), {})
         expected_seconds = self._timeframe_seconds(timeframe)

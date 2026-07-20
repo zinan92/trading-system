@@ -4,7 +4,7 @@ import argparse
 import json
 
 from services.run_date import utc_run_date
-from services.tiger_futures_feed import run_tiger_futures_backfill, run_tiger_futures_feed_import
+from services.market_data_refresh import refresh_market_data, refresh_market_data_range
 
 
 def main() -> None:
@@ -20,25 +20,26 @@ def main() -> None:
     parser.add_argument("--time-interval", type=float, default=0, help="Seconds to wait between Tiger historical pages.")
     args = parser.parse_args()
 
-    overrides = {}
-    if args.contract:
-        overrides["contract"] = args.contract
-        overrides.setdefault("output_symbol", args.contract)
-    if args.output_symbol:
-        overrides["output_symbol"] = args.output_symbol
+    symbol = args.output_symbol or args.contract or "MGCmain"
     if args.backfill_start:
         if not args.backfill_end:
             parser.error("--backfill-end is required when --backfill-start is set")
-        result = run_tiger_futures_backfill(
-            args.backfill_start,
-            args.backfill_end,
-            config=overrides,
-            total=args.backfill_total,
-            page_size=args.page_size,
-            time_interval=args.time_interval,
+        result = refresh_market_data_range(
+            run_date=args.date,
+            symbol=symbol,
+            timeframe="1m",
+            output_kind="tiger_futures_backfill",
+            start=args.backfill_start,
+            end=args.backfill_end,
+            chunk_days=30,
         )
     else:
-        result = run_tiger_futures_feed_import(args.date, config=overrides, limit=args.limit)
+        result = refresh_market_data(
+            run_date=args.date,
+            symbol=symbol,
+            timeframe="1m",
+            output_kind="tiger_futures_feed",
+        )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

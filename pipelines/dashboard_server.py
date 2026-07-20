@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import argparse
 import json
 import math
@@ -8,24 +7,22 @@ import re
 import subprocess
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 from services.run_date import utc_run_date
-
 from services.code_reload import CodeReloadGuard
 from services.config_loader import ROOT, load_pipeline_config
 from services.command_center import build_command_center_state
 from services.connector_activation_plan import ConnectorActivationPlan
-from services.connector_config_apply import ConnectorConfigApply
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
-from services.dualtrack_human import DualTrackHumanEngine
+from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_scoring import (
@@ -35,35 +32,47 @@ from services.dualtrack_scoring import (
     filter_invalid_machine_fills,
 )
 from services.dualtrack_store import DualTrackPlanStore
+from services.strategy_control_plane import StrategyControlPlane
+from services.strategy_recommendation import StrategyRecommendationService
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
-from services.market_view_intake import MarketViewIntake
 from services.replay_state import ReplayState
-from services.system_state import build_system_state
 from services.tiger_venue_status import TigerVenueStatus
 
-_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_CYCLE_ID_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_(DAY|NIGHT)$")
+from services.contracts.common import _CYCLE_ID_PATTERN, _DATE_PATTERN, _truthy  # noqa: F401 — re-exported for backward compatibility
+from services.contracts.system import build_market_view_intake_response, build_system_state_response, dashboard_output_root  # noqa: F401 — re-exported for backward compatibility
+from services.contracts.dualtrack import _dualtrack_output_root, build_dualtrack_attribution_response, build_dualtrack_human_response, build_dualtrack_ledger_response, build_dualtrack_machine_response, build_dualtrack_plan_post_response, build_dualtrack_plan_response, build_dualtrack_verdict_post_response  # noqa: F401 — re-exported for backward compatibility
+from services.contracts.connector_control import _CONNECTOR_PRICE_FEED_REFRESH_RUNBOOK_ENDPOINT_SAFETY, _redacted_connector_status_snapshot, _redacted_runbook_steps, build_connector_config_apply_response, build_connector_config_rollback_response, build_connector_config_status_response, build_connector_price_feed_refresh_runbook_response  # noqa: F401 — re-exported for backward compatibility
+from services.contracts.trader_ops_payload import _compact_backend_maturity, _compact_collector_run, _compact_collector_runs, _compact_daily_trade_samples, _compact_data_health, _compact_evening_review, _compact_frequency_evidence, _compact_strategy_daily_reviews, _compact_strategy_frequency, _compact_strategy_promotion_gate, _compact_trade_reviews, _compact_trading_plan, _trim_maturity_evidence, compact_ops_payload, compact_trader_payload  # noqa: F401 — re-exported for backward compatibility
+from services.contracts.strategy_payload import _compact_artifact_provenance, _compact_bar, _compact_decision, _compact_decision_snapshot, _compact_exit_decision, _compact_explainability_summary, _compact_nav_curve, _compact_order, _compact_risk_block, _compact_signal, _compact_strategy_detail, _compact_trade, _compact_trade_record_card, compact_strategy_payload  # noqa: F401 — re-exported for backward compatibility
+
 _STRATEGY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
 _SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9:_=-]+$")
+
+
 _TIMEFRAME_PATTERN = re.compile(r"^\d+[mhdMHD]$")
+
+
 _DASHBOARD_VIEWS = {"full", "trader", "ops"}
+
+
 _MAX_OPEN_TRADES_PER_STRATEGY = 3
-_PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v4.html"
-_LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v4.html"
+
+
+_PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v5.html"
+
+
+_LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v5.html"
+
+
 _CLOUDFLARED_LOG = Path("/Users/wendy/work/选题工作台/launchd-tunnel.log")
+
+
 _DUALTRACK_POST_ENDPOINTS = {"/api/dualtrack/plan", "/api/dualtrack/orders", "/api/dualtrack/verdict"}
-_CONNECTOR_PRICE_FEED_REFRESH_RUNBOOK_ENDPOINT_SAFETY = {
-    "read_only": True,
-    "generates_runbook": False,
-    "opens_network_clients": False,
-    "opens_quote_client": False,
-    "opens_trade_client": False,
-    "submits_orders": False,
-    "writes_runtime_config": False,
-    "credential_values_exposed": False,
-    "raw_command_text_exposed": False,
-}
+
+
 _CONNECTOR_ATTENDED_SWITCH_REVIEW_ENDPOINT_SAFETY = {
     "read_only": True,
     "generates_authorization": False,
@@ -77,6 +86,8 @@ _CONNECTOR_ATTENDED_SWITCH_REVIEW_ENDPOINT_SAFETY = {
     "raw_acknowledgement_exposed": False,
     "attended_apply_command_exposed": False,
 }
+
+
 _TIGER_PAPER_ORDER_REFRESH_RUNBOOK_ENDPOINT_SAFETY = {
     "read_only": True,
     "generates_runbook": False,
@@ -110,6 +121,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/dashboard-v3.html",
             "/dashboard.html",
             "/dashboard-v4.html",
+            "/dashboard-v5.html",
             "/command-center.html",
             "/dashboard-dualtrack-split.html",
             "/dashboard-dualtrack-v5.html",
@@ -117,6 +129,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             "/dashboard-replay.html",
             "/dashboard-replay-v4.html",
             "/ops-dashboard.html",
+            "/assets/shell.js",
+            "/assets/shell.css",
+            "/packages/standard-kline/standard-kline.js",
         }
 
     def do_OPTIONS(self) -> None:
@@ -127,6 +142,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self._redirect("command-center.html")
+            return
+        if parsed.path == "/dashboard-v5.html":
+            self._serve_static_alias("/dashboard-gridmind.html")
             return
         if parsed.path == "/api/command-center-state":
             self._handle_command_center_state_api()
@@ -155,11 +173,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/dualtrack/cycle/current":
             self._handle_dualtrack_current(parsed.query)
             return
+        if parsed.path == "/api/strategy-console/current":
+            self._handle_strategy_console_current(parsed.query)
+            return
         if parsed.path == "/api/dualtrack/config":
             self._handle_dualtrack_config_get()
             return
         if parsed.path.startswith("/api/dualtrack/trades/"):
             self._handle_dualtrack_trades_get(parsed.path, parsed.query)
+            return
+        if parsed.path.startswith("/api/dualtrack/execution/"):
+            self._handle_dualtrack_execution_get(parsed.path, parsed.query)
             return
         if parsed.path.startswith("/api/dualtrack/plan/"):
             self._handle_dualtrack_plan_get(parsed.path, parsed.query)
@@ -202,6 +226,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def _serve_static_alias(self, path: str) -> None:
+        original_path = self.path
+        try:
+            self.path = path
+            super().do_GET()
+        finally:
+            self.path = original_path
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/market-view/intake":
@@ -220,7 +252,19 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._handle_connector_config_rollback()
             return
         if parsed.path in _DUALTRACK_POST_ENDPOINTS:
+            if not _dualtrack_mutation_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+            ):
+                self._write_error(403, "dualtrack_origin_blocked", "dualtrack writes require the same local origin")
+                return
             self._handle_dualtrack_post(parsed.path)
+            return
+        if parsed.path == "/api/strategy-console/control":
+            if not _dualtrack_mutation_request_allowed(str(self.headers.get("Host") or ""), str(self.headers.get("Origin") or "")):
+                self._write_error(403, "strategy_console_origin_blocked", "strategy-console writes require the same local origin")
+                return
+            self._handle_strategy_console_control()
             return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
@@ -229,6 +273,31 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_json(200, build_dualtrack_cycle_current_response())
         except ValueError as exc:
             self._write_error(400, "invalid_dualtrack_cycle", str(exc))
+
+    def _handle_strategy_console_current(self, query: str) -> None:
+        params = parse_qs(query)
+        try:
+            self._write_json(200, build_strategy_console_current_response(as_of=(params.get("as_of") or [None])[0]))
+        except ValueError as exc:
+            self._write_error(400, "strategy_console_unavailable", str(exc))
+
+    def _handle_strategy_console_control(self) -> None:
+        try:
+            payload = self._read_json_body(max_bytes=64_000)
+            self._write_json(200, build_strategy_console_control_response(payload, actor=self._control_actor()))
+        except ValueError as exc:
+            self._write_error(400, "invalid_strategy_console_control", str(exc))
+
+    def _control_actor(self) -> dict:
+        # The gateway asserts this header only after validating the Cloudflare
+        # Access JWT, and never forwards client-supplied headers. The server is
+        # loopback-bound, so a request without it is a local operator.
+        email = str(self.headers.get("X-Goldbot-Actor-Email") or "").strip().lower()
+        return {
+            "email": email or None,
+            "transport": "public_gateway" if email else "local",
+            "client": self.client_address[0] if self.client_address else None,
+        }
 
     def _handle_dualtrack_plan_get(self, path: str, query: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -247,14 +316,29 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         params = parse_qs(query)
         track = (params.get("track") or ["human"])[0]
-        mark_price = _first_query_value(params, "mark_price")
-        mark_source = _first_query_value(params, "mark_source")
         try:
-            self._write_json(200, build_dualtrack_trades_response(cycle_id, track=track, mark_price=mark_price, mark_source=mark_source))
+            self._write_json(200, build_dualtrack_trades_response(cycle_id, track=track))
         except PermissionError as exc:
             self._write_error(403, "dualtrack_trades_hidden", str(exc))
         except ValueError as exc:
             self._write_error(400, "dualtrack_trades_invalid", str(exc))
+
+    def _handle_dualtrack_execution_get(self, path: str, query: str) -> None:
+        cycle_id = path.rsplit("/", 1)[-1]
+        if not _CYCLE_ID_PATTERN.match(cycle_id):
+            self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+            return
+        params = parse_qs(query)
+        try:
+            self._write_json(
+                200,
+                build_dualtrack_execution_response(
+                    cycle_id,
+                    as_of=(params.get("as_of") or [None])[0],
+                ),
+            )
+        except ValueError as exc:
+            self._write_error(400, "dualtrack_execution_invalid", str(exc))
 
     def _handle_dualtrack_machine_get(self, path: str, query: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -268,12 +352,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if not _CYCLE_ID_PATTERN.match(cycle_id):
             self._write_error(400, "invalid_cycle_id", "expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
             return
-        params = parse_qs(query)
-        self._write_json(200, build_dualtrack_human_response(
-            cycle_id,
-            mark_price=_first_query_value(params, "mark_price"),
-            mark_source=_first_query_value(params, "mark_source"),
-        ))
+        self._write_json(200, build_dualtrack_human_response(cycle_id))
 
     def _handle_dualtrack_attribution_get(self, path: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -369,6 +448,21 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if path == "/api/dualtrack/plan":
                 result = build_dualtrack_plan_post_response(payload)
             elif path == "/api/dualtrack/orders":
+                received_at = parse_utc(None)
+                cfg = dualtrack_config()
+                market_data = cfg.get("market_data") if isinstance(cfg.get("market_data"), dict) else {}
+                market = DualTrackMarketFeed().snapshot(
+                    symbol=str(market_data.get("symbol") or "GOLD"),
+                    timeframe=str(market_data.get("timeframe") or "1m"),
+                    limit=1,
+                    as_of=received_at.isoformat(),
+                )
+                payload = _prepare_dualtrack_network_order(
+                    payload,
+                    market=market,
+                    received_at=received_at,
+                    expected_provider=str(market_data.get("provider") or ""),
+                )
                 result = build_dualtrack_order_post_response(payload)
             else:
                 result = build_dualtrack_verdict_post_response(payload)
@@ -605,78 +699,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
 
-def dashboard_output_root() -> Path:
-    cfg = load_pipeline_config()
-    return ROOT / str(cfg.get("output_root", "outputs"))
-
-
-def build_system_state_response(output_root: Path | None = None, *, as_of: str | datetime | None = None) -> dict:
-    return build_system_state(output_root=output_root, as_of=as_of)
-
-
-def build_market_view_intake_response(payload: dict, *, output_root: Path | None = None) -> dict:
-    run_date = str(payload.get("date") or payload.get("run_date") or utc_run_date())
-    if not _DATE_PATTERN.match(run_date):
-        raise ValueError("expected date as YYYY-MM-DD")
-    raw_text = str(payload.get("raw_text") or payload.get("text") or "").strip()
-    if not raw_text:
-        raise ValueError("raw_text is required")
-    if len(raw_text) > 20_000:
-        raise ValueError("raw_text exceeds 20000 characters")
-    output = Path(output_root) if output_root else dashboard_output_root()
-    draft_only = _truthy(payload.get("draft_only", False))
-    write_obsidian = _truthy(payload.get("write_obsidian", False))
-    obsidian_env = os.environ.get("TRADING_ORCHESTRATOR_OBSIDIAN_ROOT", "").strip()
-    obsidian_root = Path(obsidian_env) if obsidian_env else None
-    if write_obsidian and obsidian_root is None:
-        raise ValueError("TRADING_ORCHESTRATOR_OBSIDIAN_ROOT is required when write_obsidian=true")
-    intake = MarketViewIntake(output, obsidian_root=obsidian_root)
-    if draft_only:
-        draft = intake.draft(run_date, raw_text)
-        return {
-            "status": "draft",
-            "draft_only": True,
-            "run_date": draft.run_date,
-            "draft": {
-                "score": draft.score,
-                "summary": draft.summary,
-                "key_levels": draft.key_levels,
-                "timeframes": draft.timeframes,
-                "trade_plan": draft.trade_plan,
-                "valid_for_hours": draft.valid_for_hours,
-                "expires_at": draft.expires_at,
-                "expires_if_price_moves_pct": draft.expires_if_price_moves_pct,
-                "expiry_target_price": draft.expiry_target_price,
-                "expire_above": draft.expire_above,
-                "expire_below": draft.expire_below,
-            },
-        }
-    market_view = intake.record(run_date, raw_text, write_obsidian=write_obsidian)
-    return {
-        "status": "recorded",
-        "draft_only": False,
-        "run_date": run_date,
-        "market_view": market_view,
-        "source_artifacts": {
-            "json": str(output / "market_views" / f"{run_date}.json"),
-            "current": str(output / "market_views" / "current.json"),
-            "markdown": str(output / "market_views" / f"{run_date}.md"),
-        },
-    }
-
-
 def build_dualtrack_cycle_current_response(*, output_root: Path | None = None, as_of: str | None = None) -> dict:
     cfg = dualtrack_config()
     deadline = int(cfg.get("plan_lock_deadline_min_before_cycle", 0))
     window = cycle_window(as_of, lock_deadline_min_before_cycle=deadline)
     store = DualTrackPlanStore(output_root, config=cfg)
-    reveal_allowed = store.reveal_allowed(window.cycle_id, as_of=as_of)
-    effective = store.effective_plan(window.cycle_id, as_of=as_of) if reveal_allowed else None
+    effective = store.machine_plan(window.cycle_id)
     effective_status = {
         "has_effective_plan": effective is not None,
         "machine_stands_down": effective is None,
     }
-    if reveal_allowed and effective is not None:
+    if effective is not None:
         effective_status["author"] = effective.get("effective_author", "")
     return {
         **window.to_dict(),
@@ -685,25 +718,399 @@ def build_dualtrack_cycle_current_response(*, output_root: Path | None = None, a
     }
 
 
-def build_dualtrack_plan_response(cycle_id: str, *, output_root: Path | None = None, as_of: str | None = None) -> dict:
+def build_strategy_console_current_response(*, output_root: Path | None = None, as_of: str | None = None) -> dict:
+    """Read model for the one-production-strategy console.
+
+    Legacy dual-track endpoints remain available for historical investigation;
+    execution-engine shadow status is deliberately not a strategy shadow.
+    """
+    output = _dualtrack_output_root(output_root)
+    cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
+    cycle_id = str(cycle["cycle_id"])
+    control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
+    market = build_dualtrack_market_bars_response(limit=240, as_of=as_of)
+    trades = build_dualtrack_trades_response(cycle_id, track="human", output_root=output, as_of=as_of)
+    execution = build_dualtrack_execution_response(cycle_id, output_root=output, as_of=as_of)
+    production_history = build_strategy_console_production_history(
+        output_root=output,
+        mark_price=market.get("latest_close"),
+        mark_fresh=bool(market.get("fresh")),
+        authoritative_engine=str(execution.get("engine") or "legacy_paper"),
+    )
+    production_account = {
+        **production_history["account"],
+        "exposure": (execution.get("account") or {}).get("exposure", 0),
+        "margin": (execution.get("account") or {}).get("margin", 0),
+        "slippage": (execution.get("account") or {}).get("slippage", 0),
+    }
+    folder = output / "dualtrack" / "strategy_shadows"
+    shadows = [rows[-1] for path in sorted(folder.glob(f"{cycle_id}_*.json")) if (rows := load_json(path))] if folder.exists() else []
+    return {
+        "schema_version": "strategy-production-console-v1",
+        "cycle": cycle,
+        **control,
+        "market": market,
+        "production_execution": {
+            **execution,
+            "account": production_account,
+            "pnl": production_history["pnl"],
+            "trades": production_history["trades"],
+            "fills": production_history["fills"],
+            "trade_summary": production_history["summary"],
+            "current_cycle_fills": execution.get("fills", []),
+            "current_cycle_trades": (
+                execution.get("positions", [])
+                if str(execution.get("engine") or "") == "nautilus_paper"
+                else trades.get("trades", [])
+            ),
+            "history_contract": production_history["history_contract"],
+        },
+        "ledger": build_dualtrack_ledger_response(output_root=output),
+        "strategy_shadows": shadows,
+        "execution_shadow": execution.get("shadow_cutover", {}),
+        "safety": {
+            "one_production_strategy": True,
+            "strategy_shadow_separate_from_execution_shadow": True,
+            "new_entries_fail_closed": not bool(control.get("production_plan")),
+        },
+        "ui_capabilities": {
+            "manual_order": True,
+            "manual_close": True,
+            "market_timeframes": ["1m", "5m", "15m", "30m", "1h", "4h"],
+            "start_stop_production": True,
+            "parameter_mutation": True,
+            "cancel_order": True,
+            "reset_statistics": True,
+            "production_grid_orders": True,
+            "strategy_preview": True,
+            "runtime_actual_state": True,
+        },
+    }
+
+
+def build_strategy_console_production_history(
+    *,
+    output_root: Path | None = None,
+    mark_price: float | None = None,
+    mark_fresh: bool = False,
+    limit: int = 200,
+    authoritative_engine: str = "legacy_paper",
+) -> dict:
+    """Aggregate only versioned StrategyPlan fills into the production ledger.
+
+    Legacy human/machine records remain available through their historical
+    endpoints, but are never silently mixed into production account totals.
+    """
+    output = _dualtrack_output_root(output_root)
+    fills_dir = output / "dualtrack" / "fills"
+    production_fills: list[dict[str, Any]] = []
+    production_trades: list[dict[str, Any]] = []
+    if fills_dir.exists():
+        for path in sorted(fills_dir.glob("*_human.json")):
+            cycle_id = path.name.removesuffix("_human.json")
+            rows = [row for row in load_json(path) if isinstance(row, dict)]
+            production_trade_ids = {
+                str(row.get("trade_id") or "")
+                for row in rows
+                if row.get("strategy_plan_id") not in (None, "") and row.get("trade_id") not in (None, "")
+            }
+            selected = [row for row in rows if str(row.get("trade_id") or "") in production_trade_ids]
+            if not selected:
+                continue
+            entries = {
+                str(row.get("trade_id") or ""): row
+                for row in selected
+                if str(row.get("event") or "") == "entry"
+            }
+            for row in selected:
+                entry = entries.get(str(row.get("trade_id") or ""), {})
+                production_fills.append({
+                    **row,
+                    "strategy_plan_id": row.get("strategy_plan_id") or entry.get("strategy_plan_id"),
+                    "strategy_plan_version": row.get("strategy_plan_version") or entry.get("strategy_plan_version"),
+                    "source_cycle_id": cycle_id,
+                })
+            for trade in _trades_from_fills(selected, track="production"):
+                entry = entries.get(str(trade.get("trade_id") or ""), {})
+                production_trades.append({
+                    **trade,
+                    "strategy_plan_id": entry.get("strategy_plan_id"),
+                    "strategy_plan_version": entry.get("strategy_plan_version"),
+                    "source_cycle_id": cycle_id,
+                })
+    if str(authoritative_engine or "legacy_paper") == "nautilus_paper":
+        snapshots_dir = output / "dualtrack" / "nautilus_authoritative" / "snapshots"
+        if snapshots_dir.exists():
+            for path in sorted(snapshots_dir.glob("*.json")):
+                cycle_id = path.stem
+                snapshots = load_json(path)
+                snapshot = snapshots[-1] if snapshots and isinstance(snapshots[-1], dict) else {}
+                selected_fills = [
+                    row for row in snapshot.get("fills") or []
+                    if isinstance(row, dict) and row.get("strategy_plan_id") not in (None, "")
+                ]
+                selected_trades = [
+                    row for row in snapshot.get("positions") or []
+                    if isinstance(row, dict) and row.get("strategy_plan_id") not in (None, "")
+                ]
+                production_fills.extend({**row, "source_cycle_id": cycle_id} for row in selected_fills)
+                production_trades.extend({**row, "source_cycle_id": cycle_id} for row in selected_trades)
+    enriched = apply_unrealized(production_trades, mark_price, mark_fresh=mark_fresh)
+    enriched.sort(key=lambda trade: str(trade.get("exit_ts") or trade.get("entry_ts") or ""))
+    production_fills.sort(key=lambda fill: str(fill.get("ts") or ""))
+    summary = _trade_summary(enriched)
+    summary["fill_count"] = len(production_fills)
+    summary["total_notional"] = round(sum(
+        float(fill.get("notional") or 0.0)
+        or float(fill.get("price") or 0.0) * float(fill.get("pnl_units") or fill.get("quantity") or 0.0)
+        for fill in production_fills
+    ), 8)
+    starting_cash = float(dualtrack_config().get("capital_per_track_usd") or 0.0)
+    realized = float(summary.get("realized_pnl") or 0.0)
+    unrealized = summary.get("unrealized_pnl")
+    ending_cash = round(starting_cash + realized, 8)
+    equity = None if unrealized is None else round(ending_cash + float(unrealized), 8)
+    return {
+        "schema_version": "strategy-production-history-v1",
+        "trades": enriched[-max(1, int(limit)):],
+        "fills": production_fills[-max(1, int(limit * 2)):],
+        "summary": summary,
+        "pnl": {"realized": round(realized, 8), "unrealized": unrealized},
+        "account": {
+            "starting_cash": starting_cash,
+            "realized_pnl": round(realized, 8),
+            "ending_cash": ending_cash,
+            "equity": equity,
+        },
+        "history_contract": {
+            "source": (
+                "versioned_strategy_plan_and_nautilus_authoritative"
+                if str(authoritative_engine or "legacy_paper") == "nautilus_paper"
+                else "versioned_strategy_plan_fills_only"
+            ),
+            "authoritative_engine": str(authoritative_engine or "legacy_paper"),
+            "nautilus_shadow_excluded": True,
+            "legacy_dualtrack_history_preserved": True,
+            "legacy_dualtrack_totals_mixed_into_production": False,
+        },
+    }
+
+
+def build_strategy_console_control_response(
+    payload: dict,
+    *,
+    output_root: Path | None = None,
+    market: dict | None = None,
+    account: dict | None = None,
+    recommendation_provider=None,
+    actor: dict | None = None,
+) -> dict:
+    output = _dualtrack_output_root(output_root)
+    cycle_id = str(payload.get("cycle_id") or cycle_window(payload.get("as_of")).cycle_id)
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
-    return DualTrackPlanStore(output_root).plan_response(cycle_id, as_of=as_of)
+    action = str(payload.get("action") or "")
+    # The chart selector is display-only. Production planning always receives
+    # the fixed 1m execution tape. Grid geometry needs only D1/4H; the AI
+    # recommendation path separately requires D1/4H/1H/15m.
+    trusted_market = dict(market or build_dualtrack_market_bars_response(
+        timeframe="1m",
+        limit=240,
+        as_of=payload.get("as_of"),
+    ))
+    if not isinstance(trusted_market.get("strategy_timeframes"), dict):
+        required = ("1d", "4h") if action != "refresh_recommendation" else ("1d", "4h", "1h", "15m")
+        trusted_market["strategy_timeframes"] = build_strategy_timeframes_response(
+            as_of=payload.get("as_of"),
+            timeframes=required,
+        )
+    trusted_account = account
+    if trusted_account is None:
+        history = build_strategy_console_production_history(
+            output_root=output,
+            mark_price=trusted_market.get("latest_close"),
+            mark_fresh=bool(trusted_market.get("fresh")),
+        )
+        trusted_account = dict(history.get("account") or {})
+    plane = StrategyControlPlane(output)
+    if action == "refresh_recommendation":
+        contexts = dict(trusted_market.get("strategy_timeframes") or {})
+        if not all(timeframe in contexts for timeframe in ("1d", "4h", "1h", "15m")):
+            contexts.update(build_strategy_timeframes_response(as_of=payload.get("as_of")))
+            trusted_market["strategy_timeframes"] = contexts
+        before = plane.active_plan(cycle_id) or plane.ensure_compatible_active_plan(cycle_id, as_of=payload.get("as_of"))
+        review_files = sorted((output / "dualtrack" / "reviews").glob("*_machine.json"))
+        review_rows = load_json(review_files[-1]) if review_files else []
+        review = review_rows[-1] if review_rows else {}
+        try:
+            recommendation_service = StrategyRecommendationService(
+                output,
+                decision_provider=recommendation_provider,
+            )
+            recommendation = recommendation_service.recommend(
+                cycle_id,
+                strategy_timeframes=contexts,
+                current_plan=before or {},
+                account=trusted_account or {},
+                review=review,
+                now=payload.get("as_of"),
+            )
+        except (OSError, RuntimeError) as exc:
+            # Return a structured fail-closed API error instead of dropping the
+            # browser connection. Production state remains untouched.
+            raise ValueError(f"AI recommendation unavailable: {exc}") from exc
+        preview = plane.preview(
+            cycle_id,
+            {"direction": recommendation["direction"], "style": recommendation["style"]},
+            market=trusted_market,
+            account=trusted_account,
+        )
+        proposal = plane.upsert_proposal({
+            "proposal_id": f"proposal-{recommendation['evaluation_receipt']['evaluation_id']}",
+            "cycle_id": cycle_id,
+            "source": "ai",
+            "created_at": recommendation["created_at"],
+            "direction": recommendation["direction"],
+            "style": recommendation["style"],
+            "range": preview["range"],
+            "key_levels": recommendation["key_levels"] or [preview["range"]["low"], preview["range"]["high"]],
+            "grid": {**preview["grid"], "orders": preview["orders"]},
+            "signal": recommendation["signal"],
+            "tp_sl": {
+                "mode": "per_grid",
+                "take_profit": "next_grid_level",
+                "stop_loss": "one_grid_beyond_range",
+                "r_multiple": 1.0,
+            },
+            "risk_budget": preview["risk"],
+            "intraday_rules": [
+                {"if": "1m closes outside range for 3 consecutive bars", "then": "exit_only_and_replan"},
+            ],
+            "rationale": recommendation["rationale"],
+            "evidence_used": recommendation["evidence_used"],
+            "analysis": recommendation["analysis"],
+            "prompt_contract": recommendation["prompt_contract"],
+            "evaluation_receipt": recommendation["evaluation_receipt"],
+            "preview_id": preview["preview_id"],
+        }, now=recommendation["created_at"])
+        after = plane.active_plan(cycle_id)
+        unchanged = (before or {}).get("strategy_plan_id") == (after or {}).get("strategy_plan_id")
+        finalized_receipt = recommendation_service.persist_receipt(
+            recommendation["evaluation_receipt"],
+            effects={
+                "proposal_id": proposal["proposal_id"],
+                "preview_id": preview["preview_id"],
+                "production_plan_unchanged": unchanged,
+                "orders_created": 0,
+            },
+        )
+        recommendation["evaluation_receipt"] = finalized_receipt
+        proposal["evaluation_receipt"] = finalized_receipt
+        proposal = plane.upsert_proposal(proposal, now=recommendation["created_at"])
+        return {
+            "action": action,
+            "recommendation": recommendation,
+            "proposal": proposal,
+            "preview": preview,
+            "production_plan_unchanged": unchanged,
+        }
+    return plane.control(
+        cycle_id,
+        action,
+        payload,
+        market=trusted_market,
+        account=trusted_account,
+        now=payload.get("as_of"),
+        actor=actor,
+    )
 
 
-def build_dualtrack_plan_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
-    lock = _truthy(payload.get("lock", True))
-    now = payload.get("as_of") or payload.get("now")
-    plan = DualTrackPlanStore(output_root).save_human_plan(payload, now=now, lock=lock)
-    return {"status": "locked" if lock else "draft", "plan": plan}
+def build_strategy_timeframes_response(
+    *,
+    as_of: str | None = None,
+    market_db: Path | None = None,
+    config: dict | None = None,
+    timeframes: tuple[str, ...] = ("1d", "4h", "1h", "15m"),
+) -> dict[str, dict[str, Any]]:
+    """Build fixed, completed strategy bars; never follows the chart timeframe."""
+    checked_at = parse_utc(as_of)
+    feed = DualTrackMarketFeed(market_db=market_db, config=config)
+    specs = {"1d": 32, "4h": 64, "1h": 96, "15m": 160}
+    seconds = {"1d": 86_400, "4h": 14_400, "1h": 3_600, "15m": 900}
+    minimum = {"1d": 15, "4h": 15, "1h": 15, "15m": 50}
+    result: dict[str, dict[str, Any]] = {}
+    unknown = set(timeframes) - set(specs)
+    if unknown:
+        raise ValueError(f"unsupported strategy timeframes: {sorted(unknown)}")
+    for timeframe in timeframes:
+        limit = specs[timeframe]
+        snapshot = feed.snapshot(symbol="GOLD", timeframe=timeframe, limit=limit, as_of=as_of)
+        trusted = snapshot.get("status") in {"ready", "derived"} and snapshot.get("is_synthetic") is False
+        # A single upstream connection reset must not make the operator's selected
+        # grid mode disagree with the chart. Retry only the exact same trusted
+        # source/timeframe once; synthetic data is never retried or accepted.
+        if not trusted and snapshot.get("is_synthetic") is False:
+            snapshot = feed.snapshot(symbol="GOLD", timeframe=timeframe, limit=limit, as_of=as_of)
+            trusted = snapshot.get("status") in {"ready", "derived"} and snapshot.get("is_synthetic") is False
+        if not trusted:
+            issues = snapshot.get("access_issues") or []
+            detail = f": {issues[0]}" if issues else ""
+            raise ValueError(f"strategy timeframe {timeframe} is unavailable or untrusted{detail}")
+        completed: list[dict[str, Any]] = []
+        for bar in snapshot.get("bars") or []:
+            started = parse_utc(str(bar.get("timestamp") or ""))
+            if started + timedelta(seconds=seconds[timeframe]) > checked_at:
+                continue
+            if timeframe == "1d" and started.weekday() >= 5:
+                continue
+            completed.append(dict(bar))
+        if len(completed) < minimum[timeframe]:
+            raise ValueError(f"strategy timeframe {timeframe} has insufficient completed bars")
+        result[timeframe] = {
+            "timeframe": timeframe,
+            "provider": snapshot.get("provider"),
+            "is_synthetic": False,
+            "status": snapshot.get("status"),
+            "fresh": snapshot.get("fresh"),
+            "bars": completed,
+            "bar_count": len(completed),
+            "latest_timestamp": completed[-1].get("timestamp"),
+            "completed_only": True,
+            "weekends_excluded": timeframe == "1d",
+        }
+    return result
 
 
 def build_dualtrack_config_response() -> dict:
     cfg = dualtrack_config()
+    cadence = cfg.get("cycle_cadence") if isinstance(cfg.get("cycle_cadence"), dict) else {}
+    planner = cfg.get("machine_planner") if isinstance(cfg.get("machine_planner"), dict) else {}
+    reassessment = planner.get("range_reassessment") if isinstance(planner.get("range_reassessment"), dict) else {}
     return {
         "schema_version": "dualtrack-config-v1",
         "max_leverage": cfg.get("max_leverage"),
         "capital_per_track_usd": cfg.get("capital_per_track_usd"),
+        "cycle_cadence": {
+            "decision_hours": int(cadence.get("hours", 12)),
+            "windows_cst": ["09:00-21:00", "21:00-09:00"],
+            "accounting_day_hours": int(cadence.get("accounting_day_hours", 24)),
+            "restored_at_cst": cadence.get("restored_at_cst"),
+        },
+        "machine_rules": {
+            "range_reassessment": {
+                "enabled": bool(reassessment.get("enabled", True)),
+                "confirmation_timeframe": str(reassessment.get("confirmation_timeframe") or "1m"),
+                "confirm_closes": max(2, int(reassessment.get("confirm_closes", 3))),
+                "cooldown_minutes": max(0, int(reassessment.get("cooldown_minutes", 60))),
+                "failure_retry_minutes": max(1, int(reassessment.get("failure_retry_minutes", 5))),
+                "max_replans_per_window": max(1, int(reassessment.get("max_replans_per_cycle", 2))),
+                "minimum_remaining_minutes": max(0, int(reassessment.get("minimum_remaining_minutes", 30))),
+            },
+            "neutral_mode": "bilateral_grid",
+            "untrusted_market_action": "stand_down",
+            "missing_plan_action": "stand_down",
+            "open_position_on_breach_action": "exit_only_until_flat",
+        },
         "safety": {
             "read_only": True,
             "credentials_exposed": False,
@@ -711,33 +1118,145 @@ def build_dualtrack_config_response() -> dict:
     }
 
 
-def build_dualtrack_machine_response(cycle_id: str, *, output_root: Path | None = None, as_of: str | None = None) -> dict:
-    if not _CYCLE_ID_PATTERN.match(cycle_id):
-        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
-    return DualTrackMachineRunner(output_root).machine_payload(cycle_id, as_of=as_of)
-
-
 def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
-    fill = DualTrackHumanEngine(output_root).submit_order(payload)
-    return {"status": "filled", "fill": fill}
+    root = _dualtrack_output_root(output_root)
+    command = dict(payload)
+    position_cycle_id = str(command.get("position_cycle_id") or "")
+    if position_cycle_id:
+        request_cycle_id = str(command.get("cycle_id") or "")
+        if not _CYCLE_ID_PATTERN.match(position_cycle_id):
+            raise ValueError("position_cycle_id must be YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
+        if str(command.get("event") or "").lower() not in {"exit", "stop", "target", "flatten"}:
+            raise ValueError("position_cycle_id is only valid for closing an existing position")
+        if not command.get("trade_id"):
+            raise ValueError("cross-cycle position close requires trade_id")
+        if cycle_window_from_id(position_cycle_id).start > cycle_window_from_id(request_cycle_id).start:
+            raise ValueError("position_cycle_id cannot be later than the request cycle")
+        command["request_cycle_id"] = request_cycle_id
+        command["cycle_id"] = position_cycle_id
+    event = str(command.get("event") or "entry").lower()
+    production_plan = StrategyControlPlane(root).ensure_compatible_active_plan(str(command.get("cycle_id") or ""))
+    strict_production = str(command.get("source") or "") == "strategy_production_console"
+    if event == "entry" and strict_production and not production_plan:
+        raise ValueError("no valid StrategyPlan: new entries are fail-closed")
+    if event == "entry" and strict_production and StrategyControlPlane(root).runtime_state(str(command.get("cycle_id") or ""))["desired_state"] != "running":
+        raise ValueError("production strategy is stopped")
+    if production_plan:
+        command["strategy_plan_id"] = production_plan["strategy_plan_id"]
+        command["strategy_plan_version"] = production_plan["version"]
+    adapter = build_configured_execution_engine_adapter(root)
+    immediate_nautilus_event = (
+        str(getattr(adapter, "name", "")) == "nautilus_paper"
+        and (
+            str(command.get("order_type") or "market").lower() == "market"
+            or event in {"exit", "stop", "target", "flatten"}
+        )
+    )
+    if immediate_nautilus_event:
+        trusted_price = _finite_float(command.get("market_price"))
+        if trusted_price is None or not command.get("market_timestamp") or not command.get("market_source"):
+            raise ValueError("Nautilus market order requires a server-validated market event")
+    receipt = adapter.submit_order(command)
+    if receipt.get("state") == "accepted" or receipt.get("status") == "accepted":
+        if immediate_nautilus_event:
+            cfg = dualtrack_config()
+            nautilus = ((cfg.get("execution_shadow") or {}).get("nautilus") or {})
+            market_price = float(command["market_price"])
+            adapter.process_market_event({
+                "schema_version": "dualtrack-market-event-v1",
+                "event_id": f"dashboard-order:{receipt.get('order_id')}:{command.get('ts')}",
+                "cycle_id": str(command.get("cycle_id") or ""),
+                "ts_event": str(command.get("ts") or ""),
+                "event_started_at": str(command.get("market_timestamp") or ""),
+                "source": str(command.get("market_source") or ""),
+                "provider": str(command.get("market_source") or ""),
+                "instrument_id": str(nautilus.get("execution_instrument_id") or command.get("symbol") or "GOLD"),
+                "symbol": str(command.get("symbol") or "GOLD"),
+                "timeframe": "1m",
+                "open": market_price,
+                "high": market_price,
+                "low": market_price,
+                "close": market_price,
+                "price": market_price,
+                "fresh": True,
+                "is_synthetic": False,
+            })
+            snapshot = adapter.snapshot(str(command.get("cycle_id") or ""))
+            fill = next((
+                row for row in reversed(snapshot.get("fills") or [])
+                if str(row.get("order_id") or "") == str(receipt.get("order_id") or "")
+            ), None)
+            if fill is not None:
+                return {"status": "filled", "fill": fill}
+        return {"status": "accepted", "order": receipt}
+    if str(getattr(adapter, "name", "")) == "legacy_paper":
+        DualTrackScorer(root).rebuild_ledgers()
+    return {"status": "filled", "fill": receipt}
 
 
-def build_dualtrack_human_response(
-    cycle_id: str,
+def _dualtrack_mutation_request_allowed(host: str, origin: str) -> bool:
+    host_value = str(host or "").strip()
+    try:
+        target = urlparse(f"http://{host_value}")
+    except ValueError:
+        return False
+    if target.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return False
+    origin_value = str(origin or "").strip()
+    if not origin_value:
+        return True
+    try:
+        source = urlparse(origin_value)
+        source_port = source.port or (80 if source.scheme == "http" else None)
+        target_port = target.port or 80
+    except ValueError:
+        return False
+    return (
+        source.scheme == "http"
+        and source.hostname == target.hostname
+        and source_port == target_port
+    )
+
+
+def _prepare_dualtrack_network_order(
+    payload: dict,
     *,
-    output_root: Path | None = None,
-    mark_price: float | str | None = None,
-    mark_source: str | None = None,
+    market: dict,
+    received_at: str | datetime,
+    expected_provider: str = "",
 ) -> dict:
-    if not _CYCLE_ID_PATTERN.match(cycle_id):
-        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
-    output = _dualtrack_output_root(output_root)
-    closed = _dualtrack_cycle_closed(cycle_id)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, override_price=mark_price, override_source=mark_source)
-    sweep = _dualtrack_sweep_human_protective_exits(output, cycle_id, mark)
-    payload = DualTrackHumanEngine(output).human_payload(cycle_id)
-    payload["protective_sweep"] = sweep
-    return payload
+    if bool(market.get("is_synthetic")):
+        raise ValueError("synthetic market data is forbidden")
+    if market.get("status") != "ready" or market.get("fresh") is not True:
+        raise ValueError("server market data is stale")
+    provider = str(market.get("provider") or "")
+    if market.get("source_mode") not in {"requested_symbol", provider}:
+        raise ValueError("server market source is not canonical")
+    if expected_provider and provider != expected_provider:
+        raise ValueError("server market provider is not canonical")
+    mark = _finite_float(market.get("latest_close"))
+    if mark is None:
+        raise ValueError("server market price is missing")
+    now = parse_utc(received_at)
+    try:
+        market_ts = parse_utc(market.get("latest_timestamp"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("server market timestamp is invalid") from exc
+    if market_ts > now + timedelta(seconds=60):
+        raise ValueError("server market timestamp is in the future")
+    cycle_id = str(payload.get("cycle_id") or "")
+    current_window = cycle_window(now)
+    if current_window.cycle_id != cycle_id:
+        raise ValueError("order cycle is not current")
+    if market_ts < current_window.start:
+        raise ValueError("server market timestamp is outside the current cycle")
+    prepared = {**payload, "ts": now.isoformat()}
+    prepared["market_price"] = mark
+    prepared["market_timestamp"] = market_ts.isoformat()
+    prepared["market_source"] = provider
+    if str(payload.get("order_type") or "market").lower() == "market":
+        prepared["price"] = mark
+    return prepared
 
 
 def build_dualtrack_trades_response(
@@ -749,6 +1268,7 @@ def build_dualtrack_trades_response(
     mark_price: float | str | None = None,
     mark_source: str | None = None,
 ) -> dict:
+    del mark_price, mark_source
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
     normalized_track = str(track or "human").lower()
@@ -756,8 +1276,7 @@ def build_dualtrack_trades_response(
         raise ValueError("track must be human or machine")
     closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
     output = _dualtrack_output_root(output_root)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of, override_price=mark_price, override_source=mark_source)
-    sweep = _dualtrack_sweep_human_protective_exits(output, cycle_id, mark) if normalized_track == "human" else {"status": "skipped", "reason": "machine_track"}
+    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
     rows = _dualtrack_trade_rows_for_cycle(output, cycle_id, normalized_track, mark)
     enriched = rows["trades"]
     summary = _trade_summary(enriched)
@@ -781,12 +1300,13 @@ def build_dualtrack_trades_response(
         "mark_source": mark["source"],
         "trades": enriched,
         "summary": summary,
+        "recovery_replay_trades": rows["recovery_replay_trades"],
+        "recovery_replay_summary": _trade_summary(rows["recovery_replay_trades"]),
         "display_cycle_id": display["cycle_id"],
         "display_reason": display["reason"],
         "display_trades": display["trades"],
         "display_summary": display["summary"],
         "display_safety": display["safety"],
-        "protective_sweep": sweep,
         "safety": {
             "read_only": True,
             "machine_mid_order_rows_hidden": False,
@@ -795,14 +1315,52 @@ def build_dualtrack_trades_response(
     }
 
 
-def build_dualtrack_attribution_response(cycle_id: str, *, output_root: Path | None = None) -> dict:
+def build_dualtrack_execution_response(
+    cycle_id: str,
+    *,
+    output_root: Path | None = None,
+    as_of: str | None = None,
+) -> dict:
+    """Read-only execution/accounting view for the human paper track.
+
+    The machine track intentionally stays on its blind-safe endpoint during an
+    open cycle.  This surface is for operational accounting, not a new machine
+    intervention or disclosure channel.
+    """
+
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
-    return DualTrackScorer(output_root).attribution_payload(cycle_id)
-
-
-def build_dualtrack_ledger_response(*, output_root: Path | None = None, week: str | None = None) -> dict:
-    return DualTrackScorer(output_root).ledger_payload(week=week)
+    output = _dualtrack_output_root(output_root)
+    closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
+    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
+    adapter = build_configured_execution_engine_adapter(output)
+    snapshot = adapter.snapshot(
+        cycle_id,
+        mark_price=mark["price"],
+        mark_fresh=mark["fresh"],
+        mark_source=mark["source"],
+    )
+    reconciliation_rows = load_json(output / "dualtrack" / "reconciliation" / f"{cycle_id}.json")
+    latest_reconciliation = reconciliation_rows[-1] if reconciliation_rows else {
+        "status": "missing",
+        "reason": "shadow_reconciliation_not_run",
+    }
+    cutover_rows = load_json(output / "dualtrack" / "cutover" / "shadow_gate_current.json")
+    latest_cutover = cutover_rows[-1] if cutover_rows else {
+        "status": "missing",
+        "blocker": "shadow_cutover_gate_not_run",
+    }
+    return {
+        **snapshot,
+        "reconciliation": adapter.reconcile(cycle_id),
+        "execution_shadow_reconciliation": latest_reconciliation,
+        "shadow_cutover": latest_cutover,
+        "safety": {
+            "read_only": True,
+            "execution_control": False,
+            "machine_track_disclosed": False,
+        },
+    }
 
 
 def build_dualtrack_market_bars_response(
@@ -822,10 +1380,6 @@ def build_dualtrack_market_bars_response(
     )
 
 
-def _dualtrack_output_root(output_root: Path | None = None) -> Path:
-    return Path(output_root) if output_root else ROOT / load_pipeline_config().get("output_root", "outputs")
-
-
 def _dualtrack_cycle_closed(cycle_id: str, *, as_of: str | None = None) -> bool:
     window = cycle_window_from_id(cycle_id)
     return parse_utc(as_of) >= window.end
@@ -839,26 +1393,13 @@ def _finite_float(value) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def _first_query_value(params: dict, key: str) -> str | None:
-    values = params.get(key) or []
-    if not values:
-        return None
-    value = values[0]
-    return None if value in (None, "") else str(value)
-
-
 def _dualtrack_mark_price(
     output_root: Path,
     cycle_id: str,
     *,
     closed: bool,
     as_of: str | None = None,
-    override_price: float | str | None = None,
-    override_source: str | None = None,
 ) -> dict:
-    override = _finite_float(override_price)
-    if override is not None:
-        return {"price": override, "fresh": True, "source": str(override_source or "client_mark_price")}
     if closed:
         cycle_rows = load_json(output_root / "dualtrack" / "cycles" / f"{cycle_id}.json")
         cycle = cycle_rows[-1] if cycle_rows else {}
@@ -877,24 +1418,40 @@ def _dualtrack_mark_price(
     }
 
 
-def _dualtrack_sweep_human_protective_exits(output_root: Path, cycle_id: str, mark: dict) -> dict:
-    if not mark.get("fresh"):
-        return {"status": "skipped", "reason": "stale_mark_price", "triggered": []}
-    return DualTrackHumanEngine(output_root).sweep_protective_exits(
-        cycle_id,
-        mark_price=mark.get("price"),
-        source=f"dualtrack_protective_sweep:{mark.get('source') or 'market'}",
-    )
-
-
 def _dualtrack_trade_rows_for_cycle(output_root: Path, cycle_id: str, track: str, mark: dict) -> dict:
     fills = load_json(output_root / "dualtrack" / "fills" / f"{cycle_id}_{track}.json")
     safety: dict[str, Any] = {}
+    replay_trades: list[dict] = []
     if track == "machine":
         fills, safety = filter_invalid_machine_fills(fills)
+        replay_fills = [fill for fill in fills if fill.get("execution_origin") == "recovery_replay"]
+        fills = [fill for fill in fills if fill.get("execution_origin") != "recovery_replay"]
+        replay_trades = apply_unrealized(
+            _trades_from_fills(replay_fills, track=track),
+            mark["price"],
+            mark_fresh=mark["fresh"],
+        )
+        replay_trades = [{**trade, "source_cycle_id": cycle_id} for trade in replay_trades]
+        safety = {
+            **safety,
+            "recovery_replay_fill_count": len(replay_fills),
+            "recovery_replay_realized_pnl": round(
+                sum(float(fill.get("realized_pnl") or 0.0) for fill in replay_fills),
+                8,
+            ),
+            "recovery_replay_excluded_from_paper_pnl": True,
+        }
     trades = _trades_from_fills(fills, track=track)
-    enriched = apply_unrealized(trades, mark["price"], mark_fresh=mark["fresh"])
-    return {"cycle_id": cycle_id, "trades": enriched, "safety": safety}
+    enriched = [
+        {**trade, "source_cycle_id": cycle_id}
+        for trade in apply_unrealized(trades, mark["price"], mark_fresh=mark["fresh"])
+    ]
+    return {
+        "cycle_id": cycle_id,
+        "trades": enriched,
+        "recovery_replay_trades": replay_trades,
+        "safety": safety,
+    }
 
 
 def _dualtrack_display_trade_rows(
@@ -907,24 +1464,39 @@ def _dualtrack_display_trade_rows(
     current_summary: dict,
     current_safety: dict,
 ) -> dict:
+    carried_open = _prior_open_trade_rows(output_root, cycle_id, track, mark)
     if current_trades:
+        existing_ids = {str(trade.get("trade_id") or "") for trade in current_trades}
+        carried_open = [trade for trade in carried_open if str(trade.get("trade_id") or "") not in existing_ids]
+        display_trades = [*current_trades, *carried_open]
         return {
             "cycle_id": cycle_id,
-            "reason": "current_cycle",
-            "trades": current_trades,
-            "summary": current_summary,
+            "reason": "current_plus_carried_open" if carried_open else "current_cycle",
+            "trades": display_trades,
+            "summary": _trade_summary(display_trades),
             "safety": current_safety,
         }
     for previous_cycle_id in _same_day_previous_cycles(cycle_id):
         rows = _dualtrack_trade_rows_for_cycle(output_root, previous_cycle_id, track, mark)
         if rows["trades"]:
+            existing_ids = {str(trade.get("trade_id") or "") for trade in rows["trades"]}
+            older_open = [trade for trade in carried_open if str(trade.get("trade_id") or "") not in existing_ids]
+            display_trades = [*rows["trades"], *older_open]
             return {
                 "cycle_id": previous_cycle_id,
-                "reason": "latest_same_day",
-                "trades": rows["trades"],
-                "summary": _trade_summary(rows["trades"]),
+                "reason": "latest_same_day_plus_carried_open" if older_open else "latest_same_day",
+                "trades": display_trades,
+                "summary": _trade_summary(display_trades),
                 "safety": rows["safety"],
             }
+    if carried_open:
+        return {
+            "cycle_id": str(carried_open[0].get("source_cycle_id") or cycle_id),
+            "reason": "carried_open_positions",
+            "trades": carried_open,
+            "summary": _trade_summary(carried_open),
+            "safety": current_safety,
+        }
     return {
         "cycle_id": cycle_id,
         "reason": "current_cycle_empty",
@@ -932,6 +1504,27 @@ def _dualtrack_display_trade_rows(
         "summary": current_summary,
         "safety": current_safety,
     }
+
+
+def _prior_open_trade_rows(output_root: Path, cycle_id: str, track: str, mark: dict) -> list[dict]:
+    current_start = cycle_window_from_id(cycle_id).start
+    suffix = f"_{track}.json"
+    carried: list[dict] = []
+    fills_dir = output_root / "dualtrack" / "fills"
+    if not fills_dir.exists():
+        return carried
+    for path in sorted(fills_dir.glob(f"*{suffix}"), reverse=True):
+        prior_cycle_id = path.name.removesuffix(suffix)
+        if prior_cycle_id == cycle_id:
+            continue
+        try:
+            if cycle_window_from_id(prior_cycle_id).start >= current_start:
+                continue
+        except ValueError:
+            continue
+        rows = _dualtrack_trade_rows_for_cycle(output_root, prior_cycle_id, track, mark)
+        carried.extend(trade for trade in rows["trades"] if str(trade.get("status") or "open") == "open")
+    return carried
 
 
 def _same_day_previous_cycles(cycle_id: str) -> list[str]:
@@ -965,7 +1558,13 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     output = Path(output_root) if output_root else ROOT / load_pipeline_config().get("output_root", "outputs")
     store = DualTrackPlanStore(output, config=cfg)
     machine = DualTrackMachineRunner(output, config=cfg).machine_payload(window.cycle_id, as_of=now)
-    market = DualTrackMarketFeed().snapshot(limit=5, as_of=now.isoformat())
+    market_config = cfg.get("market_data") if isinstance(cfg.get("market_data"), dict) else {}
+    market = DualTrackMarketFeed().snapshot(
+        symbol=str(market_config.get("symbol") or "GOLD"),
+        timeframe=str(market_config.get("timeframe") or "1m"),
+        limit=5,
+        as_of=now.isoformat(),
+    )
     runner_rows = _json_rows(output / "dualtrack" / "runner" / f"{window.cycle_id}.json")
     latest_runner = runner_rows[-1] if runner_rows else {}
     runner_ts = latest_runner.get("ts")
@@ -974,21 +1573,35 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
     runner_ok = runner_age is not None and runner_age <= runner_max_age
     cycle_rows = _json_rows(output / "dualtrack" / "cycles" / f"{window.cycle_id}.json")
     cycle_state = cycle_rows[-1] if cycle_rows else {}
+    reassessment_rows = _json_rows(output / "dualtrack" / "reassessment" / f"{window.cycle_id}.json")
+    range_reassessment = reassessment_rows[-1] if reassessment_rows else {}
     attribution_rows = _json_rows(output / "dualtrack" / "attribution" / f"{window.cycle_id}.json")
     ledger_rows = _json_rows(output / "dualtrack" / "ledger" / "daily" / f"{window.cycle_id.split('_', 1)[0]}.json")
     human_fills = _json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_human.json")
-    machine_fills = _json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_machine.json")
+    machine_fills = _paper_execution_fills(_json_rows(output / "dualtrack" / "fills" / f"{window.cycle_id}_machine.json"))
     previous_window = cycle_window(window.start - timedelta(seconds=1), lock_deadline_min_before_cycle=deadline)
     previous_attribution_rows = _json_rows(output / "dualtrack" / "attribution" / f"{previous_window.cycle_id}.json")
     previous_ledger_rows = _json_rows(output / "dualtrack" / "ledger" / "daily" / f"{previous_window.cycle_id.split('_', 1)[0]}.json")
     previous_human_fills = _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_human.json")
-    previous_machine_fills = _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_machine.json")
-    effective = store.effective_plan(window.cycle_id, as_of=now)
-    reveal_allowed = store.reveal_allowed(window.cycle_id, as_of=now)
+    previous_machine_fills = _paper_execution_fills(
+        _json_rows(output / "dualtrack" / "fills" / f"{previous_window.cycle_id}_machine.json")
+    )
+    effective = store.machine_plan(window.cycle_id)
     closed = now >= window.end
-    market_ok = bool(market.get("fresh")) and market.get("source_mode") != "synthetic_fallback"
+    market_provider = str(market.get("provider") or "")
+    market_source_mode = str(market.get("source_mode") or "")
+    market_ok = (
+        market.get("status") == "ready"
+        and market.get("fresh") is True
+        and bool(market_provider)
+        and market_source_mode in {"requested_symbol", market_provider}
+        and market.get("is_synthetic") is not True
+        and (not market_config.get("provider") or market_provider == market_config.get("provider"))
+    )
     stood_down = bool(cycle_state.get("machine_stood_down", effective is None))
-    sample_ok = bool(effective) and market_ok and runner_ok and not stood_down
+    machine_layers = list(machine.get("layers") or cycle_state.get("layers") or [])
+    invalid_machine_fill_count = _machine_invalid_fill_count(machine_layers)
+    sample_ok = bool(effective) and market_ok and runner_ok and not stood_down and invalid_machine_fill_count == 0
     checks = [
         _runtime_check("market", market_ok, "行情新鲜", "行情过期或展示种子", {
             "source_mode": market.get("source_mode"),
@@ -1002,23 +1615,31 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
             "max_age_seconds": runner_max_age,
             "event": latest_runner.get("event"),
         }),
-        _runtime_check("effective_plan", bool(effective), "有效作战单存在", "无有效作战单，机器轨应站下", {
-            "author": (effective or {}).get("effective_author") if reveal_allowed else "",
-            "reveal_allowed": reveal_allowed,
+        _runtime_check("effective_plan", bool(effective), "机器 AI 作战单存在", "机器 AI 作战单缺失，机器轨应站下", {
+            "author": (effective or {}).get("effective_author", ""),
+            "decision_mode": (effective or {}).get("decision_mode", ""),
+            "degraded": bool((effective or {}).get("degraded")),
         }),
         _runtime_check("machine", not stood_down, "机器轨未站下", "机器轨站下", {
-            "layers": list(machine.get("layers") or cycle_state.get("layers") or []),
+            "layers": machine_layers,
         }),
+        _runtime_quality_check(
+            "machine_fill_quality",
+            invalid_machine_fill_count == 0,
+            "机器轨成交几何正常",
+            "机器轨模拟出现已过滤的无效成交，禁止作为切换样本",
+            {"invalid_machine_fill_count": invalid_machine_fill_count, "layers": machine_layers},
+        ),
     ]
     if closed:
         checks.append(_runtime_check("close", bool(attribution_rows), "收盘归因已生成", "收盘归因缺失", {
             "attribution_available": bool(attribution_rows),
             "ledger_available": bool(ledger_rows),
         }))
-    status = "blocked" if any(item["status"] == "blocked" for item in checks) else "warn" if not closed else "ok"
+    status = "blocked" if any(item["status"] == "blocked" for item in checks) else "warn" if any(item["status"] == "warn" for item in checks) else "ok"
     next_tick_due_at = None
     if runner_ts:
-        next_tick_due_at = (parse_utc(runner_ts) + timedelta(seconds=300)).isoformat()
+        next_tick_due_at = (parse_utc(runner_ts) + timedelta(seconds=60)).isoformat()
     return {
         "schema_version": "dualtrack-runtime-status-v1",
         "status": status,
@@ -1044,15 +1665,18 @@ def build_dualtrack_runtime_status_response(*, output_root: Path | None = None, 
             "next_tick_due_at": next_tick_due_at,
             "bar_count": (latest_runner.get("detail") or {}).get("bar_count"),
         },
+        "machine_range_observation": dict(cycle_state.get("range_observation") or {}),
+        "machine_range_reassessment": dict(range_reassessment),
         "sample": {
             "valid_now": sample_ok,
             "has_effective_plan": effective is not None,
-            "effective_author": (effective or {}).get("effective_author") if reveal_allowed else "",
+            "effective_author": (effective or {}).get("effective_author", ""),
             "machine_stood_down": stood_down,
             "machine_pnl": round(float(machine.get("realized_pnl", 0.0)) + float(machine.get("unrealized_pnl", 0.0)), 8),
             "human_fill_count": len(human_fills),
-            "machine_fill_count": len(machine_fills) if closed else None,
-            "machine_fills_hidden": not closed,
+            "machine_fill_count": len(machine_fills),
+            "invalid_machine_fill_count": invalid_machine_fill_count,
+            "machine_fills_hidden": False,
         },
         "closeout": {
             "attribution_available": bool(attribution_rows),
@@ -1165,10 +1789,6 @@ def build_connector_activation_plan_response(payload: dict, *, output_root: Path
     return ConnectorActivationPlan(output_root=output_root).evaluate(payload)
 
 
-def build_connector_config_status_response(*, output_root: Path | None = None) -> dict:
-    return ConnectorConfigApply(output_root=output_root).status()
-
-
 def build_connector_attended_switch_review_response(*, output_root: Path | None = None) -> dict:
     status = build_connector_config_status_response(output_root=output_root)
     stage = status.get("operator_stage", {}) if isinstance(status.get("operator_stage"), dict) else {}
@@ -1224,124 +1844,6 @@ def build_connector_attended_switch_review_response(*, output_root: Path | None 
         },
         "endpoint_safety": dict(_CONNECTOR_ATTENDED_SWITCH_REVIEW_ENDPOINT_SAFETY),
     }
-
-
-def build_connector_price_feed_refresh_runbook_response(*, output_root: Path | None = None) -> dict:
-    config = load_pipeline_config()
-    root = Path(output_root) if output_root else ROOT / str(config.get("output_root", "outputs"))
-    path = root / "connector_config_apply" / "price_feed_refresh_runbook_current.json"
-    rows = load_json(path)
-    if rows and isinstance(rows[-1], dict):
-        receipt = dict(rows[-1])
-        receipt.setdefault("served_from", str(path))
-        receipt["command_sequence"] = _redacted_runbook_steps(receipt.get("command_sequence"))
-        receipt["status_receipt"] = _redacted_connector_status_snapshot(receipt.get("status_receipt"))
-        receipt["redaction"] = {
-            "raw_command_text_exposed": False,
-            "credential_values_exposed": False,
-        }
-        receipt["endpoint_safety"] = dict(_CONNECTOR_PRICE_FEED_REFRESH_RUNBOOK_ENDPOINT_SAFETY)
-        return receipt
-    return {
-        "schema_version": "connector-price-feed-refresh-runbook-v1",
-        "status": "missing",
-        "served_from": str(path),
-        "command_sequence": [],
-        "safety": {
-            "read_only": True,
-            "opens_network_clients": False,
-            "opens_quote_client": False,
-            "opens_trade_client": False,
-            "submits_orders": False,
-            "writes_runtime_config": False,
-            "credential_values_exposed": False,
-        },
-        "endpoint_safety": dict(_CONNECTOR_PRICE_FEED_REFRESH_RUNBOOK_ENDPOINT_SAFETY),
-    }
-
-
-def _redacted_runbook_steps(rows: object) -> list[dict]:
-    steps = []
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        steps.append(
-            {
-                "name": str(row.get("name") or ""),
-                "purpose": str(row.get("purpose") or ""),
-                "opens_quote_client": row.get("opens_quote_client") is True,
-                "opens_trade_client": row.get("opens_trade_client") is True,
-                "submits_orders": row.get("submits_orders") is True,
-                "writes_runtime_config": row.get("writes_runtime_config") is True,
-                "writes_market_db": row.get("writes_market_db") is True,
-                "writes_plan_artifact": row.get("writes_plan_artifact") is True,
-            }
-        )
-    return steps
-
-
-def _redacted_connector_status_snapshot(status: object) -> dict:
-    if not isinstance(status, dict):
-        return {}
-    operator_stage = status.get("operator_stage", {}) if isinstance(status.get("operator_stage"), dict) else {}
-    return {
-        "schema_version": str(status.get("schema_version") or ""),
-        "checked_at": str(status.get("checked_at") or ""),
-        "status": str(status.get("status") or ""),
-        "operator_stage": {
-            "stage": str(operator_stage.get("stage") or ""),
-            "next_action": str(operator_stage.get("next_action") or ""),
-            "runtime_switched_to_tiger_mgc": operator_stage.get("runtime_switched_to_tiger_mgc") is True,
-            "price_feed_ready": operator_stage.get("price_feed_ready") is True,
-            "can_switch_config_with_operator_authorization": operator_stage.get("can_switch_config_with_operator_authorization") is True,
-            "can_trade_machine_track": operator_stage.get("can_trade_machine_track") is True,
-            "can_submit_tiger_orders": operator_stage.get("can_submit_tiger_orders") is True,
-        },
-    }
-
-
-def build_connector_config_apply_response(
-    payload: dict,
-    *,
-    output_root: Path | None = None,
-    pipeline_config_path: Path | None = None,
-    dualtrack_config_path: Path | None = None,
-) -> dict:
-    return ConnectorConfigApply(
-        output_root=output_root,
-        pipeline_config_path=pipeline_config_path,
-        dualtrack_config_path=dualtrack_config_path,
-    ).apply(payload)
-
-
-def build_connector_config_rollback_response(
-    payload: dict,
-    *,
-    output_root: Path | None = None,
-    pipeline_config_path: Path | None = None,
-    dualtrack_config_path: Path | None = None,
-) -> dict:
-    return ConnectorConfigApply(
-        output_root=output_root,
-        pipeline_config_path=pipeline_config_path,
-        dualtrack_config_path=dualtrack_config_path,
-    ).rollback(payload)
-
-
-def build_dualtrack_verdict_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
-    cycle_id = str(payload.get("cycle_id") or "")
-    if not _CYCLE_ID_PATTERN.match(cycle_id):
-        raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
-    verdict = DualTrackScorer(output_root).record_verdict(cycle_id, str(payload.get("note") or ""))
-    return {"status": "recorded", "verdict": verdict}
-
-
-def _truthy(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def build_system_status_contract(payload: dict, *, strategy_id: str = "") -> dict:
@@ -1861,525 +2363,6 @@ def _int_or(value: object, default: int = 0) -> int:
         return default
 
 
-def compact_trader_payload(payload: dict) -> dict:
-    """Return only the reader-facing data needed for dashboard-v3 first paint.
-
-    The full `/api/dashboard` response remains unchanged for OPS and debugging.
-    """
-    keep_keys = [
-        "contract",
-        "run_date",
-        "strategy_id",
-        "bar_timeframe",
-        "latest",
-        "latest_quote",
-        "data_provenance",
-        "market_view_status",
-        "ohlc_quality",
-        "market_data_gate",
-        "performance_board",
-        "review_loop",
-        "dashboard_health",
-        "system_vitals",
-        "backend_maturity",
-        "strategy_frequency",
-        "strategy_daily_reviews",
-        "daily_trade_samples",
-        "trade_reviews",
-        "strategy_promotion_gate",
-        "live_reconciliation",
-        "legacy_live_reconciliation",
-        "live_submission_safety",
-        "alerts",
-        "operation_runbook",
-        "source_contracts",
-    ]
-    compact = {key: payload.get(key) for key in keep_keys if key in payload}
-    if isinstance(payload.get("backend_maturity"), dict):
-        compact["backend_maturity"] = _compact_backend_maturity(payload["backend_maturity"])
-    if isinstance(payload.get("strategy_frequency"), dict):
-        compact["strategy_frequency"] = _compact_strategy_frequency(payload["strategy_frequency"])
-    if isinstance(payload.get("strategy_daily_reviews"), dict):
-        compact["strategy_daily_reviews"] = _compact_strategy_daily_reviews(payload["strategy_daily_reviews"])
-    if isinstance(payload.get("daily_trade_samples"), dict):
-        compact["daily_trade_samples"] = _compact_daily_trade_samples(payload["daily_trade_samples"])
-    if isinstance(payload.get("trade_reviews"), dict):
-        compact["trade_reviews"] = _compact_trade_reviews(payload["trade_reviews"])
-    if isinstance(payload.get("strategy_promotion_gate"), dict):
-        compact["strategy_promotion_gate"] = _compact_strategy_promotion_gate(payload["strategy_promotion_gate"])
-    return compact
-
-
-def _compact_backend_maturity(maturity: dict) -> dict:
-    checks = []
-    for check in maturity.get("checks", []) or []:
-        if not isinstance(check, dict):
-            continue
-        checks.append(
-            {
-                "name": check.get("name", ""),
-                "status": check.get("status", ""),
-                "summary": check.get("summary", ""),
-                "evidence": _trim_maturity_evidence(check.get("evidence", {})),
-            }
-        )
-    return {
-        "schema_version": maturity.get("schema_version", ""),
-        "run_date": maturity.get("run_date", ""),
-        "generated_at": maturity.get("generated_at", ""),
-        "status": maturity.get("status", ""),
-        "summary": maturity.get("summary", {}),
-        "checks": checks,
-    }
-
-
-def _trim_maturity_evidence(evidence: object) -> object:
-    if not isinstance(evidence, dict):
-        return evidence
-    trimmed = dict(evidence)
-    if isinstance(trimmed.get("board"), dict):
-        board = trimmed["board"]
-        trimmed["board"] = {
-            "stage_counts": board.get("stage_counts", {}),
-            "effective_strategy_count": board.get("effective_strategy_count"),
-            "needs_attention_count": board.get("needs_attention_count"),
-            "bottlenecks": list(board.get("bottlenecks", []) or [])[:8],
-        }
-    if isinstance(trimmed.get("labels"), dict):
-        labels = trimmed["labels"]
-        trimmed["labels"] = dict(list(labels.items())[:16])
-    return trimmed
-
-
-def _compact_strategy_frequency(frequency: dict) -> dict:
-    strategies = []
-    for row in frequency.get("strategies", []) or []:
-        if not isinstance(row, dict):
-            continue
-        classification = row.get("classification", {}) if isinstance(row.get("classification"), dict) else {}
-        attribution = row.get("attribution", {}) if isinstance(row.get("attribution"), dict) else {}
-        strategies.append(
-            {
-                "strategy_id": row.get("strategy_id", ""),
-                "timeframe": row.get("timeframe", ""),
-                "stage": row.get("stage", ""),
-                "stage_label": row.get("stage_label", ""),
-                "reason": row.get("reason", ""),
-                "primary_reason": row.get("primary_reason", ""),
-                "limiting_reason": row.get("limiting_reason", ""),
-                "executed_trade_count": row.get("executed_trade_count", 0),
-                "min_daily_executed_trades": row.get("min_daily_executed_trades"),
-                "signal_count": row.get("signal_count", 0),
-                "candidate_count": row.get("candidate_count", 0),
-                "ticket_count": row.get("ticket_count", 0),
-                "sample_statuses": list(row.get("sample_statuses", []) or [])[:20],
-                "recommendation": row.get("recommendation", {}) if isinstance(row.get("recommendation"), dict) else {},
-                "classification": {
-                    "family": classification.get("family", ""),
-                    "family_label": classification.get("family_label", ""),
-                    "style": classification.get("style", ""),
-                    "style_label": classification.get("style_label", ""),
-                    "expected_trades_per_day_min": classification.get("expected_trades_per_day_min"),
-                    "expected_trades_per_day_max": classification.get("expected_trades_per_day_max"),
-                    "role": classification.get("role", ""),
-                },
-                "attribution": {
-                    "primary_reason": attribution.get("primary_reason", ""),
-                    "limiting_reason": attribution.get("limiting_reason", ""),
-                    "limiting_reason_label": attribution.get("limiting_reason_label", ""),
-                    "reason_counts": attribution.get("reason_counts", {}),
-                    "evidence": _compact_frequency_evidence(attribution.get("evidence", [])),
-                },
-            }
-        )
-    return {
-        "schema_version": frequency.get("schema_version", ""),
-        "run_date": frequency.get("run_date", ""),
-        "generated_at": frequency.get("generated_at", ""),
-        "status": frequency.get("status", ""),
-        "summary": frequency.get("summary", {}),
-        "strategies": strategies,
-    }
-
-
-def _compact_frequency_evidence(evidence: object) -> list[dict]:
-    if not isinstance(evidence, list):
-        return []
-    rows = []
-    for item in evidence:
-        if not isinstance(item, dict):
-            continue
-        rows.append(
-            {
-                "reason": item.get("reason", ""),
-                "reason_label": item.get("reason_label", ""),
-                "detail": item.get("detail", ""),
-                "sample_id": item.get("sample_id", ""),
-                "signal_id": item.get("signal_id", ""),
-                "signal_generated_at": item.get("signal_generated_at", ""),
-                "decision_cursor": item.get("decision_cursor", ""),
-                "ticket_id": item.get("ticket_id", ""),
-                "execution_status": item.get("execution_status", ""),
-            }
-        )
-        if len(rows) >= 5:
-            break
-    return rows
-
-
-def _compact_daily_trade_samples(samples: dict) -> dict:
-    summary = samples.get("summary", {}) if isinstance(samples.get("summary"), dict) else {}
-    requirements = samples.get("sample_requirements", {}) if isinstance(samples.get("sample_requirements"), dict) else {}
-    keep_summary = [
-        "observation_count",
-        "candidate_count",
-        "ticket_count",
-        "quality_pass_count",
-        "executed_count",
-        "executed_trade_sample_count",
-        "no_signal_count",
-        "blocked_count",
-        "candidate_without_ticket_count",
-        "pending_review_count",
-        "paper_order_count",
-        "demo_order_count",
-        "live_order_count",
-        "below_minimum",
-        "target_range_met",
-        "target_range",
-        "minimum_executed_trades",
-        "funnel",
-    ]
-    keep_requirements = [
-        "effective_leverage",
-        "min_target_equity_return_pct",
-        "min_target_price_move_pct",
-        "min_reward_to_risk",
-        "daily_min_trade_samples",
-        "daily_target_trade_samples_low",
-        "daily_target_trade_samples_high",
-    ]
-    return {
-        "run_date": samples.get("run_date", ""),
-        "generated_at": samples.get("generated_at", ""),
-        "status": samples.get("status", ""),
-        "active_strategy_id": samples.get("active_strategy_id", ""),
-        "summary": {key: summary.get(key) for key in keep_summary if key in summary},
-        "sample_requirements": {key: requirements.get(key) for key in keep_requirements if key in requirements},
-    }
-
-
-def _compact_strategy_daily_reviews(reviews: dict) -> dict:
-    rows = []
-    for row in reviews.get("strategies", []) or []:
-        if not isinstance(row, dict):
-            continue
-        rows.append(
-            {
-                "strategy_id": row.get("strategy_id", ""),
-                "family": row.get("family", ""),
-                "style": row.get("style", ""),
-                "timeframe": row.get("timeframe", ""),
-                "pm_verdict": row.get("pm_verdict", ""),
-                "frequency": row.get("frequency", {}),
-                "pnl": row.get("pnl", {}),
-                "attribution": row.get("attribution", {}),
-                "tp_sl": row.get("tp_sl", {}),
-                "pm_action": row.get("pm_action", ""),
-                "pm_summary": row.get("pm_summary", ""),
-                "review_priority": row.get("review_priority", 0),
-                "review_priority_label": row.get("review_priority_label", ""),
-                "review_question": row.get("review_question", ""),
-                "next_review_cursor": row.get("next_review_cursor", ""),
-                "replay_context": row.get("replay_context", {}),
-                "sample_quality": row.get("sample_quality", {}),
-            }
-        )
-    return {
-        "schema_version": reviews.get("schema_version", ""),
-        "run_date": reviews.get("run_date", ""),
-        "generated_at": reviews.get("generated_at", ""),
-        "strategy_count": reviews.get("strategy_count", len(rows)),
-        "status_counts": reviews.get("status_counts", {}),
-        "strategies": rows,
-    }
-
-
-def _compact_trade_reviews(reviews: dict) -> dict:
-    return {
-        "run_date": reviews.get("run_date", ""),
-        "generated_at": reviews.get("generated_at", ""),
-        "active_strategy_id": reviews.get("active_strategy_id", ""),
-        "status": reviews.get("status", ""),
-        "summary": reviews.get("summary", {}),
-    }
-
-
-def _compact_strategy_promotion_gate(gate: dict) -> dict:
-    return {
-        "run_date": gate.get("run_date", ""),
-        "generated_at": gate.get("generated_at", ""),
-        "status": gate.get("status", ""),
-        "strategy_id": gate.get("strategy_id", ""),
-        "promotion_allowed": gate.get("promotion_allowed", False),
-        "auto_apply": gate.get("auto_apply", False),
-        "paper_only": gate.get("paper_only", True),
-        "live_config_change_allowed": gate.get("live_config_change_allowed", False),
-        "closed_trade_count": gate.get("closed_trade_count"),
-        "official_rows": gate.get("official_rows"),
-        "data_truth_level": gate.get("data_truth_level", ""),
-        "candidate": gate.get("candidate", {}),
-        "blockers": list(gate.get("blockers", []) or [])[:8],
-    }
-
-
-def compact_ops_payload(payload: dict) -> dict:
-    """Return an OPS first-paint payload.
-
-    The full snapshot is intentionally still available as `view=full`. The OPS
-    console should not wait on multi-MB review/detail artifacts before it can
-    answer whether local services, data gates, schedules, and public access are
-    alive.
-    """
-    keep_keys = [
-        "contract",
-        "run_date",
-        "strategy_id",
-        "bar_timeframe",
-        "latest",
-        "latest_quote",
-        "manifest",
-        "signals",
-        "backtests",
-        "tickets",
-        "orders",
-        "positions",
-        "decisions",
-        "pending",
-        "review",
-        "journal",
-        "risk",
-        "risk_blocks",
-        "open_trades",
-        "closed_trades",
-        "paper_execution_blocks",
-        "performance",
-        "paper_performance",
-        "paper_exit_monitor",
-        "paper_exit_decisions",
-        "paper_risk_action_plan",
-        "equity_curve",
-        "paper_reconciliation",
-        "paper_trade_attribution",
-        "daily_review",
-        "operation_runbook",
-        "schedule",
-        "schedule_status",
-        "schedule_install_plan",
-        "schedule_install",
-        "schedule_rollback_plan",
-        "schedule_rollback",
-        "schedule_post_install_verify",
-        "schedule_takeover_package",
-        "schedule_takeover_package_check",
-        "runner",
-        "system_vitals",
-        "bot_supervisor",
-        "bot_checkpoint",
-        "market_db",
-        "data_provenance",
-        "ohlc_quality",
-        "market_data_gate",
-        "strategy_config",
-        "risk_rules",
-        "broker_preflight",
-        "data_source_preflight",
-        "data_source_lineage",
-        "data_trust",
-        "official_feed_receipt",
-        "official_feed_onboarding",
-        "broker_feed_doctor",
-        "broker_feed",
-        "broker_feed_smoke",
-        "oanda_feed",
-        "oanda_account",
-        "binance_usdm_feed",
-        "broker_receipts",
-        "broker_receipt_summary",
-        "mt5_bridge_smoke",
-        "live_order_requests",
-        "mock_runtime",
-        "mock_uat",
-        "live_readiness",
-        "live_env",
-        "live_activation",
-        "live_approval",
-        "live_submission_safety",
-        "live_broker_preflight",
-        "live_dry_run_drill",
-        "live_switch_plan",
-        "live_cutover",
-        "strategy_review",
-        "strategy_snapshot",
-        "learning_ledger",
-        "strategy_change_proposal",
-        "strategy_learning_actions",
-        "strategy_experiments",
-        "strategy_improvement_plan",
-        "strategy_promotion_gate",
-        "strategy_guardrails",
-        "risk_monitor",
-        "paper_auto_approval_gate",
-        "data_quality",
-        "data_gaps",
-        "data_gap_repair",
-        "data_archive",
-        "data_integrity",
-        "health",
-        "audit",
-        "doctor",
-        "dashboard_health",
-        "alerts",
-        "live_reconciliation",
-    ]
-    compact = {key: payload.get(key) for key in keep_keys if key in payload}
-    if isinstance(payload.get("data_health"), dict):
-        compact["data_health"] = _compact_data_health(payload["data_health"])
-    compact["collector_runs"] = _compact_collector_runs(payload.get("collector_runs", []))
-    bars = [bar for bar in payload.get("bars", []) if isinstance(bar, dict)]
-    compact["bars"] = [_compact_bar(bar) for bar in bars[-500:]]
-    compact["ops_payload"] = {
-        "mode": "compact",
-        "bars_returned": len(compact["bars"]),
-        "bars_total": len(bars),
-        "truncated_sections": [
-            "bars",
-            "evening_review",
-            "trading_plan",
-            "strategy_detail",
-            "nav_curve_intraday",
-            "performance_board",
-            "collector_runs",
-            "data_health",
-        ],
-        "full_diagnostics_query": "/api/dashboard?view=full",
-    }
-    if isinstance(payload.get("evening_review"), dict):
-        compact["evening_review"] = _compact_evening_review(payload["evening_review"])
-    if isinstance(payload.get("trading_plan"), dict):
-        compact["trading_plan"] = _compact_trading_plan(payload["trading_plan"])
-    return compact
-
-
-def _compact_data_health(data_health: dict) -> dict:
-    keep = (
-        "run_date",
-        "checked_at",
-        "symbol",
-        "timeframe",
-        "status",
-        "summary",
-        "providers",
-        "degenerate",
-        "misaligned",
-        "provider_conflicts",
-        "recommendations",
-    )
-    compact = {key: data_health.get(key) for key in keep if key in data_health}
-    compact["gaps"] = list(data_health.get("gaps", []) or [])[:6]
-    compact["issues"] = list(data_health.get("issues", []) or [])[:8]
-    compact["suspicious_price_jumps"] = list(data_health.get("suspicious_price_jumps", []) or [])[:8]
-    return compact
-
-
-def _compact_collector_runs(runs: list) -> dict:
-    rows = [row for row in (runs or []) if isinstance(row, dict)]
-    latest_by_key: dict[tuple[str, str], dict] = {}
-    status_counts: dict[str, int] = {}
-    stale_count = 0
-    for row in rows:
-        status = str(row.get("fetch_status") or "unknown")
-        status_counts[status] = status_counts.get(status, 0) + 1
-        if status == "stale":
-            stale_count += 1
-        key = (str(row.get("symbol") or ""), str(row.get("timeframe") or ""))
-        current = latest_by_key.get(key)
-        if not current or str(row.get("collected_at") or "") > str(current.get("collected_at") or ""):
-            latest_by_key[key] = row
-    latest = sorted(
-        latest_by_key.values(),
-        key=lambda row: str(row.get("collected_at") or ""),
-        reverse=True,
-    )
-    return {
-        "total_runs": len(rows),
-        "latest_count": len(latest),
-        "stale_count": stale_count,
-        "status_counts": status_counts,
-        "latest": [_compact_collector_run(row) for row in latest[:12]],
-    }
-
-
-def _compact_collector_run(row: dict) -> dict:
-    keep = (
-        "collected_at",
-        "symbol",
-        "timeframe",
-        "timestamp",
-        "close",
-        "provider",
-        "quality_flags",
-        "record_type",
-        "fetch_status",
-        "bar_age_seconds",
-        "stored_rows_seen",
-    )
-    return {key: row.get(key) for key in keep if key in row}
-
-
-def _compact_evening_review(review: dict) -> dict:
-    keep = (
-        "run_date",
-        "generated_at",
-        "status",
-        "active_strategy_id",
-        "adherence",
-        "attribution",
-        "performance",
-        "notes",
-    )
-    compact = {key: review.get(key) for key in keep if key in review}
-    compact["improvement_queue"] = list(review.get("improvement_queue", []) or [])[:6]
-    compact["trade_reviews"] = list(review.get("trade_reviews", []) or [])[:6]
-    compact["hypotheses"] = list(review.get("hypotheses", []) or [])[:6]
-    return compact
-
-
-def _compact_trading_plan(plan: dict) -> dict:
-    keep = (
-        "run_date",
-        "generated_at",
-        "plan_type",
-        "active_strategy_id",
-        "timeframe",
-        "status",
-        "mode",
-        "decision",
-        "allowed_to_trade",
-        "blockers",
-        "strategy_profile",
-        "broker_plan",
-        "data_plan",
-        "risk_envelope",
-        "trade_plan",
-        "today_focus",
-    )
-    compact = {key: plan.get(key) for key in keep if key in plan}
-    compact["signals"] = list(plan.get("signals", []) or [])[:8]
-    compact["tickets"] = list(plan.get("tickets", []) or [])[:8]
-    return compact
-
-
 def build_public_access_health(
     public_url: Optional[str] = None,
     local_url: Optional[str] = None,
@@ -2456,7 +2439,22 @@ def build_public_access_health(
 
 def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
     is_v4 = urlparse(public_url).path.endswith("/dashboard-v4.html")
-    if is_v4:
+    is_v5 = urlparse(public_url).path.endswith("/dashboard-v5.html")
+    if is_v5:
+        trader_checks = {
+            "dashboard_v5_title": "Extended 网格交易机器人",
+            "strategy_console_api": "/api/strategy-console/current",
+            "market_bars_api": "/api/dualtrack/market/bars",
+            "standard_kline": "StandardKline.StandardKlineChart",
+            "strategy_shadows": "Strategy Shadows",
+            "production_plan_traceability": "strategy_plan_version",
+            "runtime_actual_state": "actual_state",
+            "access_session_api": "/api/auth/session",
+            "authenticated_control_gate": "ACCESS_CONTROLLED",
+            "access_control_label": "已登录 · 可控制",
+            "tokens_css": "assets/tokens.css",
+        }
+    elif is_v4:
         trader_checks = {
             "dashboard_v4_title": "GoldBot Trader Console V4",
             "replay_v4_route": 'new URL("dashboard-replay-v4.html", window.location.href)',
@@ -2505,7 +2503,7 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         "ops_console_title": "GoldBot OPS Console",
         "ops_backend_signals": 'id="backend-signals"',
     }
-    if is_v4:
+    if is_v4 or is_v5:
         replay_checks = {
             "replay_v4_body": '<body class="replay-v4">',
             "replay_v4_backlink": 'new URL("dashboard-v4.html", window.location.href)',
@@ -2523,7 +2521,11 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
             "replay_trader_focus": "Trader Focus",
         }
     trader = _probe_html_features(public_url, timeout, trader_checks)
-    trader_vendor_url = _sibling_dashboard_url(public_url, "data/vendor/echarts.min.js") + "?v=20260627-gateway"
+    trader_vendor_filename = "packages/standard-kline/standard-kline.js" if is_v5 else "data/vendor/echarts.min.js"
+    trader_vendor_name = "trader_vendor_standard_kline" if is_v5 else "trader_vendor_echarts"
+    trader_vendor_url = _sibling_dashboard_url(public_url, trader_vendor_filename)
+    if not is_v5:
+        trader_vendor_url += "?v=20260627-gateway"
     trader_vendor = _probe_http(trader_vendor_url, timeout)
     replay_filename = "dashboard-replay-v4.html"
     replay_url = _sibling_dashboard_url(public_url, replay_filename)
@@ -2541,7 +2543,7 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
             {"surface": "trader", "name": item["name"], "ok": item["ok"]}
             for item in trader.get("checks", [])
         ],
-        {"surface": "trader", "name": "trader_vendor_echarts", "ok": _http_ok(trader_vendor)},
+        {"surface": "trader", "name": trader_vendor_name, "ok": _http_ok(trader_vendor)},
         *[
             {"surface": "replay", "name": item["name"], "ok": item["ok"]}
             for item in replay.get("checks", [])
@@ -2572,7 +2574,7 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
         if (
             not item.get("ok")
             and not (reason == "trader_probe_failed" and item.get("surface") == "trader")
-            and not (reason == "trader_vendor_probe_failed" and item.get("name") == "trader_vendor_echarts")
+            and not (reason == "trader_vendor_probe_failed" and item.get("name") == trader_vendor_name)
             and not (reason == "replay_probe_failed" and item.get("surface") == "replay")
             and not (reason == "replay_vendor_probe_failed" and item.get("name") == "replay_vendor_lightweight_charts")
             and not (reason in {"ops_access_forbidden", "ops_probe_failed"} and item.get("surface") == "ops")
@@ -2713,338 +2715,6 @@ def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def compact_strategy_payload(payload: dict) -> dict:
-    """Return the trader-facing single-strategy replay payload.
-
-    Full strategy snapshots carry OPS/debug artifacts that can push public
-    responses past several MB. The replay view needs Gold OHLC, trades, orders,
-    and concise evidence only; `/api/dashboard?strategy=<id>` remains full.
-    """
-    keep_keys = [
-        "contract",
-        "run_date",
-        "strategy_id",
-        "bar_timeframe",
-        "latest",
-        "latest_quote",
-        "data_provenance",
-        "ohlc_quality",
-        "market_data_gate",
-        "dashboard_health",
-        "system_vitals",
-    ]
-    compact = {key: payload.get(key) for key in keep_keys if key in payload}
-    detail = payload.get("strategy_detail")
-    if isinstance(detail, dict):
-        compact["strategy_detail"] = _compact_strategy_detail(detail)
-    return compact
-
-
-def _compact_strategy_detail(detail: dict) -> dict:
-    return {
-        "strategy_id": detail.get("strategy_id", ""),
-        "timeframe": detail.get("timeframe", ""),
-        "classification": detail.get("classification", {}),
-        "summary": detail.get("summary", {}),
-        "bars": [_compact_bar(bar) for bar in detail.get("bars", []) if isinstance(bar, dict)],
-        "replay_ohlc": detail.get("replay_ohlc", {}),
-        "ohlc_quality": detail.get("ohlc_quality", {}),
-        "nav_points": detail.get("nav_points", []),
-        "nav_quality": detail.get("nav_quality", {}),
-        "nav_curve_intraday": _compact_nav_curve(detail.get("nav_curve_intraday", {})),
-        "orders": [_compact_order(order) for order in detail.get("orders", []) if isinstance(order, dict)],
-        "open_orders": [_compact_order(order) for order in detail.get("open_orders", []) if isinstance(order, dict)],
-        "open_trades": [_compact_trade(trade) for trade in detail.get("open_trades", []) if isinstance(trade, dict)],
-        "closed_trades": [_compact_trade(trade) for trade in detail.get("closed_trades", []) if isinstance(trade, dict)],
-        "trades": [_compact_trade(trade) for trade in detail.get("trades", []) if isinstance(trade, dict)],
-        "trade_record_cards": [
-            _compact_trade_record_card(card)
-            for card in detail.get("trade_record_cards", [])
-            if isinstance(card, dict)
-        ],
-        "trade_record_audit": detail.get("trade_record_audit", {}),
-        "strategy_book": detail.get("strategy_book", {}),
-        "edge_judgment": detail.get("edge_judgment", {}),
-        "explainability_status": detail.get("explainability_status", ""),
-        "explainability_summary": _compact_explainability_summary(detail),
-        "performance_confidence": detail.get("performance_confidence", {}),
-        "unrealized_pnl": detail.get("unrealized_pnl", 0),
-        "entry_reason": detail.get("entry_reason", ""),
-        "exit_reason": detail.get("exit_reason", ""),
-        "strategy_signal": _compact_signal(detail.get("strategy_signal", {})),
-        "latest_decision_snapshot": _compact_decision_snapshot(detail.get("latest_decision_snapshot", {})),
-        "latest_go_decision_snapshot": _compact_decision_snapshot(detail.get("latest_go_decision_snapshot", {})),
-        "decision_snapshot_summary": detail.get("decision_snapshot_summary", {}),
-        "risk_block": _compact_risk_block(detail.get("risk_block", {})),
-    }
-
-
-def _compact_decision_snapshot(snapshot: dict) -> dict:
-    if not isinstance(snapshot, dict):
-        return {}
-    plan = snapshot.get("execution_plan") if isinstance(snapshot.get("execution_plan"), dict) else {}
-    signal = snapshot.get("signal") if isinstance(snapshot.get("signal"), dict) else {}
-    return {
-        "strategy_id": snapshot.get("strategy_id", ""),
-        "bar_timestamp": snapshot.get("bar_timestamp", ""),
-        "generated_at": snapshot.get("generated_at", ""),
-        "final_decision": snapshot.get("final_decision", ""),
-        "signal": {
-            "direction": signal.get("direction", ""),
-            "confidence": signal.get("confidence", ""),
-            "strength": signal.get("strength", ""),
-            "regime": signal.get("regime", ""),
-        },
-        "execution_plan": {
-            "ticket_id": plan.get("ticket_id", ""),
-            "entry_zone": plan.get("entry_zone", ""),
-            "take_profit": plan.get("take_profit"),
-            "stop_loss": plan.get("stop_loss"),
-            "target_equity_return_pct": plan.get("target_equity_return_pct"),
-        },
-        "no_go_reason": snapshot.get("no_go_reason", ""),
-    }
-
-
-def _compact_explainability_summary(detail: dict) -> dict:
-    groups = detail.get("explainability_root_cause_groups") or detail.get("explainability_gap_groups") or []
-    compact_groups = []
-    total = 0
-    warn_total = 0
-    info_total = 0
-    for group in groups if isinstance(groups, list) else []:
-        if not isinstance(group, dict):
-            continue
-        count = int(group.get("count") or 0)
-        warn_count = int(group.get("warn_count") or (count if group.get("severity") == "warn" else 0) or 0)
-        info_count = int(group.get("info_count") or max(0, count - warn_count) or 0)
-        total += count
-        warn_total += warn_count
-        info_total += info_count
-        compact_groups.append({
-            "root_cause": group.get("root_cause") or group.get("key") or "",
-            "label": group.get("label") or group.get("key") or "",
-            "severity": group.get("severity") or ("warn" if warn_count else "info"),
-            "count": count,
-            "warn_count": warn_count,
-            "info_count": info_count,
-            "next_action": group.get("next_action") or "",
-            "gap_types": list(group.get("gap_types", []) or [])[:4],
-            "sample_trade_ids": list(group.get("sample_trade_ids", []) or [])[:3],
-            "sample_ticket_ids": list(group.get("sample_ticket_ids", []) or [])[:3],
-            "sample_signal_ids": list(group.get("sample_signal_ids", []) or [])[:3],
-        })
-    compact_groups = sorted(
-        compact_groups,
-        key=lambda item: (0 if item["severity"] == "warn" else 1, -int(item["count"] or 0), item["root_cause"]),
-    )[:4]
-    status = detail.get("explainability_status") or ("warn" if warn_total else "ok")
-    return {
-        "status": status,
-        "verdict": "not_promotion_ready" if warn_total else "reviewable",
-        "gap_count": total,
-        "warn_count": warn_total,
-        "info_count": info_total,
-        "root_cause_count": len(compact_groups),
-        "groups": compact_groups,
-    }
-
-
-def _compact_nav_curve(curve: dict) -> dict:
-    if not isinstance(curve, dict):
-        return {}
-    return {
-        "status": curve.get("status", ""),
-        "source": curve.get("source", ""),
-        "reason": curve.get("reason", ""),
-        "starting_equity": curve.get("starting_equity"),
-        "current_equity": curve.get("current_equity"),
-        "current_drawdown_pct": curve.get("current_drawdown_pct"),
-        "max_drawdown_pct": curve.get("max_drawdown_pct"),
-        "point_count": curve.get("point_count", 0),
-        "points": [
-            {
-                key: point.get(key)
-                for key in (
-                    "timestamp",
-                    "close",
-                    "equity",
-                    "unrealized_pnl",
-                    "realized_pnl",
-                    "active_trade_count",
-                    "drawdown_pct",
-                )
-                if key in point
-            }
-            for point in curve.get("points", [])
-            if isinstance(point, dict)
-        ],
-    }
-
-
-def _compact_bar(bar: dict) -> dict:
-    return {
-        key: bar.get(key)
-        for key in ("timestamp", "open", "high", "low", "close", "provider", "quality_flags")
-        if key in bar
-    }
-
-
-def _compact_order(order: dict) -> dict:
-    keep = (
-        "order_id",
-        "ticket_id",
-        "status",
-        "requested_price",
-        "fill_price",
-        "quantity",
-        "filled_at",
-        "rejection_reason",
-        "total_cost",
-    )
-    return {key: order.get(key) for key in keep if key in order}
-
-
-def _compact_trade(trade: dict) -> dict:
-    keep = (
-        "trade_id",
-        "order_id",
-        "ticket_id",
-        "signal_id",
-        "signal_regime",
-        "signal_strength",
-        "signal_confidence",
-        "symbol",
-        "side",
-        "status",
-        "quantity",
-        "entry_price",
-        "requested_entry_price",
-        "stop_loss",
-        "target",
-        "opened_at",
-        "closed_at",
-        "exit_price",
-        "realized_pnl",
-        "unrealized_pnl",
-        "quality_flags",
-        "entry_reason",
-        "exit_reason",
-    )
-    compact = {key: trade.get(key) for key in keep if key in trade}
-    if isinstance(trade.get("strategy_signal"), dict):
-        compact["strategy_signal"] = _compact_signal(trade["strategy_signal"])
-    if isinstance(trade.get("risk_block"), dict):
-        compact["risk_block"] = _compact_risk_block(trade["risk_block"])
-    if isinstance(trade.get("decision"), dict):
-        compact["decision"] = _compact_decision(trade["decision"])
-    if isinstance(trade.get("exit_decision"), dict):
-        compact["exit_decision"] = _compact_exit_decision(trade["exit_decision"])
-    if isinstance(trade.get("record_card"), dict):
-        compact["record_card"] = _compact_trade_record_card(trade["record_card"])
-    return compact
-
-
-def _compact_trade_record_card(card: dict) -> dict:
-    return {
-        "schema_version": card.get("schema_version", ""),
-        "run_date": card.get("run_date", ""),
-        "trade_id": card.get("trade_id", ""),
-        "strategy_id": card.get("strategy_id", ""),
-        "trader_id": card.get("trader_id", ""),
-        "portfolio_id": card.get("portfolio_id", ""),
-        "strategy_family": card.get("strategy_family", ""),
-        "strategy_variant": card.get("strategy_variant", ""),
-        "status": card.get("status", ""),
-        "symbol": card.get("symbol", ""),
-        "side": card.get("side", ""),
-        "quantity": card.get("quantity"),
-        "entry": card.get("entry", {}),
-        "exit": card.get("exit", {}),
-        "protection": card.get("protection", {}),
-        "pnl": card.get("pnl", {}),
-        "compliance": card.get("compliance", {}),
-        "audit": card.get("audit", {}),
-        "display": card.get("display", {}),
-    }
-
-
-def _compact_signal(signal: dict) -> dict:
-    if not isinstance(signal, dict):
-        return {}
-    keep = (
-        "signal_id",
-        "asset",
-        "direction",
-        "strength",
-        "confidence",
-        "horizon",
-        "thesis",
-        "evidence",
-        "methods",
-        "regime",
-        "factor_scores",
-        "backtest_verdict",
-        "invalid_if",
-        "generated_at",
-        "expires_at",
-        "status",
-        "artifact_provenance",
-    )
-    compact = {key: signal.get(key) for key in keep if key in signal and key != "artifact_provenance"}
-    if isinstance(signal.get("artifact_provenance"), dict):
-        compact["artifact_provenance"] = _compact_artifact_provenance(signal["artifact_provenance"])
-    return compact
-
-
-def _compact_artifact_provenance(provenance: dict) -> dict:
-    keep = (
-        "status",
-        "repaired_at",
-        "target_date",
-        "source_trade_id",
-        "source_order_id",
-        "source_ticket_id",
-        "source_signal_id",
-        "warning",
-    )
-    return {key: provenance.get(key) for key in keep if key in provenance}
-
-
-def _compact_risk_block(block: dict) -> dict:
-    if not isinstance(block, dict):
-        return {}
-    keep = ("status", "blocked", "reason", "message", "checks", "generated_at")
-    return {key: block.get(key) for key in keep if key in block}
-
-
-def _compact_decision(decision: dict) -> dict:
-    if not isinstance(decision, dict):
-        return {}
-    compact = {}
-    if "risk_snapshot" in decision:
-        compact["risk_snapshot"] = decision.get("risk_snapshot")
-    if "decision" in decision:
-        compact["decision"] = decision.get("decision")
-    if "reason" in decision:
-        compact["reason"] = decision.get("reason")
-    return compact
-
-
-def _compact_exit_decision(decision: dict) -> dict:
-    if not isinstance(decision, dict):
-        return {}
-    keep = (
-        "status",
-        "required_user_action",
-        "latest_price",
-        "unrealized_pnl",
-        "reason",
-        "generated_at",
-    )
-    return {key: decision.get(key) for key in keep if key in decision}
-
-
 def _json_rows(path: Path) -> list[dict]:
     try:
         if not path.exists():
@@ -3053,6 +2723,10 @@ def _json_rows(path: Path) -> list[dict]:
     except (OSError, json.JSONDecodeError):
         return []
     return value if isinstance(value, list) else []
+
+
+def _paper_execution_fills(rows: list[dict]) -> list[dict]:
+    return [row for row in rows if row.get("execution_origin") != "recovery_replay"]
 
 
 def _age_seconds(ts: str, now) -> int:
@@ -3066,6 +2740,29 @@ def _runtime_check(name: str, ok: bool, ok_message: str, blocked_message: str, e
         "message": ok_message if ok else blocked_message,
         "evidence": evidence,
     }
+
+
+def _runtime_quality_check(name: str, clean: bool, ok_message: str, warning_message: str, evidence: dict) -> dict:
+    return {
+        "name": name,
+        "status": "ok" if clean else "warn",
+        "message": ok_message if clean else warning_message,
+        "evidence": evidence,
+    }
+
+
+def _machine_invalid_fill_count(layers: list[Any]) -> int:
+    total = 0
+    for layer in layers:
+        text = str(layer or "")
+        if not text.startswith("invalid_fills:"):
+            continue
+        try:
+            count = int(text.rsplit(":", 1)[-1])
+        except ValueError:
+            continue
+        total += max(0, count)
+    return total
 
 
 def main() -> None:

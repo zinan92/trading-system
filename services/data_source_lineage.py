@@ -7,7 +7,7 @@ from pathlib import Path
 from services.config_loader import ROOT, load_pipeline_config
 from services.data_source_preflight import DataSourcePreflight
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 
 
 class DataSourceLineage:
@@ -22,15 +22,15 @@ class DataSourceLineage:
         self.execution_venue_providers = set(source_config.get("execution_venue_providers", []))
 
     def run(self, run_date: str) -> dict:
-        store = MarketStore(self.market_db) if self.market_db.exists() else None
-        coverage = store.coverage() if store else []
+        store = market_data_repository(self.market_db)
+        coverage = store.coverage()
         gold_coverage = [item for item in coverage if item.get("symbol") == "GOLD" and item.get("timeframe") == "5m"]
         clean_bars = load_json(self.output_root / "clean_bars" / run_date / "GOLD_5m.json")
         latest_clean_bar = clean_bars[-1] if clean_bars else {}
-        latest_quote = store.load_latest_quote("GOLD") if store else {}
-        latest_public_bar = store.load_latest_bar("GOLD", "5m", sorted(self.public_providers)) if store else {}
-        latest_execution_venue_bar = store.load_latest_bar("GOLD", "5m", sorted(self.execution_venue_providers)) if store else {}
-        latest_official_bar = store.load_latest_bar("GOLD", "5m", sorted(self.official_providers)) if store else {}
+        latest_quote = store.load_latest_quote("GOLD")
+        latest_public_bar = store.load_latest_bar("GOLD", "5m", sorted(self.public_providers))
+        latest_execution_venue_bar = store.load_latest_bar("GOLD", "5m", sorted(self.execution_venue_providers))
+        latest_official_bar = store.load_latest_bar("GOLD", "5m", sorted(self.official_providers))
         preflight_rows = load_json(self.output_root / "data_source_preflight" / f"{run_date}.json")
         preflight = preflight_rows[-1] if preflight_rows else DataSourcePreflight(self.output_root, self.market_db).run(run_date)
         grouped = self._group_coverage(gold_coverage)
@@ -43,8 +43,8 @@ class DataSourceLineage:
             "run_date": run_date,
             "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "status": status,
-            "market_db": str(self.market_db),
-            "market_db_exists": self.market_db.exists(),
+            "market_data_port": "datafeed",
+            "market_data_available": bool(coverage or latest_quote),
             "symbol": "GOLD",
             "timeframe": "5m",
             "truth_level": truth_level,

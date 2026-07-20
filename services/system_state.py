@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.market_data_access import market_data_repository
 from services.schedule_profiles import is_focus_profile, profile_from_config, profile_from_schedule
 
 
@@ -225,16 +225,18 @@ def _check_dualtrack_heartbeat(root: Path, now: datetime) -> SystemCheck:
         return _unknown("dualtrack_heartbeat", f"heartbeat_failed: {exc.__class__.__name__}", "检查双轨周期")
     status = str(result.get("status") or "unknown")
     if status == "stale":
+        reason_code = str(result.get("reason") or "dualtrack close-cycle stale")
         return SystemCheck(
             id="dualtrack_heartbeat",
             status="DEGRADED",
-            reason=str(result.get("reason") or "dualtrack close-cycle stale"),
+            reason="历史周期执行证据缺失" if reason_code == "declared_evidence_gap" else reason_code,
             room="ops",
             cta="修复双轨周期",
             evidence={
                 "expected_boundary": result.get("expected_boundary"),
                 "latest_artifact_at": result.get("latest_artifact_at"),
                 "missed_boundaries": result.get("missed_boundaries", []),
+                "evidence_gaps": result.get("evidence_gaps", []),
             },
         )
     if status in {"fresh", "not_scheduled"}:
@@ -296,7 +298,7 @@ def _check_data_freshness(root: Path, now: datetime) -> SystemCheck:
     latest = max([item for item in [artifact_latest, db_latest] if item is not None], default=None)
     if latest is None:
         return _unknown("data_freshness", "latest_bar_timestamp_missing", "检查行情")
-    source = "local_market_db" if db_latest is not None and latest == db_latest else "data_source_preflight"
+    source = "market_data_port" if db_latest is not None and latest == db_latest else "data_source_preflight"
     age = now - latest
     if age > DATA_MAX_AGE:
         return SystemCheck(
@@ -321,17 +323,11 @@ def _latest_gold_1m_from_market_db(root: Path) -> datetime | None:
     config = load_pipeline_config()
     raw = str(config.get("local_market_db") or "data/market_data.db")
     path = Path(raw) if Path(raw).is_absolute() else root.parent / raw
-    if not path.exists():
-        return None
     try:
-        with sqlite3.connect(path) as conn:
-            row = conn.execute(
-                "select max(timestamp) from bars where symbol = ? and timeframe = ?",
-                ("GOLD", "1m"),
-            ).fetchone()
-    except sqlite3.Error:
+        row = market_data_repository(path).load_latest_bar("GOLD", "1m")
+    except Exception:
         return None
-    value = row[0] if row else None
+    value = row.get("timestamp") if row else None
     if not value:
         return None
     try:

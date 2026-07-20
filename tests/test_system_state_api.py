@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from services.journal_store import write_json
+from services.market_store import MarketStore
+from schemas.market_data import Bar
 from pipelines import dashboard_server
 
 
@@ -202,11 +203,10 @@ def test_system_state_all_healthy_inputs_run(tmp_path: Path) -> None:
 def test_system_state_uses_fresh_local_market_db_when_preflight_artifact_is_stale(monkeypatch, tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     db = tmp_path / "market.db"
-    conn = sqlite3.connect(db)
-    conn.execute("create table bars(symbol text, timeframe text, timestamp text)")
-    conn.execute("insert into bars values(?,?,?)", ("GOLD", "1m", (_now() - timedelta(minutes=2)).isoformat()))
-    conn.commit()
-    conn.close()
+    timestamp = (_now() - timedelta(minutes=2)).isoformat()
+    MarketStore(db).upsert_bars(
+        [Bar("GOLD", "1m", timestamp, 4030, 4031, 4029, 4030.5, 1, "fixture", [])]
+    )
     _healthy_inputs(output)
     _write_latest(
         output / "data_source_preflight" / "current.json",
@@ -223,7 +223,7 @@ def test_system_state_uses_fresh_local_market_db_when_preflight_artifact_is_stal
 
     data = next(check for check in payload["checks"] if check["id"] == "data_freshness")
     assert data["status"] == "RUN"
-    assert data["evidence"]["source"] == "local_market_db"
+    assert data["evidence"]["source"] == "market_data_port"
 
 
 def test_system_state_focus_profile_omits_daily_review_check(tmp_path: Path) -> None:

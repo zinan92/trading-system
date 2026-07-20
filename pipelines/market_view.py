@@ -7,7 +7,7 @@ from pathlib import Path
 from services.run_date import utc_run_date
 
 from services.config_loader import ROOT, load_pipeline_config
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 from services.market_view import MarketViewStore
 
 
@@ -65,9 +65,7 @@ def main() -> None:
 
 
 def _latest_gold_reference_price(db_path: Path) -> float | None:
-    if not db_path.exists():
-        return None
-    store = MarketStore(db_path)
+    store = market_data_repository(db_path)
     latest = store.load_latest_quote("GOLD") or store.load_latest_bar("GOLD", "1m") or store.load_latest_bar("GOLD", "5m")
     if not latest:
         return None

@@ -3,13 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.dualtrack_config import base_rung_notional, dualtrack_config
+from services.dualtrack_feishu import MACHINE_STRATEGY_ID, MACHINE_STRATEGY_NAME
+from services.dualtrack_scoring import _trades_from_fills
+from services.market_data_access import market_data_repository
 
 
 PM_REPORT_KINDS = {
@@ -57,7 +60,10 @@ class PMPortfolioReportBuilder:
         market = self._market_move()
         window_end = self._parse_time(market.end_time) if market else datetime.now(timezone.utc)
         window_start = window_end - timedelta(hours=REPORT_WINDOW_HOURS)
-        strategy = self._strategy_window(active_strategy_id, run_date, window_start)
+        if active_strategy_id == MACHINE_STRATEGY_ID:
+            strategy = self._dualtrack_machine_window(run_date, window_start, window_end, market.end_price if market else None)
+        else:
+            strategy = self._strategy_window(active_strategy_id, run_date, window_start)
         view_note = self._market_view_note(run_date)
 
         lines = [
@@ -95,64 +101,30 @@ class PMPortfolioReportBuilder:
         return report_path
 
     def _market_move(self) -> MarketMove | None:
-        if not self.market_db.exists():
-            return None
-        with sqlite3.connect(self.market_db) as con:
-            for timeframe in ("5m", "1m"):
-                latest = con.execute(
-                    """
-                    SELECT timestamp, close, provider
-                    FROM bars
-                    WHERE symbol='GOLD' AND timeframe=?
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                    """,
-                    (timeframe,),
-                ).fetchone()
-                if not latest:
-                    continue
-                end_time, end_price, provider = latest
-                cutoff = self._parse_time(end_time) - timedelta(hours=REPORT_WINDOW_HOURS)
-                start = con.execute(
-                    """
-                    SELECT timestamp, close
-                    FROM bars
-                    WHERE symbol='GOLD' AND timeframe=? AND timestamp <= ?
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                    """,
-                    (timeframe, cutoff.isoformat().replace("+00:00", "+00:00")),
-                ).fetchone()
-                if not start:
-                    start = con.execute(
-                        """
-                        SELECT timestamp, close
-                        FROM bars
-                        WHERE symbol='GOLD' AND timeframe=?
-                        ORDER BY timestamp ASC
-                        LIMIT 1
-                        """,
-                        (timeframe,),
-                    ).fetchone()
-                high_low = con.execute(
-                    """
-                    SELECT MAX(high), MIN(low)
-                    FROM bars
-                    WHERE symbol='GOLD' AND timeframe=? AND timestamp >= ? AND timestamp <= ?
-                    """,
-                    (timeframe, start[0], end_time),
-                ).fetchone()
-                high, low = high_low or (None, None)
-                return MarketMove(
-                    timeframe=timeframe,
-                    provider=str(provider),
-                    start_time=str(start[0]),
-                    end_time=str(end_time),
-                    start_price=float(start[1]),
-                    end_price=float(end_price),
-                    high=float(high if high is not None else max(float(start[1]), float(end_price))),
-                    low=float(low if low is not None else min(float(start[1]), float(end_price))),
-                )
+        store = market_data_repository(self.market_db)
+        for timeframe in ("5m", "1m"):
+            latest = store.load_latest_bar("GOLD", timeframe)
+            if not latest:
+                continue
+            end_time = str(latest["timestamp"])
+            end_price = float(latest["close"])
+            cutoff = self._parse_time(end_time) - timedelta(hours=REPORT_WINDOW_HOURS)
+            rows = store.load_bars_between("GOLD", timeframe, cutoff.isoformat(), end_time)
+            if not rows:
+                rows = store.load_bars("GOLD", timeframe, 1)
+            if not rows:
+                continue
+            start = rows[0]
+            return MarketMove(
+                timeframe=timeframe,
+                provider=str(latest.get("provider", "")),
+                start_time=str(start.timestamp),
+                end_time=end_time,
+                start_price=float(start.close),
+                end_price=end_price,
+                high=max(float(row.high) for row in rows),
+                low=min(float(row.low) for row in rows),
+            )
         return None
 
     def _strategy_window(self, strategy_id: str, run_date: str, window_start: datetime) -> dict[str, Any]:
@@ -168,6 +140,7 @@ class PMPortfolioReportBuilder:
         realized = sum(self._num(item.get("realized_pnl")) for item in closed)
         open_unrealized = sum(self._num(item.get("unrealized_pnl")) for item in open_trades)
         return {
+            "source": "legacy_strategy",
             "summary": summary,
             "closed": closed,
             "open_trades": open_trades,
@@ -185,8 +158,62 @@ class PMPortfolioReportBuilder:
             "blocked_demo_count": sum(1 for item in demo_requests if str(item.get("status", "")).lower() == "blocked"),
         }
 
+    def _dualtrack_machine_window(self, run_date: str, window_start: datetime, window_end: datetime, latest_price: float | None) -> dict[str, Any]:
+        fills_by_cycle = self._dualtrack_fills_by_cycle()
+        window_fills: list[dict[str, Any]] = []
+        for cycle_id, fills in fills_by_cycle.items():
+            for fill in fills:
+                if self._is_between(fill.get("ts"), window_start, window_end):
+                    window_fills.append({**fill, "cycle_id": cycle_id})
+        entry_fills = [fill for fill in window_fills if fill.get("event") == "entry"]
+        exit_fills = [fill for fill in window_fills if str(fill.get("event") or "") in {"target", "stop", "flatten", "exit"}]
+        open_trades = self._dualtrack_open_trades(fills_by_cycle, latest_price=latest_price)
+        cycle_states = self._dualtrack_cycle_states()
+        latest_cycle = cycle_states[-1] if cycle_states else {}
+        daily = self._latest_path(f"dualtrack/ledger/daily/{run_date}.json")
+        cfg = dualtrack_config()
+        grid = cfg.get("grid", {}) if isinstance(cfg.get("grid"), dict) else {}
+        max_rungs = int(grid.get("max_rungs") or 10)
+        return {
+            "source": "dualtrack_machine",
+            "summary": {
+                "closed_all_count": sum(1 for fills in fills_by_cycle.values() for fill in fills if str(fill.get("event") or "") in {"target", "stop", "flatten", "exit"}),
+                "realized_pnl_all": self._dualtrack_total_machine_pnl(),
+                "profit_factor": "n/a",
+            },
+            "closed": exit_fills,
+            "open_trades": open_trades,
+            "paper_orders": entry_fills,
+            "demo_requests": [],
+            "tickets": [],
+            "cycle": latest_cycle,
+            "realized_window": round(sum(self._num(fill.get("realized_pnl")) for fill in window_fills), 8),
+            "open_unrealized": round(sum(self._num(trade.get("unrealized_pnl")) for trade in open_trades), 8),
+            "tp_count": sum(1 for fill in exit_fills if str(fill.get("event") or "") == "target"),
+            "sl_count": sum(1 for fill in exit_fills if str(fill.get("event") or "") == "stop"),
+            "other_exit_count": sum(1 for fill in exit_fills if str(fill.get("event") or "") not in {"target", "stop"}),
+            "long_count": sum(1 for fill in entry_fills if str(fill.get("side") or "") == "buy"),
+            "short_count": sum(1 for fill in entry_fills if str(fill.get("side") or "") == "sell"),
+            "blocked_demo_count": 0,
+            "entry_count": len(entry_fills),
+            "exit_count": len(exit_fills),
+            "cycle_count": len({fill.get("cycle_id") for fill in window_fills if fill.get("cycle_id")}),
+            "daily_machine_pnl": (((daily.get("tracks") or {}).get("machine") or {}).get("realized_pnl")),
+            "base_rung_notional": base_rung_notional(cfg, max_rungs=max_rungs),
+            "trend_gate_armed": bool(latest_cycle.get("trend_gate_armed", False)),
+            "layers": list(latest_cycle.get("layers") or []),
+        }
+
     def _headline(self, strategy_id: str, market: MarketMove | None, strategy: dict[str, Any]) -> str:
         market_text = "黄金行情缺少可读数据" if not market else f"过去 {REPORT_WINDOW_HOURS} 小时黄金 {self._signed_pct(market.pct)}（{self._signed_number(market.points)} 点）"
+        if strategy.get("source") == "dualtrack_machine":
+            if not strategy["entry_count"] and not strategy["exit_count"]:
+                return f"{market_text}；{MACHINE_STRATEGY_NAME}没有开仓/平仓，当前重点是看机器轨是否有有效网格触发。"
+            return (
+                f"{market_text}；{MACHINE_STRATEGY_NAME}开仓 {strategy['entry_count']} 笔，"
+                f"平仓 {strategy['exit_count']} 笔，止盈 {strategy['tp_count']}、止损 {strategy['sl_count']}，"
+                f"过去窗口已实现 PnL {self._signed_money(strategy['realized_window'])}。"
+            )
         orders = len(strategy["paper_orders"]) + len(strategy["demo_requests"])
         closed = len(strategy["closed"])
         realized = strategy["realized_window"]
@@ -209,6 +236,17 @@ class PMPortfolioReportBuilder:
         ]
 
     def _strategy_lines(self, strategy_id: str, strategy: dict[str, Any]) -> list[str]:
+        if strategy.get("source") == "dualtrack_machine":
+            lines = [
+                f"- 当前只复盘：{MACHINE_STRATEGY_NAME}（机器轨 / 网格），不再复盘旧策略组合。",
+                f"- 过去 {REPORT_WINDOW_HOURS} 小时：开仓 {strategy['entry_count']}，平仓 {strategy['exit_count']}，止盈 {strategy['tp_count']}，止损 {strategy['sl_count']}，其他 {strategy['other_exit_count']}。",
+                f"- 窗口已实现 PnL {self._signed_money(strategy['realized_window'])}；当前 open {len(strategy['open_trades'])}，估算未实现 PnL {self._signed_money(strategy['open_unrealized'])}。",
+                f"- 方向：做多开仓 {strategy['long_count']}，做空开仓 {strategy['short_count']}。",
+                f"- 仓位口径：基础网格每层名义约 {self._signed_money(strategy['base_rung_notional']).replace('+', '')} USD；趋势腿 {'开启' if strategy['trend_gate_armed'] else '关闭'}。",
+            ]
+            if strategy["layers"]:
+                lines.append(f"- 当前机器层状态：{'；'.join(str(item) for item in strategy['layers'])}。")
+            return lines
         summary = strategy.get("summary", {})
         lines = [
             f"- 当前只复盘 active 策略：`{strategy_id}`。",
@@ -222,6 +260,15 @@ class PMPortfolioReportBuilder:
         return lines
 
     def _why_lines(self, market: MarketMove | None, strategy: dict[str, Any]) -> list[str]:
+        if strategy.get("source") == "dualtrack_machine":
+            if not strategy["entry_count"] and not strategy["exit_count"]:
+                reason = self._cycle_reason(strategy.get("cycle", {}))
+                return [f"- 机器轨没有交易的主要原因：{reason}"]
+            if strategy["sl_count"] and strategy["realized_window"] < 0:
+                return ["- 本窗口亏损主要来自机器轨触发止损；先检查失效位是否过近，以及网格重入是否过密。"]
+            if strategy["realized_window"] > 0:
+                return ["- 本窗口盈利来自网格触价后成功回到止盈位；重点看已实现 PnL，不用浮盈提前下结论。"]
+            return ["- 本窗口交易已经发生，但已实现 PnL 接近 0；继续看下一次止盈/止损闭环。"]
         if strategy["blocked_demo_count"]:
             reason = self._first_demo_block_reason(strategy["demo_requests"])
             return [
@@ -240,6 +287,19 @@ class PMPortfolioReportBuilder:
         return ["- 过去窗口没有已实现盈亏，先看 open 单是否会到 TP/SL，不要用浮盈浮亏下结论。"]
 
     def _next_focus_lines(self, strategy_id: str, strategy: dict[str, Any], view_note: str) -> list[str]:
+        if strategy.get("source") == "dualtrack_machine":
+            lines = []
+            if view_note:
+                lines.append(f"- 人工观点：{view_note}")
+            plan = self._current_ai_plan()
+            if plan:
+                levels = "、".join(self._fmt_number(item) for item in plan.get("key_levels", [])[:5])
+                lines.append(f"- 下一周期机器方向：{self._direction_zh(plan.get('direction'))}；关键位 {levels or '缺失'}。")
+            if strategy["open_trades"]:
+                lines.append("- 下一步只看 open 交易最终是否按止盈/止损闭环；不要用中途浮盈浮亏评价策略。")
+            else:
+                lines.append("- 下一步看机器轨网格是否在关键位附近触发新一层；没有触发就接受空仓。")
+            return lines[:3]
         lines = []
         if view_note:
             lines.append(f"- 人工观点：{view_note}")
@@ -260,11 +320,17 @@ class PMPortfolioReportBuilder:
         return f"当前 market view 是 {view.get('run_date')}，不是今天观点。"
 
     def _active_strategy_id(self) -> str:
+        if self._dualtrack_focus_enabled():
+            return MACHINE_STRATEGY_ID
         demo = self.config.get("demo_trading", {}) or {}
         if demo.get("active_strategy_id"):
             return str(demo["active_strategy_id"])
         samples = self._latest_path("daily_trade_samples/current.json")
         return str(samples.get("active_strategy_id") or "unknown")
+
+    def _dualtrack_focus_enabled(self) -> bool:
+        schedule = self.config.get("schedule") if isinstance(self.config.get("schedule"), dict) else {}
+        return str(schedule.get("profile") or "") == "dualtrack_focus" and (self.output_root / "dualtrack").exists()
 
     def _latest(self, name: str, run_date: str) -> dict[str, Any]:
         return self._latest_path(f"{name}/{run_date}.json") or self._latest_path(f"{name}/current.json")
@@ -285,6 +351,18 @@ class PMPortfolioReportBuilder:
         return []
 
     def _evidence_paths(self, strategy_id: str) -> list[str]:
+        if strategy_id == MACHINE_STRATEGY_ID:
+            rels = [
+                "dualtrack/scoreboard.json",
+                "dualtrack/machine_briefs/current.json",
+                "dualtrack_trade_notifications/current.json",
+                "market_views/current.json",
+            ]
+            paths = [self.market_db]
+            paths.extend(self.output_root / rel for rel in rels if (self.output_root / rel).exists())
+            paths.extend(sorted((self.output_root / "dualtrack" / "fills").glob("*_machine.json"))[-4:])
+            paths.extend(sorted((self.output_root / "dualtrack" / "attribution").glob("*.json"))[-4:])
+            return [str(path.resolve()) for path in paths if path.exists()]
         rels = [
             "health/current.json",
             "market_views/current.json",
@@ -319,6 +397,9 @@ class PMPortfolioReportBuilder:
         return "demo request blocked"
 
     def _cycle_reason(self, cycle: dict[str, Any]) -> str:
+        layers = cycle.get("layers")
+        if isinstance(layers, list) and layers:
+            return "；".join(str(item) for item in layers)
         reasons = cycle.get("no_ticket_reasons", [])
         if isinstance(reasons, list) and reasons:
             first = reasons[-1] if isinstance(reasons[-1], dict) else {}
@@ -341,6 +422,12 @@ class PMPortfolioReportBuilder:
         if not value:
             return False
         return self._parse_time(value) >= cutoff
+
+    def _is_between(self, value: Any, start: datetime, end: datetime) -> bool:
+        if not value:
+            return False
+        parsed = self._parse_time(value)
+        return start <= parsed <= end
 
     def _is_target_exit(self, reason: Any) -> bool:
         return str(reason or "").lower() in {"target", "take_profit", "tp"}
@@ -389,6 +476,65 @@ class PMPortfolioReportBuilder:
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    def _dualtrack_fills_by_cycle(self) -> dict[str, list[dict[str, Any]]]:
+        root = self.output_root / "dualtrack" / "fills"
+        rows: dict[str, list[dict[str, Any]]] = {}
+        if not root.exists():
+            return rows
+        for path in sorted(root.glob("*_machine.json")):
+            cycle_id = path.stem.removesuffix("_machine")
+            rows[cycle_id] = [item for item in self._rows(str(path.relative_to(self.output_root))) if isinstance(item, dict)]
+        return rows
+
+    def _dualtrack_open_trades(self, fills_by_cycle: dict[str, list[dict[str, Any]]], *, latest_price: float | None) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for cycle_id, fills in fills_by_cycle.items():
+            for trade in _trades_from_fills(fills, track="machine"):
+                if str(trade.get("status") or "") != "open":
+                    continue
+                if latest_price is not None:
+                    direction = -1 if str(trade.get("side")) == "short" else 1
+                    units = self._num(trade.get("remaining_units", trade.get("units")))
+                    entry = self._num(trade.get("entry_price"))
+                    trade["unrealized_pnl"] = round((latest_price - entry) * units * direction, 8)
+                rows.append({**trade, "cycle_id": cycle_id})
+        return rows
+
+    def _dualtrack_cycle_states(self) -> list[dict[str, Any]]:
+        root = self.output_root / "dualtrack" / "cycles"
+        if not root.exists():
+            return []
+        rows = []
+        for path in sorted(root.glob("*.json")):
+            item = self._latest_path(str(path.relative_to(self.output_root)))
+            if item:
+                rows.append(item)
+        return rows
+
+    def _dualtrack_total_machine_pnl(self) -> float:
+        total = 0.0
+        root = self.output_root / "dualtrack" / "ledger" / "daily"
+        if not root.exists():
+            return 0.0
+        for path in root.glob("*.json"):
+            row = self._latest_path(str(path.relative_to(self.output_root)))
+            total += self._num((((row.get("tracks") or {}).get("machine") or {}).get("realized_pnl")))
+        return round(total, 8)
+
+    def _current_ai_plan(self) -> dict[str, Any]:
+        root = self.output_root / "dualtrack" / "plans"
+        if not root.exists():
+            return {}
+        plans = []
+        for path in sorted(root.glob("*_ai.json")):
+            row = self._latest_path(str(path.relative_to(self.output_root)))
+            if row:
+                plans.append(row)
+        return plans[-1] if plans else {}
+
+    def _direction_zh(self, value: Any) -> str:
+        return {"long": "只做多", "short": "只做空", "flat": "不主动开仓"}.get(str(value or ""), str(value or "缺失"))
 
 
 def report_title(run_date: str, kind: str) -> str:

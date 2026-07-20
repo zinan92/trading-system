@@ -113,6 +113,56 @@ def test_acceptance_6_ledger_arithmetic_sums_fills_cycles_daily_and_weekly(tmp_p
     assert weekly["total_pnl"] == daily["total_pnl"]
 
 
+def test_recovery_replay_is_preserved_but_excluded_from_paper_pnl(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    store = DualTrackPlanStore(output, config=TEST_CONFIG)
+    machine = DualTrackMachineRunner(output, config=TEST_CONFIG)
+    scorer = DualTrackScorer(output, config=TEST_CONFIG)
+    cycle_id = "2026-07-05_DAY"
+    bars = _bars(datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc), [4000.0, 3998.0, 4012.0, 4020.0])
+    store.save_ai_plan(
+        {
+            **_plan(cycle_id, "long"),
+            "author": "ai",
+            "bracket": {"entry": 3998.0, "take_profit": 4010.0, "stop_loss": 3990.0, "notional": 1000.0},
+        },
+        now="2026-07-05T00:50:00+00:00",
+    )
+    machine.run_effective_plan(
+        cycle_id,
+        bars,
+        prev_range=80.0,
+        as_of="2026-07-05T13:00:00+00:00",
+        execution_provenance={
+            "origin": "recovery_replay",
+            "classified_at": "2026-07-06T00:00:00+00:00",
+            "live_observed_until": None,
+            "reason": "runner_execution_evidence_missing",
+        },
+    )
+
+    attr = scorer.close_cycle(cycle_id, bars)
+
+    raw_fills = load_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json")
+    recovery_trades = load_json(output / "dualtrack" / "recovery_replay" / "trades" / f"{cycle_id}_machine.json")
+    daily = load_json(output / "dualtrack" / "ledger" / "daily" / "2026-07-05.json")[0]
+    assert raw_fills and all(fill["execution_origin"] == "recovery_replay" for fill in raw_fills)
+    assert recovery_trades
+    assert attr["fills"]["machine"] == []
+    assert attr["tracks"]["machine"]["realized_pnl"] == 0.0
+    assert attr["recovery_replay"]["eligible_for_paper_pnl"] is False
+    assert attr["recovery_replay"]["fill_count"] == len(raw_fills)
+    assert daily["cycles"][cycle_id]["machine"] == 0.0
+    assert daily["cycles"][cycle_id]["recovery_replay"]["machine"] == pytest.approx(
+        sum(fill["realized_pnl"] for fill in raw_fills)
+    )
+    assert daily["cycles"][cycle_id]["recovery_replay"]["eligible_for_recorded_pnl"] is True
+    assert daily["tracks"]["machine"]["live_observed_realized_pnl"] == 0.0
+    assert daily["tracks"]["machine"]["realized_pnl"] == pytest.approx(
+        sum(fill["realized_pnl"] for fill in raw_fills)
+    )
+
+
 def test_12h_cycle_closes_human_manual_trade_and_ai_bracket_pnl(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     store = DualTrackPlanStore(output, config=TEST_CONFIG)

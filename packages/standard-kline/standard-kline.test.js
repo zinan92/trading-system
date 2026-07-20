@@ -149,6 +149,8 @@ test("chart wrapper surfaces TradingView-style OHLC and scale controls", () => {
 
   assert.match(source, /data-ohlc/);
   assert.match(source, /O \$\{formatPrice\(candle\.open,2\)\} H \$\{formatPrice\(candle\.high,2\)\} L \$\{formatPrice\(candle\.low,2\)\} C \$\{formatPrice\(candle\.close,2\)\}/);
+  assert.match(source, /\.standard-kline-crosshair:empty\{display:none\}/);
+  assert.match(source, /@container \(max-width:720px\)\{\.standard-kline-source\{display:none\}\}/);
   assert.match(source, /data-action="auto-fit"/);
   assert.doesNotMatch(source, /data-action="toggle-log"/);
   assert.doesNotMatch(source, /toggleLogScale/);

@@ -11,7 +11,7 @@ from services.data_source_preflight import DataSourcePreflight
 from services.data_archive_manifest import DataArchiveManifest
 from services.dualtrack_cycle_heartbeat import DualTrackCycleHeartbeat
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 from services.mock_runtime import MockTradingRuntime
 from services.mock_trading_uat import MockTradingUAT
 from services.risk_monitor import RiskMonitor
@@ -153,15 +153,13 @@ class CompletionAudit:
         return self._requirement("market_data_source", "fail", "GOLD 5m 行情源不可用", latest)
 
     def _local_storage(self) -> dict:
-        if not self.market_db.exists():
-            return self._requirement("local_storage", "fail", f"本地行情数据库不存在: {self.market_db}", {})
-        coverage = MarketStore(self.market_db).coverage()
+        coverage = market_data_repository(self.market_db).coverage()
         gold_rows = [item for item in coverage if item["symbol"] == "GOLD" and item["timeframe"] == "5m"]
         total = sum(item["rows"] for item in gold_rows)
         non_seed = sum(item["rows"] for item in gold_rows if item["provider"] != "local_synthetic_seed")
         if non_seed < 200:
-            return self._requirement("local_storage", "fail", "本地 GOLD 5m 非 seed 数据不足", {"path": str(self.market_db), "total_rows": total, "non_seed_rows": non_seed, "coverage": gold_rows})
-        return self._requirement("local_storage", "pass", "本地 SQLite 已保存足够 GOLD 5m 行情", {"path": str(self.market_db), "total_rows": total, "non_seed_rows": non_seed, "coverage": gold_rows})
+            return self._requirement("local_storage", "fail", "datafeed 的 GOLD 5m 非 seed 数据不足", {"backend": "datafeed", "total_rows": total, "non_seed_rows": non_seed, "coverage": gold_rows})
+        return self._requirement("local_storage", "pass", "datafeed 已保存足够 GOLD 5m 行情", {"backend": "datafeed", "total_rows": total, "non_seed_rows": non_seed, "coverage": gold_rows})
 
     def _data_archive(self, run_date: str) -> dict:
         archive = DataArchiveManifest(self.output_root, self.market_db).run(run_date)

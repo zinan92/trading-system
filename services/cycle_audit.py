@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pipelines.dashboard_server import build_system_status_contract
+from services.contracts.system_status import build_system_status_contract
 from services.dashboard_state import DashboardState
 from services.journal_store import load_json, write_json
 

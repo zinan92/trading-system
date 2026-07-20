@@ -10,6 +10,8 @@ from schemas.market_data import Bar
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
 from services.market_store import MarketStore
+from services.market_data_access import uses_independent_datafeed
+from services.market_data_refresh import refresh_market_data, refresh_market_data_range
 
 
 class TigerFuturesFeedClient:
@@ -423,6 +425,8 @@ def run_tiger_futures_feed_import(
     pipeline_config = load_pipeline_config()
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / pipeline_config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / pipeline_config.get("local_market_db", "data/market_data.db"))))
+    if quote_client is None and uses_independent_datafeed(market_db):
+        return refresh_market_data(run_date=run_date, symbol="MGCmain", timeframe="1m", output_kind="tiger_futures_feed", output_root=output_root)
     feed_config = dict(pipeline_config.get("tiger_futures_feed", {}))
     if config:
         feed_config.update(config)
@@ -448,6 +452,8 @@ def run_tiger_futures_backfill(
     pipeline_config = load_pipeline_config()
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / pipeline_config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / pipeline_config.get("local_market_db", "data/market_data.db"))))
+    if quote_client is None and uses_independent_datafeed(market_db):
+        return refresh_market_data_range(run_date=start[:10], symbol="MGCmain", timeframe="1m", output_kind="tiger_futures_backfill", start=start, end=end, chunk_days=30, output_root=output_root)
     feed_config = dict(pipeline_config.get("tiger_futures_feed", {}))
     if config:
         feed_config.update(config)

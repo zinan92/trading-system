@@ -13,12 +13,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 from services.run_date import utc_run_date
 from services.strategy_backtester import BacktestConfig, StrategyBacktester
 from services.strategy_registry import StrategyRegistry
@@ -93,7 +93,7 @@ def backtest_all(
     output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
     market_db = market_db or Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
     registry = registry or StrategyRegistry()
-    store = MarketStore(market_db)
+    store = market_data_repository(market_db)
 
     results = []
     for strategy in registry.enabled():

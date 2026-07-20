@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date
 from services.run_date import utc_run_date
 
 from pipelines.daily import run_daily_pipeline
@@ -18,7 +17,7 @@ from services.journal_store import load_json, write_json
 from services.live_submission_safety import LiveSubmissionSafetySmoke
 from services.live_readiness import LiveReadiness
 from services.mock_runtime import MockTradingRuntime
-from services.oanda_feed_client import run_oanda_feed_import
+from services.datafeed_source_jobs import run_oanda_feed_import
 from services.official_feed_receipt import OfficialFeedReceipt
 from services.system_doctor import SystemDoctor
 

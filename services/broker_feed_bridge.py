@@ -10,6 +10,7 @@ from services.broker_feed_doctor import BrokerFeedDoctor
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.market_store import MarketStore
+from services.market_data_access import uses_independent_datafeed
 
 
 class BrokerFeedBridge:
@@ -25,6 +26,17 @@ class BrokerFeedBridge:
         self.pattern = str(self.config.get("pattern", "*.csv"))
 
     def import_pending(self, run_date: str) -> dict:
+        if uses_independent_datafeed(self.market_db):
+            summary = {
+                "run_date": run_date,
+                "status": "skipped",
+                "reason": "CSV market-data imports must be installed as datafeed adapters",
+                "market_data_backend": "datafeed",
+                "new_files": 0,
+                "imported_rows": 0,
+            }
+            write_json(self.output_root / "broker_feed_imports" / "current.json", [summary])
+            return summary
         self.input_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.output_root / "broker_feed_imports" / f"{run_date}.json"
         existing = load_json(log_path)

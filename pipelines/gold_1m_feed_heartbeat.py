@@ -4,8 +4,17 @@ import argparse
 import json
 from typing import Sequence
 
-from services.binance_futures_feed import run_binance_usdm_1m_feed_import
+from services.market_data_refresh import refresh_market_data
 from services.run_date import utc_run_date
+
+
+def run_binance_usdm_1m_feed_import(run_date: str) -> dict:
+    return refresh_market_data(
+        run_date=run_date,
+        symbol="GOLD",
+        timeframe="1m",
+        output_kind="binance_usdm_1m_feed",
+    )
 
 
 def run(run_date: str) -> dict:

@@ -5,10 +5,24 @@
     "day_start": 1,
     "night_start": 13
   },
+  "cycle_cadence": {
+    "hours": 12,
+    "day_start_hour_cst": 9,
+    "night_start_hour_cst": 21,
+    "accounting_day_hours": 24,
+    "restored_at_cst": "2026-07-14T21:00:00+08:00"
+  },
   "market_data": {
     "symbol": "GOLD",
     "timeframe": "1m",
-    "provider": ""
+    "provider": "binance_usdm_futures"
+  },
+  "execution_engine": {
+    "authoritative": "nautilus_paper",
+    "shadow": "nautilus_paper",
+    "shadow_runtime_path": "/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python",
+    "real_money_eligible": false,
+    "switch_requires_attended_approval": true
   },
   "market_session": {
     "enabled": false,
@@ -23,6 +37,26 @@
     "require_success_before_close": true
   },
   "plan_lock_deadline_min_before_cycle": 0,
+  "machine_planner": {
+    "command": "/opt/homebrew/bin/codex",
+    "model": "gpt-5.4",
+    "timeout_seconds": 240,
+    "newsletter_root": "/Users/wendy/park-io/007_finance daily newsletter",
+    "volatility_lookback_cycles": 10,
+    "minimum_active_cycle_samples": 3,
+    "minimum_sample_coverage_pct": 0.8,
+    "minimum_range_multiplier": 1.0,
+    "exclude_weekends_from_range_reference": true,
+    "range_reassessment": {
+      "enabled": true,
+      "confirmation_timeframe": "1m",
+      "confirm_closes": 3,
+      "cooldown_minutes": 60,
+      "failure_retry_minutes": 5,
+      "max_replans_per_cycle": 2,
+      "minimum_remaining_minutes": 30
+    }
+  },
   "grid": {
     "spacing_bp": 20,
     "range_k": 1.0,
@@ -31,14 +65,80 @@
     "re_arm_max": 1,
     "trend_leg_budget_pct": 20
   },
+  "strategy_grid": {
+    "range_timeframe": "1d",
+    "range_atr_period": 14,
+    "spacing_timeframe": "4h",
+    "spacing_atr_period": 14,
+    "execution_timeframe": "1m",
+    "min_grid_count": 24,
+    "max_grid_count": 80,
+    "cost_spacing_multiple": 5,
+    "default_mode": "arithmetic",
+    "capital_utilization_cap": 1,
+    "max_plan_loss_pct": 0.1,
+    "styles": {
+      "steady": {
+        "range_atr_multiple": 2,
+        "spacing_atr_multiple": 0.25
+      },
+      "aggressive": {
+        "range_atr_multiple": 1,
+        "spacing_atr_multiple": 0.125
+      }
+    }
+  },
   "cost_per_side_bp": 0.5,
+  "execution_contract": {
+    "schema_version": "dualtrack-execution-contract-v1",
+    "execution_instrument_id": "XAUUSDT",
+    "price_precision": 2,
+    "price_increment": "0.01",
+    "quantity_precision": 3,
+    "quantity_increment": "0.001"
+  },
+  "paper_fee_model": {
+    "mode": "account_observed",
+    "maker_fee_rate": "0",
+    "taker_fee_rate": "0.000400",
+    "source": "authenticated_account_commissionRate",
+    "environment": "demo",
+    "observed_at": "2026-07-10T10:53:16+00:00",
+    "real_money_eligible": false
+  },
+  "execution_shadow": {
+    "nautilus": {
+      "instrument_endpoint": "http://127.0.0.1:8100/api/instruments/commodity/XAUUSDT",
+      "instrument_source": "binance_usdm_futures",
+      "source_symbol": "GOLD",
+      "execution_instrument_id": "XAUUSDT",
+      "fee_model": {
+        "mode": "paper_assumption",
+        "maker_fee_rate": "0.00005",
+        "taker_fee_rate": "0.00005",
+        "source": "dualtrack.cost_per_side_bp",
+        "real_money_eligible": false
+      }
+    }
+  },
   "scoreboard": {
-    "gate_threshold": 0.60,
+    "gate_threshold": 0.6,
     "window_cycles": 30
+  },
+  "review": {
+    "directional_efficiency_neutral_threshold": 0.35,
+    "max_changes_per_cycle": 1,
+    "minimum_promotion_cycles": 10,
+    "minimum_promotion_trades": 30,
+    "preferred_promotion_trades": 100,
+    "auto_promote": false
   },
   "census": {
     "reversal_bp": 10,
     "min_run_pct": 0.3
   },
-  "weekly_target_usd": [1000, 1500]
+  "weekly_target_usd": [
+    1000,
+    1500
+  ]
 }

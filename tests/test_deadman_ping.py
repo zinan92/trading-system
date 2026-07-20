@@ -159,6 +159,34 @@ def test_deadman_ping_sends_healthchecks_fail_when_always_on_is_blocked(tmp_path
     assert calls and calls[0].startswith("https://hc-ping.example/default/fail?")
 
 
+def test_deadman_ping_sends_healthchecks_fail_when_loaded_schedule_job_last_run_failed(tmp_path: Path):
+    root, db, run_date = _healthy_root(tmp_path)
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        return _Response()
+
+    result = ExternalDeadmanPing(
+        root,
+        db,
+        url="https://hc-ping.example/default",
+        opener=opener,
+        schedule_status_provider=lambda _: {
+            "status": "runtime_failed",
+            "runtime_failed_jobs": ["com.wendy.trading-orchestrator.dualtrack-live-tick"],
+            "healthy_current_count": 4,
+            "required_count": 5,
+        },
+    ).run(run_date)
+
+    assert result["status"] == "fail_sent"
+    assert result["schedule_runtime"]["status"] == "runtime_failed"
+    assert result["ping"]["failure_signal"] is True
+    assert calls and calls[0].startswith("https://hc-ping.example/default/fail?")
+    assert "schedule_status=runtime_failed" in calls[0]
+
+
 def test_deadman_ping_treats_stale_reconciliation_as_possible_position(tmp_path: Path):
     root, db, run_date = _healthy_root(tmp_path)
     write_json(root / "live_reconciliation" / "current.json", [{

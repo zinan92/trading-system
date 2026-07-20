@@ -9,8 +9,7 @@ from services.config_loader import ROOT, load_pipeline_config
 from services.data_source_lineage import DataSourceLineage
 from services.data_source_preflight import DataSourcePreflight
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
-from services.oanda_feed_client import OandaFeedClient
+from services.datafeed_market_client import DatafeedMarketClient
 
 
 class OfficialFeedReceipt:
@@ -172,11 +171,19 @@ class OfficialFeedReceipt:
         rows = load_json(self.output_root / "oanda_feed" / "current.json")
         if rows:
             return rows[-1]
-        preflight = OandaFeedClient(MarketStore(self.market_db)).preflight()
+        config = load_pipeline_config().get("datafeed", {}) or {}
+        health = DatafeedMarketClient(
+            base_url=str(config.get("base_url") or "http://127.0.0.1:8100")
+        ).health()
+        source = ((health.get("providers") or {}).get("sources") or {}).get("oanda_v20", {})
+        ready = bool(source.get("available"))
         return {
-            **preflight,
+            "provider": "oanda_v20",
+            "ready": ready,
+            "missing_env": [] if ready else ["configure_oanda_v20_in_datafeed"],
+            "instrument": "XAU_USD",
             "status": "skipped",
-            "message": "OANDA import has not run; credentials/preflight only.",
+            "message": "OANDA import has not run; datafeed adapter capability only.",
             "imported_rows": 0,
         }
 

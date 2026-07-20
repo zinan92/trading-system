@@ -104,6 +104,7 @@ def test_d6_1_open_cycle_replay_data_refuses_machine_fills(tmp_path: Path) -> No
     bars = _bars()
     store = DualTrackPlanStore(output, config=TEST_CONFIG)
     store.save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    store.save_ai_plan(_plan(cycle_id) | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
     DualTrackMachineRunner(output, config=TEST_CONFIG).run_effective_plan(
         cycle_id,
         bars,
@@ -124,6 +125,7 @@ def test_closed_cycle_attribution_contains_both_track_fills_for_replay(tmp_path:
     bars = _bars()
     store = DualTrackPlanStore(output, config=TEST_CONFIG)
     store.save_human_plan(_plan(cycle_id), now="2026-07-05T00:59:00+00:00")
+    store.save_ai_plan(_plan(cycle_id) | {"author": "ai"}, now="2026-07-05T00:58:00+00:00")
     DualTrackMachineRunner(output, config=TEST_CONFIG).run_effective_plan(
         cycle_id,
         bars,

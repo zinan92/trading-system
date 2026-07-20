@@ -71,7 +71,7 @@ class ConnectorCatalog:
             "environments": sorted({str((profiles.get(name) or {}).get("environment") or "") for name in broker_profiles if (profiles.get(name) or {}).get("environment")}),
             "roles": ["price_feed", "broker_order"],
             "ports": {
-                "price_feed": "services.binance_futures_feed.BinanceFuturesFeedClient",
+                "price_feed": "datafeed:binance_usdm_futures",
                 "broker_order": "services.binance_demo_broker_adapter.BinanceDemoBrokerAdapter",
             },
             "capabilities": [
@@ -112,7 +112,7 @@ class ConnectorCatalog:
             "environments": [str(profile.get("environment") or "paper")],
             "roles": ["price_feed", "broker_order"],
             "ports": {
-                "price_feed": "services.tiger_futures_feed.TigerFuturesFeed",
+                "price_feed": "datafeed:tiger_openapi_comex",
                 "broker_order": "services.tiger_openapi_broker_adapter.TigerOpenApiPaperBrokerAdapter",
             },
             "capabilities": [

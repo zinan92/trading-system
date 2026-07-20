@@ -304,16 +304,18 @@
     const style = root.document.createElement("style");
     style.id = "standard-kline-styles";
     style.textContent = `
-.standard-kline-root{position:relative;width:100%;height:100%;min-height:320px;display:grid;grid-template-rows:auto minmax(0,1fr);background:transparent;overflow:hidden}
+.standard-kline-root{position:relative;width:100%;height:100%;min-height:320px;display:grid;grid-template-rows:auto minmax(0,1fr);background:transparent;overflow:hidden;container-type:inline-size}
 .standard-kline-root.compact{min-height:160px}
 .standard-kline-toolbar{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;min-height:30px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.08);font:11px/1.2 var(--mono,"SFMono-Regular",ui-monospace,monospace);color:${COLORS.faint};background:rgba(255,255,255,.018)}
 .standard-kline-toolbar button{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:${COLORS.text};border-radius:5px;padding:3px 8px;cursor:pointer;font:inherit}
 .standard-kline-toolbar button:hover{border-color:rgba(216,170,63,.45);color:${COLORS.gold}}
 .standard-kline-crosshair{flex:0 0 auto;color:${COLORS.text};min-width:92px}
+.standard-kline-crosshair:empty{display:none}
 .standard-kline-ohlc{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${COLORS.text}}
 .standard-kline-ohlc.up{color:${COLORS.up}}
 .standard-kline-ohlc.down{color:${COLORS.down}}
-.standard-kline-source{margin-left:auto;min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:36%;color:${COLORS.faint};text-align:right}
+.standard-kline-source{margin-left:auto;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${COLORS.faint};text-align:right}
+@container (max-width:720px){.standard-kline-source{display:none}}
 .standard-kline-canvas{position:relative;min-width:0;min-height:0;height:100%}
 .standard-kline-scale-controls{position:absolute;right:8px;bottom:8px;z-index:5;display:flex;gap:4px}
 .standard-kline-scale-controls button{width:24px;height:22px;border:1px solid rgba(255,255,255,.2);border-radius:4px;background:rgba(10,11,12,.82);color:${COLORS.text};font:700 11px/1 var(--mono,"SFMono-Regular",ui-monospace,monospace);cursor:pointer}
@@ -548,7 +550,7 @@
           color:line.color || COLORS.gold,
           lineWidth:line.lineWidth || 1,
           lineStyle:lineStyleValue(line.lineStyle),
-          axisLabelVisible:true,
+          axisLabelVisible:line.axisLabelVisible !== false,
           title:line.title || "",
         }));
       });

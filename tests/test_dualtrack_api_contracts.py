@@ -97,7 +97,7 @@ def test_invariant_3_api_current_reports_fail_closed_without_effective_plan(tmp_
     assert response["effective_plan_status"]["machine_stands_down"] is True
 
 
-def test_fix_2_cycle_current_hides_author_until_reveal_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cycle_current_exposes_independent_machine_plan_without_human_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"
     config = {**TEST_CONFIG, "plan_lock_deadline_min_before_cycle": -60}
@@ -105,14 +105,14 @@ def test_fix_2_cycle_current_hides_author_until_reveal_allowed(tmp_path: Path, m
     store.save_ai_plan(_plan(cycle_id, "short") | {"author": "ai"}, now="2026-07-04T23:00:00+00:00")
     monkeypatch.setattr(dashboard_server, "dualtrack_config", lambda: config)
 
-    blind = dashboard_server.build_dualtrack_cycle_current_response(output_root=output, as_of="2026-07-05T01:30:00+00:00")
-    assert "author" not in blind["effective_plan_status"]
-    assert blind["effective_plan_status"]["has_effective_plan"] is False
-    assert blind["effective_plan_status"]["machine_stands_down"] is True
+    current = dashboard_server.build_dualtrack_cycle_current_response(output_root=output, as_of="2026-07-05T01:30:00+00:00")
+    assert current["effective_plan_status"]["author"] == "ai"
+    assert current["effective_plan_status"]["has_effective_plan"] is True
+    assert current["effective_plan_status"]["machine_stands_down"] is False
 
     store.save_human_plan(_plan(cycle_id, "long"), now="2026-07-05T01:45:00+00:00")
     revealed = dashboard_server.build_dualtrack_cycle_current_response(output_root=output, as_of="2026-07-05T01:45:01+00:00")
-    assert revealed["effective_plan_status"]["author"] == "human"
+    assert revealed["effective_plan_status"]["author"] == "ai"
     assert revealed["effective_plan_status"]["has_effective_plan"] is True
 
 
@@ -190,7 +190,9 @@ def test_dualtrack_market_bars_endpoint_is_read_only_get_surface(tmp_path: Path)
     )
 
     assert response["schema_version"] == "dualtrack-market-bars-v1"
-    assert response["status"] == "seeded"
+    assert response["status"] == "blocked"
+    assert response["bar_count"] == 0
+    assert response["is_synthetic"] is False
     assert response["safety"]["read_only"] is True
     assert response["safety"]["writes_market_db"] is False
     assert response["safety"]["opens_order_clients"] is False

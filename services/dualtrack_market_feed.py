@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import os
-import sqlite3
-from datetime import datetime, timedelta, timezone
-from math import sin
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.datafeed_market_client import DatafeedMarketClient, DatafeedUnavailable
+from services.market_data_access import market_data_repository
 
 
 class DualTrackMarketFeed:
@@ -15,12 +14,25 @@ class DualTrackMarketFeed:
 
     The dual-track dashboard should not open browser-side exchange sockets or
     initialize writer-capable feed clients. This reader uses SQLite read-only
-    mode and falls back in an explicit order: Tiger/COMEX bars, Binance USD-M
-    bars already present in the local DB, then display-only synthetic seed bars.
+    mode and reads exactly one requested or configured source. Missing or stale
+    data is surfaced as such; it never switches provider or creates seed bars.
     """
 
-    def __init__(self, market_db: Path | None = None, config: dict | None = None) -> None:
-        self.config = config or load_pipeline_config()
+    def __init__(
+        self,
+        market_db: Path | None = None,
+        config: dict | None = None,
+        datafeed_client: DatafeedMarketClient | None = None,
+    ) -> None:
+        self.config = config if config is not None else load_pipeline_config()
+        datafeed_config = self.config.get("datafeed", {}) or {}
+        self.datafeed_enabled = bool(datafeed_config.get("enabled", False))
+        self.datafeed_source = str(datafeed_config.get("source") or "binance_usdm_futures")
+        self.datafeed_asset_class = str(datafeed_config.get("asset_class") or "commodity")
+        self.datafeed_client = datafeed_client or DatafeedMarketClient(
+            base_url=str(datafeed_config.get("base_url") or "http://127.0.0.1:8100"),
+            timeout_seconds=float(datafeed_config.get("timeout_seconds", 10)),
+        )
         default_db = ROOT / str(self.config.get("local_market_db", "data/market_data.db"))
         self.market_db = self._resolve_market_db(
             market_db
@@ -36,6 +48,13 @@ class DualTrackMarketFeed:
         limit: int = 96,
         as_of: str | None = None,
     ) -> dict:
+        if self.datafeed_enabled:
+            return self._datafeed_snapshot(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=limit,
+                as_of=as_of,
+            )
         resolved_limit = max(1, min(int(limit), 500))
         checked_at = self._parse_as_of(as_of)
         requested = {
@@ -45,25 +64,23 @@ class DualTrackMarketFeed:
         }
         candidates = self._candidates(symbol=symbol, timeframe=timeframe)
         access_issues: list[str] = []
+        stale_exact: dict | None = None
         if self.market_db.exists():
             for candidate in candidates:
                 try:
                     bars = self._load_bars(candidate["symbol"], candidate["timeframe"], resolved_limit)
-                except sqlite3.Error as exc:
+                except OSError as exc:
                     access_issues.append(f"{type(exc).__name__}: {exc}")
                     bars = []
                 if bars:
                     freshness = self._freshness(bars[-1], checked_at=checked_at)
-                    if not freshness["fresh"] and candidate["source_mode"] != "requested_symbol":
-                        access_issues.append(
-                            f"stale_source:{candidate['symbol']}:{candidate['timeframe']}:"
-                            f"{bars[-1].get('timestamp', '')}"
-                        )
-                        continue
-                    status = "ready" if candidate["source_mode"] in {"tiger_openapi", "requested_symbol"} else "fallback"
-                    if not freshness["fresh"]:
-                        status = "stale"
-                    return self._payload(status, candidate, bars, requested, access_issues, freshness=freshness)
+                    if freshness["fresh"]:
+                        return self._payload("ready", candidate, bars, requested, access_issues, freshness=freshness)
+                    access_issues.append(
+                        f"stale_exact_source:{candidate['symbol']}:{candidate['timeframe']}:"
+                        f"{bars[-1].get('timestamp', '')}"
+                    )
+                    stale_exact = self._payload("stale", candidate, bars, requested, access_issues, freshness=freshness)
             for derived in self._derived_candidates(candidates, symbol=symbol, timeframe=timeframe, limit=resolved_limit):
                 freshness = self._freshness(derived["bars"][-1], checked_at=checked_at)
                 if not freshness["fresh"] and not symbol:
@@ -80,24 +97,136 @@ class DualTrackMarketFeed:
                     [*access_issues, derived["issue"]],
                     freshness=freshness,
                 )
+            if stale_exact is not None:
+                return stale_exact
         else:
             access_issues.append("market_db_missing")
 
-        synthetic = self._seed_bars(resolved_limit, as_of=checked_at.isoformat())
-        candidate = {
-            "symbol": symbol or self._fallback_symbol(),
+        primary = candidates[0] if candidates else {}
+        access_issues.append(
+            f"market_source_unavailable:{primary.get('symbol') or symbol or ''}:{primary.get('timeframe') or timeframe or ''}"
+        )
+        unavailable = {
+            "symbol": primary.get("symbol") or symbol or "",
             "timeframe": timeframe or "1m",
-            "provider": "synthetic_seed:dualtrack_dashboard",
-            "source_mode": "synthetic_fallback",
+            "provider": primary.get("provider") or "",
+            "source_mode": "unavailable",
         }
         return self._payload(
-            "seeded",
-            candidate,
-            synthetic,
+            "blocked",
+            unavailable,
+            [],
             requested,
             access_issues,
-            freshness={"fresh": False, "age_minutes": 0.0, "max_age_minutes": 0.0},
+            freshness={"fresh": False, "age_minutes": None, "max_age_minutes": self._max_age_minutes(timeframe)},
         )
+
+    def _datafeed_snapshot(
+        self,
+        *,
+        symbol: str | None,
+        timeframe: str | None,
+        limit: int,
+        as_of: str | None,
+    ) -> dict:
+        resolved_symbol = symbol or "GOLD"
+        resolved_timeframe = timeframe or "1m"
+        resolved_limit = max(1, min(int(limit), 60000))
+        requested = {
+            "symbol": symbol or "",
+            "timeframe": timeframe or "",
+            "limit": resolved_limit,
+        }
+        try:
+            response = self.datafeed_client.candles(
+                asset_class=self.datafeed_asset_class,
+                ticker=resolved_symbol,
+                timeframe=resolved_timeframe,
+                limit=resolved_limit,
+                source=self.datafeed_source,
+                cache_policy="bypass",
+                quality="strict",
+                require_execution_venue=True,
+            )
+        except DatafeedUnavailable as error:
+            return {
+                "schema_version": "dualtrack-market-bars-v1",
+                "status": "blocked",
+                "source_mode": "unavailable",
+                "symbol": resolved_symbol,
+                "timeframe": resolved_timeframe,
+                "provider": "",
+                "quality_flags": ["market_unavailable"],
+                "is_synthetic": False,
+                "requested": requested,
+                "bar_count": 0,
+                "latest_timestamp": "",
+                "latest_close": None,
+                "fresh": False,
+                "age_minutes": None,
+                "max_age_minutes": self._max_age_minutes(resolved_timeframe),
+                "bars": [],
+                "access_issues": [str(error)],
+                "datafeed": self.datafeed_client.base_url,
+                "safety": self._datafeed_safety(),
+            }
+
+        bars = [
+            {
+                "symbol": response.get("instrument_id") or resolved_symbol,
+                "provider_symbol": response.get("provider_symbol") or response.get("ticker"),
+                "timeframe": resolved_timeframe,
+                "timestamp": candle.get("timestamp"),
+                "open": candle.get("open"),
+                "high": candle.get("high"),
+                "low": candle.get("low"),
+                "close": candle.get("close"),
+                "volume": candle.get("volume", 0),
+                "provider": response.get("provider", ""),
+                "quality_flags": candle.get("quality_flags") or response.get("quality_flags") or [],
+            }
+            for candle in response.get("candles", [])
+        ]
+        freshness = self._freshness(
+            bars[-1] if bars else {"timeframe": resolved_timeframe},
+            checked_at=self._parse_as_of(as_of),
+        )
+        status = "ready" if bars and freshness["fresh"] else "stale" if bars else "blocked"
+        return {
+            "schema_version": "dualtrack-market-bars-v1",
+            "status": status,
+            "source_mode": response.get("selected_source") or response.get("source_mode") or "",
+            "symbol": response.get("instrument_id") or resolved_symbol,
+            "provider_symbol": response.get("provider_symbol") or response.get("ticker") or "",
+            "timeframe": resolved_timeframe,
+            "provider": response.get("provider", ""),
+            "quality_flags": response.get("quality_flags") or [],
+            "is_synthetic": bool(response.get("is_synthetic", False)),
+            "requested": requested,
+            "bar_count": len(bars),
+            "latest_timestamp": bars[-1].get("timestamp", "") if bars else "",
+            "latest_close": bars[-1].get("close") if bars else None,
+            "fresh": freshness["fresh"],
+            "age_minutes": freshness["age_minutes"],
+            "max_age_minutes": freshness["max_age_minutes"],
+            "bars": bars,
+            "access_issues": response.get("access_issues") or [],
+            "datafeed": self.datafeed_client.base_url,
+            "selection_reason": response.get("selection_reason"),
+            "attempted_sources": response.get("attempted_sources") or [],
+            "safety": self._datafeed_safety(),
+        }
+
+    @staticmethod
+    def _datafeed_safety() -> dict:
+        return {
+            "read_only": True,
+            "writes_market_db": False,
+            "opens_broker_clients": False,
+            "opens_order_clients": False,
+            "uses_browser_exchange_socket": False,
+            "reads_private_market_db": False,
+        }
 
     def _candidates(self, *, symbol: str | None, timeframe: str | None) -> list[dict]:
         if symbol:
@@ -108,21 +237,14 @@ class DualTrackMarketFeed:
                 "source_mode": "requested_symbol",
             }]
 
-        tiger = self.config.get("tiger_futures_feed", {}) or {}
         binance = self.config.get("binance_usdm_1m_feed", {}) or {}
         requested_timeframe = timeframe or ""
         return [
             {
-                "symbol": str(tiger.get("output_symbol") or tiger.get("contract") or "MGCmain"),
-                "timeframe": requested_timeframe or str(tiger.get("timeframe") or tiger.get("period") or "1m"),
-                "provider": str(tiger.get("provider") or "tiger_openapi:COMEX"),
-                "source_mode": "tiger_openapi",
-            },
-            {
                 "symbol": str(binance.get("output_symbol") or "GOLD"),
                 "timeframe": requested_timeframe or str(binance.get("timeframe") or binance.get("interval") or "1m"),
-                "provider": "binance_usdm",
-                "source_mode": "binance_usdm_fallback",
+                "provider": str(binance.get("provider") or "binance_usdm"),
+                "source_mode": "binance_usdm",
             },
         ]
 
@@ -145,32 +267,11 @@ class DualTrackMarketFeed:
         return rows
 
     def _load_bars(self, symbol: str, timeframe: str, limit: int) -> list[dict]:
-        uri = f"file:{quote(str(self.market_db.resolve()))}?mode=ro"
-        with sqlite3.connect(uri, uri=True) as conn:
-            rows = conn.execute(
-                """
-                SELECT symbol, timeframe, timestamp, open, high, low, close, volume, provider, quality_flags
-                FROM bars
-                WHERE symbol = ? AND timeframe = ?
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                (symbol, timeframe, limit),
-            ).fetchall()
         return [
-            {
-                "symbol": row[0],
-                "timeframe": row[1],
-                "timestamp": row[2],
-                "open": float(row[3]),
-                "high": float(row[4]),
-                "low": float(row[5]),
-                "close": float(row[6]),
-                "volume": float(row[7]),
-                "provider": row[8],
-                "quality_flags": [item for item in str(row[9]).split(",") if item],
-            }
-            for row in reversed(rows)
+            bar.to_dict()
+            for bar in market_data_repository(self.market_db).load_bars(
+                symbol, timeframe, limit
+            )
         ]
 
     def _derived_bars(self, *, symbol: str | None, timeframe: str | None, limit: int) -> dict | None:
@@ -183,7 +284,9 @@ class DualTrackMarketFeed:
             source_seconds = self._timeframe_seconds(source_timeframe)
             if source_seconds is None or target_seconds % source_seconds:
                 continue
-            source_limit = min(max(limit * int(target_seconds / source_seconds) + int(target_seconds / source_seconds), limit), 30_000)
+            # D1 ATR14 requires more than 30k one-minute rows once the current
+            # incomplete day and weekend filtering are accounted for.
+            source_limit = min(max(limit * int(target_seconds / source_seconds) + int(target_seconds / source_seconds), limit), 60_000)
             source_bars = self._load_bars(symbol, source_timeframe, source_limit)
             if not source_bars:
                 continue
@@ -249,6 +352,8 @@ class DualTrackMarketFeed:
     ) -> dict:
         latest = bars[-1] if bars else {}
         quality_flags = list(latest.get("quality_flags") or [])
+        if status == "blocked" and not bars:
+            quality_flags = ["market_unavailable"]
         provider = latest.get("provider") or source["provider"]
         is_synthetic = self._is_synthetic_source({**source, "provider": provider}, quality_flags=quality_flags)
         return {
@@ -291,31 +396,6 @@ class DualTrackMarketFeed:
         flags = " ".join(str(item).lower() for item in quality_flags)
         return "synthetic" in provider or "synthetic" in mode or "synthetic_seed" in flags
 
-    def _seed_bars(self, limit: int, *, as_of: str | None) -> list[dict]:
-        end = self._parse_as_of(as_of)
-        start = end - timedelta(minutes=limit - 1)
-        rows = []
-        price = 4172.0
-        for i in range(limit):
-            drift = sin(i / 5) * 2 + (i - 30) * 0.18
-            close = price + drift + (-8 if i % 7 == 0 else 1.8)
-            rows.append(
-                {
-                    "symbol": self._fallback_symbol(),
-                    "timeframe": "1m",
-                    "timestamp": (start + timedelta(minutes=i)).isoformat(),
-                    "open": price,
-                    "high": max(price, close) + 3,
-                    "low": min(price, close) - 3,
-                    "close": close,
-                    "volume": 0.0,
-                    "provider": "synthetic_seed:dualtrack_dashboard",
-                    "quality_flags": ["synthetic_seed", "display_only", "not_for_trading_signal"],
-                }
-            )
-            price = close
-        return rows
-
     def _parse_as_of(self, as_of: str | None) -> datetime:
         if as_of:
             parsed = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
@@ -340,15 +420,20 @@ class DualTrackMarketFeed:
         value = str(timeframe or "").strip().lower()
         if value.endswith("m"):
             try:
-                return max(15.0, float(value[:-1]) * 3.0)
+                return max(3.0, float(value[:-1]) * 3.0)
             except ValueError:
-                return 15.0
+                return 3.0
         if value.endswith("h"):
             try:
                 return max(120.0, float(value[:-1]) * 180.0)
             except ValueError:
                 return 120.0
-        return 15.0
+        if value.endswith("d"):
+            try:
+                return max(4_320.0, float(value[:-1]) * 4_320.0)
+            except ValueError:
+                return 4_320.0
+        return 3.0
 
     def _timeframe_seconds(self, timeframe: str | None) -> int | None:
         value = str(timeframe or "").strip().lower()
@@ -360,6 +445,11 @@ class DualTrackMarketFeed:
         if value.endswith("h"):
             try:
                 return int(float(value[:-1]) * 3600)
+            except ValueError:
+                return None
+        if value.endswith("d"):
+            try:
+                return int(float(value[:-1]) * 86_400)
             except ValueError:
                 return None
         return None

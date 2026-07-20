@@ -13,13 +13,15 @@ class _FakeSender:
         self._configured = configured
         self.ok = ok
         self.sent: list[str] = []
+        self.cards: list[dict | None] = []
 
     @property
     def configured(self) -> bool:
         return self._configured
 
-    def send(self, text: str) -> dict:
+    def send(self, text: str, card: dict | None = None) -> dict:
         self.sent.append(text)
+        self.cards.append(card)
         return {"ok": self.ok, "channel": self.channel, "code": 0 if self.ok else 999}
 
 
@@ -82,6 +84,8 @@ def test_sends_file_report_and_records_receipt(tmp_path: Path):
     assert "结论" in sender.sent[0]
     assert "暂无 proven edge" in sender.sent[0]
     assert "完整晚报已保存：report.md" in sender.sent[0]
+    assert sender.cards[0]["header"]["title"]["content"] == "黄金晚盘复盘 · 2026-06-25"
+    assert result["message_format"] == "interactive_card"
     rows = load_json(output_root / "feishu_reports" / "2026-06-25.json")
     assert rows[0]["kind"] == "pm_evening"
     assert rows[0]["source_path"] == str(artifact.resolve())
@@ -161,6 +165,36 @@ def test_long_pm_report_sends_digest_without_truncating(tmp_path: Path):
     assert "策略" in sender.sent[0]
     assert "Backend maturity" not in sender.sent[0]
     assert "完整早报已保存：morning.md" in sender.sent[0]
+    assert sender.cards[0]["header"]["template"] == "green"
+    assert sender.cards[0]["header"]["title"]["content"] == "黄金早盘复盘 · 2026-06-25"
+    assert "窗口已实现盈亏" in str(sender.cards[0])
+    assert "+18.50 USD" in str(sender.cards[0])
+    assert "接下来只看" in str(sender.cards[0])
+
+
+def test_negative_pm_report_uses_red_card(tmp_path: Path):
+    artifact = tmp_path / "evening.md"
+    artifact.write_text(
+        "# 黄金交易晚盘复盘\n\n"
+        "## 一句话\n\n过去 12 小时黄金 -0.35%；机器轨网格窗口已实现 PnL -76.67。\n\n"
+        "## 行情\n\n- 过去 12 小时：下跌 -0.35%。\n\n"
+        "## 策略表现\n\n- 当前只复盘：机器轨网格。\n- 窗口已实现 PnL -76.67。\n\n"
+        "## 为什么\n\n- 止损次数高于止盈。\n\n"
+        "## 现在看什么\n\n- 等待下一次完整闭环。\n",
+        encoding="utf-8",
+    )
+    sender = _FakeSender()
+
+    result = FeishuReportSender(tmp_path / "outputs", sender=sender).run(
+        "2026-07-10",
+        "pm_evening",
+        "黄金交易晚盘复盘 - 2026-07-10",
+        source_path=artifact,
+    )
+
+    assert result["delivered"] is True
+    assert sender.cards[0]["header"]["template"] == "red"
+    assert "-76.67 USD" in str(sender.cards[0])
 
 
 def test_strategy_research_sends_decision_digest(tmp_path: Path):

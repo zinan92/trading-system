@@ -2754,3 +2754,3031 @@ Date: 2026-07-08
 - API validation: `http://127.0.0.1:8765/api/dualtrack/trades/2026-07-09_NIGHT?track=human` returns `display_cycle_id=2026-07-09_DAY`, `display_reason=latest_same_day`, `display_summary.realized_pnl=112.8825787`, and 6 display trades.
 - API validation: `http://127.0.0.1:8765/api/dualtrack/trades/2026-07-09_NIGHT?track=machine` returns `display_cycle_id=2026-07-09_DAY`, filters 4 invalid machine fills from display safety, and reports `display_summary.realized_pnl=72.79008591`.
 - Browser DOM validation: real Playwright tab against `http://127.0.0.1:8765/dashboard-dualtrack-split.html` showed `显示 2026-07-09 日盘 最近成交`, human PnL `+$112.88`, machine PnL `+$72.79`, `开仓价` / `平仓价` headers, and no machine fills containing `4,155.0` or `4,121.3`.
+
+## 2026-07-10 DualTrack P0 Trust Boundary and Execution Adapter
+
+### Decisions
+
+- Supersede the 2026-07-09 decision that let the split page pass its WebSocket
+  mark into a GET endpoint.
+  - All DualTrack GET endpoints are now pure reads.
+  - Client `mark_price` and `mark_source` values are ignored and no longer sent
+    by the split page.
+  - Human protective exits run from the scheduled `dualtrack-live-tick` path.
+
+- Fail closed at the network order boundary.
+  - DualTrack writes require the same local HTTP origin.
+  - The server replaces client timestamps with its receive time.
+  - Market exits use the canonical server mark.
+  - Stale, synthetic, fallback, and non-canonical server market snapshots block
+    order submission.
+
+- Enforce order geometry in the backend, not only in the UI.
+  - Long: `SL < entry < TP`.
+  - Short: `TP < entry < SL`.
+  - Order timestamps must belong to the requested cycle.
+  - The split confirm button is disabled when R cannot be computed or geometry
+    is invalid.
+
+- Correct machine exit sizing by quantity.
+  - Grid target, stop, and flatten fills now carry `matched_entries`.
+  - Exit notional is `entry units * exit price`, so price changes do not leave
+    residual positions.
+  - A grid rung at exactly the stop price is invalid and is excluded from the
+    frozen golden contract.
+
+- Remove generated and automatic substitute market data.
+  - `DualTrackMarketFeed` returns `blocked/unavailable` when its requested source
+    is missing.
+  - It no longer switches to a second provider or generates synthetic seed bars.
+  - The v5 browser no longer generates local synthetic candles.
+  - Old synthetic/mock/fallback rows are rejected by pre-cycle, intraday,
+    close-cycle, plan-import, and previous-range inputs.
+
+- Make the canonical market identity and clock explicit.
+  - The default DualTrack market identity is now
+    `GOLD / 1m / binance_usdm`.
+  - Network orders reject provider mismatch, invalid/future timestamps, and
+    market events from outside the current cycle.
+  - One-minute data becomes stale after three minutes, not fifteen.
+
+- Keep failure visible in both dashboard entry points.
+  - The v5 chart clears old candles when data is missing, stale, fallback, or
+    synthetic instead of leaving the previous chart on screen.
+  - Closed fill rows display original trade units; position and risk widgets
+    continue to use remaining units.
+  - At narrow chart widths, duplicate source text is hidden so all OHLC values
+    remain visible; full provenance remains in the chart title and data widget.
+  - Static shell and standard-kline assets are `no-store`, so a normal refresh
+    loads the current code.
+  - Global `UNKNOWN` now names the failed check, such as `调度待确认`, instead
+    of incorrectly saying the whole server is disconnected.
+  - A healthy open cycle now reports runtime `ok` instead of an unconditional
+    `warn`; machine fill count remains visible during the cycle and
+    `machine_fills_hidden=false`.
+
+- Introduce `ExecutionEngineAdapter` as the engine boundary.
+  - `legacy_paper` wraps the existing human ledger and is now used by dashboard
+    order submission and live-tick protective events.
+  - `nautilus` remains fail-closed until the isolated parity spike passes.
+  - The full contract and cutover gates live in
+    `docs/dualtrack-execution-engine-adapter-spec.md`.
+
+### Gotchas
+
+- `legacy_paper` still has no native order lifecycle; its canonical snapshot
+  therefore returns `orders=[]` and declares that capability explicitly.
+
+- Protective execution currently receives the latest canonical server mark at
+  the five-minute live-tick cadence. A brief wick that crosses SL and recovers
+  before the sampled mark can still be missed. The Nautilus spike must define a
+  bar high/low or trade-tick matching rule before cutover.
+
+- A fresh Binance WebSocket in the browser no longer overrides a stale local
+  server feed. The order will be blocked until the canonical server feed is
+  repaired; this is intentional fail-closed behavior.
+
+- Existing historical machine fill files are not rewritten. New grid runs close
+  equal units; historical derived positions need a separate, auditable rebuild.
+
+- Removing fallback changes the v5 main-chart behavior when Tiger is absent.
+  The caller now requests `symbol=GOLD` explicitly; missing GOLD data produces an
+  empty blocked chart rather than silently showing another source.
+
+- The current `/api/system-state` result is `UNKNOWN` because
+  `outputs/schedules/status_current.json` is stale, while DualTrack heartbeat
+  and GOLD data freshness are both RUN. The shell now says `调度待确认`; this
+  operational artifact still needs its scheduler owner to refresh it.
+
+- The standard-kline source label is hidden below a 720px chart-container
+  width to preserve complete OHLC text. Full source lineage remains available
+  in the title attribute and the dashboard data widget.
+
+### Evidence
+
+- Tests were written red-first for GET purity, client-mark rejection, order
+  geometry, cycle timestamps, scheduled protective exits, synthetic rejection,
+  same-local-origin writes, canonical server marks, machine unit conservation,
+  and adapter routing.
+- `tests/test_dualtrack_execution_engine_adapter.py` covers the compatibility
+  adapter snapshot, protective market event, reconciliation, and fail-closed
+  Nautilus factory behavior.
+- The machine golden fixture was intentionally updated after exit quantity and
+  stop-rung semantics changed.
+- Focused backend/frontend regression passed with `301 passed`; the standalone
+  standard-kline suite passed `21/21`.
+- Final full repository regression passed with `1307 passed in 410.11s`.
+- Real browser DOM measurement passed at 1600, 1440, 1280, and 390px: horizontal
+  overflow was zero, order-button/toolbar intersection area was zero, desktop
+  confirm height was 34px, and the mobile layout stayed single-column.
+- Browser request capture after a normal reload observed nine DualTrack API
+  requests and zero `mark_price` / `mark_source` query parameters. Console
+  warnings and errors were empty.
+- Browser-visible machine fill quantities were `2.4259`, `2.4308`, and `0.4852`
+  instead of zero; the main OHLC row fit its container without truncation; the
+  Binance WebSocket reached `已连接`.
+- The live market endpoint reported `provider=binance_usdm`,
+  `source_mode=requested_symbol`, `fresh=true`, and
+  `max_age_minutes=3.0`.
+- The live runtime endpoint reported all four checks `ok`, runtime status `ok`,
+  `machine_fill_count=12`, and `machine_fills_hidden=false`.
+
+## 2026-07-10 - 黄金飞书自动化切到双轨机器轨
+
+### Decisions
+
+- 飞书交易记录只接机器轨网格。
+  - 新增 `dualtrack_machine_brief`：每个 12 小时周期输出机器方向、关键位、失效条件、网格观察位、趋势腿状态。
+  - 新增 `dualtrack_trade_record`：只发送机器轨 entry / target / stop / final flatten 事件。
+  - 继续使用 report/trade Feishu sender；健康告警不再作为交易记录内容。
+
+- 早晚盘复盘只复盘机器轨网格。
+  - 当 `schedule.profile=dualtrack_focus` 且存在 dualtrack artifact 时，`pm_portfolio_report` 不再读取旧 active strategy 的 performance/paper_orders。
+  - 复盘口径改成：黄金 12 小时行情、机器轨开仓数、平仓数、TP/SL、已实现 PnL、open 估算未实现 PnL、下一周期机器方向。
+
+- 交易记录发送必须防重复和防历史补发。
+  - 发送账本为 `outputs/dualtrack_trade_notifications/<date>.json`。
+  - 去重键为 `cycle_id + fill_id`。
+  - 首次接入某个 cycle 时默认只建立 baseline，不补发已有 fills；只有 `--backfill-existing` 才显式补发历史。
+
+- Intraday flatten 不是实际平仓。
+  - 当前周期运行中，machine simulation 会用 `flatten` 对最后一根 bar 做临时结算。
+  - Feishu 交易记录现在过滤掉周期未结束前的 `flatten`，避免把 mark-to-close 误报成真实平仓。
+
+### Gotchas
+
+- 本机 `dualtrack-cycle` launchd 每分钟运行。第一次把通知钩子接进 runner 后，后台 runner 立即扫描了当前周期已有 fills，并发出了 18 条交易记录；其中部分是 intraday flatten，语义上不应作为真实平仓。后续已改成首次 baseline + 过滤 intraday flatten，防止再次发生。
+
+- `outputs/feishu_reports/<date>.json` 是发送回执，不代表交易语义一定正确；需要结合 `dualtrack_trade_notifications` 的 `suppressed` / `delivered` / `event` 字段判断。
+
+- `trade_ticket_notifications` 仍是旧 ticket 审查链路；新的机器轨开/平仓不依赖旧 ticket。
+
+### Evidence
+
+- `tests/test_dualtrack_feishu.py` 覆盖机器轨作战单、entry/exit 交易记录、首次 baseline、intraday flatten 过滤。
+- Focused regression passed:
+  `python3 -m pytest tests/test_dualtrack_feishu.py tests/test_pm_portfolio_report.py tests/test_feishu_report_sender.py tests/test_dualtrack_dt8_cycle_runner.py`
+  returned `42 passed`.
+- Real current-cycle dry run after the flatten fix:
+  `python3 -m pipelines.dualtrack_trade_notifications --cycle-id 2026-07-10_DAY --json`
+  returned `sent=0 skipped=14 failed=0`.
+
+## 2026-07-10 - DualTrack protective OHLC replay
+
+### Decisions
+
+- Human protective execution no longer evaluates only the newest close. The
+  live tick replays every trusted 1m bar from the earliest open human trade and
+  passes canonical open/high/low/close values through `ExecutionEngineAdapter`.
+- Long stops use bar low and short stops use bar high. Targets use the opposite
+  range edge. If one OHLC bar touches both TP and SL, the compatibility engine
+  executes the stop first as the conservative deterministic rule.
+- A bar that started before a trade entry may use only its current/closing mark,
+  not its full high/low range. This prevents pre-entry price movement from
+  closing a newly created trade retroactively.
+- A real gap through a stop fills at the bar open only when a trusted OHLC event
+  explicitly supplies that open. Point-price events preserve the existing stop
+  price fill rule.
+- The generated `dualtrack-live-tick` schedule now runs every 60 seconds instead
+  of every 300 seconds, matching the GOLD 1m feed cadence.
+
+### Gotchas
+
+- OHLC replay fixes missed completed-bar wicks but does not reveal tick order
+  inside a bar. The stop-first rule is intentionally pessimistic; it must not be
+  described as exact exchange execution.
+- The standardized datafeed service starts and its health endpoint passes, but
+  its WebSocket upstream currently fails on this machine because `websockets`
+  detects the configured SOCKS proxy and `python-socks` is not installed. This
+  remains an explicit blocker to tick-level server streaming; no fallback or
+  synthetic stream was substituted.
+- The generated schedule is current, but the installed live-tick plist is still
+  the old 300-second definition. `schedule_status` now reports exactly one
+  mismatch instead of stale/unknown status. Replacing a loaded launchd job is
+  separately acknowledgement-gated by the installer.
+
+### Evidence
+
+- Red-first tests prove an intermediate short-stop wick is executed after the
+  final close recovers, same-bar TP/SL resolves to stop, and a pre-entry wick
+  cannot close a new trade.
+- Human engine, execution adapter, and cycle runner regression passed with
+  `48 passed`.
+- Generated schedule status on 2026-07-10 reports four of five jobs current and
+  only `com.wendy.trading-orchestrator.dualtrack-live-tick` mismatched.
+
+## 2026-07-10 - NautilusTrader isolated execution spike
+
+### Decisions
+
+- Installed NautilusTrader 1.230.0 only in `/tmp/dualtrack-nautilus-spike`; it is
+  not a production dependency of trading-orchestrator.
+- Ran a durable bracket fixture: market BUY 1 at 100, SL 95, TP 105, followed by
+  a 1m bar with `O=100 H=101 L=94 C=100`. Nautilus filled the stop at 95,
+  flattened the position, and reported `-5.03510000 USDT` realized PnL including
+  fees.
+- Did not implement or enable `NautilusExecutionAdapter`. datafeed currently
+  lacks the instrument-definition fields needed to build an exchange-valid
+  Nautilus instrument without hard-coded precision, multiplier, margin, and fee
+  assumptions.
+
+### Gotchas
+
+- Passing one engine fixture proves matching/accounting semantics, not parity
+  across scale-in, partial reduction, restart, duplicate replay, or the existing
+  machine-fill fixture.
+- Nautilus supports adaptive bar high/low ordering, while the compatibility
+  ledger deliberately uses stop-first when both levels are touched. The parity
+  suite must configure and document one rule rather than accepting unexplained
+  differences.
+- A BTCUSDT packaged test instrument was used only to exercise engine behavior.
+  It must never appear in DualTrack GOLD snapshots or frontend widgets.
+
+### Evidence
+
+- `spikes/dualtrack_nautilus_fixture.py` asserts the two fills, prices, flat
+  position, and fee-inclusive realized PnL.
+- `docs/dualtrack-nautilus-spike-result.md` records the missing datafeed contract
+  and cutover gates.
+
+## 2026-07-10 - 机器轨开单记录改成截图式卡片
+
+### Decisions
+
+- 机器轨 entry 事件在 Feishu 里单独使用“黄金开单 · 自动成交”格式；target / stop / final flatten 继续走“黄金交易记录”格式。
+- 策略中文名统一为“机器轨网格”；不再使用此前的误写名称。
+- 开单卡展示用户真正需要确认的信息：作战单方向、人工/机器过滤、风险闭环、仓位/保证金、入场、TP、SL、证据路径。
+- entry 自动通知使用绿色 Feishu interactive card；纯文字只作为发送审计和兼容性正文。
+- 旧 ticket 体系里的 strength、quality gate、backtest win-rate/sample 不再硬塞进机器轨开单卡；机器轨只展示原生存在或可由 fill/plan/account 换算的字段。
+
+### Gotchas
+
+- “自动成交”在当前机器轨里表示 dualtrack simulation fill 已写入，不代表已经进入 demo/live 或券商实盘。
+- 机器轨的 TP/SL 和盈亏比来自网格层级与作战单失效位，不能用旧 ticket 审查卡的 Rational Trigger / 回测样本口径解释。
+
+### Evidence
+
+- 本地渲染预览使用 `2026-07-10_DAY` 第一条 entry fill，展示出入场价、TP/SL、估算保证金、止损预估、止盈预估和 artifact 路径。
+- 仅发送一条标题为“黄金开单 · 样本预览”的受控样本，回执 `delivered=true`、`code=0`；样本未写入自动交易通知去重账本。
+- Focused regression passed:
+  `python3 -m pytest tests/test_dualtrack_feishu.py tests/test_trade_ticket_card.py tests/test_pm_portfolio_report.py tests/test_feishu_report_sender.py tests/test_dualtrack_dt8_cycle_runner.py`
+  returned `55 passed`.
+
+## 2026-07-10 - DualTrack canonical execution boundary and shadow parity
+
+### Decisions
+
+- 所有将进入执行器的行情事件统一为 `dualtrack-market-event-v1`：必须具备 UTC 时间、正数价格、可信来源、`fresh=true`、`is_synthetic=false`，且 OHLC 如存在必须完整且自洽。
+- 事件 ID 由规范化字段稳定生成；同一输入重放得到同一 ID，供未来双引擎对账和幂等排查使用。
+- 双引擎对账采用精确比较，不允许先用 tolerance 掩盖差异；候选引擎缺失时产出 `blocked` 报告，而不是空报告或误报通过。
+- Nautilus 仍然只处于影子接入准备阶段：没有 upstream、execution-venue 的 instrument definition 与候选 snapshot，不能启用。
+
+### Gotchas
+
+- 图表可展示的行情 payload 不等于执行级行情事件；后者必须同时满足来源、新鲜度和合成数据闸门。
+- 只比较 PnL 会漏掉残余仓位或重复成交；对账还必须比较 fills、positions 和 open units。
+- `blocked` 是安全状态，不是失败修复后的成功状态；它表示外部候选引擎尚未产生可审计的规范化结果。
+
+- `pipelines.dualtrack_execution_reconcile` 只读 legacy snapshot 与候选 JSON，再原子写入 reconciliation artifact；它不初始化网络 client、不开新订单，也不改变 ledger。
+
+## 2026-07-10 - Nautilus GOLD instrument bridge
+
+### Decisions
+
+- Added a lazy Nautilus instrument builder that accepts only
+  `instrument-definition-v1` and does not add NautilusTrader to the production
+  dependency set.
+- The builder rejects synthetic, cached, non-execution, non-trading, inverse,
+  incomplete, and unexplained-multiplier definitions.
+- Public Binance instrument metadata does not include account maker/taker fee
+  rates. Both rates must be supplied explicitly; the builder has no fallback
+  fee.
+- The builder is shadow-only. `legacy_paper` remains authoritative and the
+  adapter factory still refuses to enable Nautilus.
+
+### Gotchas
+
+- XAUUSDT must use Nautilus `PerpetualContract` with commodity asset class, not
+  a crypto perpetual merely because the venue API is Binance.
+- Building a valid instrument proves contract semantics, not fill/accounting
+  parity, restart persistence, or safe production cutover.
+- Concurrent canonical-event and shadow-reconciliation work was left intact
+  and excluded from this commit.
+
+### Evidence
+
+- A live datafeed response built `XAUUSDT-PERP.BINANCE` with tick `0.01`, size
+  step `0.001`, multiplier `1`, and `1 XAU @ 4100 = 4100 USDT`.
+- Instrument trust-gate plus execution-control focused regression passed with
+  `25 passed`.
+
+- `datafeed` 的 `instrument-definition-v1` 已通过真实本地 HTTP 调用验证。交易系统只接受 `require_execution_venue=true`、`served_from=upstream`、非合成定义；公开 instrument metadata 缺少 maker/taker fee 时，preflight 会保留 blocker，不能自行假设费用。
+
+- `cost_per_side_bp=0.5` 是现有纸面成本假设，不等同于交易所 maker/taker fee 的外部证据；preflight 不可把它自动转换为 Nautilus 费率。注意 0.5 bp 的小数是 `0.00005`，不是 `0.000005`。
+
+- 机器轨会过滤无法通过基本止损/止盈几何校验的模拟成交；过滤后的 ledger 可以保持干净，但 runtime 不能继续报 `ok`。此类事件现在会明确输出 `warn` 且 `valid_now=false`，阻止它被拿作切换样本。
+
+- 同一根 OHLC bar 同时触及硬失效位和网格入场位时，无法从 OHLC 恢复真实先后顺序。为避免乐观开仓，硬失效优先：该 bar 不允许新开仓；人机模型与未来 Nautilus 对账都必须采用此保守语义。
+
+- 纸面影子对账可使用已存在的 0.5bp/side 成本假设，但必须显式标记为 `paper_assumption` 与 `real_money_eligible=false`。这消除了 paper-shadow 的费率缺口，同时保留真实经纪商费率为单独授权和证据门槛。
+
+- 第一条 Nautilus 对账场景固定为 long market entry 100、同一 1m bar low=94 的 stop 95。legacy 与 Nautilus 都使用同一份 upstream XAUUSDT instrument definition 和 paper-only 费率；先以精确 PnL、fill count、open units 对账，再扩展到其余九类场景。
+
+## 2026-07-10 - Nautilus XAU first parity artifact and stricter comparison
+
+### Decisions
+
+- 首个真实 XAUUSDT shadow fixture 的结果写入
+  `outputs/dualtrack/nautilus/parity/2026-07-10-xau-stop-loss.json`；它是
+  纸面影子证据，不是 live-cycle candidate snapshot，也不能被拿来解除运行中
+  reconciliation 的 `candidate_snapshot_missing` blocker。
+- 对账不再只比较 PnL、成交数量和总残余单位；逐笔 `side/event/price/quantity`、
+  仓位 `status/side/remaining_units`、标准账户金额和 reconciliation status 都
+  必须精确一致。
+- 当前情景仍限制在长期/short stop/target 的第一条固定情景；其余九类情景未完成前，
+  Nautilus 不会被配置为 paper execution engine。
+
+### Gotchas
+
+- 两边的 `orders=[]` 不能被解读为订单生命周期也已对账；legacy compatibility
+  engine 明确没有原生 order lifecycle。这是一个尚未解决的迁移能力缺口，不是通过。
+- fixture 以临时 output root 构建 legacy ledger，避免任何测试成交写入真实 human
+  fills。候选 snapshot 因此只能证明固定场景语义，不能替代真实 cycle 的 shadow
+  execution artifact。
+- 当前 Nautilus 版本会发出 Pandas4 的 `Timestamp.utcnow` deprecation warning；
+  它不改变本次执行或对账结果，但升级运行时前应复核该警告。
+
+### Evidence
+
+- 使用真实 upstream XAUUSDT preflight、`paper_assumption` 的双边
+  `0.00005` fee 和隔离 Nautilus 1.230.0 runtime，long 100 / stop 95 的结果为
+  legacy 与 Nautilus 都 `realized=-5.00975`、2 fills、flat，精确对账 `pass`。
+- Full repository regression: `1338 passed in 395.20s`。
+- Focused boundary regression after strengthening comparison:
+  `23 passed`。
+
+## 2026-07-10 - Shadow cutover evidence gate
+
+### Decisions
+
+- 增加只读 `dualtrack_shadow_cutover_status` gate：必须连续 7 个按 cycle
+  落盘的 `pass` reconciliation，才会显示
+  `ready_for_attended_paper_switch`。
+- gate 只写 operator status artifact；它永远不改变 configured engine、不开订单，且
+  `real_money_eligible=false`。即使满足 7 次也只代表可进行人工批准的 paper switch。
+
+### Gotchas
+
+- `current.json` 不能作为连续性证据；它会被覆盖。gate 只读取每个 cycle 的独立
+  reconciliation artifact。
+- 一条 `blocked`、`drift` 或缺失候选 snapshot 都会把 trailing pass count 归零；
+  不能用旧的通过记录跨越最近失败来凑够七次。
+
+### Evidence
+
+- 真实当前 gate 输出 `blocked`，`candidate_snapshot_missing`，
+  `observed_consecutive_passes=0`；没有把首个固定 fixture 误当运行 cycle 通过。
+- Gate 与 execution boundary focused regression: `15 passed`。
+- Browser check against a disposable local server rendered `正常`、`执行对账 · 等待候选引擎`、
+  `影子切换 · 未满足连续验证` and `人工交易窗口 · 开放`; all required API reads returned
+  HTTP 200 and no execution-control endpoint was invoked.
+
+## 2026-07-10 - Second real Nautilus parity direction
+
+### Decisions
+
+- 将 XAUUSDT fixture 参数化为 `long_stop` 与 `short_stop` 两个实际运行的固定情景；
+  它们都使用同一份 upstream instrument preflight 和 paper-only fee model。
+- 固定情景的单根 OHLC wick 均以 stop 为保守优先级：long 的 `low=94 < 95`，short
+  的 `high=106 > 105`。这只验证单边 stop 行为，不宣称已覆盖同 bar TP/SL 冲突。
+
+### Gotchas
+
+- 这两个证据文件使用临时 legacy ledger，不能拼接到 live-cycle reconciliation
+  history，也不能增加 seven-cycle gate 的 through count。
+- `Pandas4Warning` 是 Nautilus runtime 的上游 deprecation warning；未改变双边
+  fill、Pnl 或 flat result，但它不是可以静默忽略的长期依赖状态。
+
+### Evidence
+
+- `outputs/dualtrack/nautilus/parity/2026-07-10-xau-long_stop.json`:
+  exact parity `pass`，双方 realized PnL `-5.00975`。
+- `outputs/dualtrack/nautilus/parity/2026-07-10-xau-short_stop.json`:
+  exact parity `pass`，双方 realized PnL `-5.01025`。
+- Fixture declaration plus boundary regression: `14 passed`。
+
+## 2026-07-10 - Target and same-bar priority Nautilus parity
+
+### Decisions
+
+- 扩展并实际运行 XAUUSDT fixture：long/short 的 target、以及 long 的
+  `O=100 H=106 L=94 C=100` same-bar 双触及情景。
+- Nautilus venue 显式使用 `bar_adaptive_high_low_ordering=true`。对 Open
+  到 High/Low 等距的 same-bar fixture，该运行时顺序为 Open → Low → High，
+  因而与 legacy 的保守 stop-first 语义一致。
+- 候选 fill event 从 Nautilus 的实际成交价推导（SL=stop、TP=target），而不是
+  从 fixture 的预期标签抄写，避免用期望值掩盖撮合顺序错误。
+
+### Gotchas
+
+- `bar_adaptive_high_low_ordering` 是一个针对 OHLC 模拟路径的显式模型选择，
+  不是对真实 tick 路径的宣称；真实 shadow 仍需同一条 immutable event stream。
+- 相同的 equality fixture 对优先级最敏感；若未来升级 Nautilus 改变该 tie-break，
+  该 parity fixture 必须 drift，而不能静默重标记为 pass。
+
+### Evidence
+
+- 5 个隔离的真实 XAUUSDT fixture 都 exact `pass`：
+  `long_stop=-5.00975`，`short_stop=-5.01025`，
+  `long_target=4.98975`，`short_target=4.99025`，
+  `long_same_bar_stop_first=-5.00975`（双方皆为 stop）。
+- Fixture-level focused regression: `3 passed`。
+- Final full repository regression after the five-scenario fixture expansion:
+  `1346 passed in 400.05s`。
+
+## 2026-07-10 - Immutable actual-cycle Nautilus shadow chain
+
+### Decisions
+
+- 每个 shadow cycle 必须先生成 `dualtrack-shadow-input-v1`：其中包含规范化的
+  1m market events、legacy snapshot 的 immutable fill evidence、以及独立的
+  accepted-command journal。候选运行时不得直接读取 legacy fills 文件。
+- `GOLD`（存储/图表符号）到 `XAUUSDT`（Nautilus 执行合约）的映射显式写入配置；
+  bundle 缺 provider、instrument ID、ready instrument preflight 或映射不一致时
+  fail closed。
+- `LegacyPaperExecutionAdapter` 仅在订单被成功接受后记录 command journal，按
+  legacy fill ID 幂等。重试相同 source fill 不会制造第二条影子命令。
+- 空订单 cycle 的 Nautilus market replay 可作为事件摄取证据，但
+  `qualifies_for_cutover=false`，绝不能推进 seven-cycle execution-parity gate。
+
+### Gotchas
+
+- 过去的 fills 没有倒推成伪造的原始命令；历史命令不存在时，未来 candidate
+  replay 必须明确 blocked，而不是把已知成交结果回灌给候选引擎。
+- 当前设置中 data store symbol 为 `GOLD`，instrument definition 为 `XAUUSDT`；
+  这个映射若被隐式处理，会重新引入 split-brain execution identity。
+- 一个 `pass` reconciliation 不一定是切换证据。没有命令的 pass 只说明同一
+  market stream 可被消费，不能说明订单、仓位或 PnL 语义已对齐。
+
+### Evidence
+
+- 真实 `2026-07-10_DAY` bundle:
+  `input_id=shadow-fc7211e35547aa6ff797`，470 条 `binance_usdm` events，
+  execution instrument `XAUUSDT`，legacy command count 0。
+- 隔离 Nautilus runtime 成功消费该 bundle；reconciliation `pass`，但 cutover gate
+  保持 `blocked/candidate_activity_insufficient/0`。
+- Command-journal, bundle, replay, reconciliation and cutover focused tests:
+  `15 passed`。
+
+## 2026-07-10 - Legacy limit lifecycle parity repair
+
+### Decisions
+
+- Human-track `limit + entry` 不再由 compatibility engine 在提交时直接写 fill。
+  它先写 `accepted` order artifact，只有可信 canonical event 的 high/low 真正触及
+  限价后才生成 fill。
+- 为避免 OHLC 内路径未知带来的乐观结果，已有仓位先处理本 bar 的 protective sweep，
+  随后才接受新触及的 limit entry；新入场不能借同一根 bar 立即触发 TP/SL。
+- 执行快照的 legacy `orders` 不再永远为空：已成交订单从 fill ledger 派生，挂单从
+  order artifact 读取，capability 仍明确是 `derived_from_fill_ledger` 而非 native OMS。
+- Dashboard POST 现在区分 `accepted` 与 `filled`；页面向用户显示“限价单已挂起 ·
+  等待可信行情触及”。
+
+### Gotchas
+
+- 历史 `DualTrackHumanEngine` 直接调用仍保留为导入/同步路径；新的 pending lifecycle
+  只在 execution adapter 边界生效，不能把外部 broker 已成交 fill 改写成挂单。
+- Limit 的数量以提交时 `notional / limit price` 固定，实际触及后按该数量写入 fill；
+  不能在触及时重新用 market price 反算数量。
+- 同一根 OHLC bar 没有可验证的入场后路径。若需要 intrabar TP/SL，必须使用 quote/trade
+  stream，而不是把 1m range 当 tick 序列。
+
+### Evidence
+
+- `limit_entry_waits_for_touch` 真实 Nautilus/XAUUSDT fixture 已 exact `pass`：双方都
+  是 `accepted`、0 fills、0 positions，数量为 `100 / 95`。
+- 固定 fixture gate 当前通过 market entry、limit wait、stop/target 和 same-bar priority；
+  仍因 6 个未完成类而 blocked。
+- Full repository regression: `1360 passed in 428.04s`。
+
+## 2026-07-10 - Fixed parity suite complete; real-cycle qualification remains
+
+### Decisions
+
+- 固定 Nautilus parity gate 现在要求并验证十个明确类别，任何 `drift`、`missing`
+  或 `not_run` 都会阻止 cutover，而不是仅凭少量 happy-path fixture 放行。
+- 历史 `2026-07-09_DAY` machine fills 作为 raw evidence 保持不变；derived trade rebuild
+  对无显式数量的同 rung machine stop/target 使用全部剩余 units，消除 exit-price
+  反推数量造成的 phantom residual。
+- Seven-cycle gate 还要求候选 snapshot 的 `qualifies_for_cutover=true`。一个真实
+  market replay 但 command count 为 0 的 pass 仅证明摄取通路，不能计为执行 parity。
+
+### Gotchas
+
+- Legacy compatibility order lifecycle 是由 fills/order artifacts 派生的，不是 native
+  OMS；它足以进行精确迁移对账，但不能被营销为 exchange queue / partial-fill model。
+- Restart fixture 的模式是 `immutable_replay`：从 persisted input/output artifact
+  重启后语义一致。它不是一个对 Nautilus 内存状态做未验证序列化的声明。
+- 固定 suite 全绿并不授权 paper engine switch；仍须积累 7 个连续、实际含命令的
+  paper cycles，且其中不得有 unexplained drift。
+
+### Evidence
+
+- `dualtrack_nautilus_parity_gate` 实际输出 `pass`，十类全部通过。
+- 当前真实 `2026-07-10_DAY` 再次 replay：493 个 market events、0 accepted commands、
+  reconciliation `pass`；cutover status 明确为
+  `blocked/candidate_activity_insufficient/observed_consecutive_passes=0`。
+- Historical residual check: 14 raw fills、7 rebuilt trades、0 residuals、
+  `raw_fills_immutable=true`。
+- Final full repository regression after lifecycle, accounting, fixture-gate and
+  historical-rebuild changes: `1363 passed in 433.24s`。
+
+## 2026-07-10 - M6 one-cycle shadow operation entrypoint
+
+### Decisions
+
+- `dualtrack_shadow_cycle` 把一个 cycle 的 prepare → isolated replay → exact
+  reconciliation → cutover gate 串成一个无订单操作入口。它的成功状态为 `replayed`，
+  不使用 `pass` 这个容易被误解为切换批准的词。
+- 该入口即使 replay 成功也会保留 cutover gate 的独立状态；`candidate_activity_insufficient`
+  仍返回为清晰的安全阻塞，而不改变 execution engine 或 real-money eligibility。
+
+### Gotchas
+
+- 目前 `2026-07-10_DAY` 没有已接受订单命令。它证明 531 条不可变 market events 的
+  入库、Nautilus replay 和对账通路，但仍不代表订单执行语义已在生产 cycle 上发生。
+- M6 的七次计数必须来自未来按 cycle 落盘的、命令非空的 replay artifacts，不能用
+  同一日期反复运行无订单 cycle 累加。
+
+### Evidence
+
+- 实际 `dualtrack_shadow_cycle` 输出 `replayed`，prepare/replay exit code 均为 0；
+  candidate evidence 为 `replayed_market_events=531`、`authoritative_command_count=0`、
+  `qualifies_for_cutover=false`。
+- Orchestration focused regression: `14 passed`。
+
+## 2026-07-10 - Command-bearing shadow replay enabled
+
+### Decisions
+
+- Isolated Nautilus replay now consumes the immutable accepted-command journal,
+  rather than refusing every nonempty command cycle. It supports market/limit
+  entry, optional bracket TP/SL, and reduce-only exits; malformed, missing-time,
+  invalid-side, invalid-quantity or unsupported order-type commands still fail
+  closed.
+- Candidate fill event labels are inferred from actual execution price against
+  the command SL/TP, and a closed Nautilus net position is normalized back to
+  the originating long/short side instead of leaking `flat` into the common
+  contract.
+
+### Gotchas
+
+- The command journal records only successfully accepted legacy commands. It
+  does not fabricate missing historical commands from fills.
+- This is a paper-shadow path only; command replay neither routes to a broker
+  nor changes the authoritative legacy ledger.
+
+### Evidence
+
+- Isolated command smoke: one market long at 100 with SL 95 replayed to two
+  Nautilus fills, flat long position and realized PnL `-5.00975`; evidence
+  records `authoritative_command_count=1` and `qualifies_for_cutover=true`.
+- Replay/orchestration focused regression: `6 passed`.
+
+## 2026-07-10 - Live API console evidence for cutover guard
+
+### Decisions
+
+- Cutover UI evidence must be captured through `pipelines.dashboard_server`, not
+  a static-file server: the page depends on `/api/dashboard` to present the
+  current shadow-gate state.
+- The visual surface continues to expose the blocked state rather than implying
+  readiness: `执行对账 · 已通过` is intentionally separate from `影子切换 · 需要真实订单样本`.
+
+### Gotchas
+
+- A static render showed `NO LIVE KLINE DATA`; it is a shell-only render and
+  must not be retained as evidence of a working runtime console.
+- The current dashboard also surfaces an unrelated `stale_installed` launchd
+  warning. It does not change the M6 candidate-activity blocker, but it should
+  not be concealed by the cutover display.
+
+### Evidence
+
+- Browser screenshot via local API server: `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-cutover-gate-live-2026-07-10.png`.
+- Browser accessibility snapshot confirms `2026-07-10_DAY`, `执行对账 · 已通过`, and
+  `影子切换 · 需要真实订单样本` in the live console.
+
+## 2026-07-10 - Paper scheduler drift repaired
+
+### Decisions
+
+- Replaced the local `dualtrack-live-tick` LaunchAgent using the attended
+  schedule installer after its generated 60-second cadence was found to differ
+  from the installed 300-second cadence.
+- The operation used a same-day, 15-minute takeover package plus the install
+  acknowledgement. It changed local paper scheduling only; it did not open a
+  broker client or submit an order.
+
+### Gotchas
+
+- An arbitrary package id and an expired package were correctly rejected. The
+  installer requires a fresh package tied to the current run date before it
+  will replace a loaded agent.
+- The installer can take longer than a shell's initial output window because
+  it sequentially backs up, bootouts, bootstraps, kickstarts, and verifies each
+  generated agent. Completion must be read from `install_current.json` and the
+  post-install verifier, not from an early empty stdout window.
+
+### Evidence
+
+- `pipelines.schedule_status`: `active`, with 5/5 generated agents installed,
+  matching, and loaded; `dualtrack-live-tick` interval is now 60 seconds.
+- `pipelines.schedule_post_install_verify`: `pass`; successful receipt at
+  `2026-07-10T10:11:16+00:00`, five backups, and all five rollback entries
+  restorable at `outputs/schedules/launch_agent_backups/20260710T101025Z/`.
+- Before/after console proof is saved at
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-cutover-gate-live-2026-07-10.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-after-scheduler-repair-2026-07-10.png`.
+
+## 2026-07-10 - Persistent Nautilus paper adapter and account-cost parity
+
+### Decisions
+
+- Implement `NautilusExecutionAdapter` as a paper-only, event-sourced adapter.
+  It durably stores accepted commands, trusted market events, replay inputs and
+  outputs, normalized orders/fills/positions/accounts, and snapshots under an
+  isolated `nautilus_paper` ledger.
+- Persist market-event ingestion separately from replay acknowledgement. A
+  process failure after event storage must retry replay on restart; it must not
+  silently classify an unprocessed event as idempotent.
+- Keep adapter construction behind attended approval, an explicit isolated
+  runtime path, and `ready_for_attended_paper_switch`. The current `0/7`
+  command-bearing cycle result cannot select Nautilus.
+- Observe Binance maker/taker rates through the authenticated read-only account
+  endpoint and funding through the public funding endpoint. Persist the exact
+  environment and keep `real_money_eligible=false`.
+- Apply the same observed fee model to both engines in parity fixtures. Market
+  entry and stop are taker events; take-profit is a maker limit event. Exact
+  parity remains required, with no tolerance widening.
+- Move the conflicting TokenPulse share port to 8767 so the trading dashboard
+  is the only listener on 8765. Keep the unrelated goldbot gateway on 8766.
+
+### Gotchas
+
+- The observed Binance rates are from the configured demo account. They are
+  real account observations for paper modeling, not evidence of mainnet fees.
+- A funding-rate sample is not a funding settlement. Do not alter realized PnL
+  until a position is proven open at a real funding timestamp with the correct
+  sign and notional.
+- A replay with hundreds of market events but zero accepted commands proves
+  ingestion only. It must remain `qualifies_for_cutover=false` and must not be
+  rerun seven times to manufacture cycle evidence.
+- Accepted orders submitted after an existing snapshot must be merged into the
+  durable normalized order view immediately; waiting for the next market event
+  would make the operator-facing order state temporarily false.
+- The live Binance WebSocket host completes a handshake on this machine but
+  sends no frames, while the demo host emits frames. Do not substitute demo,
+  REST cache, fallback, or synthetic bars into the live path; report the live
+  stream failure explicitly.
+- TokenPulse port 8767 is a local untracked operator setting; it is not part of
+  this repository commit.
+
+### Evidence
+
+- Fixed parity gate: all 10 classes exact `pass` using the account-observed demo
+  maker/taker model.
+- Persistent-adapter smoke: one command and one trusted market event persisted
+  one order, one fill, one open position, exposure and margin across ten durable
+  JSON projections including processed-event acknowledgement; restart
+  reconciliation returned `ok`.
+- Runtime status: schedule `active`, 5/5 jobs generated/installed/loaded and
+  matching; `dualtrack-live-tick` interval 60 seconds; only the dashboard owns
+  127.0.0.1:8765.
+- Cutover gate: `blocked/candidate_activity_insufficient`, fixture gate `pass`,
+  observed command-bearing cycles `0/7`, configured engine unchanged.
+- Full repository regression after the persisted-event retry repair:
+  `1378 passed in 401.21s`.
+- Live browser proof: `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-persistent-adapter-gate-2026-07-10.png`
+  and `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-cutover-status-0-of-7-2026-07-10.png`.
+  The second screenshot shows reconciliation passed while the paper switch
+  remains blocked for missing real order samples; browser warning/error log is
+  empty.
+
+## 2026-07-10 - Independent 12-hour machine decisions and explicit grid execution
+
+### Decisions
+
+- The machine track now has a dedicated AI-only plan accessor. Machine
+  execution, runtime readiness, command center status, Feishu briefs, and the
+  split dashboard must not inherit or fall back to a locked human plan.
+- Every machine plan is immutable for one 12-hour cycle and records a complete
+  direction (`long`, `short`, or `neutral`), expected range, explicit grid
+  entry/target pairs, invalidation, rationale, and source provenance.
+- The first production planner source is the dated finance daily newsletter's
+  gold section plus trusted Binance bars. The planner may later add disclosed
+  web sources, but it may not fabricate a source or use human-plan artifacts.
+- Planner failure is represented as `decision_error`: persist a degraded,
+  neutral, zero-order plan with the exact error. This is a fail-closed state,
+  not a substitute forecast or synthetic market-data fallback.
+- Explicit grid replay does not derive hidden bp-spaced levels. Intraday replay
+  preserves open positions; only TP, SL, or the 12-hour cycle close can close
+  them. OHLC ambiguity remains conservative: a touched stop wins before entry.
+- Every closed cycle writes a machine review, including neutral and zero-fill
+  cycles. The review records actual versus predicted range, touched/filled
+  grid levels, PnL, and a concrete no-trade reason.
+- The split dashboard exposes machine decisions without the former blind-state
+  human fallback. It shows the AI range, explicit grid pairs, rationale, and
+  machine review while keeping machine order controls read-only.
+
+### Gotchas
+
+- The installed Codex CLI inherited `gpt-5.6-terra` from user config and
+  rejected the first planner call because the CLI version was too old. The
+  planner now runs ephemerally with ignored user config and an explicit
+  `gpt-5.4` model; the failed attempt remains in the audit trail.
+- Existing cycle tests used human-only fixtures while asserting machine fills.
+  Those fixtures had to seed AI plans explicitly; otherwise the new, correct
+  behavior is machine stand-down.
+- Legacy fixed-spacing AI plans remain readable for historical replay, but new
+  autonomous plans are required to carry `grid_orders`. Keeping legacy replay
+  compatibility does not authorize creating new implicit grids.
+- The current DAY plan predates this contract and was not rewritten mid-cycle.
+  The first new-format production plan is `2026-07-10_NIGHT`.
+- The first NIGHT tick initially arrived before a cycle bar was available and
+  correctly skipped with `cycle_bars_missing`. Once the first trusted bar was
+  present, the next run armed both explicit levels. A missing first-minute bar
+  is not permission to synthesize one.
+
+### Evidence
+
+- Full repository regression: 1385 passed. Follow-up sizing and dashboard
+  checks passed in focused suites after clarifying that grid weights allocate
+  the machine track's full nominal budget and may total at most 1.0.
+- Production machine plan:
+  `outputs/dualtrack/plans/2026-07-10_NIGHT_ai.json` (short, range 4092-4116,
+  explicit levels 4108 and 4113, newsletter provenance).
+- Planner trace:
+  `outputs/dualtrack/planning/2026-07-10_NIGHT_machine.json`.
+- Live runtime at 21:04 Beijing: all five checks `ok`; 60-second scheduler had
+  processed four NIGHT bars, machine author was `ai`, layers were
+  `decision:ai_independent` and `grid:ai_levels_armed_no_fill`, and fills were
+  empty because neither planned entry had traded.
+- Browser proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-independent-machine-plan-2026-07-10-night.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-independent-machine-full-2026-07-10-night.png`.
+  The live page shows human long versus machine short, the 4092-4116 range,
+  explicit 4108/4113 entries, and $55k/$45k nominal allocation. Browser
+  warning/error log was empty; machine top-card DOM intersections were zero.
+
+## 2026-07-10 - 机器轨平仓与早晚复盘统一为 Feishu 卡片
+
+### Decisions
+
+- 机器轨 entry、target、stop、cycle flatten 和主动 exit 全部发送 Feishu interactive card；不再让平仓事件退回纯文字。
+- 平仓卡按结果使用固定颜色：止盈绿色、止损红色、周期结束蓝色、主动平仓灰色。
+- 平仓卡第一屏只展示交易闭环、开平仓价、TP/SL、净结果、R 倍数、名义金额和审计状态；原始文字仍保留为发送审计正文。
+- `pm_morning` 和 `pm_evening` 在统一 sender 内自动生成复盘卡，第一屏只保留黄金行情、窗口已实现盈亏、机器轨表现、原因和下一步。
+- 早盘复盘、晚盘复盘和 12 小时机器作战单三个 Codex automation 的中文策略名统一为“机器轨网格”，并明确不得额外补发纯文字副本。
+
+### Gotchas
+
+- `outputs/feishu_reports/2026-07-10.json` 和 `outputs/dualtrack_trade_notifications/2026-07-10.json` 中的旧名称属于历史回执，不应改写；新发送从代码和 automation prompt 两端统一使用“机器轨网格”。
+- Feishu interactive card 发送时不会展示兼容性 `text` 正文，但该正文仍用于 source hash 和回执审计。
+- 本次没有补发历史交易或复盘样本，避免再次刷屏；下一笔自然发生的平仓和下一次定时复盘才会在真实 Feishu 群中显示新卡片。
+- Missing visual proof: 尚无“修改后真实 Feishu 投递”的截图，因为本次刻意不发送额外样本。现有 `outputs/feishu_reports/2026-07-10.json` 仅作为历史发送 trace，不作为新样式 Evidence。
+
+### Evidence
+
+- 本地卡片视觉证据：`/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-10-feishu-trade-review-cards.png`。
+- 对应渲染 trace：`/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-10-feishu-trade-review-cards.html`。
+- 真实数据预览使用 `2026-07-10_NIGHT` 止盈 fill（净结果 `+$101.61`）和 `outputs/pm_reports/2026-07-10-evening.md`（窗口已实现 `-76.67 USD`）。
+- Focused regression：57 passed，覆盖止盈绿色、止损红色、盈利复盘绿色、亏损复盘红色、去重和 dualtrack runner 回归。
+
+## 2026-07-13 - Neutral means a bilateral grid, not no trade
+
+### Decisions
+
+- A healthy machine `neutral` decision must carry explicit long orders in the
+  lower half of the expected range and explicit short orders in the upper half.
+  Only a degraded planner failure may remain neutral with zero orders.
+- Neutral orders share the machine track's total notional budget. Their weights
+  across both sides must total at most 1.0, and each side has its own declared
+  range-boundary stop.
+- A mid-cycle plan repair records `execution_start`; only bars at or after that
+  timestamp are eligible for fills. Earlier touched levels remain missed
+  opportunities and must never be relabeled as live paper trades.
+- The live DAY plan was safely revised only because it had zero fills. The old
+  zero-order plan was quarantined before replacement.
+
+### Gotchas
+
+- The planner prompt, plan validator, runner, review language, and dashboard all
+  independently encoded `neutral = no orders`; changing only the UI would have
+  left the engine inactive.
+- A bilateral grid must preserve original plan rung indexes when long and short
+  orders are simulated separately, otherwise review rows can be matched to the
+  wrong fills.
+- The 2026-07-13 repair uses information available at 14:49 Beijing and is valid
+  only from that moment. It cannot be used to claim that the morning's large
+  move was actually traded.
+
+### Evidence
+
+- Full repository regression: `1403 passed in 382.58s`.
+- Live plan: `outputs/dualtrack/plans/2026-07-13_DAY_ai.json` with two long and
+  two short grid orders and `execution_start=2026-07-13T06:49:45+00:00`.
+- Quarantined legacy plan:
+  `outputs/dualtrack/quarantine/machine_plans/2026-07-13_DAY_ai.legacy-neutral-20260713T064945Z.json`.
+- Browser proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/dualtrack-neutral-bilateral-grid-2026-07-13.png`.
+
+## 2026-07-13 - Recorded PnL, durable history, and 12-hour review visibility
+
+### Decisions
+
+- Recovery replay remains distinguishable from live-observed execution, but it
+  is included in the operator-facing recorded PnL. Daily and weekly ledgers now
+  expose live, recovery, and recorded totals separately.
+- Historical daily ledgers are rebuilt only from durable fill evidence. Missing
+  fills remain zero rather than being inferred from a chart or plan.
+- The split canvas shows the full daily history for both tracks and keeps the
+  latest completed 12-hour review visible during the active cycle.
+- Every newly closed cycle writes human and machine review dimensions for
+  direction, key levels, entry signal, and TP/SL geometry. Missing structured
+  signal evidence is shown as missing and is not graded optimistically.
+- The next machine planning cycle receives the previous machine four-dimension
+  review and must persist a concrete `review_adjustment`; a plan that ignores an
+  available review fails closed instead of claiming a learning loop.
+
+### Gotchas
+
+- When the current cycle already exists in a rebuilt daily ledger, the frontend
+  must exclude that cycle before adding live API state. Falling back to the
+  daily total after the exclusion produced a temporary double count that was
+  caught in browser verification.
+- Recorded PnL and live-execution performance are different claims. Recovery
+  replay counts in the former but stays explicitly excluded from the latter.
+- Unrealized PnL is not treated as zero when the live mark is unavailable. The
+  UI now says that it is temporarily excluded from today and this week.
+- The already locked 2026-07-13 DAY plan was not rewritten. Review feedback
+  starts with the next naturally planned cycle, preserving plan immutability.
+
+### Evidence
+
+- Focused DualTrack regression: `247 passed`.
+- Browser DOM verification: 9 dated rows from 2026-07-05 through 2026-07-13,
+  no browser errors, and both review widgets visible in the mid-cycle phase.
+- Screenshots:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-ledger-12h-review.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-machine-12h-review.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-ledger-12h-review-full.png`.
+
+## 2026-07-13 - Weekend-safe range reference and independent chart timeframes
+
+### Decisions
+
+- A range boundary breach is recorded with its first timestamp and bar geometry.
+  For a neutral bilateral grid, the breached side stops while the other side
+  remains independently eligible; the UI states this policy instead of calling
+  every breach a whole-plan failure.
+- New machine plans use the median range of the latest 10 complete non-weekend
+  12-hour samples as a transparent minimum width. Weekend and incomplete
+  samples remain in `planning_context.excluded_samples` rather than silently
+  influencing the range.
+- An AI range below that floor is widened symmetrically and records the original
+  range, adjusted range, reference method, and excluded weekend count. Existing
+  locked plans and historical fills are never rewritten by this safeguard.
+- Human and machine main charts now keep separate timeframe state. Human remains
+  `1m/5m`; machine supports `1m/5m/15m/30m/1h/4h`. All four context charts keep
+  their existing independent selectors.
+
+### Gotchas
+
+- The 2026-07-13 DAY revision did not directly use weekend bars: it used 350
+  bars from that Monday before locking. The real weakness was the single
+  previous-cycle range input and lack of a robust minimum-width contract.
+- `4044-4078` is 34 price points, not less than one point. It was still narrower
+  than the current non-weekend 12-hour median of 54.75, so the new floor would
+  transparently widen the same candidate to `4033.625-4088.375`.
+- A shared `state.mainTf` also coupled WebSocket subscriptions and live-trade
+  refresh behavior. Splitting only the buttons would have left the data paths
+  coupled, so storage, REST loads, subscriptions, labels, and refresh gating all
+  had to become track-specific.
+
+### Evidence
+
+- Focused backend/frontend regression: `123 passed`.
+- Full repository regression: `1408 passed in 364.40s`.
+- Browser checks at 1565, 740, and 390 CSS pixels: no horizontal overflow or
+  timeframe-button intersection; human remained `1m` while machine rendered
+  `4h`, both with 240 Binance bars and zero console warnings.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-independent-timeframes-range-record.png`.
+
+## 2026-07-13 - Equal main-chart timeframes and daily context
+
+### Decisions
+
+- Human and machine main charts expose the same independent timeframe set:
+  `1m/5m/15m/30m/1h/4h`.
+- Every context chart adds `1d` while preserving its own saved selection.
+- Daily bars use the existing Binance USD-M native REST and WebSocket interval;
+  no derived, fallback, cached, or synthetic data path was added.
+
+### Gotchas
+
+- Equal available options do not mean synchronized selection. Changing one
+  track must not change the other track.
+- A live daily candle keeps its UTC-open timestamp throughout the day, so the
+  freshness bound follows the existing two-interval policy and is 2880 minutes.
+
+### Evidence
+
+- Static split-canvas regression: `20 passed`.
+- Browser: human main `4h`, machine main `1m`, human context `1d` with 215
+  Binance bars; no console warnings or errors.
+- Mobile browser at 390 CSS pixels: zero horizontal overflow and zero
+  timeframe-button intersections across all six selectors.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-equal-main-timeframes-daily-context.png`.
+
+## 2026-07-13 - Confirmed range breach triggers a full machine replan
+
+### Decisions
+
+- This decision supersedes the earlier same-day rule that kept the unbreached
+  side of a neutral grid eligible after a boundary breach.
+- The first touch of either range boundary pauses every new entry from the old
+  plan. Existing positions remain exit-only and can close only through their
+  recorded TP/SL rules.
+- A true range break requires three consecutive complete 1-minute closes
+  strictly outside the boundary. Confirmation triggers a fresh AI decision for
+  direction, the complete range, key levels, and all grid orders.
+- The replacement plan starts no earlier than the next unseen bar. It cannot
+  create fills from bars already available to the planner, and all fills from
+  the superseded plan remain in the durable ledger.
+- Range revisions are archived with both plan versions and the trigger bars.
+  Replanning is limited to two revisions per cycle with a 60-minute cooldown.
+- Planner failure is fail-closed: old entries remain paused, the error is
+  visible, and the system retries after five minutes. Fewer than 30 minutes
+  before cycle close, it waits for the next 12-hour decision instead.
+
+### Live Result
+
+- The old `4044-4078` neutral plan first touched its upper boundary at 16:18
+  Beijing and confirmed the break with the 16:21-16:23 closes.
+- Two existing short positions were genuinely stopped at 4078; this history
+  was preserved and was not reclassified or rewritten.
+- After the scheduler environment was repaired, the machine independently
+  replaced the plan at 19:33 Beijing with a `short` plan, full range
+  `4042-4098`, and three sell-grid entries at 4072, 4081, and 4089.5.
+- The runtime returned to `ok`, the new plan was inside range on its next tick,
+  and no historical level was backfilled as a new live trade.
+
+### Gotchas
+
+- The live scheduler initially failed to launch the planner because launchd's
+  PATH did not include `/opt/homebrew/bin`, where `codex` and its Node runtime
+  are installed. The generated schedule and installed live-tick job now carry
+  an explicit deterministic PATH.
+- A terminal `failed` state would have left the machine paused for the rest of
+  the cycle even after the environment was fixed. Failed replans now retain the
+  safety pause but retry every five minutes.
+- Replanning from the latest bar timestamp itself can introduce look-ahead if
+  that bar was already observed. `execution_start` is therefore later than the
+  observed bar and makes the next bar the first eligible execution input.
+- Recovery replay rows remain separate from live-observed fills. The four live
+  fills from the old plan remain the runtime paper sample; recovery rows are
+  still excluded from that claim.
+
+### Evidence
+
+- Focused range, scheduler, API, and split-canvas regression: `96 passed` and
+  `88 passed` in the two post-change suites.
+- Final full repository regression, including launchd PATH and failed-replan
+  retry behavior: `1411 passed in 371.13s`.
+- Live runtime: status `ok`, scheduler `active` with 4/4 matching and healthy
+  jobs, current range `4042-4098`, and machine not stood down.
+- Browser DOM: global status `运行`, direction `做空`, three visible short
+  grid orders, complete reassessment explanation, zero console errors, and no
+  horizontal overflow at 1280 CSS pixels.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-range-reassessment.png`.
+
+## 2026-07-13 - Pending human limit orders stay visible and executable
+
+### Decisions
+
+- An accepted human limit order remains visible in the split canvas under
+  `Current orders` until it is filled, cancelled, or rejected. The row exposes
+  side, notional, quantity, limit price, TP/SL, and submission time.
+- A limit order that is already marketable against the trusted current mark is
+  filled immediately as taker liquidity while preserving its requested limit
+  price for audit.
+- Live-tick processing must continue when there are accepted entry orders even
+  if no position is open. Position-exit checks and pending-entry checks share
+  the same execution snapshot but have independent eligibility.
+- A partial OHLC bar that began before order acceptance may use only its current
+  trusted mark for post-order matching. Its earlier high and low cannot create
+  a look-back fill.
+
+### Gotchas
+
+- The execution API already returned accepted orders; the split canvas simply
+  never rendered them, so a persisted order looked lost to the user.
+- The old protective-exit sweep returned early whenever there was no open
+  position, which also skipped every pending entry order.
+- The affected short limit at 4,056.9 was persisted and marketable. After the
+  fix, the normal 60-second live tick filled it and the UI now shows the open
+  short position instead of an invisible pending state.
+
+### Evidence
+
+- Focused execution, cycle-runner, API, and split-canvas regression:
+  `83 passed`.
+- Full repository regression: `1414 passed in 428.85s`.
+- Live browser: `Current orders` shows `0` after the real fill; the position
+  shows short `12.3247`, entry `4,056.9`, TP `4,036.7`, and SL `4,070.1`.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-pending-order-lifecycle.png`.
+
+## 2026-07-13 - Twelve-hour review closes into one testable next-iteration change
+
+### Decisions
+
+- Every completed 12-hour cycle now records market regime, direction, range,
+  key levels, signal, TP/SL geometry, execution evidence, and PnL separately.
+- A neutral market is determined by directional efficiency: the absolute net
+  move divided by the full high-low range. A slightly higher or lower close is
+  still neutral when path efficiency is below 35%.
+- No trade is a valid observed result. It is not automatically scored as a
+  strategy failure when planned levels were not touched.
+- One review can propose at most one changed dimension. It must have a durable
+  change id, one expected metric, and a stated validation rule.
+- Human-track output is advisory only and can never modify or lock the next
+  human plan. Machine-track output enters a paper challenger only.
+- A machine challenger needs at least 10 completed cycles and 30 trades before
+  it can be shown as ready for operator review; 100 trades are preferred. It
+  is never auto-promoted.
+- The next machine planner must explicitly carry the same structured change id,
+  dimension, mode, and metric. Legacy free-text reviews cannot silently alter
+  the next plan.
+
+### Gotchas
+
+- Treating neutral as exact `close == open` misclassifies ordinary range-bound
+  sessions as directional and creates false review feedback.
+- One losing or breached cycle is evidence for a challenger, not permission to
+  tune several parameters or declare a better strategy.
+- Reading review prose is not self-evolution. The loop becomes auditable only
+  when the proposed change is carried into the next plan and accumulated under
+  the same id with explicit sample counts.
+- Historical reviews lack the v3 evidence contract. They remain visible but are
+  labeled insufficient and cannot produce an automatic next-iteration change.
+- Meeting the minimum sample only means `ready_for_operator_review`; it never
+  means automatic production promotion.
+
+### Evidence
+
+- Focused review, dashboard, scoring, and cycle regressions: `102 passed`.
+- Full repository regression: `1418 passed in 406.24s`.
+- Browser at 1280 and 740 CSS pixels: both review tracks are visible, zero
+  horizontal overflow, and zero console errors.
+- Current historical cycle is explicitly labeled as legacy evidence and does
+  not claim a validated challenger.
+- Screenshots:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-review-v3.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-review-v3-mobile.png`.
+
+## 2026-07-13 - Position protection remains visible and active across cycles
+
+### Decisions
+
+- The position, risk, and fills widgets must derive from the same durable open
+  trades, including positions opened in an earlier cycle and still open now.
+- The position widget lists every open trade separately with direction,
+  quantity, notional, entry, holding time, exact TP, and exact SL.
+- TP and SL shown for a position must come from that trade or its entry fill.
+  The current plan is never a fallback because it may describe another trade.
+- A position remains protected after the cycle changes. Protective exits and
+  manual closes are executed against the position's origin ledger while also
+  recording the current request cycle for audit.
+
+### Gotchas
+
+- The fills table already included prior same-day trades, while position and
+  risk read only the current cycle. That made one page contradict itself.
+- Current-cycle-only protective sweeps did more than hide the position: they
+  also stopped monitoring the carried position's TP and SL.
+- The user's short from the day cycle was still open when this was diagnosed.
+  Once cross-cycle monitoring was restored, its trusted 1-minute bar touched
+  TP and the engine closed it normally at 4,036.7.
+
+### Evidence
+
+- Live result: short entry `4,056.9`, TP `4,036.7`, SL `4,070.1`, closed at TP
+  at Beijing time `22:09`; total realized PnL including costs is `+$243.97`.
+- Focused dashboard, API, execution, and cycle regressions: `80 passed`.
+- Full repository regression: `1422 passed in 413.73s`.
+- Browser: human position shows `无持仓`, fills show the TP close at `4,036.7`
+  and `+$243.97`, horizontal overflow is zero, and console errors are empty.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-position-protection.png`.
+
+## 2026-07-13 - Daily cycle and visible two-second Binance market refresh
+
+### Decisions
+
+- New DualTrack cycles use one Beijing natural day: `00:00-24:00`, starting
+  `2026-07-14`. Historical DAY/NIGHT cycle ids keep their original 12-hour
+  meaning so stored trades, reviews, and ledger records do not move.
+- The existing `2026-07-13_NIGHT` cycle is a one-time transition window from
+  `21:00` to midnight. At midnight it closes and `2026-07-14_DAY` opens for 24
+  hours.
+- The split canvas refreshes all active chart timeframes from Binance XAUUSDT
+  public REST every two seconds. There is no alternate provider, cached market
+  fallback, or synthetic bar.
+- Every chart uses the same latest Binance 1-minute close for its still-open
+  candle. Historical OHLC remains the exchange response, while the current
+  close and high/low envelope stay internally valid.
+- Chart refresh is a display path. Protective exits and paper matching remain
+  driven by the trusted 1-minute backend cadence, not by browser polling.
+
+### Gotchas
+
+- A WebSocket `open` event proved only that the handshake succeeded. Direct
+  probes of XAUUSDT kline, mark-price, and aggregate-trade streams produced no
+  messages, so the prior green `connected` state was a false health claim.
+- Concurrent REST requests for different timeframes can finish at slightly
+  different instants. Without one canonical live close, six individually valid
+  responses still show contradictory prices on one screen.
+- The 60-second full-page data reload briefly reintroduced divergent closes
+  until it was required to await the same canonical two-second refresh before
+  rendering.
+- Reusing `2026-07-13_DAY` for a new natural-day cycle would collide with an
+  already completed historical cycle. The midnight cutover preserves identity
+  and audit history.
+
+### Evidence
+
+- Focused DualTrack regression: `299 passed`.
+- Full repository regression: `1426 passed in 421.93s`.
+- Live browser at 1280 CSS pixels: all six chart closes remained identical
+  before and after the page's 60-second full reload; latest prices changed
+  during the sample and horizontal overflow was zero.
+- The data widget shows `2秒刷新`, a seconds-level refresh timestamp, and
+  `Binance REST ... 无备用源`.
+- Screenshots:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-24h-cycle-cutover.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-13-dualtrack-2s-live-market.png`.
+
+## 2026-07-14 - Unified daily PnL bars and cumulative NAV
+
+### Decisions
+
+- The operator-facing ledger has one PnL definition: every durable paper fill
+  is recorded in that track's daily realized PnL. Recovery provenance remains
+  in raw evidence for audit but is not a separate performance bucket or UI
+  column.
+- Daily ledger artifacts are rebuilt after every filled human order and every
+  minute-level DualTrack live tick. The ledger GET also reconciles from durable
+  fills so a stale derived ledger cannot hide a later cross-cycle exit.
+- The split canvas replaces the four-column history table with an interactive
+  daily PnL histogram and a cumulative NAV line starting at zero. Hover shows
+  date, daily PnL, and cumulative NAV.
+
+### Gotchas
+
+- The July 13 human row showed `+$93.48` because it combined a stale DAY entry
+  cost of `-$2.50` with the NIGHT trade's `+$95.98`. The DAY trade later closed
+  at TP for `+$243.97`, but that cross-cycle exit had not rebuilt the DAY ledger.
+- Hiding the recovery column without fixing ledger refresh would only conceal
+  the accounting error. Durable fills must remain the source of truth and the
+  daily/weekly ledgers must be treated as derived views.
+- Lightweight Charts returns business-day objects from crosshair events even
+  when input times are ISO date strings. Tooltip lookup must normalize that
+  object back to `YYYY-MM-DD`.
+- Page CSS color literals are token-gated; a tooltip shadow introduced an
+  unauthorized RGBA literal and was removed before completion.
+
+### Evidence
+
+- July 13 human realized PnL now reconciles to `+$339.95`: DAY `+$243.97` plus
+  NIGHT `+$95.98`.
+- Browser hover on July 13 shows daily PnL `+$339.95` and cumulative NAV
+  `+$432.49`; both tracks render daily bars plus NAV curves, with zero console
+  errors and zero horizontal overflow.
+- Focused DualTrack regression: `299 passed`.
+- Full repository regression: `1426 passed in 384.18s`.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-14-dualtrack-daily-pnl-nav.png`.
+
+## 2026-07-14 - Unified morning trading card closes review into next plan
+
+### Decisions
+
+- The 09:00 machine brief and the 10:00 morning review are one operator-facing
+  morning trading card: previous-cycle result, one review-driven adjustment,
+  the current cycle plan, and the evidence-chain status.
+- The card reads the actual cycle window. It says `24 hours` after the natural-
+  day cutover and still renders historical 12-hour cycles correctly.
+- `计划链路正常` means a completed previous review was read, an adjustment was
+  recorded, and the current AI plan is locked. Full lifecycle/runtime health
+  remains an independent audit conclusion.
+- The previous review is addressed through `previous_review_cycle_id`; missing
+  or incomplete review evidence is shown as missing and PnL is not inferred.
+
+### Gotchas
+
+- Keeping `未来 12 小时` in automation prose after the 24-hour cutover would
+  make a visually polished card factually wrong.
+- A successful brief build does not prove full system health. The card must not
+  turn plan availability into a global green status claim.
+- Neutral plans carry explicit long and short grid sides. Orders without a side
+  must fall back to the plan direction or they can appear in both grid columns.
+- The existing 10:00 report is a duplicate user-facing surface once its prior-
+  cycle result is incorporated into the 09:00 card.
+
+### Evidence
+
+- Relevant Feishu and machine-plan regression: `35 passed`.
+- Live Feishu delivery verified at `2026-07-14T01:31:27+00:00`; the newest
+  `dualtrack_machine_brief` receipt is `delivered=true`, channel `feishu`, and
+  message format `interactive_card`.
+- Desktop and mobile visual proofs:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-14-unified-morning-trading-card.png`
+  and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-14-unified-morning-trading-card-mobile.png`.
+
+## 2026-07-14 - Restore 12-hour strategy windows and expose machine rules
+
+### Decisions
+
+- Machine planning and review return to two Beijing-time windows:
+  `09:00-21:00` and `21:00-09:00`. Daily PnL and NAV accounting remain on the
+  Beijing natural day so strategy cadence and accounting cadence stay separate.
+- The already-open `2026-07-14_DAY` cycle closes at `21:00` as a one-time
+  21-hour transition window. Normal 12-hour DAY/NIGHT cycle ids resume from
+  `2026-07-14_NIGHT`; recorded fills are not reassigned retroactively.
+- The machine canvas shows the complete executable IF/THEN rule set and
+  highlights the branch currently matched by live runtime state. Thresholds and
+  prose are derived from the config API instead of being a second hard-coded
+  strategy specification.
+- Direction and range are re-evaluated on the 12-hour cadence or after a
+  confirmed range breach. Signal execution remains continuous, and market-data
+  or risk failures stop new entries immediately.
+
+### Gotchas
+
+- Reinterpreting the existing July 14 cycle as ending at `09:00` would move or
+  orphan already-recorded fills. The explicit `21:00` transition preserves the
+  audit trail.
+- A conceptual `two 5-minute closes` rule was discussed but is not the current
+  engine contract. The implemented rule remains the configured three
+  consecutive 1-minute closes and must not be silently relabeled in the UI.
+- A rules panel that is only explanatory copy will drift from execution. The
+  displayed confirmation count, timeframe, cooldown, retry delay, replan cap,
+  and minimum remaining time must all come from `/api/dualtrack/config`.
+- The in-app browser runtime currently fails while loading its browser client
+  with `Cannot redefine property: process`; source and API checks are trace, not
+  a substitute for the screenshot required by the Evidence Contract.
+
+### Evidence
+
+- Focused DualTrack regression: `300 passed`.
+- Full repository regression: `1427 passed in 387.79s`.
+- Inline dashboard JavaScript syntax and touched-file whitespace checks pass.
+- Missing visual proof: the machine rules panel on the localhost split canvas
+  still requires a desktop and sub-760px browser screenshot after the in-app
+  browser connection is restored.
+
+## 2026-07-14 - Single production strategy console migration
+
+### Decisions
+
+- `dashboard-dualtrack-split.html` is now a single production-strategy
+  console. It reads `strategy-production-console-v1`, not the previous
+  human/machine canvas payloads. The legacy pages, APIs, plan files, fills and
+  ledgers remain available as historical compatibility surfaces.
+- `StrategyPlan` is the only active production plan per cycle. It has a stable
+  ID, integer version, cycle, parameters, intraday rules, selected proposal
+  IDs, and per-field origin (`human`, `ai`, or `confirmed`). A new console
+  order carries `strategy_plan_id` and `strategy_plan_version` into the paper
+  fill ledger.
+- Old human and AI plans are read losslessly as same-schema `PlanProposal`
+  records. The compatibility rule remains explicit: locked human proposal
+  first, otherwise AI proposal, otherwise no production plan and no new entry.
+  It never blends fields silently.
+- `strategy_shadow` is a separate, deterministic historical counterfactual
+  path. It consumes frozen plan parameters plus chronological market events,
+  writes only `outputs/dualtrack/strategy_shadows/`, and reports orders,
+  fills, positions, PnL and review metrics. `execution_shadow` remains the
+  legacy ledger-vs-execution-engine parity surface and is not used for
+  strategy-performance comparisons.
+
+### Gotchas
+
+- Current Tiger/COMEX data was real but stale at validation time. The console
+  correctly rendered the chart while stopping all new entries; it must not be
+  relabeled as a live-ready chart or replaced with synthetic prices.
+- Historical dual-track paper fills cannot be retroactively rewritten into a
+  single ledger without changing audit evidence. They are retained as legacy
+  compatibility records; all new production-console orders have the new plan
+  attribution fields.
+- The first two recorded what-if variants (`atr-1-grid-8` and
+  `atr-2-grid-16`) had zero closed trades against the exact frozen historical
+  event window. Zero is a valid result, not missing data or a reason to invent
+  outcomes.
+- The preferred in-app browser connection failed with `Cannot redefine
+  property: process`; visual proof was captured with local headless Chrome
+  against the same localhost URL. This is browser-rendered evidence, not a
+  source-only claim.
+
+### Evidence
+
+- Targeted production-console, plan-store and shadow regression: `40 passed`.
+- Desktop, mobile, and Strategy Shadow browser-rendered evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-production-console-desktop-2026-07-14.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-production-console-mobile-2026-07-14.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-production-console-shadows-2026-07-14.png`.
+
+## 2026-07-14 - Paper robot console controls
+
+### Decisions
+
+- The production console now exposes actual paper-control actions: start,
+  stop, cancel all pending limit orders, revise range/grid as a new strategy
+  plan version, and reset displayed statistics by recording a new baseline.
+- Stop is execution-relevant: once control state has been configured, the
+  intraday runner skips new production entries while it is stopped. Protective
+  exits remain outside this gate.
+- Cancel changes only `accepted` pending orders. Replanning supersedes the old
+  plan but retains it; reset statistics retains every fill and ledger artifact.
+
+### Gotchas
+
+- These are paper controls, not live-broker controls. They never submit,
+  cancel, or flatten a live broker account.
+- Current market data remains stale, so start does not override the independent
+  trusted-market gate. A started robot still cannot open a position until the
+  data feed is fresh and canonical.
+
+### Evidence
+
+- Controls, plan history and runner regression: `65 passed`.
+- Browser-rendered control surface:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-live-controls-2026-07-14.png`.
+
+## 2026-07-14 - Baseline robot layout and live Tiger refresh
+
+### Decisions
+
+- The console layout follows the supplied grid-robot baseline literally: left
+  side starts with trend recognition and strategy configuration, then the
+  robot start / stop-and-clear controls; account summary, large price/grid
+  chart, real-time status, and fills occupy the same reading order.
+- MACD is no longer expanded by default. The default chart preserves the
+  primary price/grid view with EMA overlays.
+- Demo account equity is read from the real paper ledger (`ending_cash`), not
+  a display placeholder. The validated value is `$9,906.84` from a `$10,000`
+  starting balance and recorded paper PnL.
+
+### Gotchas
+
+- The stale quote was not a front-end refresh failure: the Tiger importer had
+  not run since `2026-07-06T09:48:00Z`. A read-only Tiger import refreshed 500
+  real MGC bars to `2026-07-14T04:18:00Z`; no fallback or synthetic quote was
+  used.
+- That one refresh does not prove a durable always-on ingestion schedule. The
+  next control-plane pass must wire the importer into the recurring runtime
+  before calling the feed continuously live.
+
+### Evidence
+
+- Layout, controls, plan-store, runner and API regression: `65 passed`.
+- Live data browser proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-baseline-live-feed-2026-07-14.png`.
+
+## 2026-07-14 - Reference-first grid robot shell
+
+### Decisions
+
+- The page is now rebuilt from the supplied grid-robot reference before any
+  additional backend-driven layout work. Its first view is exactly the
+  reference reading order: market/trend, strategy configuration, running
+  adjustment; then account overview, price/grid, real-time state, and fills.
+- Removed the `人工 / AI 提案差异` card from the operational first view. It
+  remains represented in the production-plan evidence model and can return in
+  a later history/detail surface, but it no longer competes with robot use.
+- The reference controls now have real UI affordances: direction and style are
+  selectable, the visible grid parameters are editable, start and
+  stop/cancel/flatten retain their paper-control handlers, and the K-line
+  period selector reads the existing canonical market-bars endpoint rather
+  than resampling or fabricating data in the browser.
+
+### Gotchas
+
+- “Smart fill” deliberately only fills reviewable visible parameters in this
+  phase; applying a changed direction/range/grid creates an explicit plan
+  version. It is not an opaque automatic mutation.
+- The 5-minute canonical response is reachable and has 240 real bars, but is
+  currently `stale` (not synthetic). The visual console therefore shows the
+  red fail-closed state; the missing recurring Tiger ingestion remains a
+  backend runtime concern, not a front-end refresh substitute.
+- Local headless Chrome constrains very narrow windows to a larger desktop
+  layout width, so its 390px screenshot is browser-rendered but only
+  conservative proof of mobile cropping. CSS switches the actual page to
+  single-column left cards and single-column control fields below 1120px.
+
+### Evidence
+
+- Reference-shell focused regression: `65 passed`.
+- Browser-rendered desktop and narrow-screen evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-reference-shell-desktop-2026-07-14.png` and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-reference-shell-mobile-2026-07-14.png`.
+
+## 2026-07-14 - Reference parity and button acceptance
+
+### Decisions
+
+- The reference comparison is now enforced at component level: the header
+  badges, left-card ordering, trend recommendation action, direction/style
+  selectors, parameter block, start/stop controls, running adjustment card,
+  four account metrics, large price/grid area, status and fills all use the
+  same visual reading order as the supplied robot console.
+- The chart remains the existing trusted `standard-kline` implementation as
+  required by the trading console contract. Grid lines are generated from the
+  active plan's real range and real grid count, not from screenshot values.
+- A real DevTools browser pass clicked every visible application button, all
+  six K-line period buttons, the period selector, every tab, and six chart
+  library controls. Paper-control actions were then verified against the
+  backend state rather than only checking their visual affordance.
+
+### Gotchas
+
+- The acceptance pass intentionally exercised the paper `adjust_plan` action.
+  It preserved the prior plan and created auditable versions through v4, as
+  designed; the final runtime state is `stopped`, with no new position opened.
+- There was no open position in the ledger, so the conditional `手动平仓`
+  control was correctly not rendered and could not be clicked. Its handler is
+  retained for when a position exists.
+- The market is still `stale`. Button validation did not bypass the market
+  gate: start can set the paper desired state, but no fresh-market entry can
+  be produced, and the final visible state remains stopped/new entries blocked.
+
+### Evidence
+
+- Focused regression and syntax validation: `65 passed`.
+- Browser interaction pass: all app, timeframe, tab and chart buttons passed;
+  start/stop, replanning and statistics reset all passed their backend-state
+  assertions. Final state: `stopped`, active plan version `4`.
+- Browser-rendered desktop, live button-check and actual mobile evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-reference-iteration-desktop-2026-07-14.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-browser-button-check-2026-07-14.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-reference-actual-mobile-2026-07-14.png`.
+
+## 2026-07-14 - Console market source switched to Binance
+
+### Decisions
+
+- Per the explicit operator decision, the production-console default market
+  reader now uses the existing Binance USD-M demo GOLD/XAUUSDT one-minute
+  feed. It is the same feed refreshed by the installed 60-second
+  `gold-1m-feed` heartbeat.
+- This is a source selection, not a fallback chain: when the configured
+  Binance source is absent or stale, the console blocks entries. It does not
+  quietly fall back to Tiger or synthetic data.
+
+### Gotchas
+
+- The Tiger MGC data is still retained in the market database and historic
+  receipts, but is no longer the console's default quote source. It was 39
+  minutes old at diagnosis time because `tiger_futures_feed.enabled` is false
+  and no Tiger heartbeat is installed.
+- The Binance source is an execution-venue/demo feed and carries its explicit
+  provenance flags (`public_proxy_feed`, `execution_venue_feed`,
+  `crypto_perpetual`, `xauusdt`). It is not claimed to be COMEX broker data.
+
+### Evidence
+
+- Market feed, API, console static, strategy control and runner regression:
+  `70 passed`.
+- Live console API assertion: `GOLD`, `binance_usdm`, `ready`, `fresh`, and
+  non-synthetic.
+- Browser-rendered proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-binance-live-2026-07-14.png`.
+
+## 2026-07-14 - Production console interaction repair
+
+### Decisions
+
+- The trend card is now strictly an operator-facing explanation: market,
+  symbol, timeframe, bar count, update time, trend and confidence.  Provider
+  implementation flags and raw operation metadata are retained in API
+  provenance, not rendered as trading guidance.
+- “根据当前行情智能填充参数” uses the already available, trusted one-minute
+  Binance bars to calculate a reviewable ATR/EMA suggestion.  It changes only
+  visible form fields and displays its calculation; applying the proposal
+  still requires the separate “调整区间” operation and therefore creates an
+  auditable plan version.
+- Start and stop/cancel/flatten are real paper-control actions.  The console
+  disables the active button during a request and preserves the outcome notice
+  across normal live refreshes, so an operator can see that the command was
+  accepted rather than mistaking a five-second repaint for a no-op.
+- Production-plan grid levels are rendered as chart price lines with labels,
+  using the existing `standard-kline` chart.  EMA is selectable with editable
+  fast/slow periods and MACD is an opt-in lower pane; neither creates a new
+  charting engine or invents market data.
+
+### Gotchas
+
+- A real-browser pass caught a render-path typo that static tests did not
+  exercise.  It was fixed before the final visual capture; this is why the
+  acceptance record includes user actions rather than only DOM-source checks.
+- The active plan's lower grid levels may sit outside the current candle price
+  viewport after the market moves.  They remain attached to the chart and are
+  visible when the user zooms/pans; the compact grid summary always states the
+  complete range, count and spacing.
+- The production browser bridge could not initialise in this environment, so
+  the interaction pass used a clean local Chrome session through DevTools.
+  It is still a real browser rendering the served dashboard, not a source-only
+  assertion.  The stop/start acceptance action restored the pre-test paper
+  state: `running`.
+
+### Evidence
+
+- Final focused regression plus syntax check: `95 passed`.
+- Real-browser journey passed: trusted fresh market, clean trend card, smart
+  fill and refresh persistence, editable EMA, MACD rendering, chart grid
+  lines, and stop/start backend control with persistent user feedback.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-ready-desktop-2026-07-14.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-ready-mobile-2026-07-14.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-macd-enabled-2026-07-14.png`.
+
+## 2026-07-14 - Production paper-grid lifecycle closure
+
+### Decisions
+
+- Direction, style and parameter controls now call one authoritative backend
+  preview contract before any order is placed. Neutral produces bilateral grid
+  orders, long produces buy orders below market, short produces sell orders
+  above market; steady uses a wider/lower-density grid and aggressive uses a
+  narrower/higher-density grid. The exact preview is drawn on the standard
+  K-line chart and becomes the committed plan only after Start is confirmed.
+- Start is a real paper lifecycle action: it creates a new versioned
+  `StrategyPlan`, submits accepted paper limit orders to the existing ledger,
+  and records `strategy_plan_id` plus `strategy_plan_version` on every order.
+  Identical repeated Start requests are idempotent. A changed configuration
+  while running must use the explicit running-adjustment action.
+- Runtime truth is represented by `desired_state` and `actual_state`. The UI
+  derives its button emphasis from actual state: Start is enabled only while
+  stopped; while running Start is dimmed and Stop is prominent, with the real
+  accepted-order count shown in the header and status card.
+- Stop is complete only after accepted orders are cancelled, open paper
+  positions are flattened with a fresh trusted quote, and reconciliation
+  passes. Running adjustment cancels and replaces grid orders without changing
+  the production ledger into a shadow ledger or silently stopping the robot.
+- A process-wide re-entrant control lock and a single activation helper enforce
+  at most one active production plan even when browser refresh, legacy
+  compatibility reads and Start arrive concurrently.
+- For alternate K-line periods, a stale exact-period Binance series no longer
+  masks fresh same-provider one-minute data. The server first prefers a fresh
+  exact series, then deterministically derives the requested period from fresh
+  Binance one-minute bars; it never falls back to another provider or
+  synthetic prices.
+
+### Gotchas
+
+- Real-browser testing exposed a race where the compatibility reader could
+  activate an older plan between Start and the next refresh. It was reproduced
+  with a plan/order version mismatch and fixed with the shared control lock;
+  a concurrent regression now asserts exactly one active plan and matching
+  order versions.
+- The browser pass also caught three source-level false positives: a stale 5m
+  exact series was being returned ahead of fresh 1m derivation, the mobile
+  account-grid CSS had an invalid `repeat()` value, and the preview hint could
+  remain visible after the same plan became live. All three were fixed and
+  rechecked in a real browser.
+- Acceptance intentionally created auditable paper plan history through v23
+  and then stopped the robot. Historical plans and cancelled orders were
+  retained. Final acceptance state is stopped, zero accepted orders, zero open
+  positions, reconciliation passed, and exactly one active plan record.
+- This closes the paper-trading console lifecycle only. It does not migrate to
+  live trading and does not switch execution to Nautilus.
+
+### Evidence
+
+- Real-browser journey passed 17 lifecycle and responsive assertions: fresh 5m
+  switching, direction/style geometry, preview chart layers, versioned Start,
+  running regrid, refresh persistence, idempotent Start, stop/cancel/flatten,
+  Strategy Shadow isolation, mobile layout and zero browser runtime errors.
+- Final repository regression: `1423 passed in 378.15s`; focused production
+  strategy, market-feed, API, console and shadow regression: `52 passed`.
+- The page also passes the repository design-token contract; operational state
+  colours remain semantic while ungoverned colour literals and forbidden heavy
+  font weights were removed.
+- Running short/aggressive proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-grid-running-2026-07-14.png`.
+- Running neutral/steady regrid proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-grid-regridded-2026-07-14.png`.
+- Strategy Shadow comparison proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-shadows-2026-07-14.png`.
+- Final mobile proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-production-grid-mobile-2026-07-14.png`.
+
+## 2026-07-14 - Goldbot public dashboard v5 deployment
+
+### Decisions
+
+- The production strategy console is now published at
+  `https://goldbot.park-ai-intel.com/dashboard-v5.html`. The existing v4 URL
+  is retained for compatibility, and the domain root redirects to v5.
+- Public v5 is an explicit observer surface. Live market data, account state,
+  production orders, timeframe switching and strategy/grid preview are
+  available; Start, Stop/cancel/flatten, running adjustment, statistics reset
+  and manual close remain local-only. The gateway permits only the preview
+  action and rejects every production mutation, so deployment cannot silently
+  expand the trading-control boundary.
+- The public route serves the same tested console implementation through a
+  stable v5 alias. It does not copy or fork the page into a second source of
+  truth.
+- The existing named Cloudflare Tunnel remains the deployment path. Its
+  connector was upgraded to cloudflared 2026.7.1 and pinned to QUIC after the
+  previous connector stopped registering reliably over HTTP/2.
+
+### Gotchas
+
+- A local gateway process being healthy was not sufficient evidence that the
+  public site was deployed: the initial public response was Cloudflare 1033
+  because no tunnel connector was registered. Completion required both a
+  persistent connector and successful external HTTP/browser checks.
+- The public console displays the pre-existing running paper plan v24 and its
+  five accepted orders. That plan started before this deployment; the public
+  preview test did not start, stop, replace or otherwise mutate it.
+- The public hostname continues to depend on the local Mac, gateway and named
+  tunnel being online, matching the existing v4 hosting model.
+- The bundled in-app browser bridge could not initialise because its process
+  shim conflicts with the current desktop runtime. Final acceptance therefore
+  used a clean, headless Google Chrome session with real layout, canvas,
+  interaction and network assertions.
+
+### Evidence
+
+- Public desktop proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-dashboard-v5-public-desktop-2026-07-14.png`.
+- Public strategy-preview/grid proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-dashboard-v5-public-preview-2026-07-14.png`.
+- Public mobile proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-dashboard-v5-public-mobile-2026-07-14.png`.
+
+## 2026-07-15 - Goldbot authenticated remote control
+
+### Decisions
+
+- Goldbot v5 will use Cloudflare Access on the existing Tunnel rather than
+  moving the frontend to Vercel. The chosen identity is the current Cloudflare
+  account member, additionally restricted at the gateway to
+  `zinan92@hotmail.com`.
+- The requested application session duration is seven days (`168h`). Access
+  authentication unlocks Start, Stop/cancel/flatten, running adjustment,
+  statistics reset and manual close; local `127.0.0.1:8765` control remains
+  available independently.
+- The public gateway validates the signed Access JWT against the application
+  audience and Cloudflare team issuer before any production mutation. Preview
+  remains non-mutating and available through the existing safe path.
+- Authenticated mutation attempts and upstream results are written to a
+  dedicated JSONL audit trail without logging the Access token.
+
+### Gotchas
+
+- The existing Wrangler OAuth and Tunnel certificate can manage deployment and
+  connectivity but both receive `403` from the Access applications API. A
+  one-time scoped Cloudflare token with `Access: Apps and Policies Write` is
+  required to create the edge application and policy.
+- Initializing Zero Trust through the signed-in dashboard reaches the free-plan
+  activation checkout at `$0/month`, but Cloudflare requires an explicit
+  authorization to charge the saved card if usage exceeds the free allowance.
+  Activation is paused at that consent step; no billing authorization has been
+  accepted by the agent.
+- Before the Access application, team domain and AUD tag were installed, the
+  gateway remained fail-closed and the public page stayed read-only. That
+  intermediate state did not expose remote trading controls.
+
+### Completed configuration
+
+- Activated Cloudflare Zero Trust Free after Park personally accepted the
+  dashboard billing authorization. Team name: `plain-pine-ac3d`.
+- Created self-hosted Access application `Goldbot v5` for
+  `goldbot.park-ai-intel.com` with application id
+  `66b8a370-676d-4fcb-9b68-46bbbba384a2` and AUD tag
+  `f591b72ad4a3d3bf1aa602a76ab991dbe4fb1b1802d6d513d0db167b8b403b5a`.
+- Created allow policy `Goldbot operator` with policy id
+  `04c3698f-4749-4809-97b6-1cdbb585e69a`, restricted to
+  `zinan92@hotmail.com`. Both the Access application and gateway session
+  contract use `168h`.
+- Installed the Access team issuer and AUD in the persistent gateway LaunchAgent
+  and restarted only the gateway. No strategy start, stop, order, position,
+  statistics-reset or manual-close mutation was invoked during acceptance.
+
+### Acceptance
+
+- An unauthenticated public request now receives a Cloudflare Access `302` to
+  the `plain-pine-ac3d.cloudflareaccess.com` login page.
+- The signed-in public dashboard displays `已登录 · 可控制`; the existing runtime
+  state controls render normally, with the active stop/cancel/flatten control
+  available and the start control disabled while the UI reports the robot as
+  running.
+- Gateway authentication unit tests: 5 passed. Related dashboard/control-plane
+  regression tests: 76 passed.
+
+### Evidence
+
+- Authenticated public dashboard and identity/control badge:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-authenticated-control-2026-07-15.png`.
+- Authenticated start/stop state and live runtime panel:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-authenticated-start-stop-2026-07-15.png`.
+
+## 2026-07-15 - Goldbot Access-session and trusted D1 startup recovery
+
+### Decisions
+
+- All dashboard API calls now identify themselves as AJAX with
+  `X-Requested-With: XMLHttpRequest`. An expired Cloudflare Access session therefore returns
+  a deterministic `401`; the page performs one top-level refresh to re-enter Access login
+  instead of parsing the login HTML as JSON.
+- Non-JSON API responses now fail with a user-readable service message. The raw
+  `Unexpected token '<'` parser error is no longer exposed.
+- Restored the startup prerequisite by adding native Binance USD-M `1d` candles in the
+  independent datafeed adapter. Strategy planning still fails closed unless D1, 4H, 1H,
+  15m and the 1m execution tape are trusted and non-synthetic.
+
+### Gotchas
+
+- The visible error looked like a Binance JSON failure, but the `<DOCTYPE>` response was a
+  Cloudflare Access login page returned to a background request. Cloudflare documents this
+  as an AJAX/session-expiry behavior.
+- After isolating the login-layer symptom, a second blocker remained: the datafeed adapter
+  declared Binance USD-M support only through `4h`, so a fresh 1m chart could coexist with
+  a correctly blocked D1 strategy preview.
+- No strategy start, stop, order, position, or ledger mutation was performed during this
+  repair. Startup readiness was verified with the non-mutating preview action.
+
+### Verification and evidence
+
+- Access AJAX probe now returns `401` instead of redirecting to an HTML login page.
+- Non-mutating production preview succeeds with 49 neutral/steady orders and fixed
+  D1/4H/1m planning contexts.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-access-recovery-market-2026-07-15.png`.
+- Browser start-readiness proof after the Binance D1 repair:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-start-ready-binance-d1-2026-07-15.png`.
+- Focused dashboard, market-feed, strategy-control and recommendation regression:
+  `82 passed`; gateway authentication regression: `5 passed`; browser acceptance had
+  fresh/non-synthetic Binance data, a 49-order D1/4H/1m preview, an enabled Start button,
+  and zero runtime errors.
+
+### Login UX follow-up
+
+- Replaced the Cloudflare-account OAuth step with Cloudflare Access One-time
+  PIN as the application's only identity provider. `Accept all identity
+  providers` is off, `onetimepin` is the sole selected provider, and instant
+  authentication is on.
+- The operator now enters an email address and receives a login code directly;
+  no Cloudflare dashboard account login is required. The email allow policy and
+  seven-day application session remain unchanged.
+- Visual proof of the simplified login page:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-email-otp-login-2026-07-15.png`.
+
+### OTP delivery troubleshooting
+
+- The Access code-entry page accepted `zinan92@hotmail.com` and one explicit
+  resend was issued. The application policy remains exact-email allow and the
+  Access authentication log shows `Allowed` entries with no `Blocked` entries.
+- Do not treat the text `A code has been emailed to you` as a delivery receipt.
+  Cloudflare deliberately shows it even when no message is sent, and its Access
+  authentication log is not an outbound-email delivery log. A mailbox receipt
+  is therefore still missing evidence.
+- Cloudflare documents `noreply@notify.cloudflare.com` as the OTP sender and
+  lists mailbox filtering or sender suppression after previous delivery failures
+  as the remaining causes once policy denial is excluded. A newly requested PIN
+  invalidates the previous PIN and expires after 10 minutes.
+- Visual traces:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-otp-resend-2026-07-15.jpg` and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-access-auth-log-2026-07-15.jpg`.
+
+## 2026-07-15 — Production console cycle rollover and ledger reconciliation
+
+### Decision
+
+- Runtime state is cycle-scoped. A `running` row from a previous 12-hour cycle
+  is now exposed as `stopped + stale_cycle` for the current cycle; it can no
+  longer create the false state `运行但无挂单` after rollover.
+- Account totals and trade history use only fills traceable to a
+  `strategy_plan_id`. Exit fills paired to those entries are included in the
+  same production trade. Legacy human/machine results remain available through
+  the historical ledger but are not silently added to production equity.
+- An empty current-cycle paper ledger retains the configured 10,000 USDC paper
+  account baseline. The current console therefore shows the versioned
+  production history: 6 trades, 1,193.16 USDC cumulative notional, -4.38 USDC
+  realized PnL and 9,995.62 USDC equity.
+- New protective exit fills inherit `strategy_plan_id` and
+  `strategy_plan_version` from the matched entry, closing the traceability gap
+  without rewriting old source records.
+- The recommendation block now names its direction source and explains that
+  parameters use the latest 14-period ATR. The duplicated broker/timeframe/bar
+  count sentence was removed. The opaque short plan hash was replaced with a
+  human-readable production strategy label.
+
+### Grid algorithm shown to the operator
+
+- Steady: half-range = `max(2 * ATR14, latest * 0.25%)`, 8 intervals,
+  per-grid notional = `max(10, equity * 1%)`, default leverage 1x.
+- Aggressive: half-range = `max(1 * ATR14, latest * 0.125%)`, 12 intervals,
+  per-grid notional = `max(10, equity * 1.5%)`, default leverage 2x.
+- Neutral centers the range on the latest price. Long shifts 75% of total width
+  below the latest price and only places buy entries; short mirrors that geometry
+  above the latest price and only places sell entries. All controls generate a
+  preview first and do not submit orders until explicit Start.
+
+### Gotchas
+
+- The prior page joined current cycle `2026-07-15_DAY` to runtime state from
+  `2026-07-14_DAY`, then read only the empty current human execution file. This
+  was a data-contract mismatch, not lost orders or lost history.
+- One preserved historical production trade has an exit timestamp one minute
+  earlier than its entry timestamp in the raw ledger. The compatibility reader
+  preserves that evidence rather than silently correcting it; a separate ledger
+  repair/migration should address historical timestamp quality.
+- `A code has been emailed` in Cloudflare Access remains non-evidence of mail
+  delivery; Park subsequently confirmed receipt of the OTP.
+
+### Verification and evidence
+
+- Focused backend, control-plane and static dashboard regression: 67 passed.
+- Browser acceptance confirmed stopped current-cycle state, restored account
+  equity, six historical production trades, explicit recommendation provenance,
+  and both steady/aggressive preview geometry without placing orders.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-ledger-reconciled-2026-07-15.jpg` and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/strategy-console-aggressive-preview-2026-07-15.jpg`.
+
+## 2026-07-15 — External operator user instruction contract
+
+### Decisions
+
+- The external user guide treats a robot as started only when the runtime is
+  `running`, at least one paper order is accepted, the current-orders table is
+  populated, and the chart is showing production orders rather than a preview.
+- Every non-intuitive control is classified as explanation-required, dangerous,
+  or a current limitation. The guide explains the exact ATR14 range geometry,
+  direction bias, grid count, notional sizing, TP/SL and runtime state machine.
+- The current safe distribution model is one designated operator with other
+  users observing. Cloudflare-authorized users still share one paper robot and
+  one paper ledger; the console does not provide per-user accounts or roles.
+- The guide documents actual control-plane behavior even where the visible copy
+  is currently inaccurate: running adjustment cancels and resubmits all pending
+  grid orders from the complete current form state, while existing positions
+  remain open.
+
+### Gotchas
+
+- `刷新趋势` currently reloads console and market data; it does not rerun AI,
+  create a proposal or relock the production direction.
+- A raw plan confidence of `1` is rendered as `100%`. That value is not a
+  calibrated probability, win rate or profit guarantee and should not be
+  exposed to external operators as certainty.
+- `价格冲出区间时` is stored in the plan, but its three advertised behaviors
+  have not been proven end to end in the new production control plane.
+- `重置盈亏 / 交易量统计` writes `statistics_baseline_at`, but the production
+  history/account aggregate does not yet apply that baseline to displayed
+  totals. The external guide therefore marks the control as not reliable yet.
+- This documentation task changed no dashboard surface. Per the Evidence
+  Contract, the Markdown guide and decision log are trace material rather than
+  new visual Evidence.
+
+## 2026-07-15 — Grid timeframe, capital sizing and AI-confidence audit
+
+### Decisions
+
+- The chart timeframe is presentation only. The target strategy contract uses
+  complete D1 bars for the persistent grid Range, complete 4H bars for spacing,
+  and 1m only for execution and breach confirmation. A 12-hour cycle produces a
+  review/proposal; it does not silently replace a continuously running grid.
+- `刷新趋势` is defined as a fresh market evaluation that creates a new
+  direction, style and grid-specification proposal. It must never directly
+  mutate orders or the production plan.
+- Capital sizing must start from `equity * leverage_limit`, then apply a margin
+  utilization cap and a worst-case plan-loss cap. The leverage limit is an
+  absolute ceiling, not a target utilization.
+- The first Strategy Shadow matrix will test D1 ATR14 Range multipliers, 4H ATR
+  spacing, 24-80 grids, 3x/5x/10x leverage, margin utilization and plan-loss
+  caps. No single untested parameter set is promoted to production.
+- The external operator guide is paused until the strategy specification is
+  implemented and browser-verified.
+
+### Current findings
+
+- The machine planner runs Codex `gpt-5.4` with one program-built user prompt.
+  There is no repository-owned custom system-prompt artifact, and the Codex
+  internal system prompt is not persisted in the planning trace.
+- The prompt currently receives cycle-local 1m OHLC/recent closes, a median of
+  ten completed non-weekend 12h ranges, the previous machine review, a replan
+  context and up to 16k characters of the finance newsletter. It does not
+  receive D1/4H ATR, full multi-timeframe bars or deterministic trend features.
+- Normal plan confidence is an uncalibrated 1-10 integer self-reported by the
+  LLM. A decision-error plan hard-codes `confidence=1`.
+- The current active production plan was locked from a 09:01 fail-closed plan.
+  The later successful 09:02 neutral plan (`5/10`) and 10:20 short replan
+  (`7/10`) did not replace it. The frontend then converted the error value `1`
+  to `100%` by treating it as a 0-1 probability.
+- The legacy DualTrack sizing contract uses a 100,000 U total notional ceiling
+  for 10,000 U equity at 10x. The new production console independently added
+  `equity * 1%` steady sizing, yielding 100 U per grid. That is an incomplete
+  migration, not an approved product decision.
+- A read-only audit of complete stored bars produced D1 ATR14 approximately
+  100.50 and 4H ATR14 approximately 31.57. The current DualTrack market feed
+  cannot yet aggregate `1d`; the target contract requires a trusted D1 feed and
+  complete-bar filter before use.
+
+### Gotchas
+
+- Four 25,000 U grids do equal the full 100,000 U notional ceiling, but at 10x
+  they also consume all 10,000 U initial margin when all four fill. A production
+  default needs explicit free-margin and loss buffers.
+- More grid levels do not mean every level can be sized by dividing the total
+  budget by the displayed count. Sizing must use maximum simultaneously filled
+  levels and the aggregate distance-to-stop loss.
+- D1 ATR14 with the old `2 ATR` half-range may be materially wider than the
+  current 12h planning range. It is a shadow candidate, not an automatic fix.
+- Markdown audit artifacts are trace material, not new visual Evidence. No UI
+  or runtime mutation was performed in this audit.
+
+## 2026-07-15 — Fixed-timeframe grid and auditable AI proposal implemented
+
+### Decisions
+
+- Superseded the rejected chart-timeframe ATR behavior. Production previews now
+  use complete D1 ATR14 for Range, complete 4H ATR14 for spacing and 1m for
+  execution. The visible chart timeframe is presentation-only.
+- Steady uses a `2 × D1 ATR14` half-range, `0.25 × 4H ATR14` target spacing,
+  50% margin-utilization cap and 5% max-plan-loss cap. Aggressive uses `1 ×`,
+  `0.125 ×`, 70% and 8%. Automatic grid count is clamped to 24–80.
+- Direction no longer moves the market Range. Neutral arms both sides, long
+  arms buy entries and short arms sell entries against identical geometry.
+- Per-grid notional is the lower of the capital cap and distance-to-stop loss
+  cap. `equity × leverage_limit` is an absolute ceiling, not target exposure;
+  neutral risk uses maximum same-side exposure rather than summing mutually
+  exclusive buy and sell books.
+- `刷新趋势` now runs an auditable AI evaluation over fixed D1/4H/1H contexts.
+  AI can propose direction and style only; deterministic code owns Range,
+  spacing, grid count, leverage and notional. The prompt and evidence inputs are
+  stored with the proposal.
+- Removed the false probability display. The UI separates a deterministic
+  rule score labelled `uncalibrated` from the model's 1–10 reasoning-material
+  self-assessment labelled `not a probability`.
+- AI refresh and adopting its recommendation create/preview a proposal only.
+  They do not mutate the active production plan, cancel orders or place orders.
+
+### Live verification
+
+- Trusted strategy inputs were available: 22 complete non-weekend D1 bars and
+  47 complete 4H bars. The inspected sample had D1 ATR14 about 100.50 and 4H
+  ATR14 about 33.67.
+- A real AI refresh recommended `short + steady`, produced rule score 74.4/100
+  (uncalibrated) and AI self-assessment 8/10 (not probability), and returned
+  `production_plan_unchanged=true`.
+- With current paper equity 9,995.62 U, a steady preview produced about 47
+  grids, about 800 U per grid, about 49,978 U capital budget and about 1.92x
+  actual leverage. The 10x setting remained a ceiling because the 5% loss cap
+  bound sizing first.
+- Switching the chart from 1m to 30m preserved the exact Range, grid count and
+  per-grid notional. Steady to aggressive narrowed Range and increased density;
+  short to neutral preserved geometry while changing armed order sides.
+- Full regression: `1438 passed in 367.40s`. Browser console had no errors;
+  390px mobile viewport had no horizontal overflow.
+
+### Gotchas
+
+- A high leverage limit does not imply high actual leverage. The loss budget is
+  intentionally allowed to bind before the capital ceiling.
+- The rule score is not historical success probability. Its reserved historical
+  calibration component remains zero until enough reproducible shadow outcomes
+  exist.
+- The active production plan is never silently replaced by a fresher AI plan.
+  An operator must explicitly start or apply a running adjustment.
+- The launchd environment could resolve the Codex wrapper but not Homebrew Node.
+  The planner now uses an absolute Codex path and an explicit PATH; failures are
+  returned as structured fail-closed API errors instead of dropped connections.
+- Full-page mobile screenshot stitching was unreliable. Evidence therefore uses
+  separate mobile viewport captures for the top and strategy-control sections.
+- Current Strategy Shadow output is a smoke comparison. Its cost model remains
+  zero and must not be treated as sufficient promotion evidence.
+
+### Evidence
+
+- Desktop AI/grid console:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-strategy-console-ai-grid-desktop.png`.
+- Mobile top and strategy controls:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-strategy-console-ai-grid-mobile.png` and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-strategy-console-mobile-strategy.png`.
+- Strategy Shadow comparison:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-strategy-shadow-comparison.png`.
+
+## 2026-07-15 — AI trend evaluation Input/Output receipt
+
+### Decisions
+
+- Every `刷新趋势` run now creates a standalone
+  `strategy-ai-evaluation-v1` receipt. Success and provider/validation failure
+  attempts are both archived; a failed evaluation never disappears into an API
+  error alone.
+- AI input now includes complete, trusted D1/4H/1H/15m contexts. Each context
+  records provider, bar window, latest completed OHLC, ATR14, EMA20, EMA50,
+  standard MACD(12/26/9), trend and directional efficiency.
+- 15m is confirmation evidence only. It cannot change the fixed D1 Range or 4H
+  spacing contract, and the operator's visible chart timeframe remains excluded.
+- The receipt stores the exact business prompt, raw model response, parsed
+  decision, deterministic rule-score components, final recommendation and
+  side-effect declaration. The server finalizes it with proposal/preview IDs,
+  `production_plan_unchanged` and `orders_created`.
+- Each AI refresh receives a unique evaluation-backed proposal ID, so repeated
+  identical decisions do not replace the previous visible evaluation history.
+- The current-trend card exposes a compact receipt entry. A responsive audit
+  dialog shows Input and Output side by side, offers current-cycle evaluation
+  history, and displays the local archive path plus SHA256.
+
+### Local archive contract
+
+- Path:
+  `outputs/dualtrack/strategy_control/evaluations/<cycle_id>/<timestamp>_<evaluation_id>.json`.
+- The archive is one atomic JSON record per file. `source_manifests` remains
+  available even when context validation fails before a model call.
+- The proposal also retains its `evaluation_receipt`, allowing the dashboard to
+  render the exact evidence without reconstructing it from current market data.
+
+### Gotchas
+
+- “AI 检查 K 线图” means it reads completed OHLC numbers and indicator
+  snapshots; it does not perform pixel-based visual chart interpretation.
+- D1 may have too few completed bars for fully warmed EMA50 or MACD. Missing
+  indicators are explicitly stored/displayed as insufficient sample, never
+  silently synthesized.
+- The complete prompt and response are intentionally local audit evidence. They
+  may include current account and plan context and therefore should stay behind
+  the existing authenticated dashboard boundary.
+- A receipt proves what the model saw and returned. It does not prove that the
+  recommendation is profitable or historically calibrated.
+
+### Verification and Evidence
+
+- A real Binance-backed refresh produced `short + steady`, rule score 73.3/100
+  (uncalibrated), and AI self-assessment 8/10 (not probability). The receipt
+  includes 22 D1, 63 4H, 95 1H and 159 15m completed bars; 15m EMA20 was
+  4,037.999925 and MACD histogram was 0.339211 for that snapshot.
+- The finalized receipt is 64,010 bytes and records
+  `production_plan_unchanged=true` plus `orders_created=0` at:
+  `outputs/dualtrack/strategy_control/evaluations/2026-07-15_DAY/2026-07-15T06-09-08.303402_00-00_ai-eval-0dc5545b91964186.json`.
+- Full regression: `1440 passed in 384.18s`. Desktop and 390px mobile browser
+  acceptance confirmed no console errors and no horizontal overflow.
+- Visual Evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-ai-evaluation-receipt-desktop.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-ai-evaluation-receipt-mobile.png`, and
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-ai-evaluation-receipt-public-v5.png`.
+- The public Cloudflare Tunnel briefly returned 1033 during acceptance. Its
+  existing LaunchAgent was restarted, after which the authenticated public v5
+  page loaded the new receipt UI successfully.
+
+## 2026-07-15 — Runtime stop diagnosis and readable execution records
+
+### Findings and decisions
+
+- The robot did not stop because of stale market data, a cycle rollover, or an
+  automatic fill rule. The authoritative runtime records `last_action=stop` at
+  `2026-07-15T06:41:59.602095+00:00` (Beijing `2026-07-15 14:41`). The same
+  control operation cancelled the remaining accepted production grid orders.
+- The dashboard request log confirms a successful
+  `POST /api/strategy-console/control` at that time. This is an explicit stop
+  control path whose contract is “stop + cancel pending orders + flatten open
+  positions + reconcile”.
+- Stopped state is no longer shown without context. The header now says
+  `已停止 · 收到停止指令`; the runtime card exposes the last action and its
+  Beijing action time from the authoritative runtime record.
+- Execution tables now render timestamps as `YYYY-MM-DD HH:mm` in
+  `Asia/Shanghai`, with the column header explicitly marked `时间（北京）`.
+- Asset quantity is rendered with at most six decimal places and trailing zeros
+  removed. Ledger values remain unchanged; this is display formatting only.
+
+### Gotchas
+
+- The existing HTTP request log records endpoint, result and server time, but
+  not the control request body or authenticated actor identity. Therefore the
+  stopped action and time are proven, but attributing this historical action to
+  a specific person or browser session would be speculation.
+- `runtime.json` stores the latest authoritative runtime row rather than an
+  append-only operator audit trail. The visible last action is sufficient for
+  the current state explanation, but actor-level audit requires a separate
+  authenticated control-event contract in a future change.
+
+### Evidence
+
+- Public v5 runtime/action and readable fills:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-v5-stop-action-and-readable-fills-detail.png`.
+- Public v5 full-page capture:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-v5-stop-reason-beijing-time-readable-quantity.png`.
+- Focused regression: `61 passed`; full regression: `1442 passed in
+  400.43s`.
+## 2026-07-15 - Independent datafeed cutover (in progress)
+
+Objective: make the independent datafeed the trading framework's only market-data entry,
+while keeping broker execution adapters separate.
+
+### Decisions
+
+- Added `DatafeedMarketClient` as the HTTP consumer of `kline-candles-v1`; it fails closed
+  on unavailable, non-JSON, or non-200 datafeed responses.
+- Enabled the independent datafeed at `127.0.0.1:8100` in pipeline config and declared
+  per-instrument routes. GOLD uses `binance_usdm_futures`; MGCmain uses
+  `tiger_openapi_comex`.
+- Switched the dual-track chart market path to datafeed with `cache_policy=bypass`, strict
+  quality, execution-venue required, and no fallback. The response exposes canonical GOLD,
+  provider symbol XAUUSDT, provenance, freshness, and `reads_private_market_db=false`.
+- Added `DatafeedMarketRepository` for strategy/replay read contracts. Normal
+  `DualTrackCycleRunner` construction now uses datafeed; an explicitly supplied test DB is
+  retained temporarily as a compatibility seam while remaining consumers migrate.
+
+### Gotchas
+
+- Using `cache_policy=allow` on the live dashboard initially returned an older cached bar.
+  The chart path now bypasses cache and uses strict quality so it cannot quietly show stale
+  history as the current market.
+- The old market database mixed timezone-naive and timezone-aware timestamps. That produced
+  duplicate logical minutes after migration; datafeed now canonicalizes and deduplicates UTC.
+- The trading repository still contains ancillary/reporting modules that directly read
+  `market_data.db`. The cutover is not complete until these are migrated or removed and a
+  guard test proves production consumers cannot regress.
+- Tiger credentials are not present in the current environment. Tiger adapter behavior is
+  contract-tested and its 1,709 existing proven-source bars are migrated, but a fresh live
+  Tiger request cannot yet be claimed.
+
+### Verification so far
+
+- datafeed: 65 tests passed; ruff passed.
+- trading datafeed/chart/cycle targeted suites: 79 chart/client tests and 73
+  repository/cycle tests passed.
+- Live dashboard market API returned `ready`, `fresh=true`,
+  `source_mode=binance_usdm_futures`, `is_synthetic=false`, and
+  `reads_private_market_db=false`.
+- Visual evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-datafeed-source-health-full.png`.
+
+## 2026-07-15 — Public start-control 502 recovery
+
+### Findings and decisions
+
+- The failed public start did not create orders: the authoritative runtime
+  remained `stopped`, with zero accepted orders and zero open positions.
+- The public gateway used a fixed 20-second upstream timeout. A production
+  control request validates trusted 1m plus fixed D1/4H/1H/15m market contexts
+  before writing the paper ledger, so a transiently slow datafeed could outlive
+  that proxy deadline and surface as HTTP 502.
+- Authenticated control POSTs now receive a 90-second upstream deadline. Normal
+  read requests retain the 20-second deadline.
+- The gateway now forwards the upstream's bounded JSON error body for rejected
+  controls. The dashboard can therefore show the real rejection reason instead
+  of only `HTTP 400` or an empty response.
+- A 5xx or broken control response is now treated as an unknown outcome, not an
+  automatic failure. The browser polls the authoritative current-state endpoint
+  and reports success only when running orders (or a fully stopped/flat state)
+  are confirmed. It explicitly tells the operator not to repeat-click while
+  reconciliation is in progress.
+- The dashboard reuses the 1m market payload already returned by the current
+  read model and pauses its five-second refresh while a control action is busy
+  or the tab is hidden. This removes duplicate Binance reads and reduces
+  self-inflicted contention from multiple open tabs.
+
+### Gotchas
+
+- A proxy timeout does not prove whether a mutation committed. Repeating a
+  start/stop action before reading authoritative state can create ambiguous
+  operator feedback even when the backend action is idempotent.
+- The verification deliberately used `preview`, not `start`; it proved the
+  deployed market-validation path, public JSON proxying, button availability
+  and stopped/flat state without creating paper orders.
+- The full-page in-app-browser capture repeats the sticky header at browser
+  capture tile boundaries. The focused viewport evidence is the clearer visual
+  proof for the actionable start/disabled stop controls.
+
+### Verification and evidence
+
+- Public gateway preview: HTTP 200 in 6.37 seconds, 49 grid orders, no ledger
+  mutation. Invalid cycle requests returned the upstream JSON message through
+  the public gateway.
+- Public browser state: authenticated/control-enabled, market `实时·可信`, source
+  `binance_usdm_futures`, start enabled, stop disabled, runtime stopped, no
+  browser warnings/errors.
+- Focused regression: 67 trading tests and 7 gateway tests passed; dashboard
+  inline JavaScript parsed successfully.
+- Visual evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/goldbot-v5-start-control-recovered-actions-2026-07-15.png`.
+
+## 2026-07-15 - Datafeed becomes the production market-data boundary
+
+Objective: strategies, charts, reports, replay, health, and schedulers consume one
+auditable datafeed port; broker execution remains a separate port.
+
+### Decisions
+
+- Production market reads now construct `DatafeedMarketRepository`. The repository
+  is used by dual-track cycles, charts, replay, market view, data trust/lineage,
+  portfolio reports, health, system state, completion audits, and backtests.
+- Scheduled Binance, Tiger, FRED, and OANDA market-data refreshes call datafeed HTTP.
+  Trading scheduler modules no longer import exchange-specific candle collectors.
+- The OANDA and Tiger connector catalog price-feed ports now identify datafeed
+  adapters; execution adapters remain broker-owned and independent.
+- Production CSV imports are rejected with an instruction to install a datafeed
+  adapter. The old SQLite store is accepted only for system temporary paths used by
+  isolated tests and migration rehearsals; non-temporary private paths fail closed.
+- Added a CI architecture guard that freezes all remaining compatibility seams and
+  rejects new scheduler imports, direct market-data URLs, SQLite reads, or exchange
+  collectors outside those seams.
+
+### Gotchas
+
+- `TRADING_ORCHESTRATOR_MARKET_DB` is no longer a production routing mechanism.
+  Setting it to a non-temporary alternate database does not bypass datafeed.
+- Source availability is not credential readiness. Tiger/OANDA adapters must be
+  enabled in datafeed config before their scheduled jobs become healthy.
+- Datafeed downtime is a hard market-data failure. Trading does not silently fall
+  back to the old database, synthetic candles, Yahoo, or another unnamed source.
+- Daily snapshots no longer copy datafeed's private SQLite file. Trading archives its
+  own artifacts and consumes the owner-side datafeed storage-integrity receipt.
+- Existing legacy collector classes remain only to keep deterministic temporary-DB
+  tests and one-time migrations reproducible. Their default production entrypoints
+  delegate to datafeed.
+
+### Verification and evidence
+
+- Architecture boundary guard: 7 focused tests passed.
+- Live scheduled Binance refresh returned 1,500 GOLD 5m candles with
+  `market_data_backend=datafeed`, `provider_symbol=XAUUSDT`, fresh, non-synthetic.
+- Fail-closed drill against an unavailable datafeed returned connection refusal with
+  `fallback_used=false`.
+- First full trading regression found five compatibility-output regressions; all five
+  were fixed before the final rerun.
+- Final full trading regression: `1455 passed` in 6m38s.
+- Visual evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-datafeed-source-health-final.png`.
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-trading-datafeed-cutover-final.png`.
+
+## 2026-07-15 - Datafeed outage and dashboard recovery
+
+### Decision
+
+- Keep trading fail-closed. The dashboard block was caused by no process listening
+  on datafeed port `8100`, not by a Binance payload or downstream contract change.
+- Fix service ownership in `/Users/wendy/datafeed` with a persistent LaunchAgent;
+  no trading compatibility change or private market-data fallback was added.
+
+### Gotchas
+
+- A repo update and a running datafeed are separate facts. Connection refusal must
+  remain visible as `行情 blocked` until the owner service and a fresh live candle
+  are both verified.
+- Datafeed recovery must not auto-resume a deliberately stopped robot. The dashboard
+  is start-eligible again, but the runtime stays stopped until the user starts it.
+
+### Verification
+
+- Local and public v5 dashboards show `行情：实时·可信`, Binance USD-M provenance,
+  no blocked-data state, and an enabled start control.
+- Strategy-console current API reports fresh, non-synthetic GOLD/XAUUSDT 1m data.
+- Focused downstream regression: `68 passed`.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-datafeed-restored-dashboard.png`.
+
+## 2026-07-15 - Revalidate automatic grid notional at start
+
+### Decision
+
+- Distinguish automatic per-grid sizing from a manually fixed notional. Automatic
+  sizing is now recalculated inside the start transaction from the latest trusted
+  market/account snapshot; manual values remain subject to the unchanged hard cap.
+- Persist `grid.notional_mode` in the preview and production plan so sizing intent is
+  auditable. The dashboard labels automatic values as `自动风险上限`.
+
+### Gotchas
+
+- The safe per-grid notional changes when price crosses grid levels because the
+  number of armed buy/sell levels and their cumulative loss to the shared stop
+  change. A valid preview amount is therefore not a durable fixed quote.
+- Treating an auto-generated amount as manual created a time-of-check/time-of-use
+  failure: the start gate correctly rejected the stale number even though the user
+  had selected automatic sizing.
+- This fix does not relax risk limits and does not auto-start the robot. It only
+  recomputes the automatic amount at the atomic start check.
+
+### Verification
+
+- Live preview with stale `774.23 USD` in auto mode returned `200` and resized to the
+  current safe cap; the same stale value in manual mode remained blocked.
+- Focused backend/dashboard regression: `82 passed`.
+- Local and public v5 browser checks showed real-time trusted data, an enabled start
+  button, and a preview explicitly labeled `自动风险上限`; no start was clicked.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-grid-auto-notional-revalidation.png`.
+
+## 2026-07-15 - Datafeed provider contract and missed-fill recovery
+
+### Decision
+
+- Keep provider validation exact and fail-closed. Align the production DualTrack
+  market-data provider with datafeed's canonical GOLD route,
+  `binance_usdm_futures`; do not add a silent alias or fallback.
+- Keep broker/execution identity `binance_usdm` separate. A market-data source
+  name and an order-routing broker name are different contracts and must not be
+  renamed together.
+- Recover the missed current-cycle paper events only after pausing the one-minute
+  scheduler, preserving pre-replay artifacts, and proving replay idempotency.
+
+### Recovery result
+
+- The accepted 4060.1089 buy limit was filled at the close of the 21:25 Beijing
+  minute bar and recorded at 21:26.
+- The 4067.9911 target was reached during the 21:58 minute bar and recorded at
+  21:59. The trade is closed, so current position is correctly zero.
+- Net trade PnL after both-side costs is `+1.32861937 USD`. The current cycle has
+  2 fills, 1 closed trade, 50 remaining accepted orders, and clean execution
+  reconciliation.
+- A second replay processed the same history without changing the orders, fills,
+  trades, or account hashes. The scheduler was restored and its next tick exited
+  0 without `market_provider_mismatch`.
+
+### Gotchas
+
+- Zero current position does not mean an order failed. The UI must be checked
+  against fills, closed trades, realized PnL, and pending-order state together.
+- One-minute candle timestamps are interval starts; chronology-safe paper fills
+  are recorded at the interval end, hence 21:25 touch becomes 21:26 execution
+  time in the ledger.
+- `runtime.accepted_order_count` is the original start receipt (51), while the
+  live execution snapshot now has 50 pending orders. The dashboard correctly
+  renders the latter as the actionable count.
+- A pre-existing 2026-07-15 DAY human trade has an exit timestamp earlier than
+  its entry timestamp. This is unrelated to the provider fix but remains a
+  separate ledger-chronology debt to repair and backfill explicitly.
+- The account panel is cumulative across versioned production-plan history. The
+  recovered current-cycle trade is +1.33 USD, while the displayed cumulative
+  realized PnL also includes earlier production trades.
+
+### Verification and evidence
+
+- Test-first contract reproduced the drift (`binance_usdm` versus
+  `binance_usdm_futures`) before the fix.
+- Focused provider, execution-adapter, cycle-runner, and runtime-dashboard
+  regression: 74 passed.
+- Full repository regression after fixture migration: 1475 passed in 547.71s.
+- Pre-replay snapshot:
+  `/Users/wendy/trading-orchestrator/outputs/dualtrack/recovery/2026-07-15-provider-contract-replay/pre/`.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-grid-fill-recovery-dashboard.png`.
+
+## 2026-07-15 - Chronology-safe protective exits and current-cycle ledger repair
+
+### Decision
+
+- A protective market event whose end timestamp is not later than a trade's
+  entry timestamp is ineligible for that trade. Skip it before price
+  evaluation, even when the old candle close itself is beyond TP/SL.
+- Enforce the same invariant at the ledger write boundary: every exit must be
+  strictly later than its matched entry. This prevents any caller from
+  bypassing the event-loop guard.
+- Allocate new fill IDs after the highest persisted suffix, not from row count,
+  because a controlled repair can leave intentional sequence gaps.
+- Aggregate accepted-limit fills across the complete replay window so the
+  scheduler receipt reports every real fill, not only the final market event.
+
+### Recovery result
+
+- Removed two impossible current-cycle targets whose timestamps preceded their
+  entries: `2026-07-15_NIGHT_human_0004` and `_0006`.
+- Replayed the same trusted Binance USD-M Futures 1m history. The 4044.3444
+  long correctly reached 4052.2266 during the 23:41 Beijing bar and closed at
+  23:42 for net `+1.33407949 USD`.
+- The 4052.2266 long has not reached 4060.1088 and remains open. A later real
+  touch opened the 4036.4622 grid long at 00:20 Beijing on 2026-07-16.
+- Current authoritative state at visual capture: 47 pending orders, 2 open
+  positions, 6 current-cycle fills, unique fill IDs, and local execution
+  reconciliation `ok` with no chronology errors.
+- The one-minute LaunchAgent was restored; its first post-repair run exited 0.
+
+### Gotchas
+
+- Filtering only the pre-entry OHLC range is insufficient. Falling back to the
+  old candle close can still trigger a new trade, so the entire event must be
+  rejected when its end timestamp is at or before entry.
+- `len(rows) + 1` is not a safe durable identifier allocator after a repair;
+  it can collide with a higher existing suffix.
+- Per-event replay receipts must be aggregated. The final event often reports
+  zero fills even though an earlier event in the same sweep legitimately
+  filled an order.
+- A historical 2026-07-15 DAY trade still has a pre-entry exit. It is outside
+  this current-cycle repair and remains explicitly blocked from silent rewrite
+  until its own historical replay evidence is approved.
+- The local datafeed health endpoint exceeded its 10-second client timeout
+  during full regression. Test-only market DBs are now propagated through the
+  report/doctor dependency boundary instead of accidentally calling the live
+  service; production remains fail-closed.
+
+### Verification and evidence
+
+- Focused chronology, ID allocation, replay summary, execution, provider, and
+  dashboard regression: 102 passed.
+- The isolated daily-review/report/doctor boundary regression: 3 passed.
+- Corrupt-state pre-repair snapshot:
+  `/Users/wendy/trading-orchestrator/outputs/dualtrack/recovery/2026-07-15-chronology-repair/pre/`.
+- Visual proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-15-grid-chronology-recovery-dashboard.png`.
+
+## 2026-07-16 - M0 freeze the Nautilus paper-engine cutover boundary
+
+### Decision
+
+- Keep `legacy_paper` as the sole authoritative paper engine while declaring
+  `nautilus_paper` as the migration shadow. No configured engine changed.
+- Route the scheduler, production strategy control plane, dashboard order
+  endpoint, and execution snapshot endpoint through one configuration-aware
+  adapter factory.
+- Persistent config may express the desired engine but cannot self-authorize a
+  Nautilus cutover. Attended approval and the isolated Nautilus runtime path
+  must come from the service environment, and the existing shadow gate remains
+  a separate mandatory check.
+- Freeze the migration milestones and exit criteria in
+  `docs/dualtrack-nautilus-migration-plan.md` before implementing continuous
+  shadow delivery.
+
+### Gotchas
+
+- The existing Nautilus adapter and fixed parity pass did not mean production
+  was wired to Nautilus; every production caller still relied on the factory's
+  default `legacy_paper` selection.
+- A config boolean such as `allow_paper_switch` is not attended approval. It is
+  writable ahead of time and therefore cannot satisfy the cutover trust gate.
+- The isolated runtime previously used under `/tmp` is not a durable production
+  dependency. M1 must provision a stable isolated path before continuous
+  shadow operation.
+- The live cutover gate is correctly blocked at `0/7` because the only recorded
+  parity cycle did not contain qualifying command activity.
+
+### Verification
+
+- Pre-change execution boundary baseline: `30 passed`.
+- New selection contract first failed because the configured builder did not
+  exist; after implementation, the production callers use the configured
+  factory and keep `legacy_paper` authoritative.
+- Nautilus instrument preflight: `ready_for_paper_shadow`.
+- Fixed parity fixture gate: `pass`; paper cutover gate:
+  `candidate_activity_insufficient`, `0/7`.
+
+## 2026-07-16 - M1 continuous Nautilus paper shadow runtime
+
+### Decision
+
+- Install pinned NautilusTrader 1.230.0 in the stable isolated runtime
+  `/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0`; stop using
+  `/tmp` as an execution dependency.
+- Mirror the exact accepted production command and canonical market event into
+  a separate Nautilus journal. Shadow failures are append-only evidence and do
+  not alter or stop the authoritative legacy paper result.
+- Defer Nautilus replay until the end of each live-tick event batch. Queue each
+  immutable event once, replay the complete prefix once, then acknowledge all
+  commands/events included in that successful replay.
+- Idempotently backfill the current cycle's 51 pre-shadow production commands
+  from the existing immutable `shadow_commands` journal. Do not ask the user to
+  restart the robot and do not copy candidate fills into the legacy ledger.
+
+### Gotchas
+
+- The first continuous attempt called a full Nautilus subprocess replay for
+  every bar in the legacy replay window. It exceeded 90 seconds and was
+  manually terminated. Increasing the timeout would have hidden an O(n^2)
+  integration error.
+- A later successful event replay includes earlier unacknowledged events. The
+  processed-event journal must acknowledge the entire replayed prefix, not only
+  the event that triggered the retry.
+- Importing commands after all market events were already acknowledged still
+  requires a replay. A separate processed-command journal is therefore needed;
+  event freshness alone is not a sufficient dirty-state signal.
+- Fixed fixture parity is not live parity. The first command-bearing live
+  comparison correctly reported drift rather than advancing the cutover gate.
+
+### Verification
+
+- Continuous-shadow unit and integration regression: `94 passed`.
+- Real live tick after batching: `4.41 seconds`, exit 0, one flush, six newly
+  processed events.
+- Current shadow journal: 246 unique events / 246 processed; 51 unique commands
+  / 51 processed.
+- Current authoritative engine: `legacy_paper`; reconciliation `ok`, six fills,
+  four positions, two open positions.
+- Current fixed parity fixture gate remains `pass`; command-bearing live parity
+  reports 49 explicit differences and cutover remains blocked at `0/7`.
+
+## 2026-07-16 - M2-M5 Nautilus lifecycle, accounting, and attended-cutover rehearsal
+
+### Decision
+
+- Implement cancellations as durable commands, not mutable order-row edits. All
+  commands sharing one timestamp are delivered through one Nautilus clock alert
+  in journal order; this is required for complete 40-50 order batch cancellation.
+- Preserve Nautilus HEDGING position identity on every close. Partial reduction
+  targets the exact position ID and resizes the remaining TP/SL protection;
+  regrid is two phase: cancel the old accepted set, verify it is gone, then arm
+  the replacement set.
+- Normalize the engine snapshot as the one read model for orders, fills,
+  positions, account, realized/unrealized PnL, margin, exposure, fees and
+  slippage. Production reconciliation now comes from the selected engine;
+  candidate reconciliation is exposed separately as
+  `execution_shadow_reconciliation`.
+- Permit comparison rounding only when the candidate explicitly declares the
+  venue price/quantity/money precision. Exact comparison remains exact; side,
+  state, event and other semantic drift can never be rounded away.
+- Use the authenticated demo account's observed paper fee contract (maker 0,
+  taker 0.0004). Keep the older flat-fee historical drift unchanged. Only new
+  command-bearing 12-hour cycles under the unified contract can count toward
+  7/7; no historical evidence is rewritten.
+- Isolate candidate and production persistence. Continuous shadow stays under
+  `dualtrack/nautilus_paper`; an attended cutover writes only under
+  `dualtrack/nautilus_authoritative`. Pre-cutover shadow orders therefore cannot
+  become production orders through directory reuse.
+- When Nautilus is authoritative, production history combines the preserved
+  versioned Legacy archive with only `nautilus_authoritative` snapshots. Shadow
+  fills are excluded. Market orders and manual closes are advanced with the
+  server-validated market event before the API returns a fill.
+- Keep `legacy_paper` authoritative. The real Nautilus cutover remains blocked
+  until the live gate reaches seven consecutive qualifying cycles and the
+  operator supplies attended service approval.
+- Count only completed 12-hour cycles. A passing intracycle comparison is
+  debugging evidence but never advances 7/7. The close path now re-runs the
+  shadow comparison idempotently and requires a persisted close artifact,
+  command activity, trusted configured-provider events, the current paper fee
+  contract, and a pinned replay version.
+- Add a read-only attended-cutover precheck which combines the 7/7 evidence gate
+  with the operational flat-state boundary. It refuses Go while Legacy is
+  running, accepted orders or positions remain, either ledger does not
+  reconcile, service-environment approval is absent, or the isolated runtime
+  and preflight are unavailable. It cannot edit config or submit an order.
+
+### Gotchas
+
+- Scheduling one clock alert per cancellation at the same nanosecond caused a
+  real Nautilus batch to cancel only a prefix. Timestamp batching is execution
+  semantics, not a performance-only optimization.
+- A factory switch alone is unsafe if candidate state and authoritative state
+  share disk paths. This was not visible in empty-directory unit tests; the
+  cutover rehearsal now pre-seeds a historical shadow command to prove it stays
+  excluded.
+- Overwriting `production_execution.reconciliation` with the latest shadow
+  comparison made a healthy Legacy ledger appear drifted. Active-ledger health
+  and migration evidence must stay visibly separate.
+- Existing shadow PnL differs from Legacy by the historical fee model. This is
+  expected evidence and resets the streak; precision normalization must not be
+  used to hide money-model differences.
+- `re_arm_max` is a Strategy Lab parameter, not authorization for an automatic
+  production re-arm loop. Production replacement behavior remains driven by
+  explicit grid events and control actions.
+- Browser full-page capture failed in the Codex in-app tab through both the
+  high-level screenshot API and raw CDP. The same live local dashboard was then
+  captured with the browser fallback; public DOM/error checks still used the
+  authenticated public tab and reported zero browser errors.
+- The first gate implementation could count an open cycle as soon as its current
+  prefix matched. That did not prove 12 hours of behavior. `cycle_complete` is
+  now cross-checked against the cycle attribution artifact before qualification.
+- Excluding open cycles only at increment time was insufficient: after a 7/7
+  completed streak, the next open cycle's provisional report would reset the
+  gate to zero until its close. The gate now counts and resets only from strict
+  v2 completed-cycle evidence. The newest open report remains visible through
+  separate observation fields but cannot erase earned qualification. An open
+  cycle with live drift can still block the attended switch without resetting
+  the completed streak; an open passing prefix leaves a 7/7 gate ready.
+- The updated datafeed reports the canonical provider name in `source_mode`
+  instead of the older `requested_symbol` marker. The production order path
+  already accepted both forms, but the legacy runtime-status endpoint did not,
+  causing a false `blocked` message while the same payload was fresh and ready.
+  Runtime diagnostics now use the same fail-closed contract: ready, fresh,
+  explicit provider, non-synthetic, canonical source mode, and exact configured
+  provider match.
+- `test_official_feed_receipt_refreshes_from_current_local_state` was not truly
+  local: when its temporary output root had no OANDA receipt it queried the live
+  datafeed health endpoint, making the full suite depend on network timing. The
+  fixture now persists the explicit local skipped-OANDA state it intends to
+  test; production fail-closed behavior was not relaxed.
+
+### Verification and evidence
+
+- Fixed real Nautilus parity gate: all 10 lifecycle classes pass.
+- Added the M5 transactional apply/rollback controller. It requires the read-only
+  7/7 precheck and an exact acknowledgement, stops both adapter-owning services
+  before any write, backs up the config and two installed LaunchAgent plists,
+  persists service-environment approval/runtime, restarts and validates the
+  selected engine, and automatically restores Legacy on failed validation.
+  Explicit rollback separately requires stopped/flat/reconciled Nautilus and
+  restores the apply backups byte-for-byte. Neither path starts a strategy or
+  submits an order. The live controller has not been applied because M4 is 0/7.
+- Exercised the real apply command against the current live state with the exact
+  acknowledgement and isolated runtime path. It returned exit 2 with only the
+  expected blockers (`shadow_gate_not_ready`, running Legacy runtime, 45 open
+  Legacy orders), reported `config_write_performed=false`, and left the config
+  plus both installed LaunchAgent files byte-identical. Legacy remained running.
+- Automatic rollback is itself an audited state machine. A restore, restart, or
+  Legacy revalidation failure now returns and persists
+  `automatic_rollback_failed` instead of escaping without a receipt. Service
+  quiescence is idempotent: a non-zero `bootout` is acceptable only when an
+  immediate `launchctl print` proves the job is no longer loaded.
+- Real isolated cutover rehearsal: start, regrid, cancel-all, manual market
+  open/close, stop and final reconciliation pass; the historical shadow command
+  remains untouched in the shadow directory.
+- Isolated rollback selection restores `legacy_paper` after the Nautilus stop;
+  the Legacy history bytes and Nautilus authoritative snapshot remain present
+  and unchanged.
+- The live attended precheck currently reports No-Go for exactly the expected
+  reasons: 0/7, production runtime running, 45 accepted Legacy orders, and no
+  cutover-only service approval/runtime environment. Legacy reconciliation is
+  `ok`, so this is a controlled migration block rather than a production fault.
+- Focused completed-cycle gate/dashboard/cutover regression: `71 passed`.
+- Focused transactional M5 controller regression: `7 passed`.
+- Final full repository regression after the transactional apply/rollback and
+  failure-visible automatic rollback: `1531 passed` in 411.33 seconds.
+- Current production check after tests: `legacy_paper`, runtime `running`,
+  authoritative reconciliation `ok`; live-tick LaunchAgent running with last
+  exit code 0. Runtime market diagnostics now report `ok / 行情新鲜`. Shadow
+  gate remains blocked at `0/7`.
+- Desktop evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-migration-gate-desktop.png`.
+- 390px mobile evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-migration-gate-mobile.png`.
+
+## 2026-07-16 - Nautilus paper authority cutover and contract-level drift audit
+
+### Decision
+
+- Complete the paper-only authority migration now at a stopped/flat cycle
+  boundary. Keep the normal seven completed-cycle gate at `7/7`; do not lower or
+  rewrite it. The operator-authorized acceleration is a separately acknowledged,
+  receipt-backed override which is valid only when the deterministic Nautilus
+  fixture gate passes, both ledgers are flat and reconciled, the isolated runtime
+  is ready, and `real_money_eligible=false`.
+- Normalize every new execution command before either engine accepts it. XAUUSDT
+  executable prices now use `0.01`, quantities use `0.001`, and the command keeps
+  its raw requested values plus immutable execution-contract and fee-contract
+  hashes. Legacy and Nautilus therefore receive the same executable numbers.
+- Make reconciliation economic and traceable, not count-only. It now checks fees,
+  equity, fill cost/slippage/time, order time, position economics and
+  StrategyPlan ID/version. Money remains eight-decimal exact; venue rounding is
+  allowed only for price and quantity when explicitly declared by the candidate.
+- Canonicalize spelling-only lifecycle aliases (`canceled` and `cancelled`) while
+  continuing to treat semantically different states as drift.
+- Preserve every historical Legacy fill/order/trade and every previous Nautilus
+  shadow artifact byte-for-byte. Old cycles are classified as non-qualifying
+  evidence rather than rewritten to look compatible.
+- Treat the current migrated UI state explicitly. Once Nautilus is authoritative,
+  the dashboard shows `已切换（Paper）`, fixed-fixture status, and the old-cycle
+  streak separately instead of presenting an already-completed migration as a
+  pending failed gate.
+
+### Migration result
+
+- Cutover receipt: `20260716T013003702625Z`; status `applied`.
+- Authoritative engine: `nautilus_paper`; current cycle `2026-07-16_DAY` remains
+  `stopped`, with zero accepted orders, zero positions, and reconciliation `ok`.
+- The controller backed up `configs/dualtrack.yaml` plus both installed
+  LaunchAgent plists, stopped both adapter-owning services, wrote the paper-only
+  authority/runtime/override environment, restarted them, and validated the
+  dashboard API. No order was submitted and no real-money path was enabled.
+- Rollback remains available from the cutover receipt and restores the exact
+  Legacy config/service bytes while preserving all three ledger namespaces.
+
+### Full drift audit
+
+- The historical `2026-07-15_NIGHT` engines still agree on lifecycle counts:
+  57 orders, 12 fills and 6 positions on each side.
+- The previously discussed `0.29247753 USD` net-PnL difference is fully explained:
+  `0.28891059 USD` is the mixed historical fee-contract transition and
+  `0.00356694 USD` is venue price/quantity precision. It is not missing cash.
+- With the expanded schema, the old-cycle audit exposes 120 rows: 58 chronology,
+  31 economic, 19 schema/semantic, and 12 StrategyPlan traceability differences.
+  Most chronology/schema rows are missing fields in the old replay artifact;
+  they are intentionally not backfilled. The earlier 45 `cancelled/canceled`
+  rows disappear after canonicalization because they were spelling-only.
+- New deterministic fixtures cover market long/short, untouched limit orders,
+  scale-in weighted average, partial reduction, TP/SL, same-bar conservative
+  priority, fees/slippage/margin/exposure/PnL, duplicate replay, restart and
+  residual-unit reconciliation. All 10 fixture classes pass with the expanded
+  schema.
+
+### Gotchas
+
+- Running the fixed parity fixtures does not refresh
+  `cutover/shadow_gate_current.json` by itself. The shadow cutover status must be
+  rebuilt after the fixture gate or the API/UI can display a stale blocker.
+- Several tests implicitly loaded the live `configs/dualtrack.yaml` and therefore
+  failed after a legitimate authority switch. Those tests now freeze a complete
+  Legacy test config; test behavior no longer depends on the operator's current
+  production engine.
+- A candidate field must not be invented when Nautilus upstream reports omit it.
+  Order/fill time and order type are emitted only when present; the deterministic
+  fixture supplies the explicit engine-neutral evidence it is intended to test.
+- StrategyPlan trace is absent from some historical persisted Legacy trade rows
+  even when newer candidate artifacts contain it. Historical records remain
+  immutable; all new commands carry the versioned trace.
+- `Strategy Shadows` currently has no generated comparison result. The UI and
+  saved screenshot correctly show this as missing historical what-if evidence;
+  it is not evidence against the production cutover and was not fabricated.
+
+### Verification and evidence
+
+- Focused execution/cutover/UI regression: `135 passed`.
+- Final full repository regression after the live cutover and test-isolation fix:
+  `1538 passed in 479.98s`.
+- Browser validation on the authenticated public v5 page: `Nautilus Paper（当前）`,
+  stopped, zero orders, zero positions, preserved 10,005.35 equity and 13 fills,
+  fresh Binance data, and zero browser console errors.
+- Desktop:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-cutover-desktop.png`.
+- 390px mobile:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-cutover-mobile.png`.
+- Real-time grid:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-cutover-realtime-grid.png`.
+- Strategy Shadow empty-state evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-nautilus-cutover-strategy-shadows.png`.
+
+## 2026-07-16 - Leverage-derived grid sizing, grid modes, and chart hierarchy
+
+### Decision
+
+- Define the operator-selected leverage as the worst-side notional ceiling. With
+  10,000 USD equity and 10x leverage, the grid may deploy up to 100,000 USD of
+  simultaneous same-side notional. For a neutral grid, the denominator is the
+  larger of the buy-entry and sell-entry rung counts; it is not the total number
+  of bilateral orders.
+- Calculate automatic per-grid notional as
+  `equity × leverage × capital_utilization_cap ÷ max_same_side_entry_levels`.
+  `capital_utilization_cap` is now a single global value of 1.0. Steady and
+  aggressive styles change range and spacing geometry only; they no longer
+  carry hidden 50%/70% capital haircuts or different sizing risk budgets.
+- Keep plan-loss math visible as a diagnostic and flag when it exceeds the
+  configured advisory budget. It no longer silently reduces the order size.
+  Lowering leverage is the explicit operator control for reducing deployment.
+- Preserve the grid-count contract: D1 ATR14 determines the range, 4H ATR14
+  determines the target spacing, and the resulting interval count is clamped to
+  24-80 unless the operator enters a valid count explicitly.
+- Add grid mode to the versioned preview/plan/order path. `arithmetic` uses equal
+  absolute price differences; `geometric` uses equal price ratios. Both derive
+  TP from the adjacent grid level, include fee-deducted minimum profit per grid,
+  and produce deterministic preview hashes.
+- Reduce chart noise by making ordinary chart reference lines faint, drawing
+  grid/order levels as solid side-colored lines, removing the duplicate
+  grid-plus-order line at the same price, and showing right-axis labels only for
+  the six orders nearest the current price. Range boundaries remain emphasized.
+
+### Binance feature inventory for later product review
+
+- Candidate next: trigger price; open initial position on creation; TP/SL by
+  price, PnL or ROI; explicit close-all-versus-keep-position behavior when the
+  bot stops; fee-deducted profit/grid; estimated liquidation prices.
+- Later / requires a separate execution design: trailing up/down with a movement
+  limit, automatic margin addition on bracket change, live parameter
+  customization, and copy-strategy workflows.
+- Read-only reporting ideas: runtime, 24h/total matched trades, historical
+  ROI/PnL curve, bot preview chart, range/grid/mode summary, and historical
+  strategy comparison. These do not authorize production mutations.
+
+### Gotchas
+
+- The previous sizing formula took the minimum of a style-specific capital cap
+  and a style-specific plan-loss cap. On the same live 53-grid preview this made
+  steady use about 1.89x while aggressive used about 6.09x, despite both showing
+  a 10x leverage limit. This was the source of the unexplained quantity change.
+- A bilateral neutral grid must not divide capacity by all buy and sell orders.
+  Only the maximum simultaneously accumulating side owns the worst-case margin
+  denominator; using total order count would understate usable capacity by about
+  half.
+- Grid preview/start originally built all D1/4H/1H/15m contexts before sizing,
+  so an unrelated 1H outage could block a calculation that only consumes D1 and
+  4H. Preview/start now fetch only D1/4H; AI trend refresh remains fail-closed on
+  all four required timeframes.
+- Full-page screenshots of the canvas page can tile a sticky region in the
+  in-app browser. Evidence therefore uses a desktop viewport capture for the
+  chart and a separately scrolled 390px viewport capture for the controls.
+- The authenticated public preview POST briefly returned Cloudflare 530 while
+  the same local API remained healthy. No production mutation was attempted;
+  interactive acceptance used the local authenticated control surface and the
+  public page was rechecked read-only after the service settled.
+- The final public read-only check then exposed Cloudflare Tunnel error 1033:
+  the dashboard and gateway listeners were healthy, but the named tunnel had
+  zero edge connections. Restarting its existing LaunchAgent restored two edge
+  connectors; the authenticated page recovered without changing robot, order,
+  position, or ledger state.
+
+### Verification and evidence
+
+- Live stopped-state preview, 10,005.35 USD equity, 10x leverage: steady and
+  aggressive both calculate 3,705.68 USD per grid with 27 worst-side levels,
+  or 100,053.36 USD total worst-side notional versus a 100,053.46 USD ceiling.
+- Arithmetic and geometric previews both produced 53 deterministic orders; the
+  displayed fee-deducted minimum profit/grid was 0.17%/0.18% for the steady
+  snapshot and 0.08% for the aggressive snapshot.
+- Full repository regression: `1543 passed in 519.31s`.
+- Browser acceptance: trusted Binance USD-M data, Nautilus Paper authority,
+  stopped, zero accepted orders, zero open positions, 390px horizontal overflow
+  zero, no browser console errors, and no production-ledger writes from the
+  preview interactions. Final public read-only state remained stopped with
+  10,005.35 USD equity, 13 historical trades, zero orders, and zero positions.
+- Desktop chart hierarchy:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-grid-visual-hierarchy.png`.
+- Desktop sizing/modes:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-grid-sizing-modes-desktop.png`.
+- 390px sizing/modes:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-grid-sizing-modes-mobile.png`.
+
+## 2026-07-16 - Trusted strategy-timeframe retry and truthful grid-mode preview
+
+### Decision
+
+- Keep D1 and 4H strategy inputs fail-closed, but retry the exact same
+  source/timeframe once when a non-synthetic snapshot is temporarily
+  unavailable. The retry does not change provider, accept stale data, or allow
+  synthetic data; a second failure still blocks preview and new positions.
+- Preserve the last valid grid preview when a later preview request fails. A
+  failed arithmetic/geometric switch now rolls the selected button back and
+  explicitly says which grid remains on the chart, instead of showing a new
+  selection over old grid geometry.
+- Make mode geometry auditable in the chart summary. Arithmetic displays one
+  fixed USD price gap; geometric displays the fixed percentage ratio plus its
+  lower-to-upper USD price-gap range.
+
+### Gotchas
+
+- The previous grid-mode click changed the selected button before the async
+  preview completed. On a transient D1 failure, the preview was then cleared
+  and the chart fell back to the production plan without rolling back the
+  button. The backend geometric calculation was correct, but the UI could
+  falsely imply that the old chart was geometric.
+- Equal-ratio levels do not have equal dollar gaps. On the accepted live
+  53-grid preview, the ratio was about 0.19% while absolute gaps increased from
+  about 7.15 to 7.87 USD across the range. Showing only the ratio made the
+  visual difference unnecessarily hard to verify.
+
+### Verification and evidence
+
+- Focused strategy-timeframe, static UI, sizing, and control-plane regression:
+  `47 passed`.
+- Final full repository rerun: `1545 passed in 509.07s`. The first full run had
+  one unrelated offline-runner isolation failure (`1544 passed, 1 failed`); that
+  test passed alone and the clean full rerun did not reproduce it.
+- Synthetic strategy data is rejected immediately and is never retried; the
+  dedicated transient-retry/synthetic-rejection/UI-rollback check passed `4/4`.
+- Authenticated public browser acceptance: arithmetic showed a fixed 7.5 USD
+  gap; geometric showed a 0.19% ratio and a 7.15-7.87 USD variable gap, both
+  with 53 deterministic preview orders. Preview created no production orders.
+- Arithmetic chart:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-arithmetic-grid-chart-fixed.png`.
+- Geometric chart:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-geometric-grid-chart-fixed.png`.
+
+## 2026-07-16 - GRIDMIND visual restoration with the full production console contract
+
+### Decision
+
+- Keep the compact GRIDMIND visual system from the first Claude reskin: five
+  account metrics, a wide chart/data column, a narrow decision/control rail,
+  terminal typography, and restrained amber/green/red state accents.
+- Restore missing capabilities by reusing the proven production-console logic,
+  not by extending the first reskin's simplified handwritten implementation.
+  The restored page retains clickable direction/style/grid-mode previews,
+  editable range/grid/notional/leverage/out-of-range fields, preview risk,
+  start/stop, running range adjustment, statistics reset, AI Input/Output
+  receipts, EMA/MACD, six data tabs, manual close, operator audit, execution
+  engine, and Nautilus cutover status.
+- Continue using `standard-kline`; the first GRIDMIND draft's custom canvas is
+  not a production chart contract. Include the complete active/preview range in
+  price autoscaling so the grid geometry remains visible while all overlays
+  still move with the chart's native scale and pan behavior.
+- Make `/dashboard-v5.html` serve `dashboard-gridmind.html`. Keep
+  `dashboard-dualtrack-split.html` unchanged as the compatibility entry point.
+
+### Gotchas
+
+- The earlier follow-up replaced `dashboard-gridmind.html` with the full legacy
+  page to recover functionality. That restored behavior but also erased the
+  compact visual hierarchy; the right fix was to preserve the full controller
+  contract while replacing only the information architecture and skin.
+- Price lines do not participate in Lightweight Charts autoscaling by default.
+  Without an explicit `autoscaleInfoProvider`, a valid wide grid can exist but
+  most levels remain outside the visible price scale. The GRIDMIND page now
+  includes the selected production/preview range in autoscaling.
+- The control rail is intentionally independently scrollable on desktop because
+  the complete production controls cannot fit inside the screenshot draft's
+  shorter read-only rail. At 1120px and below it returns to normal document flow.
+- Automated public browsing reaches the Cloudflare Access login page without the
+  operator session. Public authenticated visual proof is therefore not claimed;
+  the local v5 route and the public gateway upstream were verified, while the
+  edge remained fail-closed with HTTP 302 to Access.
+
+### Verification and evidence
+
+- Focused dashboard/server/chart regression: `70 passed`.
+- Full repository regression: `1550 passed in 526.82s`.
+- Browser acceptance: trusted Binance USD-M data, live 1m/5m switching, five
+  populated account metrics, no horizontal overflow at 390px, AI receipt with
+  Input/Output/archive, and zero browser console errors.
+- Read-only preview acceptance: short + aggressive + geometric produced 53 grid
+  intervals, 26 candidate orders, 3,848.21 USD per grid, and 10x estimated
+  leverage; the production runtime remained stopped with zero accepted orders
+  and zero open positions.
+- Dashboard service restart preserved authoritative state exactly: cycle
+  `2026-07-16_DAY`, `nautilus_paper`, stopped, zero orders, zero positions.
+  The local gateway returned the new GRIDMIND page and the public edge returned
+  the expected Cloudflare Access 302.
+- Final desktop v5:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-v5-final-desktop.png`.
+- Geometric preview/grid visibility:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-geometric-fit.png`.
+- 390px full-page acceptance:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-mobile-local.png`.
+
+## 2026-07-16 - Chronological execution replay and immutable fill history
+
+### Decision
+
+- Treat execution lifecycle as four separate facts: submitted order, accepted
+  order, immutable fill, and derived position. A filled order leaves the current
+  order list but must remain in fill history; a position can change only through
+  a later close fill.
+- Sort both trusted market events and execution commands by event time before
+  every Nautilus rebuild. Historical bars may be backfilled, but they can never
+  be appended after a live control command and replayed as if they arrived later.
+- Validate the complete start batch before advancing the market. A start is now
+  all-or-zero: every planned order must be accepted or legitimately filled. On
+  failure, the control plane cancels pending orders, flattens any positions
+  created during the failed attempt, advances one cleanup event, and verifies
+  zero remaining orders and positions before reporting failure.
+- Use the durable client order ID as the business identity of a fill. Nautilus
+  internal event IDs are replay-local random values and cannot be used for
+  append-only guarantees. Persisted fill history rejects a missing or
+  economically changed prior fill.
+- Show position open/close time in Beijing time. Render the fill tab from the
+  immutable production fill history rather than from the current derived trade
+  snapshot, and label each event as open-long, close-long, open-short, or
+  close-short.
+
+### Root cause
+
+- The 19:52 start did submit the complete 53-order batch. A live start event was
+  persisted before older cycle bars, so Nautilus received event time in the
+  order `11:52 -> 01:01 -> cleanup -> 01:02...`. This time travel caused two
+  sell orders to appear filled transiently; the start verifier then observed
+  only 51 accepted orders, rolled those 51 back, and left the transient state
+  dependent on replay order.
+- A later full replay reordered/recomputed that state and the temporary fill and
+  position disappeared. It was not a user cancellation and was not valid fill
+  lifecycle behavior; the UI was exposing a derived replay snapshot as if it
+  were an immutable ledger.
+
+### Gotchas
+
+- Nautilus regenerates an internal event UUID during each replay. Comparing that
+  UUID initially caused valid later partial-close replays to be rejected; the
+  stable client order ID is the correct fill identity for this execution model.
+- Commands with identical timestamps must keep insertion order. Python's stable
+  sort is relied on so an entry remains before its associated cancel/exit at the
+  same event time.
+- The dashboard rolled from `2026-07-16_DAY` to `2026-07-16_NIGHT` during the
+  investigation. The new cycle correctly displays stopped, zero orders, and
+  zero positions; this rollover must not be described as manual cleanup of the
+  previous cycle artifact.
+- The transient 19:52 fill was never captured in an immutable intermediate
+  ledger, so it cannot be reconstructed faithfully after the fact. Do not
+  fabricate it from screenshots or current replay output.
+
+### Verification and evidence
+
+- Focused controller, adapter, dashboard, cycle-runner, and execution contract
+  regression: `109 passed` plus real Nautilus runtime/cutover regression
+  `43 passed`.
+- Final clean full repository regression after the replay-version fixture was
+  updated: `1555 passed in 698.82s`.
+- Browser acceptance clicked current positions, current orders, fills, and the
+  5m timeframe. The position table shows Beijing open/close time, fills remain
+  visible as immutable lifecycle events, 5m loads trusted Binance USD-M data,
+  and current-cycle orders remain zero. No dashboard-originated console errors
+  were observed.
+- Desktop lifecycle evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-order-lifecycle-desktop.png`.
+- 390px position-time evidence (zero horizontal page overflow):
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-order-lifecycle-mobile.png`.

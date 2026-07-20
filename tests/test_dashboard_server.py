@@ -1094,6 +1094,28 @@ def test_deployment_feature_summary_reports_missing_trader_and_ops_features(monk
     assert all(item["surface"] in {"trader", "replay", "ops"} for item in summary["checks"])
 
 
+def test_deployment_feature_summary_recognizes_public_v5_console(monkeypatch):
+    def fake_feature_probe(_url, _timeout, features):
+        return {
+            "ok": True,
+            "status_code": 200,
+            "checks": [{"name": name, "ok": True} for name in features],
+        }
+
+    monkeypatch.setattr(dashboard_server, "_probe_html_features", fake_feature_probe)
+    monkeypatch.setattr(dashboard_server, "_probe_http", lambda _url, _timeout: {"ok": True, "status_code": 200})
+
+    summary = dashboard_server._deployment_feature_summary("https://goldbot.park-ai-intel.com/dashboard-v5.html", 1)
+
+    assert summary["status"] == "ok"
+    assert summary["trader_vendor_url"] == "https://goldbot.park-ai-intel.com/packages/standard-kline/standard-kline.js"
+    assert any(item["name"] == "dashboard_v5_title" for item in summary["checks"])
+    assert any(item["name"] == "strategy_console_api" for item in summary["checks"])
+    assert any(item["name"] == "access_session_api" for item in summary["checks"])
+    assert any(item["name"] == "authenticated_control_gate" for item in summary["checks"])
+    assert any(item["name"] == "trader_vendor_standard_kline" for item in summary["checks"])
+
+
 def test_deployment_feature_summary_warns_when_replay_page_is_missing(monkeypatch):
     def fake_feature_probe(url, _timeout, features):
         if "dashboard-replay-v4.html" in url:
@@ -1232,10 +1254,14 @@ def test_dashboard_handler_disables_cache_for_dashboard_html():
         "/dashboard-v2.html",
         "/dashboard-v3.html",
         "/dashboard-v4.html",
+        "/dashboard-v5.html",
         "/dashboard.html",
         "/dashboard-replay.html",
         "/dashboard-replay-v4.html",
         "/ops-dashboard.html?v=123",
+        "/assets/shell.js",
+        "/assets/shell.css?v=20260710",
+        "/packages/standard-kline/standard-kline.js",
     ]:
         handler.path = path
         assert handler._should_disable_static_cache() is True
@@ -1243,6 +1269,182 @@ def test_dashboard_handler_disables_cache_for_dashboard_html():
     for path in ["/api/dashboard", "/api/public-access-health", "/outputs/state.json", "/"]:
         handler.path = path
         assert handler._should_disable_static_cache() is False
+
+
+def test_dashboard_v5_is_a_stable_alias_for_the_production_strategy_console():
+    source = Path(dashboard_server.__file__).read_text(encoding="utf-8")
+
+    assert 'if parsed.path == "/dashboard-v5.html":' in source
+    assert 'self._serve_static_alias("/dashboard-gridmind.html")' in source
+    assert 'https://goldbot.park-ai-intel.com/dashboard-v5.html' in source
+    assert 'http://127.0.0.1:8766/dashboard-v5.html' in source
+
+
+def test_strategy_console_production_history_keeps_prior_versioned_trades(tmp_path: Path):
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-04_NIGHT"
+    write_json(output / "dualtrack" / "fills" / f"{cycle_id}_human.json", [
+        {
+            "fill_id": "entry-1",
+            "cycle_id": cycle_id,
+            "trade_id": "trade-1",
+            "event": "entry",
+            "side": "buy",
+            "ts": "2026-07-04T13:10:00+00:00",
+            "price": 100.0,
+            "pnl_units": 10.0,
+            "notional": 1000.0,
+            "cost": 0.05,
+            "realized_pnl": -0.05,
+            "remaining_units": 0.0,
+            "position_status": "closed",
+            "strategy_plan_id": "strategy-plan-2026-07-04_NIGHT-2-test",
+            "strategy_plan_version": 2,
+            "source": "strategy_production_console",
+        },
+        {
+            "fill_id": "exit-1",
+            "cycle_id": cycle_id,
+            "trade_id": "trade-1",
+            "event": "target",
+            "side": "sell",
+            "ts": "2026-07-04T13:20:00+00:00",
+            "price": 101.0,
+            "pnl_units": 10.0,
+            "notional": 1010.0,
+            "cost": 0.05,
+            "realized_pnl": 9.95,
+            "matched_entries": [{"trade_id": "trade-1", "units": 10.0, "gross_pnl": 10.0, "realized_pnl": 9.95}],
+        },
+        {
+            "fill_id": "legacy-only",
+            "cycle_id": cycle_id,
+            "trade_id": "legacy-trade",
+            "event": "entry",
+            "side": "sell",
+            "ts": "2026-07-04T13:30:00+00:00",
+            "price": 102.0,
+            "pnl_units": 1.0,
+            "notional": 102.0,
+            "source": "split_canvas",
+        },
+    ])
+
+    result = dashboard_server.build_strategy_console_production_history(
+        output_root=output,
+        mark_price=101.0,
+        mark_fresh=True,
+    )
+
+    assert result["summary"]["trade_count"] == 1
+    assert result["summary"]["fill_count"] == 2
+    assert result["summary"]["total_notional"] == 2010.0
+    assert result["summary"]["realized_pnl"] == 9.9
+    assert result["account"]["starting_cash"] == 10_000
+    assert result["account"]["ending_cash"] == 10_009.9
+    assert result["trades"][0]["strategy_plan_version"] == 2
+    assert result["trades"][0]["source_cycle_id"] == cycle_id
+
+
+def test_strategy_console_history_combines_legacy_archive_with_authoritative_nautilus_only(tmp_path: Path):
+    output = tmp_path / "outputs"
+    legacy_cycle = "2026-07-04_NIGHT"
+    write_json(output / "dualtrack" / "fills" / f"{legacy_cycle}_human.json", [
+        {
+            "fill_id": "legacy-entry",
+            "cycle_id": legacy_cycle,
+            "trade_id": "legacy-trade",
+            "event": "entry",
+            "side": "buy",
+            "ts": "2026-07-04T13:10:00+00:00",
+            "price": 100.0,
+            "pnl_units": 1.0,
+            "notional": 100.0,
+            "cost": 0.1,
+            "realized_pnl": -0.1,
+            "strategy_plan_id": "legacy-plan",
+            "strategy_plan_version": 1,
+        },
+        {
+            "fill_id": "legacy-exit",
+            "cycle_id": legacy_cycle,
+            "trade_id": "legacy-trade",
+            "event": "target",
+            "side": "sell",
+            "ts": "2026-07-04T13:20:00+00:00",
+            "price": 110.0,
+            "pnl_units": 1.0,
+            "notional": 110.0,
+            "cost": 0.1,
+            "realized_pnl": 9.9,
+        },
+    ])
+    active_cycle = "2026-07-05_DAY"
+    write_json(
+        output / "dualtrack" / "nautilus_authoritative" / "snapshots" / f"{active_cycle}.json",
+        [{
+            "engine": "nautilus_paper",
+            "cycle_id": active_cycle,
+            "fills": [
+                {
+                    "fill_id": "nautilus-entry",
+                    "trade_id": "nautilus-open",
+                    "event": "entry",
+                    "side": "buy",
+                    "ts": "2026-07-05T01:00:00+00:00",
+                    "price": 100.0,
+                    "quantity": 2.0,
+                    "strategy_plan_id": "nautilus-plan",
+                    "strategy_plan_version": 2,
+                },
+            ],
+            "positions": [
+                {
+                    "trade_id": "nautilus-open",
+                    "position_id": "POS-nautilus-open",
+                    "status": "open",
+                    "side": "long",
+                    "remaining_units": 2.0,
+                    "entry_price": 100.0,
+                    "entry_ts": "2026-07-05T01:00:00+00:00",
+                    "realized_pnl": 4.0,
+                    "strategy_plan_id": "nautilus-plan",
+                    "strategy_plan_version": 2,
+                },
+            ],
+        }],
+    )
+    write_json(
+        output / "dualtrack" / "nautilus_paper" / "snapshots" / f"{active_cycle}.json",
+        [{
+            "engine": "nautilus_paper",
+            "cycle_id": active_cycle,
+            "fills": [{
+                "fill_id": "shadow-must-not-leak",
+                "strategy_plan_id": "shadow-plan",
+            }],
+            "positions": [],
+        }],
+    )
+
+    result = dashboard_server.build_strategy_console_production_history(
+        output_root=output,
+        mark_price=105.0,
+        mark_fresh=True,
+        authoritative_engine="nautilus_paper",
+    )
+
+    assert result["summary"]["trade_count"] == 2
+    assert result["summary"]["fill_count"] == 3
+    assert result["summary"]["realized_pnl"] == 13.8
+    assert result["summary"]["unrealized_pnl"] == 10.0
+    assert result["account"]["ending_cash"] == 10_013.8
+    assert result["account"]["equity"] == 10_023.8
+    assert {row["fill_id"] for row in result["fills"]} == {
+        "legacy-entry", "legacy-exit", "nautilus-entry",
+    }
+    assert result["history_contract"]["source"] == "versioned_strategy_plan_and_nautilus_authoritative"
+    assert result["history_contract"]["nautilus_shadow_excluded"] is True
 
 
 def test_compact_strategy_payload_keeps_replay_fields_and_drops_ops_bulk():

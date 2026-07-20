@@ -5,7 +5,7 @@ from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 
 
 class DataTrustReport:
@@ -25,9 +25,9 @@ class DataTrustReport:
     def run(self, run_date: str) -> dict:
         clean = load_json(self.output_root / "clean_bars" / run_date / "GOLD_5m.json")
         latest_clean = clean[-1] if clean else {}
-        store = MarketStore(self.market_db) if self.market_db.exists() else None
-        latest_quote = store.load_latest_quote("GOLD") if store else {}
-        coverage = store.coverage() if store else []
+        store = market_data_repository(self.market_db)
+        latest_quote = store.load_latest_quote("GOLD")
+        coverage = store.coverage()
         lineage = self._latest("data_source_lineage", run_date)
         preflight = self._latest("data_source_preflight", run_date)
         truth_level = str(lineage.get("truth_level", "unknown"))
@@ -67,7 +67,7 @@ class DataTrustReport:
                 "price_sanity_max": self.max_price,
             },
             "source_artifacts": {
-                "market_db": str(self.market_db),
+                "market_data_port": "datafeed",
                 "clean_bars": str(self.output_root / "clean_bars" / run_date / "GOLD_5m.json"),
                 "data_source_preflight": str(self.output_root / "data_source_preflight" / f"{run_date}.json"),
                 "data_source_lineage": str(self.output_root / "data_source_lineage" / f"{run_date}.json"),

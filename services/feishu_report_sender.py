@@ -72,6 +72,14 @@ class FeishuReportSender:
             source_path=resolved_source,
             max_chars=max_chars,
         )
+        if card is None and kind in {"pm_morning", "pm_evening"}:
+            card = _pm_review_card(
+                run_date=run_date,
+                kind=kind,
+                title=title,
+                body=source_text,
+                source_path=resolved_source,
+            )
 
         configured = bool(getattr(self.sender, "configured", False))
         if configured:
@@ -96,6 +104,7 @@ class FeishuReportSender:
             "channel": channel,
             "truncated": truncated,
             "summarized": summarized,
+            "message_format": "interactive_card" if card is not None else "text",
             "message_chars": len(source_text),
             "sent_chars": len(text),
             "delivery": delivery,
@@ -193,6 +202,8 @@ def _kind_label(kind: str) -> str:
         "strategy_research": "策略研究",
         "health_check": "系统检查",
         "trade_ticket_open": "开单审查卡",
+        "dualtrack_machine_brief": "机器轨作战单",
+        "dualtrack_trade_record": "黄金交易记录",
         "market_analysis_prompt": "市场分析提醒",
     }.get(kind, kind)
 
@@ -225,6 +236,75 @@ def _pm_digest(kind: str, body: str, source_path: str) -> str:
     noun = "早报" if kind == "pm_morning" else "晚报"
     lines.extend(["", f"完整{noun}已保存：{Path(source_path).name}"])
     return "\n".join(_drop_empty_tail(lines))
+
+
+def _pm_review_card(*, run_date: str, kind: str, title: str, body: str, source_path: str) -> dict:
+    headline = _first_paragraph(_section(body, "一句话")) or _first_paragraph(body) or "本窗口暂无可读结论。"
+    market = _pick_bullets(_section(body, "行情"), tuple(), 2)
+    strategy = _pick_bullets(_section(body, "策略表现"), tuple(), 5)
+    why = _pick_bullets(_section(body, "为什么"), tuple(), 2)
+    focus = _pick_bullets(_section(body, "现在看什么"), tuple(), 3)
+    pnl_value, pnl_text = _pm_pnl(headline, strategy)
+    template = "green" if pnl_value is not None and pnl_value > 0 else "red" if pnl_value is not None and pnl_value < 0 else "wathet"
+    session = "早盘" if kind == "pm_morning" else "晚盘"
+
+    market_primary = _shorten(_clean_text(market[0]), 105) if market else "行情数据缺失，请检查数据源。"
+    performance = strategy[1:4] if len(strategy) > 1 else strategy
+    performance_text = "\n".join(f"- {_shorten(_clean_text(item), 115)}" for item in performance[:3])
+    why_text = "\n".join(f"- {_shorten(_clean_text(item), 125)}" for item in why[:2]) or "- 暂无额外归因，先看下一笔交易是否完成止盈/止损闭环。"
+    focus_text = "\n".join(f"- {_shorten(_clean_text(item), 125)}" for item in focus[:3]) or "- 等待机器轨下一次有效触发。"
+    artifact = Path(source_path).name if source_path else "未保存本地报告"
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"tag": "plain_text", "content": f"黄金{session}复盘 · {run_date}"},
+        },
+        "elements": [
+            _card_div(f"**一句话结论**\n{_shorten(_clean_text(headline), 190)}"),
+            _card_fields([
+                ("黄金行情", market_primary),
+                ("窗口已实现盈亏", pnl_text),
+            ]),
+            {"tag": "hr"},
+            _card_div(f"**机器轨表现**\n{performance_text or '- 本窗口没有开仓或平仓。'}"),
+            _card_div(f"**为什么**\n{why_text}"),
+            _card_div(f"**接下来只看**\n{focus_text}"),
+            _card_note(f"完整{session}复盘：{artifact}　·　策略：机器轨网格"),
+        ],
+    }
+
+
+def _pm_pnl(headline: str, strategy: list[str]) -> tuple[float | None, str]:
+    haystack = " ".join([headline, *strategy])
+    match = re.search(r"(?:已实现\s*)?PnL\s*([+-]?\$?[\d,]+(?:\.\d+)?)", haystack, flags=re.IGNORECASE)
+    if not match:
+        return None, "待核对"
+    raw = match.group(1).replace("$", "").replace(",", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return None, "待核对"
+    return value, f"{value:+.2f} USD"
+
+
+def _card_div(content: str) -> dict:
+    return {"tag": "div", "text": {"tag": "lark_md", "content": content}}
+
+
+def _card_fields(pairs: list[tuple[str, str]]) -> dict:
+    return {
+        "tag": "div",
+        "fields": [
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**{label}**\n{value}"}}
+            for label, value in pairs
+        ],
+    }
+
+
+def _card_note(content: str) -> dict:
+    return {"tag": "note", "elements": [{"tag": "lark_md", "content": content}]}
 
 
 def _strategy_research_digest(body: str, source_path: str) -> str:

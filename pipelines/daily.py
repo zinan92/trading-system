@@ -18,6 +18,7 @@ from services.decision_snapshot import DecisionSnapshotBuilder
 from services.direction_bias_gate import DirectionBiasGate
 from services.intel_client import IntelClient
 from services.kline_client import KlineClient
+from services.market_data_access import uses_independent_datafeed
 from services.live_env import apply_live_env
 from services.market_view_obsidian import MarketViewObsidianSync
 from services.pending_entry_guard import build_pending_entry_block, evaluate_pending_entry_state, reject_expired_pending_entries
@@ -54,7 +55,8 @@ def run_daily_pipeline(run_date: str, strategy=None, output_root=None) -> dict[s
     else:
         output_root = Path(output_root)
     _sync_market_view_from_obsidian(run_date, output_root)
-    BrokerFeedBridge(output_root=output_root, market_db=local_db_path).import_pending(run_date)
+    if not uses_independent_datafeed(local_db_path):
+        BrokerFeedBridge(output_root=output_root, market_db=local_db_path).import_pending(run_date)
     kline = KlineClient(
         base_url=pipeline_config["kline_base_url"],
         fallback_to_mock=bool(pipeline_config.get("fallback_to_mock", True)),

@@ -53,7 +53,7 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     assert "function cycleClosed(cycle)" in html
     assert 'api("/api/dualtrack/ledger")' in html
     assert "const MARKET_BAR_LIMIT = 240" in html
-    assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`" in html
+    assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`" in html
     assert "const context15Tf = contextTimeframe(CONTEXT_SLOTS[0])" in html
     assert "const context1hTf = contextTimeframe(CONTEXT_SLOTS[1])" in html
     assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(context15Tf)}&limit=${MARKET_BAR_LIMIT}`" in html
@@ -76,13 +76,17 @@ def test_dualtrack_v5_uses_dualtrack_api_contracts_and_backend_market_bars():
     assert "marketBarsToCandles" in html
     assert 'id="chartSyntheticWarning"' in html
     assert "data-synthetic-market-warning" in html
-    assert "模拟数据 · 非真实价格" in html
+    assert "非标准行情 · 已阻断" in html
+    assert "不会保留旧图" in html
     assert "function isSyntheticMarket(payload)" in html
     assert "payload.is_synthetic === true" in html
     assert 'provider.includes("synthetic_seed")' in html
     assert 'mode.includes("synthetic")' in html
     assert "function renderSyntheticWarning()" in html
-    assert 'warning.classList.toggle("hidden", !synthetic)' in html
+    assert 'warning.classList.toggle("hidden", !blocked)' in html
+    assert "seedCandles(" not in html
+    assert "seedMarketPayload(" not in html
+    assert "frontend_synthetic_seed" not in html
     assert '<svg id="mainChart"' not in html
     assert "function drawChart" not in html
     assert "contextMeta" in html
@@ -216,9 +220,9 @@ def test_dashboard_server_exposes_read_only_market_bars_endpoint(tmp_path):
     )
 
     assert response["schema_version"] == "dualtrack-market-bars-v1"
-    assert response["status"] == "seeded"
-    assert response["is_synthetic"] is True
-    assert "synthetic_seed" in response["quality_flags"]
+    assert response["status"] == "blocked"
+    assert response["is_synthetic"] is False
+    assert response["quality_flags"] == ["market_unavailable"]
     assert response["safety"]["read_only"] is True
     assert response["safety"]["opens_order_clients"] is False
     assert "/api/dualtrack/market/bars" not in dashboard_server._DUALTRACK_POST_ENDPOINTS
@@ -233,7 +237,7 @@ def test_dualtrack_v5_task06_main_timeframe_switch_is_wired() -> None:
     assert "state.mainTf = button.dataset.tf" in html
     assert "renderMainKline()" in html
     assert "loadMainMarket()" in html
-    assert "`/api/dualtrack/market/bars?timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`" in html
+    assert "`/api/dualtrack/market/bars?symbol=GOLD&timeframe=${encodeURIComponent(state.mainTf)}&limit=${MARKET_BAR_LIMIT}`" in html
     assert 'api("/api/dualtrack/market/bars?limit=96")' not in html
 
 
@@ -379,7 +383,11 @@ def test_dualtrack_v5_browser_comments_explain_sources_and_expose_ema_config() -
     assert "EMA 20" in html
     assert "EMA 50" in html
     assert "sourceModeLabel(" in html
-    assert "fallback：主源不可用或不新鲜" in html
+    assert "function marketUsable(payload)" in html
+    assert 'mode.includes("fallback")' in html
+    assert "state.candles = marketUsable(market) ? marketBarsToCandles(market) : [];" in html
+    assert 'binance_usdm_fallback:"本地缓存"' not in html
+    assert "fallback：主源不可用或不新鲜" not in html
     assert "由1m聚合" in html
     assert "原生K线" in html
 
@@ -394,7 +402,8 @@ def test_standard_kline_browser_comments_show_time_and_clamp_toolbar() -> None:
     assert "timeFormatter" in html
     assert "formatChartTime(" in html
     assert ".standard-kline-toolbar{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;" in html
-    assert ".standard-kline-source{margin-left:auto;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" in html
+    assert ".standard-kline-crosshair:empty{display:none}" in html
+    assert "@container (max-width:720px){.standard-kline-source{display:none}}" in html
     assert "source.title = fullText" in html
     assert "typeof this.options.sourceFormatter === \"function\"" in html
     assert "timeZone:\"Asia/Shanghai\"" in dashboard
@@ -403,7 +412,7 @@ def test_standard_kline_browser_comments_show_time_and_clamp_toolbar() -> None:
     assert "limit=96" not in extract_function(dashboard, "loadMainMarket")
 
 
-def test_dashboard_server_runtime_status_hides_machine_fills_until_close(tmp_path, monkeypatch):
+def test_dashboard_server_runtime_status_exposes_machine_fills_during_cycle(tmp_path, monkeypatch):
     from pipelines import dashboard_server
 
     class FakeMarketFeed:
@@ -412,11 +421,11 @@ def test_dashboard_server_runtime_status_hides_machine_fills_until_close(tmp_pat
 
         def snapshot(self, **kwargs):
             return {
-                "status": "fallback",
-                "source_mode": "binance_usdm_fallback",
+                "status": "ready",
+                "source_mode": "binance_usdm_futures",
                 "symbol": "GOLD",
                 "timeframe": "1m",
-                "provider": "binance_usdm",
+                    "provider": "binance_usdm_futures",
                 "fresh": True,
                 "latest_timestamp": "2026-07-05T02:04:00+00:00",
                 "age_minutes": 1.0,
@@ -446,6 +455,17 @@ def test_dashboard_server_runtime_status_hides_machine_fills_until_close(tmp_pat
         "cycle_id": cycle_id,
         "machine_stood_down": False,
         "layers": ["grid:traded", "trend:armed"],
+        "range_observation": {
+            "status": "high_breached",
+            "eligible_sides": [],
+            "first_breaches": [{"side": "above", "boundary": 4010.0, "ts": "2026-07-05T02:02:00+00:00"}],
+        },
+    }])
+    write_json(output / "dualtrack" / "reassessment" / f"{cycle_id}.json", [{
+        "status": "awaiting_confirmation",
+        "plan_locked_at": "2026-07-05T01:00:00+00:00",
+        "touch": {"side": "above", "boundary": 4010.0, "touched_at": "2026-07-05T02:02:00+00:00"},
+        "entry_mode": "paused",
     }])
     write_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json", [{
         "fill_id": "m1",
@@ -459,11 +479,48 @@ def test_dashboard_server_runtime_status_hides_machine_fills_until_close(tmp_pat
     )
 
     assert response["schema_version"] == "dualtrack-runtime-status-v1"
+    assert response["status"] == "ok"
     assert response["sample"]["valid_now"] is True
-    assert response["sample"]["machine_fills_hidden"] is True
-    assert response["sample"]["machine_fill_count"] is None
+    assert response["sample"]["machine_fills_hidden"] is False
+    assert response["sample"]["machine_fill_count"] == 1
     assert response["runner"]["bar_count"] == 64
-    assert response["market"]["provider"] == "binance_usdm"
+    assert response["market"]["provider"] == "binance_usdm_futures"
+    assert response["machine_range_observation"]["status"] == "high_breached"
+    assert response["machine_range_observation"]["eligible_sides"] == []
+    assert response["machine_range_reassessment"]["status"] == "awaiting_confirmation"
+
+
+def test_dashboard_server_runtime_status_warns_when_simulation_filtered_invalid_machine_fills(tmp_path, monkeypatch):
+    from pipelines import dashboard_server
+
+    class FakeMarketFeed:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def snapshot(self, **kwargs):
+            return {
+                "status": "ready", "source_mode": "requested_symbol", "symbol": "GOLD", "timeframe": "1m",
+                "provider": "binance_usdm_futures", "fresh": True, "latest_timestamp": "2026-07-05T02:04:00+00:00", "age_minutes": 1.0,
+            }
+
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", FakeMarketFeed)
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    DualTrackPlanStore(output).save_ai_plan({
+        "cycle_id": cycle_id, "author": "ai", "direction": "long", "range": {"low": 3960.0, "high": None},
+        "key_levels": [3992.0], "invalidation": [{"side": "below", "price": 3960.0, "confirm": "touch"}],
+        "confidence": 7, "source": "obsidian", "status": "fallback_active",
+    }, now="2026-07-05T01:00:00+00:00")
+    write_json(output / "dualtrack" / "runner" / f"{cycle_id}.json", [{"ts": "2026-07-05T02:04:00+00:00", "event": "intraday"}])
+    write_json(output / "dualtrack" / "cycles" / f"{cycle_id}.json", [{"machine_stood_down": False, "layers": ["grid:traded", "invalid_fills:4"]}])
+
+    response = dashboard_server.build_dualtrack_runtime_status_response(output_root=output, as_of="2026-07-05T02:05:00+00:00")
+
+    quality = next(check for check in response["checks"] if check["name"] == "machine_fill_quality")
+    assert response["status"] == "warn"
+    assert response["sample"]["valid_now"] is False
+    assert response["sample"]["invalid_machine_fill_count"] == 4
+    assert quality["status"] == "warn"
 
 
 def test_dashboard_server_runtime_status_exposes_previous_closed_cycle_summary(tmp_path, monkeypatch):
@@ -475,11 +532,11 @@ def test_dashboard_server_runtime_status_exposes_previous_closed_cycle_summary(t
 
         def snapshot(self, **kwargs):
             return {
-                "status": "fallback",
-                "source_mode": "binance_usdm_fallback",
+                "status": "ready",
+                "source_mode": "requested_symbol",
                 "symbol": "GOLD",
                 "timeframe": "1m",
-                "provider": "binance_usdm",
+                "provider": "binance_usdm_futures",
                 "fresh": True,
                 "latest_timestamp": "2026-07-05T14:04:00+00:00",
                 "age_minutes": 1.0,
@@ -541,8 +598,8 @@ def test_dashboard_server_runtime_status_exposes_previous_closed_cycle_summary(t
     )
 
     assert response["cycle_id"] == current_cycle
-    assert response["sample"]["machine_fills_hidden"] is True
-    assert response["sample"]["machine_fill_count"] is None
+    assert response["sample"]["machine_fills_hidden"] is False
+    assert response["sample"]["machine_fill_count"] == 1
     assert response["previous_closeout"]["cycle_id"] == previous_cycle
     assert response["previous_closeout"]["attribution_available"] is True
     assert response["previous_closeout"]["ledger_available"] is True

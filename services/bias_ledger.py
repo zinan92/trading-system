@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 from services.market_view import MarketViewStore, infer_market_view_reference_price
 
 
@@ -192,12 +192,14 @@ class BiasLedger:
         return base
 
     def _settle_bar(self, expires_at: str) -> dict[str, Any] | None:
-        if not self.config.market_db or not self.config.market_db.exists():
+        if not self.config.market_db:
             return None
         expiry = _parse_ts(expires_at)
         if expiry is None:
             return None
-        row = MarketStore(self.config.market_db).load_bar_at_or_before(self.config.symbol, "1m", expiry.isoformat())
+        row = market_data_repository(self.config.market_db).load_bar_at_or_before(
+            self.config.symbol, "1m", expiry.isoformat()
+        )
         if not row:
             return None
         row_ts = _parse_ts(str(row.get("timestamp") or ""))

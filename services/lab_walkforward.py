@@ -98,9 +98,9 @@ def run_walkforward(
 
 
 def load_gold_1m_bars(market_db: Path, start: str | None = None, end: str | None = None) -> list[Bar]:
-    from services.market_store import MarketStore
+    from services.market_data_access import market_data_repository
 
-    store = MarketStore(market_db)
+    store = market_data_repository(market_db)
     if start and end:
         return store.load_bars_between("GOLD", "1m", start, end)
     return store.load_bars("GOLD", "1m", 2_000_000)

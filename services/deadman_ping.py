@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from services.journal_store import load_json, write_json
+from services.schedule_status import ScheduleStatus
 from services.system_vitals import SystemVitals
 
 
@@ -60,6 +62,7 @@ class ExternalDeadmanPing:
         position_url: str | None = None,
         opener: Any = None,
         timeout_seconds: float = 10.0,
+        schedule_status_provider: Any = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.market_db = Path(market_db)
@@ -67,15 +70,17 @@ class ExternalDeadmanPing:
         self.position_url = position_url if position_url is not None else os.getenv("TRADING_ORCHESTRATOR_DEADMAN_POSITION_URL", "")
         self.opener = opener or urllib.request.urlopen
         self.timeout_seconds = timeout_seconds
+        self.schedule_status_provider = schedule_status_provider
 
     def run(self, run_date: str, *, dry_run: bool = False) -> dict:
         now = _utcnow()
         checked_at = now.isoformat()
         vitals = SystemVitals(self.output_root, self.market_db).run(run_date, persist=False)
+        schedule_runtime = self._schedule_runtime(run_date)
         exposure = self._exposure_snapshot(now=now)
         severity = "critical" if exposure["has_open_position"] else "normal"
         selected_url = self._selected_url(severity)
-        ping = self._ping(selected_url, severity, exposure, vitals, dry_run=dry_run)
+        ping = self._ping(selected_url, severity, exposure, vitals, schedule_runtime, dry_run=dry_run)
         payload = {
             "schema_version": "external-deadman-ping-v1",
             "run_date": run_date,
@@ -87,6 +92,7 @@ class ExternalDeadmanPing:
             "position_aware": True,
             "exposure": exposure,
             "always_on": vitals.get("always_on", {}),
+            "schedule_runtime": schedule_runtime,
             "ping": ping,
             "note": "External dead-man alert is triggered by missed pings outside this laptop.",
         }
@@ -99,14 +105,14 @@ class ExternalDeadmanPing:
             return self.position_url
         return self.url or self.position_url
 
-    def _ping(self, url: str, severity: str, exposure: dict, vitals: dict, *, dry_run: bool) -> dict:
+    def _ping(self, url: str, severity: str, exposure: dict, vitals: dict, schedule_runtime: dict, *, dry_run: bool) -> dict:
         if not url:
             return {
                 "status": "not_configured",
                 "delivered": False,
                 "message": "TRADING_ORCHESTRATOR_DEADMAN_URL is not configured",
             }
-        failure_signal = self._always_on_blocked(vitals)
+        failure_signal = self._always_on_blocked(vitals) or self._schedule_runtime_failed(schedule_runtime)
         target_url = self._healthchecks_fail_url(url) if failure_signal else url
         full_url = self._url_with_query(
             target_url,
@@ -114,6 +120,7 @@ class ExternalDeadmanPing:
                 "severity": severity,
                 "position_open": "1" if exposure["has_open_position"] else "0",
                 "always_on_status": str((vitals.get("always_on") or {}).get("status") or ""),
+                "schedule_status": str(schedule_runtime.get("status") or ""),
             },
         )
         if dry_run:
@@ -152,6 +159,28 @@ class ExternalDeadmanPing:
     def _always_on_blocked(self, vitals: dict) -> bool:
         always_on = vitals.get("always_on") if isinstance(vitals.get("always_on"), dict) else {}
         return bool(always_on.get("blocks_new_orders")) or str(always_on.get("status") or "").startswith("BLOCKED_")
+
+    def _schedule_runtime(self, run_date: str) -> dict:
+        schedule_path = self.output_root / "schedules" / "current.json"
+        if self.schedule_status_provider is None and not schedule_path.exists():
+            return {"status": "not_configured", "runtime_failed_jobs": []}
+        try:
+            result = (
+                self.schedule_status_provider(run_date)
+                if self.schedule_status_provider is not None
+                else ScheduleStatus(self.output_root).run(run_date)
+            )
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            return {"status": "check_failed", "runtime_failed_jobs": [], "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "status": str(result.get("status") or "unknown"),
+            "runtime_failed_jobs": list(result.get("runtime_failed_jobs") or []),
+            "healthy_current_count": int(result.get("healthy_current_count") or 0),
+            "required_count": int(result.get("required_count") or 0),
+        }
+
+    def _schedule_runtime_failed(self, schedule_runtime: dict) -> bool:
+        return str(schedule_runtime.get("status") or "") not in {"active", "not_configured"}
 
     def _healthchecks_fail_url(self, url: str) -> str:
         parsed = urllib.parse.urlparse(url)

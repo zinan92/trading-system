@@ -9,8 +9,9 @@ import pytest
 
 from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
-from services.dualtrack_grid_core import simulate_conditional_grid
+from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
 from services.dualtrack_machine import DualTrackMachineRunner
+from services.dualtrack_scoring import _trades_from_fills
 from services.dualtrack_store import DualTrackPlanStore
 from services.lab_r5_grid import Cycle
 
@@ -82,7 +83,6 @@ def test_acceptance_7_5_runner_matches_frozen_golden_on_three_cycles(tmp_path: P
     fixture = json.loads((Path(__file__).parent / "fixtures" / "dualtrack_machine_golden.json").read_text(encoding="utf-8"))
 
     saw_stop = False
-    saw_rearm = False
     for cycle, plan in cycles:
         state = runner.run_plan(
             cycle.cycle_id,
@@ -109,12 +109,32 @@ def test_acceptance_7_5_runner_matches_frozen_golden_on_three_cycles(tmp_path: P
         assert state["stop_hit"] is expected["stop_hit"]
         assert state["rearms"] == expected["rearms"]
         saw_stop = saw_stop or state["stop_hit"]
-        saw_rearm = saw_rearm or state["rearms"] == 1
     assert saw_stop is True
-    assert saw_rearm is True
+    assert all(expected["rearms"] == 0 for expected in fixture.values())
 
 
-def test_dt8_grid_floor_uses_plan_stop_as_bottom_and_stop_pnl_is_non_positive(tmp_path: Path) -> None:
+def test_machine_target_closes_the_same_units_opened_by_grid_entry(tmp_path: Path) -> None:
+    cycle = _cycle("2026-07-05_DAY", [4000.0, 3990.0, 4001.0])
+    output = tmp_path / "outputs"
+
+    DualTrackMachineRunner(output, config=TEST_CONFIG).run_plan(
+        cycle.cycle_id,
+        _plan(cycle.cycle_id),
+        cycle.bars,
+        prev_range=cycle.prev_range,
+        trend_gate_armed=False,
+    )
+
+    fills = json.loads((output / "dualtrack" / "fills" / f"{cycle.cycle_id}_machine.json").read_text(encoding="utf-8"))
+    trades = _trades_from_fills(fills, track="machine")
+    target = next(fill for fill in fills if fill["event"] == "target")
+
+    assert target["matched_entries"]
+    assert all(trade["remaining_units"] == 0.0 for trade in trades)
+    assert all(trade["status"] == "closed" for trade in trades)
+
+
+def test_dt8_grid_does_not_open_a_new_rung_at_the_plan_stop(tmp_path: Path) -> None:
     runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
     cycle = _cycle("2026-07-05_DAY", [4000.0, 3990.0, 3970.0], prev_range=100.0)
     floor = 3976.0
@@ -134,16 +154,38 @@ def test_dt8_grid_floor_uses_plan_stop_as_bottom_and_stop_pnl_is_non_positive(tm
     assert state["stop_hit"] is True
     assert entries
     assert stops
-    assert min(float(fill["price"]) for fill in entries) >= floor
-    assert any(float(fill["price"]) == floor for fill in entries)
+    assert min(float(fill["price"]) for fill in entries) > floor
+    assert not any(float(fill["price"]) == floor for fill in entries)
     assert all(float(fill["realized_pnl"]) <= 0 for fill in stops)
+
+
+def test_hard_invalidation_wins_over_same_bar_grid_entry() -> None:
+    cycle = _cycle("same_bar_hard_stop_DAY", [4000.0, 3940.0], prev_range=100.0)
+
+    result = simulate_conditional_grid(
+        cycle_id=cycle.cycle_id,
+        bars=cycle.bars,
+        direction=1,
+        prev_range=cycle.prev_range,
+        spacing_bp=20.0,
+        range_k=1.0,
+        rung_notional=1000.0,
+        max_rungs=10,
+        cost_per_side_bp=0.5,
+        re_arm_max=1,
+        stop=GridStop(side="below", price=3950.0),
+    )
+
+    assert result.stop_hit is True
+    assert result.rearms == 0
+    assert result.fills == []
 
 
 def test_dt8_machine_fixed_per_rung_sizing_tight_floor_deploys_less(tmp_path: Path) -> None:
     runner = DualTrackMachineRunner(tmp_path / "outputs", config=TEST_CONFIG)
     base = base_rung_notional(TEST_CONFIG)
-    tight = _cycle("2026-07-05_DAY", [4000.0, 3970.0], prev_range=100.0)
-    wide = _cycle("2026-07-05_NIGHT", [4000.0, 3910.0], prev_range=100.0)
+    tight = _cycle("2026-07-05_DAY", [4000.0, 3981.0], prev_range=100.0)
+    wide = _cycle("2026-07-05_NIGHT", [4000.0, 3921.0], prev_range=100.0)
 
     runner.run_plan(
         tight.cycle_id,
@@ -220,6 +262,27 @@ def test_lab_stop_none_path_still_uses_range_k_prev_range_geometry() -> None:
         3928.0,
         3920.0,
     ]
+
+
+def test_synthetic_range_stop_can_rearm_after_a_stop() -> None:
+    cycle = _cycle("range_stop_rearm_DAY", [4000.0, 3920.0, 4000.0], prev_range=80.0)
+
+    result = simulate_conditional_grid(
+        cycle_id=cycle.cycle_id,
+        bars=cycle.bars,
+        direction=1,
+        prev_range=cycle.prev_range,
+        spacing_bp=20.0,
+        range_k=1.0,
+        rung_notional=1000.0,
+        max_rungs=10,
+        cost_per_side_bp=0.5,
+        re_arm_max=1,
+        stop=None,
+    )
+
+    assert result.stop_hit is True
+    assert result.rearms == 1
 
 
 def test_machine_runner_tiger_mgc_mode_uses_integer_contracts_and_fixed_side_cost(tmp_path: Path) -> None:
@@ -323,7 +386,7 @@ def test_invariant_4_intraday_machine_payload_is_pnl_only(tmp_path: Path) -> Non
     assert forbidden.isdisjoint(payload)
 
 
-def test_machine_runner_uses_effective_human_plan_when_locked_before_deadline(tmp_path: Path) -> None:
+def test_machine_runner_never_uses_human_plan_when_ai_plan_is_missing(tmp_path: Path) -> None:
     store = DualTrackPlanStore(tmp_path / "outputs", config=TEST_CONFIG)
     cycle = _cycle("2026-07-05_DAY", [4000.0] + [3990.0, 4001.0] * 2)
     store.save_human_plan(_plan(cycle.cycle_id), now="2026-07-05T00:59:00+00:00")
@@ -331,5 +394,6 @@ def test_machine_runner_uses_effective_human_plan_when_locked_before_deadline(tm
 
     state = runner.run_effective_plan(cycle.cycle_id, cycle.bars, prev_range=cycle.prev_range, as_of="2026-07-05T01:00:00+00:00")
 
-    assert state["machine_stood_down"] is False
-    assert state["effective_plan_author"] == "human"
+    assert state["machine_stood_down"] is True
+    assert state["effective_plan_author"] == ""
+    assert state["layers"] == ["grid:stand_down:no_effective_plan", "trend:stand_down:no_effective_plan"]

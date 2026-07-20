@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterable
 
 from services.journal_store import load_json, write_json
-from services.market_store import MarketStore
+from services.market_data_access import market_data_repository
 
 
 OBSIDIAN_DAILY_TRADE_ANALYSIS_DIR = Path("003_park原始输出") / "每日交易分析"
@@ -139,10 +139,30 @@ class MarketViewStore:
 
     def latest(self, run_date: str) -> dict:
         dated = load_json(self.output_root / "market_views" / f"{run_date}.json")
-        if dated:
-            return dated[-1]
-        current = load_json(self.output_root / "market_views" / "current.json")
-        return current[-1] if current else {}
+        return dated[-1] if dated else {}
+
+    def load_active(self, run_date: str, *, as_of: str | datetime | None = None) -> dict:
+        payload = self.latest(run_date)
+        if not payload:
+            raise ValueError("market_view_missing_for_date")
+        if str(payload.get("run_date") or "") != run_date:
+            raise ValueError("market_view_date_mismatch")
+        expiry = payload.get("expiry") if isinstance(payload.get("expiry"), dict) else {}
+        if str(expiry.get("status") or "").lower() != "active":
+            raise ValueError("market_view_expired")
+        expires_at = str(expiry.get("expires_at") or "").strip()
+        if not expires_at:
+            raise ValueError("market_view_expiry_missing")
+        try:
+            expiry_time = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("market_view_expiry_invalid") from exc
+        if expiry_time.tzinfo is None:
+            expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+        now = _parse_datetime_utc(as_of)
+        if now >= expiry_time.astimezone(timezone.utc):
+            raise ValueError("market_view_expired")
+        return payload
 
     def _validate(self, payload: dict) -> None:
         if payload["direction_score"] < 0 or payload["direction_score"] > 100:
@@ -208,11 +228,8 @@ def infer_market_view_reference_price(
     generated_at = str(market_view.get("generated_at") or "")
     if not generated_at or not market_db:
         return None
-    db_path = Path(market_db)
-    if not db_path.exists():
-        return None
     try:
-        store = MarketStore(db_path)
+        store = market_data_repository(Path(market_db))
         for timeframe in ("1m", "5m"):
             row = store.load_bar_at_or_before(symbol, timeframe, generated_at)
             value = _safe_float(row.get("close") if row else None)
@@ -252,3 +269,15 @@ def _safe_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_datetime_utc(value: str | datetime | None) -> datetime:
+    if value is None:
+        parsed = datetime.now(timezone.utc)
+    elif isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

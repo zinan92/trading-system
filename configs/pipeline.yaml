@@ -3,6 +3,51 @@
   "intel_base_url": "http://localhost:8001",
   "output_root": "outputs",
   "local_market_db": "data/market_data.db",
+  "datafeed": {
+    "enabled": true,
+    "base_url": "http://127.0.0.1:8100",
+    "source": "binance_usdm_futures",
+    "asset_class": "commodity",
+    "timeout_seconds": 10,
+    "instrument_routes": {
+      "GOLD": {
+        "asset_class": "commodity",
+        "ticker": "GOLD",
+        "source": "binance_usdm_futures",
+        "require_execution_venue": true
+      },
+      "MGCmain": {
+        "asset_class": "commodity",
+        "ticker": "MGCmain",
+        "source": "tiger_openapi_comex",
+        "require_execution_venue": true
+      },
+      "DXY": {
+        "asset_class": "macro",
+        "ticker": "DXY",
+        "source": "fred_public_csv_macro",
+        "cache_policy": "allow"
+      },
+      "US10Y_REAL": {
+        "asset_class": "macro",
+        "ticker": "US10Y_REAL",
+        "source": "fred_public_csv_macro",
+        "cache_policy": "allow"
+      },
+      "GLD_FLOW": {
+        "asset_class": "flow",
+        "ticker": "GLD_FLOW",
+        "source": "fred_public_csv_flow",
+        "cache_policy": "allow"
+      },
+      "FED_CPI_EVENTS": {
+        "asset_class": "event",
+        "ticker": "FED_CPI_EVENTS",
+        "source": "fred_public_csv_event",
+        "cache_policy": "allow"
+      }
+    }
+  },
   "copilot_base_url": "http://localhost:8200",
   "backtest_base_url": "http://localhost:8300",
   "timeframes": ["5m"],
@@ -109,8 +154,8 @@
     "timeout_seconds": 10
   },
   "binance_usdm_feed": {
-    "environment": "demo",
-    "base_url": "https://demo-fapi.binance.com",
+    "environment": "mainnet",
+    "base_url": "https://fapi.binance.com",
     "symbol": "XAUUSDT",
     "interval": "5m",
     "output_symbol": "GOLD",
@@ -119,8 +164,8 @@
     "timeout_seconds": 10
   },
   "binance_usdm_1m_feed": {
-    "environment": "demo",
-    "base_url": "https://demo-fapi.binance.com",
+    "environment": "mainnet",
+    "base_url": "https://fapi.binance.com",
     "symbol": "XAUUSDT",
     "interval": "1m",
     "output_symbol": "GOLD",
