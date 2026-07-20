@@ -9,13 +9,22 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
-from typing import Protocol
 
 from schemas.market_data import PaperOrder
+from services.broker_port import (
+    BrokerCancelRequest,
+    BrokerExecutionPort,
+    BrokerOrderRequest,
+    BrokerPortDescriptor,
+    BrokerProtectiveRecoveryRequest,
+    BrokerCapability,
+    broker_port_descriptor,
+    execution_capabilities_for,
+    require_broker_capability,
+)
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present
@@ -23,27 +32,38 @@ from services.order_lifecycle import IllegalOrderTransition, OrderLifecycleStore
 from services.paper_executor import PaperExecutor
 from services.risk_port import LiveMoneyRiskDecisionAdapter, canonical_live_risk_allows_exposure
 
-
-@dataclass(frozen=True)
-class BrokerOrderRequest:
-    run_date: str
-    ticket: dict
-    latest_price: float | None = None
-    actual_size: float | None = None
-
-
-class BrokerAdapter(Protocol):
-    name: str
-
-    def submit_order(self, request: BrokerOrderRequest) -> PaperOrder:
-        ...
+BrokerAdapter = BrokerExecutionPort
 
 
 class PaperBrokerAdapter:
     name = "paper"
+    provider = "paper"
 
     def __init__(self, output_root: Path) -> None:
+        self.output_root = Path(output_root)
+        self.broker_config = {"provider": "paper", "environment": "paper", "dry_run": True}
+        self._capabilities = execution_capabilities_for(provider=self.provider, adapter_name=self.name)
         self.executor = PaperExecutor(output_root)
+
+    @property
+    def capabilities(self):
+        return self._capabilities
+
+    @property
+    def descriptor(self) -> BrokerPortDescriptor:
+        return broker_port_descriptor(self)
+
+    def preflight(self) -> dict:
+        return {
+            "provider": self.provider,
+            "mode": "paper",
+            "dry_run": True,
+            "live_trading_enabled": False,
+            "ready": True,
+            "block_reason": "paper mode active; live broker is not used",
+            "allowed_symbols": [],
+            "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        }
 
     def submit_order(self, request: BrokerOrderRequest) -> PaperOrder:
         return self.executor.execute_ticket(
@@ -64,6 +84,15 @@ class LiveBrokerAdapter:
         self.provider = str(self.broker_config.get("provider", "manual_gateway"))
         self.dry_run = bool(self.broker_config.get("dry_run", True))
         self.opener = opener or urllib.request.urlopen
+        self._capabilities = execution_capabilities_for(provider=self.provider, adapter_name=self.name)
+
+    @property
+    def capabilities(self):
+        return self._capabilities
+
+    @property
+    def descriptor(self) -> BrokerPortDescriptor:
+        return broker_port_descriptor(self)
 
     def submit_order(self, request: BrokerOrderRequest) -> PaperOrder:
         if not self.live_trading_enabled:
@@ -1592,6 +1621,7 @@ class LiveBrokerAdapter:
         return self._binance_signed_request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
 
     def cancel_binance_order(self, symbol: str, *, orig_client_order_id: str = "", order_id: str = "") -> dict:
+        require_broker_capability(self, BrokerCapability.CANCEL_ORDER)
         params = {"symbol": symbol}
         if orig_client_order_id:
             params["origClientOrderId"] = orig_client_order_id
@@ -1600,6 +1630,23 @@ class LiveBrokerAdapter:
         else:
             raise ValueError("orig_client_order_id or order_id is required to cancel a Binance order")
         return self._binance_signed_request("DELETE", "/fapi/v1/order", params)
+
+    def cancel_order(self, request: BrokerCancelRequest) -> dict:
+        require_broker_capability(self, BrokerCapability.CANCEL_ORDER)
+        return self.cancel_binance_order(
+            self._binance_symbol(request.asset),
+            orig_client_order_id=request.client_order_id,
+            order_id=request.broker_order_id,
+        )
+
+    def recover_protective_orders(self, request: BrokerProtectiveRecoveryRequest) -> dict:
+        require_broker_capability(self, BrokerCapability.PROTECTIVE_RECOVERY)
+        return self.recover_missing_protective_orders(
+            request.run_date,
+            request.lifecycle_record,
+            request.exchange_position,
+            source=request.source,
+        )
 
     def _auto_close_on_protective_failure(self, readiness: dict) -> bool:
         if readiness.get("demo_trading") is not True:
@@ -2008,27 +2055,19 @@ class LiveBrokerAdapter:
 
 def resolve_broker_config(config: dict | None = None) -> dict:
     config = config or load_pipeline_config()
-    broker_config = dict(config.get("broker", {}) or {})
-    profile_name = str(config.get("broker_profile") or broker_config.get("broker_profile") or broker_config.get("profile") or "").strip()
-    if not profile_name:
-        return broker_config
-    profiles = config.get("broker_profiles", {}) or {}
-    if profile_name not in profiles:
-        raise ValueError(f"unknown broker profile: {profile_name}")
-    overrides = {
-        key: value
-        for key, value in broker_config.items()
-        if key not in {"profile", "broker_profile"}
-    }
-    return {**dict(profiles[profile_name]), **overrides, "profile": profile_name}
+    from services.broker_composition import resolve_broker_profile_config
+
+    return resolve_broker_profile_config(config)
 
 
 def _live_adapter_for_provider(output_root: Path, live_trading_enabled: bool, broker_config: dict) -> BrokerAdapter:
-    if str(broker_config.get("provider", "")).lower() == "tiger_openapi" and str(broker_config.get("environment", "")).lower() == "paper":
-        from services.tiger_openapi_broker_adapter import TigerOpenApiPaperBrokerAdapter
+    from services.broker_composition import build_configured_live_broker_execution_port
 
-        return TigerOpenApiPaperBrokerAdapter(output_root, broker_config)
-    return LiveBrokerAdapter(output_root, live_trading_enabled, broker_config)
+    return build_configured_live_broker_execution_port(
+        output_root,
+        live_trading_enabled,
+        broker_config,
+    )
 
 
 def build_live_broker_adapter(output_root: Path, live_trading_enabled: bool, broker_config: dict) -> BrokerAdapter:
@@ -2060,8 +2099,20 @@ def broker_preflight(output_root: Path | None = None) -> dict:
 def build_broker_adapter(output_root: Path) -> BrokerAdapter:
     config = load_pipeline_config()
     mode = str(config.get("execution_mode", "paper")).lower()
-    if mode == "paper":
-        return PaperBrokerAdapter(output_root)
+    broker_config = resolve_broker_config(config)
     if mode == "live":
-        return _live_adapter_for_provider(output_root, bool(config.get("live_trading_enabled", False)), resolve_broker_config(config))
-    raise ValueError(f"unknown execution_mode: {mode}")
+        return _live_adapter_for_provider(
+            output_root,
+            bool(config.get("live_trading_enabled", False)),
+            broker_config,
+        )
+    from services.broker_composition import BrokerBuildContext, build_broker_execution_port
+
+    return build_broker_execution_port(
+        BrokerBuildContext(
+            output_root=output_root,
+            execution_mode=mode,
+            live_trading_enabled=bool(config.get("live_trading_enabled", False)),
+            broker_config=broker_config,
+        )
+    )

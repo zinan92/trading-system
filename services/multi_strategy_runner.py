@@ -31,6 +31,13 @@ from services.pending_entry_guard import evaluate_limit_entry_status, load_entry
 from services.paper_equity_curve import PaperEquityCurve
 from services.paper_performance import PaperPerformanceAnalyzer
 from services.paper_reconciliation import PaperReconciliation
+from services.broker_port import (
+    BrokerCancelRequest,
+    BrokerCapability,
+    BrokerProtectiveRecoveryRequest,
+    UnsupportedBrokerCapability,
+    require_broker_capability,
+)
 from services.risk_monitor import RiskMonitor
 from services.backend_maturity_audit import BackendMaturityAudit
 from services.strategy_leaderboard import StrategyLeaderboard
@@ -64,18 +71,17 @@ class MultiStrategyRunner:
         active = self._active_demo_broker_config(strategy, config=config)
         if active is not None:
             broker_config, demo = active
-            provider = str(broker_config.get("provider") or "")
-            if provider == "binance_usdm":
-                from services.binance_demo_broker_adapter import BinanceDemoBrokerAdapter
+            from services.broker_composition import BrokerBuildContext, build_demo_broker_execution_port
 
-                return BinanceDemoBrokerAdapter(scoped, broker_config, demo)
-            if provider == "tiger_openapi":
-                from services.broker_adapter import build_live_broker_adapter
-
-                return build_live_broker_adapter(scoped, True, broker_config)
-            from services.broker_adapter import build_live_broker_adapter
-
-            return build_live_broker_adapter(scoped, False, broker_config)
+            return build_demo_broker_execution_port(
+                BrokerBuildContext(
+                    output_root=scoped,
+                    execution_mode="live",
+                    live_trading_enabled=True,
+                    broker_config=broker_config,
+                    auxiliary_config=demo,
+                )
+            )
 
         # A `live` strategy routes execution through the live broker (its own
         # scoped namespace); everyone else returns None -> the default paper path.
@@ -83,41 +89,25 @@ class MultiStrategyRunner:
         # still decide whether a real order is actually sent.
         if not getattr(strategy, "live", False):
             return None
-        from services.broker_adapter import build_live_broker_adapter, resolve_broker_config
+        from services.broker_composition import (
+            build_configured_live_broker_execution_port,
+            resolve_broker_profile_config,
+        )
 
-        return build_live_broker_adapter(scoped, bool(config.get("live_trading_enabled", False)), resolve_broker_config(config))
+        return build_configured_live_broker_execution_port(
+            scoped,
+            bool(config.get("live_trading_enabled", False)),
+            resolve_broker_profile_config(config),
+        )
 
     def _active_demo_broker_config(self, strategy, *, config: dict | None = None) -> tuple[dict, dict] | None:
         config = config or load_pipeline_config()
-        demo = config.get("demo_trading", {}) or {}
-        if demo.get("enabled") is True and str(demo.get("active_strategy_id", "")) == strategy.strategy_id:
-            profile_name = str(demo.get("broker_profile", config.get("broker", {}).get("provider", "binance_usdm")))
-            broker_config = dict((config.get("broker_profiles", {}) or {}).get(profile_name) or config.get("broker", {}) or {})
-            provider = str(broker_config.get("provider") or profile_name)
-            if provider == "tiger_openapi":
-                merged = {
-                    **broker_config,
-                    "provider": "tiger_openapi",
-                    "environment": str(broker_config.get("environment", "paper")),
-                    "profile": profile_name,
-                    "request_dir": str(broker_config.get("request_dir", "tiger_order_requests")),
-                }
-                return merged, demo
-            if provider != "binance_usdm":
-                return {**broker_config, "provider": provider, "profile": profile_name}, demo
-            merged = {
-                **broker_config,
-                "provider": "binance_usdm",
-                "environment": "demo",
-                "base_url": "https://demo-fapi.binance.com",
-                "dry_run": False,
-                "request_dir": str(demo.get("request_dir", broker_config.get("request_dir", "demo_order_requests"))),
-                "protective_failure_action": str(demo.get("protective_failure_action", "reduce_only_close")),
-                "instrument_map": {"GOLD": "XAUUSDT", "XAUUSD": "XAUUSDT", **broker_config.get("instrument_map", {})},
-                "profile": profile_name,
-            }
-            return merged, demo
-        return None
+        from services.broker_composition import resolve_active_demo_broker_config
+
+        return resolve_active_demo_broker_config(
+            config,
+            strategy_id=strategy.strategy_id,
+        )
 
     def _execution_profile_for(self, strategy) -> dict:
         config = load_pipeline_config()
@@ -209,14 +199,24 @@ class MultiStrategyRunner:
         active = self._active_demo_broker_config(strategy)
         if active is None:
             return None
-        broker_config, _demo = active
-        if str(broker_config.get("provider") or "") == "tiger_openapi":
-            from services.tiger_openapi_reconciliation import TigerOpenApiPaperReconciliation
+        broker_config, demo = active
+        from services.broker_composition import (
+            BrokerBuildContext,
+            build_broker_reconciliation_port,
+        )
 
-            return TigerOpenApiPaperReconciliation(scoped, broker_config).run(run_date)
-        from services.live_reconciliation import LiveBrokerReconciliation
-
-        return LiveBrokerReconciliation(scoped, broker_config).run(run_date)
+        execution = self._broker_adapter_for(strategy, scoped)
+        reconciliation = build_broker_reconciliation_port(
+            BrokerBuildContext(
+                output_root=scoped,
+                execution_mode="live",
+                live_trading_enabled=True,
+                broker_config=broker_config,
+                auxiliary_config=demo,
+            ),
+            execution_port=execution,
+        )
+        return reconciliation.run(run_date)
 
     def _demo_reconciliation_block_reason(self, report: dict) -> str:
         provider = str(report.get("provider") or "binance_usdm")
@@ -664,20 +664,23 @@ class MultiStrategyRunner:
                 continue
             if adapter is None:
                 adapter = self._broker_adapter_for(strategy, scoped)
-            if adapter is None or not hasattr(adapter, "cancel_binance_order"):
-                reason = "expired demo limit order requires a broker adapter with cancel_binance_order"
+            if adapter is None:
+                reason = "expired demo limit order requires a broker cancel capability"
                 block_reason = block_reason or reason
                 errors.append({"order_id": lifecycle.get("order_id"), "ticket_id": ticket_id, "error": reason, "expiry": status})
                 continue
             try:
-                symbol = self._binance_symbol_for_adapter(adapter, ticket)
+                require_broker_capability(adapter, BrokerCapability.CANCEL_ORDER)
                 metadata = lifecycle.get("metadata") if isinstance(lifecycle.get("metadata"), dict) else {}
                 client_order_id = str(metadata.get("client_order_id") or lifecycle.get("idempotency_key") or "")
                 broker_order_id = str(metadata.get("broker_order_id") or "")
-                cancel_response = adapter.cancel_binance_order(
-                    symbol,
-                    orig_client_order_id=client_order_id,
-                    order_id=broker_order_id,
+                cancel_response = adapter.cancel_order(
+                    BrokerCancelRequest(
+                        run_date=run_date,
+                        asset=str(ticket.get("asset") or "GOLD"),
+                        client_order_id=client_order_id,
+                        broker_order_id=broker_order_id,
+                    )
                 )
                 store.transition(
                     run_date,
@@ -700,7 +703,7 @@ class MultiStrategyRunner:
                 self._record_recovered_journal_decision(scoped, run_date, ticket, paper_order)
                 expired_ticket_ids.append(ticket_id)
                 orders.append({"order_id": paper_order["order_id"], "ticket_id": ticket_id, "status": "expired", "state": "expired"})
-            except (OSError, TimeoutError, RuntimeError, ValueError, KeyError) as exc:
+            except (OSError, TimeoutError, RuntimeError, ValueError, KeyError, UnsupportedBrokerCapability) as exc:
                 reason = f"{type(exc).__name__}: {exc}"
                 block_reason = block_reason or reason
                 errors.append({"order_id": lifecycle.get("order_id"), "ticket_id": ticket_id, "error": reason, "expiry": status})
@@ -714,12 +717,6 @@ class MultiStrategyRunner:
             "block_reason": block_reason,
         }
 
-    def _binance_symbol_for_adapter(self, adapter, ticket: dict) -> str:
-        symbol = str(ticket.get("asset") or "GOLD")
-        if hasattr(adapter, "_binance_symbol"):
-            return adapter._binance_symbol(symbol)
-        return symbol
-
     def _recover_unprotected_demo_positions(self, strategy, scoped: Path, run_date: str, lifecycle_rows: list[dict], reconciliation: dict) -> dict:
         if not reconciliation or not reconciliation.get("suspected_naked_position"):
             return {"status": "clear", "blocks_new_orders": False, "recovered_ticket_ids": [], "recovered_orders": [], "errors": [], "actions": [], "refresh_required": False}
@@ -730,7 +727,11 @@ class MultiStrategyRunner:
         if not risks:
             return {"status": "clear", "blocks_new_orders": False, "recovered_ticket_ids": [], "recovered_orders": [], "errors": [], "actions": [], "refresh_required": False}
         adapter = self._broker_adapter_for(strategy, scoped)
-        if adapter is None or not hasattr(adapter, "recover_missing_protective_orders"):
+        try:
+            if adapter is None:
+                raise UnsupportedBrokerCapability("broker adapter is unavailable")
+            require_broker_capability(adapter, BrokerCapability.PROTECTIVE_RECOVERY)
+        except UnsupportedBrokerCapability as exc:
             reason = "demo naked position recovery has no broker adapter capable of attaching protective orders"
             return {
                 "status": "blocked",
@@ -738,7 +739,7 @@ class MultiStrategyRunner:
                 "block_reason": reason,
                 "recovered_ticket_ids": [],
                 "recovered_orders": [],
-                "errors": [{"error": reason}],
+                "errors": [{"error": reason, "detail": str(exc)}],
                 "actions": [],
                 "refresh_required": False,
             }
@@ -762,11 +763,13 @@ class MultiStrategyRunner:
                 errors.append({"exchange_symbol": exchange_symbol, "error": reason})
                 continue
             try:
-                action = adapter.recover_missing_protective_orders(
-                    run_date,
-                    lifecycle,
-                    self._exchange_position_for_risk(reconciliation, risk),
-                    source="order_recovery_missing_protective",
+                action = adapter.recover_protective_orders(
+                    BrokerProtectiveRecoveryRequest(
+                        run_date=run_date,
+                        lifecycle_record=lifecycle,
+                        exchange_position=self._exchange_position_for_risk(reconciliation, risk),
+                        source="order_recovery_missing_protective",
+                    )
                 )
             except (OSError, TimeoutError, RuntimeError, ValueError, KeyError) as exc:
                 blocks_new_orders = True

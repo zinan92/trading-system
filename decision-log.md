@@ -6221,3 +6221,123 @@ auditable datafeed port; broker execution remains a separate port.
   `claude-opus-4-8`, session `e8e84226-e8c6-4430-8c09-29bb07e2722b`, receipt
   `20260717T214429Z_dcf548a2-be9e-49bb-9923-e64236de976b.json`, verdict
   `NO P0/P1`.
+
+## 2026-07-18 - A5 Broker Port kickoff
+
+### Decision
+
+- Introduce one engine-neutral Broker Port and a registry composition root.
+  Provider selection belongs at assembly; strategies, control, Dashboard
+  commands, and Lab remain consumers of normalized execution intent.
+- Preserve the proven Binance/Tiger order, live-money guardrail, activation,
+  reconciliation, lifecycle, and protective recovery algorithms. A5 changes
+  dependency direction before moving venue wire code.
+- Model cancel, protective recovery, and reconciliation as explicit
+  capabilities. Application code must stop guessing with `hasattr` or calling
+  provider-private methods such as `_binance_symbol`.
+- Keep `services.broker_adapter` as a compatibility facade while new code
+  depends on `broker_port` and `broker_composition`. Existing import and
+  monkeypatch seams remain supported during the strangler migration.
+- Follow NautilusTrader's official adapter split: normalized execution client
+  interface, venue-owned networking, configuration/factories at composition,
+  and venue reports as reconciliation truth. Do not switch live authority in
+  this milestone.
+
+### Gotchas
+
+- The 2,067-line `LiveBrokerAdapter` is also the utility base for Binance
+  demo/testnet and Tiger paper. A mass file move would create high-risk semantic
+  churn; A5 first establishes the port and routes constructors through it.
+- Binance demo/testnet bypass only the real-money activation gate for fixed
+  non-mainnet endpoints. Registry environment resolution must never carry this
+  behavior into `environment=live`.
+- Tiger paper can create network orders only behind its existing owner-only
+  credential file, explicit paper TradeClient mode, confirmation,
+  reconciliation, account, risk, and protection gates. Composition must not
+  default or infer any arming flag.
+- Inherited methods can make structural `hasattr` checks lie about a venue's
+  supported capabilities. Capability declarations must be explicit and closed.
+- Unknown providers may preserve historical dry-run artifacts for compatibility
+  but can never resolve to an armed network path.
+- A transport timeout or ambiguous acknowledgement remains recoverable venue
+  uncertainty, not a rejection. Registry/facade code cannot collapse that
+  state or bypass reconciliation.
+- A5 has no new visible UI surface. Visual Evidence is not applicable; tests,
+  code, docs, and review receipts remain trace material only.
+- The primary worktree contains unrelated Debug and range-drag changes. A5
+  remains isolated and must not be integrated by copying whole files.
+
+### Baseline
+
+- Focused broker, Binance demo/testnet, Tiger, multi-strategy, journal, live
+  safety, mainnet canary, and broker-accounting regression: `105 passed`.
+- Official Nautilus adapter guidance confirms separate execution clients,
+  configuration/factories, venue networking, capability testing, and startup
+  reconciliation as the mature boundary.
+
+### Opus planning review
+
+- Verified `claude-opus-4-8` review, session
+  `212a4cb6-d50a-467b-8e6a-f2beb3900f6c`, receipt
+  `20260717T220217Z_0a6d338b-06ce-40b0-8fcb-619e29a4878f.json`: no P0; safe
+  to implement after the accepted corrections below.
+- Accepted P1: capabilities default absent and are resolved from both concrete
+  adapter and normalized provider. Tiger must not inherit Binance cancel or
+  protective recovery, including plain `LiveBrokerAdapter(provider=tiger)`.
+- Accepted P1: the Binance live registry entry must retain the existing
+  `real_money_ready` activation-gated submit path. Demo/testnet builders cannot
+  be reused or generalized into mainnet.
+- Accepted P1: demo/testnet keep exact mode flags, guardrail semantics, request
+  namespaces, and endpoints; reconciliation must use the same endpoint as the
+  execution adapter.
+- Accepted P2: unknown demo providers remain unarmed; builders are lazy and
+  receive already-resolved config to preserve import/monkeypatch behavior;
+  ambiguous lifecycle state passes through unchanged.
+- Accepted P2: provider-neutrality tests are function-scoped. Existing
+  `_execution_profile_for` and `_demo_reconciliation_block_reason` are
+  explicitly classified as diagnostic read-model debt deferred to A6.
+
+## 2026-07-18 - A5 final Opus review and hardening
+
+### Review result
+
+- Verified `claude-opus-4-8` review, session
+  `61281269-e0b5-4f29-b7d3-64bad1e6efe3`, receipt
+  `20260717T223756Z_79e46db2-2d1e-45be-925e-e43551447b1f.json`: explicit
+  `NO P0 / NO P1`.
+- Opus verified live activation, unknown-provider unarming, Tiger capability
+  isolation, demo/testnet endpoint binding, secret safety, facade compatibility,
+  and unchanged ambiguous-submit recovery.
+
+### Accepted hardening
+
+- Guard the legacy `cancel_binance_order` alias itself, not only the new public
+  `cancel_order` port. Tiger is rejected before any signed request.
+- Freeze adapter capabilities at construction so mutating `provider` later
+  cannot grant Binance cancel/protection authority.
+- Move active-demo profile normalization from the runner into broker
+  composition. Only explicitly demo-capable plugins can be selected; OANDA,
+  MT5, and unknown profiles fall back to the paper path instead of becoming
+  armed through a demo toggle.
+- Enforce equality between a plugin's declared execution capabilities and the
+  port returned by its factory. Reconciliation remains a separate capability.
+- Add hostile-config tests proving demo/testnet override a supplied Binance
+  mainnet URL with their fixed non-mainnet endpoint.
+
+### Verification so far
+
+- Post-review targeted hardening: `28 passed`.
+- Post-review focused broker/cycle regression: `131 passed`.
+- Ruff on every changed Python file: `All checks passed`.
+
+### Final closure
+
+- Full repository regression after every hardening change:
+  `1719 passed, 7 skipped`.
+- Verified follow-up review used `claude-opus-4-8`, session
+  `421c1d8e-3041-4ddd-9fec-756c519f3394`, receipt
+  `20260717T230038Z_e68d8f4c-4bec-41c7-8805-e55909ce0064.json`: explicit
+  `NO P0/P1 findings`; all five earlier hardening items were independently
+  confirmed closed.
+- A5 therefore meets its completion boundary without changing any active
+  profile, credential, order semantics, live authority, or visible UI.
