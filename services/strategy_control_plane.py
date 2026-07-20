@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -466,10 +467,21 @@ class StrategyControlPlane:
         self._write_runtime(starting)
         try:
             receipts = self._submit_plan_orders(adapter, adjusted, timestamp=timestamp, commands=commands)
-            submitted_ids = {str(row.get("order_id") or "") for row in receipts}
-            accepted_before_market = self._accepted_orders(cycle_id, adapter=adapter)
-            if {str(row.get("order_id") or "") for row in accepted_before_market} != submitted_ids:
-                raise ValueError("paper start did not accept the complete grid")
+            submitted_order_ids = [str(row.get("order_id") or "") for row in receipts]
+            duplicate_receipt_ids = sorted({
+                order_id
+                for order_id, count in Counter(submitted_order_ids).items()
+                if count > 1
+            })
+            empty_receipt_count = sum(not order_id.strip() for order_id in submitted_order_ids)
+            if empty_receipt_count or duplicate_receipt_ids:
+                raise ValueError(
+                    "paper start receipts require valid unique order IDs"
+                    f"; empty_count={empty_receipt_count}"
+                    f"; duplicate_ids={duplicate_receipt_ids}"
+                )
+            submitted_ids = set(submitted_order_ids)
+            self._validate_start_grid_snapshot(adapter, cycle_id, submitted_ids=submitted_ids)
             execution_event = self._advance_selected_execution(
                 adapter,
                 cycle_id,
@@ -477,23 +489,16 @@ class StrategyControlPlane:
                 now=now,
                 identity="strategy-start",
             )
-            terminal_orders = {
-                str(row.get("order_id") or ""): row
-                for row in adapter.snapshot(cycle_id).get("orders") or []
-            }
-            missing_ids = sorted(submitted_ids - set(terminal_orders))
-            invalid_states = sorted(
-                order_id
-                for order_id in submitted_ids & set(terminal_orders)
-                if str(terminal_orders[order_id].get("state") or "").lower()
-                not in {"accepted", "filled"}
+            terminal_orders = self._validate_start_grid_snapshot(
+                adapter,
+                cycle_id,
+                submitted_ids=submitted_ids,
             )
-            if missing_ids or invalid_states:
-                raise ValueError(
-                    "paper start lost submitted grid orders"
-                    f"; missing={missing_ids}; invalid_states={invalid_states}"
-                )
-            accepted = self._accepted_orders(cycle_id, adapter=adapter)
+            accepted = [
+                terminal_orders[order_id]
+                for order_id in submitted_ids
+                if str(terminal_orders[order_id].get("state") or "").lower() == "accepted"
+            ]
             filled_count = sum(
                 1
                 for order_id in submitted_ids
@@ -769,6 +774,52 @@ class StrategyControlPlane:
                 raise ValueError("paper execution did not accept a grid order")
             receipts.append(receipt)
         return receipts
+
+    @staticmethod
+    def _validate_start_grid_snapshot(
+        adapter,
+        cycle_id: str,
+        *,
+        submitted_ids: set[str],
+    ) -> dict[str, dict[str, Any]]:
+        rows = adapter.snapshot(cycle_id).get("orders") or []
+        if not all(isinstance(row, dict) for row in rows):
+            raise ValueError("paper start snapshot contains an invalid order row")
+        order_ids = [str(row.get("order_id") or "") for row in rows]
+        duplicate_snapshot_ids = sorted({
+            order_id
+            for order_id, count in Counter(order_ids).items()
+            if count > 1
+        })
+        empty_snapshot_count = sum(not order_id.strip() for order_id in order_ids)
+        if empty_snapshot_count or duplicate_snapshot_ids:
+            raise ValueError(
+                "paper start snapshot requires valid unique order IDs"
+                f"; empty_count={empty_snapshot_count}"
+                f"; duplicate_ids={duplicate_snapshot_ids}"
+            )
+        orders_by_id = dict(zip(order_ids, rows, strict=True))
+        missing_ids = sorted(submitted_ids - set(orders_by_id))
+        invalid_states = sorted(
+            order_id
+            for order_id in submitted_ids & set(orders_by_id)
+            if str(orders_by_id[order_id].get("state") or "").lower()
+            not in {"accepted", "filled"}
+        )
+        unexpected_accepted = sorted(
+            order_id
+            for order_id, row in orders_by_id.items()
+            if order_id not in submitted_ids
+            and str(row.get("state") or "").lower() == "accepted"
+        )
+        if missing_ids or invalid_states or unexpected_accepted:
+            raise ValueError(
+                "paper start did not observe the complete grid"
+                f"; missing={missing_ids}"
+                f"; invalid_states={invalid_states}"
+                f"; unexpected_accepted={unexpected_accepted}"
+            )
+        return orders_by_id
 
     def _authorize_grid_mutation(
         self,
