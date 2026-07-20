@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,14 @@ from services.grid_sizing import (
     positive_number as _positive_number,
 )
 from services.journal_store import load_json, write_json
+from services.risk_port import (
+    PaperGridRiskDecisionPort,
+    RiskDecisionPort,
+    RiskDecisionStore,
+    assert_matching_risk_decision,
+    build_grid_risk_request,
+    require_exposure_permission,
+)
 from services.strategy_plan_execution import build_plan_grid_entry_commands
 
 
@@ -35,11 +44,27 @@ FIELD_SOURCES = {"human", "ai", "confirmed"}
 _CONTROL_LOCK = threading.RLock()
 
 
+@contextmanager
+def production_mutation_lock():
+    """Serialize every in-process plan, grid, and manual-order mutation."""
+
+    with _CONTROL_LOCK:
+        yield
+
+
 class StrategyControlPlane:
-    def __init__(self, output_root: Path) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        *,
+        risk_port: RiskDecisionPort | None = None,
+        risk_store: RiskDecisionStore | None = None,
+    ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "strategy_control"
         self.config = dualtrack_config()
+        self.risk_port = risk_port or PaperGridRiskDecisionPort()
+        self.risk_store = risk_store or RiskDecisionStore(self.output_root)
 
     def upsert_proposal(self, payload: dict[str, Any], *, now: str | None = None) -> dict[str, Any]:
         proposal = normalize_proposal(payload, now=now)
@@ -176,6 +201,8 @@ class StrategyControlPlane:
                 "strategy_plan_id": None,
                 "strategy_plan_version": None,
                 "preview_id": None,
+                "risk_decision_id": None,
+                "risk_policy_id": None,
                 "accepted_order_count": 0,
                 "last_action": None,
                 "last_error": None,
@@ -193,6 +220,8 @@ class StrategyControlPlane:
             "strategy_plan_id": row.get("strategy_plan_id"),
             "strategy_plan_version": row.get("strategy_plan_version"),
             "preview_id": row.get("preview_id"),
+            "risk_decision_id": row.get("risk_decision_id"),
+            "risk_policy_id": row.get("risk_policy_id"),
             "accepted_order_count": int(row.get("accepted_order_count") or 0),
             "last_action": row.get("last_action"),
             "last_error": row.get("last_error"),
@@ -311,6 +340,9 @@ class StrategyControlPlane:
         if action == "adjust_plan":
             if market is not None and body.get("style") in GRID_STYLES:
                 return self._regrid(cycle_id, body, market=market, account=account or {}, now=now)
+            runtime = self.runtime_state(cycle_id)
+            if runtime["desired_state"] == "running" and any(key in body for key in ("grid", "risk_budget")):
+                raise ValueError("running grid or risk adjustment requires trusted market preview and risk decision")
             current = self.active_plan(cycle_id) or self.ensure_compatible_active_plan(cycle_id, as_of=now)
             if not current:
                 raise ValueError("cannot adjust without an active StrategyPlan")
@@ -360,12 +392,13 @@ class StrategyControlPlane:
         account: dict[str, Any],
         now: str | None,
     ) -> dict[str, Any]:
-        current = self.active_plan(cycle_id) or self.ensure_compatible_active_plan(cycle_id, as_of=now)
+        current = self.active_plan(cycle_id)
         if not current:
-            raise ValueError("cannot start without an active StrategyPlan")
+            raise ValueError("cannot start without an already selected active StrategyPlan")
         preview = self.preview(cycle_id, body, market=market, account=account)
         runtime = self.runtime_state(cycle_id)
-        pending = self._accepted_orders(cycle_id)
+        adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
+        pending = self._accepted_orders(cycle_id, adapter=adapter)
         same_running_plan = (
             runtime["desired_state"] == "running"
             and runtime.get("preview_id") == preview["preview_id"]
@@ -385,8 +418,23 @@ class StrategyControlPlane:
             raise ValueError("robot is already running; stop it before changing the grid")
 
         adjusted = self._plan_from_preview(current, preview, now=now)
-        self._activate_plan(adjusted)
         timestamp = _timestamp(now)
+        commands = build_plan_grid_entry_commands(adjusted, timestamp=timestamp)
+        risk_decision = self._authorize_grid_mutation(
+            cycle_id,
+            action_class="increase_exposure",
+            intent="start_grid",
+            plan=adjusted,
+            commands=commands,
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+        )
+        # From this point through the first submit the shared control lock owns
+        # every in-process production mutation path. Plan/runtime writes do not
+        # alter any economic input bound by the immediately preceding recheck.
+        self._activate_plan(adjusted)
         starting = {
             **runtime,
             "cycle_id": cycle_id,
@@ -398,12 +446,13 @@ class StrategyControlPlane:
             "strategy_plan_id": adjusted["strategy_plan_id"],
             "strategy_plan_version": adjusted["version"],
             "preview_id": preview["preview_id"],
+            "risk_decision_id": risk_decision["decision_id"],
+            "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
             "accepted_order_count": 0,
         }
         self._write_runtime(starting)
-        adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
         try:
-            receipts = self._submit_plan_orders(adapter, adjusted, timestamp=timestamp)
+            receipts = self._submit_plan_orders(adapter, adjusted, timestamp=timestamp, commands=commands)
             submitted_ids = {str(row.get("order_id") or "") for row in receipts}
             accepted_before_market = self._accepted_orders(cycle_id, adapter=adapter)
             if {str(row.get("order_id") or "") for row in accepted_before_market} != submitted_ids:
@@ -537,6 +586,7 @@ class StrategyControlPlane:
             "created_orders": len(receipts),
             "accepted_orders": len(accepted),
             "filled_orders": filled_count,
+            "risk_decision": risk_decision,
             "idempotent": False,
         }
 
@@ -566,11 +616,27 @@ class StrategyControlPlane:
                 "idempotent": True,
             }
 
-        old_orders = self._accepted_orders(cycle_id)
-        old_order_ids = [str(row.get("order_id") or "") for row in old_orders if row.get("order_id")]
-        old_accepted = len(old_order_ids)
         adjusted = self._plan_from_preview(current, preview, now=now)
         timestamp = _timestamp(now)
+        adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
+        # Re-read from the selected adapter so risk binding and replacement use
+        # exactly one engine state, not two independently constructed views.
+        old_orders = self._accepted_orders(cycle_id, adapter=adapter)
+        old_order_ids = [str(row.get("order_id") or "") for row in old_orders if row.get("order_id")]
+        old_accepted = len(old_order_ids)
+        commands = build_plan_grid_entry_commands(adjusted, timestamp=timestamp)
+        risk_decision = self._authorize_grid_mutation(
+            cycle_id,
+            action_class="replace_pending",
+            intent="replace_grid",
+            plan=adjusted,
+            commands=commands,
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+            replaced_order_ids=old_order_ids,
+        )
         replanning = {
             **runtime,
             "actual_state": "replanning",
@@ -580,16 +646,17 @@ class StrategyControlPlane:
             "strategy_plan_id": adjusted["strategy_plan_id"],
             "strategy_plan_version": adjusted["version"],
             "preview_id": preview["preview_id"],
+            "risk_decision_id": risk_decision["decision_id"],
+            "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
             "accepted_order_count": 0,
         }
         self._write_runtime(replanning)
-        adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
         receipts: list[dict[str, Any]] = []
         try:
             # Two-phase paper replacement: the old grid stays live until every
             # replacement order is accepted. A failed stage is removed without
             # pretending that an engine cancellation can be rolled back.
-            receipts = self._submit_plan_orders(adapter, adjusted, timestamp=timestamp)
+            receipts = self._submit_plan_orders(adapter, adjusted, timestamp=timestamp, commands=commands)
             cancel_receipt = adapter.cancel_orders(
                 cycle_id,
                 order_ids=old_order_ids,
@@ -669,6 +736,7 @@ class StrategyControlPlane:
             "execution_event": execution_event,
             "created_orders": len(receipts),
             "cancelled_orders": cancelled,
+            "risk_decision": risk_decision,
             "idempotent": False,
         }
 
@@ -678,14 +746,90 @@ class StrategyControlPlane:
         plan: dict[str, Any],
         *,
         timestamp: str,
+        commands: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         receipts: list[dict[str, Any]] = []
-        for command in build_plan_grid_entry_commands(plan, timestamp=timestamp):
+        command_rows = commands if commands is not None else build_plan_grid_entry_commands(plan, timestamp=timestamp)
+        for command in command_rows:
             receipt = adapter.submit_order(command)
             if str(receipt.get("state") or receipt.get("status") or "") != "accepted":
                 raise ValueError("paper execution did not accept a grid order")
             receipts.append(receipt)
         return receipts
+
+    def _authorize_grid_mutation(
+        self,
+        cycle_id: str,
+        *,
+        action_class: str,
+        intent: str,
+        plan: dict[str, Any],
+        commands: list[dict[str, Any]],
+        account: dict[str, Any],
+        market: dict[str, Any],
+        adapter,
+        timestamp: str,
+        replaced_order_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        request = self._grid_risk_request(
+            cycle_id,
+            action_class=action_class,
+            intent=intent,
+            plan=plan,
+            commands=commands,
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+            replaced_order_ids=replaced_order_ids,
+        )
+        decision = self.risk_port.evaluate(request)
+        self.risk_store.persist(decision)
+        require_exposure_permission(decision)
+        # Re-read the same authoritative adapter and re-evaluate. Any order,
+        # position, account, market, policy, or evaluator drift rejects before
+        # candidate plan/runtime/order mutation.
+        current_request = self._grid_risk_request(
+            cycle_id,
+            action_class=action_class,
+            intent=intent,
+            plan=plan,
+            commands=commands,
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+            replaced_order_ids=replaced_order_ids,
+        )
+        return assert_matching_risk_decision(self.risk_port, decision, current_request).to_dict()
+
+    def _grid_risk_request(
+        self,
+        cycle_id: str,
+        *,
+        action_class: str,
+        intent: str,
+        plan: dict[str, Any],
+        commands: list[dict[str, Any]],
+        account: dict[str, Any],
+        market: dict[str, Any],
+        adapter,
+        timestamp: str,
+        replaced_order_ids: list[str] | None,
+    ):
+        return build_grid_risk_request(
+            checked_at=timestamp,
+            action_class=action_class,
+            intent=intent,
+            plan=plan,
+            commands=commands,
+            account_context=account,
+            market=market,
+            execution_snapshot=adapter.snapshot(cycle_id),
+            execution_reconciliation=adapter.reconcile(cycle_id),
+            config=self.config,
+            replaced_order_ids=replaced_order_ids,
+        )
 
     def _stop(self, cycle_id: str, *, market: dict[str, Any] | None, now: str | None) -> dict[str, Any]:
         previous = self.runtime_state(cycle_id)

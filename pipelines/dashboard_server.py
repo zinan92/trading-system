@@ -33,7 +33,15 @@ from services.dualtrack_scoring import (
     filter_invalid_machine_fills,
 )
 from services.dualtrack_store import DualTrackPlanStore
-from services.strategy_control_plane import StrategyControlPlane
+from services.strategy_control_plane import StrategyControlPlane, production_mutation_lock
+from services.risk_port import (
+    PaperGridRiskDecisionPort,
+    RiskDecisionStore,
+    assert_matching_risk_decision,
+    build_manual_order_risk_request,
+    normalize_manual_order_command,
+    require_risk_permission,
+)
 from services.strategy_recommendation import StrategyRecommendationService
 from services.strategy_shadow import load_strategy_shadow_runs
 from services.connector_catalog import ConnectorCatalog
@@ -466,7 +474,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     received_at=received_at,
                     expected_provider=str(market_data.get("provider") or ""),
                 )
-                result = build_dualtrack_order_post_response(payload)
+                result = build_dualtrack_order_post_response(
+                    payload,
+                    enforce_risk=True,
+                    market=market,
+                )
             else:
                 result = build_dualtrack_verdict_post_response(payload)
             self._write_json(200, result)
@@ -847,7 +859,10 @@ def build_strategy_console_control_response(
             mark_price=trusted_market.get("latest_close"),
             mark_fresh=bool(trusted_market.get("fresh")),
         )
-        trusted_account = dict(history.get("account") or {})
+        trusted_account = {
+            **dict(history.get("account") or {}),
+            "accounting_snapshot": dict(history.get("accounting_snapshot") or {}),
+        }
     plane = StrategyControlPlane(output)
     if action == "refresh_recommendation":
         contexts = dict(trusted_market.get("strategy_timeframes") or {})
@@ -1034,7 +1049,32 @@ def build_dualtrack_config_response() -> dict:
     }
 
 
-def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
+def build_dualtrack_order_post_response(
+    payload: dict,
+    *,
+    output_root: Path | None = None,
+    enforce_risk: bool = False,
+    market: dict | None = None,
+    account: dict | None = None,
+) -> dict:
+    with production_mutation_lock():
+        return _build_dualtrack_order_post_response_locked(
+            payload,
+            output_root=output_root,
+            enforce_risk=enforce_risk,
+            market=market,
+            account=account,
+        )
+
+
+def _build_dualtrack_order_post_response_locked(
+    payload: dict,
+    *,
+    output_root: Path | None,
+    enforce_risk: bool,
+    market: dict | None,
+    account: dict | None,
+) -> dict:
     root = _dualtrack_output_root(output_root)
     command = dict(payload)
     position_cycle_id = str(command.get("position_cycle_id") or "")
@@ -1051,16 +1091,63 @@ def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | No
         command["request_cycle_id"] = request_cycle_id
         command["cycle_id"] = position_cycle_id
     event = str(command.get("event") or "entry").lower()
-    production_plan = StrategyControlPlane(root).ensure_compatible_active_plan(str(command.get("cycle_id") or ""))
+    plane = StrategyControlPlane(root)
+    production_plan = (
+        plane.active_plan(str(command.get("cycle_id") or ""))
+        if enforce_risk
+        else plane.ensure_compatible_active_plan(str(command.get("cycle_id") or ""))
+    )
     strict_production = str(command.get("source") or "") == "strategy_production_console"
     if event == "entry" and strict_production and not production_plan:
         raise ValueError("no valid StrategyPlan: new entries are fail-closed")
-    if event == "entry" and strict_production and StrategyControlPlane(root).runtime_state(str(command.get("cycle_id") or ""))["desired_state"] != "running":
+    if event == "entry" and strict_production and plane.runtime_state(str(command.get("cycle_id") or ""))["desired_state"] != "running":
         raise ValueError("production strategy is stopped")
     if production_plan:
         command["strategy_plan_id"] = production_plan["strategy_plan_id"]
         command["strategy_plan_version"] = production_plan["version"]
+    cfg = dualtrack_config()
+    if enforce_risk:
+        command = normalize_manual_order_command(command, config=cfg)
     adapter = build_configured_execution_engine_adapter(root)
+    risk_decision_payload: dict | None = None
+    if enforce_risk:
+        if not isinstance(market, dict):
+            raise ValueError("server-validated market is required for order risk")
+        trusted_account = account
+        if trusted_account is None:
+            history = build_strategy_console_production_history(
+                output_root=root,
+                mark_price=market.get("latest_close"),
+                mark_fresh=bool(market.get("fresh")),
+                authoritative_engine=str(getattr(adapter, "name", "legacy_paper")),
+            )
+            trusted_account = {
+                **dict(history.get("account") or {}),
+                "accounting_snapshot": dict(history.get("accounting_snapshot") or {}),
+            }
+
+        def risk_request():
+            cycle_id = str(command.get("cycle_id") or "")
+            return build_manual_order_risk_request(
+                checked_at=str(command.get("ts") or parse_utc(None).isoformat()),
+                command=command,
+                account_context=trusted_account or {},
+                market=market,
+                execution_snapshot=adapter.snapshot(cycle_id),
+                execution_reconciliation=adapter.reconcile(cycle_id),
+                config=cfg,
+            )
+
+        risk_port = PaperGridRiskDecisionPort()
+        initial_request = risk_request()
+        initial_decision = risk_port.evaluate(initial_request)
+        RiskDecisionStore(root).persist(initial_decision)
+        require_risk_permission(initial_decision)
+        risk_decision_payload = assert_matching_risk_decision(
+            risk_port,
+            initial_decision,
+            risk_request(),
+        ).to_dict()
     immediate_nautilus_event = (
         str(getattr(adapter, "name", "")) == "nautilus_paper"
         and (
@@ -1103,11 +1190,20 @@ def build_dualtrack_order_post_response(payload: dict, *, output_root: Path | No
                 if str(row.get("order_id") or "") == str(receipt.get("order_id") or "")
             ), None)
             if fill is not None:
-                return {"status": "filled", "fill": fill}
-        return {"status": "accepted", "order": receipt}
+                result = {"status": "filled", "fill": fill}
+                if risk_decision_payload is not None:
+                    result["risk_decision"] = risk_decision_payload
+                return result
+        result = {"status": "accepted", "order": receipt}
+        if risk_decision_payload is not None:
+            result["risk_decision"] = risk_decision_payload
+        return result
     if str(getattr(adapter, "name", "")) == "legacy_paper":
         DualTrackScorer(root).rebuild_ledgers()
-    return {"status": "filled", "fill": receipt}
+    result = {"status": "filled", "fill": receipt}
+    if risk_decision_payload is not None:
+        result["risk_decision"] = risk_decision_payload
+    return result
 
 
 def _dualtrack_mutation_request_allowed(host: str, origin: str) -> bool:

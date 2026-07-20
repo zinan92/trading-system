@@ -263,6 +263,7 @@ def test_tiger_paper_tradeclient_money_guardrail_fails_closed_before_preview_or_
     assert request["receipt"]["status"] == "blocked"
     assert request["readiness"]["tiger_account_sync"]["sync_status"] == "cannot_sync"
     assert request["readiness"]["live_money_guardrails"]["status"] == "BLOCKED_MONEY_GUARDRAIL_UNKNOWN"
+    assert request["readiness"]["live_money_guardrails"]["risk_decision"]["allow_exposure_increase"] is False
     assert "account history was not observed" in request["receipt"]["rejection_reason"]
     assert not any(name in {"preview_order", "place_order"} for name, _ in trade_client.calls)
 
@@ -283,6 +284,7 @@ def test_tiger_paper_tradeclient_uses_account_sync_before_money_guardrails(tmp_p
     assert request["readiness"]["tiger_reconciliation_raw"]["exchange_balance"]["balance"] == 25000.0
     assert request["readiness"]["live_money_guardrails"]["daily_loss"]["known"] is True
     assert request["readiness"]["live_money_guardrails"]["status"] == "BLOCKED_SINGLE_ORDER_NOTIONAL_LIMIT"
+    assert request["readiness"]["live_money_guardrails"]["risk_decision"]["allow_exposure_increase"] is False
     assert not any(name in {"preview_order", "place_order"} for name, _ in trade_client.calls)
 
 

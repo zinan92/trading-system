@@ -4,8 +4,10 @@ from copy import deepcopy
 
 import pytest
 
+from schemas.accounting import build_accounting_snapshot
 from services.dualtrack_execution_adapter import build_execution_engine_adapter
 from services.dualtrack_config import dualtrack_config as load_test_config
+from services.journal_store import load_json
 from services.strategy_control_plane import StrategyControlPlane
 import services.strategy_control_plane as strategy_control_plane_module
 
@@ -18,7 +20,9 @@ def _isolate_legacy_execution_engine(monkeypatch: pytest.MonkeyPatch):
         "shadow": "none",
         "real_money_eligible": False,
     }
-    factory = lambda *args, **kwargs: deepcopy(config)
+    def factory(*_args, **_kwargs):
+        return deepcopy(config)
+
     monkeypatch.setattr(strategy_control_plane_module, "dualtrack_config", factory)
     monkeypatch.setattr("services.dualtrack_config.dualtrack_config", factory)
 
@@ -80,6 +84,35 @@ def market(*, close: float = 110.0, fresh: bool = True) -> dict:
     }
 
 
+def account_context(equity: float = 10_000.0) -> dict:
+    snapshot = build_accounting_snapshot(
+        source_type="production_history",
+        source_name="production_history",
+        source_schema_version="dualtrack-execution-v1",
+        scope={"strategy_plan_scope": "test"},
+        currency="USDT",
+        orders=[],
+        fills=[],
+        positions=[],
+        trades=[],
+        counts={},
+        pnl={"net_realized_pnl": 0.0, "unrealized_pnl": 0.0},
+        account={"starting_balance": equity, "ending_cash": equity, "equity": equity},
+        completeness={"status": "complete", "limitations": []},
+        reconciliation={"status": "pass", "issues": []},
+    ).to_dict()
+    return {"equity": equity, "ending_cash": equity, "accounting_snapshot": snapshot}
+
+
+def safe_grid(direction: str = "neutral", style: str = "steady") -> dict:
+    return {
+        "direction": direction,
+        "style": style,
+        "grid": {"notional_per_grid": 400.0, "notional_mode": "manual"},
+        "risk_budget": {"leverage": 2.0},
+    }
+
+
 def test_plan_proposals_share_schema_and_active_plan_has_field_sources(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     cycle_id = "2026-07-05_DAY"
@@ -128,9 +161,9 @@ def test_production_controls_are_durable_and_preserve_history(tmp_path: Path) ->
     assert plane.control(
         cycle_id,
         "start",
-        {"direction": "long", "style": "steady"},
+        safe_grid("long", "steady"),
         market=market(),
-        account={"ending_cash": 10_000.0},
+        account=account_context(),
         now="2026-07-05T01:40:00+00:00",
     )["runtime"]["desired_state"] == "running"
     revised = plane.control(cycle_id, "adjust_plan", {"range": {"low": 98.0, "high": 122.0}})["plan"]
@@ -171,7 +204,7 @@ def test_control_plane_reads_accepted_orders_from_selected_execution_adapter(
 def test_preview_direction_and_style_change_grid_geometry_and_order_sides(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     cycle_id = "2026-07-05_DAY"
-    account = {"ending_cash": 10_000.0}
+    account = account_context()
 
     neutral = plane.preview(cycle_id, {"direction": "neutral", "style": "steady"}, market=market(), account=account)
     long = plane.preview(cycle_id, {"direction": "long", "style": "steady"}, market=market(), account=account)
@@ -220,7 +253,7 @@ def test_auto_notional_revalidates_against_start_market_while_manual_notional_re
     cycle_id = "2026-07-05_DAY"
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
-    account = {"ending_cash": 10_000.0}
+    account = account_context()
     geometry = {"low": 90.0, "high": 130.0}
 
     earlier = plane.preview(
@@ -244,24 +277,49 @@ def test_auto_notional_revalidates_against_start_market_while_manual_notional_re
             account=account,
         )
 
+    auto_payload = {
+        "direction": "neutral",
+        "style": "steady",
+        "range": geometry,
+        "grid": {"count": 24, "notional_per_grid": stale_notional, "notional_mode": "auto"},
+        "risk_budget": {"leverage": 10.0},
+    }
+    recalculated = plane.preview(cycle_id, auto_payload, market=market(close=120.0), account=account)
+
+    with pytest.raises(ValueError, match="plan_loss_budget_exceeded"):
+        plane.control(
+            cycle_id,
+            "start",
+            auto_payload,
+            market=market(close=120.0),
+            account=account,
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    blocked = load_json(output / "dualtrack" / "risk_decisions" / "current.json")[-1]
+    recommended = blocked["recommendation"]["recommended_notional_per_grid"]
+    assert plane.runtime_state(cycle_id)["desired_state"] == "stopped"
+    assert plane.active_plan(cycle_id)["version"] == 1
+    assert recalculated["grid"]["notional_mode"] == "auto"
+    assert recalculated["grid"]["notional_per_grid"] < stale_notional
+    assert recalculated["grid"]["notional_per_grid"] == recalculated["risk"]["capital_notional_cap_per_grid"]
+    assert blocked["recommendation"]["applied_automatically"] is False
+    assert recommended < recalculated["grid"]["notional_per_grid"]
+
     started = plane.control(
         cycle_id,
         "start",
         {
-            "direction": "neutral",
-            "style": "steady",
-            "range": geometry,
-            "grid": {"count": 24, "notional_per_grid": stale_notional, "notional_mode": "auto"},
-            "risk_budget": {"leverage": 10.0},
+            **auto_payload,
+            "grid": {"count": 24, "notional_per_grid": recommended, "notional_mode": "manual"},
         },
         market=market(close=120.0),
         account=account,
-        now="2026-07-05T01:40:00+00:00",
+        now="2026-07-05T01:40:01+00:00",
     )
 
-    assert started["preview"]["grid"]["notional_mode"] == "auto"
-    assert started["preview"]["grid"]["notional_per_grid"] < stale_notional
-    assert started["preview"]["grid"]["notional_per_grid"] == started["preview"]["risk"]["capital_notional_cap_per_grid"]
+    assert started["preview"]["grid"]["notional_mode"] == "manual"
+    assert started["preview"]["grid"]["notional_per_grid"] == recommended
     assert started["plan"]["grid"]["notional_per_grid"] == started["preview"]["grid"]["notional_per_grid"]
     assert started["accepted_orders"] > 0
 
@@ -281,9 +339,9 @@ def test_start_commits_plan_and_real_versioned_paper_orders_idempotently(tmp_pat
     cycle_id = "2026-07-05_DAY"
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
-    payload = {"direction": "short", "style": "aggressive"}
+    payload = safe_grid("short", "aggressive")
 
-    started = plane.control(cycle_id, "start", payload, market=market(), account={"ending_cash": 10_000.0}, now="2026-07-05T01:40:00+00:00")
+    started = plane.control(cycle_id, "start", payload, market=market(), account=account_context(), now="2026-07-05T01:40:00+00:00")
     orders = build_execution_engine_adapter(output).snapshot(cycle_id)["orders"]
 
     assert started["runtime"]["desired_state"] == "running"
@@ -296,7 +354,7 @@ def test_start_commits_plan_and_real_versioned_paper_orders_idempotently(tmp_pat
     assert all(order["strategy_plan_id"] == started["plan"]["strategy_plan_id"] for order in orders)
     assert all(order["strategy_plan_version"] == started["plan"]["version"] for order in orders)
 
-    repeated = plane.control(cycle_id, "start", payload, market=market(), account={"ending_cash": 10_000.0}, now="2026-07-05T01:41:00+00:00")
+    repeated = plane.control(cycle_id, "start", payload, market=market(), account=account_context(), now="2026-07-05T01:41:00+00:00")
     repeated_orders = build_execution_engine_adapter(output).snapshot(cycle_id)["orders"]
     assert repeated["created_orders"] == 0
     assert repeated["idempotent"] is True
@@ -315,6 +373,166 @@ def test_start_is_fail_closed_for_stale_market(tmp_path: Path) -> None:
         plane.control(cycle_id, "start", {"direction": "neutral", "style": "steady"}, market=market(fresh=False), account={"ending_cash": 10_000.0})
 
     assert plane.runtime_state(cycle_id)["desired_state"] == "stopped"
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+
+
+def test_risk_block_precedes_candidate_plan_runtime_and_order_mutation(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    active = plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    before_runtime = plane.runtime_state(cycle_id)
+
+    with pytest.raises(ValueError, match="plan_loss_budget_exceeded"):
+        plane.control(
+            cycle_id,
+            "start",
+            {"direction": "neutral", "style": "steady"},
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
+    after_runtime = plane.runtime_state(cycle_id)
+    for field in (
+        "desired_state",
+        "actual_state",
+        "strategy_plan_id",
+        "strategy_plan_version",
+        "preview_id",
+        "accepted_order_count",
+        "risk_decision_id",
+        "risk_policy_id",
+    ):
+        assert after_runtime[field] == before_runtime[field]
+    assert after_runtime["last_control_event"]["result"] == "rejected"
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+    decision = load_json(output / "dualtrack" / "risk_decisions" / "current.json")[-1]
+    assert decision["outcome"] == "block"
+    assert decision["recommendation"]["applied_automatically"] is False
+
+
+def test_unknown_account_blocks_before_mutation_even_when_preview_used_fallback(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    active = plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    preview = plane.preview(cycle_id, safe_grid(), market=market(), account={})
+    assert preview["risk"]["equity"] == 10_000.0  # display compatibility only
+    with pytest.raises(ValueError, match="account_snapshot_unavailable"):
+        plane.control(
+            cycle_id,
+            "start",
+            safe_grid(),
+            market=market(),
+            account={},
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
+    assert plane.runtime_state(cycle_id)["desired_state"] == "stopped"
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+
+
+def test_pre_submit_recheck_reads_same_state_source_and_rejects_drift_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    active = plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    class DriftingAdapter:
+        name = "legacy_paper"
+
+        def __init__(self) -> None:
+            self.snapshot_calls = 0
+            self.submissions = 0
+
+        def snapshot(self, requested_cycle: str, **_kwargs) -> dict:
+            self.snapshot_calls += 1
+            unexpected = self.snapshot_calls >= 3
+            return {
+                "schema_version": "dualtrack-execution-v1",
+                "engine": self.name,
+                "cycle_id": requested_cycle,
+                "orders": ([{
+                    "order_id": "concurrent-order",
+                    "state": "accepted",
+                    "side": "buy",
+                    "event": "entry",
+                    "order_type": "limit",
+                    "price": 90.0,
+                    "quantity": 1.0,
+                }] if unexpected else []),
+                "fills": [],
+                "positions": [],
+                "account": {
+                    "starting_cash": 10_000.0,
+                    "realized_pnl": 0.0,
+                    "ending_cash": 10_000.0,
+                    "equity": 10_000.0,
+                    "margin": 0.0,
+                    "exposure": 0.0,
+                    "slippage": 0.0,
+                    "fees": 0.0,
+                    "funding": 0.0,
+                },
+                "pnl": {"realized": 0.0, "unrealized": 0.0},
+            }
+
+        def reconcile(self, _cycle_id: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+        def submit_order(self, _command: dict) -> dict:
+            self.submissions += 1
+            raise AssertionError("stale decision must fail before submit")
+
+    adapter = DriftingAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+
+    with pytest.raises(ValueError, match="risk decision stale"):
+        plane.control(
+            cycle_id,
+            "start",
+            safe_grid("long", "steady"),
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    assert adapter.submissions == 0
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
+    assert plane.runtime_state(cycle_id)["desired_state"] == "stopped"
+
+
+def test_start_requires_plan_selection_and_does_not_auto_lock_on_risk_path(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    plane.upsert_proposal(proposal(cycle_id, "ai"))
+
+    with pytest.raises(ValueError, match="already selected active StrategyPlan"):
+        plane.control(
+            cycle_id,
+            "start",
+            safe_grid(),
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    assert plane.active_plan(cycle_id) is None
     assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
 
 
@@ -348,11 +566,26 @@ def test_start_accepts_complete_grid_before_processing_a_legitimate_fill(
             self.orders.append(row)
             return dict(row)
 
-        def snapshot(self, _cycle_id: str, **_kwargs) -> dict:
+        def snapshot(self, cycle_id: str, **_kwargs) -> dict:
             return {
+                "schema_version": "dualtrack-execution-v1",
+                "engine": self.name,
+                "cycle_id": cycle_id,
                 "orders": [dict(row) for row in self.orders],
                 "fills": ([{"fill_id": "fill-1"}] if self.filled else []),
                 "positions": [],
+                "account": {
+                    "starting_cash": 10_000.0,
+                    "realized_pnl": 0.0,
+                    "ending_cash": 10_000.0,
+                    "equity": 10_000.0,
+                    "margin": 0.0,
+                    "exposure": 0.0,
+                    "slippage": 0.0,
+                    "fees": 0.0,
+                    "funding": 0.0,
+                },
+                "pnl": {"realized": 0.0, "unrealized": 0.0},
             }
 
         def process_market_event(self, _event: dict) -> dict:
@@ -375,9 +608,9 @@ def test_start_accepts_complete_grid_before_processing_a_legitimate_fill(
     started = plane.control(
         cycle_id,
         "start",
-        {"direction": "long", "style": "steady"},
-        market=market(),
-        account={"ending_cash": 10_000.0},
+            safe_grid("long", "steady"),
+            market=market(),
+            account=account_context(),
         now="2026-07-05T01:40:00+00:00",
     )
 
@@ -418,7 +651,7 @@ def test_stop_cancels_pending_orders_flattens_position_and_reconciles(tmp_path: 
     cycle_id = "2026-07-05_DAY"
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
-    started = plane.control(cycle_id, "start", {"direction": "long", "style": "steady"}, market=market(), account={"ending_cash": 10_000.0}, now="2026-07-05T01:40:00+00:00")
+    started = plane.control(cycle_id, "start", safe_grid("long", "steady"), market=market(), account=account_context(), now="2026-07-05T01:40:00+00:00")
     adapter = build_execution_engine_adapter(output)
     adapter.submit_order({
         "cycle_id": cycle_id,
@@ -454,7 +687,7 @@ def test_running_adjustment_replaces_pending_grid_without_stopping_runtime(tmp_p
     cycle_id = "2026-07-05_DAY"
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
-    started = plane.control(cycle_id, "start", {"direction": "neutral", "style": "steady"}, market=market(), account={"ending_cash": 10_000.0}, now="2026-07-05T01:40:00+00:00")
+    started = plane.control(cycle_id, "start", safe_grid("neutral", "steady"), market=market(), account=account_context(), now="2026-07-05T01:40:00+00:00")
     original_orders = [order for order in build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] if order["state"] == "accepted"]
 
     adjusted = plane.control(
@@ -468,7 +701,7 @@ def test_running_adjustment_replaces_pending_grid_without_stopping_runtime(tmp_p
             "risk_budget": {"leverage": 2.0},
         },
         market=market(),
-        account={"ending_cash": 10_000.0},
+        account=account_context(),
         now="2026-07-05T01:42:00+00:00",
     )
     snapshot = build_execution_engine_adapter(output).snapshot(cycle_id)
@@ -483,6 +716,83 @@ def test_running_adjustment_replaces_pending_grid_without_stopping_runtime(tmp_p
     assert all(order["strategy_plan_id"] == adjusted["plan"]["strategy_plan_id"] for order in current_orders)
 
 
+def test_regrid_stages_every_replacement_before_cancel_and_advances_market_only_after_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    real = build_execution_engine_adapter(output)
+
+    class SequencedAdapter:
+        # The control plane advances accepted mutations synchronously only for
+        # the active Nautilus path; the legacy adapter gives this test a small,
+        # deterministic ledger while the name exercises that exact ordering.
+        name = "nautilus_paper"
+
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def submit_order(self, command: dict) -> dict:
+            self.events.append("submit")
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            self.events.append("cancel")
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def process_market_event(self, event: dict) -> dict:
+            self.events.append("process")
+            return real.process_market_event(event)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return real.snapshot(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            return real.reconcile(requested_cycle)
+
+    adapter = SequencedAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    adapter.events.clear()
+
+    adjusted = plane.control(
+        cycle_id,
+        "adjust_plan",
+        {
+            "direction": "short",
+            "style": "aggressive",
+            "range": {"low": 108.0, "high": 116.0},
+            "grid": {"count": 12, "notional_per_grid": 50.0, "notional_mode": "manual"},
+            "risk_budget": {"leverage": 2.0},
+        },
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )
+
+    cancel_index = adapter.events.index("cancel")
+    process_index = adapter.events.index("process")
+    submit_indices = [index for index, event in enumerate(adapter.events) if event == "submit"]
+    assert len(submit_indices) == adjusted["created_orders"] > 0
+    assert max(submit_indices) < cancel_index < process_index
+    assert "process" not in adapter.events[:cancel_index]
+
+
 def test_failed_running_adjustment_keeps_previous_grid_and_removes_staged_orders(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -495,9 +805,9 @@ def test_failed_running_adjustment_keeps_previous_grid_and_removes_staged_orders
     started = plane.control(
         cycle_id,
         "start",
-        {"direction": "neutral", "style": "steady"},
+        safe_grid("neutral", "steady"),
         market=market(),
-        account={"ending_cash": 10_000.0},
+        account=account_context(),
         now="2026-07-05T01:40:00+00:00",
     )
     old_plan_id = started["plan"]["strategy_plan_id"]
@@ -537,9 +847,9 @@ def test_failed_running_adjustment_keeps_previous_grid_and_removes_staged_orders
         plane.control(
             cycle_id,
             "adjust_plan",
-            {"direction": "short", "style": "aggressive"},
+            safe_grid("short", "aggressive"),
             market=market(),
-            account={"ending_cash": 10_000.0},
+            account=account_context(),
             now="2026-07-05T01:42:00+00:00",
         )
 
@@ -568,9 +878,9 @@ def test_concurrent_refresh_cannot_override_started_plan_or_create_two_active_pl
         return plane.control(
             cycle_id,
             "start",
-            {"direction": "short", "style": "aggressive"},
-            market=market(),
-            account={"ending_cash": 10_000.0},
+                safe_grid("short", "aggressive"),
+                market=market(),
+                account=account_context(),
             now="2026-07-05T01:40:00+00:00",
         )["plan"]
 
