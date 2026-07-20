@@ -691,8 +691,8 @@ def test_accounting_projection_failure_cannot_block_reconciliation_writes(tmp_pa
     for state in ["submitting", "accepted", "filled", "protective_attached", "closed"]:
         store.transition("2026-06-03", "order_closed", state, reason=f"test_{state}")
     monkeypatch.setattr(
-        "services.accounting_projection.build_accounting_snapshot",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot builder failed")),
+        "services.accounting_projection_composition.project_broker_accounting_fail_honest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot builder failed")),
     )
 
     report = LiveBrokerReconciliation(

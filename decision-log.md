@@ -6933,3 +6933,110 @@ auditable datafeed port; broker execution remains a separate port.
   (`635 / 7 = 90.7%`, rounded to `91%`).
 - No strategy parameters, risk rules, credentials, live configuration, orders,
   positions, accounts, or production state were changed.
+
+## 2026-07-18 - A12 Accounting Adapter Registry kickoff
+
+### Objective and value
+
+- Extract Binance USD-M and Tiger accounting interpretation from the generic
+  P&L core, then register each source explicitly behind one canonical snapshot
+  port.
+- Make a new broker/account source an adapter-plus-conformance change rather
+  than a provider branch inside risk, Dashboard, or reconciliation code.
+
+### Decisions
+
+- Preserve `accounting-snapshot-v1`, exact snapshot IDs, rounding, issue order,
+  completeness, and unknown-is-not-zero behavior.
+- Reuse the explicit frozen-registry pattern already proven in A8-A11; do not
+  add Pluggy or entry-point discovery.
+- Keep execution-engine accounting provider-free and separate from broker
+  source composition. Retain the old module as a compatibility facade only.
+
+### Gotchas
+
+- Binance user trades do not prove round-trip lifecycle, so trade and
+  entry/exit counts must remain unknown.
+- Tiger is aggregate account evidence; missing orders, fills, fees, funding,
+  exposure, and ending cash must never become zero.
+- Fail-honest accounting is additive to source persistence. Projection failure
+  must remain visible without suppressing the reconciliation or sync receipt.
+- The primary worktree remains unrelated and active. A12 is isolated on top of
+  completed A11 and changes no live config or production state.
+
+### Baseline
+
+- A11 full suite: `1800 passed, 7 skipped`.
+- Accounting/risk/reconciliation/Dashboard pack: `113 passed`.
+
+## 2026-07-18 - A12 Accounting Adapter Registry complete
+
+### Value delivered
+
+- Broker accounting sources are now replaceable without editing risk,
+  Dashboard, execution, reconciliation, or account-sync application modules.
+  Binance USD-M and Tiger each own an isolated read-only mapping adapter behind
+  one frozen content-hashed source registry.
+- Execution-engine P&L projection is provider-free. It imports no venue mapper;
+  the old `accounting_projection.py` path contains only compatibility re-exports.
+- Exact economic behavior is preserved: Binance and Tiger retain their A11
+  canonical payload hashes, while unknown/malformed evidence remains blocked
+  and `None` rather than fabricated zero.
+
+### Decisions
+
+- Keep execution accounting generic because Legacy and Nautilus already emit
+  the same versioned snapshot. Apply source registration only where venue field
+  interpretation genuinely differs.
+- Treat broker accounting plugins as trusted read-only anti-corruption
+  adapters. The registry structurally validates implementation identity,
+  source aliases, schema, capability, source name, and canonical snapshot type;
+  it does not pretend to prove the economic honesty of trusted registered code.
+- Keep fail-honest fallback in provider-neutral composition. Registered
+  descriptor metadata supplies Tiger versus Binance source schema and default
+  currency without restoring an inline provider branch.
+- Preserve explicit registration and startup freeze; do not auto-discover
+  installed code in a money-reporting process.
+
+### Gotchas
+
+- Snapshot IDs bind the entire canonical payload, including order, issue, and
+  limitation ordering. The frozen A11 IDs therefore guard more than headline
+  P&L values.
+- Binance's present commission/funding map may legitimately contain numeric
+  zero; an absent map remains `None`. These states must not be collapsed.
+- Tiger's net liquidation is equity evidence, not ending cash. Orders, fills,
+  positions, gross P&L, fees, funding, exposure, and lifecycle counts remain
+  unknown.
+- Opus found that the generic forbidden-import scanner did not name the new
+  concrete accounting adapter module paths. No live dependency violation
+  existed, but a future core leak could have escaped that guard. Both concrete
+  module names are now explicitly forbidden and pinned by a test.
+- Currency is intentionally not forced equal to descriptor default currency:
+  adapters may observe a real balance asset. The registry validates source and
+  schema provenance, while the registered adapter owns that observed label.
+- A12 has no visible product surface and deploys no service. Visual Evidence is
+  not applicable; tests, commits, diffs, documents, and the Opus receipt are
+  trace material only.
+
+### Verification
+
+- Final repository regression after Opus hardening:
+  `1813 passed, 7 skipped in 400.54s`.
+- Pre-review accounting/risk/reconciliation/Dashboard/Shadow/parity pack:
+  `181 passed`; post-review defense pack: `31 passed`.
+- Frozen A11 IDs:
+  - Binance: `accounting-07c106a8682cb8be79954801823763d97b0dccff5086e66a0ac9a2a48055b3cb`.
+  - Tiger: `accounting-a8ba1a6cf165aa0fed9cf6f720d09033e512378adb1b86bfabd6d7a0ca201a68`.
+- Git source relocation checks for execution core, Binance mapping, Tiger
+  mapping, and broker counts each returned `exit=0` with zero diff output.
+- Changed-file Ruff, architecture fitness, parity-path coverage, and
+  `git diff --check`: clean.
+- Verified Opus: `claude-opus-4-8`, session
+  `76dfbe46-edcf-4315-8f72-dc6b3af13250`, receipt
+  `20260718T053243Z_06b5df69-2399-41cc-82cb-4a65eaa59b85.json`; `SHIP`, no
+  P0-P2. Its conditional verbatim-diff gate was independently closed with Git.
+- Risk/accounting/reconciliation improved from `90/100` to `95/100`. Overall
+  progress remains the honest rounded `91%` (`640 / 7 = 91.4%`).
+- No strategy parameters, risk thresholds, credentials, live configuration,
+  orders, positions, accounts, or production state were changed.

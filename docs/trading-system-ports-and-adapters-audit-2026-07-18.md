@@ -12,10 +12,10 @@ Changing a data source, paper execution engine, or broker no longer requires
 rewriting P&L, risk, or the UI.
 
 It is not yet a full plug-and-play system. Signal analysis, production grid
-proposal generation, all three backtest use cases, and paper execution now
-resolve through frozen plugin registries. The largest remaining gaps are
-accounting-adapter extraction, venue-package strangling, and the authoritative
-Market Envelope V2 cutover.
+proposal generation, all three backtest use cases, paper execution, and broker
+accounting normalization now resolve through frozen plugin registries. The
+largest remaining gaps are venue-package strangling, the authoritative Market
+Envelope V2 cutover, and physical risk evaluator/store separation.
 
 This percentage measures modular architecture, not profitability, live-money
 readiness, or whether the self-evolution loop has enough trades.
@@ -25,7 +25,7 @@ readiness, or whether the self-evolution loop has enough trades.
 Each row receives 0–25 for: versioned Contract, adapter Isolation, explicit
 Composition, and conformance Proof plus intended production cutover. The total
 is the rounded arithmetic mean of the seven visible row totals:
-`635 / 7 = 90.7%`, reported as `91%`.
+`640 / 7 = 91.4%`, reported as `91%`.
 
 | Product line | Contract | Isolation | Composition | Proof/cutover | Total |
 |---|---:|---:|---:|---:|---:|
@@ -34,7 +34,7 @@ is the rounded arithmetic mean of the seven visible row totals:
 | Analysis / strategy | 25 | 20 | 25 | 25 | 95 |
 | Backtest / replay | 25 | 20 | 25 | 20 | 90 |
 | Live execution / broker | 25 | 20 | 25 | 20 | 90 |
-| Risk / accounting / reconciliation | 25 | 20 | 20 | 25 | 90 |
+| Risk / accounting / reconciliation | 25 | 20 | 25 | 25 | 95 |
 | Dashboard / read model | 25 | 25 | 20 | 25 | 95 |
 
 ## Current end-to-end shape
@@ -49,7 +49,7 @@ flowchart LR
     PP --> SP["Validated StrategyPlan"]
     SP --> RP["RiskDecisionPort"]
     RP --> EP["ExecutionEngineAdapter + frozen plugin registry"]
-    EP --> AP["AccountingSnapshot"]
+    EP --> AP["AccountingSnapshot + source adapter registry"]
     EP --> BP["BrokerExecutionPort"]
     BP --> BR["Broker reconciliation"]
     AP --> RM["TradingSystemReadModel"]
@@ -197,20 +197,29 @@ plug-compatible while plan safety remains invariant across plugins.
     eligibility remains correctly false. That is an operational gate, not an
     architecture failure, but it prevents claiming full cutover proof.
 
-### 6. Risk / accounting / reconciliation — 90/100
+### 6. Risk / accounting / reconciliation — 95/100
 
 - Risk: `risk-request-v1` and `risk-decision-v1` bind exact plan commands,
   trusted market, canonical account, current execution, policy, and evaluator
   identity. Every exposure-increasing mutation rechecks under the command lock.
 - Accounting: `accounting-snapshot-v1` is the only P&L/count/account truth for
-  Legacy, Nautilus, production history, and broker observations. Unknown venue
-  facts remain `None`, never fabricated zeroes.
+  Legacy, Nautilus, production history, and broker observations. The
+  provider-free execution projector and immutable snapshot contract import no
+  venue adapter. Binance USD-M and Tiger aggregate-account mappings live in
+  separate read-only adapters behind one frozen source registry with aliases,
+  source schemas, stable fingerprint, runtime identity checks, and exact result
+  validation. Unknown venue facts remain `None`, never fabricated zeroes.
+- Composition/cutover: execution consumers import only the provider-free core;
+  reconciliation and Tiger sync import only the broker accounting composition
+  root. `accounting_projection.py` is a re-export-only compatibility facade.
+  A custom source adapter can be registered without editing risk, Dashboard,
+  execution, or reconciliation modules. Frozen A11 snapshot IDs prove the
+  Binance and Tiger economic payloads did not change.
 - Reconciliation: execution and broker truth are compared explicitly; stale or
   drifted evidence cannot authorize money.
-- Main gap: `accounting_projection.py` is pure, but Binance and Tiger broker
-  normalization still branch inside that same module. The contract is stable;
-  the provider mappers have not yet been extracted into registered accounting
-  adapters. Risk evaluator/store responsibilities also share one module.
+- Remaining 5: risk evaluator and decision-store responsibilities still share
+  one module. Their public port and content-bound decision contract are stable,
+  but physical policy/store composition has not yet been extracted.
 
 ### 7. Dashboard / read model — 95/100
 
@@ -235,6 +244,7 @@ plug-compatible while plan safety remains invariant across plugins.
 | Market data provider | Yes, behind datafeed | Implement one datafeed adapter and pass the envelope conformance suite |
 | Paper execution engine | Yes | Implement and register `ExecutionEngineAdapter`, pass exact accounting/conformance, then satisfy attended cutover gates |
 | Broker / venue | Yes at application boundary | Register execution + reconciliation plugins and pass venue/lifecycle/protection tests |
+| Broker accounting source | Yes | Register one read-only projection adapter and pass exact snapshot/completeness/reconciliation conformance |
 | Risk policy evaluator | Yes for normalized requests | Implement `RiskDecisionPort`; preserve mutation-time identity and exit availability |
 | Dashboard client | Yes | Consume `trading-system-read-model-v1`; commands remain separate POSTs |
 | Strategy analysis engine | Yes | Implement `StrategyAnalysisPort`, explicitly register before startup freeze, and pass behavior/replay tests |
@@ -266,15 +276,15 @@ evolution yet.
 
 ## Shortest remaining architecture backlog
 
-1. **Accounting adapter extraction (medium):** keep
-   `accounting-snapshot-v1`, move broker-specific mappings out of
-   `accounting_projection.py`, and register them by source contract.
-2. **Venue package strangler (large but incremental):** move Binance, Tiger,
+1. **Venue package strangler (large but incremental):** move Binance, Tiger,
    OANDA, and MT5 networking out of `LiveBrokerAdapter` one adapter at a time;
    retain the compatibility facade until every venue passes the same suite.
-3. **Market Envelope V2 cutover (small after evidence):** capture real
+2. **Market Envelope V2 cutover (small after evidence):** capture real
    session-aware same-response parity, switch authority explicitly, then delete
    the duplicate `load_bars()` interpretation and narrow SQLite seams.
+3. **Risk policy/store extraction (medium):** keep `risk-request-v1` and
+   `risk-decision-v1`, register policy evaluators explicitly, and separate
+   immutable decision persistence from evaluation.
 4. **Legacy read-surface retirement (medium):** migrate remaining consumers to
    the stable read model, announce deprecation, then remove facade-only
    presentation code.
@@ -287,11 +297,11 @@ evolution yet.
 The architecture is now strong enough that self-repair and grid evolution can
 be built without reworking market, strategy, backtest, risk, accounting, broker,
 and UI truth again. A new signal engine, production grid planner, signal
-backtester, historical ranker, Strategy Shadow replay, or paper execution
-engine can be registered without editing its application pipeline. The honest
-state is a robust hexagonal spine with several contained compatibility
-monoliths still awaiting physical extraction.
+backtester, historical ranker, Strategy Shadow replay, paper execution engine,
+or broker accounting source can be registered without editing its application
+pipeline. The honest state is a robust hexagonal spine with several contained
+compatibility monoliths still awaiting physical extraction.
 
 For the grid-only product focus, the next highest-leverage architecture change
-is broker-specific accounting adapter extraction, followed by incremental venue
-package isolation—not another Dashboard or provider-specific integration.
+is incremental venue package isolation, followed by the evidence-gated Market
+Envelope V2 cutover—not another Dashboard or provider-specific integration.

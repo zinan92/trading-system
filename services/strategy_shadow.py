@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from services.accounting_projection import project_execution_accounting
+from services.accounting_projection_core import project_execution_accounting
 from services.backtest_port import StrategyShadowReplayPort
 from services.execution_conformance import (
     build_execution_scenario,

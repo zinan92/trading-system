@@ -20,7 +20,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from services.accounting_projection import broker_accounting_snapshot_payload
+from services.accounting_projection_composition import broker_accounting_snapshot_payload
 from services.config_loader import load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.live_env import apply_live_env, live_env_value_present

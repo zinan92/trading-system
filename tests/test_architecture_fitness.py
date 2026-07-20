@@ -15,6 +15,7 @@ from services.backtest_port import (
     SignalBacktestPort,
     StrategyShadowReplayPort,
 )
+from services.accounting_projection_port import BrokerAccountingProjectionPort
 from services.execution_engine_port import ExecutionEngineAdapter
 from services.market_data_access import TrustedMarketDataReadPort
 from services.risk_port import RiskDecisionPort
@@ -42,7 +43,10 @@ CONTRACT_KERNELS = (
     "services/dualtrack_execution_contract.py",
     "services/execution_engine_port.py",
     "services/execution_engine_plugin_registry.py",
-    "services/accounting_projection.py",
+    "services/accounting_projection_core.py",
+    "services/accounting_projection_port.py",
+    "services/accounting_projection_registry.py",
+    "services/accounting_broker_common.py",
     "services/risk_port.py",
     "services/broker_port.py",
     "services/trading_system_read_model.py",
@@ -57,6 +61,8 @@ FORBIDDEN_KERNEL_IMPORTS = (
     "websocket",
     "services.binance_",
     "services.tiger_",
+    "services.accounting_binance_adapter",
+    "services.accounting_tiger_adapter",
     "services.oanda_",
     "services.mt5_",
     "services.ib_",
@@ -79,16 +85,11 @@ EXPECTED_SCORE_ROWS = {
     "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (25, 20, 25, 20, 90),
     "Live execution / broker": (25, 20, 25, 20, 90),
-    "Risk / accounting / reconciliation": (25, 20, 20, 25, 90),
+    "Risk / accounting / reconciliation": (25, 20, 25, 25, 95),
     "Dashboard / read model": (25, 25, 20, 25, 95),
 }
 
 APPROVED_INLINE_PROVIDER_BRANCHES = {
-    "services/accounting_projection.py": {
-        "binance_usdm",
-        "binance_usdm_futures",
-        "tiger_openapi",
-    },
     "services/broker_port.py": {"binance_usdm"},
 }
 PROVIDER_SUBSCRIPT_DISPATCH = "<provider-subscript-dispatch>"
@@ -169,6 +170,11 @@ def test_contract_kernels_do_not_import_concrete_adapters_or_network_clients() -
     assert violations == []
 
 
+def test_concrete_accounting_adapters_remain_forbidden_kernel_dependencies() -> None:
+    assert "services.accounting_binance_adapter" in FORBIDDEN_KERNEL_IMPORTS
+    assert "services.accounting_tiger_adapter" in FORBIDDEN_KERNEL_IMPORTS
+
+
 def test_existing_inline_provider_branches_are_frozen_to_named_extraction_debt() -> None:
     observed = {
         relative: _inline_provider_branch_literals(ROOT / relative)
@@ -232,6 +238,14 @@ class GenericExecutionPort:
         return {}
 
 
+class GenericBrokerAccountingPort:
+    name = "generic_accounting"
+    source_names = ("generic_broker",)
+
+    def project(self, source):
+        return source
+
+
 class GenericStrategyAnalysisPort:
     def generate(self, asset, candles, events=None, run_date="", factor_context=None):
         return None
@@ -293,6 +307,7 @@ class GenericReconciliationPort:
 def test_provider_free_fakes_expose_the_public_port_shapes() -> None:
     assert isinstance(GenericMarketPort(), TrustedMarketDataReadPort)
     assert isinstance(GenericExecutionPort(), ExecutionEngineAdapter)
+    assert isinstance(GenericBrokerAccountingPort(), BrokerAccountingProjectionPort)
     assert isinstance(GenericStrategyAnalysisPort(), StrategyAnalysisPort)
     assert isinstance(GenericStrategyProposalPort(), StrategyProposalPort)
     assert isinstance(GenericSignalBacktestPort(), SignalBacktestPort)
@@ -436,6 +451,51 @@ def test_execution_compatibility_module_is_a_reexport_only_facade() -> None:
     assert "services.legacy_paper_execution_adapter" in _imported_modules(path)
 
 
+def test_accounting_selection_stays_in_one_explicit_composition_root() -> None:
+    execution_consumers = (
+        ROOT / "pipelines" / "dashboard_server.py",
+        ROOT / "services" / "risk_port.py",
+        ROOT / "services" / "execution_conformance.py",
+        ROOT / "services" / "production_accounting.py",
+        ROOT / "services" / "strategy_shadow.py",
+    )
+    broker_consumers = (
+        ROOT / "services" / "live_reconciliation.py",
+        ROOT / "services" / "tiger_openapi_account_sync.py",
+    )
+    concrete_modules = {
+        "services.accounting_binance_adapter",
+        "services.accounting_tiger_adapter",
+    }
+    for path in execution_consumers:
+        imports = _imported_modules(path)
+        assert "services.accounting_projection_core" in imports, path
+        assert "services.accounting_projection" not in imports, path
+        assert "services.accounting_projection_composition" not in imports, path
+        assert not (imports & concrete_modules), path
+    for path in broker_consumers:
+        imports = _imported_modules(path)
+        assert "services.accounting_projection_composition" in imports, path
+        assert "services.accounting_projection" not in imports, path
+        assert not (imports & concrete_modules), path
+
+    composition = ROOT / "services" / "accounting_projection_composition.py"
+    imported = _imported_modules(composition)
+    assert concrete_modules.issubset(imported)
+
+
+def test_accounting_compatibility_module_is_a_reexport_only_facade() -> None:
+    path = ROOT / "services" / "accounting_projection.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    assert not any(
+        isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in tree.body
+    )
+    assert "services.accounting_projection_core" in _imported_modules(path)
+    assert "services.accounting_projection_composition" in _imported_modules(path)
+
+
 def test_production_backtest_plugins_are_explicit_and_non_synthetic() -> None:
     pipeline = (ROOT / "configs" / "pipeline.yaml").read_text(encoding="utf-8")
     dualtrack = (ROOT / "configs" / "dualtrack.yaml").read_text(encoding="utf-8")
@@ -450,12 +510,13 @@ def test_audit_names_every_known_non_hexagonal_seam() -> None:
     text = AUDIT.read_text(encoding="utf-8")
     backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
-        "accounting_projection.py",
         "LiveBrokerAdapter",
         "Market Envelope V2",
+        "Risk policy/store extraction",
         "BacktestClient",
     ):
         assert seam in backlog
+    assert "accounting_projection.py" not in backlog
     assert "dualtrack_execution_adapter.py" not in backlog
     assert "DualTrackMachinePlanner" not in backlog
     assert "Strategy._base_engine" not in backlog
