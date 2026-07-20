@@ -15,7 +15,7 @@ from services.backtest_port import (
     SignalBacktestPort,
     StrategyShadowReplayPort,
 )
-from services.dualtrack_execution_adapter import ExecutionEngineAdapter
+from services.execution_engine_port import ExecutionEngineAdapter
 from services.market_data_access import TrustedMarketDataReadPort
 from services.risk_port import RiskDecisionPort
 from services.strategy_analysis_port import StrategyAnalysisPort
@@ -40,6 +40,8 @@ CONTRACT_KERNELS = (
     "services/backtest_plugin_registry.py",
     "services/backtest_service.py",
     "services/dualtrack_execution_contract.py",
+    "services/execution_engine_port.py",
+    "services/execution_engine_plugin_registry.py",
     "services/accounting_projection.py",
     "services/risk_port.py",
     "services/broker_port.py",
@@ -76,7 +78,7 @@ EXPECTED_SCORE_ROWS = {
     "Data cleaning / quality": (25, 25, 20, 15, 85),
     "Analysis / strategy": (25, 20, 25, 25, 95),
     "Backtest / replay": (25, 20, 25, 20, 90),
-    "Live execution / broker": (25, 20, 20, 20, 85),
+    "Live execution / broker": (25, 20, 25, 20, 90),
     "Risk / accounting / reconciliation": (25, 20, 20, 25, 90),
     "Dashboard / read model": (25, 25, 20, 25, 95),
 }
@@ -314,8 +316,8 @@ def test_architecture_progress_bar_is_reproducible_from_visible_scores() -> None
     for values in observed.values():
         assert sum(values[:4]) == values[4]
     overall = round(sum(values[4] for values in observed.values()) / len(observed))
-    assert overall == 90
-    assert "**Overall architecture progress: 90%**" in text
+    assert overall == 91
+    assert "**Overall architecture progress: 91%**" in text
 
 
 def test_strategy_selection_stays_in_the_explicit_plugin_composition_root() -> None:
@@ -395,6 +397,45 @@ def test_backtest_selection_stays_in_one_explicit_composition_root() -> None:
     ).read_text(encoding="utf-8")
 
 
+def test_execution_selection_stays_in_one_explicit_composition_root() -> None:
+    application_paths = (
+        ROOT / "pipelines" / "dualtrack_cycle_runner.py",
+        ROOT / "pipelines" / "dashboard_server.py",
+        ROOT / "services" / "strategy_control_plane.py",
+        ROOT / "pipelines" / "dualtrack_nautilus_cutover_apply.py",
+        ROOT / "pipelines" / "dualtrack_nautilus_attended_cutover.py",
+    )
+    concrete_modules = {
+        "services.legacy_paper_execution_adapter",
+        "services.dualtrack_nautilus_execution_adapter",
+        "services.dualtrack_shadow_execution_adapter",
+        "services.dualtrack_execution_adapter",
+    }
+    for path in application_paths:
+        assert not (_imported_modules(path) & concrete_modules), path
+        assert "services.execution_plugin_composition" in _imported_modules(path), path
+
+    composition = ROOT / "services" / "execution_plugin_composition.py"
+    imported = _imported_modules(composition)
+    assert {
+        "services.legacy_paper_execution_adapter",
+        "services.dualtrack_nautilus_execution_adapter",
+        "services.dualtrack_shadow_execution_adapter",
+    }.issubset(imported)
+
+
+def test_execution_compatibility_module_is_a_reexport_only_facade() -> None:
+    path = ROOT / "services" / "dualtrack_execution_adapter.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    assert not any(
+        isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in tree.body
+    )
+    assert "services.execution_plugin_composition" in _imported_modules(path)
+    assert "services.legacy_paper_execution_adapter" in _imported_modules(path)
+
+
 def test_production_backtest_plugins_are_explicit_and_non_synthetic() -> None:
     pipeline = (ROOT / "configs" / "pipeline.yaml").read_text(encoding="utf-8")
     dualtrack = (ROOT / "configs" / "dualtrack.yaml").read_text(encoding="utf-8")
@@ -409,11 +450,13 @@ def test_audit_names_every_known_non_hexagonal_seam() -> None:
     text = AUDIT.read_text(encoding="utf-8")
     backlog = text.split("## Shortest remaining architecture backlog", 1)[1]
     for seam in (
-        "dualtrack_execution_adapter.py",
         "accounting_projection.py",
         "LiveBrokerAdapter",
+        "Market Envelope V2",
+        "BacktestClient",
     ):
         assert seam in backlog
+    assert "dualtrack_execution_adapter.py" not in backlog
     assert "DualTrackMachinePlanner" not in backlog
     assert "Strategy._base_engine" not in backlog
     assert "Backtest composition" not in backlog

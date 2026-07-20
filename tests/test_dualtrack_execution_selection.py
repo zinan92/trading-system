@@ -106,9 +106,12 @@ def test_production_entrypoints_use_only_configured_execution_factory() -> None:
         root / "pipelines" / "dualtrack_cycle_runner.py",
         root / "pipelines" / "dashboard_server.py",
         root / "services" / "strategy_control_plane.py",
+        root / "pipelines" / "dualtrack_nautilus_cutover_apply.py",
     )
 
     for path in paths:
         source = path.read_text(encoding="utf-8")
         assert "build_configured_execution_engine_adapter" in source, path
+        assert "services.execution_plugin_composition" in source, path
+        assert "services.dualtrack_execution_adapter" not in source, path
         assert "build_execution_engine_adapter(" not in source, path

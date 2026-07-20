@@ -6834,3 +6834,102 @@ auditable datafeed port; broker execution remains a separate port.
 - Architecture progress: `90%`, reproducible from the canonical audit table.
 - No strategy parameters, risk rules, execution/broker authority, credentials,
   orders, positions, accounts, or production state were changed.
+
+## 2026-07-18 - A11 Execution Plugin Registry kickoff
+
+### Objective and value
+
+- Make Legacy, Nautilus, and continuous Shadow execution composition replaceable
+  through explicit factories without moving cutover or money authority into
+  plugins.
+- Remove concrete engine selection from production applications while preserving
+  every current paper-execution and reconciliation behavior.
+
+### Decisions
+
+- Follow NautilusTrader's configuration-plus-factory registration pattern.
+- Extract the port and Legacy adapter physically; retain the old module only as
+  a compatibility facade.
+- Keep attended approval, runtime path, parity/shadow gate, override
+  acknowledgement, and paper-only policy in trusted composition.
+- Register factories explicitly and freeze before use; do not auto-load installed
+  packages.
+
+### Gotchas
+
+- Shadow is non-authoritative decoration and must never replace the Legacy return
+  value or account truth when its runtime fails.
+- Registry metadata is not cutover evidence and cannot bypass the existing
+  seven-cycle/parity/fee/precision gates.
+- The primary worktree remains unrelated and active. A11 is isolated on top of
+  completed A10 and changes no live config or state.
+
+### Baseline
+
+- A10 full suite: `1788 passed, 7 skipped`.
+- Execution boundary pack: `69 passed, 1 skipped`.
+
+## 2026-07-18 - A11 Execution Plugin Registry complete
+
+### Value delivered
+
+- Paper execution is now a real replaceable boundary: one provider-free port,
+  separate Legacy/Nautilus/Shadow adapters, a frozen content-hashed registry,
+  and one trusted production composition root.
+- Adding a paper engine is an explicit registration plus conformance task. The
+  cycle runner, Dashboard commands, control plane, and attended cutover no
+  longer need an engine-name branch or concrete-adapter import.
+- The old `dualtrack_execution_adapter.py` path remains available, but contains
+  only re-exports. No execution, selection, gate, or accounting logic remains
+  there.
+
+### Decisions
+
+- Keep plugin behavior and money authority separate. Descriptors can describe
+  capabilities, but config cannot self-approve Nautilus, supply authoritative
+  runtime, bypass the cutover gate, or claim real-money eligibility.
+- Keep Shadow as a wrapper around one authoritative port. Its missing or broken
+  runtime is visible, but its return value, ledger, positions, P&L, and
+  reconciliation never replace authoritative truth.
+- Keep explicit registration instead of Pluggy/entry-point auto-discovery.
+  Three trusted factories do not justify arbitrary installed code in an
+  execution process.
+- Treat the registry fingerprint as plugin provenance, not cutover evidence.
+  Runtime, fee, precision, reconciliation, and parity gates remain independent.
+
+### Gotchas
+
+- A frozen registry prevents late mutation, but a future developer could still
+  misdeclare a known adapter's safety flags at registration time. A core
+  invariant now ties the known Nautilus implementation to attended approval,
+  isolated runtime, and cutover-gate requirements.
+- The first parity-path expansion covered every moved A11 file but omitted the
+  pre-existing Shadow adapter which computes cutover qualification. Opus marked
+  this P3; Shadow execution, reconciliation, and cutover-status semantics are
+  now included so their changes invalidate stale parity evidence.
+- `inspect_execution_engine_state()` intentionally constructs a candidate
+  without granting authority. It returns only snapshot/reconciliation data; a
+  defense test proves it neither exposes the adapter nor invokes order submit.
+- Factory implementation-string checks protect accidental false provenance,
+  not a malicious trusted registrant who controls Python class metadata. That
+  is acceptable under the explicit trusted-registration threat model.
+- A11 has no visible product surface and deploys no local service. Visual
+  Evidence is not applicable; tests, commits, documents, and the Opus receipt
+  are trace material only.
+
+### Verification
+
+- Final repository regression after Opus hardening:
+  `1800 passed, 7 skipped in 404.82s`.
+- Cross-layer execution/control/Dashboard pack before review:
+  `179 passed, 1 skipped`; post-review policy/parity defense pack:
+  `58 passed`; promotion/Shadow/runtime pack: `33 passed, 7 skipped`.
+- Changed-file Ruff and `git diff --check`: clean.
+- Verified Opus: `claude-opus-4-8`, session
+  `58e32a97-c86f-4fd7-9d2f-9f463aa72d40`, receipt
+  `20260718T044941Z_51c01cb4-c4a4-43ed-9c52-34c87b2866ad.json`; `SHIP`, no
+  P0-P2. Three useful P3 defenses were applied before the final full run.
+- Architecture progress: `91%`, reproducible from the canonical seven-row audit
+  (`635 / 7 = 90.7%`, rounded to `91%`).
+- No strategy parameters, risk rules, credentials, live configuration, orders,
+  positions, accounts, or production state were changed.

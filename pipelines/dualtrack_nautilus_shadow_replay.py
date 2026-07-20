@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
-from services.dualtrack_execution_adapter import build_execution_engine_adapter
+from services.execution_plugin_composition import build_execution_engine_adapter
 from services.dualtrack_shadow_reconciliation import DualTrackShadowReconciler
 from services.journal_store import load_json
 

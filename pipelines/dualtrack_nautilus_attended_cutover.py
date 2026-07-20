@@ -17,11 +17,10 @@ from pipelines.dualtrack_shadow_cutover_status import build_cutover_status
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_clock import cycle_window
 from services.dualtrack_config import dualtrack_config
-from services.dualtrack_execution_adapter import (
+from services.execution_plugin_composition import (
     NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT,
-    LegacyPaperExecutionAdapter,
+    inspect_execution_engine_state,
 )
-from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
 from services.journal_store import load_json, write_json
 from services.strategy_control_plane import StrategyControlPlane
 
@@ -40,9 +39,14 @@ def build_attended_cutover_precheck(
     selected_cycle = str(cycle_id or cycle_window().cycle_id)
     gate = build_cutover_status(output)
     runtime = StrategyControlPlane(output).runtime_state(selected_cycle)
-    legacy = LegacyPaperExecutionAdapter(output, config=cfg)
-    legacy_snapshot = legacy.snapshot(selected_cycle)
-    legacy_reconciliation = legacy.reconcile(selected_cycle)
+    legacy_state = inspect_execution_engine_state(
+        output,
+        engine="legacy_paper",
+        cycle_id=selected_cycle,
+        config=cfg,
+    )
+    legacy_snapshot = legacy_state["snapshot"]
+    legacy_reconciliation = legacy_state["reconciliation"]
     accepted_orders = [
         row for row in legacy_snapshot.get("orders") or []
         if str(row.get("state") or "").lower() == "accepted"
@@ -107,14 +111,15 @@ def build_attended_cutover_precheck(
     candidate_state: dict[str, Any] = {"status": "not_checked"}
     if approved and runtime_path is not None and runtime_path.exists() and preflight.get("status") == "ready_for_paper_shadow":
         try:
-            candidate = NautilusExecutionAdapter(
+            inspected = inspect_execution_engine_state(
                 output,
-                nautilus_python=runtime_path,
-                storage_namespace="nautilus_authoritative",
+                engine="nautilus_paper",
+                cycle_id=selected_cycle,
                 config=cfg,
+                runtime_path=runtime_path,
             )
-            snapshot = candidate.snapshot(selected_cycle)
-            candidate_reconciliation = candidate.reconcile(selected_cycle)
+            snapshot = inspected["snapshot"]
+            candidate_reconciliation = inspected["reconciliation"]
             candidate_accepted = sum(
                 str(row.get("state") or "").lower() == "accepted"
                 for row in snapshot.get("orders") or []

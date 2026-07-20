@@ -26,7 +26,7 @@ from urllib.request import Request, urlopen
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_config import dualtrack_config
-from services.dualtrack_execution_adapter import NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT
+from services.execution_plugin_composition import NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT
 from services.journal_store import load_json, write_json
 
 
@@ -269,7 +269,7 @@ class DualTrackNautilusCutoverController:
         environ: dict[str, str],
         cycle_id: str | None,
     ) -> dict[str, Any]:
-        from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
+        from services.execution_plugin_composition import build_configured_execution_engine_adapter
         from services.strategy_control_plane import StrategyControlPlane
 
         selected_cycle = str(cycle_id or "")

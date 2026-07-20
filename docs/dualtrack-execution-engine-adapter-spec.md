@@ -1,9 +1,9 @@
 # DualTrack Execution Engine Adapter Spec
 
-Status: compatibility and persistent Nautilus paper adapters implemented;
-Strategy Shadow delegates to isolated Nautilus replay; fixed parity suite
-passed; Nautilus paper adapter not selected because the seven command-bearing
-cycle gate is incomplete
+Status: typed port, isolated Legacy/Nautilus/Shadow adapters, and frozen plugin
+registry implemented; Strategy Shadow delegates to isolated Nautilus replay;
+fixed parity suite passed; Nautilus paper adapter not selected because the
+seven command-bearing cycle gate is incomplete
 Date: 2026-07-18
 
 ## Objective
@@ -53,7 +53,10 @@ Lab promotion <- candidate receipt + current platform parity
 
 ## Adapter protocol
 
-`services/dualtrack_execution_adapter.py` defines five operations:
+`services/execution_engine_port.py` defines five operations.
+`services/execution_plugin_composition.py` is the only production selection
+root, while `services/dualtrack_execution_adapter.py` remains a re-export-only
+compatibility facade:
 
 ### `submit_order(command)`
 

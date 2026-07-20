@@ -18,7 +18,7 @@ from services.dualtrack_clock import (
     parse_utc,
 )
 from services.dualtrack_config import dualtrack_config
-from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
+from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_scoring import DualTrackScorer
