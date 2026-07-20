@@ -6538,3 +6538,92 @@ auditable datafeed port; broker execution remains a separate port.
   closed, no new P0/P1, `SHIP`.
 - A7 changed no runtime config, execution authority, credentials, orders,
   positions, accounts, or production state.
+
+## 2026-07-18 - A8 Strategy Plugin Registry kickoff
+
+### Objective and value
+
+- Remove the last application-level strategy engine branch so new grid variants
+  and analysis engines plug into one explicit factory boundary.
+- Preserve every current strategy's signal/filter behavior while making unknown
+  plugins fail closed before a multi-strategy run creates trading artifacts.
+
+### Decisions
+
+- Follow NautilusTrader's configuration/factory separation with a repository-
+  local `StrategyAnalysisPort` and explicit plugin composition root.
+- Do not add Pluggy or auto-discover PyPA entry points. One factory call does
+  not justify a new dependency, and loading arbitrary installed packages would
+  expand trading-process code authority.
+- Preserve missing `engine` as the legacy `ma` default. Reject explicitly
+  unknown names instead of silently routing them to MA.
+- Keep Chan imports lazy and keep filter composition outside the base-plugin
+  registry.
+
+### Gotchas
+
+- Protocol shape is not semantic parity; all existing engine suites remain in
+  the acceptance pack.
+- Production config contains 25 strategies and 20 distinct engine names when
+  the implicit MA default is included; every name must resolve before cutover.
+- The primary worktree remains on an unrelated active branch. A8 is stacked on
+  the clean A7 worktree and must not change live configuration or order state.
+
+### Baseline
+
+- A7 full suite: `1741 passed, 7 skipped`.
+- Focused A8 baseline: `46 passed in 227.70s`.
+
+## 2026-07-18 - A8 Strategy Plugin Registry complete
+
+### Value delivered
+
+- A new signal-analysis engine now enters through one explicit
+  `StrategyAnalysisPort` factory registration. `Strategy`, Daily, Runner, Lab,
+  Backtest, and Dashboard-facing summaries do not select concrete engines.
+- The registry is frozen before use and publishes a content fingerprint plus
+  safe descriptors. Runtime mutation cannot silently swap a strategy factory.
+- Enabled strategies with unresolved plugins are reported and skipped before a
+  per-strategy trading namespace is created.
+
+### Decisions
+
+- Keep plugin loading explicit. Do not auto-load installed Python packages or
+  add Pluggy for a one-method boundary; separately distributed discovery can be
+  added later behind a signed allowlist.
+- Missing `engine` remains the compatible MA default. Explicit empty or unknown
+  names fail closed; no explicit typo silently becomes MA.
+- Preserve the legacy global report's disabled `gold_5m_v1` selection through
+  an explicitly named compatibility method, but construct its engine through
+  the same frozen registry.
+- Keep Chan imports lazy and validate every factory result against both the
+  base port and its declared capabilities.
+
+### Gotchas
+
+- All 25 research strategy entries are currently disabled for the
+  multi-strategy fleet. The legacy global report nevertheless relies on
+  `gold_5m_v1`; removing that behavior would have broken a real compatibility
+  contract even though the production config appeared inactive.
+- Registration availability is checked without instantiating every plugin in
+  runner preflight, preserving Chan's optional interpreter/dependency boundary.
+  Factory shape/capabilities are enforced when built and exhaustively covered
+  for the trusted built-in composition.
+- `TechnicalRuleSignalEngine` and signal filters retain internal dispatch, and
+  `DualTrackMachinePlanner` is still hard-wired into the production grid cycle.
+  A8 removes application-level signal selection; it does not pretend those
+  separate seams are complete.
+- A8 has no visible product surface, so visual Evidence is not applicable.
+
+### Verification
+
+- Registry audit: frozen, 64-character fingerprint, 20 registered plugins, 25
+  configured strategies, zero enabled or resolution failures.
+- Focused A0-A8 architecture/conformance: `139 passed`.
+- Strategy behavior acceptance: `88 passed`; dedicated signal/filter/backtest
+  parity: `42 passed`.
+- Full repository regression: `1752 passed, 7 skipped in 491.24s`.
+- Changed-file Ruff and diff checks: clean.
+- Architecture progress: `86%`, reproducible from the canonical audit table.
+- No config, strategy parameter, execution authority, credential, order,
+  position, account, or production-state mutation occurred.

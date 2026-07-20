@@ -450,6 +450,32 @@ def test_enabled_strategy_without_complete_classification_is_skipped(monkeypatch
     assert not (root / "strategies" / "missing_classification" / "signals" / "2026-05-10.json").exists()
 
 
+def test_enabled_strategy_with_unknown_analysis_plugin_is_skipped_before_artifacts(monkeypatch, tmp_path: Path):
+    root = tmp_path / "outputs"
+    _offline_env(monkeypatch, root, tmp_path / "market_data.db")
+    bad = {
+        "unknown_plugin": {
+            "symbol": "GOLD",
+            "engine": "not_installed",
+            "classification": _classification("unknown"),
+            "signal": {},
+        }
+    }
+
+    summary = MultiStrategyRunner(output_root=root, registry=StrategyRegistry(bad)).run(
+        "2026-05-10",
+        paper_auto_approve=True,
+    )
+
+    assert summary["classification_audit"]["status"] == "pass"
+    assert summary["analysis_plugin_audit"]["status"] == "fail"
+    assert summary["strategies"][0]["strategy_id"] == "unknown_plugin"
+    assert summary["strategies"][0]["status"] == "skipped"
+    assert summary["strategies"][0]["reason"] == "analysis_plugin_unavailable"
+    assert "not_installed" in summary["strategies"][0]["analysis_plugin_audit"]["issues"][0]
+    assert not (root / "strategies" / "unknown_plugin").exists()
+
+
 def test_runner_ignores_disabled_strategy_entries(monkeypatch, tmp_path: Path):
     root = tmp_path / "outputs"
     _offline_env(monkeypatch, root, tmp_path / "market_data.db")

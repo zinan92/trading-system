@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from services.run_date import utc_run_date
 
@@ -26,7 +26,6 @@ from services.portfolio_risk import PortfolioRiskState
 from services.position_map import GoldPositionMap
 from services.reporting import ReportBuilder
 from services.risk_engine import RiskEngine
-from services.signal_engine import SignalEngine
 from services.strategy_registry import StrategyRegistry
 from services.strategy_guardrails import StrategyGuardrails
 from services.writers import write_outputs
@@ -73,11 +72,14 @@ def run_daily_pipeline(run_date: str, strategy=None, output_root=None) -> dict[s
     # identical to the legacy single-engine path; it is the seam Phase 3 widens
     # to run every enabled strategy in parallel.
     active_strategy = strategy
-    if active_strategy is not None:
-        signal_engine = active_strategy.signal_engine()
-    else:
-        active_strategy = StrategyRegistry(strategy_config).default()
-        signal_engine = active_strategy.signal_engine() if active_strategy else SignalEngine(strategy_config)
+    if active_strategy is None:
+        registry = StrategyRegistry(strategy_config)
+        # Strategy enablement controls the multi-strategy fleet. The original
+        # global report cycle intentionally keeps its canonical gold_5m_v1
+        # analysis even while that fleet is disabled; resolve it explicitly
+        # through the same plugin registry instead of constructing SignalEngine.
+        active_strategy = registry.default() or registry.require_legacy_default()
+    signal_engine = active_strategy.signal_engine()
     risk_engine = RiskEngine(load_risk_rules())
     copilot = CopilotClient(
         base_url=pipeline_config["copilot_base_url"],
