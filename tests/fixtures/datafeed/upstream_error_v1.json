@@ -1,0 +1,37 @@
+{
+  "detail": {
+    "error": "upstream_error",
+    "detail": "Binance USD-M Futures request failed: ",
+    "suggestions": [
+      "Check network access to fapi.binance.com"
+    ],
+    "provider": "binance_usdm_futures",
+    "source_mode": "binance_usdm_futures",
+    "requested_source": "binance_usdm_futures",
+    "selected_source": null,
+    "attempted_sources": [
+      "binance_usdm_futures"
+    ],
+    "cache_policy": "bypass",
+    "quality_policy": "strict",
+    "fallback_policy": "none",
+    "require_execution_venue": true,
+    "served_from": "upstream",
+    "is_synthetic": false,
+    "fresh": null,
+    "latest_timestamp": null,
+    "age_seconds": null,
+    "max_age_seconds": null,
+    "quality_flags": [
+      "public_api",
+      "usd_m_futures",
+      "live",
+      "execution_venue"
+    ],
+    "execution_venue": true,
+    "reject_reason": "upstream_error",
+    "access_issues": [
+      "binance_usdm_futures: Binance USD-M Futures request failed: "
+    ]
+  }
+}

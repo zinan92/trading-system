@@ -1,0 +1,64 @@
+{
+  "ticker": "XAUUSDT",
+  "instrument_id": "GOLD",
+  "provider_symbol": "XAUUSDT",
+  "asset_class": "commodity",
+  "timeframe": "1m",
+  "count": 2,
+  "schema_version": "kline-candles-v1",
+  "provider": "binance_usdm_futures",
+  "source_mode": "binance_usdm_futures",
+  "requested_source": "binance_usdm_futures",
+  "selected_source": "binance_usdm_futures",
+  "selection_reason": "requested_or_default",
+  "attempted_sources": [
+    "binance_usdm_futures"
+  ],
+  "cache_policy": "bypass",
+  "quality_policy": "strict",
+  "fallback_policy": "none",
+  "require_execution_venue": true,
+  "quality_flags": [
+    "public_api",
+    "usd_m_futures",
+    "live",
+    "execution_venue"
+  ],
+  "is_synthetic": false,
+  "served_from": "upstream",
+  "fresh": true,
+  "latest_timestamp": "2026-07-18T12:01:00+00:00",
+  "age_seconds": 5.0,
+  "max_age_seconds": 180.0,
+  "execution_venue": true,
+  "reject_reason": null,
+  "access_issues": [],
+  "candles": [
+    {
+      "timestamp": "2026-07-18T12:00:00+00:00",
+      "open": 4000.0,
+      "high": 4002.0,
+      "low": 3999.0,
+      "close": 4001.0,
+      "volume": 10.0,
+      "provider": "binance_usdm_futures",
+      "quality_flags": [
+        "public_api",
+        "usd_m_futures"
+      ]
+    },
+    {
+      "timestamp": "2026-07-18T12:01:00+00:00",
+      "open": 4001.0,
+      "high": 4004.0,
+      "low": 4000.0,
+      "close": 4003.0,
+      "volume": 12.0,
+      "provider": "binance_usdm_futures",
+      "quality_flags": [
+        "live",
+        "execution_venue"
+      ]
+    }
+  ]
+}

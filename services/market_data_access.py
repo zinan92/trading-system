@@ -7,8 +7,9 @@ remain available only for isolated tests and migration rehearsals.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
+from schemas.market_data import MarketDataEnvelope
 from services.config_loader import ROOT, load_pipeline_config
 from services.datafeed_market_repository import DatafeedMarketRepository
 from services.market_store import MarketStore
@@ -21,6 +22,21 @@ class MarketDataReadPort(Protocol):
     def load_latest_quote(self, symbol: str): ...
     def load_bar_at_or_before(self, symbol: str, timeframe: str, timestamp: str): ...
     def coverage(self): ...
+
+
+@runtime_checkable
+class TrustedMarketDataReadPort(Protocol):
+    """Opt-in port for versioned market-data trust envelopes."""
+
+    def load_envelope(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> MarketDataEnvelope: ...
 
 
 def market_data_repository(market_db: Path | str | None = None) -> MarketDataReadPort:
