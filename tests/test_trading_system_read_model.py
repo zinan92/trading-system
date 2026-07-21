@@ -100,6 +100,16 @@ def _source(*, open_trade: bool = False) -> dict:
                 "count": 50,
                 "notional_per_grid": 2800.0,
                 "leverage": 3.0,
+                "orders": [
+                    {
+                        "preview_order_id": f"preview-{index}",
+                        "side": "buy" if index % 2 else "sell",
+                        "price": 3900.0 + index,
+                        "tp": 3903.0 + index,
+                        "sl": 3823.0 + index,
+                    }
+                    for index in range(25)
+                ],
             },
             "risk_budget": {"max_loss": 77.0, "leverage": 3.0},
         },
@@ -233,6 +243,7 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     assert model["execution"]["counts"] == {
         "order_count": 25,
         "open_order_count": 25,
+        "accepted_order_count": 25,
         "unknown_order_count": 0,
         "open_position_count": 0,
         "trade_count": 1,
@@ -252,6 +263,9 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     assert model["runtime"]["status"] == "running"
     assert model["runtime"]["open_order_count"] == 25
     assert model["runtime"]["can_stop_when_authorized"] is True
+    assert len(model["execution"]["accepted_orders"]) == 25
+    assert model["execution"]["trades"][0]["close_reason"] == "tp"
+    assert model["execution"]["trades"][0]["close_reason_label"] == "TP"
     assert source == before
 
 
@@ -429,6 +443,70 @@ def test_one_open_and_one_open_then_close_are_each_one_trade() -> None:
     assert open_model["execution"]["counts"]["completed_round_trip_count"] == 0
     assert closed_model["execution"]["counts"]["trade_count"] == 1
     assert closed_model["execution"]["counts"]["completed_round_trip_count"] == 1
+
+
+def test_order_protection_is_completed_only_from_the_exact_strategy_plan() -> None:
+    source = _source()
+    same_plan = source["production_execution"]["orders"][0]
+    same_plan["source_fill_id"] = "strategy-grid:plan-7:preview-0"
+    same_plan.pop("tp", None)
+    same_plan.pop("sl", None)
+    missing_plan = source["production_execution"]["orders"][1]
+    missing_plan.pop("strategy_plan_id")
+    missing_plan.update({"tp": 3999.0, "sl": 3800.0})
+    mismatched_plan = source["production_execution"]["orders"][2]
+    mismatched_plan["strategy_plan_id"] = "plan-old"
+    mismatched_plan.update({"tp": 3999.0, "sl": 3800.0})
+    ambiguous = source["production_execution"]["orders"][3]
+    source["production_plan"]["grid"]["orders"].append(
+        dict(source["production_plan"]["grid"]["orders"][3], preview_order_id="preview-duplicate")
+    )
+    wrong_source_plan = source["production_execution"]["orders"][4]
+    wrong_source_plan["source_fill_id"] = "strategy-grid:plan-old:preview-4"
+    wrong_source_plan.update({"tp": 3907.0, "sl": 3827.0})
+    conflicting_identity = source["production_execution"]["orders"][5]
+    conflicting_identity["preview_order_id"] = "preview-5"
+    conflicting_identity["source_fill_id"] = "strategy-grid:plan-7:preview-6"
+    conflicting_identity.update({"tp": 3908.0, "sl": 3828.0})
+    missing_preview = source["production_execution"]["orders"][6]
+    missing_preview["preview_order_id"] = "preview-missing"
+    missing_preview.update({"tp": 3909.0, "sl": 3829.0})
+    duplicate_preview = source["production_execution"]["orders"][7]
+    duplicate_preview["preview_order_id"] = "preview-7"
+    duplicate_preview.update({"tp": 3910.0, "sl": 3830.0})
+    source["production_plan"]["grid"]["orders"].append(
+        dict(source["production_plan"]["grid"]["orders"][7])
+    )
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+    orders = {row["order_id"]: row for row in model["execution"]["orders"]}
+
+    assert orders["order-0"]["protection"] == {
+        "status": "known",
+        "tp": 3903.0,
+        "sl": 3823.0,
+        "source": "strategy_plan",
+        "reason": None,
+    }
+    assert orders["order-1"]["protection"]["status"] == "unknown"
+    assert orders["order-1"]["protection"]["reason"] == "strategy_plan_id_missing"
+    assert orders["order-2"]["protection"]["status"] == "unknown"
+    assert orders["order-2"]["protection"]["reason"] == "strategy_plan_id_mismatch"
+    assert orders[ambiguous["order_id"]]["protection"]["status"] == "unknown"
+    assert orders[ambiguous["order_id"]]["protection"]["reason"] == "strategy_plan_protection_incomplete"
+    assert orders[wrong_source_plan["order_id"]]["protection"]["status"] == "unknown"
+    assert (
+        orders[wrong_source_plan["order_id"]]["protection"]["reason"]
+        == "strategy_plan_order_identity_mismatch"
+    )
+    assert orders[conflicting_identity["order_id"]]["protection"]["status"] == "unknown"
+    assert orders[missing_preview["order_id"]]["protection"]["status"] == "unknown"
+    assert orders[duplicate_preview["order_id"]]["protection"]["status"] == "unknown"
 
 
 def test_mismatched_risk_observation_is_never_presented_as_current_permission() -> None:

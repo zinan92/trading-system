@@ -124,8 +124,11 @@ def test_gridmind_positions_show_lifecycle_times_and_keeps_immutable_fill_trace(
     assert 'table("#positions",["状态","方向","数量","开仓时间（北京）","平仓时间（北京）"' in html
     assert 'fills=execution.fills||[]' in html
     assert 'fillAction(fill)' in html
-    assert 'beijingDateTime(order.updated_at??order.cancelled_at??order.ts)' in html
+    assert 'beijingDateTime(order.updated_at??order.ts)' in html
     assert 'trades.slice().reverse().map(trade=>' in html
+    assert 'trade.entry_quantity??trade.quantity' in html
+    assert 'trade.close_reason_label||"未知"' in html
+    assert 'trade.realized_pnl' in html
 
 
 def test_gridmind_consumes_stable_read_model_without_recalculating_trading_truth() -> None:
@@ -162,7 +165,7 @@ def test_gridmind_tabs_show_authoritative_lifecycle_counts() -> None:
     for element_id in ("positionsCount", "ordersCount", "tradesCount"):
         assert f'id="{element_id}"' in html
     assert 'counts?.open_position_count' in html
-    assert 'renderTabCounts(counts,lifecycleOrders.length)' in html
+    assert 'renderTabCounts(counts,acceptedOrderCount)' in html
     assert 'openOrderCount=counts.open_order_count' in html
     assert 'counts?.trade_count' in html
     assert 'counts.completed_round_trip_count' in html
@@ -179,29 +182,52 @@ def test_gridmind_uses_revision_for_same_phase_lifecycle_recovery() -> None:
     assert "revision>=previousRevision" in html
 
 
-def test_gridmind_order_table_preserves_terminal_lifecycle_rows() -> None:
+def test_gridmind_current_order_table_uses_only_backend_classified_accepted_lifecycles() -> None:
     html = _html()
 
-    assert "订单状态" in html
+    assert "当前委托" in html
     assert "reconcileOrderLifecycle(data)" in html
     assert "rank>previousRank" in html
-    assert "renderTables(execution,lifecycleOrders)" in html
-    assert 'orders.slice().reverse().map(order=>[esc(order.state_label||"未知状态")' in html
+    assert "acceptedLifecycleOrders=displayedAcceptedOrderLifecycle()" in html
+    assert "current.has(orderId)" in html
+    assert "renderTables(execution,acceptedLifecycleOrders)" in html
+    assert 'acceptedOrders.slice().reverse().map(order=>[esc(order.state_label||"未知状态")' in html
     assert "openOrders.map(order=>" not in html
     assert '["挂单中",side(order.side)' not in html
+
+
+def test_gridmind_order_protection_never_guesses_across_plans() -> None:
+    html = _html()
+
+    assert 'const protection=order?.protection||{}' in html
+    assert 'protection.status==="known"?num(protection[key]):"未知"' in html
+    assert 'protectionText(order,"tp")' in html
+    assert 'protectionText(order,"sl")' in html
 
 
 def test_gridmind_lifecycle_retention_cannot_change_controls_or_chart_truth() -> None:
     html = _html()
 
-    assert "orderLifecycle:{cycleId:null,byId:new Map(),anonymous:[]}" in html
+    assert "orderLifecycle:{cycleId:null,byId:new Map(),anonymous:[],currentIds:new Set()}" in html
     assert "state.orderLifecycle.byId.get(orderId)" in html
     assert "state.orderLifecycle.cycleId!==cycleId" in html
+    assert "state.orderLifecycle.currentIds=new Set(incoming.map" in html
     assert "applyReadModel(data)" in html
     assert "applyReadModel(latest)" in html
     assert "renderRobotControls(data,fresh,execution)" in html
     assert "visibleOrders=previewing?state.preview.orders:(execution.open_orders||[])" in html
-    assert "accepted=counts.open_order_count" in html
+    assert "openOrders=counts.open_order_count" in html
+
+
+def test_uncertain_start_requires_persisted_complete_start_evidence() -> None:
+    html = _html()
+
+    assert "accepted=Number(counts.accepted_order_count)" in html
+    assert "runtime.last_action==='start'" in html
+    assert "runtime.accepted_order_count_known===true" in html
+    assert "samePlan" in html
+    assert "控制面已确认完整网格启动" in html
+    assert "openOrders=Number(counts.open_order_count)" in html
 
 
 def test_gridmind_order_state_is_always_escaped_as_text() -> None:

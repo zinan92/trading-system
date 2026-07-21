@@ -8055,3 +8055,58 @@ auditable datafeed port; broker execution remains a separate port.
   overlay ordering and duplicate-price order labels.
 - Full-suite execution was intentionally not used for this read-only UI
   milestone.
+
+## 2026-07-21 - Auditable position, order and trade lifecycle counts
+
+### User outcome
+
+- The three trading tabs now answer three different questions without double
+  counting: open positions, broker-accepted working orders, and unique trade
+  lifecycles where entry plus later exit remains one trade.
+
+### Decisions
+
+- Keep canonical trade count and PnL in the accounting snapshot. The read model
+  adds only presentation fields such as the verified close reason.
+- Define a currently accepted order as `accepted`, `open`, `working`, or
+  `partially_filled`; pre-acceptance and terminal states are not current
+  委托. The existing monotonic browser lifecycle cache still prevents stale
+  snapshots from resurrecting a terminal order.
+- Display TP/SL only when the order and current StrategyPlan have the same
+  non-empty plan ID. Missing protection may be completed from one uniquely
+  matched deterministic plan order; missing, mismatched, ambiguous or
+  incomplete lineage displays `未知`.
+- Resolve TP, SL and manual close reason from authoritative exit-fill events,
+  not from price proximity. Unknown evidence stays unknown.
+- Count open positions from the projected open rows and render canonical entry
+  quantity, entry/exit times and realized PnL for each unique trade lifecycle.
+
+### Gotchas
+
+- `open_order_count` includes pre-acceptance states and therefore cannot label
+  the operator's current broker-accepted委托 count.
+- A plan order with the same price and side is not sufficient when multiple
+  candidates match; deterministic ambiguity must fail closed.
+- The latest execution snapshot defines whether an order is still current;
+  the monotonic cache defines only its latest valid phase. Without both rules,
+  a disappeared accepted order becomes a permanent ghost or a terminal order
+  can be resurrected by stale polling.
+- `open_order_count` includes pre-acceptance states. It remains the broader
+  stop/start safety gate. Start recovery trusts the persisted `running` runtime
+  only when its last action and plan identity match, because a completely
+  accepted grid may legitimately contain an immediately filled order.
+- A `source_fill_id` is one complete identity. Parsing only its final preview
+  segment can silently borrow TP/SL from the wrong plan.
+- The 30m chart refresh is optional. The trusted read model must render before
+  that request so a timeframe outage cannot blank these lifecycle tables.
+
+### Verification
+
+- Trading-system read model, API, GridMind static and real-DOM lifecycle pack:
+  36 passed.
+- Real-DOM lifecycle browser test: 1 passed.
+- Inline dashboard JavaScript syntax check passed.
+- Three adversarial passes ended with no remaining P0-P2 findings after
+  resolving lifecycle membership, start-evidence and plan-lineage defects.
+- Full-suite execution was intentionally not used for this bounded read-only
+  projection milestone.

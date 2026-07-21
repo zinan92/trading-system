@@ -98,6 +98,7 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
         _read_model("accepted", history=accepted),
         _read_model(None),
         _read_model("accepted", cycle_id="2026-07-18_NIGHT", history=accepted),
+        _read_model(None, cycle_id="2026-07-18_NIGHT"),
         _read_model("protective_failed", cycle_id="2026-07-19_DAY", history=protection_failed_8),
         _read_model("protective_failed", cycle_id="2026-07-19_DAY", history=protection_failed_6),
         _read_model("protective_attached", cycle_id="2026-07-19_DAY", history=protection_attached_7),
@@ -139,9 +140,9 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
             open_counts.append(page.evaluate("() => state.data.execution.open_orders.length"))
             table_counts.append(page.locator("#ordersCount").inner_text())
 
-        assert labels == ["已接受", "部分成交", "已撤单", "已撤单", "已撤单"]
+        assert labels == ["已接受", "部分成交", "暂无记录", "暂无记录", "暂无记录"]
         assert open_counts == [1, 1, 0, 1, 0]
-        assert table_counts == ["(2)"] * 5
+        assert table_counts == ["(1)", "(1)", "(0)", "(0)", "(0)"]
         assert page.locator("#orders img").count() == 0
         assert page.evaluate("() => globalThis.pwned === true") is False
         assert "ok" not in (page.locator("#runBadge").get_attribute("class") or "").split()
@@ -149,8 +150,12 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
 
         page.evaluate("() => load({withMarket:false})")
         assert page.locator("#orders tbody tr").first.locator("td").first.inner_text() == "已接受"
-        assert page.locator("#ordersCount").inner_text() == "(2)"
+        assert page.locator("#ordersCount").inner_text() == "(1)"
         assert page.evaluate("() => state.orderLifecycle.cycleId") == "2026-07-18_NIGHT"
+
+        page.evaluate("() => load({withMarket:false})")
+        assert page.locator("#orders tbody tr").first.locator("td").first.inner_text() == "暂无记录"
+        assert page.locator("#ordersCount").inner_text() == "(0)"
 
         protection_states: list[tuple[str, int]] = []
         for _index in range(4):
