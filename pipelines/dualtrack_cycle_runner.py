@@ -23,7 +23,10 @@ from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
-from services.strategy_control_plane import StrategyControlPlane
+from services.strategy_control_plane import StrategyControlPlane, production_mutation_lock
+from services.strategy_cycle_package import StrategyCyclePackager
+from services.strategy_market_context import build_strategy_timeframes
+from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_tiger_human_sync import DualTrackTigerHumanSync
 from services.journal_store import load_json, write_json
 from services.datafeed_market_repository import DatafeedMarketRepository
@@ -627,7 +630,446 @@ class DualTrackCycleRunner:
         return [
             self.close_cycle(previous.cycle_id, as_of=now),
             self.pre_cycle(current.cycle_id, as_of=now),
+            self._rollover_production(previous.cycle_id, current.cycle_id, now=now),
         ]
+
+    def _rollover_production(
+        self,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        """Resume the durable paper rollover state machine at a cycle boundary."""
+
+        with production_mutation_lock(self.output_root):
+            return self._rollover_production_locked(
+                previous_cycle_id,
+                current_cycle_id,
+                now=now,
+            )
+
+    def _rollover_production_locked(
+        self,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+
+        control = StrategyControlPlane(self.output_root)
+        if not control.runtime_configured():
+            return {
+                "event": "production_rollover",
+                "status": "skipped",
+                "reason": "production_runtime_not_configured",
+            }
+        persisted = control.persisted_runtime_state()
+        rows = self._rollover_rows(previous_cycle_id, current_cycle_id)
+        latest = rows[-1] if rows else {}
+        rollover_owner = f"rollover:{previous_cycle_id}->{current_cycle_id}"
+        owned_stop = next(
+            (row for row in reversed(rows) if row.get("status") == "previous_cycle_stopped"),
+            None,
+        )
+
+        if persisted.get("cycle_id") == current_cycle_id:
+            desired = str(persisted.get("desired_state") or "stopped")
+            actual = str(persisted.get("actual_state") or desired)
+            if desired == "running" and actual == "running":
+                package_hash = next(
+                    (
+                        str(row.get("package_hash"))
+                        for row in reversed(rows)
+                        if row.get("package_hash")
+                    ),
+                    "",
+                )
+                if latest.get("status") != "completed" and package_hash:
+                    latest = self._record_rollover(
+                        previous_cycle_id,
+                        current_cycle_id,
+                        {
+                            "status": "completed",
+                            "should_continue": True,
+                            "package_hash": package_hash,
+                            "strategy_plan_id": persisted.get("strategy_plan_id"),
+                            "strategy_plan_version": persisted.get("strategy_plan_version"),
+                            "accepted_orders": int(persisted.get("accepted_order_count") or 0),
+                            "recovered_after_restart": True,
+                        },
+                        now=now,
+                    )
+                    return {"event": "production_rollover", **latest}
+                return {
+                    "event": "production_rollover",
+                    "status": "already_running",
+                    "cycle_id": current_cycle_id,
+                }
+            rollover_owned_incomplete = (
+                actual in {"starting", "stopping"}
+                or (
+                    actual == "error"
+                    and str(persisted.get("transition_owner") or "") == rollover_owner
+                )
+            )
+            if rollover_owned_incomplete:
+                try:
+                    recovered = control.control(
+                        current_cycle_id,
+                        "stop",
+                        {
+                            "expected_runtime_updated_at": persisted.get("updated_at"),
+                            "transition_owner": rollover_owner,
+                        },
+                        market=self._paper_safe_action_market_snapshot(now),
+                        now=now.isoformat(),
+                        actor={"transport": "system", "client": "dualtrack-rollover-recovery"},
+                    )
+                    reconciliation = dict(recovered.get("reconciliation") or {})
+                    if str(reconciliation.get("status") or "") != "ok":
+                        raise ValueError("incomplete current cycle recovery reconciliation failed")
+                    blocked = self._record_rollover(
+                        previous_cycle_id,
+                        current_cycle_id,
+                        {
+                            "status": "blocked",
+                            "stage": "current_cycle_recovered_stopped",
+                            "should_continue": False,
+                            "reason": f"recovered incomplete current cycle runtime from {actual}",
+                            "cancelled_orders": int(recovered.get("cancelled_orders") or 0),
+                            "flattened_positions": int(recovered.get("flattened_positions") or 0),
+                            "reconciliation_status": reconciliation.get("status"),
+                            "fail_closed": True,
+                        },
+                        now=now,
+                    )
+                except Exception as exc:
+                    blocked = self._record_rollover(
+                        previous_cycle_id,
+                        current_cycle_id,
+                        {
+                            "status": "blocked",
+                            "stage": "current_cycle_recovery_failed",
+                            "should_continue": False,
+                            "reason": str(exc),
+                            "error_type": type(exc).__name__,
+                            "fail_closed": True,
+                        },
+                        now=now,
+                    )
+                return {"event": "production_rollover", **blocked}
+            # Once the new cycle owns the runtime namespace, an automatic
+            # retry could override an operator stop or repeat a failed start.
+            return {
+                "event": "production_rollover",
+                "status": "skipped",
+                "reason": "current_cycle_runtime_not_running",
+                "cycle_id": current_cycle_id,
+                "desired_state": desired,
+                "actual_state": actual,
+            }
+
+        if latest.get("status") == "cancelled" and latest.get("should_continue") is False:
+            return {"event": "production_rollover", **latest}
+
+        previous_running = (
+            persisted.get("cycle_id") == previous_cycle_id
+            and persisted.get("desired_state") == "running"
+        )
+        rollover_owned_incomplete_stop = (
+            persisted.get("cycle_id") == previous_cycle_id
+            and str(persisted.get("actual_state") or "") in {"stopping", "error"}
+            and str(persisted.get("transition_owner") or "") == rollover_owner
+            and bool(rows and any(row.get("should_continue") for row in rows))
+        )
+        rollover_owned_stop = bool(
+            owned_stop
+            and persisted.get("cycle_id") == previous_cycle_id
+            and persisted.get("desired_state") == "stopped"
+            and persisted.get("actual_state") == "stopped"
+            and str(persisted.get("updated_at") or "")
+            == str(owned_stop.get("runtime_updated_at") or "")
+        )
+        should_continue = previous_running or rollover_owned_stop or rollover_owned_incomplete_stop
+        if not should_continue:
+            if rows and any(row.get("should_continue") for row in rows):
+                cancelled = self._record_rollover(
+                    previous_cycle_id,
+                    current_cycle_id,
+                    {
+                        "status": "cancelled",
+                        "stage": "operator_intent_check",
+                        "should_continue": False,
+                        "reason": "runtime changed after rollover intent",
+                        "fail_closed": True,
+                    },
+                    now=now,
+                )
+                return {"event": "production_rollover", **cancelled}
+            return {
+                "event": "production_rollover",
+                "status": "skipped",
+                "reason": "previous_cycle_not_running",
+                "previous_cycle_id": previous_cycle_id,
+                "current_cycle_id": current_cycle_id,
+            }
+        if not latest:
+            latest = self._record_rollover(
+                previous_cycle_id,
+                current_cycle_id,
+                {
+                    "status": "intent_recorded",
+                    "should_continue": True,
+                    "runtime_updated_at": persisted.get("updated_at"),
+                },
+                now=now,
+            )
+
+        stage = str(latest.get("status") or "intent_recorded")
+        try:
+            market = self._paper_safe_action_market_snapshot(now)
+            if persisted.get("cycle_id") == previous_cycle_id and persisted.get("actual_state") != "stopped":
+                stage = "stopping_previous_cycle"
+                intent = next(
+                    (row for row in reversed(self._rollover_rows(previous_cycle_id, current_cycle_id)) if row.get("status") == "intent_recorded"),
+                    {},
+                )
+                stopped = control.control(
+                    previous_cycle_id,
+                    "stop",
+                    {
+                        "expected_runtime_updated_at": (
+                            persisted.get("updated_at")
+                            if rollover_owned_incomplete_stop
+                            else intent.get("runtime_updated_at")
+                        ),
+                        "transition_owner": rollover_owner,
+                    },
+                    market=market,
+                    now=now.isoformat(),
+                    actor={"transport": "system", "client": "dualtrack-live-tick"},
+                )
+                reconciliation = dict(stopped.get("reconciliation") or {})
+                if str(reconciliation.get("status") or "") != "ok":
+                    raise ValueError("previous cycle stop reconciliation failed")
+                latest = self._record_rollover(
+                    previous_cycle_id,
+                    current_cycle_id,
+                    {
+                        "status": "previous_cycle_stopped",
+                        "should_continue": True,
+                        "cancelled_orders": int(stopped.get("cancelled_orders") or 0),
+                        "flattened_positions": int(stopped.get("flattened_positions") or 0),
+                        "reconciliation_status": reconciliation.get("status"),
+                        "runtime_updated_at": (stopped.get("runtime") or {}).get("updated_at"),
+                    },
+                    now=now,
+                )
+
+            stage = "packaging_previous_cycle"
+            package = StrategyCyclePackager(
+                self.output_root,
+                config=self.config,
+                adapter=self.execution,
+            ).package(previous_cycle_id, now=now.isoformat())
+            if package.get("status") != "closed":
+                raise ValueError("previous production cycle package is not terminal")
+            latest = self._record_rollover(
+                previous_cycle_id,
+                current_cycle_id,
+                {
+                    "status": "previous_cycle_packaged",
+                    "should_continue": True,
+                    "package_hash": package.get("package_hash"),
+                },
+                now=now,
+            )
+
+            stage = "starting_current_cycle"
+            stopped_receipt = next(
+                (
+                    row
+                    for row in reversed(self._rollover_rows(previous_cycle_id, current_cycle_id))
+                    if row.get("status") == "previous_cycle_stopped"
+                ),
+                None,
+            )
+            market = self._production_start_market_snapshot(now, market=market)
+            plan = control.active_plan(current_cycle_id) or control.ensure_compatible_active_plan(
+                current_cycle_id,
+                as_of=now.isoformat(),
+            )
+            if not plan:
+                raise ValueError("current cycle has no trusted production plan")
+            current_runtime = control.persisted_runtime_state()
+            if not (
+                stopped_receipt
+                and current_runtime.get("cycle_id") == previous_cycle_id
+                and current_runtime.get("desired_state") == "stopped"
+                and current_runtime.get("actual_state") == "stopped"
+                and str(current_runtime.get("updated_at") or "")
+                == str(stopped_receipt.get("runtime_updated_at") or "")
+            ):
+                raise ValueError("paper runtime changed after rollover stop")
+            start_payload = self._rollover_start_payload(plan)
+            start_payload["rollover_guard"] = {
+                "previous_cycle_id": previous_cycle_id,
+                "expected_runtime_updated_at": stopped_receipt.get("runtime_updated_at"),
+            }
+            started = control.control(
+                current_cycle_id,
+                "start",
+                start_payload,
+                market=market,
+                account=dict((package.get("execution") or {}).get("account") or {}),
+                now=now.isoformat(),
+                actor={"transport": "system", "client": "dualtrack-live-tick"},
+            )
+            final = self._record_rollover(
+                previous_cycle_id,
+                current_cycle_id,
+                {
+                    "status": "completed",
+                    "should_continue": True,
+                    "package_hash": package.get("package_hash"),
+                    "strategy_plan_id": (started.get("plan") or {}).get("strategy_plan_id"),
+                    "strategy_plan_version": (started.get("plan") or {}).get("version"),
+                    "accepted_orders": int(started.get("accepted_orders") or 0),
+                },
+                now=now,
+            )
+            return {"event": "production_rollover", **final, "package": package}
+        except Exception as exc:
+            operator_changed_runtime = str(exc) in {
+                "paper runtime changed after rollover intent",
+                "paper runtime changed after rollover stop",
+                "paper runtime changed before rollover start",
+            }
+            blocked = self._record_rollover(
+                previous_cycle_id,
+                current_cycle_id,
+                {
+                    "status": "cancelled" if operator_changed_runtime else "blocked",
+                    "stage": stage,
+                    "should_continue": not operator_changed_runtime,
+                    "reason": str(exc),
+                    "error_type": type(exc).__name__,
+                    "fail_closed": True,
+                },
+                now=now,
+            )
+            return {"event": "production_rollover", **blocked}
+
+    def _production_market_snapshot(self, now: datetime) -> dict[str, Any]:
+        pipeline_config = load_pipeline_config()
+        feed = DualTrackMarketFeed(config=pipeline_config)
+        return feed.snapshot(
+            symbol=self.symbol,
+            timeframe="1m",
+            limit=240,
+            as_of=now.isoformat(),
+        )
+
+    def _paper_safe_action_market_snapshot(self, now: datetime) -> dict[str, Any]:
+        """Never let a quote transport error prevent paper cancel/flatten."""
+
+        try:
+            return self._production_market_snapshot(now)
+        except Exception as exc:
+            return {
+                "schema_version": "dualtrack-market-bars-v1",
+                "status": "blocked",
+                "fresh": False,
+                "is_synthetic": False,
+                "provider": "",
+                "source_mode": "unavailable",
+                "symbol": getattr(self, "symbol", "GOLD"),
+                "timeframe": "1m",
+                "latest_close": None,
+                "latest_timestamp": "",
+                "bars": [],
+                "access_issues": [f"{type(exc).__name__}: {exc}"],
+            }
+
+    def _production_start_market_snapshot(
+        self,
+        now: datetime,
+        *,
+        market: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add planning evidence only after old-cycle safe actions complete."""
+
+        result = dict(market)
+        result["strategy_timeframes"] = build_strategy_timeframes(
+            symbol=self.symbol,
+            as_of=now.isoformat(),
+            config=load_pipeline_config(),
+            timeframes=("1d", "4h"),
+        )
+        return result
+
+    @staticmethod
+    def _rollover_start_payload(plan: dict[str, Any]) -> dict[str, Any]:
+        grid = dict(plan.get("grid") or {})
+        risk = dict(plan.get("risk_budget") or {})
+        payload: dict[str, Any] = {
+            "direction": str(plan.get("direction") or "neutral"),
+            "style": str(plan.get("style") or "steady"),
+            "out_of_range": str(grid.get("out_of_range") or "wait"),
+            "grid": {"mode": str(grid.get("mode") or "arithmetic")},
+            "risk_budget": {
+                "leverage": float(risk.get("leverage") or risk.get("max_leverage") or 10.0),
+            },
+        }
+        range_spec = dict(plan.get("range") or {})
+        if range_spec.get("low") is not None and range_spec.get("high") is not None:
+            payload["range"] = {"low": range_spec["low"], "high": range_spec["high"]}
+        for key in ("count", "notional_per_grid"):
+            if grid.get(key) is not None:
+                payload["grid"][key] = grid[key]
+        if grid.get("notional_per_grid") is not None:
+            payload["grid"]["notional_mode"] = "manual"
+        return payload
+
+    def _rollover_rows(self, previous_cycle_id: str, current_cycle_id: str) -> list[dict[str, Any]]:
+        return load_json(self._rollover_path(previous_cycle_id, current_cycle_id))
+
+    def _record_rollover(
+        self,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        payload: dict[str, Any],
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        path = self._rollover_path(previous_cycle_id, current_cycle_id)
+        rows = load_json(path)
+        row = {
+            "schema_version": "strategy-cycle-rollover-v1",
+            "previous_cycle_id": previous_cycle_id,
+            "current_cycle_id": current_cycle_id,
+            "recorded_at": now.isoformat(),
+            **payload,
+        }
+        signature = tuple(
+            row.get(key)
+            for key in ("status", "stage", "reason", "package_hash", "strategy_plan_id")
+        )
+        if rows:
+            latest_signature = tuple(
+                rows[-1].get(key)
+                for key in ("status", "stage", "reason", "package_hash", "strategy_plan_id")
+            )
+            if signature == latest_signature:
+                return rows[-1]
+        rows.append(row)
+        write_json(path, rows)
+        return row
+
+    def _rollover_path(self, previous_cycle_id: str, current_cycle_id: str) -> Path:
+        filename = f"{previous_cycle_id}__{current_cycle_id}.json"
+        return self.output_root / "dualtrack" / "strategy_control" / "rollovers" / filename
 
     def _close_execution_provenance(self, cycle_id: str, *, classified_at: datetime) -> dict[str, Any]:
         window = cycle_window_from_id(cycle_id)
@@ -713,6 +1155,15 @@ class DualTrackCycleRunner:
         return sorted(active, key=lambda value: cycle_window_from_id(value).start) or [current_cycle_id]
 
     def _sweep_human_protective_exits(self, cycle_id: str, *, now: datetime) -> dict[str, Any]:
+        with production_mutation_lock(self.output_root):
+            return self._sweep_human_protective_exits_locked(cycle_id, now=now)
+
+    def _sweep_human_protective_exits_locked(
+        self,
+        cycle_id: str,
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
         snapshot = self.execution.snapshot(cycle_id)
         open_trades = [
             position

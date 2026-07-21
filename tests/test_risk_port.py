@@ -210,6 +210,7 @@ def request(
     action_class: str = "increase_exposure",
     intent: str = "start_grid",
     replaced_order_ids: list[str] | None = None,
+    retained_order_ids: list[str] | None = None,
     config_value: dict | None = None,
 ):
     resolved_config = config_value or config()
@@ -218,7 +219,7 @@ def request(
         action_class=action_class,
         intent=intent,
         plan=plan_value or plan(),
-        commands=command_rows or commands(),
+        commands=command_rows if command_rows is not None else commands(),
         account_context=account if account is not None else accounting_context(),
         market=market_value or market(),
         execution_snapshot=snapshot or execution_snapshot(),
@@ -226,6 +227,7 @@ def request(
         policy=grid_risk_policy(resolved_config),
         evaluator=grid_risk_evaluator(),
         replaced_order_ids=replaced_order_ids,
+        retained_order_ids=retained_order_ids,
     )
 
 
@@ -402,6 +404,108 @@ def test_regrid_blocks_unmanaged_order_and_unknown_existing_protection() -> None
 
     assert "replacement_order_set_mismatch" in codes
     assert "open_position_protection_unknown" in codes
+
+
+def test_partial_regrid_binds_retained_orders_and_replaces_only_declared_edge() -> None:
+    open_orders = [
+        {
+            "order_id": "keep-order",
+            "state": "accepted",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 95.0,
+            "quantity": round(1_000.0 / 95.0, 8),
+        },
+        {
+            "order_id": "remove-order",
+            "state": "accepted",
+            "side": "sell",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 105.0,
+            "quantity": round(1_000.0 / 105.0, 8),
+        },
+    ]
+    candidate_commands = commands()
+    candidate_commands[0]["existing_order_id"] = "keep-order"
+    state = execution_snapshot(orders=open_orders)
+
+    allowed = PaperGridRiskDecisionPort().evaluate(
+        request(
+            snapshot=state,
+            action_class="replace_pending",
+            intent="adjust_grid_edges",
+            command_rows=candidate_commands,
+            retained_order_ids=["keep-order"],
+            replaced_order_ids=["remove-order"],
+        )
+    )
+    unbound = PaperGridRiskDecisionPort().evaluate(
+        request(
+            snapshot=state,
+            action_class="replace_pending",
+            intent="adjust_grid_edges",
+            command_rows=commands(),
+            retained_order_ids=["keep-order"],
+            replaced_order_ids=["remove-order"],
+        )
+    )
+    tampered_commands = commands()
+    tampered_commands[0]["existing_order_id"] = "keep-order"
+    tampered_commands[0]["quantity"] = tampered_commands[0]["quantity"] / 10.0
+    tampered_commands[0]["notional"] = tampered_commands[0]["notional"] / 10.0
+    tampered = PaperGridRiskDecisionPort().evaluate(
+        request(
+            snapshot=state,
+            action_class="replace_pending",
+            intent="adjust_grid_edges",
+            command_rows=tampered_commands,
+            retained_order_ids=["keep-order"],
+            replaced_order_ids=["remove-order"],
+        )
+    )
+
+    assert allowed.allow_exposure_increase is True
+    assert allowed.to_dict()["metrics"]["retained_entry_order_count"] == 1
+    assert allowed.to_dict()["metrics"]["replaced_entry_order_count"] == 1
+    assert any(
+        row["code"] == "replacement_order_set_mismatch"
+        for row in unbound.to_dict()["blockers"]
+    )
+    assert any(
+        row["code"] == "replacement_order_set_mismatch"
+        and row["evidence"]["retained_economics_mismatch_order_ids"] == ["keep-order"]
+        for row in tampered.to_dict()["blockers"]
+    )
+
+
+def test_partial_regrid_allows_pure_contraction_to_zero_pending_entries() -> None:
+    existing = {
+        "order_id": "outside-order",
+        "state": "accepted",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 105.0,
+        "quantity": 1.0,
+    }
+    decision = PaperGridRiskDecisionPort().evaluate(
+        request(
+            snapshot=execution_snapshot(orders=[existing]),
+            action_class="replace_pending",
+            intent="adjust_grid_edges",
+            command_rows=[],
+            replaced_order_ids=["outside-order"],
+            retained_order_ids=[],
+        )
+    )
+
+    assert decision.allow_exposure_increase is True
+    assert decision.to_dict()["metrics"]["candidate_notional_by_side"] == {
+        "buy": 0.0,
+        "sell": 0.0,
+    }
 
 
 def test_decision_recheck_rebuilds_state_and_rejects_stale_or_blocked_inputs() -> None:

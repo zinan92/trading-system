@@ -148,6 +148,7 @@ def test_new_endpoint_uses_history_for_lifecycle_and_pnl_but_current_cycle_for_p
     assert response["execution"]["counts"] == {
         "order_count": 25,
         "open_order_count": 25,
+        "accepted_order_count": 25,
         "unknown_order_count": 0,
         "open_position_count": 1,
         "trade_count": 2,
@@ -283,6 +284,73 @@ def test_market_bars_response_projects_trust_and_display_label(monkeypatch) -> N
 
     assert response["trusted"] is True
     assert response["provider_label"] == "Venue A"
+
+
+def test_review_cycle_selection_never_mixes_open_or_unreviewed_cycles() -> None:
+    packages = [
+        {"cycle_id": "2026-07-20_NIGHT", "status": "blocked"},
+        {"cycle_id": "2026-07-20_DAY", "status": "closed"},
+        {"cycle_id": "2026-07-19_NIGHT", "status": "closed"},
+    ]
+    ledger = {
+        "recent_reviews": [
+            {"cycle_id": "2026-07-20_NIGHT"},
+            {"cycle_id": "2026-07-19_NIGHT"},
+        ]
+    }
+
+    assert dashboard_server._latest_review_cycle_id(ledger, packages) == "2026-07-19_NIGHT"
+    assert dashboard_server._latest_review_cycle_id({"recent_reviews": []}, packages) == "2026-07-20_DAY"
+
+
+def test_review_polling_projection_omits_replay_events_and_full_execution_rows() -> None:
+    shadow = {
+        "status": "pass",
+        "cycle_id": "2026-07-19_NIGHT",
+        "variant_id": "production",
+        "scenario_id": "scenario-production",
+        "plan": {"strategy_plan_id": "plan-1", "version": 4},
+        "metrics": {"net_pnl": 3.0},
+        "scenario": {
+            "plan_identity": {"strategy_plan_id": "plan-1", "strategy_plan_version": 4},
+            "evaluation_window": {"started_at": "start", "ended_at": "end", "event_count": 1},
+            "contracts": {"execution_contract_hash": "exec", "fee_contract_hash": "fee"},
+            "hashes": {"market_event_hash": "events"},
+            "market_events": [{"large": "raw-event"}],
+            "commands": [{"large": "raw-command"}],
+        },
+        "orders": [{"order_id": "raw-order"}],
+        "fills": [{"fill_id": "raw-fill"}],
+    }
+    packages = [{
+        "cycle_id": "2026-07-19_NIGHT",
+        "status": "closed",
+        "package_hash": "package-hash",
+        "strategy_plan": {"strategy_plan_id": "plan-1", "version": 4},
+        "proposals": [],
+        "execution": {
+            "engine": "nautilus_paper",
+            "orders": [{"order_id": "raw-order"}],
+            "fills": [{"fill_id": "raw-fill"}],
+            "positions": [],
+            "pnl": {"realized": 3.0},
+            "reconciliation": {"status": "ok", "issues": []},
+        },
+        "strategy_shadows": [shadow],
+    }]
+
+    projected = dashboard_server._compact_review_packages(packages, "2026-07-19_NIGHT")[0]
+    compact_shadow = projected["strategy_shadows"][0]
+
+    assert projected["execution"]["order_count"] == 1
+    assert projected["execution"]["fill_count"] == 1
+    assert "orders" not in projected["execution"]
+    assert "fills" not in projected["execution"]
+    assert "market_events" not in compact_shadow["scenario"]
+    assert "commands" not in compact_shadow["scenario"]
+    assert "orders" not in compact_shadow
+    assert "fills" not in compact_shadow
+    assert compact_shadow["scenario"]["hashes"]["market_event_hash"] == "events"
 
 
 def test_safe_start_post_is_observable_through_new_get(tmp_path: Path, monkeypatch) -> None:

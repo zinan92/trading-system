@@ -531,6 +531,11 @@
       return this.current;
     }
 
+    setPriceLines(lines){
+      this._setPriceLines(Array.isArray(lines) ? lines : []);
+      return this.priceLines.length;
+    }
+
     _setMarkers(markers){
       const sorted = (markers || []).slice().sort((a,b) => Number(a.time) - Number(b.time));
       if(this.markerApi?.setMarkers) this.markerApi.setMarkers(sorted);
@@ -735,6 +740,24 @@
     getVisibleLogicalRange(){
       const range = this._readLogicalRange();
       return range ? {from:Number(range.from), to:Number(range.to)} : null;
+    }
+
+    getVisibleOhlcRange(fallbackBars){
+      const candles = this.current?.candles || [];
+      if(!candles.length) return null;
+      const logical = this.getVisibleLogicalRange();
+      const fallback = Math.max(1, Math.floor(numberOrNull(fallbackBars) ?? 100));
+      const from = logical && Number.isFinite(logical.from)
+        ? Math.max(0, Math.floor(logical.from))
+        : Math.max(0, candles.length - fallback);
+      const to = logical && Number.isFinite(logical.to)
+        ? Math.min(candles.length - 1, Math.ceil(logical.to))
+        : candles.length - 1;
+      const prices = candles
+        .slice(Math.min(from, to), Math.max(from, to) + 1)
+        .flatMap(candle => [numberOrNull(candle.low), numberOrNull(candle.high)])
+        .filter(Number.isFinite);
+      return prices.length ? {min:Math.min(...prices), max:Math.max(...prices)} : null;
     }
 
     restoreVisibleLogicalRange(range, prependedBars){

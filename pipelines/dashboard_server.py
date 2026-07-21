@@ -52,6 +52,7 @@ from services.risk_port import (
 )
 from services.strategy_recommendation import StrategyRecommendationService
 from services.strategy_shadow import load_strategy_shadow_runs
+from services.strategy_cycle_package import StrategyCyclePackager
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
 from services.production_accounting import build_production_accounting_history
@@ -61,6 +62,7 @@ from services.trading_system_read_model import (
     project_market_read_model,
     project_trading_system_read_model,
 )
+from services.trading_daily_24h_report import load_daily_report_rows
 
 from services.contracts.common import _CYCLE_ID_PATTERN, _DATE_PATTERN, _truthy  # noqa: F401 — re-exported for backward compatibility
 from services.contracts.system import build_market_view_intake_response, build_system_state_response, dashboard_output_root  # noqa: F401 — re-exported for backward compatibility
@@ -838,7 +840,15 @@ def _assemble_strategy_console_snapshot(
         "margin": (execution.get("account") or {}).get("margin", 0),
         "slippage": (execution.get("account") or {}).get("slippage", 0),
     }
-    shadows = load_strategy_shadow_runs(output, cycle_id)
+    ledger = build_dualtrack_ledger_response(output_root=output)
+    raw_cycle_packages = StrategyCyclePackager(output).list_verified_packages(limit=12)
+    review_cycle_id = _latest_review_cycle_id(ledger, raw_cycle_packages)
+    cycle_packages = _compact_review_packages(raw_cycle_packages, review_cycle_id)
+    shadows = (
+        [_compact_strategy_shadow(row) for row in load_strategy_shadow_runs(output, review_cycle_id)]
+        if review_cycle_id
+        else []
+    )
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
@@ -860,7 +870,10 @@ def _assemble_strategy_console_snapshot(
             ),
             "history_contract": production_history["history_contract"],
         },
-        "ledger": build_dualtrack_ledger_response(output_root=output),
+        "ledger": ledger,
+        "cycle_packages": cycle_packages,
+        "review_cycle_id": review_cycle_id,
+        "daily_reports": build_strategy_console_daily_reports_response(output_root=output),
         "strategy_shadows": shadows,
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
@@ -880,6 +893,112 @@ def _assemble_strategy_console_snapshot(
             "strategy_preview": True,
             "runtime_actual_state": True,
         },
+    }
+
+
+def _latest_review_cycle_id(ledger: dict[str, Any], packages: list[dict[str, Any]]) -> str:
+    """Choose one closed cycle with review evidence; never mix cycles."""
+
+    closed = {
+        str(row.get("cycle_id") or "")
+        for row in packages
+        if isinstance(row, dict) and row.get("status") == "closed" and row.get("cycle_id")
+    }
+    for review in ledger.get("recent_reviews") or []:
+        cycle_id = str((review or {}).get("cycle_id") or "")
+        if cycle_id in closed:
+            return cycle_id
+    return next(
+        (
+            str(row.get("cycle_id") or "")
+            for row in packages
+            if isinstance(row, dict) and row.get("status") == "closed" and row.get("cycle_id")
+        ),
+        "",
+    )
+
+
+def _compact_review_packages(
+    packages: list[dict[str, Any]],
+    selected_cycle_id: str,
+) -> list[dict[str, Any]]:
+    """Project polling-safe review evidence without replay event payloads."""
+
+    result: list[dict[str, Any]] = []
+    for package in packages:
+        cycle_id = str(package.get("cycle_id") or "")
+        summary = {
+            key: package.get(key)
+            for key in ("schema_version", "cycle_id", "status", "blockers", "packaged_at", "window", "package_hash")
+            if key in package
+        }
+        if cycle_id == selected_cycle_id:
+            execution = package.get("execution") or {}
+            summary.update({
+                "strategy_plan": package.get("strategy_plan"),
+                "proposals": package.get("proposals") or [],
+                "execution": {
+                    "engine": execution.get("engine"),
+                    "order_count": len(execution.get("orders") or []),
+                    "fill_count": len(execution.get("fills") or []),
+                    "position_count": len(execution.get("positions") or []),
+                    "pnl": execution.get("pnl") or {},
+                    "reconciliation": execution.get("reconciliation") or {},
+                },
+                "review": package.get("review") or {},
+                "strategy_shadows": [
+                    _compact_strategy_shadow(row)
+                    for row in package.get("strategy_shadows") or []
+                    if isinstance(row, dict)
+                ],
+                "traceability": package.get("traceability") or {},
+            })
+        result.append(summary)
+    return result
+
+
+def _compact_strategy_shadow(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep comparison lineage and metrics; omit replay orders and market events."""
+
+    scenario = row.get("scenario") or {}
+    compact_scenario = {
+        "plan_identity": scenario.get("plan_identity") or {},
+        "evaluation_window": scenario.get("evaluation_window") or {},
+        "contracts": scenario.get("contracts") or {},
+        "hashes": scenario.get("hashes") or {},
+    }
+    return {
+        key: value
+        for key, value in {
+            "schema_version": row.get("schema_version"),
+            "status": row.get("status"),
+            "blockers": row.get("blockers") or [],
+            "cycle_id": row.get("cycle_id"),
+            "variant_id": row.get("variant_id"),
+            "scenario_id": row.get("scenario_id"),
+            "input_hash": row.get("input_hash"),
+            "plan": row.get("plan") or {},
+            "scenario": compact_scenario,
+            "metrics": row.get("metrics") or {},
+            "review": row.get("review") or {},
+            "safety": row.get("safety") or {},
+        }.items()
+        if value not in (None, "")
+    }
+
+
+def build_strategy_console_daily_reports_response(
+    *,
+    output_root: Path | None = None,
+    limit: int = 30,
+) -> dict[str, Any]:
+    output = _dualtrack_output_root(output_root)
+    rows = load_daily_report_rows(output, limit=limit)
+    return {
+        "schema_version": "strategy-daily-reports-v1",
+        "reports": rows,
+        "latest": rows[0] if rows else None,
+        "source": "terminal_cycle_packages",
     }
 
 
@@ -923,17 +1042,38 @@ def build_strategy_console_control_response(
     # The chart selector is display-only. Production planning always receives
     # the fixed 1m execution tape. Grid geometry needs only D1/4H; the AI
     # recommendation path separately requires D1/4H/1H/15m.
-    trusted_market = (
-        dict(market)
-        if market is not None
-        else {}
-        if action == "cancel_all"
-        else dict(build_dualtrack_market_bars_response(
+    if market is not None:
+        trusted_market = dict(market)
+    elif action == "cancel_all":
+        trusted_market = {}
+    elif action == "stop":
+        try:
+            trusted_market = dict(build_dualtrack_market_bars_response(
+                timeframe="1m",
+                limit=240,
+                as_of=payload.get("as_of"),
+            ))
+        except Exception as exc:
+            trusted_market = {
+                "schema_version": "dualtrack-market-bars-v1",
+                "status": "blocked",
+                "fresh": False,
+                "is_synthetic": False,
+                "provider": "",
+                "source_mode": "unavailable",
+                "symbol": "GOLD",
+                "timeframe": "1m",
+                "latest_close": None,
+                "latest_timestamp": "",
+                "bars": [],
+                "access_issues": [f"{type(exc).__name__}: {exc}"],
+            }
+    else:
+        trusted_market = dict(build_dualtrack_market_bars_response(
             timeframe="1m",
             limit=240,
             as_of=payload.get("as_of"),
         ))
-    )
     if not safe_control and not isinstance(trusted_market.get("strategy_timeframes"), dict):
         required = ("1d", "4h") if action != "refresh_recommendation" else ("1d", "4h", "1h", "15m")
         trusted_market["strategy_timeframes"] = build_strategy_timeframes_response(
@@ -1145,10 +1285,11 @@ def build_dualtrack_order_post_response(
     market: dict | None = None,
     account: dict | None = None,
 ) -> dict:
-    with production_mutation_lock():
+    root = _dualtrack_output_root(output_root)
+    with production_mutation_lock(root):
         return _build_dualtrack_order_post_response_locked(
             payload,
-            output_root=output_root,
+            output_root=root,
             enforce_risk=enforce_risk,
             market=market,
             account=account,

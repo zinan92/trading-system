@@ -184,6 +184,32 @@ def test_manual_notional_above_safe_cap_is_rejected(tmp_path: Path) -> None:
         )
 
 
+def test_read_only_preview_can_explain_unsafe_manual_notional_without_resizing_it(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        {
+            "direction": "neutral",
+            "style": "steady",
+            "grid": {
+                "notional_per_grid": 10_000_000.0,
+                "notional_mode": "manual",
+            },
+        },
+        market=market(),
+        account=account(),
+        config=plane.config,
+        allow_unsafe_manual_preview=True,
+    )
+
+    assert preview["grid"]["notional_per_grid"] == 10_000_000.0
+    assert preview["risk"]["capital_budget_exceeded"] is True
+    assert preview["risk"]["risk_budget_exceeded"] is True
+    assert 0 < preview["risk"]["safe_notional_cap_per_grid"] < 10_000_000.0
+
+
 def test_leverage_above_limit_is_rejected(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     limit = float(plane.config.get("max_leverage") or 10.0)

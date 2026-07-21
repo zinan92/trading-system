@@ -58,6 +58,10 @@ _ORDER_STATE_PRESENTATION = {
     "reconciled": (80, "已对账"),
 }
 _KNOWN_ORDER_STATES = ORDER_STATES | OPEN_ORDER_STATES
+_ACCEPTED_ORDER_STATES = {"accepted", "open", "working", "partially_filled"}
+_TP_EVENTS = {"target", "take_profit", "tp"}
+_SL_EVENTS = {"stop", "stop_loss", "sl"}
+_MANUAL_EXIT_EVENTS = {"exit", "flatten", "manual"}
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,7 @@ def project_trading_system_read_model(
     cycle = _json_copy(_mapping(source.get("cycle")))
     market = project_market_read_model(source.get("market"))
     plan = _json_copy(_mapping(source.get("production_plan")))
+    plan_history = _json_copy(_list(source.get("production_plan_history")))
     proposals = _json_copy(_list(source.get("proposals")))
     execution_source = _mapping(source.get("production_execution"))
     current_accounting = _json_copy(_mapping(execution_source.get("accounting_snapshot")))
@@ -109,6 +114,8 @@ def project_trading_system_read_model(
         execution_source,
         history_accounting=accounting,
         current_accounting=current_accounting,
+        plan=plan,
+        plan_history=plan_history,
     )
     unknown_order_count = execution["counts"]["unknown_order_count"]
     if unknown_order_count:
@@ -151,6 +158,8 @@ def project_trading_system_read_model(
         "risk": risk,
         "review": {
             "ledger": _json_copy(_mapping(source.get("ledger"))),
+            "cycle_packages": _json_copy(_list(source.get("cycle_packages"))),
+            "selected_cycle_id": str(source.get("review_cycle_id") or "") or None,
         },
         "research": {
             "strategy_shadows": _json_copy(_list(source.get("strategy_shadows"))),
@@ -211,18 +220,24 @@ def _project_execution(
     *,
     history_accounting: Mapping[str, Any],
     current_accounting: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    plan_history: list[Any],
 ) -> dict[str, Any]:
-    orders = _project_orders(source.get("orders"))
+    orders = _project_orders(source.get("orders"), plan=plan, plan_history=plan_history)
     open_orders = [row for row in orders if row["is_open"]]
+    accepted_orders = [row for row in orders if row["is_accepted"]]
     current_positions = _json_copy(_list(current_accounting.get("positions")))
     open_positions = [
         row
         for row in current_positions
         if str(_mapping(row).get("status") or "") == "open"
     ]
-    canonical_trades = _json_copy(_list(history_accounting.get("trades")))
+    canonical_fills = _json_copy(_list(history_accounting.get("fills")))
+    canonical_trades = _project_trade_lifecycles(
+        history_accounting.get("trades"),
+        fills=canonical_fills,
+    )
     canonical_counts = _mapping(history_accounting.get("counts"))
-    current_counts = _mapping(current_accounting.get("counts"))
     canonical_pnl = _json_copy(_mapping(history_accounting.get("pnl")))
     canonical_account = _json_copy(_mapping(history_accounting.get("account")))
     current_account = _json_copy(_mapping(source.get("account")))
@@ -235,8 +250,9 @@ def _project_execution(
     counts = {
         "order_count": len(orders),
         "open_order_count": len(open_orders),
+        "accepted_order_count": len(accepted_orders),
         "unknown_order_count": sum(1 for row in orders if not row["state_known"]),
-        "open_position_count": _integer_or_none(current_counts.get("open_position_count")),
+        "open_position_count": len(open_positions),
         "trade_count": _integer_or_none(canonical_counts.get("trade_count")),
         "open_trade_count": _integer_or_none(canonical_counts.get("open_trade_count")),
         "completed_trade_count": _integer_or_none(canonical_counts.get("completed_trade_count")),
@@ -253,6 +269,7 @@ def _project_execution(
         "cycle_id": source.get("cycle_id"),
         "orders": orders,
         "open_orders": open_orders,
+        "accepted_orders": accepted_orders,
         "order_summary": {
             "open_buy_order_count": sum(
                 1 for row in open_orders if str(_mapping(row).get("side") or "").lower() == "buy"
@@ -260,11 +277,17 @@ def _project_execution(
             "open_sell_order_count": sum(
                 1 for row in open_orders if str(_mapping(row).get("side") or "").lower() == "sell"
             ),
+            "accepted_buy_order_count": sum(
+                1 for row in accepted_orders if str(_mapping(row).get("side") or "").lower() == "buy"
+            ),
+            "accepted_sell_order_count": sum(
+                1 for row in accepted_orders if str(_mapping(row).get("side") or "").lower() == "sell"
+            ),
         },
         "positions": current_positions,
         "open_positions": open_positions,
         "trades": canonical_trades,
-        "fills": _json_copy(_list(history_accounting.get("fills"))),
+        "fills": canonical_fills,
         "counts": counts,
         "scopes": {
             "orders_and_positions": {
@@ -426,6 +449,11 @@ def _project_strategy_summary(
     style_label = _STYLE_LABELS.get(style, style or "未知")
     mode_label = _GRID_MODE_LABELS.get(mode, mode or "未知")
     notional = _finite_or_none(grid.get("notional_per_grid"))
+    notional_mode = str(grid.get("notional_mode") or "").lower()
+    notional_mode_label = {
+        "auto": "自动风控",
+        "manual": "手动设定",
+    }.get(notional_mode, "来源未知")
     leverage = _finite_or_none(grid.get("leverage"))
     if leverage is None:
         leverage = _finite_or_none(risk_budget.get("leverage"))
@@ -452,16 +480,32 @@ def _project_strategy_summary(
         "spacing": spacing,
         "spacing_ratio": spacing_ratio,
         "notional_per_grid": notional,
+        "notional_mode": notional_mode or None,
+        "notional_mode_label": notional_mode_label,
+        "max_loss": _finite_or_none(risk_budget.get("max_loss")),
         "leverage": leverage,
         "display_label": display_label,
     }
 
 
-def _project_orders(value: Any) -> list[dict[str, Any]]:
-    return [_project_order(_mapping(row)) for row in _list(value)]
+def _project_orders(
+    value: Any,
+    *,
+    plan: Mapping[str, Any],
+    plan_history: list[Any],
+) -> list[dict[str, Any]]:
+    return [
+        _project_order(_mapping(row), plan=plan, plan_history=plan_history)
+        for row in _list(value)
+    ]
 
 
-def _project_order(row: Mapping[str, Any]) -> dict[str, Any]:
+def _project_order(
+    row: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+    plan_history: list[Any],
+) -> dict[str, Any]:
     state = _normalize_order_state(row.get("state") or row.get("status"))
     rank, label = _ORDER_STATE_PRESENTATION.get(state, (0, "未知状态"))
     return {
@@ -473,8 +517,162 @@ def _project_order(row: Mapping[str, Any]) -> dict[str, Any]:
         "state_known": state in _KNOWN_ORDER_STATES,
         "state_source": "current_execution_snapshot",
         "is_open": state in OPEN_ORDER_STATES,
+        "is_accepted": state in _ACCEPTED_ORDER_STATES,
         "is_terminal": state in TERMINAL_STATES,
+        "protection": _project_order_protection(
+            row,
+            plan=plan,
+            plan_history=plan_history,
+        ),
     }
+
+
+def _project_order_protection(
+    row: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+    plan_history: list[Any],
+) -> dict[str, Any]:
+    plan_id = str(plan.get("strategy_plan_id") or "").strip()
+    order_plan_id = str(row.get("strategy_plan_id") or "").strip()
+    unknown = {"status": "unknown", "tp": None, "sl": None, "source": None}
+    if not plan_id or not order_plan_id:
+        return {**unknown, "reason": "strategy_plan_id_missing"}
+    source_plan = plan
+    if order_plan_id != plan_id:
+        inherited_ids = {
+            str(value)
+            for value in plan.get("inherited_plan_ids") or []
+            if str(value)
+        }
+        if order_plan_id not in inherited_ids:
+            return {**unknown, "reason": "strategy_plan_id_mismatch"}
+        matches = [
+            _mapping(candidate)
+            for candidate in plan_history
+            if str(_mapping(candidate).get("strategy_plan_id") or "") == order_plan_id
+        ]
+        if len(matches) != 1:
+            return {**unknown, "reason": "inherited_strategy_plan_missing"}
+        source_plan = matches[0]
+    identity_valid, _preview_id = _plan_order_identity(row, plan=source_plan)
+    if not identity_valid:
+        return {**unknown, "reason": "strategy_plan_order_identity_mismatch"}
+
+    tp = _positive_finite_or_none(row.get("tp"))
+    sl = _positive_finite_or_none(row.get("sl"))
+    source = "execution_snapshot" if tp is not None or sl is not None else None
+    if tp is None or sl is None:
+        match = _matching_plan_order(row, plan=source_plan)
+        if match is not None:
+            tp = tp if tp is not None else _positive_finite_or_none(match.get("tp"))
+            sl = sl if sl is not None else _positive_finite_or_none(match.get("sl"))
+            source = "strategy_plan" if source is None else "execution_snapshot+strategy_plan"
+    if tp is None or sl is None:
+        return {**unknown, "reason": "strategy_plan_protection_incomplete"}
+    return {"status": "known", "tp": tp, "sl": sl, "source": source, "reason": None}
+
+
+def _matching_plan_order(
+    row: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    candidates = [_mapping(item) for item in _list(_mapping(plan.get("grid")).get("orders"))]
+    identity_valid, preview_id = _plan_order_identity(row, plan=plan)
+    if not identity_valid:
+        return None
+    if preview_id:
+        identified = [item for item in candidates if str(item.get("preview_order_id") or "") == preview_id]
+        return identified[0] if len(identified) == 1 else None
+
+    side = str(row.get("side") or "").strip().lower()
+    price = _finite_or_none(row.get("price"))
+    if not side or price is None:
+        return None
+    matched = [
+        item
+        for item in candidates
+        if str(item.get("side") or "").strip().lower() == side
+        and _same_price(price, item.get("price"))
+    ]
+    return matched[0] if len(matched) == 1 else None
+
+
+def _plan_order_identity(
+    row: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+) -> tuple[bool, str]:
+    explicit_preview_id = str(row.get("preview_order_id") or "").strip()
+    source_fill_id = str(row.get("source_fill_id") or "").strip()
+    source_preview_id = ""
+    if source_fill_id:
+        identity = source_fill_id.split(":")
+        identity_valid = (
+            len(identity) == 3
+            and identity[0] == "strategy-grid"
+            and identity[1] == str(plan.get("strategy_plan_id") or "")
+            and bool(identity[2])
+        )
+        if not identity_valid:
+            return False, ""
+        source_preview_id = identity[2]
+    if explicit_preview_id and source_preview_id and explicit_preview_id != source_preview_id:
+        return False, ""
+    preview_id = explicit_preview_id or source_preview_id
+    if preview_id:
+        candidates = _list(_mapping(plan.get("grid")).get("orders"))
+        matches = [
+            item
+            for item in candidates
+            if str(_mapping(item).get("preview_order_id") or "") == preview_id
+        ]
+        if len(matches) != 1:
+            return False, ""
+    return True, preview_id
+
+
+def _same_price(left: float, right: Any) -> bool:
+    parsed = _finite_or_none(right)
+    return parsed is not None and abs(left - parsed) <= max(0.00000001, abs(left) * 0.000000001)
+
+
+def _project_trade_lifecycles(value: Any, *, fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    fills_by_id = {
+        str(row.get("fill_id") or ""): row
+        for row in fills
+        if str(row.get("fill_id") or "")
+    }
+    projected: list[dict[str, Any]] = []
+    for raw in _list(value):
+        trade = _json_copy(_mapping(raw))
+        exit_ids = _list(trade.get("exit_fill_ids"))
+        if exit_ids:
+            matching_fills = [_mapping(fills_by_id.get(str(fill_id))) for fill_id in exit_ids]
+        else:
+            trade_id = str(trade.get("trade_id") or "")
+            matching_fills = [
+                row
+                for row in fills
+                if trade_id and str(row.get("trade_id") or "") == trade_id
+            ]
+        exit_events = [
+            str(row.get("event") or "").strip().lower()
+            for row in matching_fills
+            if str(row.get("event") or "").strip().lower() not in {"", "entry"}
+        ]
+        event = next((item for item in reversed(exit_events) if item), "")
+        if event in _TP_EVENTS:
+            reason, label = "tp", "TP"
+        elif event in _SL_EVENTS:
+            reason, label = "sl", "SL"
+        elif event in _MANUAL_EXIT_EVENTS:
+            reason, label = "manual", "手动平仓"
+        else:
+            reason, label = None, "未知" if str(trade.get("status") or "") == "closed" else "持仓中"
+        projected.append({**trade, "close_reason": reason, "close_reason_label": label})
+    return projected
 
 
 def _order_state_revision(row: Mapping[str, Any], state: str) -> int | None:
@@ -540,6 +738,11 @@ def _finite_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _positive_finite_or_none(value: Any) -> float | None:
+    parsed = _finite_or_none(value)
+    return parsed if parsed is not None and parsed > 0 else None
 
 
 def _integer_or_none(value: Any) -> int | None:
