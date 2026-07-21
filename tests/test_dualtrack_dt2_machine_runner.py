@@ -9,7 +9,12 @@ import pytest
 
 from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
-from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
+from services.dualtrack_grid_core import (
+    GridLineLifecycle,
+    GridStop,
+    simulate_conditional_grid,
+    simulate_explicit_grid,
+)
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_scoring import _trades_from_fills
 from services.dualtrack_store import DualTrackPlanStore
@@ -132,6 +137,138 @@ def test_machine_target_closes_the_same_units_opened_by_grid_entry(tmp_path: Pat
     assert target["matched_entries"]
     assert all(trade["remaining_units"] == 0.0 for trade in trades)
     assert all(trade["status"] == "closed" for trade in trades)
+
+
+def test_explicit_grid_rearms_same_line_for_two_complete_oscillation_cycles() -> None:
+    cycle = _cycle("grid_loop_DAY", [4000.0, 4010.0, 4000.0, 4010.0])
+
+    result = simulate_explicit_grid(
+        cycle_id=cycle.cycle_id,
+        bars=cycle.bars,
+        direction=1,
+        orders=[{"entry": 4000.0, "take_profit": 4010.0, "weight": 1.0}],
+        stop=GridStop(side="below", price=3990.0),
+        rung_notional=1000.0,
+        cost_per_side_bp=0.5,
+        finalize=False,
+    )
+
+    assert [(fill["event"], fill["price"]) for fill in result.fills] == [
+        ("entry", 4000.0),
+        ("target", 4010.0),
+        ("entry", 4000.0),
+        ("target", 4010.0),
+    ]
+    assert [fill["grid_line_cycle"] for fill in result.fills] == [1, 1, 2, 2]
+    assert len({fill["trade_id"] for fill in result.fills if fill["event"] == "entry"}) == 2
+    assert result.round_trips == 2
+    assert result.rearms == 2
+    assert result.max_inventory == 1
+    assert [
+        row["event"]
+        for row in result.lifecycle
+        if row["event"] != "armed"
+    ] == [
+        "entry_fill_confirmed",
+        "close_fill_confirmed_rearm",
+        "entry_fill_confirmed",
+        "close_fill_confirmed_rearm",
+    ]
+
+
+def test_grid_line_partial_fill_reconnect_waits_for_close_and_cancel_before_rearm() -> None:
+    line = GridLineLifecycle(
+        line_id="ai_grid_0",
+        armed_at="2026-07-05T01:00:00+00:00",
+        requested_quantity=10.0,
+    )
+    line.apply_entry_fill(
+        fill_id="entry-partial-1",
+        quantity=4.0,
+        at="2026-07-05T01:01:00+00:00",
+    )
+
+    restored = GridLineLifecycle.from_snapshot(line.snapshot())
+    replay = restored.apply_entry_fill(
+        fill_id="entry-partial-1",
+        quantity=4.0,
+        at="2026-07-05T01:01:00+00:00",
+    )
+    restored.apply_close_fill(
+        fill_id="close-partial-position",
+        quantity=4.0,
+        at="2026-07-05T01:02:00+00:00",
+        rearm=True,
+    )
+
+    assert replay["idempotent"] is True
+    assert restored.state == "entry_cancel_pending"
+    assert restored.open_quantity == 0.0
+    assert restored.can_enter is False
+    assert restored.generation == 1
+
+    restored.confirm_entry_cancelled(
+        at="2026-07-05T01:03:00+00:00",
+        reason="venue_cancel_confirmed_after_partial_fill",
+    )
+
+    assert restored.state == "rearmed"
+    assert restored.can_enter is True
+    assert restored.open_quantity == 0.0
+    assert restored.generation == 2
+
+    restored.cancel(at="2026-07-05T01:04:00+00:00", reason="operator_cancelled_grid_line")
+    assert restored.state == "cancelled"
+    assert restored.can_enter is False
+    with pytest.raises(ValueError, match="entry fill is illegal"):
+        restored.apply_entry_fill(
+            fill_id="orphan-entry",
+            quantity=10.0,
+            at="2026-07-05T01:05:00+00:00",
+        )
+
+
+def test_machine_runner_persists_deterministic_grid_lifecycle_on_reconnect(tmp_path: Path) -> None:
+    cycle = _cycle("2026-07-05_DAY", [4000.0, 4010.0, 4000.0, 4010.0])
+    output = tmp_path / "outputs"
+    plan = {
+        **_plan(cycle.cycle_id, floor=3990.0),
+        "grid_orders": [{"entry": 4000.0, "take_profit": 4010.0, "weight": 1.0}],
+        "effective_author": "ai",
+    }
+    runner = DualTrackMachineRunner(output, config=TEST_CONFIG)
+
+    first = runner.run_plan(
+        cycle.cycle_id,
+        plan,
+        cycle.bars,
+        prev_range=cycle.prev_range,
+        trend_gate_armed=False,
+        finalize=False,
+    )
+    lifecycle_path = output / "dualtrack" / "grid_lifecycle" / f"{cycle.cycle_id}_machine.json"
+    first_lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+    first_fills = json.loads(
+        (output / "dualtrack" / "fills" / f"{cycle.cycle_id}_machine.json").read_text(encoding="utf-8")
+    )
+
+    second = runner.run_plan(
+        cycle.cycle_id,
+        plan,
+        cycle.bars,
+        prev_range=cycle.prev_range,
+        trend_gate_armed=False,
+        finalize=False,
+    )
+    second_lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+    second_fills = json.loads(
+        (output / "dualtrack" / "fills" / f"{cycle.cycle_id}_machine.json").read_text(encoding="utf-8")
+    )
+
+    assert first["rearms"] == second["rearms"] == 2
+    assert first_lifecycle == second_lifecycle
+    assert first_fills == second_fills
+    assert not [fill for fill in second_fills if fill["event"] == "entry" and fill["position_status"] == "open"]
 
 
 def test_dt8_grid_does_not_open_a_new_rung_at_the_plan_stop(tmp_path: Path) -> None:
