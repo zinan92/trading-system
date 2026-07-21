@@ -8651,7 +8651,6 @@ auditable datafeed port; broker execution remains a separate port.
 - Full-suite execution was intentionally omitted for this bounded policy
   change; obsolete tests that encode 2x, 12/24-grid, and max-loss blocking are
   being replaced in the chained operator-surface milestone.
-
 ### Adversarial review corrections
 
 - Auto sizing now evaluates 70 down to 30 directly. ATR explains the proposed
@@ -8674,3 +8673,39 @@ auditable datafeed port; broker execution remains a separate port.
 - The old risk-budget notional reduction can lower planned profit below 10 USD.
   It remains unavailable for this product contract; the response explains
   that geometry or capital must change instead.
+
+## 2026-07-22 - Profit-targeted operator surface
+
+### Decision
+
+- The strategy card exposes only direction, style, grid mode, and Range.
+  Grid count, per-grid notional, and leverage are derived outputs, not editable
+  strategy inputs.
+- The preview shows the selected 30–70 grid count, per-grid notional, minimum
+  planned net profit versus the 10 USD target, estimated margin, and actual
+  leverage versus the 10x ceiling.
+- Maximum stop loss is absent from primary KPI and strategy summaries. The
+  range replacement card may retain it only as `参考最大止损（不阻断）`.
+- Copy states that modeled entry/exit fees are included while funding and
+  realized slippage are excluded. A planned minimum is not presented as a
+  guaranteed realized fill.
+
+### Gotchas
+
+- A currently running older plan can still display its historical grid count
+  and notional beside a new derived preview. The UI labels one as production
+  and the other as pending preview so they cannot be mistaken for one plan.
+- Removing a control requires removing its event listeners and DOM reads too;
+  leaving an old selector would fail at page initialization before any preview.
+- Range drag intentionally preserves the running plan's count and notional.
+  If the new geometry misses the 10 USD target, confirmation remains blocked;
+  the old risk-budget downsize action cannot solve a profit shortfall and was
+  removed from the card.
+
+### Verification
+
+- Static dashboard/read-model tests: 40 passed.
+- Dashboard JavaScript, market retention, range interaction, and review tests:
+  19 passed.
+- Playwright operator-surface acceptance: 1 passed with screenshot saved at
+  `docs/evidence/issue-84-profit-target-controls.png`.

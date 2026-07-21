@@ -209,7 +209,7 @@ test("replacement confirmation fails closed on ambiguous execution identity", ()
     () => executionIdentity({execution: {open_orders: [{order_id: "same"}, {order_id: "same"}], open_positions: []}}),
     /缺少唯一身份/,
   );
-  assert.match(html, /再次核对计划版本、行情、风险、挂单和持仓/);
+  assert.match(html, /再次核对计划版本、行情、利润目标、挂单和持仓/);
   assert.match(html, /确认后全部平仓/);
   assert.match(html, /随旧持仓撤销；新网格重建/);
 });

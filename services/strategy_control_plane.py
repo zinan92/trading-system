@@ -3651,6 +3651,13 @@ def _range_preview_specification(
             "projected_max_loss",
             risk.get("max_loss"),
         ),
+        "min_net_profit_per_grid_usd": metrics.get(
+            "minimum_planned_net_profit_per_grid_usd",
+            grid.get("min_net_profit_per_grid_usd"),
+        ),
+        "target_net_profit_per_grid_usd": grid.get(
+            "target_net_profit_per_grid_usd"
+        ),
         "canonical_max_side_notional": metrics.get("projected_max_side_notional"),
         "canonical_equity": metrics.get("equity"),
         "leverage": grid.get("leverage"),
