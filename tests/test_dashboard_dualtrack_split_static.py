@@ -27,8 +27,11 @@ def test_console_exposes_five_baseline_modules_and_fail_closed_order_gate() -> N
 def test_console_wires_robot_controls_to_real_backend_actions() -> None:
     html = (ROOT / "dashboard-dualtrack-split.html").read_text(encoding="utf-8")
     assert "api('/api/strategy-console/control'" in html
-    for action in ("preview", "refresh_recommendation", "start", "stop", "adjust_plan", "reset_statistics"):
+    for action in ("preview", "refresh_recommendation", "start", "stop", "extend_range", "reset_statistics"):
         assert action in html
+    assert "expected_strategy_plan_id:plan.strategy_plan_id" in html
+    assert "间距、每格金额和已有持仓 TP/SL 保持不变" in html
+    assert "await requestPreview({useInputs:true});const result=await control('adjust_plan'" not in html
     assert "cancel_all" not in html
     assert "/api/dualtrack/market/bars?symbol=${encodeURIComponent(symbol)}" in html
 

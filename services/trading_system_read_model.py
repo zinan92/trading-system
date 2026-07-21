@@ -87,6 +87,7 @@ def project_trading_system_read_model(
     cycle = _json_copy(_mapping(source.get("cycle")))
     market = project_market_read_model(source.get("market"))
     plan = _json_copy(_mapping(source.get("production_plan")))
+    plan_history = _json_copy(_list(source.get("production_plan_history")))
     proposals = _json_copy(_list(source.get("proposals")))
     execution_source = _mapping(source.get("production_execution"))
     current_accounting = _json_copy(_mapping(execution_source.get("accounting_snapshot")))
@@ -114,6 +115,7 @@ def project_trading_system_read_model(
         history_accounting=accounting,
         current_accounting=current_accounting,
         plan=plan,
+        plan_history=plan_history,
     )
     unknown_order_count = execution["counts"]["unknown_order_count"]
     if unknown_order_count:
@@ -219,8 +221,9 @@ def _project_execution(
     history_accounting: Mapping[str, Any],
     current_accounting: Mapping[str, Any],
     plan: Mapping[str, Any],
+    plan_history: list[Any],
 ) -> dict[str, Any]:
-    orders = _project_orders(source.get("orders"), plan=plan)
+    orders = _project_orders(source.get("orders"), plan=plan, plan_history=plan_history)
     open_orders = [row for row in orders if row["is_open"]]
     accepted_orders = [row for row in orders if row["is_accepted"]]
     current_positions = _json_copy(_list(current_accounting.get("positions")))
@@ -485,11 +488,24 @@ def _project_strategy_summary(
     }
 
 
-def _project_orders(value: Any, *, plan: Mapping[str, Any]) -> list[dict[str, Any]]:
-    return [_project_order(_mapping(row), plan=plan) for row in _list(value)]
+def _project_orders(
+    value: Any,
+    *,
+    plan: Mapping[str, Any],
+    plan_history: list[Any],
+) -> list[dict[str, Any]]:
+    return [
+        _project_order(_mapping(row), plan=plan, plan_history=plan_history)
+        for row in _list(value)
+    ]
 
 
-def _project_order(row: Mapping[str, Any], *, plan: Mapping[str, Any]) -> dict[str, Any]:
+def _project_order(
+    row: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+    plan_history: list[Any],
+) -> dict[str, Any]:
     state = _normalize_order_state(row.get("state") or row.get("status"))
     rank, label = _ORDER_STATE_PRESENTATION.get(state, (0, "未知状态"))
     return {
@@ -503,7 +519,11 @@ def _project_order(row: Mapping[str, Any], *, plan: Mapping[str, Any]) -> dict[s
         "is_open": state in OPEN_ORDER_STATES,
         "is_accepted": state in _ACCEPTED_ORDER_STATES,
         "is_terminal": state in TERMINAL_STATES,
-        "protection": _project_order_protection(row, plan=plan),
+        "protection": _project_order_protection(
+            row,
+            plan=plan,
+            plan_history=plan_history,
+        ),
     }
 
 
@@ -511,15 +531,31 @@ def _project_order_protection(
     row: Mapping[str, Any],
     *,
     plan: Mapping[str, Any],
+    plan_history: list[Any],
 ) -> dict[str, Any]:
     plan_id = str(plan.get("strategy_plan_id") or "").strip()
     order_plan_id = str(row.get("strategy_plan_id") or "").strip()
     unknown = {"status": "unknown", "tp": None, "sl": None, "source": None}
     if not plan_id or not order_plan_id:
         return {**unknown, "reason": "strategy_plan_id_missing"}
+    source_plan = plan
     if order_plan_id != plan_id:
-        return {**unknown, "reason": "strategy_plan_id_mismatch"}
-    identity_valid, _preview_id = _plan_order_identity(row, plan=plan)
+        inherited_ids = {
+            str(value)
+            for value in plan.get("inherited_plan_ids") or []
+            if str(value)
+        }
+        if order_plan_id not in inherited_ids:
+            return {**unknown, "reason": "strategy_plan_id_mismatch"}
+        matches = [
+            _mapping(candidate)
+            for candidate in plan_history
+            if str(_mapping(candidate).get("strategy_plan_id") or "") == order_plan_id
+        ]
+        if len(matches) != 1:
+            return {**unknown, "reason": "inherited_strategy_plan_missing"}
+        source_plan = matches[0]
+    identity_valid, _preview_id = _plan_order_identity(row, plan=source_plan)
     if not identity_valid:
         return {**unknown, "reason": "strategy_plan_order_identity_mismatch"}
 
@@ -527,7 +563,7 @@ def _project_order_protection(
     sl = _positive_finite_or_none(row.get("sl"))
     source = "execution_snapshot" if tp is not None or sl is not None else None
     if tp is None or sl is None:
-        match = _matching_plan_order(row, plan=plan)
+        match = _matching_plan_order(row, plan=source_plan)
         if match is not None:
             tp = tp if tp is not None else _positive_finite_or_none(match.get("tp"))
             sl = sl if sl is not None else _positive_finite_or_none(match.get("sl"))

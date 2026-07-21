@@ -8315,3 +8315,80 @@ auditable datafeed port; broker execution remains a separate port.
 - Inline dashboard JavaScript syntax and diff checks passed.
 - Full-suite execution was intentionally not used for this small read-only UI
   milestone.
+
+## 2026-07-21 - Running grid edge adjustment
+
+### User outcome
+
+- A running paper grid can add or remove whole price levels at either edge
+  without stopping, flattening, changing its spacing/ratio, or resizing each
+  grid order.
+- Existing positions and their TP/SL evidence remain byte-for-byte equivalent
+  across the adjustment; only unfilled entry orders outside a contracted range
+  are cancelled.
+
+### Decisions
+
+- Keep edge geometry pure: arithmetic requests snap to the current absolute
+  spacing and geometric requests snap to the current ratio. Grid count changes;
+  per-grid notional and its auto/manual provenance do not.
+- Require the current StrategyPlan identity in every request. A successful
+  retry is recognized by a fingerprint of the original plan plus the direct
+  requested range and performs no second mutation.
+- Reuse the canonical `replace_pending` risk action, but bind accepted entries
+  into disjoint retained and replaced ID sets. Retained orders appear as exact
+  risk commands tied back to their engine order IDs, so the risk decision
+  reflects the complete post-adjustment pending set without claiming they were
+  cancelled.
+- Stage only new edge commands, verify them as accepted or filled, then cancel
+  only out-of-range entry IDs. Activate the new StrategyPlan version only after
+  retained entries, positions, protection orders, and reconciliation pass.
+- Persist the candidate plan as `staging` before the first order submit while
+  leaving runtime on the old running plan. A retry with the same fingerprint
+  resumes the same plan/version and submits only missing edge orders.
+- Persist the canonical risk request, decision, and policy IDs on that staging
+  plan so a crash after activation can repair runtime without losing the exact
+  authorization evidence.
+- Swap the old active and new staging statuses in one atomic same-cycle plan
+  file write. The specialized edge path fails closed if another cycle is active
+  rather than recreating the generic two-write activation gap.
+- Flush Nautilus control commands only when there is no unprocessed market
+  event. The replay uses the exact checked event snapshot, so an event arriving
+  afterward remains pending for the normal market path.
+- Resolve retained-order protection from the exact inherited StrategyPlan in
+  the operator read model rather than treating every old plan ID as unknown.
+- On pre-cancellation failure, cancel only the staged plan and leave the old
+  plan running. Any failure after old-edge cancellation is non-rollbackable and
+  moves runtime to error without cancelling the useful staged edges.
+
+### Gotchas
+
+- The older full-regrid risk contract assumed every accepted entry would be
+  replaced. Supplying only the outside IDs would fail closed; supplying all IDs
+  would create false audit evidence. Retained IDs therefore need an explicit
+  binding to candidate economics.
+- Accepted execution rows do not carry SL/TP in the canonical accounting view.
+  Retained risk commands must resolve them from the exact originating plan;
+  missing or ambiguous lineage blocks before mutation.
+- A newly exposed edge already represented by an accepted order or open
+  position is not submitted again. A fully completed entry/exit lifecycle is
+  intentionally eligible to re-arm at that price with a deterministic new
+  command identity; closed historical positions do not occupy the line.
+- New edge limits are outside the trusted current mark. If an engine nonetheless
+  creates a staged position during failure cleanup, the control plane fails
+  visibly instead of flattening an unrelated prior position.
+- Contraction can be snapped more aggressively than the pointer value. The
+  trusted current market must remain inside the effective snapped range.
+
+### Verification
+
+- Focused geometry, sizing, risk, control-plane, inherited-plan read-model, and
+  API, two-console static, and Nautilus adapter suite: 157 passed.
+- Covered arithmetic and geometric snapping, fixed notional provenance,
+  live-exposure deduplication plus completed-cycle re-arm, exact retained/replaced
+  risk binding, pure contraction to zero pending entries, position and TP/SL
+  preservation, atomic activation and runtime repair, completed-edge rearm,
+  post-cancel failure preservation, inherited-plan protection, fail-closed
+  Nautilus command-only flush, and staged-order-only cleanup.
+- Full-suite execution was intentionally not used for this bounded paper-order
+  milestone.

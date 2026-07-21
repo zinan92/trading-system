@@ -515,6 +515,45 @@ def test_order_protection_is_completed_only_from_the_exact_strategy_plan() -> No
     assert orders[duplicate_preview["order_id"]]["protection"]["status"] == "unknown"
 
 
+def test_inherited_running_order_resolves_protection_from_its_originating_plan() -> None:
+    source = _source()
+    active = source["production_plan"]
+    inherited = deepcopy(active)
+    inherited.update(
+        {
+            "strategy_plan_id": "plan-6",
+            "version": 6,
+            "status": "superseded",
+        }
+    )
+    active["inherited_plan_ids"] = ["plan-6"]
+    source["production_plan_history"] = [inherited, active]
+    order = source["production_execution"]["orders"][0]
+    order["strategy_plan_id"] = "plan-6"
+    order["strategy_plan_version"] = 6
+    order["source_fill_id"] = "strategy-grid:plan-6:preview-0"
+    order.pop("tp", None)
+    order.pop("sl", None)
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+    projected = next(
+        row for row in model["execution"]["orders"] if row["order_id"] == order["order_id"]
+    )
+
+    assert projected["protection"] == {
+        "status": "known",
+        "tp": 3903.0,
+        "sl": 3823.0,
+        "source": "strategy_plan",
+        "reason": None,
+    }
+
+
 def test_mismatched_risk_observation_is_never_presented_as_current_permission() -> None:
     model = project_trading_system_read_model(
         _source(),
