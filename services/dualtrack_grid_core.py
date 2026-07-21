@@ -1,10 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from schemas.market_data import Bar
 from services.dualtrack_costs import dualtrack_order_cost
+
+
+GRID_LINE_STATES = {
+    "armed",
+    "rearmed",
+    "entry_partially_filled",
+    "open",
+    "exit_partially_filled",
+    "entry_cancel_pending",
+    "open_cancelled",
+    "cancelled",
+    "closed",
+    "stopped",
+    "finalized",
+}
 
 
 @dataclass(frozen=True)
@@ -27,6 +42,324 @@ class GridResult:
     stop_hit: bool
     rearms: int
     max_inventory: int
+    lifecycle: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class GridLineLifecycle:
+    """Fail-closed state for one explicit grid line.
+
+    Fill identifiers make execution-report replay idempotent. A line becomes
+    eligible for a fresh entry only after its confirmed close has flattened the
+    exposure (and any partially-filled entry remainder has been cancelled).
+    """
+
+    line_id: str
+    armed_at: str
+    requested_quantity: float | None = None
+    state: str = "armed"
+    generation: int = 1
+    entry_filled_quantity: float = 0.0
+    close_filled_quantity: float = 0.0
+    entry_order_open: bool = True
+    active: bool = True
+    processed_fill_ids: set[str] = field(default_factory=set)
+    transitions: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not str(self.line_id).strip():
+            raise ValueError("grid line_id is required")
+        if int(self.generation) < 1:
+            raise ValueError("grid line generation must be positive")
+        if self.requested_quantity is not None and float(self.requested_quantity) <= 0:
+            raise ValueError("grid line requested_quantity must be positive")
+        if self.entry_filled_quantity < 0 or self.close_filled_quantity < 0:
+            raise ValueError("grid line fill quantities cannot be negative")
+        if self.close_filled_quantity > self.entry_filled_quantity + 1e-9:
+            raise ValueError("grid line close quantity exceeds entry quantity")
+        if self.state not in GRID_LINE_STATES:
+            raise ValueError(f"unknown grid line state: {self.state}")
+        if self.state in {"armed", "rearmed"} and self.open_quantity > 1e-9:
+            raise ValueError("entry-eligible grid line cannot retain exposure")
+        if (
+            self.state in {"entry_partially_filled", "open", "exit_partially_filled", "open_cancelled"}
+            and self.open_quantity <= 1e-9
+        ):
+            raise ValueError(f"grid line state {self.state} requires open exposure")
+        if (
+            self.state in {"cancelled", "closed", "stopped", "finalized"}
+            and (self.active or self.open_quantity > 1e-9)
+        ):
+            raise ValueError(f"terminal grid line state {self.state} must be inactive and flat")
+        if not self.transitions and self.state != "armed":
+            raise ValueError("non-armed grid line snapshot requires transition history")
+        if not self.transitions:
+            self._record("armed", from_state="", at=self.armed_at)
+
+    @property
+    def open_quantity(self) -> float:
+        return max(0.0, float(self.entry_filled_quantity) - float(self.close_filled_quantity))
+
+    @property
+    def can_enter(self) -> bool:
+        return bool(self.active and self.state in {"armed", "rearmed"} and self.open_quantity <= 1e-9)
+
+    def apply_entry_fill(self, *, fill_id: str, quantity: float, at: str) -> dict[str, Any]:
+        replay = self._fill_replay(fill_id)
+        if replay:
+            return replay
+        fill_quantity = _positive_lifecycle_quantity(quantity)
+        if self.state not in {"armed", "rearmed", "entry_partially_filled"} or not self.active:
+            raise ValueError(f"grid line entry fill is illegal in state {self.state}")
+        if self.state in {"armed", "rearmed"} and not self.can_enter:
+            raise ValueError("grid line entry would stack existing exposure")
+        if self.requested_quantity is None:
+            self.requested_quantity = fill_quantity
+        requested = float(self.requested_quantity)
+        new_total = float(self.entry_filled_quantity) + fill_quantity
+        if new_total > requested + 1e-9:
+            raise ValueError("grid line entry fill exceeds requested quantity")
+
+        from_state = self.state
+        self.entry_filled_quantity = min(requested, new_total)
+        self.entry_order_open = self.entry_filled_quantity < requested - 1e-9
+        self.state = "entry_partially_filled" if self.entry_order_open else "open"
+        self.processed_fill_ids.add(str(fill_id))
+        return self._record(
+            "entry_partial_fill_confirmed" if self.entry_order_open else "entry_fill_confirmed",
+            from_state=from_state,
+            at=at,
+            fill_id=fill_id,
+            fill_quantity=fill_quantity,
+        )
+
+    def apply_close_fill(
+        self,
+        *,
+        fill_id: str,
+        quantity: float,
+        at: str,
+        rearm: bool,
+        terminal_state: str = "closed",
+    ) -> dict[str, Any]:
+        replay = self._fill_replay(fill_id)
+        if replay:
+            return replay
+        fill_quantity = _positive_lifecycle_quantity(quantity)
+        if self.state not in {
+            "entry_partially_filled",
+            "open",
+            "exit_partially_filled",
+            "open_cancelled",
+        }:
+            raise ValueError(f"grid line close fill is illegal in state {self.state}")
+        if fill_quantity > self.open_quantity + 1e-9:
+            raise ValueError("grid line close fill exceeds open quantity")
+
+        from_state = self.state
+        closing_generation = int(self.generation)
+        self.close_filled_quantity += fill_quantity
+        remaining = self.open_quantity
+        self.processed_fill_ids.add(str(fill_id))
+        if remaining > 1e-9:
+            self.state = "exit_partially_filled"
+            return self._record(
+                "close_partial_fill_confirmed",
+                from_state=from_state,
+                at=at,
+                fill_id=fill_id,
+                fill_quantity=fill_quantity,
+            )
+
+        if rearm and self.active and not self.entry_order_open:
+            self.state = "rearmed"
+            self.entry_order_open = True
+            transition = self._record(
+                "close_fill_confirmed_rearm",
+                from_state=from_state,
+                at=at,
+                fill_id=fill_id,
+                fill_quantity=fill_quantity,
+                extra={"next_generation": closing_generation + 1},
+            )
+            self.generation = closing_generation + 1
+            self.entry_filled_quantity = 0.0
+            self.close_filled_quantity = 0.0
+            return transition
+
+        if rearm and self.active and self.entry_order_open:
+            self.state = "entry_cancel_pending"
+            return self._record(
+                "close_fill_confirmed_waiting_entry_cancel",
+                from_state=from_state,
+                at=at,
+                fill_id=fill_id,
+                fill_quantity=fill_quantity,
+            )
+
+        self.active = False
+        self.entry_order_open = False
+        self.state = str(terminal_state or "closed")
+        return self._record(
+            "close_fill_confirmed_terminal",
+            from_state=from_state,
+            at=at,
+            fill_id=fill_id,
+            fill_quantity=fill_quantity,
+        )
+
+    def confirm_entry_cancelled(self, *, at: str, reason: str) -> dict[str, Any]:
+        if not self.entry_order_open:
+            raise ValueError("grid line has no open entry remainder to cancel")
+        from_state = self.state
+        self.entry_order_open = False
+        if self.open_quantity > 1e-9:
+            self.state = "exit_partially_filled" if self.close_filled_quantity > 0 else "open"
+            return self._record(
+                "entry_remainder_cancel_confirmed",
+                from_state=from_state,
+                at=at,
+                extra={"reason": str(reason or "")},
+            )
+        if self.close_filled_quantity > 0 and self.active:
+            closing_generation = int(self.generation)
+            self.state = "rearmed"
+            self.entry_order_open = True
+            transition = self._record(
+                "entry_remainder_cancel_confirmed_rearm",
+                from_state=from_state,
+                at=at,
+                extra={"reason": str(reason or ""), "next_generation": closing_generation + 1},
+            )
+            self.generation = closing_generation + 1
+            self.entry_filled_quantity = 0.0
+            self.close_filled_quantity = 0.0
+            return transition
+        self.active = False
+        self.state = "cancelled"
+        return self._record(
+            "entry_cancel_confirmed",
+            from_state=from_state,
+            at=at,
+            extra={"reason": str(reason or "")},
+        )
+
+    def cancel(self, *, at: str, reason: str) -> dict[str, Any]:
+        from_state = self.state
+        self.active = False
+        self.entry_order_open = False
+        self.state = "open_cancelled" if self.open_quantity > 1e-9 else "cancelled"
+        return self._record(
+            "line_cancel_confirmed",
+            from_state=from_state,
+            at=at,
+            extra={"reason": str(reason or "")},
+        )
+
+    def terminate(self, *, at: str, reason: str, state: str) -> dict[str, Any]:
+        if self.open_quantity > 1e-9:
+            raise ValueError("cannot terminate a grid line with open exposure")
+        from_state = self.state
+        self.active = False
+        self.entry_order_open = False
+        self.state = str(state or "closed")
+        return self._record(
+            "line_terminated",
+            from_state=from_state,
+            at=at,
+            extra={"reason": str(reason or "")},
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "line_id": self.line_id,
+            "armed_at": self.armed_at,
+            "requested_quantity": self.requested_quantity,
+            "state": self.state,
+            "generation": self.generation,
+            "entry_filled_quantity": self.entry_filled_quantity,
+            "close_filled_quantity": self.close_filled_quantity,
+            "entry_order_open": self.entry_order_open,
+            "active": self.active,
+            "processed_fill_ids": sorted(self.processed_fill_ids),
+            "transitions": [dict(row) for row in self.transitions],
+        }
+
+    @classmethod
+    def from_snapshot(cls, payload: dict[str, Any]) -> "GridLineLifecycle":
+        if not isinstance(payload, dict):
+            raise ValueError("grid line lifecycle snapshot must be an object")
+        return cls(
+            line_id=str(payload.get("line_id") or ""),
+            armed_at=str(payload.get("armed_at") or ""),
+            requested_quantity=(
+                None if payload.get("requested_quantity") in (None, "") else float(payload["requested_quantity"])
+            ),
+            state=str(payload.get("state") or ""),
+            generation=int(payload.get("generation") or 0),
+            entry_filled_quantity=float(payload.get("entry_filled_quantity") or 0.0),
+            close_filled_quantity=float(payload.get("close_filled_quantity") or 0.0),
+            entry_order_open=bool(payload.get("entry_order_open", False)),
+            active=bool(payload.get("active", False)),
+            processed_fill_ids={str(value) for value in payload.get("processed_fill_ids") or []},
+            transitions=[dict(row) for row in payload.get("transitions") or []],
+        )
+
+    def _fill_replay(self, fill_id: str) -> dict[str, Any] | None:
+        normalized = str(fill_id or "")
+        if not normalized:
+            raise ValueError("grid line fill_id is required")
+        if normalized not in self.processed_fill_ids:
+            return None
+        return {
+            "event": "fill_replay_ignored",
+            "line_id": self.line_id,
+            "generation": self.generation,
+            "fill_id": normalized,
+            "idempotent": True,
+            "state": self.state,
+            "open_quantity": round(self.open_quantity, 12),
+        }
+
+    def _record(
+        self,
+        event: str,
+        *,
+        from_state: str,
+        at: str,
+        fill_id: str = "",
+        fill_quantity: float = 0.0,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        row = {
+            "sequence": len(self.transitions) + 1,
+            "line_id": self.line_id,
+            "generation": int(self.generation),
+            "event": str(event),
+            "from": str(from_state),
+            "to": self.state,
+            "at": str(at),
+            "fill_id": str(fill_id or ""),
+            "fill_quantity": round(float(fill_quantity or 0.0), 12),
+            "requested_quantity": (
+                None if self.requested_quantity is None else round(float(self.requested_quantity), 12)
+            ),
+            "entry_filled_quantity": round(float(self.entry_filled_quantity), 12),
+            "close_filled_quantity": round(float(self.close_filled_quantity), 12),
+            "open_quantity": round(self.open_quantity, 12),
+            "entry_order_open": bool(self.entry_order_open),
+            "active": bool(self.active),
+            **dict(extra or {}),
+        }
+        self.transitions.append(row)
+        return row
+
+
+def _positive_lifecycle_quantity(value: float) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise ValueError("grid line fill quantity must be positive")
+    return parsed
 
 
 def simulate_conditional_grid(
@@ -291,7 +624,13 @@ def simulate_explicit_grid(
         cost_config["execution_cost_model"] = execution_cost_model
 
     holdings: dict[int, dict[str, Any]] = {}
-    entered: set[int] = set()
+    lifecycles = {
+        rung: GridLineLifecycle(
+            line_id=f"{layer}_{_plan_rung(order, rung)}",
+            armed_at=rows[0].timestamp,
+        )
+        for rung, order in enumerate(orders)
+    }
     fills: list[dict[str, Any]] = []
     gross_pnl = 0.0
     total_cost = 0.0
@@ -299,6 +638,7 @@ def simulate_explicit_grid(
     sides = 0
     round_trips = 0
     stop_hit = False
+    rearms = 0
     max_inventory = 0
 
     for bar_index, bar in enumerate(rows):
@@ -316,10 +656,24 @@ def simulate_explicit_grid(
                     holding=holding,
                     price=exit_price,
                     event="stop",
+                    line_cycle=int(holding["line_cycle"]),
                     stop=active_stop,
                     layer=layer,
                     cost_config=cost_config,
                     cost_rules=cost_rules,
+                )
+                transition = lifecycles[rung].apply_close_fill(
+                    fill_id=str(exit_fill["fill_id"]),
+                    quantity=float(exit_fill["matched_entries"][0]["units"]),
+                    at=bar.timestamp,
+                    rearm=False,
+                    terminal_state="stopped",
+                )
+                _annotate_grid_lifecycle_fill(
+                    exit_fill,
+                    line=lifecycles[rung],
+                    line_cycle=int(holding["line_cycle"]),
+                    transition=transition,
                 )
                 fills.append(exit_fill)
                 _mark_entry_closed(fills, holding, exit_fill)
@@ -328,13 +682,21 @@ def simulate_explicit_grid(
                 side_notional += exit_cost.notional
                 sides += 1
             holdings.clear()
+            for lifecycle in lifecycles.values():
+                if lifecycle.active and lifecycle.open_quantity <= 1e-9:
+                    lifecycle.terminate(at=bar.timestamp, reason="hard_stop", state="stopped")
             break
 
         low, high = float(bar.low), float(bar.high)
         entries_allowed = entry_cutoff_bar_index is None or bar_index < entry_cutoff_bar_index
+        if not entries_allowed:
+            for rung, lifecycle in lifecycles.items():
+                if rung not in holdings and lifecycle.active and lifecycle.open_quantity <= 1e-9:
+                    lifecycle.terminate(at=bar.timestamp, reason="entry_cutoff", state="cancelled")
         if entries_allowed:
             for rung, order in enumerate(orders):
-                if rung in entered:
+                lifecycle = lifecycles[rung]
+                if rung in holdings or not lifecycle.can_enter:
                     continue
                 entry = float(order["entry"])
                 touched = low <= entry if sign > 0 else high >= entry
@@ -363,6 +725,19 @@ def simulate_explicit_grid(
                     realized_pnl=-entry_cost.cost,
                     sl=active_stop.price,
                     tp=float(order["take_profit"]),
+                    line_cycle=int(lifecycle.generation),
+                )
+                line_cycle = int(lifecycle.generation)
+                transition = lifecycle.apply_entry_fill(
+                    fill_id=str(entry_fill["fill_id"]),
+                    quantity=_units(entry, entry_cost.notional),
+                    at=bar.timestamp,
+                )
+                _annotate_grid_lifecycle_fill(
+                    entry_fill,
+                    line=lifecycle,
+                    line_cycle=line_cycle,
+                    transition=transition,
                 )
                 holdings[rung] = {
                     "bar_index": bar_index,
@@ -371,8 +746,8 @@ def simulate_explicit_grid(
                     "trade_id": entry_fill["trade_id"],
                     "fill_id": entry_fill["fill_id"],
                     "units": _units(entry, entry_cost.notional) if entry_cost.contracts is None else None,
+                    "line_cycle": line_cycle,
                 }
-                entered.add(rung)
                 fills.append(entry_fill)
                 total_cost += entry_cost.cost
                 side_notional += entry_cost.notional
@@ -396,10 +771,28 @@ def simulate_explicit_grid(
                 holding=holding,
                 price=target,
                 event="target",
+                line_cycle=int(holding["line_cycle"]),
                 stop=active_stop,
                 layer=layer,
                 cost_config=cost_config,
                 cost_rules=cost_rules,
+            )
+            can_rearm = (
+                (not finalize or bar_index + 1 < len(rows))
+                and (entry_cutoff_bar_index is None or bar_index + 1 < entry_cutoff_bar_index)
+            )
+            transition = lifecycles[rung].apply_close_fill(
+                fill_id=str(exit_fill["fill_id"]),
+                quantity=float(exit_fill["matched_entries"][0]["units"]),
+                at=bar.timestamp,
+                rearm=can_rearm,
+                terminal_state="cancelled",
+            )
+            _annotate_grid_lifecycle_fill(
+                exit_fill,
+                line=lifecycles[rung],
+                line_cycle=int(holding["line_cycle"]),
+                transition=transition,
             )
             fills.append(exit_fill)
             _mark_entry_closed(fills, holding, exit_fill)
@@ -408,9 +801,11 @@ def simulate_explicit_grid(
             side_notional += exit_cost.notional
             sides += 1
             round_trips += 1
+            if transition.get("to") == "rearmed":
+                rearms += 1
             del holdings[rung]
 
-    if finalize and holdings:
+    if finalize:
         last = rows[-1]
         for rung, holding in list(holdings.items()):
             exit_fill, pnl, exit_cost = _close_explicit_holding(
@@ -423,10 +818,24 @@ def simulate_explicit_grid(
                 holding=holding,
                 price=float(last.close),
                 event="flatten",
+                line_cycle=int(holding["line_cycle"]),
                 stop=active_stop,
                 layer=layer,
                 cost_config=cost_config,
                 cost_rules=cost_rules,
+            )
+            transition = lifecycles[rung].apply_close_fill(
+                fill_id=str(exit_fill["fill_id"]),
+                quantity=float(exit_fill["matched_entries"][0]["units"]),
+                at=last.timestamp,
+                rearm=False,
+                terminal_state="finalized",
+            )
+            _annotate_grid_lifecycle_fill(
+                exit_fill,
+                line=lifecycles[rung],
+                line_cycle=int(holding["line_cycle"]),
+                transition=transition,
             )
             fills.append(exit_fill)
             _mark_entry_closed(fills, holding, exit_fill)
@@ -435,6 +844,14 @@ def simulate_explicit_grid(
             side_notional += exit_cost.notional
             sides += 1
         holdings.clear()
+        for lifecycle in lifecycles.values():
+            if lifecycle.active and lifecycle.open_quantity <= 1e-9:
+                lifecycle.terminate(at=last.timestamp, reason="cycle_finalized", state="finalized")
+
+    lifecycle_rows = sorted(
+        (row for lifecycle in lifecycles.values() for row in lifecycle.transitions),
+        key=lambda row: (str(row.get("at") or ""), str(row.get("line_id") or ""), int(row.get("sequence") or 0)),
+    )
 
     return GridResult(
         armed=True,
@@ -446,8 +863,9 @@ def simulate_explicit_grid(
         sides=sides,
         round_trips=round_trips,
         stop_hit=stop_hit,
-        rearms=0,
+        rearms=rearms,
         max_inventory=max_inventory,
+        lifecycle=lifecycle_rows,
     )
 
 
@@ -462,6 +880,7 @@ def _close_explicit_holding(
     holding: dict[str, Any],
     price: float,
     event: str,
+    line_cycle: int,
     stop: GridStop,
     layer: str,
     cost_config: dict[str, Any],
@@ -492,6 +911,7 @@ def _close_explicit_holding(
         sl=stop.price,
         tp=float(order["take_profit"]) if event != "stop" else None,
         gross_pnl=pnl,
+        line_cycle=line_cycle,
     )
     fill["matched_entries"] = [{
         "fill_id": holding["fill_id"],
@@ -519,8 +939,9 @@ def _explicit_fill(
     sl: float | None,
     tp: float | None,
     gross_pnl: float = 0.0,
+    line_cycle: int = 1,
 ) -> dict[str, Any]:
-    trade_id = f"{cycle_id}_{layer}_trade_{rung + 1:04d}"
+    trade_id = _explicit_trade_id(cycle_id, layer=layer, rung=rung, line_cycle=line_cycle)
     units = _units(float(price), float(order_cost.notional))
     return {
         "fill_id": f"{cycle_id}_{layer}_{len(fills) + 1:04d}",
@@ -542,6 +963,27 @@ def _explicit_fill(
         "remaining_units": round(units, 10) if event == "entry" else 0.0,
         "position_status": "open" if event == "entry" else "closed",
         **order_cost.fill_fields(),
+    }
+
+
+def _explicit_trade_id(cycle_id: str, *, layer: str, rung: int, line_cycle: int) -> str:
+    base = f"{cycle_id}_{layer}_trade_{rung + 1:04d}"
+    return base if int(line_cycle) == 1 else f"{base}_cycle_{int(line_cycle):04d}"
+
+
+def _annotate_grid_lifecycle_fill(
+    fill: dict[str, Any],
+    *,
+    line: GridLineLifecycle,
+    line_cycle: int,
+    transition: dict[str, Any],
+) -> None:
+    fill["grid_line_id"] = line.line_id
+    fill["grid_line_cycle"] = int(line_cycle)
+    fill["grid_line_transition"] = {
+        key: transition[key]
+        for key in ("sequence", "generation", "event", "from", "to", "next_generation")
+        if key in transition
     }
 
 

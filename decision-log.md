@@ -7593,3 +7593,42 @@ auditable datafeed port; broker execution remains a separate port.
   architecture is `668 / 7 = 95.4%`, still reported as `95%`.
 - No strategy parameter, risk threshold, credential, production process,
   order, position, account, or live state changed.
+
+## 2026-07-21 - Issue #49 explicit grid-line rearm
+
+### Decision
+
+- Make each AI-authored explicit grid line a fail-closed lifecycle with a stable
+  line identity, monotonic generation, idempotent fill IDs, quantity accounting,
+  and an auditable transition log.
+- Re-arm a line only after a confirmed target close leaves zero exposure. A
+  partially filled entry that has been closed remains blocked until the venue's
+  residual-entry cancellation is also confirmed.
+- Keep hard-stop, entry-cutoff, operator-cancel, and cycle-finalization paths
+  terminal. They may close exposure but may not silently create a new entry.
+- Give every repeated line cycle a distinct trade identity while retaining the
+  stable line/position identity used for grid-level reconciliation.
+
+### User value
+
+- A 4000 -> 4010 -> 4000 -> 4010 oscillation can produce two independently
+  reconcilable round trips on the same grid line instead of consuming that line
+  after its first take-profit.
+
+### Testing decision
+
+- Focused grid, cycle-runner, scoring, and execution-contract regression:
+  `113 passed`.
+- Full repository suite: `1872 passed, 7 skipped in 369.22s`.
+
+### Gotchas
+
+- A fresh entry cannot target in its entry bar because OHLC does not reveal the
+  intrabar path. This conservative ordering also prevents same-bar re-entry.
+- The paper simulator currently emits full fills. Partial-fill and reconnect
+  safety are enforced and tested at the grid-line state-machine boundary; this
+  change does not enable a venue adapter or any real-money submission path.
+- `dualtrack/grid_lifecycle/*_machine.json` is deterministic audit trace, not a
+  venue receipt or authority to trade.
+- No grid spacing, sizing, exchange key, live runtime configuration, risk-port
+  behavior, production process, order, position, account, or live state changes.

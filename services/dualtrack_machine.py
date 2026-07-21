@@ -60,6 +60,9 @@ class DualTrackMachineRunner:
         rows = tuple(bars)
         if not rows:
             raise ValueError("bars are required")
+        explicit_candidate = plan.get("grid_orders") if isinstance(plan, dict) else None
+        if not isinstance(explicit_candidate, list) or not explicit_candidate:
+            self._persist_grid_lifecycle(cycle_id, [])
         gate_armed = self._resolved_trend_gate_armed(cycle_id, trend_gate_armed)
         if plan is None:
             return self._stand_down(cycle_id, rows, reason="no_effective_plan", trend_gate_armed=gate_armed)
@@ -109,6 +112,7 @@ class DualTrackMachineRunner:
                 entry_cutoff_bar_index=_range_entry_cutoff_index(plan, execution_rows),
                 **self._grid_cost_kwargs(),
             )
+            self._persist_grid_lifecycle(cycle_id, result.lifecycle)
             fills = [self._annotate_fill(fill, execution_provenance) for fill in result.fills]
             fills, fill_quality = filter_invalid_machine_fills(fills)
             open_inventory = any(fill.get("event") == "entry" and fill.get("position_status") == "open" for fill in fills)
@@ -128,7 +132,7 @@ class DualTrackMachineRunner:
                 layers=layers,
                 trend_gate_armed=False,
                 stop_hit=result.stop_hit,
-                rearms=0,
+                rearms=result.rearms,
             )
             _preserve_gate_snapshot(state, existing_cycle)
             write_json(self._cycle_path(cycle_id), [state])
@@ -269,6 +273,11 @@ class DualTrackMachineRunner:
             for result in results
             for fill in result.fills
         ]
+        lifecycle_rows = sorted(
+            (row for result in results for row in result.lifecycle),
+            key=lambda row: (str(row.get("at") or ""), str(row.get("line_id") or ""), int(row.get("sequence") or 0)),
+        )
+        self._persist_grid_lifecycle(cycle_id, lifecycle_rows)
         fills.sort(key=lambda fill: (str(fill.get("ts") or ""), str(fill.get("fill_id") or "")))
         fills, fill_quality = filter_invalid_machine_fills(fills)
         open_inventory = any(fill.get("event") == "entry" and fill.get("position_status") == "open" for fill in fills)
@@ -289,7 +298,7 @@ class DualTrackMachineRunner:
             layers=layers,
             trend_gate_armed=False,
             stop_hit=any(result.stop_hit for result in results),
-            rearms=0,
+            rearms=sum(result.rearms for result in results),
         )
         _preserve_gate_snapshot(state, existing_cycle)
         write_json(self._cycle_path(cycle_id), [state])
@@ -346,6 +355,7 @@ class DualTrackMachineRunner:
         trend_gate_armed: bool = False,
     ) -> dict[str, Any]:
         existing_cycle = self._existing_cycle_state(cycle_id)
+        self._persist_grid_lifecycle(cycle_id, [])
         self._persist_fills(cycle_id, [])
         state = self._cycle_state(
             cycle_id,
@@ -465,6 +475,12 @@ class DualTrackMachineRunner:
 
     def _fills_path(self, cycle_id: str) -> Path:
         return self.root / "fills" / f"{cycle_id}_machine.json"
+
+    def _grid_lifecycle_path(self, cycle_id: str) -> Path:
+        return self.root / "grid_lifecycle" / f"{cycle_id}_machine.json"
+
+    def _persist_grid_lifecycle(self, cycle_id: str, rows: list[dict[str, Any]]) -> None:
+        write_json(self._grid_lifecycle_path(cycle_id), rows)
 
     def _cycle_path(self, cycle_id: str) -> Path:
         return self.root / "cycles" / f"{cycle_id}.json"
