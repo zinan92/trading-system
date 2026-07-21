@@ -795,12 +795,13 @@ class StrategyControlPlane:
         commands, risk_decision = evaluate_candidate(candidate)
         local_risk = dict(candidate.get("risk") or {})
         local_budget_blocked = bool(
-            local_risk.get("risk_budget_exceeded")
+            local_risk.get("profit_target_met") is not True
             or local_risk.get("capital_budget_exceeded")
         )
         blockers = list(risk_decision.get("blockers") or [])
         budget_blocker_codes = {
-            "plan_loss_budget_exceeded",
+            "grid_profit_target_not_met",
+            "required_leverage_mismatch",
             "leverage_limit_exceeded",
             "projected_leverage_exceeded",
             "projected_margin_exceeded",
@@ -862,7 +863,7 @@ class StrategyControlPlane:
             )
             trial_local_risk = dict(trial_candidate.get("risk") or {})
             trial_local_blocked = bool(
-                trial_local_risk.get("risk_budget_exceeded")
+                trial_local_risk.get("profit_target_met") is not True
                 or trial_local_risk.get("capital_budget_exceeded")
             )
         recalculation_available = bool(
@@ -879,7 +880,7 @@ class StrategyControlPlane:
             risk_decision = dict(trial_decision or {})
             local_risk = dict(candidate.get("risk") or {})
             local_budget_blocked = bool(
-                local_risk.get("risk_budget_exceeded")
+                local_risk.get("profit_target_met") is not True
                 or local_risk.get("capital_budget_exceeded")
             )
             blockers = list(risk_decision.get("blockers") or [])
@@ -913,7 +914,7 @@ class StrategyControlPlane:
                 if isinstance(row, dict)
             ]
             + (
-                ["preview_risk_budget_exceeded"]
+                ["preview_profit_or_capital_target_not_met"]
                 if local_budget_blocked
                 else []
             ),

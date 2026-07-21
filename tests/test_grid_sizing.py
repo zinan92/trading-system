@@ -111,6 +111,10 @@ def test_auto_notional_uses_the_full_leverage_capacity_on_the_worst_side(tmp_pat
         * risk["max_simultaneous_same_side_levels"]
     ) == pytest.approx(risk["absolute_notional_ceiling"], abs=0.25)
     assert preview["grid"]["notional_mode"] == "auto"
+    assert preview["grid"]["leverage"] == 10.0
+    assert 30 <= preview["grid"]["count"] <= 70
+    assert preview["grid"]["min_net_profit_per_grid_usd"] >= 10.0
+    assert preview["grid"]["profit_target_met"] is True
 
 
 def test_style_changes_geometry_but_not_the_capital_utilization_policy(tmp_path: Path) -> None:
@@ -138,7 +142,7 @@ def test_arithmetic_and_geometric_modes_generate_their_declared_geometry(tmp_pat
         "direction": "neutral",
         "style": "steady",
         "range": {"low": 90.0, "high": 130.0},
-        "grid": {"count": 8},
+        "grid": {"count": 30},
     }
     arithmetic = grid_sizing.build_grid_preview(
         "2026-07-05_DAY", {**base, "grid": {**base["grid"], "mode": "arithmetic"}},
@@ -176,7 +180,7 @@ def test_unknown_grid_mode_is_rejected(tmp_path: Path) -> None:
 
 def test_manual_notional_above_safe_cap_is_rejected(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
-    with pytest.raises(ValueError, match="exceeds safe cap"):
+    with pytest.raises(ValueError, match="within 10x capacity"):
         grid_sizing.build_grid_preview(
             "2026-07-05_DAY",
             {"direction": "neutral", "style": "steady", "grid": {"notional_per_grid": 10_000_000.0, "notional_mode": "manual"}},
@@ -206,8 +210,47 @@ def test_read_only_preview_can_explain_unsafe_manual_notional_without_resizing_i
 
     assert preview["grid"]["notional_per_grid"] == 10_000_000.0
     assert preview["risk"]["capital_budget_exceeded"] is True
-    assert preview["risk"]["risk_budget_exceeded"] is True
+    assert preview["risk"]["max_loss_role"] == "advisory_only"
     assert 0 < preview["risk"]["safe_notional_cap_per_grid"] < 10_000_000.0
+
+
+def test_auto_density_searches_from_70_down_to_30_for_ten_dollar_target(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        {
+            "direction": "neutral",
+            "style": "steady",
+            "range": {"low": 3_900.0, "high": 4_100.0},
+        },
+        market=market(close=4_000.0),
+        account=account(),
+        config=plane.config,
+    )
+
+    assert preview["grid"]["count"] == 30
+    assert preview["grid"]["min_net_profit_per_grid_usd"] >= 10.0
+    assert min(order["planned_net_profit_usd"] for order in preview["orders"]) >= 10.0
+    assert preview["risk"]["actual_leverage"] <= 10.0
+
+
+def test_manual_grid_below_ten_dollar_target_is_rejected(tmp_path: Path) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    with pytest.raises(ValueError, match="planned net profit of 10.00 USD"):
+        grid_sizing.build_grid_preview(
+            "2026-07-05_DAY",
+            {
+                "direction": "neutral",
+                "style": "steady",
+                "range": {"low": 3_900.0, "high": 4_100.0},
+                "grid": {"count": 70},
+            },
+            market=market(close=4_000.0),
+            account=account(),
+            config=plane.config,
+        )
 
 
 def test_leverage_above_limit_is_rejected(tmp_path: Path) -> None:

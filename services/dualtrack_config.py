@@ -74,12 +74,13 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "spacing_timeframe": "4h",
         "spacing_atr_period": 14,
         "execution_timeframe": "1m",
-        "min_grid_count": 24,
-        "max_grid_count": 80,
+        "min_grid_count": 30,
+        "max_grid_count": 70,
         "cost_spacing_multiple": 5.0,
         "default_mode": "arithmetic",
         "capital_utilization_cap": 1.0,
-        "max_plan_loss_pct": 0.10,
+        "required_leverage": 10.0,
+        "min_net_profit_per_grid_usd": 10.0,
         "styles": {
             "steady": {
                 "range_atr_multiple": 2.0,

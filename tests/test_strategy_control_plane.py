@@ -110,8 +110,6 @@ def safe_grid(direction: str = "neutral", style: str = "steady") -> dict:
     return {
         "direction": direction,
         "style": style,
-        "grid": {"notional_per_grid": 400.0, "notional_mode": "manual"},
-        "risk_budget": {"leverage": 2.0},
     }
 
 

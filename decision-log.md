@@ -8615,3 +8615,39 @@ auditable datafeed port; broker execution remains a separate port.
   Standard K-line, dashboard behavior, syntax, and conflict-marker checks.
 - Full-suite execution is intentionally omitted for this medium integration;
   browser acceptance covers the joined Range-drag and history-drag surface.
+## 2026-07-22 - 10x profit-targeted grid density
+
+### Decision
+
+- Keep direction, style, grid mode, and Range as the only operator strategy
+  inputs. Leverage is a 10x ceiling and grid count/notional are derived.
+- Let D1 ATR own Range and 4H ATR propose the densest grid, then search from
+  at most 70 grids down to a floor of 30. Select the densest candidate whose
+  minimum completed-grid profit is at least 10 USD within 10x capacity.
+- Calculate profit after venue price/quantity rounding and modeled entry plus
+  exit fees. Funding and realized slippage are excluded and must be labelled;
+  this is a planned minimum, not a guaranteed fill outcome.
+- Remove maximum stop loss from sizing and exposure blocking. Keep it as an
+  advisory diagnostic while retaining market trust, margin, total leverage,
+  order identity, protection geometry, and reconciliation gates.
+
+### Gotchas
+
+- A 10x leverage setting controls capital capacity; it does not multiply a
+  fixed order's profit. The target is met by jointly solving grid density and
+  per-grid notional under the same-side exposure ceiling.
+- Neutral and directional grids have different maximum same-side counts. The
+  solver uses the exact generated order set instead of assuming count / 2.
+- Requested quantities are floored to the venue increment before profit is
+  tested. Rounding a theoretical quantity up could otherwise pass the profit
+  test while exceeding 10x capacity.
+- If even 30 grids cannot clear 10 USD, preview/start fails closed. It never
+  raises leverage, lowers the target, or invents a manual notional.
+
+### Verification
+
+- Focused sizing, exact-command canonical risk, policy registry, and selected
+  start-transaction tests: 45 passed.
+- Full-suite execution was intentionally omitted for this bounded policy
+  change; obsolete tests that encode 2x, 12/24-grid, and max-loss blocking are
+  being replaced in the chained operator-surface milestone.

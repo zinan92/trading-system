@@ -78,12 +78,13 @@
     "spacing_timeframe": "4h",
     "spacing_atr_period": 14,
     "execution_timeframe": "1m",
-    "min_grid_count": 24,
-    "max_grid_count": 80,
+    "min_grid_count": 30,
+    "max_grid_count": 70,
     "cost_spacing_multiple": 5,
     "default_mode": "arithmetic",
     "capital_utilization_cap": 1,
-    "max_plan_loss_pct": 0.1,
+    "required_leverage": 10,
+    "min_net_profit_per_grid_usd": 10,
     "styles": {
       "steady": {
         "range_atr_multiple": 2,

@@ -26,8 +26,8 @@ from services.risk_policy_core import (
 )
 
 
-GRID_RISK_POLICY_SCHEMA = "strategy-grid-risk-policy-v1"
-GRID_RISK_EVALUATOR_VERSION = "paper-grid-risk-v1"
+GRID_RISK_POLICY_SCHEMA = "strategy-grid-risk-policy-v2"
+GRID_RISK_EVALUATOR_VERSION = "paper-grid-risk-v2"
 EXPOSURE_ACTIONS = frozenset({"increase_exposure", "replace_pending"})
 
 
@@ -206,7 +206,11 @@ class PaperGridRiskDecisionPort:
             if isinstance(candidate.get("commands"), list)
             else []
         )
-        candidate_economics = _command_economics(commands)
+        cost_per_side_bp = _non_negative_number(policy.get("cost_per_side_bp"))
+        candidate_economics = _command_economics(
+            commands,
+            cost_per_side_rate=(cost_per_side_bp or 0.0) / 10_000.0,
+        )
         blockers.extend(candidate_economics["blockers"])
         candidate_by_side = candidate_economics["notional_by_side"]
         candidate_loss_by_side = candidate_economics["loss_by_side"]
@@ -342,14 +346,19 @@ class PaperGridRiskDecisionPort:
 
         requested_leverage = finite_positive(candidate.get("leverage"))
         max_leverage = finite_positive(policy.get("max_leverage"))
-        max_loss_pct = fraction(policy.get("max_plan_loss_pct"))
+        required_leverage = finite_positive(policy.get("required_leverage"))
+        min_net_profit = finite_positive(
+            policy.get("min_net_profit_per_grid_usd")
+        )
         utilization = fraction(policy.get("margin_utilization_cap"))
         invalid_policy_fields = [
             field
             for field, value in (
                 ("max_leverage", max_leverage),
-                ("max_plan_loss_pct", max_loss_pct),
+                ("required_leverage", required_leverage),
+                ("min_net_profit_per_grid_usd", min_net_profit),
                 ("margin_utilization_cap", utilization),
+                ("cost_per_side_bp", cost_per_side_bp),
             )
             if value is None
         ]
@@ -371,16 +380,22 @@ class PaperGridRiskDecisionPort:
                     {"value": candidate.get("leverage")},
                 )
             )
-        elif (
-            max_leverage is not None
-            and requested_leverage > max_leverage + 1e-12
-        ):
+        elif max_leverage is not None and requested_leverage > max_leverage + 1e-12:
             blockers.append(
                 blocker(
                     "leverage_limit_exceeded",
                     "grid_risk_policy.max_leverage",
                     "requested leverage exceeds policy limit",
                     {"requested": requested_leverage, "limit": max_leverage},
+                )
+            )
+        elif required_leverage is not None and abs(requested_leverage - required_leverage) > 1e-12:
+            blockers.append(
+                blocker(
+                    "required_leverage_mismatch",
+                    "grid_risk_policy.required_leverage",
+                    "grid leverage must equal the fixed policy leverage",
+                    {"requested": requested_leverage, "required": required_leverage},
                 )
             )
 
@@ -396,11 +411,6 @@ class PaperGridRiskDecisionPort:
         }
         projected_notional = max(projected_by_side.values())
         projected_loss = max(projected_loss_by_side.values())
-        risk_budget = (
-            equity * max_loss_pct
-            if equity is not None and max_loss_pct is not None
-            else None
-        )
         margin_budget = (
             equity * utilization
             if equity is not None and utilization is not None
@@ -413,15 +423,23 @@ class PaperGridRiskDecisionPort:
             else None
         )
 
-        if risk_budget is not None and projected_loss > risk_budget + 1e-8:
+        planned_net_profits = list(candidate_economics["net_profit_usd"])
+        minimum_planned_net_profit = min(planned_net_profits) if planned_net_profits else None
+        if (
+            candidate_kind == "strategy_plan_grid"
+            and commands
+            and min_net_profit is not None
+            and (minimum_planned_net_profit is None or minimum_planned_net_profit + 1e-8 < min_net_profit)
+        ):
             blockers.append(
                 blocker(
-                    "plan_loss_budget_exceeded",
-                    "grid_risk_policy.max_plan_loss",
-                    "candidate maximum loss exceeds the configured plan-loss budget",
+                    "grid_profit_target_not_met",
+                    "grid_risk_policy.min_net_profit_per_grid_usd",
+                    "at least one completed grid is below the planned net-profit target",
                     {
-                        "projected_max_loss": round(projected_loss, 8),
-                        "max_loss_budget": round(risk_budget, 8),
+                        "minimum_planned_net_profit_usd": rounded(minimum_planned_net_profit),
+                        "target_net_profit_per_grid_usd": rounded(min_net_profit),
+                        "calculation": "modeled_entry_exit_fees_funding_excluded",
                     },
                 )
             )
@@ -458,12 +476,19 @@ class PaperGridRiskDecisionPort:
                 )
             )
 
-        recommendation = _notional_recommendation(
-            candidate,
-            candidate_loss_by_side=candidate_loss_by_side,
-            existing_loss_by_side=existing_loss,
-            risk_budget=risk_budget,
+        warnings.append(
+            notice(
+                "plan_max_loss_advisory",
+                "strategy_plan.commands",
+                "maximum stop loss is reported for operator awareness and does not block sizing",
+                {"projected_max_loss": round(projected_loss, 8)},
+            )
         )
+        recommendation = {
+            "available": False,
+            "reason": "profit_target_requires_grid_geometry_or_capital_change",
+            "applied_automatically": False,
+        }
         metrics = {
             "calculation_source": "exact_commands_plus_canonical_accounting",
             "preview_risk_fields_used": False,
@@ -476,6 +501,7 @@ class PaperGridRiskDecisionPort:
             "existing_stop_loss_by_side": rounded_mapping(existing_loss),
             "projected_loss_by_side": rounded_mapping(projected_loss_by_side),
             "projected_max_loss": rounded(projected_loss),
+            "minimum_planned_net_profit_per_grid_usd": rounded(minimum_planned_net_profit),
             "projected_actual_leverage": rounded(actual_leverage),
             "projected_margin": rounded(estimated_margin),
             "open_position_count": len(positions),
@@ -484,9 +510,10 @@ class PaperGridRiskDecisionPort:
             "replaced_entry_order_count": len(replaced_ids),
         }
         limits = {
-            "max_plan_loss_pct": max_loss_pct,
-            "max_plan_loss": rounded(risk_budget),
             "max_leverage": max_leverage,
+            "required_leverage": required_leverage,
+            "min_net_profit_per_grid_usd": min_net_profit,
+            "cost_per_side_bp": cost_per_side_bp,
             "margin_utilization_cap": utilization,
             "margin_budget": rounded(margin_budget),
             "market_must_be_inside_range": True,
@@ -511,7 +538,15 @@ def grid_risk_policy(config: Mapping[str, Any]) -> dict[str, Any]:
     body = {
         "schema_version": GRID_RISK_POLICY_SCHEMA,
         "max_leverage": finite_positive(config.get("max_leverage")),
-        "max_plan_loss_pct": fraction(strategy.get("max_plan_loss_pct")),
+        "required_leverage": finite_positive(
+            strategy.get("required_leverage") or config.get("max_leverage")
+        ),
+        "min_net_profit_per_grid_usd": finite_positive(
+            strategy.get("min_net_profit_per_grid_usd") or 10.0
+        ),
+        "cost_per_side_bp": _non_negative_number(
+            config.get("cost_per_side_bp", 0.5)
+        ),
         "margin_utilization_cap": fraction(
             strategy.get("capital_utilization_cap")
         ),
@@ -566,9 +601,14 @@ def _same_retained_order_economics(
     return accepted_version in (None, "") or candidate_version == accepted_version
 
 
-def _command_economics(commands: list[Any]) -> dict[str, Any]:
+def _command_economics(
+    commands: list[Any],
+    *,
+    cost_per_side_rate: float,
+) -> dict[str, Any]:
     notionals = {"buy": 0.0, "sell": 0.0}
     losses = {"buy": 0.0, "sell": 0.0}
+    net_profits: list[float] = []
     blockers: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, command in enumerate(commands):
@@ -651,9 +691,13 @@ def _command_economics(commands: list[Any]) -> dict[str, Any]:
             )
         notionals[side] += economic_notional
         losses[side] += abs(price - stop) * quantity
+        gross_profit = abs(take_profit - price) * quantity
+        modeled_fees = (price + take_profit) * quantity * cost_per_side_rate
+        net_profits.append(gross_profit - modeled_fees)
     return {
         "notional_by_side": notionals,
         "loss_by_side": losses,
+        "net_profit_usd": net_profits,
         "blockers": blockers,
     }
 
@@ -736,37 +780,9 @@ def _position_economics(
     }
 
 
-def _notional_recommendation(
-    candidate: Mapping[str, Any],
-    *,
-    candidate_loss_by_side: Mapping[str, float],
-    existing_loss_by_side: Mapping[str, float],
-    risk_budget: float | None,
-) -> dict[str, Any]:
-    current = finite_positive(candidate.get("notional_per_grid"))
-    if current is None or risk_budget is None:
-        return {
-            "available": False,
-            "reason": "candidate_notional_or_risk_budget_unknown",
-        }
-    scales = []
-    for side in ("buy", "sell"):
-        candidate_loss = float(candidate_loss_by_side.get(side) or 0.0)
-        if candidate_loss <= 0:
-            continue
-        available = max(
-            0.0,
-            risk_budget - float(existing_loss_by_side.get(side) or 0.0),
-        )
-        scales.append(available / candidate_loss)
-    if not scales:
-        return {"available": False, "reason": "candidate_loss_rate_unknown"}
-    recommended = max(0.0, current * min(scales))
-    recommended_cents = math.floor(min(current, recommended) * 100.0) / 100.0
-    return {
-        "available": recommended_cents > 0,
-        "action": "recalculate_notional_by_risk_budget",
-        "requested_notional_per_grid": round(current, 2),
-        "recommended_notional_per_grid": recommended_cents,
-        "applied_automatically": False,
-    }
+def _non_negative_number(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) and parsed >= 0 else None
