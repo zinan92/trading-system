@@ -8,7 +8,7 @@ import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from services.dualtrack_clock import cycle_window_from_id
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
@@ -17,7 +17,9 @@ from services.strategy_control_plane import StrategyControlPlane, production_mut
 from services.strategy_shadow import load_strategy_shadow_runs
 
 
-ShadowEvidenceBuilder = Callable[[str, dict[str, Any] | None, list[dict[str, Any]]], Any]
+# Runtime-evaluated alias: keep 3.9-compatible Optional[...] (PEP 604 unions
+# in a non-annotation position crash under the launchd system Python 3.9).
+ShadowEvidenceBuilder = Callable[[str, Optional[dict[str, Any]], list[dict[str, Any]]], Any]
 
 
 class StrategyCyclePackager:
