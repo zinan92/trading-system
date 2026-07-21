@@ -4,19 +4,21 @@ import hashlib
 import json
 import os
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
 from services.config_loader import ROOT
 from services.dualtrack_execution_contract import canonical_market_event, normalize_execution_command
 from services.dualtrack_config import dualtrack_config
+from services.dualtrack_grid_core import GridLineLifecycle
 from services.dualtrack_shadow_input import build_shadow_input
 from services.journal_store import load_json, write_json
 from services.risk_port import action_class_for_command, build_paper_safe_action_market_gate
 
 
 ReplayExecutor = Callable[[Path, Path, Path], dict[str, Any]]
-REPLAY_VERSION = "dualtrack-nautilus-replay-v7"
+REPLAY_VERSION = "dualtrack-nautilus-replay-v8"
 
 
 class NautilusExecutionAdapter:
@@ -288,6 +290,7 @@ class NautilusExecutionAdapter:
                 "snapshot": self.snapshot(cycle_id),
             }
         snapshot = self._replay(cycle_id)
+        commands = load_json(self._commands_path(cycle_id))
         processed_by_id = {str(row.get("event_id") or ""): row for row in processed_rows}
         for persisted in rows:
             persisted_id = str(persisted.get("event_id") or "")
@@ -428,20 +431,32 @@ class NautilusExecutionAdapter:
     def _replay(self, cycle_id: str) -> dict[str, Any]:
         events = sorted(load_json(self._events_path(cycle_id)), key=_market_event_sort_key)
         commands = sorted(load_json(self._commands_path(cycle_id)), key=_command_sort_key)
-        bundle = build_shadow_input(
-            cycle_id=cycle_id,
-            authoritative_snapshot={"cycle_id": cycle_id, "engine": self.name, "fills": []},
-            market_events=events,
-            commands=commands,
-            execution_settings={
-                "starting_cash": float(self.config["capital_per_track_usd"]),
-                "max_leverage": float(self.config["max_leverage"]),
-            },
-        )
         input_path = self.root / "inputs" / f"{cycle_id}.json"
         output_path = self.root / "replays" / f"{cycle_id}.json"
-        write_json(input_path, [bundle])
-        snapshot = self._replay_executor(self.preflight_path, input_path, output_path)
+        snapshot: dict[str, Any] | None = None
+        max_passes = max(1, len(events) + len(commands) + 1)
+        for _pass in range(max_passes):
+            bundle = build_shadow_input(
+                cycle_id=cycle_id,
+                authoritative_snapshot={"cycle_id": cycle_id, "engine": self.name, "fills": []},
+                market_events=events,
+                commands=commands,
+                execution_settings={
+                    "starting_cash": float(self.config["capital_per_track_usd"]),
+                    "max_leverage": float(self.config["max_leverage"]),
+                },
+            )
+            write_json(input_path, [bundle])
+            snapshot = self._replay_executor(self.preflight_path, input_path, output_path)
+            generated = self._next_grid_rearm_commands(cycle_id, commands, snapshot)
+            if not generated:
+                break
+            commands = sorted([*commands, *generated], key=_command_sort_key)
+            write_json(self._commands_path(cycle_id), commands)
+        else:
+            raise RuntimeError("Nautilus grid rearm replay did not converge")
+        if snapshot is None:
+            raise RuntimeError("Nautilus replay did not return a snapshot")
         if snapshot.get("schema_version") != "dualtrack-execution-v1":
             raise RuntimeError("Nautilus replay returned unsupported snapshot schema")
         if str(snapshot.get("cycle_id") or "") != cycle_id:
@@ -457,8 +472,218 @@ class NautilusExecutionAdapter:
                 "replay_version": REPLAY_VERSION,
             },
         }
+        if self.storage_namespace == "nautilus_authoritative":
+            lifecycle = self._persist_grid_lifecycle(cycle_id, commands, snapshot)
+            normalized["rearms"] = lifecycle["rearms"]
+            normalized["grid_lifecycle"] = lifecycle
+            normalized["capabilities"]["grid_rearm_after_target"] = True
+            self._merge_future_accepted_orders(normalized, commands, events)
         self._persist_snapshot(cycle_id, normalized)
         return normalized
+
+    def _next_grid_rearm_commands(
+        self,
+        cycle_id: str,
+        commands: list[dict[str, Any]],
+        snapshot: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if self.storage_namespace != "nautilus_authoritative":
+            return []
+        command_by_id = {
+            str(row.get("command_id") or ""): dict(row.get("command") or {})
+            for row in commands
+        }
+        lines: dict[str, list[tuple[int, str, dict[str, Any]]]] = {}
+        for command_id, command in command_by_id.items():
+            if not _grid_rearm_entry(command):
+                continue
+            root_id = str(command.get("grid_line_id") or command_id)
+            generation = int(command.get("grid_generation") or 1)
+            lines.setdefault(root_id, []).append((generation, command_id, command))
+
+        fills = [dict(row) for row in snapshot.get("fills") or []]
+        generated: list[dict[str, Any]] = []
+        for root_id, generations in sorted(lines.items()):
+            generation, command_id, command = max(generations, key=lambda row: row[0])
+            entry_quantity = sum(
+                float(fill.get("quantity") or 0.0)
+                for fill in fills
+                if str(fill.get("trade_id") or "") == command_id
+                and str(fill.get("event") or "") == "entry"
+            )
+            target_fills = [
+                fill
+                for fill in fills
+                if str(fill.get("trade_id") or "") == command_id
+                and str(fill.get("event") or "") == "target"
+            ]
+            target_quantity = sum(float(fill.get("quantity") or 0.0) for fill in target_fills)
+            if entry_quantity <= 0 or target_quantity + 1e-9 < entry_quantity:
+                continue
+            target_at = max((str(fill.get("ts") or "") for fill in target_fills), default="")
+            if not target_at or self._grid_plan_cancelled_after(commands, command, target_at):
+                continue
+            next_generation = generation + 1
+            if any(item[0] == next_generation for item in generations):
+                continue
+            payload = {
+                **command,
+                "cycle_id": cycle_id,
+                "ts": _after_fill_timestamp(target_at),
+                "source_fill_id": f"nautilus-grid-rearm:{root_id}:generation:{next_generation}",
+                "grid_line_id": root_id,
+                "grid_generation": next_generation,
+                "grid_rearm_enabled": True,
+                "rearm_of_order_id": command_id,
+            }
+            normalized = _canonical_command(payload)
+            generated.append({
+                "schema_version": "dualtrack-shadow-command-v1",
+                "command_id": normalized["command_id"],
+                "cycle_id": cycle_id,
+                "command": normalized["command"],
+            })
+        return generated
+
+    @staticmethod
+    def _grid_plan_cancelled_after(
+        commands: list[dict[str, Any]],
+        entry_command: dict[str, Any],
+        target_at: str,
+    ) -> bool:
+        plan_id = str(entry_command.get("strategy_plan_id") or "")
+        for row in commands:
+            command = row.get("command") if isinstance(row.get("command"), dict) else {}
+            if str(command.get("event") or "").lower() != "cancel":
+                continue
+            if plan_id and str(command.get("strategy_plan_id") or "") != plan_id:
+                continue
+            if str(command.get("ts") or "") >= target_at:
+                return True
+        return False
+
+    def _persist_grid_lifecycle(
+        self,
+        cycle_id: str,
+        commands: list[dict[str, Any]],
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        command_by_id = {
+            str(row.get("command_id") or ""): dict(row.get("command") or {})
+            for row in commands
+        }
+        grouped: dict[str, list[tuple[int, str, dict[str, Any]]]] = {}
+        for command_id, command in command_by_id.items():
+            if not _grid_rearm_entry(command):
+                continue
+            root_id = str(command.get("grid_line_id") or command_id)
+            grouped.setdefault(root_id, []).append(
+                (int(command.get("grid_generation") or 1), command_id, command)
+            )
+        fills = [dict(row) for row in snapshot.get("fills") or []]
+        orders = {
+            str(row.get("order_id") or ""): dict(row)
+            for row in snapshot.get("orders") or []
+        }
+        rows: list[dict[str, Any]] = []
+        for root_id, generations in sorted(grouped.items()):
+            first = min(generations, key=lambda row: row[0])
+            lifecycle = GridLineLifecycle(
+                line_id=root_id,
+                armed_at=str(first[2].get("ts") or ""),
+                requested_quantity=float(
+                    first[2].get("quantity") or first[2].get("contracts") or 0.0
+                ),
+            )
+            for generation, command_id, command in sorted(generations):
+                if lifecycle.generation != generation:
+                    raise RuntimeError("Nautilus grid lifecycle generation is discontinuous")
+                line_fills = sorted(
+                    (
+                        fill for fill in fills
+                        if str(fill.get("trade_id") or "") == command_id
+                    ),
+                    key=lambda fill: (
+                        str(fill.get("ts") or ""),
+                        str(fill.get("fill_id") or ""),
+                    ),
+                )
+                for fill in line_fills:
+                    event = str(fill.get("event") or "")
+                    if event == "entry":
+                        lifecycle.apply_entry_fill(
+                            fill_id=str(fill.get("fill_id") or ""),
+                            quantity=float(fill.get("quantity") or 0.0),
+                            at=str(fill.get("ts") or ""),
+                        )
+                    elif event in {"target", "stop", "exit", "flatten"}:
+                        lifecycle.apply_close_fill(
+                            fill_id=str(fill.get("fill_id") or ""),
+                            quantity=float(fill.get("quantity") or 0.0),
+                            at=str(fill.get("ts") or ""),
+                            rearm=event == "target" and any(
+                                next_generation == generation + 1
+                                for next_generation, _next_id, _next_command in generations
+                            ),
+                            terminal_state="stopped" if event == "stop" else "closed",
+                        )
+                order = orders.get(command_id) or {}
+                if (
+                    str(order.get("state") or "") in {"canceled", "cancelled"}
+                    and lifecycle.active
+                    and lifecycle.open_quantity <= 1e-9
+                ):
+                    lifecycle.cancel(
+                        at=str(
+                            order.get("cancelled_at")
+                            or order.get("ts")
+                            or command.get("ts")
+                            or ""
+                        ),
+                        reason="authoritative_order_cancelled",
+                    )
+            rows.extend(lifecycle.transitions)
+        rows.sort(
+            key=lambda row: (
+                str(row.get("at") or ""),
+                str(row.get("line_id") or ""),
+                int(row.get("sequence") or 0),
+            )
+        )
+        path = self.output_root / "dualtrack" / "grid_lifecycle" / f"{cycle_id}_nautilus.json"
+        write_json(path, rows)
+        return {
+            "schema_version": "dualtrack-grid-lifecycle-summary-v1",
+            "engine": self.name,
+            "cycle_id": cycle_id,
+            "line_count": len(grouped),
+            "rearms": sum(row.get("event") == "close_fill_confirmed_rearm" for row in rows),
+            "audit_path": str(path),
+        }
+
+    @staticmethod
+    def _merge_future_accepted_orders(
+        snapshot: dict[str, Any],
+        commands: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+    ) -> None:
+        if not events:
+            return
+        last_event_at = max(str(event.get("ts_event") or "") for event in events)
+        orders = list(snapshot.get("orders") or [])
+        known_ids = {str(order.get("order_id") or "") for order in orders}
+        for row in commands:
+            command_id = str(row.get("command_id") or "")
+            command = row.get("command") if isinstance(row.get("command"), dict) else {}
+            if (
+                command_id
+                and command_id not in known_ids
+                and _grid_rearm_entry(command)
+                and str(command.get("ts") or "") > last_event_at
+            ):
+                orders.append(_order_receipt(row))
+                known_ids.add(command_id)
+        snapshot["orders"] = orders
 
     def _persist_snapshot(self, cycle_id: str, snapshot: dict[str, Any]) -> None:
         previous_fills = load_json(self._fills_path(cycle_id))
@@ -655,6 +880,27 @@ def _market_event_sort_key(row: dict[str, Any]) -> str:
 def _command_sort_key(row: dict[str, Any]) -> str:
     command = row.get("command") if isinstance(row.get("command"), dict) else {}
     return str(command.get("ts") or "")
+
+
+def _grid_rearm_entry(command: dict[str, Any]) -> bool:
+    if str(command.get("event") or "entry").lower() != "entry":
+        return False
+    if str(command.get("order_type") or "market").lower() != "limit":
+        return False
+    if command.get("sl") in (None, "") or command.get("tp") in (None, ""):
+        return False
+    if command.get("grid_rearm_enabled") is True:
+        return bool(str(command.get("grid_line_id") or ""))
+    return (
+        str(command.get("source") or "") == "strategy_production_console"
+        and str(command.get("source_fill_id") or "").startswith("strategy-grid:")
+        and bool(str(command.get("strategy_plan_id") or ""))
+    )
+
+
+def _after_fill_timestamp(value: str) -> str:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return (parsed + timedelta(microseconds=1)).isoformat()
 
 
 def _fill_business_key(row: dict[str, Any]) -> str:
