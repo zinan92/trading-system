@@ -646,7 +646,7 @@ def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: 
     })
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
 
-    result = runner.live_tick(as_of="2026-07-05T01:01:30+00:00")
+    result = runner.live_tick(as_of="2026-07-05T01:02:00+00:00")
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
     assert result["protective_sweep"]["status"] == "triggered"
@@ -654,6 +654,62 @@ def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: 
     assert len(fills) == 2
     assert fills[-1]["event"] == "stop"
     assert fills[-1]["price"] == 105.0
+
+
+def test_live_tick_waits_for_final_one_minute_ohlc_before_execution(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    MarketStore(db).upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:01:00+00:00",
+            open=100.0,
+            high=106.0,
+            low=99.0,
+            close=106.0,
+            volume=1.0,
+            provider="test",
+        )
+    ])
+    DualTrackHumanEngine(output, config=TEST_CONFIG).submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+    })
+    runner = DualTrackCycleRunner(
+        output_root=output,
+        market_db=db,
+        config=TEST_CONFIG,
+    )
+
+    forming = runner.live_tick(as_of="2026-07-05T01:01:30+00:00")
+    fills_while_forming = load_json(
+        output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json"
+    )
+    final = runner.live_tick(as_of="2026-07-05T01:02:00+00:00")
+    fills_after_close = load_json(
+        output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json"
+    )
+    event = runner._protective_bar_event(
+        "2026-07-05_DAY",
+        MarketStore(db).load_bars("GOLD", "1m", 1)[0],
+        now=parse_utc("2026-07-05T01:02:00+00:00"),
+    )
+
+    assert forming["protective_sweep"]["reason"] == "waiting_for_completed_market_bar"
+    assert len(fills_while_forming) == 1
+    assert final["protective_sweep"]["status"] == "triggered"
+    assert fills_after_close[-1]["event"] == "stop"
+    assert event["event_id"] == "2026-07-05_DAY:1m:2026-07-05T01:01:00+00:00"
 
 
 def test_live_tick_keeps_prior_cycle_human_tp_sl_active(
@@ -682,7 +738,7 @@ def test_live_tick_keeps_prior_cycle_human_tp_sl_active(
     monkeypatch.setattr(runner, "sync_obsidian_human_plans", lambda **_kwargs: {"status": "skipped"})
     monkeypatch.setattr(runner, "intraday_tick", lambda **_kwargs: {"status": "skipped"})
 
-    result = runner.live_tick(as_of="2026-07-05T13:01:30+00:00")
+    result = runner.live_tick(as_of="2026-07-05T13:02:00+00:00")
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
     assert result["protective_sweep"]["status"] == "triggered"
@@ -737,7 +793,7 @@ def test_live_tick_replays_intermediate_bar_wick_after_close_recovers(tmp_path: 
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
     assert result["protective_sweep"]["status"] == "triggered"
-    assert result["protective_sweep"]["processed_events"] == 2
+    assert result["protective_sweep"]["processed_events"] == 1
     assert fills[-1]["event"] == "stop"
     assert fills[-1]["price"] == 105.0
     assert fills[-1]["trigger_mark_price"] == 100.0
@@ -772,7 +828,7 @@ def test_live_tick_same_bar_stop_and_target_uses_conservative_stop_first(tmp_pat
     })
 
     DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
-        as_of="2026-07-05T01:01:30+00:00"
+        as_of="2026-07-05T01:02:00+00:00"
     )
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
@@ -969,7 +1025,7 @@ def test_live_tick_routes_trusted_market_event_through_execution_adapter(tmp_pat
     )
 
     result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
-        as_of="2026-07-05T01:01:30+00:00"
+        as_of="2026-07-05T01:02:00+00:00"
     )
 
     assert result["protective_sweep"]["status"] == "triggered"
@@ -1012,7 +1068,7 @@ def test_live_tick_processes_pending_limit_without_an_open_position(tmp_path: Pa
     )
 
     result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
-        as_of="2026-07-05T01:01:30+00:00"
+        as_of="2026-07-05T01:02:00+00:00"
     )
 
     assert result["protective_sweep"]["processed_events"] > 0
@@ -1073,8 +1129,8 @@ def test_live_tick_replays_datafeed_limit_fill_and_target_exactly_once(
     monkeypatch.setattr(runner, "sync_obsidian_human_plans", lambda **_kwargs: {"status": "skipped"})
     monkeypatch.setattr(runner, "intraday_tick", lambda **_kwargs: {"status": "skipped"})
 
-    first = runner.live_tick(as_of="2026-07-05T01:02:30+00:00")
-    second = runner.live_tick(as_of="2026-07-05T01:02:30+00:00")
+    first = runner.live_tick(as_of="2026-07-05T01:03:00+00:00")
+    second = runner.live_tick(as_of="2026-07-05T01:03:00+00:00")
 
     snapshot = runner.execution.snapshot("2026-07-05_DAY", mark_price=110.0, mark_fresh=True)
     assert first["protective_sweep"]["status"] == "triggered"

@@ -8575,3 +8575,43 @@ auditable datafeed port; broker execution remains a separate port.
   risk-budget recalculation.
 - Full-suite execution was intentionally not used for this bounded UI
   milestone.
+
+## 2026-07-21 - Trusted historical K-lines and finalized execution bars
+
+### Decision
+
+- Only a bar whose start plus timeframe is at or before the current time may
+  enter the execution adapter. The forming bar remains display-only.
+- A historical page still passes through the typed market envelope. It may be
+  `trusted_history=true` for display while always remaining `fresh=false` and
+  therefore cannot authorize an entry.
+- A failed live refresh keeps the last trusted candles visible but explicitly
+  clears `trusted` and `fresh`; retained pixels never satisfy the trade gate.
+- History uses an exclusive `end`, server `has_more`, timestamp deduplication,
+  and logical-range restoration after prepend.
+
+### Gotchas
+
+- Treating a historical page as live-ready would let an old candle authorize a
+  new order. Display trust and execution freshness are intentionally separate.
+- Reusing a bar id while its high/low is still changing can permanently hide
+  the final range behind idempotency. Event identity is cycle, timeframe, and
+  bar start, and creation is delayed until close.
+- A retained chart must set `trusted=false`; changing only its status text is a
+  cosmetic block and is not a safety boundary.
+- History dragging is disabled while Range adjustment mode owns the pointer;
+  chart polling and prepend restoration are marked programmatic so neither can
+  accidentally request another history page.
+- A retained snapshot has `fresh=false`, so the ordinary five-second read-model
+  refresh must reconcile it instead of treating it as disposable stale data;
+  otherwise the next poll would erase the last trusted candles.
+- Shadow contract mode still owns its legacy payload, but historical paging
+  metadata must be attached after comparison so the dashboard can apply the
+  same display-only trust contract in either cutover mode.
+
+### Verification
+
+- Revalidated on the post-#82 integration branch with the focused Python,
+  Standard K-line, dashboard behavior, syntax, and conflict-marker checks.
+- Full-suite execution is intentionally omitted for this medium integration;
+  browser acceptance covers the joined Range-drag and history-drag surface.

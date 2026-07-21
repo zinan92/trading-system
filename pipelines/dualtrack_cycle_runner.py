@@ -1226,22 +1226,27 @@ class DualTrackCycleRunner:
         if rejected:
             return {"status": "skipped", "reason": rejected, "triggered": []}
 
-        events = [self._protective_bar_event(cycle_id, bar, now=now) for bar in bars]
+        # The latest database row may still be the exchange's forming candle.
+        # Replaying it before close would freeze an incomplete high/low behind
+        # the event id and can create fills which never existed on a final bar.
+        completed_bars = [
+            bar
+            for bar in bars
+            if parse_utc(bar.timestamp) + self._timeframe_duration() <= now
+        ]
+        events = [
+            self._protective_bar_event(cycle_id, bar, now=now)
+            for bar in completed_bars
+        ]
         if not events:
-            fallback_price = float(latest.get("close") or 0.0)
-            events = [{
-                "cycle_id": cycle_id,
-                "ts_event": now.isoformat(),
-                "price": fallback_price,
-                "open": fallback_price,
-                "high": fallback_price,
-                "low": fallback_price,
-                "fresh": True,
-                "is_synthetic": False,
-                "source": f"market_db:{provider or 'unknown'}",
-                "provider": provider,
-                "instrument_id": self._execution_instrument_id(),
-            }]
+            return {
+                "status": "ok",
+                "reason": "waiting_for_completed_market_bar",
+                "triggered": [],
+                "accepted_limit_fills": [],
+                "accepted_limit_fill_count": 0,
+                "processed_events": 0,
+            }
 
         triggered: list[dict[str, Any]] = []
         accepted_limit_fills: list[dict[str, Any]] = []
@@ -1267,9 +1272,12 @@ class DualTrackCycleRunner:
 
     def _protective_bar_event(self, cycle_id: str, bar: Bar, *, now: datetime) -> dict[str, Any]:
         started_at = parse_utc(bar.timestamp)
-        ended_at = min(started_at + self._timeframe_duration(), now)
+        ended_at = started_at + self._timeframe_duration()
+        if ended_at > now:
+            raise ValueError("market bar is not complete")
         return {
             "cycle_id": cycle_id,
+            "event_id": f"{cycle_id}:{self.timeframe}:{started_at.isoformat()}",
             "ts_event": ended_at.isoformat(),
             "event_started_at": started_at.isoformat(),
             "price": float(bar.close),

@@ -54,6 +54,7 @@ def project_dualtrack_market_payload(
     requested: dict,
     datafeed_url: str,
     checked_at: datetime,
+    historical: bool = False,
 ) -> dict:
     """Project one validated envelope into the existing DualTrack read shape.
 
@@ -97,7 +98,16 @@ def project_dualtrack_market_payload(
         and consumer_session_ready
         and consumer_bar_fresh
     )
-    if consumer_fresh:
+    trusted_history = bool(
+        historical
+        and bars
+        and envelope.execution_venue
+        and not envelope.is_synthetic
+        and bool(envelope.provider)
+    )
+    if trusted_history:
+        status = "ready"
+    elif consumer_fresh:
         status = "ready"
     elif not bars or not consumer_session_ready:
         status = "blocked"
@@ -123,6 +133,8 @@ def project_dualtrack_market_payload(
         "latest_timestamp": bars[-1]["timestamp"] if bars else "",
         "latest_close": bars[-1]["close"] if bars else None,
         "fresh": consumer_fresh,
+        "historical_page": historical,
+        "trusted_history": trusted_history,
         "age_minutes": age_minutes,
         "max_age_minutes": max_age_minutes,
         "bars": bars,

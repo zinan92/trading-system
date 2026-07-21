@@ -32,9 +32,9 @@ def test_gridmind_defaults_to_30m_without_changing_strategy_input_timeframes() -
 def test_gridmind_renders_last_trusted_read_model_before_optional_30m_refresh() -> None:
     html = _html()
 
-    load_body = html.split("async function load", 1)[1].split("async function control", 1)[0]
-    assert "if(!state.market||!isFresh(state.market))state.market=data.market;render();" in load_body
-    assert load_body.index("state.market=data.market;render();") < load_body.index("await refreshMarket()")
+    load_body = html.split("async function load({", 1)[1].split("async function control", 1)[0]
+    assert "state.market=reconcileReadModelMarket(state.market,data.market);render();" in load_body
+    assert load_body.index("reconcileReadModelMarket") < load_body.index("await refreshMarket()")
 
 
 def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
@@ -109,6 +109,21 @@ def test_gridmind_mobile_layout_prevents_global_horizontal_overflow() -> None:
     assert "html,body{max-width:100%;overflow-x:hidden}" in html
     assert ".workspace,.market-column,.control-rail,.chart-card,.data-card,.chart-tools,.timeframes{min-width:0}" in html
     assert ".console-wrap{max-width:100%;padding:7px}" in html
+
+
+def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> None:
+    html = _html()
+
+    assert 'id="chartHistoryNotice"' in html
+    assert "retainLastTrustedMarket" in html
+    assert "retained_last_trusted" in html
+    assert "loadOlderMarketBars" in html
+    assert "page.historical_page!==true||page.trusted_history!==true" in html
+    assert "pagination?.has_more===false" in html
+    assert "getVisibleLogicalRange" in html
+    assert "restoreVisibleLogicalRange" in html
+    assert "standard-kline:viewchange" in html
+    assert 'status:"error",fresh:false,trusted:false' in html
 
 
 def test_gridmind_restores_all_production_controls() -> None:
