@@ -426,6 +426,53 @@ def _package_hash_is_valid(value: Any) -> bool:
     return bool(observed) and hmac.compare_digest(observed, expected)
 
 
+def load_latest_verified_cycle_package(path: Path) -> dict[str, Any]:
+    """Load one terminal package only after its complete journal is verified."""
+
+    rows = load_json(Path(path))
+    if not rows:
+        raise ValueError(f"missing strategy cycle package: {path}")
+    failure = _package_chain_failure(rows)
+    if failure:
+        raise ValueError(
+            "strategy cycle package chain is invalid"
+            f"; row={failure['source_record_index']}"
+            f"; reason={failure['failure_reason']}"
+        )
+    latest = rows[-1]
+    if not isinstance(latest, dict) or latest.get("status") != "closed":
+        raise ValueError(f"strategy cycle package is not terminal: {path}")
+    return deepcopy(latest)
+
+
+def load_verified_cycle_package_revision(path: Path, package_hash: str) -> dict[str, Any]:
+    """Resolve one referenced closed revision from a valid package journal."""
+
+    rows = load_json(Path(path))
+    if not rows:
+        raise ValueError(f"missing strategy cycle package: {path}")
+    failure = _package_chain_failure(rows)
+    if failure:
+        raise ValueError(
+            "strategy cycle package chain is invalid"
+            f"; row={failure['source_record_index']}"
+            f"; reason={failure['failure_reason']}"
+        )
+    expected = str(package_hash or "")
+    matched = next(
+        (
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and hmac.compare_digest(str(row.get("package_hash") or ""), expected)
+        ),
+        None,
+    )
+    if matched is None or matched.get("status") != "closed":
+        raise ValueError(f"referenced terminal strategy cycle package is missing: {package_hash}")
+    return deepcopy(matched)
+
+
 def _package_chain_failure(rows: list[Any]) -> dict[str, Any] | None:
     """Return the first unacknowledged hash/link failure in an append-only journal."""
 

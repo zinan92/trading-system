@@ -61,6 +61,7 @@ from services.trading_system_read_model import (
     project_market_read_model,
     project_trading_system_read_model,
 )
+from services.trading_daily_24h_report import load_daily_report_rows
 
 from services.contracts.common import _CYCLE_ID_PATTERN, _DATE_PATTERN, _truthy  # noqa: F401 — re-exported for backward compatibility
 from services.contracts.system import build_market_view_intake_response, build_system_state_response, dashboard_output_root  # noqa: F401 — re-exported for backward compatibility
@@ -853,6 +854,7 @@ def _assemble_strategy_console_snapshot(
             "history_contract": production_history["history_contract"],
         },
         "ledger": build_dualtrack_ledger_response(output_root=output),
+        "daily_reports": build_strategy_console_daily_reports_response(output_root=output),
         "strategy_shadows": shadows,
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
@@ -872,6 +874,21 @@ def _assemble_strategy_console_snapshot(
             "strategy_preview": True,
             "runtime_actual_state": True,
         },
+    }
+
+
+def build_strategy_console_daily_reports_response(
+    *,
+    output_root: Path | None = None,
+    limit: int = 30,
+) -> dict[str, Any]:
+    output = _dualtrack_output_root(output_root)
+    rows = load_daily_report_rows(output, limit=limit)
+    return {
+        "schema_version": "strategy-daily-reports-v1",
+        "reports": rows,
+        "latest": rows[0] if rows else None,
+        "source": "terminal_cycle_packages",
     }
 
 
