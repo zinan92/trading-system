@@ -210,7 +210,12 @@ class PaperGridRiskDecisionPort:
         blockers.extend(candidate_economics["blockers"])
         candidate_by_side = candidate_economics["notional_by_side"]
         candidate_loss_by_side = candidate_economics["loss_by_side"]
-        if not commands:
+        empty_replacement_allowed = (
+            payload["action_class"] == "replace_pending"
+            and bool(candidate.get("replaced_order_ids"))
+            and not candidate.get("retained_order_ids")
+        )
+        if not commands and not empty_replacement_allowed:
             blockers.append(
                 blocker(
                     "candidate_commands_missing",
@@ -239,9 +244,19 @@ class PaperGridRiskDecisionPort:
             for row in accepted
             if str(row.get("order_id") or "")
         }
+        accepted_by_id = {
+            str(row.get("order_id") or ""): row
+            for row in accepted
+            if isinstance(row, Mapping) and str(row.get("order_id") or "")
+        }
         replaced_ids = {
             str(value)
             for value in candidate.get("replaced_order_ids") or []
+            if str(value)
+        }
+        retained_ids = {
+            str(value)
+            for value in candidate.get("retained_order_ids") or []
             if str(value)
         }
         if payload["action_class"] == "increase_exposure":
@@ -273,17 +288,54 @@ class PaperGridRiskDecisionPort:
                     )
                 )
         else:
-            unmanaged = sorted(accepted_ids - replaced_ids)
-            missing = sorted(replaced_ids - accepted_ids)
-            if unmanaged or missing:
+            overlapping = sorted(replaced_ids & retained_ids)
+            accounted_ids = replaced_ids | retained_ids
+            unmanaged = sorted(accepted_ids - accounted_ids)
+            missing = sorted(accounted_ids - accepted_ids)
+            retained_command_ids = [
+                str(row.get("existing_order_id") or "")
+                for row in commands
+                if isinstance(row, Mapping) and str(row.get("existing_order_id") or "")
+            ]
+            duplicated_retained_commands = sorted({
+                order_id
+                for order_id in retained_command_ids
+                if retained_command_ids.count(order_id) > 1
+            })
+            unbound_retained = sorted(retained_ids - set(retained_command_ids))
+            unexpected_retained = sorted(set(retained_command_ids) - retained_ids)
+            retained_economics_mismatch = sorted(
+                str(row.get("existing_order_id") or "")
+                for row in commands
+                if isinstance(row, Mapping)
+                and str(row.get("existing_order_id") or "") in accepted_by_id
+                and not _same_retained_order_economics(
+                    row,
+                    accepted_by_id[str(row.get("existing_order_id") or "")],
+                )
+            )
+            if (
+                overlapping
+                or unmanaged
+                or missing
+                or duplicated_retained_commands
+                or unbound_retained
+                or unexpected_retained
+                or retained_economics_mismatch
+            ):
                 blockers.append(
                     blocker(
                         "replacement_order_set_mismatch",
                         "canonical_execution.open_orders",
-                        "regrid replacement set does not exactly match current pending entries",
+                        "regrid retained and replaced sets do not exactly match current pending entries",
                         {
+                            "overlapping_order_ids": overlapping,
                             "unmanaged_order_ids": unmanaged,
                             "missing_order_ids": missing,
+                            "duplicated_retained_command_ids": duplicated_retained_commands,
+                            "unbound_retained_order_ids": unbound_retained,
+                            "unexpected_retained_order_ids": unexpected_retained,
+                            "retained_economics_mismatch_order_ids": retained_economics_mismatch,
                         },
                     )
                 )
@@ -428,6 +480,8 @@ class PaperGridRiskDecisionPort:
             "projected_margin": rounded(estimated_margin),
             "open_position_count": len(positions),
             "open_entry_order_count": len(accepted),
+            "retained_entry_order_count": len(retained_ids),
+            "replaced_entry_order_count": len(replaced_ids),
         }
         limits = {
             "max_plan_loss_pct": max_loss_pct,
@@ -464,6 +518,7 @@ def grid_risk_policy(config: Mapping[str, Any]) -> dict[str, Any]:
         "market_must_be_inside_range": True,
         "existing_position_stop_required": True,
         "old_pending_orders_excluded_after_replace": True,
+        "retained_pending_orders_bound_to_candidate": True,
         "unknown_facts_block_new_exposure": True,
     }
     body["policy_id"] = f"grid-risk-policy-{digest(body)}"
@@ -487,6 +542,28 @@ def grid_risk_evaluator() -> dict[str, Any]:
         "source_hashes": hashes,
         "code_sha256": digest(hashes),
     }
+
+
+def _same_retained_order_economics(
+    candidate: Mapping[str, Any],
+    accepted: Mapping[str, Any],
+) -> bool:
+    if str(candidate.get("side") or "").lower() != str(accepted.get("side") or "").lower():
+        return False
+    for field in ("price", "quantity"):
+        candidate_value = finite_positive(candidate.get(field))
+        accepted_value = finite_positive(accepted.get(field))
+        if candidate_value is None or accepted_value is None:
+            return False
+        if abs(candidate_value - accepted_value) > max(1e-8, accepted_value * 1e-8):
+            return False
+    candidate_plan = str(candidate.get("strategy_plan_id") or "")
+    accepted_plan = str(accepted.get("strategy_plan_id") or "")
+    if accepted_plan and candidate_plan != accepted_plan:
+        return False
+    candidate_version = candidate.get("strategy_plan_version")
+    accepted_version = accepted.get("strategy_plan_version")
+    return accepted_version in (None, "") or candidate_version == accepted_version
 
 
 def _command_economics(commands: list[Any]) -> dict[str, Any]:

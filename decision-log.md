@@ -1,5 +1,57 @@
 # Decision Log
 
+## Paper Grid Range Replacement
+
+Date: 2026-07-21
+
+### Decisions
+
+- Treat chart dragging as a draft only. The final mutation is a separate `replace_grid` control action whose button is exactly `停止+平仓+撤单+交易新网格`.
+  - Rationale: repeated mouse tuning must not create repeated stop/start side effects.
+  - Evidence: `dashboard-gridmind.html`, `tests/test_dashboard_gridmind_range_drag.mjs`.
+
+- Reuse the existing execution adapter, canonical risk port, deterministic grid command identity, and staged-plan activation boundary.
+  - Rationale: the replacement needs stronger orchestration, not another execution engine or order schema.
+  - Evidence: `services/strategy_control_plane.py`, `services/strategy_plan_execution.py`.
+
+- Persist the candidate StrategyPlan and replacement request fingerprint before stopping the old grid.
+  - Rationale: a crash after stop must leave a durable statement of what was requested and which plan/version/execution set authorized it.
+  - Evidence: `StrategyControlPlane._replace_grid`, `test_replace_grid_persists_request_before_stop_attempt`.
+
+- Bind final execution to exact active-plan ID/version, preview ID, accepted-order IDs, open-position IDs, current trusted market, account and canonical risk.
+  - Rationale: any fill, cancel, plan change, price move or risk change between preview and click must reject before old-grid mutation.
+  - Evidence: `StrategyControlPlane._assert_expected_execution`, `test_replace_grid_rejects_execution_drift_before_staging_or_stop`, `test_replace_grid_rechecks_risk_and_range_before_any_execution_change`.
+
+- Activate the staged plan only after all replacement orders are visible as accepted/filled and paper reconciliation passes.
+  - Rationale: runtime and active-plan identity must never claim that an incomplete replacement grid is running.
+  - Evidence: `StrategyControlPlane._launch_staged_replacement`, `StrategyControlPlane._activate_staged_range_plan`.
+
+- Make retries idempotent through one request fingerprint and deterministic command IDs. If only the final runtime write fails, retry repairs runtime without resubmitting orders.
+  - Rationale: an uncertain HTTP response must not create a second grid.
+  - Evidence: `test_replace_grid_stages_before_stop_then_activates_once`, `test_replace_grid_retry_repairs_final_runtime_write_without_duplicate_orders`, `test_replace_grid_same_fingerprint_recovers_after_process_crash`.
+
+- Reject empty or duplicate identities in both the browser-provided execution set and the current server snapshot.
+  - Rationale: set equality alone can hide two current records that share one order or position ID.
+  - Evidence: `test_replace_grid_rejects_duplicate_ids_in_current_execution_snapshot`, `tests/test_dashboard_gridmind_range_drag.mjs`.
+
+- On replacement launch failure, cancel/flatten only state attributed to the staged plan; foreign plan state remains untouched and visible.
+  - Rationale: cleanup is not permission to mutate another strategy's paper state.
+  - Evidence: `StrategyControlPlane._cleanup_staged_replacement`, `test_replace_grid_failure_cleans_only_staged_plan_state`. Cleanup deliberately does not call global Nautilus flush or inject a market event.
+
+### Gotchas
+
+- This action intentionally differs from the existing running edge adjustment. `extend_range` preserves live positions and spacing while adding/removing edge orders; `replace_grid` stops, flattens, cancels and rebuilds every grid level with the dragged geometry.
+
+- A replacement preview can become invalid before the final click. The server recomputes it and rejects on preview, market, execution or risk drift; the frontend preview is never execution authority.
+
+- `stop_failed` leaves the staged plan as a durable non-active record and preserves the old active plan identity. It is not silently promoted or treated as success.
+
+- After the old grid has stopped, a failed new-grid launch leaves runtime visibly stopped/error. Cleanup is staged-plan-scoped; any foreign accepted order remains visible for operator intervention.
+
+- A hard process exit can bypass Python exception cleanup. Same-fingerprint retries therefore inspect durable staging/runtime/execution state before the normal running-old-plan gate and either converge the exact staged grid or fail closed; they never create another StrategyPlan.
+
+- The optional gstack browser binary is not built locally, but the repository's existing Playwright/Chrome acceptance harness is available. Visual evidence must therefore come from that checked-in harness, not be described as gstack evidence.
+
 ## Tiger OpenAPI Integration
 
 Date: 2026-07-05
@@ -7876,3 +7928,650 @@ auditable datafeed port; broker execution remains a separate port.
   reproductions passed after hardening.
 - No live/broker file, credential, branch protection, production process,
   strategy parameter, or risk threshold is changed.
+
+## 2026-07-21 - Durable paper cycle rollover and terminal package
+
+### User outcome
+
+- A paper grid that was running at the 09:00/21:00 boundary closes safely,
+  leaves one auditable terminal package, and starts the next trusted plan
+  without requiring an operator to notice a stopped cycle.
+
+### Decision
+
+- Treat rollover as a persisted state machine: record intent, stop the old
+  cycle, verify cancellation/flatten reconciliation, package immutable facts,
+  then start the next cycle. Every failure writes a blocked fail-closed row.
+- Bind rollover intent to the persisted runtime timestamp and compare it again
+  inside the stop mutation and immediately before start. A later operator
+  action cancels continuation instead of being overwritten by the scheduler.
+- Carry the stopped-runtime token into `start` and recheck it after risk work,
+  under a re-entrant cross-process file lock immediately before any
+  plan/runtime or order write. Dashboard and scheduler therefore share one
+  local production writer boundary, closing the planning/risk race window.
+- Read the raw persisted runtime row at the boundary. The normal current-cycle
+  read model intentionally masks an older cycle as stopped and cannot decide
+  whether automatic continuation was authorized.
+- Size the next cycle from the terminal post-flatten account in the package,
+  never the pre-stop snapshot. Preserve explicit plan range, count and per-grid
+  notional; a changed risk ceiling blocks instead of silently resizing.
+- Keep optional Strategy Shadow evidence outside the production close gate.
+  A shadow exception is captured once in the immutable package and only an
+  explicit append-only revision may retry it.
+- A new-cycle runtime row in stopped or error state is never automatically
+  restarted. This protects an operator stop and prevents a failed start from
+  looping every minute.
+- If the process dies after a successful start but before the final rollover
+  receipt, the persisted running state repairs the missing completed receipt.
+  A crash leaving `starting` or `stopping` is blocked for inspection instead
+  of being mistaken for a healthy running strategy.
+- Verify every stored package hash before trusting `status=closed`. A mismatch
+  creates a new fail-closed integrity incident without claiming to supersede
+  the untrusted hash. The incident remains latched across scheduler ticks until
+  an explicit actor/hash-bound acknowledgement; only then may fresh evidence
+  create an append-only revision. A transient non-integrity blocked package is
+  re-snapshotted and may close through a revision linked to its verified hash.
+- Integrity acknowledgement requires a structured, non-empty actor id and
+  transport plus the current incident hash; rejected acknowledgements leave
+  the package journal byte-for-byte unchanged.
+- Use the same cross-process production mutation lock for rollover receipts,
+  terminal-package revisions, integrity acknowledgements and control-plane
+  writes. This prevents scheduler and dashboard processes from interleaving
+  state transitions or append-only evidence.
+- Persist a rollover-specific transition owner in `starting`, `stopping` and
+  error runtimes. Only scheduler-owned incomplete work is retried; an operator
+  stop or unrelated failed start remains stopped and is never auto-restarted.
+- Validate every package row and every supersedes link, not only the latest
+  hash. An integrity incident records the exact historical row and remains
+  latched until an actor/hash-bound acknowledgement.
+
+### Gotchas
+
+- Stop uses only the safe-action market contract, so unavailable planning
+  timeframes cannot strand the old cycle. If no trusted execution-ledger price
+  can flatten an open position, stop records a blocked receipt and resumes
+  only after that safety evidence exists.
+- A datafeed transport exception is converted into an explicit blocked market
+  envelope so cancellation still runs. Flattening may use only trusted
+  execution-ledger prices; the rollover never invents a quote.
+- Cleanup must persist an error runtime even when its final adapter snapshot
+  also fails. In that case `accepted_order_count_known=false` prevents a zero
+  count from being mistaken for proof that no orders remain.
+- The protective order sweep is also a production-ledger writer. Its snapshot,
+  market-event processing and shadow flush must stay inside the same
+  cross-process mutation boundary as dashboard controls and rollover.
+- Once stop succeeds, package/start may resume from persisted evidence, but
+  only while the runtime namespace still belongs to the previous cycle.
+- Historical packages prove local paper execution and reconciliation facts;
+  they are not evidence of live venue execution or liquidity.
+- The new cycle still requires fresh, non-synthetic 1m data plus completed D1
+  and 4H planning bars. Missing context blocks start rather than degrading to
+  synthetic inputs.
+
+### Verification
+
+- Focused rollover, package, cycle-runner, dashboard and control-plane pack:
+  144 passed, including an independent-process lock barrier test.
+- Ruff and git diff checks passed. Full-suite execution was intentionally not
+  used for this bounded lifecycle milestone.
+
+## 2026-07-21 - Authoritative Beijing daily report and NAV
+
+### User outcome
+
+- The 24-hour report, daily realized PnL and NAV now agree with the terminal
+  paper execution ledger instead of displaying zero when fills omit a PnL
+  field.
+
+### Decisions
+
+- Define one report day as Beijing 00:00–24:00. Because the production grid
+  rolls at 09:00/21:00, one complete calendar day requires three overlapping,
+  terminal cycle packages and is publishable only after the last one closes.
+- Source realized PnL exclusively from authoritative closed positions and
+  reconcile their cycle total to execution.pnl.realized. Fills contribute only
+  event count, entry-defined trade count and executed notional.
+- Count one trade by its entry identity: an entry is one trade and its later
+  close does not create a second trade.
+- Persist one idempotent JSON report plus one readable Markdown report. Both
+  carry the exact cycle IDs, package hashes and StrategyPlan identities used by
+  the NAV projection; the dashboard exposes the same JSON artifact.
+- Revalidate the report hash and every referenced closed package revision on
+  dashboard read. A later append-only revision does not invalidate an older
+  verified reference, but any package-chain tampering fails closed.
+- Reject missing, non-finite, timezone-free, unreconciled or hash-invalid
+  evidence. Unknown financial truth is never coerced to zero.
+
+### Gotchas
+
+- Beijing midnight cuts across the 21:00–09:00 trading cycle. Aggregating only
+  two cycle reviews is not a Beijing natural day and can shift fills or PnL to
+  the wrong date.
+- Fill-level realized_pnl is intentionally ignored: adapters do not guarantee
+  it is present or economically complete. A fill is still mandatory for event
+  count and notional, so missing price/quantity also blocks publication.
+- The daily NAV is a normalized one-day projection from the configured cycle
+  starting equity. It is not an intraday mark-to-market curve.
+
+### Verification
+
+- Daily-report, cycle-package and dashboard focused pack: 54 passed.
+- Full-suite execution was intentionally not used for this bounded financial
+  reporting milestone.
+
+## 2026-07-21 - Readable K-line viewport and quiet grid overlays
+
+### User outcome
+
+- GridMind opens on a readable 30-minute chart; a wide production Range no
+  longer compresses the live candles into a flat line.
+
+### Decisions
+
+- Default only the operator's chart selector to 30m. Strategy planning and
+  execution continue to consume their fixed backend timeframes unchanged.
+- Restore native visible-candle autoscale. Price lines never expand the candle
+  scale to the complete strategy Range.
+- Derive the displayed price band from OHLC bars inside the current logical
+  viewport and draw only Range, grid, order and position lines that fall inside
+  that band. The complete Range remains in the production model and summary.
+- Expose provider-neutral visible-range and price-line methods on the shared
+  StandardKline adapter so the console does not reach into Lightweight Charts.
+- Use low-opacity overlay lines and show one axis label: the pending order
+  nearest the current price.
+- Constrain all grid/flex ancestors at the 390px layout boundary; tables retain
+  local scrolling while the page itself has no horizontal overflow.
+
+### Gotchas
+
+- Re-rendering the full chart on every visible-range event creates a feedback
+  loop because live-edge restoration also changes that range. View events now
+  update only the price-line overlay through the adapter.
+- A 30m fetch is optional enrichment, not permission to blank the console.
+  Render the trusted read-model market first, then replace it only when the
+  requested chart timeframe succeeds.
+- Hiding overflow alone does not make a grid responsive. Every minmax/flex
+  ancestor of the chart and control rail must also allow min-width zero.
+
+### Verification
+
+- GridMind static suite: 14 passed.
+- StandardKline Node suite: 21 passed.
+- Inline dashboard JavaScript syntax check passed.
+- Browser layout smoke test showed no page-level horizontal overflow at
+  390x844 or 1440x900. Screenshots are archived under
+  `/Users/wendy/.codex/visualizations/2026/07/21/trading-system-issue-57/`.
+- The browser smoke used a static server, so it proves responsive layout only;
+  it does not claim live API or candle-data acceptance.
+- Adversarial review found no remaining P0-P2 defects after fixing timeframe
+  overlay ordering and duplicate-price order labels.
+- Full-suite execution was intentionally not used for this read-only UI
+  milestone.
+
+## 2026-07-21 - Auditable position, order and trade lifecycle counts
+
+### User outcome
+
+- The three trading tabs now answer three different questions without double
+  counting: open positions, broker-accepted working orders, and unique trade
+  lifecycles where entry plus later exit remains one trade.
+
+### Decisions
+
+- Keep canonical trade count and PnL in the accounting snapshot. The read model
+  adds only presentation fields such as the verified close reason.
+- Define a currently accepted order as `accepted`, `open`, `working`, or
+  `partially_filled`; pre-acceptance and terminal states are not current
+  委托. The existing monotonic browser lifecycle cache still prevents stale
+  snapshots from resurrecting a terminal order.
+- Display TP/SL only when the order and current StrategyPlan have the same
+  non-empty plan ID. Missing protection may be completed from one uniquely
+  matched deterministic plan order; missing, mismatched, ambiguous or
+  incomplete lineage displays `未知`.
+- Resolve TP, SL and manual close reason from authoritative exit-fill events,
+  not from price proximity. Unknown evidence stays unknown.
+- Count open positions from the projected open rows and render canonical entry
+  quantity, entry/exit times and realized PnL for each unique trade lifecycle.
+
+### Gotchas
+
+- `open_order_count` includes pre-acceptance states and therefore cannot label
+  the operator's current broker-accepted委托 count.
+- A plan order with the same price and side is not sufficient when multiple
+  candidates match; deterministic ambiguity must fail closed.
+- The latest execution snapshot defines whether an order is still current;
+  the monotonic cache defines only its latest valid phase. Without both rules,
+  a disappeared accepted order becomes a permanent ghost or a terminal order
+  can be resurrected by stale polling.
+- `open_order_count` includes pre-acceptance states. It remains the broader
+  stop/start safety gate. Start recovery trusts the persisted `running` runtime
+  only when its last action and plan identity match, because a completely
+  accepted grid may legitimately contain an immediately filled order.
+- A `source_fill_id` is one complete identity. Parsing only its final preview
+  segment can silently borrow TP/SL from the wrong plan.
+- The 30m chart refresh is optional. The trusted read model must render before
+  that request so a timeframe outage cannot blank these lifecycle tables.
+
+### Verification
+
+- Trading-system read model, API, GridMind static and real-DOM lifecycle pack:
+  36 passed.
+- Real-DOM lifecycle browser test: 1 passed.
+- Inline dashboard JavaScript syntax check passed.
+- Three adversarial passes ended with no remaining P0-P2 findings after
+  resolving lifecycle membership, start-evidence and plan-lineage defects.
+- Full-suite execution was intentionally not used for this bounded read-only
+  projection milestone.
+
+## 2026-07-21 - Trusted live market tape and runtime lamp
+
+### User outcome
+
+- The top bar now answers, at a glance, what is trading, the latest trusted
+  price and today's venue move, and whether the paper grid is truly running.
+
+### Decisions
+
+- Derive the displayed pair only from the canonical market
+  `provider_symbol`; `XAUUSDT` is rendered as `XAU / USDT` without inventing a
+  symbol from a product label.
+- Treat the canonical trusted 1m snapshot as the header ticker. A higher
+  timeframe selected for the chart cannot replace or recolor the live header.
+- Retain the previous price direction when two consecutive snapshots are
+  equal. Only a strictly higher or lower trusted 1m price changes the color.
+- Calculate today's percentage move from a trusted 1d open and the trusted 1m
+  latest close only when provider, provider symbol, and UTC trading day match.
+- Blink green only when runtime and actual state are both running, at least one
+  broker-accepted order is visible, the market is trusted 1m, completeness is
+  complete, the current risk decision still allows exposure with no blockers,
+  and the runtime cycle is not stale.
+
+### Gotchas
+
+- A green data-source badge is not proof that the strategy is running. The run
+  lamp has a separate conjunction of execution, market, and completeness gates.
+- The chart can legitimately display 30m while the header must remain bound to
+  canonical 1m; sharing `state.market` would make header price behavior depend
+  on the operator's chart timeframe.
+- A 1d bar from another provider or symbol is not a valid denominator. Missing
+  lineage leaves the daily percentage unknown rather than blending venues.
+- Equal ticks must not reset the last direction, or a quiet market would make
+  the price flicker back to neutral between real moves.
+- Price direction belongs to a provider plus provider-symbol identity. The
+  first tick after a feed switch establishes a new baseline and must not be
+  compared with the previous venue's price.
+- A complete read model can still contain a currently blocked risk decision;
+  completeness alone is therefore insufficient to authorize a green run lamp.
+
+### Verification
+
+- GridMind static and real-browser header pack: 19 passed.
+- The browser test covered canonical pair formatting, same-venue daily change,
+  up/equal/down tick behavior, feed-identity reset, the healthy run gate, and
+  fail-closed behavior for blocked risk and an untrusted 1m snapshot.
+- Inline dashboard JavaScript syntax check passed.
+- Full-suite execution was intentionally not used for this bounded top-bar UI
+  milestone.
+
+## 2026-07-21 - Authoritative trade activity notifications
+
+### User outcome
+
+- New entries, partial reductions, take-profits, stop-losses, and final closes
+  now appear as compact top-right notifications without replaying the account's
+  historical fills whenever the page opens.
+
+### Decisions
+
+- Seed the browser tracker from the first complete, reconciled accounting
+  snapshot and emit nothing for that baseline.
+- Deduplicate a fill only with a stable lineage plus fill identity. Prefer
+  `fill_id`, then source fill ID, then order ID; a fill without enough lineage
+  evidence remains silent.
+- Require an authoritative decrease in remaining units before announcing a
+  partial close. Require a closed trade or zero remaining units before the one
+  final completion notification.
+- Require both historical and current accounting snapshots to be complete and
+  reconciled before current position rows can authorize a notification.
+- Keep trade tracking across current execution-cycle changes so a prior-cycle
+  position can still emit its one eventual close notification without reviving
+  it as a current position.
+- Create Web Audio only after a pointer or keyboard gesture. Unsupported,
+  suspended, or failed audio stays silent and cannot break polling or control.
+
+### Gotchas
+
+- A new exit fill is not by itself proof that the position is fully closed;
+  fills and authoritative remaining units can arrive in different snapshots.
+- The fill row and closed trade can become visible in the same snapshot. The
+  tracker must coalesce them into one completion toast.
+- Trade IDs alone may collide across cycles or plans. Missing lineage fails
+  closed instead of risking a duplicate or wrong notification.
+- Current positions join historical trades by the same lineage plus trade ID;
+  a bare duplicate trade ID cannot overwrite a prior-cycle lifecycle.
+- Browser refresh intentionally resets the in-memory tracker and establishes a
+  new silent baseline; this feature is not a durable notification inbox.
+- Audio autoplay policy varies by browser. Sound is an enhancement after user
+  interaction, never evidence that a trade occurred.
+
+### Verification
+
+- Trade activity Node suite: 8 passed.
+- GridMind static plus adjacent real-browser lifecycle/header pack: 21 passed.
+- Covered silent authoritative baseline, degraded-snapshot rejection, fill
+  deduplication, two fills on one order, partial/final close ordering,
+  same-snapshot coalescing, degraded current-accounting rejection, colliding
+  cross-cycle IDs, cross-cycle completion, and no-Web-Audio fallback.
+- Inline dashboard JavaScript syntax and diff checks passed.
+- Full-suite execution was intentionally not used for this browser-only
+  notification milestone.
+
+## 2026-07-21 - Same-cycle review ledger and Strategy Shadows
+
+### User outcome
+
+- The 12-hour review now reads as one paired ledger: what the locked production
+  plan said, how that exact plan was judged, and what the same cycle actually
+  produced.
+- Strategy Shadows explain the human meaning of each scenario and compare only
+  against a successful same-cycle replay of the locked production plan.
+
+### Decisions
+
+- Select only a closed cycle package for review and load its Shadows by the
+  identical cycle ID; the current open cycle cannot be blended into history.
+  Every displayed package must first pass its complete append-only hash-chain
+  verification.
+- Link a review track only through one unique source proposal referenced by the
+  locked StrategyPlan. Missing or ambiguous lineage is displayed as unknown.
+- Compare complete plan specifications, including direction, style, range,
+  mode, spacing, grid count, per-grid notional, leverage, and out-of-range
+  policy. A partial record cannot be called unchanged.
+- Keep realized and unrealized PnL separate. A missing value remains unknown
+  and is never normalized to zero.
+- Accept only `variant_id=production` with `status=pass` as the counterfactual
+  baseline, and require its plan identity to match the packaged production
+  plan. Candidates must share its market-event hash, evaluation window, and
+  execution and fee contracts.
+- Project one selected compact review package plus summary-only package history
+  into the five-second polling response. Raw replay events, commands, orders,
+  and fills remain in immutable evidence rather than the dashboard payload.
+- Present next-cycle output as advice. A record claiming automatic application
+  is flagged for human verification rather than repeated as production truth.
+
+### Gotchas
+
+- A ledger review can contain both machine and human assessments. Choosing a
+  default track would silently grade a different proposal than the locked plan.
+- A row with `status=closed` is not trusted evidence by itself. A forged hash or
+  broken supersedes link excludes the entire journal from review selection.
+- A Shadow named `production` is still not usable if its replay was blocked or
+  belongs to another cycle, has a different plan identity, or lacks replay
+  input lineage.
+- JavaScript numeric coercion turns `null` into zero. Review formatting must
+  reject missing values before conversion.
+- Range and grid values can match while the out-of-range policy differs; this
+  is a materially different production specification.
+- Key-level and TP/SL verdicts are dimension-specific. If those dimensions
+  changed after proposal review, the old verdict is marked口径不一致.
+- The packaged Shadow list can lag the dedicated read-model source. Same-cycle
+  rows from the current source take precedence, then scenario IDs are deduped.
+- Historical superiority is descriptive evidence for one replay window, not a
+  forecast and not authorization to promote a strategy.
+
+### Verification
+
+- Review behavior Node suite: 8 passed.
+- Cycle-package integrity, read-model, API, and GridMind static suite: 51 passed.
+- Covered missing-value preservation, unique proposal linkage, track selection,
+  complete specification comparison, direction mismatch, same-cycle Shadow
+  filtering, selected-cycle alignment, dimension-specific plan matching,
+  compact polling projection, deduplication, and strict same-input production
+  baseline gating.
+- Inline dashboard JavaScript syntax and diff checks passed.
+- Full-suite execution was intentionally not used for this bounded review UI
+  and read-model milestone.
+
+## 2026-07-21 - Always-visible production strategy summary
+
+### User outcome
+
+- The chart now always states which locked production plan exists, whether it
+  is actually running, and why its per-grid amount has the displayed value.
+
+### Decisions
+
+- Render the line only from `strategy.summary` and `runtime` in the canonical
+  trading-system read model. Editable controls and preview state are excluded.
+- Show plan version, bilateral or unilateral direction, style, grid mode and
+  count, per-grid notional source, maximum plan loss, and leverage in one line.
+- Keep the existing Range, spacing, and accepted buy/sell order summary as the
+  separate line below it.
+- Project `notional_mode`, its human label, and locked `max_loss` from the
+  StrategyPlan so the UI does not reverse-engineer sizing intent.
+
+### Gotchas
+
+- A locked plan can exist while the runtime is stopped. Plan presence must not
+  be presented as proof that the strategy is running.
+- A draft preview may change direction, Range, count, or notional. It cannot
+  replace the production summary before a new plan is actually locked.
+- Missing notional provenance remains `来源未知`; the UI does not assume auto
+  sizing merely because the amount resembles a risk-budget calculation.
+
+### Verification
+
+- Trading-system read-model and GridMind static tests: 36 passed.
+- Covered locked sizing provenance, maximum loss, stopped copy, and exclusion
+  of preview/form values from the production summary function.
+- Inline dashboard JavaScript syntax and diff checks passed.
+- Full-suite execution was intentionally not used for this small read-only UI
+  milestone.
+
+## 2026-07-21 - Running grid edge adjustment
+
+### User outcome
+
+- A running paper grid can add or remove whole price levels at either edge
+  without stopping, flattening, changing its spacing/ratio, or resizing each
+  grid order.
+- Existing positions and their TP/SL evidence remain byte-for-byte equivalent
+  across the adjustment; only unfilled entry orders outside a contracted range
+  are cancelled.
+
+### Decisions
+
+- Keep edge geometry pure: arithmetic requests snap to the current absolute
+  spacing and geometric requests snap to the current ratio. Grid count changes;
+  per-grid notional and its auto/manual provenance do not.
+- Require the current StrategyPlan identity in every request. A successful
+  retry is recognized by a fingerprint of the original plan plus the direct
+  requested range and performs no second mutation.
+- Reuse the canonical `replace_pending` risk action, but bind accepted entries
+  into disjoint retained and replaced ID sets. Retained orders appear as exact
+  risk commands tied back to their engine order IDs, so the risk decision
+  reflects the complete post-adjustment pending set without claiming they were
+  cancelled.
+- Stage only new edge commands, verify them as accepted or filled, then cancel
+  only out-of-range entry IDs. Activate the new StrategyPlan version only after
+  retained entries, positions, protection orders, and reconciliation pass.
+- Persist the candidate plan as `staging` before the first order submit while
+  leaving runtime on the old running plan. A retry with the same fingerprint
+  resumes the same plan/version and submits only missing edge orders.
+- Persist the canonical risk request, decision, and policy IDs on that staging
+  plan so a crash after activation can repair runtime without losing the exact
+  authorization evidence.
+- Swap the old active and new staging statuses in one atomic same-cycle plan
+  file write. The specialized edge path fails closed if another cycle is active
+  rather than recreating the generic two-write activation gap.
+- Flush Nautilus control commands only when there is no unprocessed market
+  event. The replay uses the exact checked event snapshot, so an event arriving
+  afterward remains pending for the normal market path.
+- Resolve retained-order protection from the exact inherited StrategyPlan in
+  the operator read model rather than treating every old plan ID as unknown.
+- On pre-cancellation failure, cancel only the staged plan and leave the old
+  plan running. Any failure after old-edge cancellation is non-rollbackable and
+  moves runtime to error without cancelling the useful staged edges.
+
+### Gotchas
+
+- The older full-regrid risk contract assumed every accepted entry would be
+  replaced. Supplying only the outside IDs would fail closed; supplying all IDs
+  would create false audit evidence. Retained IDs therefore need an explicit
+  binding to candidate economics.
+- Accepted execution rows do not carry SL/TP in the canonical accounting view.
+  Retained risk commands must resolve them from the exact originating plan;
+  missing or ambiguous lineage blocks before mutation.
+- A newly exposed edge already represented by an accepted order or open
+  position is not submitted again. A fully completed entry/exit lifecycle is
+  intentionally eligible to re-arm at that price with a deterministic new
+  command identity; closed historical positions do not occupy the line.
+- New edge limits are outside the trusted current mark. If an engine nonetheless
+  creates a staged position during failure cleanup, the control plane fails
+  visibly instead of flattening an unrelated prior position.
+- Contraction can be snapped more aggressively than the pointer value. The
+  trusted current market must remain inside the effective snapped range.
+
+### Verification
+
+- Focused geometry, sizing, risk, control-plane, inherited-plan read-model, and
+  API, two-console static, and Nautilus adapter suite: 157 passed.
+- Covered arithmetic and geometric snapping, fixed notional provenance,
+  live-exposure deduplication plus completed-cycle re-arm, exact retained/replaced
+  risk binding, pure contraction to zero pending entries, position and TP/SL
+  preservation, atomic activation and runtime repair, completed-edge rearm,
+  post-cancel failure preservation, inherited-plan protection, fail-closed
+  Nautilus command-only flush, and staged-order-only cleanup.
+- Full-suite execution was intentionally not used for this bounded paper-order
+  milestone.
+
+## 2026-07-21 - Read-only Range drag specification and risk preview
+
+### User outcome
+
+- A Range drag can be evaluated before any chart interaction or order mutation:
+  whole-Range movement preserves width, count, and per-grid notional; one-edge
+  movement fixes the opposite edge, preserves count and notional, and recomputes
+  arithmetic spacing or the geometric ratio.
+- The result is one explicit old-to-new specification with current canonical
+  risk, order deltas, position/TP-SL statements, and a disabled confirmation
+  state when current facts do not pass.
+
+### Decisions
+
+- Add `preview_range` as a read-only control action. It requires the exact
+  active StrategyPlan ID and a running runtime, but does not append a control
+  audit, risk decision, plan, order, fill, or runtime record.
+- Keep pointer geometry validation pure and separate from market, account, risk,
+  execution, and persistence adapters.
+- Reuse the existing deterministic grid preview with fixed grid count and fixed
+  manual notional. Only this read-only path may return an over-budget manual
+  preview so the operator can see why confirmation is disabled.
+- Evaluate the candidate through the canonical `replace_pending` risk port
+  against the current trusted market, account, accepted entries, open positions,
+  policy, and reconciliation. The decision is returned but not persisted.
+- Evaluate the current grid through that same canonical port with every accepted
+  entry retained. Old and new margin, actual leverage, maximum loss, and
+  max-side notional therefore share current account/execution facts and one
+  calculation basis.
+- Never apply a sizing recommendation automatically. A second explicit
+  `recalculate_notional_by_risk_budget` preview recomputes the candidate using
+  the fresh server-side loss, projected leverage, and projected margin caps,
+  then advertises the operation only if a trial candidate clears the complete
+  canonical decision; production remains untouched.
+
+### Gotchas
+
+- Additive movement preserves arithmetic spacing because width and count remain
+  fixed. On a geometric grid, additive movement preserves absolute width but
+  necessarily changes the ratio; the old-to-new card exposes that change.
+- Whole-Range equality uses a tight width-relative tolerance, then derives the
+  upper boundary from the authoritative lower-boundary delta. A boundary drag
+  returns the exact stored opposite edge; absolute-price-scaled tolerance must
+  not introduce a tiny hidden width/spacing change.
+- A local geometry risk estimate is not enough. Current open positions or an
+  execution reconciliation problem can still block the canonical risk decision.
+- A positive local cap is not a valid recommendation when open-position loss has
+  consumed the canonical budget. Zero/unavailable canonical recommendations
+  remain unavailable; they are never replaced by the local cap.
+- An unsafe manual notional may be visible only as a read-only preview. Normal
+  start/replace paths retain the strict manual-notional rejection and must run a
+  new canonical risk decision before mutation.
+- Order-delta counts describe a future full replacement. This milestone never
+  performs that replacement and reports zero side effects explicitly.
+
+### Verification
+
+- Geometry, sizing, canonical risk, and control-plane focused suite: 93 passed.
+- Covered whole-Range and fixed-edge geometry, arithmetic/geometric recompute,
+  fixed count/notional, stale plan and current-price gates, exact order delta,
+  over-budget visibility, explicit server-side risk recalculation, open-position
+  old/new risk parity, projected margin/leverage clearance, zero remaining loss
+  budget, high-price near-tolerance width drift, authoritative fixed boundaries,
+  and byte-level proof that plan/runtime/risk/audit artifacts remain unchanged.
+- Ruff and diff checks passed. Full-suite execution was intentionally not used
+  for this read-only calculation milestone.
+
+## 2026-07-21 - Chart Range draft interaction
+
+### User outcome
+
+- The production chart remains a normal pan/zoom chart until the operator
+  explicitly enables `调整网格` on a running paper plan.
+- Inside adjustment mode, the Range body moves as one fixed-width band while
+  the upper and lower handles resize only their respective edge. Pointer
+  release keeps a dashed draft and small confirm/cancel controls; it never
+  opens a card or writes an order.
+- Successive pointer releases accumulate. Only the small confirm control asks
+  the server for the read-only old-to-new risk card; cancel removes the draft
+  and restores the current production overlay.
+
+### Decisions
+
+- Put the interaction layer inside the standard K-line chart's existing
+  coordinate adapter instead of adding another chart engine. The overlay is
+  absent from pointer routing outside adjustment mode, avoiding a chart-pan
+  conflict.
+- Keep the production price lines authoritative throughout adjustment. Draft
+  levels are a separate translucent dashed layer and never replace the current
+  order/position overlay.
+- Disable other production controls while a draft is active. A draft cannot be
+  entered unless the authenticated paper runtime is running with an exact
+  StrategyPlan.
+- Treat a mixed sequence of individually constrained upper/lower/body gestures
+  as one consolidated `draft` geometry for the read-only server preview. Count
+  and per-grid notional remain fixed unless the operator explicitly requests
+  risk-budget recalculation from the card.
+- Validate the preview identity, requested bounds, fixed count/notional, and
+  zero-side-effect receipt before displaying the card.
+
+### Gotchas
+
+- The visible edge can be outside the current candle window. Drag math must use
+  price deltas from the gesture start, not snap to a currently visible price.
+- Releasing the pointer is intentionally not confirmation. Network calls and
+  modal opening occur only from the small `确认` button so repeated fine tuning
+  stays uninterrupted.
+- A polling render may redraw candles while a draft exists. The overlay is
+  derived from the stored draft after every chart update, while the server
+  still rejects a changed production plan ID on confirmation.
+- `actual_state=running` is not sufficient identity evidence. Both UI entry and
+  server preview require runtime plan ID/version to equal the active
+  StrategyPlan; a polling mismatch cancels the local draft and requires a fresh
+  operator review.
+- Risk recalculation changes only the returned card. It does not silently
+  rewrite the geometric draft or current production plan.
+
+### Verification
+
+- Dashboard static/browser, pure drag geometry, control-plane preview, and Node
+  behavior/syntax suites: 67
+  focused assertions passed.
+- Covered explicit-mode gating, grab/ns-resize semantics, fixed-body and
+  fixed-edge math, successive mixed gestures, no pointer-release request,
+  outside release and pointer cancellation, cancel-to-production restoration,
+  normal chart pan isolation, runtime/active-plan identity drift, zero-side-
+  effect preview validation, required old-to-new card fields, and explicit
+  risk-budget recalculation.
+- Full-suite execution was intentionally not used for this bounded UI
+  milestone.

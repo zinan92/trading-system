@@ -99,7 +99,18 @@ def _source(*, open_trade: bool = False) -> dict:
                 "mode": "arithmetic",
                 "count": 50,
                 "notional_per_grid": 2800.0,
+                "notional_mode": "auto",
                 "leverage": 3.0,
+                "orders": [
+                    {
+                        "preview_order_id": f"preview-{index}",
+                        "side": "buy" if index % 2 else "sell",
+                        "price": 3900.0 + index,
+                        "tp": 3903.0 + index,
+                        "sl": 3823.0 + index,
+                    }
+                    for index in range(25)
+                ],
             },
             "risk_budget": {"max_loss": 77.0, "leverage": 3.0},
         },
@@ -152,6 +163,8 @@ def _source(*, open_trade: bool = False) -> dict:
             "reconciliation": {"status": "ok", "issues": []},
         },
         "ledger": {"daily": [], "recent_reviews": []},
+        "cycle_packages": [],
+        "review_cycle_id": None,
         "strategy_shadows": [],
         "execution_shadow": {"status": "observing"},
         "ui_capabilities": {"market_timeframes": ["1m", "5m"]},
@@ -227,12 +240,16 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
         "spacing": 4.0,
         "spacing_ratio": None,
         "notional_per_grid": 2800.0,
+        "notional_mode": "auto",
+        "notional_mode_label": "自动风控",
+        "max_loss": 77.0,
         "leverage": 3.0,
         "display_label": "中性 · 稳健 · 等价差 · 3900–4100 · 50 格 · 每格 2800 USD",
     }
     assert model["execution"]["counts"] == {
         "order_count": 25,
         "open_order_count": 25,
+        "accepted_order_count": 25,
         "unknown_order_count": 0,
         "open_position_count": 0,
         "trade_count": 1,
@@ -252,6 +269,9 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     assert model["runtime"]["status"] == "running"
     assert model["runtime"]["open_order_count"] == 25
     assert model["runtime"]["can_stop_when_authorized"] is True
+    assert len(model["execution"]["accepted_orders"]) == 25
+    assert model["execution"]["trades"][0]["close_reason"] == "tp"
+    assert model["execution"]["trades"][0]["close_reason_label"] == "TP"
     assert source == before
 
 
@@ -431,6 +451,109 @@ def test_one_open_and_one_open_then_close_are_each_one_trade() -> None:
     assert closed_model["execution"]["counts"]["completed_round_trip_count"] == 1
 
 
+def test_order_protection_is_completed_only_from_the_exact_strategy_plan() -> None:
+    source = _source()
+    same_plan = source["production_execution"]["orders"][0]
+    same_plan["source_fill_id"] = "strategy-grid:plan-7:preview-0"
+    same_plan.pop("tp", None)
+    same_plan.pop("sl", None)
+    missing_plan = source["production_execution"]["orders"][1]
+    missing_plan.pop("strategy_plan_id")
+    missing_plan.update({"tp": 3999.0, "sl": 3800.0})
+    mismatched_plan = source["production_execution"]["orders"][2]
+    mismatched_plan["strategy_plan_id"] = "plan-old"
+    mismatched_plan.update({"tp": 3999.0, "sl": 3800.0})
+    ambiguous = source["production_execution"]["orders"][3]
+    source["production_plan"]["grid"]["orders"].append(
+        dict(source["production_plan"]["grid"]["orders"][3], preview_order_id="preview-duplicate")
+    )
+    wrong_source_plan = source["production_execution"]["orders"][4]
+    wrong_source_plan["source_fill_id"] = "strategy-grid:plan-old:preview-4"
+    wrong_source_plan.update({"tp": 3907.0, "sl": 3827.0})
+    conflicting_identity = source["production_execution"]["orders"][5]
+    conflicting_identity["preview_order_id"] = "preview-5"
+    conflicting_identity["source_fill_id"] = "strategy-grid:plan-7:preview-6"
+    conflicting_identity.update({"tp": 3908.0, "sl": 3828.0})
+    missing_preview = source["production_execution"]["orders"][6]
+    missing_preview["preview_order_id"] = "preview-missing"
+    missing_preview.update({"tp": 3909.0, "sl": 3829.0})
+    duplicate_preview = source["production_execution"]["orders"][7]
+    duplicate_preview["preview_order_id"] = "preview-7"
+    duplicate_preview.update({"tp": 3910.0, "sl": 3830.0})
+    source["production_plan"]["grid"]["orders"].append(
+        dict(source["production_plan"]["grid"]["orders"][7])
+    )
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+    orders = {row["order_id"]: row for row in model["execution"]["orders"]}
+
+    assert orders["order-0"]["protection"] == {
+        "status": "known",
+        "tp": 3903.0,
+        "sl": 3823.0,
+        "source": "strategy_plan",
+        "reason": None,
+    }
+    assert orders["order-1"]["protection"]["status"] == "unknown"
+    assert orders["order-1"]["protection"]["reason"] == "strategy_plan_id_missing"
+    assert orders["order-2"]["protection"]["status"] == "unknown"
+    assert orders["order-2"]["protection"]["reason"] == "strategy_plan_id_mismatch"
+    assert orders[ambiguous["order_id"]]["protection"]["status"] == "unknown"
+    assert orders[ambiguous["order_id"]]["protection"]["reason"] == "strategy_plan_protection_incomplete"
+    assert orders[wrong_source_plan["order_id"]]["protection"]["status"] == "unknown"
+    assert (
+        orders[wrong_source_plan["order_id"]]["protection"]["reason"]
+        == "strategy_plan_order_identity_mismatch"
+    )
+    assert orders[conflicting_identity["order_id"]]["protection"]["status"] == "unknown"
+    assert orders[missing_preview["order_id"]]["protection"]["status"] == "unknown"
+    assert orders[duplicate_preview["order_id"]]["protection"]["status"] == "unknown"
+
+
+def test_inherited_running_order_resolves_protection_from_its_originating_plan() -> None:
+    source = _source()
+    active = source["production_plan"]
+    inherited = deepcopy(active)
+    inherited.update(
+        {
+            "strategy_plan_id": "plan-6",
+            "version": 6,
+            "status": "superseded",
+        }
+    )
+    active["inherited_plan_ids"] = ["plan-6"]
+    source["production_plan_history"] = [inherited, active]
+    order = source["production_execution"]["orders"][0]
+    order["strategy_plan_id"] = "plan-6"
+    order["strategy_plan_version"] = 6
+    order["source_fill_id"] = "strategy-grid:plan-6:preview-0"
+    order.pop("tp", None)
+    order.pop("sl", None)
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+    projected = next(
+        row for row in model["execution"]["orders"] if row["order_id"] == order["order_id"]
+    )
+
+    assert projected["protection"] == {
+        "status": "known",
+        "tp": 3903.0,
+        "sl": 3823.0,
+        "source": "strategy_plan",
+        "reason": None,
+    }
+
+
 def test_mismatched_risk_observation_is_never_presented_as_current_permission() -> None:
     model = project_trading_system_read_model(
         _source(),
@@ -462,6 +585,66 @@ def test_snapshot_identity_is_deterministic_and_json_safe() -> None:
 
     assert first["contract"]["snapshot_id"] == second["contract"]["snapshot_id"]
     json.dumps(first, allow_nan=False)
+
+
+def test_review_packages_and_shadows_remain_separate_read_only_evidence() -> None:
+    source = _source()
+    package = {
+        "cycle_id": "2026-07-17_NIGHT",
+        "status": "closed",
+        "package_hash": "package-hash",
+        "strategy_plan": {"strategy_plan_id": "plan-old", "version": 6},
+    }
+    source["cycle_packages"] = [package]
+    source["review_cycle_id"] = "2026-07-17_NIGHT"
+    source["strategy_shadows"] = [{
+        "cycle_id": "2026-07-17_NIGHT",
+        "variant_id": "production",
+        "metrics": {"realized_pnl": 3.0, "unrealized_pnl": 0.0},
+    }]
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    assert model["review"]["cycle_packages"] == [package]
+    assert model["review"]["selected_cycle_id"] == "2026-07-17_NIGHT"
+    assert model["research"]["strategy_shadows"][0]["variant_id"] == "production"
+    assert model["safety"]["read_only"] is True
+    assert model["safety"]["command_authority"] is False
+
+
+def test_review_projection_does_not_fill_missing_evidence_fields() -> None:
+    source = _source()
+    source["cycle_packages"] = [{"cycle_id": "2026-07-17_NIGHT", "status": "closed"}]
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+    ).to_dict()
+
+    package = model["review"]["cycle_packages"][0]
+    assert "strategy_plan" not in package
+    assert "execution" not in package
+    assert "review" not in package
+
+
+def test_strategy_summary_does_not_invent_notional_provenance() -> None:
+    source = _source()
+    source["production_plan"]["grid"].pop("notional_mode")
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+    ).to_dict()
+
+    assert model["strategy"]["summary"]["notional_mode"] is None
+    assert model["strategy"]["summary"]["notional_mode_label"] == "来源未知"
 
 
 def test_projector_contains_no_provider_or_engine_selection_branches() -> None:

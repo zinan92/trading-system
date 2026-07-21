@@ -74,6 +74,149 @@ def _candidate(cycle_id: str) -> dict:
     }
 
 
+def _grid_command() -> dict:
+    return {
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 4000.0,
+        "quantity": 1.0,
+        "sl": 3990.0,
+        "tp": 4010.0,
+        "source": "strategy_production_console",
+        "source_fill_id": "strategy-grid:plan-grid:preview-1-buy",
+        "strategy_plan_id": "plan-grid",
+        "strategy_plan_version": 1,
+    }
+
+
+def _grid_market_event(index: int, price: float) -> dict:
+    return {
+        "event_id": f"grid-event-{index}",
+        "cycle_id": CYCLE_ID,
+        "ts_event": f"2026-07-10T01:0{index}:00+00:00",
+        "price": price,
+        "open": price,
+        "high": price,
+        "low": price,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    }
+
+
+def _completed_grid_replay(input_path: Path, output_path: Path) -> dict:
+    bundle = load_json(input_path)[-1]
+    commands = [
+        row for row in bundle["commands"]
+        if str((row.get("command") or {}).get("event") or "entry") == "entry"
+    ]
+    orders = []
+    fills = []
+    positions = []
+    fill_times = {
+        1: ("2026-07-10T01:01:00+00:00", "2026-07-10T01:02:00+00:00"),
+        2: ("2026-07-10T01:03:00+00:00", "2026-07-10T01:04:00+00:00"),
+    }
+    for row in commands:
+        command_id = row["command_id"]
+        command = row["command"]
+        generation = int(command.get("grid_generation") or 1)
+        completed = generation in fill_times
+        orders.append({
+            "order_id": command_id,
+            "state": "filled" if completed else "accepted",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 4000.0,
+            "quantity": 1.0,
+            "strategy_plan_id": "plan-grid",
+            "strategy_plan_version": 1,
+        })
+        if not completed:
+            continue
+        entry_at, target_at = fill_times[generation]
+        orders.append({
+            "order_id": f"{command_id}-TP",
+            "state": "filled",
+            "side": "sell",
+            "event": "target",
+            "order_type": "limit",
+            "price": 4010.0,
+            "quantity": 1.0,
+            "strategy_plan_id": "plan-grid",
+            "strategy_plan_version": 1,
+        })
+        fills.extend([
+            {
+                "fill_id": f"nautilus-{command_id}",
+                "order_id": command_id,
+                "trade_id": command_id,
+                "event": "entry",
+                "side": "buy",
+                "price": 4000.0,
+                "quantity": 1.0,
+                "cost": 0.0,
+                "ts": entry_at,
+            },
+            {
+                "fill_id": f"nautilus-{command_id}-TP",
+                "order_id": f"{command_id}-TP",
+                "trade_id": command_id,
+                "event": "target",
+                "side": "sell",
+                "price": 4010.0,
+                "quantity": 1.0,
+                "cost": 0.0,
+                "ts": target_at,
+            },
+        ])
+        positions.append({
+            "trade_id": command_id,
+            "position_id": f"POS-{command_id}",
+            "status": "closed",
+            "side": "long",
+            "remaining_units": 0.0,
+            "entry_price": 4000.0,
+            "exit_price": 4010.0,
+            "entry_ts": entry_at,
+            "exit_ts": target_at,
+            "realized_pnl": 10.0,
+            "strategy_plan_id": "plan-grid",
+            "strategy_plan_version": 1,
+        })
+    snapshot = {
+        "schema_version": "dualtrack-execution-v1",
+        "engine": "nautilus_shadow",
+        "cycle_id": CYCLE_ID,
+        "orders": orders,
+        "fills": fills,
+        "positions": positions,
+        "account": {
+            "starting_cash": 10_000.0,
+            "realized_pnl": 20.0,
+            "ending_cash": 10_020.0,
+            "equity": 10_020.0,
+            "margin": 0.0,
+            "exposure": 0.0,
+            "slippage": 0.0,
+            "fees": 0.0,
+            "funding": 0.0,
+        },
+        "pnl": {"realized": 20.0, "unrealized": 0.0},
+        "mark": {"price": 4010.0, "fresh": True, "source": "test"},
+        "capabilities": {"native_order_lifecycle": True},
+        "reconciliation": {"status": "ok", "issues": []},
+    }
+    write_json(output_path, [snapshot])
+    return snapshot
+
+
 def test_nautilus_normalized_snapshot_projects_to_canonical_accounting() -> None:
     accounting = project_execution_accounting(_candidate(CYCLE_ID)).to_dict()
 
@@ -157,6 +300,140 @@ def test_persists_orders_fills_positions_and_restarts_idempotently(tmp_path: Pat
     duplicate = restarted.process_market_event(event)
     assert duplicate["status"] == "idempotent"
     assert len(load_json(adapter.root / "events" / f"{CYCLE_ID}.json")) == 1
+
+
+def test_authoritative_grid_rearms_same_price_for_two_complete_cycles(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+
+    def replay(_preflight: Path, input_path: Path, output_path: Path) -> dict:
+        return _completed_grid_replay(input_path, output_path)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    first_order = adapter.submit_order(_grid_command())
+    for index, price in enumerate((4000.0, 4010.0, 4000.0, 4010.0), start=1):
+        adapter.process_market_event(_grid_market_event(index, price))
+
+    result = adapter.flush(CYCLE_ID)
+    snapshot = result["snapshot"]
+    commands = load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")
+    entry_commands = [
+        row for row in commands
+        if str((row.get("command") or {}).get("event") or "entry") == "entry"
+    ]
+
+    assert snapshot["rearms"] == 2
+    assert snapshot["grid_lifecycle"]["rearms"] == 2
+    assert [row["command"].get("grid_generation", 1) for row in entry_commands] == [1, 2, 3]
+    assert [row["command"]["price"] for row in entry_commands] == [4000.0, 4000.0, 4000.0]
+    assert [row["event"] for row in snapshot["fills"]] == ["entry", "target", "entry", "target"]
+    assert len({row["trade_id"] for row in snapshot["fills"] if row["event"] == "entry"}) == 2
+    assert not [row for row in snapshot["positions"] if row["status"] == "open"]
+    accepted = [row for row in snapshot["orders"] if row["state"] == "accepted"]
+    assert len(accepted) == 1
+    assert accepted[0]["price"] == 4000.0
+    assert accepted[0]["order_id"] != first_order["order_id"]
+    lifecycle = load_json(
+        output / "dualtrack" / "grid_lifecycle" / f"{CYCLE_ID}_nautilus.json"
+    )
+    assert [
+        row["event"] for row in lifecycle if row["event"] != "armed"
+    ] == [
+        "entry_fill_confirmed",
+        "close_fill_confirmed_rearm",
+        "entry_fill_confirmed",
+        "close_fill_confirmed_rearm",
+    ]
+
+    restarted = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    assert restarted.snapshot(CYCLE_ID) == snapshot
+    assert restarted.flush(CYCLE_ID)["status"] == "idempotent"
+    assert restarted.reconcile(CYCLE_ID)["status"] == "ok"
+
+
+def test_authoritative_grid_does_not_rearm_after_plan_cancel(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+
+    def replay(_preflight: Path, input_path: Path, output_path: Path) -> dict:
+        return _completed_grid_replay(input_path, output_path)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    order = adapter.submit_order(_grid_command())
+    adapter.cancel_orders(
+        CYCLE_ID,
+        order_ids=[order["order_id"]],
+        ts="2026-07-10T01:02:30+00:00",
+        reason="stop",
+    )
+    adapter.process_market_event(_grid_market_event(1, 4000.0))
+    adapter.process_market_event(_grid_market_event(2, 4010.0))
+
+    snapshot = adapter.flush(CYCLE_ID)["snapshot"]
+    commands = load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")
+
+    assert len([row for row in commands if (row.get("command") or {}).get("event") == "entry"]) == 1
+    assert snapshot["rearms"] == 0
+    assert not [
+        row for row in load_json(
+            output / "dualtrack" / "grid_lifecycle" / f"{CYCLE_ID}_nautilus.json"
+        )
+        if row["event"] == "close_fill_confirmed_rearm"
+    ]
+
+
+def test_manual_bracket_is_not_silently_promoted_to_rearming_grid(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+
+    def replay(_preflight: Path, input_path: Path, output_path: Path) -> dict:
+        return _completed_grid_replay(input_path, output_path)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    adapter.submit_order({
+        **_grid_command(),
+        "source": "manual_ticket",
+        "source_fill_id": "manual-bracket",
+    })
+    adapter.process_market_event(_grid_market_event(1, 4000.0))
+    adapter.process_market_event(_grid_market_event(2, 4010.0))
+
+    snapshot = adapter.flush(CYCLE_ID)["snapshot"]
+
+    assert len(load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")) == 1
+    assert snapshot["rearms"] == 0
+    assert snapshot["grid_lifecycle"]["line_count"] == 0
 
 
 def test_order_receipt_keeps_submission_time_and_strategy_traceability(tmp_path: Path) -> None:
@@ -408,6 +685,96 @@ def test_deferred_mode_queues_many_events_and_replays_the_batch_once(tmp_path: P
     assert adapter.flush(CYCLE_ID)["status"] == "idempotent"
     assert len(attempts) == 1
     assert len(load_json(adapter.root / "processed_commands" / f"{CYCLE_ID}.json")) == 1
+
+
+def test_command_flush_replays_pending_commands_without_market_events(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    attempts = []
+
+    def replay(_preflight: Path, _input: Path, _output: Path) -> dict:
+        attempts.append(1)
+        return _candidate(CYCLE_ID)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    adapter.process_market_event({
+        "cycle_id": CYCLE_ID,
+        "event_id": "processed-baseline",
+        "ts_event": "2026-07-10T01:00:00+00:00",
+        "price": 101.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    })
+    adapter.flush(CYCLE_ID)
+    attempts.clear()
+    adapter.submit_order({
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "source_fill_id": "command-only-1",
+    })
+
+    result = adapter.flush_commands(CYCLE_ID)
+
+    assert result["status"] == "replayed"
+    assert result["processed_event_count"] == 0
+    assert result["processed_command_count"] == 1
+    assert attempts == [1]
+    assert [
+        row["event_id"]
+        for row in load_json(adapter.root / "processed_events" / f"{CYCLE_ID}.json")
+    ] == ["processed-baseline"]
+
+
+def test_command_flush_fails_closed_when_market_event_is_pending(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    attempts = []
+
+    def replay(_preflight: Path, _input: Path, _output: Path) -> dict:
+        attempts.append(1)
+        return _candidate(CYCLE_ID)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    queued = adapter.process_market_event({
+        "cycle_id": CYCLE_ID,
+        "event_id": "pending-event",
+        "ts_event": "2026-07-10T01:01:00+00:00",
+        "price": 100.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    })
+    assert queued["status"] == "queued"
+
+    with pytest.raises(RuntimeError, match="pending market events"):
+        adapter.flush_commands(CYCLE_ID)
+
+    assert attempts == []
+    assert load_json(adapter.root / "processed_events" / f"{CYCLE_ID}.json") == []
 
 
 def test_persists_idempotent_cancel_commands_for_authoritative_order_ids(tmp_path: Path) -> None:
