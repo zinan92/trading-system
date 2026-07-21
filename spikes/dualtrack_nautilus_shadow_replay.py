@@ -40,6 +40,7 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
         taker_fee_rate=str(fee.get("taker_fee_rate") or ""),
     )
     commands = _replayable_commands(list(bundle.get("commands") or []))
+    native_commands = _native_replay_commands(commands)
     settings = dict(bundle.get("execution_settings") or {})
     starting_cash = float(settings.get("starting_cash") or 10_000.0)
     max_leverage = float(settings.get("max_leverage") or 10.0)
@@ -48,7 +49,7 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
     engine = _run_market_replay(
         instrument,
         events,
-        commands,
+        native_commands,
         starting_cash=starting_cash,
         max_leverage=max_leverage,
     )
@@ -59,6 +60,16 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
         commands,
         mark_price=float(last_event["price"]),
         price_precision=int(preflight["instrument"]["price_precision"]),
+    )
+    orders, fills, positions, realized, unrealized, safe_settlement_count = (
+        _apply_paper_safe_action_settlements(
+            orders,
+            fills,
+            positions,
+            commands,
+            mark_price=float(last_event["price"]),
+            taker_fee_rate=float(fee.get("taker_fee_rate") or 0.0),
+        )
     )
     return {
         "schema_version": "dualtrack-execution-v1",
@@ -82,6 +93,7 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
             "native_order_lifecycle": True,
             "paper_shadow": True,
             "market_replay": True,
+            "paper_safe_action_settlement": True,
             "nautilus_version": _nautilus_version(),
             "platform_code_hash": platform_parity_code_hash(),
             "comparison_normalization": {
@@ -96,6 +108,7 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
             "input_id": bundle["input_id"],
             "replayed_market_events": len(events),
             "authoritative_command_count": command_count,
+            "safe_action_settlement_count": safe_settlement_count,
             # A no-command replay is valuable ingestion evidence, but cannot
             # advance the seven-cycle execution parity cutover requirement.
             "qualifies_for_cutover": command_count > 0,
@@ -289,6 +302,36 @@ def _replayable_commands(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(accepted, key=_command_time)
 
 
+def _native_replay_commands(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep post-replay safe settlements out of future native replays."""
+
+    cancelled_targets = {
+        str((row.get("command") or {}).get("cancel_order_id") or "")
+        for row in rows
+        if _valid_safe_action_gate(
+            (row.get("command") or {}).get("safe_action_market_gate"),
+            action_class="cancel",
+        )
+    } - {""}
+    native = []
+    for row in rows:
+        command_id = str(row.get("command_id") or "")
+        command = row.get("command") if isinstance(row.get("command"), dict) else {}
+        event = str(command.get("event") or "entry").lower()
+        gate = command.get("safe_action_market_gate")
+        if command_id in cancelled_targets:
+            continue
+        if event == "cancel" and _valid_safe_action_gate(gate, action_class="cancel"):
+            continue
+        if event in {"exit", "stop", "target", "flatten"} and _valid_safe_action_gate(
+            gate,
+            action_class="reduce_only",
+        ):
+            continue
+        native.append(row)
+    return native
+
+
 def _command_time(row: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(str(row["command"]["ts"]).replace("Z", "+00:00"))
 
@@ -326,6 +369,243 @@ def _snapshot_reports(
         if row.get("status") == "open"
     ), 8)
     return orders, fills, positions, realized, unrealized
+
+
+def _apply_paper_safe_action_settlements(
+    orders: list[dict[str, Any]],
+    fills: list[dict[str, Any]],
+    positions: list[dict[str, Any]],
+    commands: list[dict[str, Any]],
+    *,
+    mark_price: float,
+    taker_fee_rate: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], float, float, int]:
+    """Settle paper-only safe actions after the final real market event.
+
+    No market event is fabricated. Cancellation changes only accepted order
+    lifecycle state; reduce-only fills use the server-bound price evidence on
+    the command and can never increase position size.
+    """
+
+    order_by_id = {str(row.get("order_id") or ""): row for row in orders}
+    fill_order_ids = {str(row.get("order_id") or "") for row in fills}
+    command_rows = [
+        (str(row.get("command_id") or ""), dict(row.get("command") or {}))
+        for row in commands
+    ]
+    command_by_id = dict(command_rows)
+    settlement_count = 0
+
+    for _command_id, command in command_rows:
+        gate = command.get("safe_action_market_gate")
+        if not _valid_safe_action_gate(gate, action_class="cancel"):
+            continue
+        target_id = str(command.get("cancel_order_id") or "")
+        target = order_by_id.get(target_id)
+        if target is None and target_id in command_by_id:
+            target = _paper_order_from_command(target_id, command_by_id[target_id])
+            orders.append(target)
+            order_by_id[target_id] = target
+        if target is None or str(target.get("state") or "") != "accepted":
+            continue
+        target["state"] = "canceled"
+        target["cancelled_at"] = str(command.get("ts") or "")
+        target["safe_action_market_gate"] = dict(gate)
+        settlement_count += 1
+
+    for command_id, command in command_rows:
+        event = str(command.get("event") or "").lower()
+        gate = command.get("safe_action_market_gate")
+        if event not in {"exit", "stop", "target", "flatten"}:
+            continue
+        if not _valid_safe_action_gate(gate, action_class="reduce_only"):
+            continue
+        if command.get("market_fresh") is not False:
+            raise ValueError("paper safe-action settlement freshness evidence mismatch")
+        if str(gate.get("pricing_source") or "") == "fresh_server_mark":
+            continue
+        if command_id in fill_order_ids:
+            continue
+        price = float(command.get("price") or 0.0)
+        quantity = float(command.get("quantity") or command.get("contracts") or 0.0)
+        requested_at = str(command.get("requested_at") or "")
+        if price <= 0 or quantity <= 0 or not requested_at:
+            raise ValueError("paper safe-action settlement command is incomplete")
+        if float(gate.get("pricing_price") or 0.0) != price:
+            raise ValueError("paper safe-action settlement price evidence mismatch")
+        if command.get("market_price") not in (None, "") and float(command["market_price"]) != price:
+            raise ValueError("paper safe-action settlement market price mismatch")
+        if str(gate.get("pricing_timestamp") or "") != str(command.get("market_timestamp") or ""):
+            raise ValueError("paper safe-action settlement timestamp evidence mismatch")
+        if str(gate.get("pricing_provider") or "") != str(command.get("market_source") or ""):
+            raise ValueError("paper safe-action settlement provider evidence mismatch")
+        target = _safe_action_target_position(positions, command)
+        remaining_before = float(target.get("remaining_units") or 0.0)
+        target_side = str(target.get("side") or "").lower()
+        if target_side not in {"long", "short"}:
+            raise ValueError("paper safe-action target position side is invalid")
+        expected_side = "sell" if target_side == "long" else "buy"
+        if str(command.get("side") or "").lower() != expected_side:
+            raise ValueError("paper safe-action settlement side does not reduce the target position")
+        if quantity > remaining_before + 1e-9:
+            raise ValueError("paper safe-action settlement exceeds the open position")
+        entry_at = datetime.fromisoformat(str(target.get("entry_ts") or "").replace("Z", "+00:00"))
+        settled_at = datetime.fromisoformat(requested_at.replace("Z", "+00:00"))
+        priced_at = datetime.fromisoformat(
+            str(gate.get("pricing_timestamp") or "").replace("Z", "+00:00")
+        )
+        if settled_at <= entry_at:
+            raise ValueError("paper safe-action settlement must follow the position entry")
+        if priced_at > settled_at:
+            raise ValueError("paper safe-action pricing evidence cannot be in the future")
+        direction = 1.0 if str(target.get("side") or "") == "long" else -1.0
+        gross = (price - float(target.get("entry_price") or 0.0)) * quantity * direction
+        cost = price * quantity * taker_fee_rate
+        remaining_after = max(0.0, remaining_before - quantity)
+        if command.get("target_remaining_before") not in (None, "") and abs(
+            float(command["target_remaining_before"]) - remaining_before
+        ) > 1e-9:
+            raise ValueError("paper safe-action settlement position evidence is stale")
+        if command.get("target_remaining_after") not in (None, "") and abs(
+            float(command["target_remaining_after"]) - remaining_after
+        ) > 1e-9:
+            raise ValueError("paper safe-action settlement remaining evidence mismatch")
+        target["remaining_units"] = round(remaining_after, 10)
+        target["realized_pnl"] = round(float(target.get("realized_pnl") or 0.0) + gross - cost, 8)
+        target["status"] = "closed" if remaining_after <= 1e-9 else "open"
+        if target["status"] == "closed":
+            target["exit_price"] = price
+            target["exit_ts"] = requested_at
+        order = order_by_id.get(command_id)
+        if order is None:
+            order = {
+                "order_id": command_id,
+                "side": str(command.get("side") or ""),
+                "event": event,
+                "order_type": "market",
+                "strategy_plan_id": command.get("strategy_plan_id"),
+                "strategy_plan_version": command.get("strategy_plan_version"),
+            }
+            orders.append(order)
+            order_by_id[command_id] = order
+        order.update({
+            "state": "filled",
+            "price": price,
+            "quantity": quantity,
+            "ts": requested_at,
+            "safe_action_market_gate": dict(gate),
+        })
+        fills.append({
+            "fill_id": f"nautilus-{command_id}",
+            "order_id": command_id,
+            "trade_id": str(command.get("target_command_id") or target.get("trade_id") or ""),
+            "cycle_id": str(command.get("cycle_id") or ""),
+            "ts": requested_at,
+            "side": str(command.get("side") or ""),
+            "event": event,
+            "price": price,
+            "quantity": quantity,
+            "requested_price": price,
+            "slippage": 0.0,
+            "cost": round(cost, 8),
+            "liquidity": "taker",
+            "order_type": "market",
+            "strategy_plan_id": command.get("strategy_plan_id"),
+            "strategy_plan_version": command.get("strategy_plan_version"),
+            "safe_action_market_gate": dict(gate),
+        })
+        fill_order_ids.add(command_id)
+        settlement_count += 1
+
+    fills.sort(key=lambda row: (str(row.get("ts") or ""), str(row.get("order_id") or "")))
+    realized = round(sum(float(row.get("realized_pnl") or 0.0) for row in positions), 8)
+    unrealized = round(sum(
+        (mark_price - float(row.get("entry_price") or 0.0))
+        * float(row.get("remaining_units") or 0.0)
+        * (1.0 if row.get("side") == "long" else -1.0)
+        for row in positions
+        if row.get("status") == "open"
+    ), 8)
+    return orders, fills, positions, realized, unrealized, settlement_count
+
+
+def _paper_order_from_command(command_id: str, command: dict[str, Any]) -> dict[str, Any]:
+    """Project a canceled-before-fill command that native replay intentionally omits."""
+
+    return {
+        "order_id": command_id,
+        "state": "accepted",
+        "side": str(command.get("side") or "").lower(),
+        "event": str(command.get("event") or "entry").lower(),
+        "order_type": str(command.get("order_type") or "market").lower(),
+        "price": float(command.get("price") or 0.0),
+        "quantity": float(command.get("quantity") or command.get("contracts") or 0.0),
+        "ts": str(command.get("ts") or ""),
+        "requested_price": float(command.get("requested_price") or command.get("price") or 0.0),
+        "requested_quantity": float(
+            command.get("requested_quantity")
+            or command.get("quantity")
+            or command.get("contracts")
+            or 0.0
+        ),
+        "strategy_plan_id": command.get("strategy_plan_id"),
+        "strategy_plan_version": command.get("strategy_plan_version"),
+    }
+
+
+def _valid_safe_action_gate(value: Any, *, action_class: str) -> bool:
+    base = (
+        isinstance(value, dict)
+        and value.get("schema_version") == "paper-safe-action-market-gate-v1"
+        and value.get("scope") == "paper_only"
+        and value.get("action_class") == action_class
+        and value.get("entry_market_gate_applies") is False
+    )
+    if not base:
+        return False
+    if action_class == "cancel":
+        return value.get("pricing_required") is False and value.get("pricing_source") == "not_required"
+    try:
+        price = float(value.get("pricing_price") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return (
+        value.get("pricing_required") is True
+        and value.get("pricing_source") in {
+            "last_known_execution_event",
+            "last_known_server_mark",
+            "last_known_execution_fill",
+            "position_cost_basis",
+        }
+        and price > 0
+        and bool(str(value.get("pricing_timestamp") or ""))
+        and bool(str(value.get("pricing_provider") or ""))
+    )
+
+
+def _safe_action_target_position(
+    positions: list[dict[str, Any]],
+    command: dict[str, Any],
+) -> dict[str, Any]:
+    trade_ids = {
+        str(command.get("target_command_id") or ""),
+        str(command.get("trade_id") or ""),
+    } - {""}
+    position_ids = {
+        str(command.get("target_position_id") or ""),
+        str(command.get("position_id") or ""),
+    } - {""}
+    open_positions = [row for row in positions if str(row.get("status") or "") == "open"]
+    candidates = []
+    if trade_ids:
+        candidates = [row for row in open_positions if str(row.get("trade_id") or "") in trade_ids]
+    if not candidates and position_ids:
+        candidates = [
+            row for row in open_positions if str(row.get("position_id") or "") in position_ids
+        ]
+    if len(candidates) != 1:
+        raise ValueError("paper safe-action settlement could not resolve one open position")
+    return candidates[0]
 
 
 def _orders_from_reports(

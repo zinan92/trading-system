@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
+from services.dualtrack_clock import parse_utc
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_store import DualTrackPlanStore
 from services.control_audit import append_control_event, build_control_event, read_last_control_event
@@ -34,8 +35,11 @@ from services.risk_policy_composition import (
 from services.risk_port import (
     RiskDecisionPort,
     RiskDecisionStorePort,
+    action_class_for_command,
     assert_matching_risk_decision,
+    build_paper_safe_action_market_gate,
     build_grid_risk_request,
+    normalize_manual_order_command,
     require_exposure_permission,
 )
 from services.strategy_plan_execution import build_plan_grid_entry_commands
@@ -48,12 +52,283 @@ FIELD_SOURCES = {"human", "ai", "confirmed"}
 _CONTROL_LOCK = threading.RLock()
 
 
+def paper_safe_action_market_mark_is_trusted(
+    market: dict[str, Any] | None,
+    *,
+    expected_provider: str = "",
+) -> bool:
+    """Check provenance before a server mark may price a paper safe action."""
+
+    source = market if isinstance(market, dict) else {}
+    provider = str(source.get("provider") or "")
+    return (
+        source.get("is_synthetic") is False
+        and bool(provider)
+        and source.get("source_mode") in {"requested_symbol", provider}
+        and (not expected_provider or provider == expected_provider)
+    )
+
+
 @contextmanager
 def production_mutation_lock():
     """Serialize every in-process plan, grid, and manual-order mutation."""
 
     with _CONTROL_LOCK:
         yield
+
+
+def resolve_paper_safe_action_pricing(
+    market: dict[str, Any] | None,
+    execution_snapshot: dict[str, Any],
+    *,
+    requested_at: str | None,
+    command: dict[str, Any] | None = None,
+    engine_name: str = "legacy_paper",
+    last_market_event: dict[str, Any] | None = None,
+    allow_market_mark: bool = True,
+) -> dict[str, Any]:
+    """Resolve paper-only exit pricing without trusting a browser or fake freshness."""
+
+    source = market if isinstance(market, dict) else {}
+    if source.get("is_synthetic") is True:
+        raise ValueError("paper safe action cannot use synthetic market data")
+    requested = parse_utc(requested_at)
+    targets = _safe_action_target_positions(execution_snapshot, command)
+    if not targets:
+        raise ValueError("paper safe action requires an open position")
+    latest_entry = _latest_position_entry_time(targets)
+    fresh = (
+        allow_market_mark
+        and source.get("status") in {"ready", "derived"}
+        and source.get("fresh") is True
+        and source.get("is_synthetic") is False
+    )
+
+    if str(engine_name or "") == "nautilus_paper" and not fresh:
+        event = last_market_event if isinstance(last_market_event, dict) else {}
+        if event.get("is_synthetic") is False:
+            candidate = _safe_action_price_candidate(
+                price=event.get("price"),
+                timestamp=event.get("ts_event"),
+                provider=event.get("provider") or event.get("source"),
+                requested=requested,
+                latest_entry=latest_entry,
+            )
+            if candidate is not None:
+                return {
+                    **candidate,
+                    "pricing_source": "last_known_execution_event",
+                    "command_timestamp": requested.isoformat(),
+                }
+
+    market_candidate = None
+    if allow_market_mark and source.get("is_synthetic") is False:
+        market_candidate = _safe_action_price_candidate(
+            price=source.get("latest_close"),
+            timestamp=source.get("latest_timestamp"),
+            provider=source.get("provider"),
+            requested=requested,
+            latest_entry=None if fresh else latest_entry,
+        )
+    if market_candidate is not None:
+        return {
+            **market_candidate,
+            "pricing_source": "fresh_server_mark" if fresh else "last_known_server_mark",
+            "command_timestamp": requested.isoformat(),
+        }
+
+    ledger_candidate = _latest_execution_fill_candidate(
+        execution_snapshot,
+        targets=targets,
+        requested=requested,
+    )
+    if ledger_candidate is not None:
+        return {
+            **ledger_candidate,
+            "pricing_source": "last_known_execution_fill",
+            "command_timestamp": requested.isoformat(),
+        }
+
+    position_candidate = _latest_position_cost_candidate(targets, requested=requested)
+    if position_candidate is not None:
+        return {
+            **position_candidate,
+            "pricing_source": "position_cost_basis",
+            "command_timestamp": requested.isoformat(),
+        }
+    raise ValueError("paper safe action has no trusted execution-ledger price")
+
+
+def _safe_action_target_positions(
+    snapshot: dict[str, Any],
+    command: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    positions = [
+        dict(row)
+        for row in snapshot.get("positions") or []
+        if isinstance(row, dict) and str(row.get("status") or "") == "open"
+    ]
+    body = command if isinstance(command, dict) else {}
+    trade_ids = {
+        str(body.get("trade_id") or ""),
+        str(body.get("target_command_id") or ""),
+    } - {""}
+    position_ids = {
+        str(body.get("position_id") or ""),
+        str(body.get("target_position_id") or ""),
+    } - {""}
+    if not trade_ids and not position_ids:
+        return positions
+    matched = []
+    if trade_ids:
+        matched = [row for row in positions if str(row.get("trade_id") or "") in trade_ids]
+    if not matched and position_ids:
+        matched = [row for row in positions if str(row.get("position_id") or "") in position_ids]
+    if len(matched) != 1:
+        raise ValueError("paper safe action could not resolve exactly one open position")
+    return matched
+
+
+def _latest_position_entry_time(positions: list[dict[str, Any]]) -> datetime | None:
+    values = [
+        parsed
+        for row in positions
+        if (parsed := _optional_utc(row.get("entry_ts"))) is not None
+    ]
+    return max(values) if values else None
+
+
+def _safe_action_price_candidate(
+    *,
+    price: Any,
+    timestamp: Any,
+    provider: Any,
+    requested: datetime,
+    latest_entry: datetime | None,
+) -> dict[str, Any] | None:
+    value = _optional_positive(price)
+    priced_at = _optional_utc(timestamp)
+    provenance = str(provider or "").strip()
+    if value is None or priced_at is None or not provenance or priced_at > requested:
+        return None
+    if latest_entry is not None and priced_at < latest_entry:
+        return None
+    return {
+        "price": value,
+        "pricing_timestamp": priced_at.isoformat(),
+        "pricing_provider": provenance,
+    }
+
+
+def _latest_execution_fill_candidate(
+    snapshot: dict[str, Any],
+    *,
+    targets: list[dict[str, Any]],
+    requested: datetime,
+) -> dict[str, Any] | None:
+    target_trade_ids = {
+        str(row.get("trade_id") or "") for row in targets if row.get("trade_id") not in (None, "")
+    }
+    target_position_ids = {
+        str(row.get("position_id") or "")
+        for row in targets
+        if row.get("position_id") not in (None, "")
+    }
+    candidates: list[tuple[datetime, float]] = []
+    for row in snapshot.get("fills") or []:
+        if not isinstance(row, dict):
+            continue
+        if target_trade_ids and str(row.get("trade_id") or "") not in target_trade_ids:
+            continue
+        if (
+            not target_trade_ids
+            and target_position_ids
+            and str(row.get("position_id") or "") not in target_position_ids
+        ):
+            continue
+        priced_at = _optional_utc(row.get("ts"))
+        price = _optional_positive(row.get("price"))
+        if priced_at is None or price is None or priced_at > requested:
+            continue
+        candidates.append((priced_at, price))
+    if not candidates:
+        return None
+    priced_at, price = max(candidates, key=lambda item: item[0])
+    return {
+        "price": price,
+        "pricing_timestamp": priced_at.isoformat(),
+        "pricing_provider": "paper_execution_ledger",
+    }
+
+
+def _latest_position_cost_candidate(
+    positions: list[dict[str, Any]],
+    *,
+    requested: datetime,
+) -> dict[str, Any] | None:
+    candidates: list[tuple[datetime, float]] = []
+    for row in positions:
+        priced_at = _optional_utc(row.get("entry_ts"))
+        price = _optional_positive(row.get("entry_price"))
+        if priced_at is None or price is None or priced_at > requested:
+            continue
+        candidates.append((priced_at, price))
+    if not candidates:
+        return None
+    priced_at, price = max(candidates, key=lambda item: item[0])
+    return {
+        "price": price,
+        "pricing_timestamp": priced_at.isoformat(),
+        "pricing_provider": "paper_execution_ledger",
+    }
+
+
+def _optional_positive(value: Any) -> float | None:
+    try:
+        return _positive_number(value, "paper safe action price")
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_utc(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        return parse_utc(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def last_paper_execution_market_event(adapter, cycle_id: str) -> dict[str, Any] | None:
+    authoritative = getattr(adapter, "authoritative", adapter)
+    reader = getattr(authoritative, "last_market_event", None)
+    if not callable(reader):
+        return None
+    event = reader(cycle_id)
+    return dict(event) if isinstance(event, dict) else None
+
+
+def settle_paper_safe_action_commands(adapter, cycle_id: str) -> dict[str, Any] | None:
+    """Persist safe actions without requiring another market-data event."""
+
+    authoritative_result: dict[str, Any] | None = None
+    if str(getattr(adapter, "name", "")) == "nautilus_paper":
+        authoritative = getattr(adapter, "authoritative", adapter)
+        flush = getattr(authoritative, "flush", None)
+        if not callable(flush):
+            raise ValueError("Nautilus paper safe action requires replay flush support")
+        authoritative_result = flush(cycle_id)
+
+    shadow_result: dict[str, Any] | None = None
+    flush_shadow = getattr(adapter, "flush_shadow", None)
+    if callable(flush_shadow):
+        shadow_result = flush_shadow(cycle_id)
+
+    if authoritative_result is not None:
+        return authoritative_result
+    if shadow_result is not None:
+        return {"status": "shadow_flushed", "shadow": shadow_result}
+    return None
 
 
 class StrategyControlPlane:
@@ -287,7 +562,19 @@ class StrategyControlPlane:
                     self._audit_control(cycle_id, action, payload, actor=actor, result="rejected", error=str(exc), now=now)
                 raise
             if str(action or "").lower() != "preview":
-                recorded = self._audit_control(cycle_id, action, payload, actor=actor, result="accepted", error=None, now=now)
+                evidence = None
+                if isinstance(result, dict) and result.get("safe_action_market_gates"):
+                    evidence = {"safe_action_market_gates": result["safe_action_market_gates"]}
+                recorded = self._audit_control(
+                    cycle_id,
+                    action,
+                    payload,
+                    actor=actor,
+                    result="accepted",
+                    error=None,
+                    evidence=evidence,
+                    now=now,
+                )
                 if isinstance(result, dict):
                     result = {**result, "audit_recorded": recorded}
             return result
@@ -301,6 +588,7 @@ class StrategyControlPlane:
         actor: dict[str, Any] | None,
         result: str,
         error: str | None,
+        evidence: dict[str, Any] | None = None,
         now: str | None,
     ) -> bool:
         # An audit failure must never block or alter the control outcome;
@@ -314,6 +602,7 @@ class StrategyControlPlane:
                 result=result,
                 error=error,
                 runtime=self.runtime_state(cycle_id),
+                evidence=evidence,
                 now=_timestamp(now),
             )
             append_control_event(self.output_root, event)
@@ -375,13 +664,7 @@ class StrategyControlPlane:
                 ts=_timestamp(now),
                 reason="operator_cancel_all",
             )
-            execution_event = self._advance_selected_execution(
-                adapter,
-                cycle_id,
-                market=market,
-                now=now,
-                identity="operator-cancel-all",
-            )
+            execution_event = self._settle_safe_action_commands(adapter, cycle_id)
             accepted_after = self._accepted_orders(cycle_id, adapter=adapter)
             if accepted_after:
                 raise ValueError("paper cancel left accepted orders")
@@ -394,6 +677,13 @@ class StrategyControlPlane:
                 "execution_receipt": receipt,
                 "execution_event": execution_event,
                 "reconciliation": reconciliation,
+                "safe_action_market_gates": [
+                    build_paper_safe_action_market_gate(
+                        action_class_for_command({"event": "cancel"}),
+                        market,
+                        pricing_source="not_required",
+                    )
+                ],
             }
         raise ValueError("unsupported production control action")
 
@@ -915,25 +1205,57 @@ class StrategyControlPlane:
             adapter=adapter,
             reason="stop",
         )
+        execution_event = self._settle_safe_action_commands(adapter, cycle_id)
         snapshot = adapter.snapshot(cycle_id)
         open_positions = [row for row in snapshot.get("positions") or [] if row.get("status") == "open"]
         flattened: list[dict[str, Any]] = []
-        execution_event: dict[str, Any] | None = None
+        safe_action_market_gates = [
+            build_paper_safe_action_market_gate(
+                action_class_for_command({"event": "cancel"}),
+                market,
+                pricing_source="not_required",
+            )
+        ]
         try:
+            flatten_commands: list[dict[str, Any]] = []
             if open_positions:
-                _validate_market(market or {})
-                price = _positive_number((market or {}).get("latest_close"), "market latest_close")
-                timestamp = _timestamp(now or (market or {}).get("latest_timestamp"))
+                requested_at = _timestamp(now)
+                market_config = (
+                    self.config.get("market_data")
+                    if isinstance(self.config.get("market_data"), dict)
+                    else {}
+                )
+                allow_market_mark = paper_safe_action_market_mark_is_trusted(
+                    market,
+                    expected_provider=str(market_config.get("provider") or ""),
+                )
+                execution_event_mark = last_paper_execution_market_event(adapter, cycle_id)
                 for position in open_positions:
                     side = "sell" if str(position.get("side") or "") in {"buy", "long"} else "buy"
-                    flattened.append(adapter.submit_order({
+                    pricing = resolve_paper_safe_action_pricing(
+                        market,
+                        snapshot,
+                        requested_at=requested_at,
+                        command={
+                            "trade_id": position.get("trade_id"),
+                            "position_id": position.get("position_id"),
+                        },
+                        engine_name=str(getattr(adapter, "name", "legacy_paper")),
+                        last_market_event=execution_event_mark,
+                        allow_market_mark=allow_market_mark,
+                    )
+                    command = normalize_manual_order_command({
                         "cycle_id": cycle_id,
-                        "ts": timestamp,
+                        "ts": pricing["command_timestamp"],
                         "side": side,
                         "event": "flatten",
                         "order_type": "market",
-                        "price": price,
-                        "market_price": price,
+                        "price": pricing["price"],
+                        "market_price": pricing["price"],
+                        "market_timestamp": pricing["pricing_timestamp"],
+                        "market_source": pricing["pricing_provider"],
+                        "market_fresh": pricing["pricing_source"] == "fresh_server_mark",
+                        "requested_at": requested_at,
                         "trade_id": position.get("trade_id"),
                         "position_id": position.get("position_id"),
                         "target_position_side": position.get("side"),
@@ -943,28 +1265,46 @@ class StrategyControlPlane:
                         "source_fill_id": f"strategy-stop:{cycle_id}:{position.get('trade_id')}",
                         "strategy_plan_id": previous.get("strategy_plan_id"),
                         "strategy_plan_version": previous.get("strategy_plan_version"),
-                    }))
-            if market is not None:
-                _validate_market(market)
-                price = _positive_number(market.get("latest_close"), "market latest_close")
+                    }, config=self.config)
+                    flatten_gate = build_paper_safe_action_market_gate(
+                        action_class_for_command(command),
+                        market,
+                        pricing_source=pricing["pricing_source"],
+                        pricing_price=command["price"],
+                        pricing_timestamp=pricing["pricing_timestamp"],
+                        pricing_provider=pricing["pricing_provider"],
+                    )
+                    command["safe_action_market_gate"] = flatten_gate
+                    flatten_commands.append(command)
+                    safe_action_market_gates.append(flatten_gate)
+                flattened.extend(adapter.submit_order(command) for command in flatten_commands)
+            fresh_flatten = bool(flatten_commands) and all(
+                gate.get("pricing_source") == "fresh_server_mark"
+                for gate in safe_action_market_gates[1:]
+            )
+            if fresh_flatten:
                 timestamp = _timestamp(now)
+                price = float(flatten_commands[0]["price"])
+                trusted_market = market or {}
                 execution_event = adapter.process_market_event({
                     "schema_version": "dualtrack-market-event-v1",
                     "event_id": f"strategy-stop:{cycle_id}:{timestamp}",
                     "cycle_id": cycle_id,
                     "ts_event": timestamp,
-                    "event_started_at": market.get("latest_timestamp"),
-                    "source": str(market.get("provider") or market.get("source_mode") or ""),
-                    "provider": str(market.get("provider") or ""),
+                    "event_started_at": trusted_market.get("latest_timestamp"),
+                    "source": str(
+                        trusted_market.get("provider") or trusted_market.get("source_mode") or ""
+                    ),
+                    "provider": str(trusted_market.get("provider") or ""),
                     "instrument_id": str(
                         ((self.config.get("execution_shadow") or {}).get("nautilus") or {}).get(
                             "execution_instrument_id"
                         )
-                        or market.get("symbol")
+                        or trusted_market.get("symbol")
                         or ""
                     ),
-                    "symbol": str(market.get("symbol") or "GOLD"),
-                    "timeframe": str(market.get("timeframe") or "1m"),
+                    "symbol": str(trusted_market.get("symbol") or "GOLD"),
+                    "timeframe": str(trusted_market.get("timeframe") or "1m"),
                     "open": price,
                     "high": price,
                     "low": price,
@@ -976,8 +1316,8 @@ class StrategyControlPlane:
                 flush_shadow = getattr(adapter, "flush_shadow", None)
                 if callable(flush_shadow):
                     flush_shadow(cycle_id)
-            elif adapter.name == "nautilus_paper":
-                raise ValueError("Nautilus stop requires a fresh trusted market mark")
+            else:
+                execution_event = self._settle_safe_action_commands(adapter, cycle_id)
             terminal = adapter.snapshot(cycle_id)
             if [row for row in terminal.get("orders") or [] if row.get("state") == "accepted"]:
                 raise ValueError("paper stop left accepted orders")
@@ -1011,7 +1351,12 @@ class StrategyControlPlane:
             "execution_event": execution_event,
             "reconciliation": reconciliation,
             "historical_records_preserved": True,
+            "safe_action_market_gates": safe_action_market_gates,
         }
+
+    @staticmethod
+    def _settle_safe_action_commands(adapter, cycle_id: str) -> dict[str, Any] | None:
+        return settle_paper_safe_action_commands(adapter, cycle_id)
 
     def _plan_from_preview(self, current: dict[str, Any], preview: dict[str, Any], *, now: str | None) -> dict[str, Any]:
         version = int(current.get("version") or 0) + 1

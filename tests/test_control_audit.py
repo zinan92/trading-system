@@ -65,6 +65,69 @@ def test_event_bounds_payload_and_never_stores_credentials(tmp_path: Path) -> No
     assert event["actor"]["email"] == "zinan92@hotmail.com"
 
 
+def test_event_bounds_safe_action_evidence_and_redacts_credentials(tmp_path: Path) -> None:
+    event = control_audit.build_control_event(
+        cycle_id="2026-07-15_DAY",
+        action="stop",
+        actor=actor(),
+        payload={
+            "apiKey": "request-api-key",
+            "accessKey": "request-access-key",
+            "privateKey": "request-private-key",
+            "credential": "request-credential",
+        },
+        result="rejected",
+        error=(
+            "api_key=error-api-key token=error-token "
+            "Authorization: Bearer error-bearer " + ("x" * 600)
+        ),
+        runtime={"actual_state": "stopped"},
+        evidence={
+            "safe_action_market_gates": [{
+                "action_class": "reduce_only",
+                "market_fresh": False,
+                "pricing_source": "last_known_server_mark",
+                "api_token": "must-not-survive",
+                "apiKey": "evidence-api-key",
+            }],
+        },
+        now="2026-07-15T10:00:00+00:00",
+    )
+
+    gate = event["evidence"]["safe_action_market_gates"][0]
+    assert gate["action_class"] == "reduce_only"
+    assert gate["market_fresh"] is False
+    assert gate["api_token"] == "[redacted]"
+    assert gate["apiKey"] == "[redacted]"
+    assert event["request"] == {
+        "apiKey": "[redacted]",
+        "accessKey": "[redacted]",
+        "privateKey": "[redacted]",
+        "credential": "[redacted]",
+    }
+    assert "error-api-key" not in event["error"]
+    assert "error-token" not in event["error"]
+    assert "error-bearer" not in event["error"]
+    assert len(event["error"]) <= 530
+
+    control_audit.append_control_event(tmp_path, event)
+    persisted = control_audit.read_last_control_event(tmp_path)
+    raw = next(tmp_path.rglob("*.jsonl")).read_text(encoding="utf-8")
+    assert persisted == event
+    for secret in (
+        "request-api-key",
+        "request-access-key",
+        "request-private-key",
+        "request-credential",
+        "evidence-api-key",
+        "must-not-survive",
+        "error-api-key",
+        "error-token",
+        "error-bearer",
+    ):
+        assert secret not in raw
+
+
 def test_accepted_control_writes_attributed_event(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     result = plane.control(

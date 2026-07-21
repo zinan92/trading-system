@@ -7797,3 +7797,82 @@ auditable datafeed port; broker execution remains a separate port.
   records the exact base/result instead of relabeling the count.
 - Two independent adversarial reviews closed clean with no P0-P3 actionable
   finding after the revision-ordering and unknown-runtime badge fixes.
+
+## 2026-07-20 - Issue #42 paper safe-action market-gate audit
+
+### User outcome
+
+- When the paper datafeed is unavailable or stale, an operator can still cancel
+  pending orders, reduce an open position, or stop-and-flatten the strategy;
+  every bypass of the entry freshness gate leaves bounded audit evidence.
+
+### Success criteria
+
+- Canonical server-side command classification runs before any entry-only
+  market freshness rejection.
+- Cancellation executes without a market price, including a fully blocked feed.
+- Partial reduce and emergency flatten execute when the feed is fully blocked,
+  using only gateway-bound server marks or trusted paper execution-ledger facts.
+- A stale mark is never relabelled or injected as a fresh execution event.
+- Stale entry remains fail-closed; synthetic, provenance-free, or wrong-provider
+  marks cannot become safe-action pricing.
+- API responses, persisted risk decisions, execution commands, and control
+  audit JSONL expose the action class and stale-pricing evidence.
+
+### Scope
+
+- In scope: Dashboard manual paper orders, Strategy Control `cancel_all` and
+  `stop`, Legacy paper, Nautilus paper replay settlement, tests, and this audit.
+- Out of scope: every live/broker money path, credentials, branch protection,
+  live-equivalent verification, strategy parameters, and risk thresholds.
+
+### Decision
+
+- Reuse `action_class_for_command()` as the only authority; client-supplied
+  `action_class` and gate objects are discarded at the network boundary.
+- Keep entry semantics unchanged. Only canonical `cancel` and `reduce_only`
+  actions bypass the freshness requirement.
+- Cancellation has no pricing dependency. Reduce/flatten pricing priority is a
+  gateway-bound fresh/server mark, a persisted Nautilus execution event, the
+  target position's last paper fill, then its paper cost basis. Every source,
+  original timestamp, executable price, and operator request time is recorded.
+- A gateway rejection of a provider, source mode, or missing synthetic flag
+  cannot be bypassed by the later resolver. Client limit prices and gate objects
+  never authorize the executable price.
+- Fresh actions advance Nautilus with a validated new event. Stale safe actions
+  use an explicit paper-only post-replay settlement step through `flush()`;
+  cancellation changes only order lifecycle, and reduce-only settlement cannot
+  exceed an open position. No stale or fabricated market event is appended.
+- The same safe-action settlement flushes a configured Nautilus shadow behind
+  Legacy authority, so its audit state does not wait for a future market event.
+- Safe control actions skip planning timeframes and account-history construction
+  because those read models do not authorize cancellation or flattening.
+
+### Gotchas
+
+- A reduce/flatten still requires one exactly identified open paper position and
+  a trusted price already present in server or execution-ledger evidence. A
+  corrupt position with no such evidence fails honestly instead of inventing a
+  quote.
+- A last-known mark, execution fill, or position cost basis is paper valuation
+  evidence, not proof of current venue liquidity or a live execution price.
+- Nautilus runs native replay first, then settles only canonical paper safe
+  actions requested after the entry. This avoids time travel and avoids the fake
+  fresh event that could also fill unrelated pending entries.
+- This change has no visible UI. Visual evidence is not applicable; tests,
+  JSONL audit rows, risk decisions, and persisted commands are trace evidence.
+
+### Verification
+
+- Focused paper safe-action, control, risk/API, shadow, and audit pack:
+  `148 passed in 14.54s`.
+- Isolated Nautilus 1.230.0 runtime pack: `8 passed`; the blocked-feed control
+  test and the post-final-event cancel/reduce/flatten test both reconcile `ok`
+  without adding a market event.
+- Full repository regression: `1897 passed, 1 skipped in 416.67s`, exceeding the
+  required `1889 passed` floor.
+- Two independent adversarial reviews found no remaining P0, P1, or P2 issue;
+  the exact wrong-provider, per-position fallback, and later-market recovery
+  reproductions passed after hardening.
+- No live/broker file, credential, branch protection, production process,
+  strategy parameter, or risk threshold is changed.

@@ -7,6 +7,7 @@ from services.dualtrack_execution_contract import canonical_market_event, normal
 from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_scoring import _trades_from_fills, apply_unrealized
 from services.journal_store import load_json, write_json
+from services.risk_port import action_class_for_command, build_paper_safe_action_market_gate
 
 
 class LegacyPaperExecutionAdapter:
@@ -62,6 +63,11 @@ class LegacyPaperExecutionAdapter:
             row["state"] = "cancelled"
             row["cancelled_at"] = ts
             row["cancel_reason"] = str(reason or "")
+            row["safe_action_market_gate"] = build_paper_safe_action_market_gate(
+                action_class_for_command({"event": "cancel"}),
+                None,
+                pricing_source="not_required",
+            )
             cancelled_ids.append(row_id)
         if cancelled_ids:
             write_json(self._orders_path(cycle_id), rows)
@@ -349,7 +355,12 @@ def _orders_from_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "price": float(fill.get("price") or 0.0),
             "quantity": float(fill.get("pnl_units") or fill.get("units") or 0.0),
         }
-        for key in ("ts", "strategy_plan_id", "strategy_plan_version"):
+        for key in (
+            "ts",
+            "strategy_plan_id",
+            "strategy_plan_version",
+            "safe_action_market_gate",
+        ):
             if fill.get(key) not in (None, ""):
                 order[key] = fill[key]
         orders.append(order)
@@ -367,7 +378,18 @@ def _order_row(row: dict[str, Any]) -> dict[str, Any]:
         "quantity": float(row.get("fill_quantity") or row.get("quantity") or 0.0),
     }
     command = row.get("command") if isinstance(row.get("command"), dict) else {}
-    for key in ("notional", "sl", "tp", "ts", "source", "strategy_plan_id", "strategy_plan_version"):
+    for key in (
+        "notional",
+        "sl",
+        "tp",
+        "ts",
+        "source",
+        "strategy_plan_id",
+        "strategy_plan_version",
+        "cancelled_at",
+        "cancel_reason",
+        "safe_action_market_gate",
+    ):
         if row.get(key) in (None, "") and command.get(key) not in (None, ""):
             order[key] = command[key]
         if row.get(key) not in (None, ""):

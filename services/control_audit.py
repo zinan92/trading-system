@@ -24,6 +24,7 @@ failed write honestly via `audit_recorded: false` in the API response.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,33 @@ _EVENTS_SUBDIR = Path("dualtrack") / "strategy_control" / "control_events"
 _MAX_STRING = 512
 _MAX_KEYS = 40
 _MAX_DEPTH = 4
-_CREDENTIAL_MARKERS = ("token", "jwt", "assertion", "authorization", "secret", "password", "cookie")
+_CREDENTIAL_MARKERS = (
+    "token",
+    "jwt",
+    "assertion",
+    "authorization",
+    "secret",
+    "password",
+    "cookie",
+    "credential",
+    "api_key",
+    "access_key",
+    "private_key",
+    "passphrase",
+)
+_COMPACT_CREDENTIAL_KEYS = frozenset({
+    "accesstoken",
+    "apikey",
+    "accesskey",
+    "privatekey",
+    "clientsecret",
+    "clientcredential",
+})
+_INLINE_CREDENTIAL = re.compile(
+    r"(?i)\b(token|jwt|assertion|authorization|secret|password|cookie|credential|"
+    r"api[_-]?key|access[_-]?key|private[_-]?key|passphrase)\b\s*[:=]\s*([^\s,;]+)"
+)
+_BEARER_CREDENTIAL = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 
 
 def build_control_event(
@@ -45,6 +72,7 @@ def build_control_event(
     result: str,
     error: str | None,
     runtime: dict[str, Any] | None,
+    evidence: dict[str, Any] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     normalized_actor = normalize_actor(actor)
@@ -57,7 +85,8 @@ def build_control_event(
         "actor": normalized_actor,
         "request": _bounded(payload or {}, depth=0),
         "result": str(result),
-        "error": str(error) if error else None,
+        "error": _bounded(str(error), depth=0) if error else None,
+        "evidence": _bounded(evidence or {}, depth=0),
         "runtime_after": {
             "desired_state": runtime.get("desired_state"),
             "actual_state": runtime.get("actual_state"),
@@ -112,7 +141,7 @@ def _bounded(value: Any, *, depth: int) -> Any:
             if index >= _MAX_KEYS:
                 out["[truncated]"] = f"{len(value) - _MAX_KEYS} more keys"
                 break
-            if any(marker in str(key).lower() for marker in _CREDENTIAL_MARKERS):
+            if _is_credential_key(key):
                 out[str(key)] = "[redacted]"
                 continue
             out[str(key)] = _bounded(item, depth=depth + 1)
@@ -122,8 +151,25 @@ def _bounded(value: Any, *, depth: int) -> Any:
         if len(value) > _MAX_KEYS:
             items.append("[truncated]")
         return items
-    if isinstance(value, str) and len(value) > _MAX_STRING:
-        return value[:_MAX_STRING] + f"...[{len(value)} chars]"
+    if isinstance(value, str):
+        redacted = _redact_inline_credentials(value)
+        if len(redacted) > _MAX_STRING:
+            return redacted[:_MAX_STRING] + f"...[{len(redacted)} chars]"
+        return redacted
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     return str(value)[:_MAX_STRING]
+
+
+def _redact_inline_credentials(value: str) -> str:
+    redacted = _BEARER_CREDENTIAL.sub("Bearer [redacted]", value)
+    return _INLINE_CREDENTIAL.sub(lambda match: f"{match.group(1)}=[redacted]", redacted)
+
+
+def _is_credential_key(value: Any) -> bool:
+    lowered = str(value).lower()
+    compact = re.sub(r"[^a-z0-9]", "", lowered)
+    return (
+        any(marker in lowered for marker in _CREDENTIAL_MARKERS)
+        or compact in _COMPACT_CREDENTIAL_KEYS
+    )

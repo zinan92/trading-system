@@ -35,10 +35,18 @@ from services.dualtrack_scoring import (
     filter_invalid_machine_fills,
 )
 from services.dualtrack_store import DualTrackPlanStore
-from services.strategy_control_plane import StrategyControlPlane, production_mutation_lock
+from services.strategy_control_plane import (
+    StrategyControlPlane,
+    last_paper_execution_market_event,
+    production_mutation_lock,
+    resolve_paper_safe_action_pricing,
+    settle_paper_safe_action_commands,
+)
 from services.risk_port import (
+    action_class_for_command,
     assert_matching_risk_decision,
     build_manual_order_risk_request,
+    build_paper_safe_action_market_gate,
     normalize_manual_order_command,
     require_risk_permission,
 )
@@ -902,23 +910,30 @@ def build_strategy_console_control_response(
     cycle_id = str(payload.get("cycle_id") or cycle_window(payload.get("as_of")).cycle_id)
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
-    action = str(payload.get("action") or "")
+    action = str(payload.get("action") or "").lower()
+    safe_control = action in {"stop", "cancel_all"}
     # The chart selector is display-only. Production planning always receives
     # the fixed 1m execution tape. Grid geometry needs only D1/4H; the AI
     # recommendation path separately requires D1/4H/1H/15m.
-    trusted_market = dict(market or build_dualtrack_market_bars_response(
-        timeframe="1m",
-        limit=240,
-        as_of=payload.get("as_of"),
-    ))
-    if not isinstance(trusted_market.get("strategy_timeframes"), dict):
+    trusted_market = (
+        dict(market)
+        if market is not None
+        else {}
+        if action == "cancel_all"
+        else dict(build_dualtrack_market_bars_response(
+            timeframe="1m",
+            limit=240,
+            as_of=payload.get("as_of"),
+        ))
+    )
+    if not safe_control and not isinstance(trusted_market.get("strategy_timeframes"), dict):
         required = ("1d", "4h") if action != "refresh_recommendation" else ("1d", "4h", "1h", "15m")
         trusted_market["strategy_timeframes"] = build_strategy_timeframes_response(
             as_of=payload.get("as_of"),
             timeframes=required,
         )
     trusted_account = account
-    if trusted_account is None:
+    if trusted_account is None and not safe_control:
         history = build_strategy_console_production_history(
             output_root=output,
             mark_price=trusted_market.get("latest_close"),
@@ -1142,6 +1157,12 @@ def _build_dualtrack_order_post_response_locked(
 ) -> dict:
     root = _dualtrack_output_root(output_root)
     command = dict(payload)
+    prepared_safe_action_market_gate = (
+        dict(command.get("safe_action_market_gate") or {})
+        if isinstance(command.get("safe_action_market_gate"), dict)
+        else None
+    )
+    safe_action_market_gate: dict | None = None
     position_cycle_id = str(command.get("position_cycle_id") or "")
     if position_cycle_id:
         request_cycle_id = str(command.get("cycle_id") or "")
@@ -1173,13 +1194,60 @@ def _build_dualtrack_order_post_response_locked(
     cfg = plane.config
     if enforce_risk:
         command = normalize_manual_order_command(command, config=cfg)
+        command.pop("safe_action_market_gate", None)
+    elif isinstance(command.get("safe_action_market_gate"), dict):
+        safe_action_market_gate = dict(command["safe_action_market_gate"])
     adapter = build_configured_execution_engine_adapter(root)
     risk_decision_payload: dict | None = None
     if enforce_risk:
         if not isinstance(market, dict):
             raise ValueError("server-validated market is required for order risk")
+        action_class = action_class_for_command(command)
+        if action_class == "cancel":
+            safe_action_market_gate = build_paper_safe_action_market_gate(
+                action_class,
+                market,
+                pricing_source="not_required",
+            )
+            command["safe_action_market_gate"] = safe_action_market_gate
+        elif action_class == "reduce_only":
+            command_cycle_id = str(command.get("cycle_id") or "")
+            execution_snapshot = adapter.snapshot(command_cycle_id)
+            pricing = resolve_paper_safe_action_pricing(
+                market,
+                execution_snapshot,
+                requested_at=str(command.get("requested_at") or command.get("ts") or ""),
+                command=command,
+                engine_name=str(getattr(adapter, "name", "legacy_paper")),
+                last_market_event=last_paper_execution_market_event(adapter, command_cycle_id),
+                allow_market_mark=_prepared_safe_action_market_mark_allowed(
+                    prepared_safe_action_market_gate,
+                    market,
+                ),
+            )
+            command.update({
+                "ts": pricing["command_timestamp"],
+                "price": pricing["price"],
+                "market_price": pricing["price"],
+                "market_timestamp": pricing["pricing_timestamp"],
+                "market_source": pricing["pricing_provider"],
+                "market_fresh": pricing["pricing_source"] == "fresh_server_mark",
+            })
+            command = normalize_manual_order_command(command, config=cfg)
+            execution_price = float(command["price"])
+            safe_action_market_gate = build_paper_safe_action_market_gate(
+                action_class,
+                market,
+                pricing_source=pricing["pricing_source"],
+                pricing_price=execution_price,
+                pricing_timestamp=pricing["pricing_timestamp"],
+                pricing_provider=pricing["pricing_provider"],
+            )
+            command["safe_action_market_gate"] = safe_action_market_gate
         trusted_account = account
-        if trusted_account is None:
+        if trusted_account is None and action_class in {"cancel", "reduce_only"}:
+            trusted_account = {}
+        elif trusted_account is None:
             history = build_strategy_console_production_history(
                 output_root=root,
                 mark_price=market.get("latest_close"),
@@ -1215,6 +1283,39 @@ def _build_dualtrack_order_post_response_locked(
             initial_decision,
             risk_request(),
         ).to_dict()
+    if action_class_for_command(command) == "cancel":
+        target_order_id = str(command.get("cancel_order_id") or command.get("order_id") or "")
+        if not target_order_id:
+            raise ValueError("cancel_order_id is required")
+        cycle_id = str(command.get("cycle_id") or "")
+        cancellation = adapter.cancel_orders(
+            cycle_id,
+            order_ids=[target_order_id],
+            ts=str(command.get("requested_at") or command.get("ts") or ""),
+            reason="operator_manual_cancel",
+        )
+        settlement = settle_paper_safe_action_commands(adapter, cycle_id)
+        snapshot = adapter.snapshot(cycle_id)
+        if any(
+            str(row.get("order_id") or "") == target_order_id
+            and str(row.get("state") or "").lower() == "accepted"
+            for row in snapshot.get("orders") or []
+        ):
+            raise ValueError("paper cancel left the target order accepted")
+        reconciliation = adapter.reconcile(cycle_id)
+        if reconciliation.get("status") != "ok":
+            raise ValueError("paper ledger reconciliation failed")
+        result = {
+            "status": "cancelled" if cancellation.get("cancelled_order_count") else "idempotent",
+            "cancellation": cancellation,
+            "execution_event": settlement,
+            "reconciliation": reconciliation,
+        }
+        if risk_decision_payload is not None:
+            result["risk_decision"] = risk_decision_payload
+        if safe_action_market_gate is not None:
+            result["safe_action_market_gate"] = safe_action_market_gate
+        return result
     immediate_nautilus_event = (
         str(getattr(adapter, "name", "")) == "nautilus_paper"
         and (
@@ -1227,30 +1328,38 @@ def _build_dualtrack_order_post_response_locked(
         if trusted_price is None or not command.get("market_timestamp") or not command.get("market_source"):
             raise ValueError("Nautilus market order requires a server-validated market event")
     receipt = adapter.submit_order(command)
+    stale_safe_action = (
+        safe_action_market_gate is not None
+        and safe_action_market_gate.get("action_class") == "reduce_only"
+        and safe_action_market_gate.get("pricing_source") != "fresh_server_mark"
+    )
+    if stale_safe_action:
+        settle_paper_safe_action_commands(adapter, str(command.get("cycle_id") or ""))
     if receipt.get("state") == "accepted" or receipt.get("status") == "accepted":
         if immediate_nautilus_event:
-            cfg = dualtrack_config()
-            nautilus = ((cfg.get("execution_shadow") or {}).get("nautilus") or {})
-            market_price = float(command["market_price"])
-            adapter.process_market_event({
-                "schema_version": "dualtrack-market-event-v1",
-                "event_id": f"dashboard-order:{receipt.get('order_id')}:{command.get('ts')}",
-                "cycle_id": str(command.get("cycle_id") or ""),
-                "ts_event": str(command.get("ts") or ""),
-                "event_started_at": str(command.get("market_timestamp") or ""),
-                "source": str(command.get("market_source") or ""),
-                "provider": str(command.get("market_source") or ""),
-                "instrument_id": str(nautilus.get("execution_instrument_id") or command.get("symbol") or "GOLD"),
-                "symbol": str(command.get("symbol") or "GOLD"),
-                "timeframe": "1m",
-                "open": market_price,
-                "high": market_price,
-                "low": market_price,
-                "close": market_price,
-                "price": market_price,
-                "fresh": True,
-                "is_synthetic": False,
-            })
+            if not stale_safe_action:
+                cfg = dualtrack_config()
+                nautilus = ((cfg.get("execution_shadow") or {}).get("nautilus") or {})
+                market_price = float(command["market_price"])
+                adapter.process_market_event({
+                    "schema_version": "dualtrack-market-event-v1",
+                    "event_id": f"dashboard-order:{receipt.get('order_id')}:{command.get('ts')}",
+                    "cycle_id": str(command.get("cycle_id") or ""),
+                    "ts_event": str(command.get("ts") or ""),
+                    "event_started_at": str(command.get("market_timestamp") or ""),
+                    "source": str(command.get("market_source") or ""),
+                    "provider": str(command.get("market_source") or ""),
+                    "instrument_id": str(nautilus.get("execution_instrument_id") or command.get("symbol") or "GOLD"),
+                    "symbol": str(command.get("symbol") or "GOLD"),
+                    "timeframe": "1m",
+                    "open": market_price,
+                    "high": market_price,
+                    "low": market_price,
+                    "close": market_price,
+                    "price": market_price,
+                    "fresh": True,
+                    "is_synthetic": False,
+                })
             snapshot = adapter.snapshot(str(command.get("cycle_id") or ""))
             fill = next((
                 row for row in reversed(snapshot.get("fills") or [])
@@ -1260,16 +1369,24 @@ def _build_dualtrack_order_post_response_locked(
                 result = {"status": "filled", "fill": fill}
                 if risk_decision_payload is not None:
                     result["risk_decision"] = risk_decision_payload
+                if safe_action_market_gate is not None:
+                    result["safe_action_market_gate"] = safe_action_market_gate
                 return result
+            if stale_safe_action:
+                raise ValueError("paper safe action did not fill against the last trusted market event")
         result = {"status": "accepted", "order": receipt}
         if risk_decision_payload is not None:
             result["risk_decision"] = risk_decision_payload
+        if safe_action_market_gate is not None:
+            result["safe_action_market_gate"] = safe_action_market_gate
         return result
     if str(getattr(adapter, "name", "")) == "legacy_paper":
         DualTrackScorer(root).rebuild_ledgers()
     result = {"status": "filled", "fill": receipt}
     if risk_decision_payload is not None:
         result["risk_decision"] = risk_decision_payload
+    if safe_action_market_gate is not None:
+        result["safe_action_market_gate"] = safe_action_market_gate
     return result
 
 
@@ -1304,7 +1421,97 @@ def _prepare_dualtrack_network_order(
     received_at: str | datetime,
     expected_provider: str = "",
 ) -> dict:
-    if bool(market.get("is_synthetic")):
+    action_class = action_class_for_command(payload)
+    now = parse_utc(received_at)
+    cycle_id = str(payload.get("cycle_id") or "")
+    current_window = cycle_window(now)
+    if current_window.cycle_id != cycle_id:
+        raise ValueError("order cycle is not current")
+    prepared = {
+        key: value
+        for key, value in payload.items()
+        if key not in {
+            "action_class",
+            "market_fresh",
+            "market_price",
+            "market_source",
+            "market_timestamp",
+            "requested_at",
+            "safe_action_market_gate",
+        }
+    }
+    prepared["requested_at"] = now.isoformat()
+    if action_class == "cancel":
+        target_order_id = str(payload.get("cancel_order_id") or payload.get("order_id") or "").strip()
+        if not target_order_id:
+            raise ValueError("cancel_order_id is required")
+        prepared["cancel_order_id"] = target_order_id
+        prepared["ts"] = now.isoformat()
+        prepared["market_fresh"] = market.get("fresh") is True
+        prepared["safe_action_market_gate"] = build_paper_safe_action_market_gate(
+            "cancel",
+            market,
+            pricing_source="not_required",
+        )
+        return prepared
+    if action_class == "reduce_only":
+        if market.get("is_synthetic") is True:
+            raise ValueError("synthetic market data is forbidden")
+        provider = str(market.get("provider") or "")
+        mark = _finite_float(market.get("latest_close"))
+        try:
+            market_ts = (
+                parse_utc(market.get("latest_timestamp"))
+                if market.get("latest_timestamp") not in (None, "")
+                else None
+            )
+        except (TypeError, ValueError):
+            market_ts = None
+        canonical_source = market.get("source_mode") in {"requested_symbol", provider}
+        canonical_provider = not expected_provider or provider == expected_provider
+        usable_mark = (
+            market.get("is_synthetic") is False
+            and
+            canonical_source
+            and canonical_provider
+            and bool(provider)
+            and mark is not None
+            and mark > 0
+            and market_ts is not None
+            and market_ts <= now + timedelta(seconds=60)
+        )
+        prepared["ts"] = now.isoformat()
+        prepared["market_fresh"] = market.get("fresh") is True
+        if usable_mark:
+            fresh_server_mark = (
+                market.get("status") in {"ready", "derived"}
+                and market.get("fresh") is True
+            )
+            prepared.update({
+                "price": mark,
+                "market_price": mark,
+                "market_timestamp": market_ts.isoformat(),
+                "market_source": provider,
+            })
+            prepared["safe_action_market_gate"] = build_paper_safe_action_market_gate(
+                action_class,
+                market,
+                pricing_source=(
+                    "fresh_server_mark" if fresh_server_mark else "last_known_server_mark"
+                ),
+                pricing_price=mark,
+                pricing_timestamp=market_ts.isoformat(),
+                pricing_provider=provider,
+            )
+        else:
+            prepared.pop("price", None)
+            prepared["safe_action_market_gate"] = build_paper_safe_action_market_gate(
+                action_class,
+                market,
+                pricing_source="paper_execution_fallback_required",
+            )
+        return prepared
+    if market.get("is_synthetic") is not False:
         raise ValueError("synthetic market data is forbidden")
     if market.get("status") != "ready" or market.get("fresh") is not True:
         raise ValueError("server market data is stale")
@@ -1314,28 +1521,60 @@ def _prepare_dualtrack_network_order(
     if expected_provider and provider != expected_provider:
         raise ValueError("server market provider is not canonical")
     mark = _finite_float(market.get("latest_close"))
-    if mark is None:
+    if mark is None or mark <= 0:
         raise ValueError("server market price is missing")
-    now = parse_utc(received_at)
     try:
         market_ts = parse_utc(market.get("latest_timestamp"))
     except (TypeError, ValueError) as exc:
         raise ValueError("server market timestamp is invalid") from exc
     if market_ts > now + timedelta(seconds=60):
         raise ValueError("server market timestamp is in the future")
-    cycle_id = str(payload.get("cycle_id") or "")
-    current_window = cycle_window(now)
-    if current_window.cycle_id != cycle_id:
-        raise ValueError("order cycle is not current")
     if market_ts < current_window.start:
         raise ValueError("server market timestamp is outside the current cycle")
-    prepared = {**payload, "ts": now.isoformat()}
+    prepared["ts"] = now.isoformat()
     prepared["market_price"] = mark
     prepared["market_timestamp"] = market_ts.isoformat()
     prepared["market_source"] = provider
+    prepared["market_fresh"] = market.get("fresh") is True
     if str(payload.get("order_type") or "market").lower() == "market":
         prepared["price"] = mark
     return prepared
+
+
+def _prepared_safe_action_market_mark_allowed(
+    gate: dict | None,
+    market: dict,
+) -> bool:
+    """Accept a mark only when the gateway-bound evidence still matches it."""
+
+    if not isinstance(gate, dict) or market.get("is_synthetic") is not False:
+        return False
+    pricing_source = str(gate.get("pricing_source") or "")
+    if pricing_source not in {"fresh_server_mark", "last_known_server_mark"}:
+        return False
+    provider = str(market.get("provider") or "")
+    mark = _finite_float(market.get("latest_close"))
+    gate_price = _finite_float(gate.get("pricing_price"))
+    if not provider or mark is None or mark <= 0 or gate_price != mark:
+        return False
+    try:
+        market_timestamp = parse_utc(market.get("latest_timestamp")).isoformat()
+        gate_timestamp = parse_utc(gate.get("pricing_timestamp")).isoformat()
+    except (TypeError, ValueError):
+        return False
+    return (
+        gate.get("schema_version") == "paper-safe-action-market-gate-v1"
+        and gate.get("scope") == "paper_only"
+        and gate.get("action_class") == "reduce_only"
+        and gate.get("entry_market_gate_applies") is False
+        and gate.get("pricing_required") is True
+        and gate.get("market_is_synthetic") is False
+        and str(gate.get("market_status") or "") == str(market.get("status") or "missing")
+        and gate.get("market_fresh") is (market.get("fresh") is True)
+        and str(gate.get("market_provider") or "") == provider
+        and str(gate.get("pricing_provider") or "") == provider
+        and gate_timestamp == market_timestamp
+    )
 
 
 def build_dualtrack_trades_response(

@@ -482,6 +482,20 @@ def test_close_command_resolves_one_hedged_position_and_persists_target_identity
     }]
     adapter._persist_snapshot(CYCLE_ID, snapshot)
 
+    with pytest.raises(ValueError, match="side does not reduce"):
+        adapter.submit_order({
+            "cycle_id": CYCLE_ID,
+            "ts": "2026-07-10T01:04:00+00:00",
+            "side": "buy",
+            "event": "flatten",
+            "order_type": "market",
+            "price": 4010.0,
+            "target_position_side": "long",
+            "target_entry_price": 4000.0,
+            "strategy_plan_id": "plan-1",
+            "source_fill_id": "wrong-side-close",
+        })
+
     receipt = adapter.submit_order({
         "cycle_id": CYCLE_ID,
         "ts": "2026-07-10T01:05:00+00:00",

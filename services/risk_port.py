@@ -29,6 +29,9 @@ from services.risk_policy_core import (
 )
 
 
+SAFE_ACTION_MARKET_GATE_SCHEMA = "paper-safe-action-market-gate-v1"
+
+
 @runtime_checkable
 class RiskDecisionPort(Protocol):
     name: str
@@ -340,6 +343,38 @@ def action_class_for_command(command: Mapping[str, Any]) -> str:
     if event in CLOSE_EVENTS:
         return "reduce_only"
     return "increase_exposure"
+
+
+def build_paper_safe_action_market_gate(
+    action_class: str,
+    market: Mapping[str, Any] | None,
+    *,
+    pricing_source: str,
+    pricing_price: Any = None,
+    pricing_timestamp: Any = None,
+    pricing_provider: Any = None,
+) -> dict[str, Any]:
+    """Build auditable evidence that an entry-only market gate did not apply."""
+
+    normalized = str(action_class or "")
+    if normalized not in {"cancel", "reduce_only"}:
+        raise ValueError("paper safe-action market gate requires cancel or reduce_only")
+    source = market if isinstance(market, Mapping) else {}
+    return {
+        "schema_version": SAFE_ACTION_MARKET_GATE_SCHEMA,
+        "scope": "paper_only",
+        "action_class": normalized,
+        "entry_market_gate_applies": False,
+        "market_status": str(source.get("status") or "missing"),
+        "market_fresh": source.get("fresh") is True,
+        "market_is_synthetic": source.get("is_synthetic"),
+        "market_provider": str(source.get("provider") or ""),
+        "pricing_required": normalized == "reduce_only",
+        "pricing_source": str(pricing_source or "not_required"),
+        "pricing_price": _finite_positive(pricing_price),
+        "pricing_timestamp": str(pricing_timestamp or ""),
+        "pricing_provider": str(pricing_provider or ""),
+    }
 
 
 def _normalized_risk_command(command: Mapping[str, Any]) -> dict[str, Any]:

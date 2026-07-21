@@ -172,6 +172,145 @@ def test_network_order_gate_accepts_configured_binance_source_mode() -> None:
     assert prepared["price"] == 105.0
 
 
+def test_network_order_gate_accepts_stale_server_mark_for_reduce_only() -> None:
+    prepared = dashboard_server._prepare_dualtrack_network_order(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "ts": "1999-01-01T00:00:00+00:00",
+            "side": "sell",
+            "event": "exit",
+            "order_type": "market",
+            "price": 9999.0,
+            "action_class": "increase_exposure",
+            "safe_action_market_gate": {"pricing_source": "client_spoof"},
+        },
+        market={
+            "status": "stale",
+            "source_mode": "requested_symbol",
+            "fresh": False,
+            "is_synthetic": False,
+            "provider": "binance_usdm",
+            "latest_timestamp": "2026-07-05T01:39:00+00:00",
+            "latest_close": 105.0,
+        },
+        received_at="2026-07-05T02:00:00+00:00",
+        expected_provider="binance_usdm",
+    )
+
+    assert prepared["ts"] == "2026-07-05T02:00:00+00:00"
+    assert prepared["requested_at"] == "2026-07-05T02:00:00+00:00"
+    assert prepared["price"] == prepared["market_price"] == 105.0
+    assert prepared["market_fresh"] is False
+    assert "action_class" not in prepared
+    assert prepared["safe_action_market_gate"] == {
+        "schema_version": "paper-safe-action-market-gate-v1",
+        "scope": "paper_only",
+        "action_class": "reduce_only",
+        "entry_market_gate_applies": False,
+        "market_status": "stale",
+        "market_fresh": False,
+        "market_is_synthetic": False,
+        "market_provider": "binance_usdm",
+        "pricing_required": True,
+        "pricing_source": "last_known_server_mark",
+        "pricing_price": 105.0,
+        "pricing_timestamp": "2026-07-05T01:39:00+00:00",
+        "pricing_provider": "binance_usdm",
+    }
+
+
+def test_network_order_gate_rejects_stale_entry_even_with_safe_action_spoof() -> None:
+    with pytest.raises(ValueError, match="server market data is stale"):
+        dashboard_server._prepare_dualtrack_network_order(
+            {
+                "cycle_id": "2026-07-05_DAY",
+                "side": "buy",
+                "event": "entry",
+                "order_type": "market",
+                "notional": 100.0,
+                "action_class": "cancel",
+                "safe_action_market_gate": {"action_class": "cancel"},
+            },
+            market={
+                "status": "stale",
+                "source_mode": "requested_symbol",
+                "fresh": False,
+                "is_synthetic": False,
+                "provider": "binance_usdm",
+                "latest_timestamp": "2026-07-05T01:39:00+00:00",
+                "latest_close": 105.0,
+            },
+            received_at="2026-07-05T02:00:00+00:00",
+            expected_provider="binance_usdm",
+        )
+
+
+def test_network_order_gate_rejects_synthetic_reduce_only_mark() -> None:
+    with pytest.raises(ValueError, match="synthetic market data is forbidden"):
+        dashboard_server._prepare_dualtrack_network_order(
+            {
+                "cycle_id": "2026-07-05_DAY",
+                "side": "sell",
+                "event": "exit",
+                "order_type": "market",
+            },
+            market={
+                "status": "stale",
+                "source_mode": "requested_symbol",
+                "fresh": False,
+                "is_synthetic": True,
+                "provider": "binance_usdm",
+                "latest_timestamp": "2026-07-05T01:39:00+00:00",
+                "latest_close": 105.0,
+            },
+            received_at="2026-07-05T02:00:00+00:00",
+            expected_provider="binance_usdm",
+        )
+
+
+@pytest.mark.parametrize(
+    "market_override",
+    [
+        {"provider": "evil_provider"},
+        {"source_mode": "evil_source"},
+        {"is_synthetic": None},
+    ],
+)
+def test_network_reduce_ignores_untrusted_mark_and_requires_ledger_fallback(
+    market_override: dict,
+) -> None:
+    market = {
+        "status": "stale",
+        "source_mode": "requested_symbol",
+        "fresh": False,
+        "is_synthetic": False,
+        "provider": "binance_usdm",
+        "latest_timestamp": "2026-07-05T01:39:00+00:00",
+        "latest_close": 777.0,
+        **market_override,
+    }
+
+    prepared = dashboard_server._prepare_dualtrack_network_order(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "side": "sell",
+            "event": "exit",
+            "order_type": "limit",
+            "price": 999.0,
+            "trade_id": "trusted-position",
+        },
+        market=market,
+        received_at="2026-07-05T02:00:00+00:00",
+        expected_provider="binance_usdm",
+    )
+
+    assert "price" not in prepared
+    assert "market_price" not in prepared
+    assert prepared["safe_action_market_gate"]["pricing_source"] == (
+        "paper_execution_fallback_required"
+    )
+
+
 @pytest.mark.parametrize(
     ("market", "message"),
     [
@@ -603,6 +742,277 @@ def test_nautilus_market_close_advances_with_server_validated_event(
     assert captured["event"]["provider"] == "binance_usdm_futures"
     assert captured["event"]["instrument_id"] == "XAUUSDT-PERP.BINANCE"
     assert captured["event"]["price"] == 101.0
+
+
+def test_nautilus_stale_safe_close_flushes_without_injecting_market_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"flush": 0, "market_event": 0}
+
+    class FakeNautilusAdapter:
+        name = "nautilus_paper"
+
+        def submit_order(self, _payload: dict) -> dict:
+            return {"order_id": "nautilus-stale-close-1", "state": "accepted"}
+
+        def flush(self, _cycle_id: str) -> dict:
+            calls["flush"] += 1
+            return {"status": "replayed"}
+
+        def process_market_event(self, _event: dict) -> dict:
+            calls["market_event"] += 1
+            raise AssertionError("stale safe action must not inject a fresh market event")
+
+        def snapshot(self, cycle_id: str) -> dict:
+            return {
+                "cycle_id": cycle_id,
+                "fills": [{
+                    "fill_id": "nautilus-stale-fill-1",
+                    "order_id": "nautilus-stale-close-1",
+                    "event": "exit",
+                    "price": 101.0,
+                }],
+            }
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda output_root: FakeNautilusAdapter(),
+    )
+    prepared = dashboard_server._prepare_dualtrack_network_order(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "side": "sell",
+            "event": "exit",
+            "order_type": "market",
+            "trade_id": "open-position-1",
+        },
+        market={
+            "status": "stale",
+            "source_mode": "requested_symbol",
+            "fresh": False,
+            "is_synthetic": False,
+            "provider": "binance_usdm_futures",
+            "latest_timestamp": "2026-07-05T01:19:00+00:00",
+            "latest_close": 101.0,
+        },
+        received_at="2026-07-05T02:00:00+00:00",
+        expected_provider="binance_usdm_futures",
+    )
+
+    response = dashboard_server.build_dualtrack_order_post_response(
+        prepared,
+        output_root=tmp_path / "outputs",
+    )
+
+    assert response["status"] == "filled"
+    assert response["safe_action_market_gate"]["pricing_source"] == "last_known_server_mark"
+    assert calls == {"flush": 1, "market_event": 0}
+
+
+def test_blocked_market_manual_reduce_executes_end_to_end_and_keeps_risk_auditable(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    entry = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:45:00+00:00",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "market",
+            "price": 100.0,
+            "quantity": 2.0,
+            "notional": 200.0,
+            "sl": 95.0,
+            "tp": 110.0,
+            "position_id": "stale-reduce-long",
+            "source": "test_setup",
+        },
+        output_root=output,
+    )
+    decoy = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:46:00+00:00",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "market",
+            "price": 101.0,
+            "quantity": 1.0,
+            "notional": 101.0,
+            "position_id": "stale-reduce-long",
+            "source": "test_setup_decoy",
+        },
+        output_root=output,
+    )
+    assert decoy["fill"]["trade_id"] != entry["fill"]["trade_id"]
+    blocked_market = {
+        "status": "blocked",
+        "source_mode": "unavailable",
+        "fresh": False,
+        "is_synthetic": False,
+        "provider": "",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "latest_timestamp": "",
+        "latest_close": None,
+    }
+    prepared = dashboard_server._prepare_dualtrack_network_order(
+        {
+            "cycle_id": cycle_id,
+            "side": "sell",
+            "event": "exit",
+            "order_type": "limit",
+            "price": 999.0,
+            "quantity": 1.0,
+            "trade_id": entry["fill"]["trade_id"],
+            "position_id": "stale-reduce-long",
+            "source": "split_canvas_manual_close",
+        },
+        market=blocked_market,
+        received_at="2026-07-05T02:00:00+00:00",
+        expected_provider="binance_usdm_futures",
+    )
+
+    reduced = dashboard_server.build_dualtrack_order_post_response(
+        prepared,
+        output_root=output,
+        enforce_risk=True,
+        market=blocked_market,
+        account=_canonical_account_context(),
+    )
+    snapshot = dashboard_server.build_configured_execution_engine_adapter(output).snapshot(cycle_id)
+    open_position = next(
+        row
+        for row in snapshot["positions"]
+        if row["status"] == "open" and row["trade_id"] == entry["fill"]["trade_id"]
+    )
+
+    assert reduced["status"] == "filled"
+    assert reduced["risk_decision"]["allow_reduce_only"] is True
+    assert reduced["risk_decision"]["request"]["action_class"] == "reduce_only"
+    assert reduced["risk_decision"]["request"]["market"]["fresh"] is False
+    assert reduced["safe_action_market_gate"]["pricing_source"] == "last_known_execution_fill"
+    assert reduced["fill"]["price"] == pytest.approx(100.0)
+    assert reduced["fill"]["price"] != 999.0
+    assert reduced["fill"]["safe_action_market_gate"] == reduced["safe_action_market_gate"]
+    assert open_position["remaining_units"] == pytest.approx(1.0)
+
+
+def test_wrong_provider_reduce_cannot_reenter_resolver_and_execute_evil_price(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    entry = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:45:00+00:00",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "market",
+            "price": 100.0,
+            "quantity": 1.0,
+            "notional": 100.0,
+            "position_id": "wrong-provider-long",
+            "source": "test_setup",
+        },
+        output_root=output,
+    )
+    wrong_provider_market = {
+        "status": "ready",
+        "source_mode": "requested_symbol",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "evil_provider",
+        "latest_timestamp": "2026-07-05T01:50:00+00:00",
+        "latest_close": 777.0,
+    }
+    prepared = dashboard_server._prepare_dualtrack_network_order(
+        {
+            "cycle_id": cycle_id,
+            "side": "sell",
+            "event": "exit",
+            "order_type": "market",
+            "trade_id": entry["fill"]["trade_id"],
+            "position_id": "wrong-provider-long",
+        },
+        market=wrong_provider_market,
+        received_at="2026-07-05T02:00:00+00:00",
+        expected_provider="binance_usdm_futures",
+    )
+
+    closed = dashboard_server.build_dualtrack_order_post_response(
+        prepared,
+        output_root=output,
+        enforce_risk=True,
+        market=wrong_provider_market,
+        account=_canonical_account_context(),
+    )
+
+    assert closed["status"] == "filled"
+    assert closed["fill"]["price"] == pytest.approx(100.0)
+    assert closed["fill"]["price"] != 777.0
+    assert closed["safe_action_market_gate"]["pricing_source"] == "last_known_execution_fill"
+    assert closed["safe_action_market_gate"]["pricing_provider"] == "paper_execution_ledger"
+
+
+def test_blocked_market_manual_cancel_executes_without_price(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    pending = dashboard_server.build_dualtrack_order_post_response(
+        {
+            "cycle_id": cycle_id,
+            "ts": "2026-07-05T01:45:00+00:00",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 90.0,
+            "market_price": 100.0,
+            "quantity": 1.0,
+            "notional": 90.0,
+            "position_id": "pending-cancel",
+            "source": "test_setup",
+        },
+        output_root=output,
+    )
+    blocked_market = {
+        "status": "blocked",
+        "source_mode": "unavailable",
+        "fresh": False,
+        "is_synthetic": False,
+        "provider": "",
+        "latest_timestamp": "",
+        "latest_close": None,
+    }
+    prepared = dashboard_server._prepare_dualtrack_network_order(
+        {
+            "cycle_id": cycle_id,
+            "event": "cancel",
+            "cancel_order_id": pending["order"]["order_id"],
+        },
+        market=blocked_market,
+        received_at="2026-07-05T02:00:00+00:00",
+        expected_provider="binance_usdm_futures",
+    )
+
+    cancelled = dashboard_server.build_dualtrack_order_post_response(
+        prepared,
+        output_root=output,
+        enforce_risk=True,
+        market=blocked_market,
+    )
+    snapshot = dashboard_server.build_configured_execution_engine_adapter(output).snapshot(cycle_id)
+
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["risk_decision"]["allow_cancel"] is True
+    assert cancelled["safe_action_market_gate"]["pricing_required"] is False
+    assert not [row for row in snapshot["orders"] if row["state"] == "accepted"]
+    cancelled_order = next(
+        row for row in snapshot["orders"] if row["order_id"] == pending["order"]["order_id"]
+    )
+    assert cancelled_order["safe_action_market_gate"]["action_class"] == "cancel"
 
 
 def test_human_trades_endpoint_returns_order_rows_with_unrealized_when_mark_fresh(

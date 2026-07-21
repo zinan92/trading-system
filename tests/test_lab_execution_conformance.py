@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from services.dualtrack_nautilus_execution_adapter import REPLAY_VERSION
 from services.dualtrack_nautilus_parity_contract import (
     FIXTURE_CLASSES,
     PLATFORM_PARITY_SCHEMA,
@@ -103,7 +104,7 @@ def _candidate_receipt() -> dict:
         },
         "pnl": {"realized": 0.0, "unrealized": 0.0},
         "capabilities": {
-            "replay_version": "dualtrack-nautilus-replay-v6",
+            "replay_version": REPLAY_VERSION,
             "nautilus_version": "1.230.0",
             "platform_code_hash": platform_parity_code_hash(),
         },

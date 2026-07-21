@@ -15,8 +15,9 @@ It is not yet a full plug-and-play system. Signal analysis, production grid
 proposal generation, all three backtest use cases, paper execution, broker
 execution, and broker accounting normalization now resolve through frozen
 plugin registries and venue-owned adapters. The largest remaining gaps are
-retirement of contained compatibility facades, bounded market-contract
-deployment cleanup, and one debug-priority safe-action market-gate audit.
+retirement of contained compatibility facades and bounded market-contract
+deployment cleanup. The debug-priority safe-action market-gate audit was
+completed on 2026-07-20 in the paper-only path.
 
 This percentage measures modular architecture, not profitability, live-money
 readiness, or whether the self-evolution loop has enough trades.
@@ -301,23 +302,36 @@ decision based on at least the required trade sample (preferably 100) without
 silently changing production. This is a safe partial loop, not true autonomous
 evolution yet.
 
+## Completed debug audit
+
+- **Safe-action market-gate audit (completed 2026-07-20, #42):** Dashboard and
+  Strategy Control now classify economic intent before applying entry-only
+  market freshness gates. Paper cancellation requires no quote. Paper reduce
+  and emergency flatten use gateway-bound server marks when valid, then trusted
+  persisted execution-event/fill/cost-basis evidence when the feed is fully
+  blocked. Source, timestamp, executable price, and request time remain
+  distinct audit facts. Wrong-provider, provenance-free, synthetic, client
+  price, and client gate values grant no authority. Nautilus settles canonical
+  safe actions after its last real replay event without appending a fake fresh
+  event, and the Legacy-authoritative Nautilus shadow is flushed at the same
+  boundary. End-to-end tests cover blocked-feed cancel, partial reduce, and
+  flatten for Legacy plus isolated Nautilus 1.230.0; stale entry remains
+  rejected. Persisted orders/fills, risk decisions, and bounded control audit
+  JSONL retain the gate evidence without credential values.
+
 ## Shortest remaining architecture backlog
 
-1. **Safe-action market-gate audit (small, debug priority):** prove that stale
-   entry market data cannot block a correctly identified cancel, reduce-only,
-   or emergency flatten before the canonical risk action classifier runs;
-   preserve any pricing facts genuinely required by the venue command.
-2. **Legacy read-surface retirement (medium):** migrate remaining consumers to
+1. **Legacy read-surface retirement (medium):** migrate remaining consumers to
    the stable read model, announce deprecation, then remove facade-only
    presentation code.
-3. **Market data contract cleanup (small/medium):** deploy the session-aware V2
+2. **Market data contract cleanup (small/medium):** deploy the session-aware V2
    datafeed, add a versioned continuation/pagination contract for ranges beyond
    60,000 bars, then retire V1 continuous-market inference and narrow remaining
    SQLite compatibility seams.
-4. **Backtest compatibility retirement (small):** migrate remaining direct
+3. **Backtest compatibility retirement (small):** migrate remaining direct
    `BacktestClient` callers to explicit plugins, then delete its fallback branch
    and narrow legacy `BacktestEvidence` readers to the V2 provenance contract.
-5. **Broker compatibility retirement (small):** migrate old direct/private
+4. **Broker compatibility retirement (small):** migrate old direct/private
    callers to `BrokerExecutionPort`, then delete the now-thin
    `LiveBrokerAdapter` facade without changing venue behavior.
 
@@ -332,7 +346,7 @@ pipeline. The honest state is a robust hexagonal spine with a few contained
 compatibility facades still awaiting retirement.
 
 For the grid-only product focus, the next highest-leverage architecture change
-is no longer another port extraction. Debug the stale-market safe-action gate
-first; then retire the legacy read surface. Market V2 deployment and long-window
-pagination remain bounded contract follow-ups—not reasons to add another
-Dashboard or provider-specific interpretation.
+is no longer another port extraction. With the stale-market safe-action audit
+complete, retire the legacy read surface next. Market V2 deployment and
+long-window pagination remain bounded contract follow-ups—not reasons to add
+another Dashboard or provider-specific interpretation.
