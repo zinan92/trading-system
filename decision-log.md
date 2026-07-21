@@ -8110,3 +8110,53 @@ auditable datafeed port; broker execution remains a separate port.
   resolving lifecycle membership, start-evidence and plan-lineage defects.
 - Full-suite execution was intentionally not used for this bounded read-only
   projection milestone.
+
+## 2026-07-21 - Trusted live market tape and runtime lamp
+
+### User outcome
+
+- The top bar now answers, at a glance, what is trading, the latest trusted
+  price and today's venue move, and whether the paper grid is truly running.
+
+### Decisions
+
+- Derive the displayed pair only from the canonical market
+  `provider_symbol`; `XAUUSDT` is rendered as `XAU / USDT` without inventing a
+  symbol from a product label.
+- Treat the canonical trusted 1m snapshot as the header ticker. A higher
+  timeframe selected for the chart cannot replace or recolor the live header.
+- Retain the previous price direction when two consecutive snapshots are
+  equal. Only a strictly higher or lower trusted 1m price changes the color.
+- Calculate today's percentage move from a trusted 1d open and the trusted 1m
+  latest close only when provider, provider symbol, and UTC trading day match.
+- Blink green only when runtime and actual state are both running, at least one
+  broker-accepted order is visible, the market is trusted 1m, completeness is
+  complete, the current risk decision still allows exposure with no blockers,
+  and the runtime cycle is not stale.
+
+### Gotchas
+
+- A green data-source badge is not proof that the strategy is running. The run
+  lamp has a separate conjunction of execution, market, and completeness gates.
+- The chart can legitimately display 30m while the header must remain bound to
+  canonical 1m; sharing `state.market` would make header price behavior depend
+  on the operator's chart timeframe.
+- A 1d bar from another provider or symbol is not a valid denominator. Missing
+  lineage leaves the daily percentage unknown rather than blending venues.
+- Equal ticks must not reset the last direction, or a quiet market would make
+  the price flicker back to neutral between real moves.
+- Price direction belongs to a provider plus provider-symbol identity. The
+  first tick after a feed switch establishes a new baseline and must not be
+  compared with the previous venue's price.
+- A complete read model can still contain a currently blocked risk decision;
+  completeness alone is therefore insufficient to authorize a green run lamp.
+
+### Verification
+
+- GridMind static and real-browser header pack: 19 passed.
+- The browser test covered canonical pair formatting, same-venue daily change,
+  up/equal/down tick behavior, feed-identity reset, the healthy run gate, and
+  fail-closed behavior for blocked risk and an untrusted 1m snapshot.
+- Inline dashboard JavaScript syntax check passed.
+- Full-suite execution was intentionally not used for this bounded top-bar UI
+  milestone.
