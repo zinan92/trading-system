@@ -8778,8 +8778,34 @@ auditable datafeed port; broker execution remains a separate port.
 
 ### Verification
 
-- Focused read-model and static dashboard tests: 42 passed.
+- Focused control-plane, sizing, edge-adjustment, read-model, and static
+  dashboard tests: 140 passed.
 - Dashboard JavaScript market/history and Range tests: 12 passed.
 - Focused Playwright profit-control and Range acceptance: 2 passed.
 - Real-browser acceptance evidence is recorded under
   `docs/evidence/issue-88/` with action latency and backend truth checks.
+
+### Adversarial review corrections
+
+- The auto-density solver now treats a venue precision failure as a rejected
+  candidate, not the end of the 70-to-30 search. An explicit operator count
+  remains strict and returns its exact precision error.
+- Fixed-spacing edge orders now use the same modeled round-trip fee formula as
+  initial sizing, persist `planned_net_profit_usd`, and fail closed if a new
+  plan's 10 USD target would be violated.
+- Range edge activation persists canonical projected actual leverage in both
+  grid and risk budget; the dashboard no longer keeps the pre-adjustment value.
+- Eighteen legacy control-plane assertions were brought onto the 30–70 grid,
+  10x, profit-first contract. Lifecycle failure/recovery coverage remains and
+  the focused module now passes all 69 tests.
+
+### Gotchas
+
+- A 70-grid candidate can be unrepresentable at venue price precision while a
+  lower count is executable and profitable. Auto search must continue, but an
+  explicit 70-grid request must not silently become a different strategy.
+- Edge-only adjustment retains the existing notional. It cannot repair a
+  profit shortfall by resizing; it rejects before staging any order.
+- Lifecycle tests need account headroom when intentionally adding edges. That
+  is test setup for post-risk failure paths, not permission for production to
+  bypass the 10x gate.

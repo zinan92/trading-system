@@ -2442,6 +2442,8 @@ class StrategyControlPlane:
             market=market,
             accepted_entries=accepted_entries,
             positions=positions_before,
+            cost_per_side_rate=float(self.config.get("cost_per_side_bp") or 0.5)
+            / 10_000.0,
         )
 
         effective_low = float(adjustment["effective_range"]["low"])
@@ -2588,11 +2590,17 @@ class StrategyControlPlane:
             retained_order_ids=retained_ids,
         )
         risk_metrics = dict(risk_decision.get("metrics") or {})
+        actual_leverage = risk_metrics.get("projected_actual_leverage")
+        adjusted["grid"] = {
+            **dict(adjusted.get("grid") or {}),
+            "actual_leverage": actual_leverage,
+        }
         adjusted["risk_budget"] = {
             **dict(current.get("risk_budget") or {}),
             "leverage": adjusted["grid"].get("leverage"),
             "max_loss": risk_metrics.get("projected_max_loss"),
             "estimated_margin": risk_metrics.get("projected_margin"),
+            "actual_leverage": actual_leverage,
         }
         adjusted["risk_request_id"] = risk_decision.get("request_id")
         adjusted["risk_decision_id"] = risk_decision.get("decision_id")
