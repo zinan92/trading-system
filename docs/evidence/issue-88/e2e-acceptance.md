@@ -20,6 +20,12 @@ was read or changed.
 | Historical P&L / NAV | Numeric production results from canonical ledger | Correction maps machine realized P&L and computes cumulative P&L/Paper NAV from starting balance | Retested after deploy | Pass after repair |
 | Drag chart right at 240-bar edge | Load older trusted bars | Initial E2E reproduced the 240-bar lock. Edge-aware drag intent now requests the previous trusted page | Retested after deploy | Pass after repair |
 
-Artifacts `01` through `05` are the baseline, running grid, refreshed trend,
-replacement grid, and zoom screenshots. Later numbered artifacts capture the
-history repair and final running state.
+Final deployed readback: runtime `running`, 40-grid long/steady/arithmetic
+strategy, 20 accepted entry orders, 5,002.67 USD per grid, planned net
+profit 10.77–11.26 USD per accepted order, and actual leverage 9.9952x.
+The current accounting snapshot and global read-model completeness are complete;
+reconciliation passes, with zero open positions at capture time. The chart held
+537 trusted 30-minute bars after the historical prepend plus a new live bar.
+
+Artifacts `01` through `07` are the baseline, first running grid, refreshed
+trend, replacement grid, zoom, 536-bar history repair, and final running state.
