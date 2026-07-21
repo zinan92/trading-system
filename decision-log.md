@@ -7693,3 +7693,107 @@ auditable datafeed port; broker execution remains a separate port.
   five passing cases and removes none. The issue text's `1889 passed` baseline
   is not reproducible from the accessible remote, so the PR reports both the
   exact result and the positive delta instead of claiming that absolute count.
+
+## 2026-07-20 - Issue 41 monotonic Dashboard order lifecycle kickoff
+
+### User outcome
+
+- One order remains visible in GridMind while its displayed state advances from
+  accepted through partial fill to cancellation or fill; it never vanishes
+  merely because it left the open-order subset.
+
+### Success criteria
+
+- The read model normalizes provider-neutral order states and emits a stable
+  label, progression rank, open flag, and terminal flag.
+- Total lifecycle-order count stays separate from the open-order count used by
+  safety controls.
+- GridMind renders the full order lifecycle collection while chart and control
+  logic continue to use open orders only.
+- An end-to-end projection sequence proves accepted -> partially filled ->
+  cancelled remains one visible order with non-decreasing progression.
+- Desktop/mobile browser evidence shows readable lifecycle states with no
+  horizontal page overflow.
+- Focused and full regression do not degrade the accessible repository base.
+
+### Scope
+
+- In scope: `trading-system-read-model-v1`, GridMind order-table presentation,
+  static/projection/API tests, browser evidence, and this decision record.
+- Out of scope: matching, execution adapters, order submission/cancellation,
+  live/broker money paths, credentials, risk authority, and branch protection.
+
+### Decision
+
+- Reuse the execution snapshot's `orders` collection as current lifecycle
+  truth and project canonical presentation phases in Python. GridMind retains
+  the highest observed phase for each `(cycle_id, order_id)`. The two legally
+  bidirectional protection states share one phase; only a strictly increasing
+  revision derived from a complete, legal transition history may move between
+  them. A delayed, lower-revision, or briefly incomplete poll therefore cannot
+  make a displayed order regress or disappear. The cache resets on cycle
+  rollover and never infers a state from fills.
+- Preserve current-snapshot `open_orders` and `open_order_count` for charts,
+  runtime text, and safety controls. Retained rows are table-only presentation
+  memory, so a visibility fix cannot create command or risk authority.
+
+### Gotchas
+
+- A terminal order disappearing from the open-order subset is correct trading
+  state but incorrect lifecycle presentation when the table promises to show
+  the order's journey.
+- Terminal outcomes branch (`filled`, `cancelled`, `rejected`, `expired`); a
+  shared progression rank means terminal without pretending those outcomes are
+  equivalent.
+- A pure GET has no previous poll and therefore cannot enforce cross-request
+  monotonicity by itself. A mutable server GET cache would violate the A6
+  deterministic/pure boundary; the smallest stateful seam is a cycle-scoped,
+  table-only browser cache driven entirely by backend phases and validated
+  transition revisions.
+- `protective_attached <-> protective_failed` is a legal recovery loop, so no
+  total state rank can prove its direction. Both states use one phase and a
+  positive transition revision. Same-state refreshes may never lower or erase
+  a cached revision; otherwise two delayed snapshots could manufacture a
+  false recovery.
+- Fill presence alone cannot distinguish partial from full fill. The read model
+  must never reconstruct an order state from fill rows; the execution snapshot
+  remains authoritative.
+- `order.state_label` is untrusted API text even when normally backend-authored.
+  It must be escaped before entering the table's deliberately trusted HTML
+  channel used by direction and action cells.
+- An unknown provider state is not evidence that no order is open. The read
+  model exposes `unknown_order_count`, degrades completeness, blocks Start, and
+  keeps Stop available; it does not silently fold unknown into the closed set.
+  Runtime presentation is also degraded, so an unknown order can never coexist
+  with a green trustworthy run badge.
+
+### Verification
+
+- Focused read-model, API, GridMind, GET-purity, lifecycle, and real-DOM
+  regression: `35 passed`; changed-file Ruff and `git diff --check` are clean.
+- The Playwright regression executes the actual `dashboard-gridmind.html` and
+  its JavaScript/DOM. It proves accepted -> partially filled -> cancelled,
+  delayed accepted, missing rows, cycle reset, and the adversarial protection
+  sequence failed rev8 -> stale failed rev6 -> stale attached rev7 -> attached
+  rev9. Only the final rev9 recovery advances.
+- A deterministic local browser fixture exercised five consecutive API polls:
+  `accepted -> partially_filled -> cancelled -> accepted (regression) ->
+  missing`. The table advanced `已接受 -> 部分成交 -> 已撤单` and then retained
+  `已撤单`; the current-snapshot runtime count independently changed
+  `1 -> 1 -> 0 -> 1 -> 0`, proving retained rows do not feed controls.
+- A hostile unknown state beginning with `<img` rendered as `未知状态`; the
+  order table contained zero `img` elements and the browser logged no runtime
+  error. The runtime badge showed `异常` without the green class while Stop
+  remained available. This is deterministic mock acceptance, not live market
+  evidence.
+- Desktop evidence:
+  `/Users/wendy/.codex/visualizations/2026/07/20/019f7e15-978f-7831-bfb2-8c2b44eaea00/issue-41-order-lifecycle-desktop.png`.
+- 390px evidence (zero page-level horizontal overflow):
+  `/Users/wendy/.codex/visualizations/2026/07/20/019f7e15-978f-7831-bfb2-8c2b44eaea00/issue-41-order-lifecycle-mobile.png`.
+- Final repository suite: `1881 passed, 7 skipped in 432.74s`. The accessible
+  `main` baseline recorded immediately before these issue branches is `1869
+  passed, 7 skipped`; #41 adds 12 passing tests and removes none. The supplied
+  `1889 passed` reference is not reproducible from the current `main`, so this
+  records the exact base/result instead of relabeling the count.
+- Two independent adversarial reviews closed clean with no P0-P3 actionable
+  finding after the revision-ordering and unknown-runtime badge fixes.
