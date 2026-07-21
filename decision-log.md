@@ -7962,3 +7962,47 @@ auditable datafeed port; broker execution remains a separate port.
   144 passed, including an independent-process lock barrier test.
 - Ruff and git diff checks passed. Full-suite execution was intentionally not
   used for this bounded lifecycle milestone.
+
+## 2026-07-21 - Authoritative Beijing daily report and NAV
+
+### User outcome
+
+- The 24-hour report, daily realized PnL and NAV now agree with the terminal
+  paper execution ledger instead of displaying zero when fills omit a PnL
+  field.
+
+### Decisions
+
+- Define one report day as Beijing 00:00–24:00. Because the production grid
+  rolls at 09:00/21:00, one complete calendar day requires three overlapping,
+  terminal cycle packages and is publishable only after the last one closes.
+- Source realized PnL exclusively from authoritative closed positions and
+  reconcile their cycle total to execution.pnl.realized. Fills contribute only
+  event count, entry-defined trade count and executed notional.
+- Count one trade by its entry identity: an entry is one trade and its later
+  close does not create a second trade.
+- Persist one idempotent JSON report plus one readable Markdown report. Both
+  carry the exact cycle IDs, package hashes and StrategyPlan identities used by
+  the NAV projection; the dashboard exposes the same JSON artifact.
+- Revalidate the report hash and every referenced closed package revision on
+  dashboard read. A later append-only revision does not invalidate an older
+  verified reference, but any package-chain tampering fails closed.
+- Reject missing, non-finite, timezone-free, unreconciled or hash-invalid
+  evidence. Unknown financial truth is never coerced to zero.
+
+### Gotchas
+
+- Beijing midnight cuts across the 21:00–09:00 trading cycle. Aggregating only
+  two cycle reviews is not a Beijing natural day and can shift fills or PnL to
+  the wrong date.
+- Fill-level realized_pnl is intentionally ignored: adapters do not guarantee
+  it is present or economically complete. A fill is still mandatory for event
+  count and notional, so missing price/quantity also blocks publication.
+- The daily NAV is a normalized one-day projection from the configured cycle
+  starting equity. It is not an intraday mark-to-market curve.
+
+### Verification
+
+- Daily-report, cycle-package and dashboard focused pack: 54 passed.
+- Full-suite execution was intentionally not used for this bounded financial
+  reporting milestone.
