@@ -162,6 +162,8 @@ def _source(*, open_trade: bool = False) -> dict:
             "reconciliation": {"status": "ok", "issues": []},
         },
         "ledger": {"daily": [], "recent_reviews": []},
+        "cycle_packages": [],
+        "review_cycle_id": None,
         "strategy_shadows": [],
         "execution_shadow": {"status": "observing"},
         "ui_capabilities": {"market_timeframes": ["1m", "5m"]},
@@ -540,6 +542,52 @@ def test_snapshot_identity_is_deterministic_and_json_safe() -> None:
 
     assert first["contract"]["snapshot_id"] == second["contract"]["snapshot_id"]
     json.dumps(first, allow_nan=False)
+
+
+def test_review_packages_and_shadows_remain_separate_read_only_evidence() -> None:
+    source = _source()
+    package = {
+        "cycle_id": "2026-07-17_NIGHT",
+        "status": "closed",
+        "package_hash": "package-hash",
+        "strategy_plan": {"strategy_plan_id": "plan-old", "version": 6},
+    }
+    source["cycle_packages"] = [package]
+    source["review_cycle_id"] = "2026-07-17_NIGHT"
+    source["strategy_shadows"] = [{
+        "cycle_id": "2026-07-17_NIGHT",
+        "variant_id": "production",
+        "metrics": {"realized_pnl": 3.0, "unrealized_pnl": 0.0},
+    }]
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    assert model["review"]["cycle_packages"] == [package]
+    assert model["review"]["selected_cycle_id"] == "2026-07-17_NIGHT"
+    assert model["research"]["strategy_shadows"][0]["variant_id"] == "production"
+    assert model["safety"]["read_only"] is True
+    assert model["safety"]["command_authority"] is False
+
+
+def test_review_projection_does_not_fill_missing_evidence_fields() -> None:
+    source = _source()
+    source["cycle_packages"] = [{"cycle_id": "2026-07-17_NIGHT", "status": "closed"}]
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+    ).to_dict()
+
+    package = model["review"]["cycle_packages"][0]
+    assert "strategy_plan" not in package
+    assert "execution" not in package
+    assert "review" not in package
 
 
 def test_projector_contains_no_provider_or_engine_selection_branches() -> None:
