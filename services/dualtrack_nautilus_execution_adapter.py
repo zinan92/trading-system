@@ -318,6 +318,9 @@ class NautilusExecutionAdapter:
             events=rows,
             commands=commands,
         )
+        # Rearm appends next-generation grid commands during replay; re-read
+        # the durable command log so they enter the processed bookkeeping.
+        commands = load_json(self._commands_path(cycle_id))
         processed_by_id = {str(row.get("event_id") or ""): row for row in processed_rows}
         for persisted in rows:
             persisted_id = str(persisted.get("event_id") or "")
