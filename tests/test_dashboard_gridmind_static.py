@@ -164,6 +164,26 @@ def test_gridmind_preserves_traceability_and_safe_control_copy() -> None:
     assert "12小时复盘" in html
 
 
+def test_gridmind_always_shows_the_locked_production_strategy_summary() -> None:
+    html = _html()
+
+    assert 'id="productionStrategySummary"' in html
+    assert "function productionStrategySummaryModel(summary,runtime)" in html
+    assert "当前生产计划未运行" in html
+    assert "directionScope" in html
+    assert "notional_mode_label" in html
+    assert "最大风险" in html
+    assert "杠杆" in html
+    assert "renderProductionStrategySummary(strategySummary,runtime)" in html
+    assert html.index('id="productionStrategySummary"') < html.index('id="gridSummary"')
+    assert "accepted_buy_order_count" in html
+    assert "accepted_sell_order_count" in html
+    summary_body = html.split("function productionStrategySummaryModel", 1)[1].split("function renderProductionStrategySummary", 1)[0]
+    assert "state.preview" not in summary_body
+    assert "formDirty" not in summary_body
+    assert "#gridNotional" not in summary_body
+
+
 def test_gridmind_review_is_a_same_cycle_evidence_ledger() -> None:
     html = _html()
 

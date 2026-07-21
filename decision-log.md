@@ -8279,3 +8279,39 @@ auditable datafeed port; broker execution remains a separate port.
 - Inline dashboard JavaScript syntax and diff checks passed.
 - Full-suite execution was intentionally not used for this bounded review UI
   and read-model milestone.
+
+## 2026-07-21 - Always-visible production strategy summary
+
+### User outcome
+
+- The chart now always states which locked production plan exists, whether it
+  is actually running, and why its per-grid amount has the displayed value.
+
+### Decisions
+
+- Render the line only from `strategy.summary` and `runtime` in the canonical
+  trading-system read model. Editable controls and preview state are excluded.
+- Show plan version, bilateral or unilateral direction, style, grid mode and
+  count, per-grid notional source, maximum plan loss, and leverage in one line.
+- Keep the existing Range, spacing, and accepted buy/sell order summary as the
+  separate line below it.
+- Project `notional_mode`, its human label, and locked `max_loss` from the
+  StrategyPlan so the UI does not reverse-engineer sizing intent.
+
+### Gotchas
+
+- A locked plan can exist while the runtime is stopped. Plan presence must not
+  be presented as proof that the strategy is running.
+- A draft preview may change direction, Range, count, or notional. It cannot
+  replace the production summary before a new plan is actually locked.
+- Missing notional provenance remains `来源未知`; the UI does not assume auto
+  sizing merely because the amount resembles a risk-budget calculation.
+
+### Verification
+
+- Trading-system read-model and GridMind static tests: 36 passed.
+- Covered locked sizing provenance, maximum loss, stopped copy, and exclusion
+  of preview/form values from the production summary function.
+- Inline dashboard JavaScript syntax and diff checks passed.
+- Full-suite execution was intentionally not used for this small read-only UI
+  milestone.

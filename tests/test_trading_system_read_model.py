@@ -99,6 +99,7 @@ def _source(*, open_trade: bool = False) -> dict:
                 "mode": "arithmetic",
                 "count": 50,
                 "notional_per_grid": 2800.0,
+                "notional_mode": "auto",
                 "leverage": 3.0,
                 "orders": [
                     {
@@ -239,6 +240,9 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
         "spacing": 4.0,
         "spacing_ratio": None,
         "notional_per_grid": 2800.0,
+        "notional_mode": "auto",
+        "notional_mode_label": "自动风控",
+        "max_loss": 77.0,
         "leverage": 3.0,
         "display_label": "中性 · 稳健 · 等价差 · 3900–4100 · 50 格 · 每格 2800 USD",
     }
@@ -588,6 +592,20 @@ def test_review_projection_does_not_fill_missing_evidence_fields() -> None:
     assert "strategy_plan" not in package
     assert "execution" not in package
     assert "review" not in package
+
+
+def test_strategy_summary_does_not_invent_notional_provenance() -> None:
+    source = _source()
+    source["production_plan"]["grid"].pop("notional_mode")
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+    ).to_dict()
+
+    assert model["strategy"]["summary"]["notional_mode"] is None
+    assert model["strategy"]["summary"]["notional_mode_label"] == "来源未知"
 
 
 def test_projector_contains_no_provider_or_engine_selection_branches() -> None:

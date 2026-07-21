@@ -446,6 +446,11 @@ def _project_strategy_summary(
     style_label = _STYLE_LABELS.get(style, style or "未知")
     mode_label = _GRID_MODE_LABELS.get(mode, mode or "未知")
     notional = _finite_or_none(grid.get("notional_per_grid"))
+    notional_mode = str(grid.get("notional_mode") or "").lower()
+    notional_mode_label = {
+        "auto": "自动风控",
+        "manual": "手动设定",
+    }.get(notional_mode, "来源未知")
     leverage = _finite_or_none(grid.get("leverage"))
     if leverage is None:
         leverage = _finite_or_none(risk_budget.get("leverage"))
@@ -472,6 +477,9 @@ def _project_strategy_summary(
         "spacing": spacing,
         "spacing_ratio": spacing_ratio,
         "notional_per_grid": notional,
+        "notional_mode": notional_mode or None,
+        "notional_mode_label": notional_mode_label,
+        "max_loss": _finite_or_none(risk_budget.get("max_loss")),
         "leverage": leverage,
         "display_label": display_label,
     }
