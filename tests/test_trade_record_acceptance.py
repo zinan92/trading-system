@@ -52,10 +52,12 @@ def _open_trade(idx: int, *, symbol: str = "GOLD") -> dict:
 
 def test_trade_record_acceptance_samples_across_strategies_and_dates(tmp_path: Path):
     root = tmp_path / "outputs"
+    market_db = tmp_path / "market.db"
+    MarketStore(market_db)
     write_json(root / "strategies" / "gold_1m_breakout" / "paper_trades" / "closed" / "2026-06-23.json", [_closed_trade(1)])
     write_json(root / "strategies" / "gold_1m_macd" / "paper_trades" / "closed" / "2026-06-24.json", [_closed_trade(2, strategy_id="gold_1m_macd")])
 
-    result = TradeRecordAcceptanceAudit(root, sample_size=5).run("2026-06-24")
+    result = TradeRecordAcceptanceAudit(root, market_db=market_db, sample_size=5).run("2026-06-24")
 
     assert result["schema_version"] == TRADE_RECORD_ACCEPTANCE_VERSION
     assert result["status"] == "pass"
@@ -68,11 +70,13 @@ def test_trade_record_acceptance_samples_across_strategies_and_dates(tmp_path: P
 
 def test_trade_record_acceptance_fails_when_hand_check_pnl_mismatches(tmp_path: Path):
     root = tmp_path / "outputs"
+    market_db = tmp_path / "market.db"
+    MarketStore(market_db)
     write_json(root / "strategies" / "gold_1m_breakout" / "paper_trades" / "closed" / "2026-06-23.json", [
         _closed_trade(1, realized_pnl=999.0)
     ])
 
-    result = TradeRecordAcceptanceAudit(root, sample_size=5).run("2026-06-24", persist=False)
+    result = TradeRecordAcceptanceAudit(root, market_db=market_db, sample_size=5).run("2026-06-24", persist=False)
 
     assert result["status"] == "fail"
     assert result["samples"][0]["status"] == "fail"
