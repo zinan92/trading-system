@@ -1,5 +1,57 @@
 # Decision Log
 
+## Paper Grid Range Replacement
+
+Date: 2026-07-21
+
+### Decisions
+
+- Treat chart dragging as a draft only. The final mutation is a separate `replace_grid` control action whose button is exactly `停止+平仓+撤单+交易新网格`.
+  - Rationale: repeated mouse tuning must not create repeated stop/start side effects.
+  - Evidence: `dashboard-gridmind.html`, `tests/test_dashboard_gridmind_range_drag.mjs`.
+
+- Reuse the existing execution adapter, canonical risk port, deterministic grid command identity, and staged-plan activation boundary.
+  - Rationale: the replacement needs stronger orchestration, not another execution engine or order schema.
+  - Evidence: `services/strategy_control_plane.py`, `services/strategy_plan_execution.py`.
+
+- Persist the candidate StrategyPlan and replacement request fingerprint before stopping the old grid.
+  - Rationale: a crash after stop must leave a durable statement of what was requested and which plan/version/execution set authorized it.
+  - Evidence: `StrategyControlPlane._replace_grid`, `test_replace_grid_persists_request_before_stop_attempt`.
+
+- Bind final execution to exact active-plan ID/version, preview ID, accepted-order IDs, open-position IDs, current trusted market, account and canonical risk.
+  - Rationale: any fill, cancel, plan change, price move or risk change between preview and click must reject before old-grid mutation.
+  - Evidence: `StrategyControlPlane._assert_expected_execution`, `test_replace_grid_rejects_execution_drift_before_staging_or_stop`, `test_replace_grid_rechecks_risk_and_range_before_any_execution_change`.
+
+- Activate the staged plan only after all replacement orders are visible as accepted/filled and paper reconciliation passes.
+  - Rationale: runtime and active-plan identity must never claim that an incomplete replacement grid is running.
+  - Evidence: `StrategyControlPlane._launch_staged_replacement`, `StrategyControlPlane._activate_staged_range_plan`.
+
+- Make retries idempotent through one request fingerprint and deterministic command IDs. If only the final runtime write fails, retry repairs runtime without resubmitting orders.
+  - Rationale: an uncertain HTTP response must not create a second grid.
+  - Evidence: `test_replace_grid_stages_before_stop_then_activates_once`, `test_replace_grid_retry_repairs_final_runtime_write_without_duplicate_orders`, `test_replace_grid_same_fingerprint_recovers_after_process_crash`.
+
+- Reject empty or duplicate identities in both the browser-provided execution set and the current server snapshot.
+  - Rationale: set equality alone can hide two current records that share one order or position ID.
+  - Evidence: `test_replace_grid_rejects_duplicate_ids_in_current_execution_snapshot`, `tests/test_dashboard_gridmind_range_drag.mjs`.
+
+- On replacement launch failure, cancel/flatten only state attributed to the staged plan; foreign plan state remains untouched and visible.
+  - Rationale: cleanup is not permission to mutate another strategy's paper state.
+  - Evidence: `StrategyControlPlane._cleanup_staged_replacement`, `test_replace_grid_failure_cleans_only_staged_plan_state`. Cleanup deliberately does not call global Nautilus flush or inject a market event.
+
+### Gotchas
+
+- This action intentionally differs from the existing running edge adjustment. `extend_range` preserves live positions and spacing while adding/removing edge orders; `replace_grid` stops, flattens, cancels and rebuilds every grid level with the dragged geometry.
+
+- A replacement preview can become invalid before the final click. The server recomputes it and rejects on preview, market, execution or risk drift; the frontend preview is never execution authority.
+
+- `stop_failed` leaves the staged plan as a durable non-active record and preserves the old active plan identity. It is not silently promoted or treated as success.
+
+- After the old grid has stopped, a failed new-grid launch leaves runtime visibly stopped/error. Cleanup is staged-plan-scoped; any foreign accepted order remains visible for operator intervention.
+
+- A hard process exit can bypass Python exception cleanup. Same-fingerprint retries therefore inspect durable staging/runtime/execution state before the normal running-old-plan gate and either converge the exact staged grid or fail closed; they never create another StrategyPlan.
+
+- The optional gstack browser binary is not built locally, but the repository's existing Playwright/Chrome acceptance harness is available. Visual evidence must therefore come from that checked-in harness, not be described as gstack evidence.
+
 ## Tiger OpenAPI Integration
 
 Date: 2026-07-05

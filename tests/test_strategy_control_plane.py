@@ -2018,6 +2018,602 @@ def test_range_risk_recalculation_is_unavailable_when_open_loss_uses_budget(
         )
 
 
+def _range_replacement_request(
+    plane: StrategyControlPlane,
+    cycle_id: str,
+    plan: dict,
+    *,
+    upper_delta: float = 5.0,
+) -> tuple[dict, dict]:
+    geometry = {
+        "expected_strategy_plan_id": plan["strategy_plan_id"],
+        "expected_strategy_plan_version": plan["version"],
+        "handle": "upper",
+        "range": {
+            "low": plan["range"]["low"],
+            "high": float(plan["range"]["high"]) + upper_delta,
+        },
+    }
+    preview = plane.control(
+        cycle_id,
+        "preview_range",
+        geometry,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+    snapshot = build_execution_engine_adapter(plane.output_root).snapshot(cycle_id)
+    execution = {
+        "accepted_order_ids": [
+            row["order_id"]
+            for row in snapshot["orders"]
+            if row.get("state") == "accepted"
+        ],
+        "open_position_ids": [
+            row.get("position_id") or row.get("trade_id")
+            for row in snapshot["positions"]
+            if row.get("status") == "open"
+        ],
+    }
+    return preview, {
+        **geometry,
+        "expected_preview_id": preview["preview_id"],
+        "expected_execution": execution,
+    }
+
+
+def test_replace_grid_stages_before_stop_then_activates_once(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    old_plan = started["plan"]
+    preview, request = _range_replacement_request(
+        plane,
+        cycle_id,
+        old_plan,
+    )
+
+    replaced = plane.control(
+        cycle_id,
+        "replace_grid",
+        request,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:43:00+00:00",
+    )
+
+    assert replaced["action"] == "replace_grid"
+    assert replaced["idempotent"] is False
+    assert replaced["stopped"] is True
+    assert replaced["plan"]["version"] == old_plan["version"] + 1
+    assert replaced["plan"]["preview_id"] == preview["preview_id"]
+    assert replaced["plan"]["replacement_request"]["phase"] == "complete"
+    assert replaced["runtime"]["actual_state"] == "running"
+    assert replaced["runtime"]["last_action"] == "replace_grid"
+    plans = load_json(plane._plans_path(cycle_id))
+    assert next(row for row in plans if row["strategy_plan_id"] == old_plan["strategy_plan_id"])["status"] == "superseded"
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == replaced["plan"]["strategy_plan_id"]
+    accepted = [
+        row
+        for row in build_execution_engine_adapter(output).snapshot(cycle_id)["orders"]
+        if row.get("state") == "accepted"
+    ]
+    assert accepted
+    assert {row.get("strategy_plan_id") for row in accepted} == {
+        replaced["plan"]["strategy_plan_id"]
+    }
+
+    retried = plane.control(
+        cycle_id,
+        "replace_grid",
+        request,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:44:00+00:00",
+    )
+    assert retried["idempotent"] is True
+    assert retried["created_orders"] == 0
+    assert len(load_json(plane._plans_path(cycle_id))) == len(plans)
+
+
+def test_replace_grid_rejects_execution_drift_before_staging_or_stop(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    _preview, request = _range_replacement_request(plane, cycle_id, plan)
+    adapter = build_execution_engine_adapter(output)
+    removed = request["expected_execution"]["accepted_order_ids"][0]
+    adapter.cancel_orders(
+        cycle_id,
+        order_ids=[removed],
+        ts="2026-07-05T01:42:30+00:00",
+        reason="test_drift",
+    )
+
+    with pytest.raises(ValueError, match="execution_state_changed"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:43:00+00:00",
+        )
+
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == plan["strategy_plan_id"]
+    assert not [
+        row
+        for row in load_json(plane._plans_path(cycle_id))
+        if isinstance(row.get("replacement_request"), dict)
+    ]
+
+
+def test_replace_grid_persists_request_before_stop_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    _preview, request = _range_replacement_request(plane, cycle_id, plan)
+
+    def fail_stop(*_args, **_kwargs):
+        staged = [
+            row
+            for row in load_json(plane._plans_path(cycle_id))
+            if row.get("status") == "staging"
+        ]
+        assert len(staged) == 1
+        assert staged[0]["replacement_request"]["phase"] == "prepared"
+        raise RuntimeError("injected stop failure")
+
+    monkeypatch.setattr(plane, "_stop", fail_stop)
+    with pytest.raises(RuntimeError, match="injected stop failure"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:43:00+00:00",
+        )
+
+    staged = [
+        row
+        for row in load_json(plane._plans_path(cycle_id))
+        if isinstance(row.get("replacement_request"), dict)
+    ]
+    assert len(staged) == 1
+    assert staged[0]["status"] == "staging"
+    assert staged[0]["replacement_request"]["phase"] == "stop_failed"
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == plan["strategy_plan_id"]
+
+
+def test_replace_grid_rechecks_risk_and_range_before_any_execution_change(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    _preview, request = _range_replacement_request(plane, cycle_id, plan)
+    before = build_execution_engine_adapter(output).snapshot(cycle_id)
+
+    with pytest.raises(ValueError, match="strategy_preview_changed|range_replacement_blocked"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(close=90.0),
+            account=account_context(100.0),
+            now="2026-07-05T01:43:00+00:00",
+        )
+
+    after = build_execution_engine_adapter(output).snapshot(cycle_id)
+    assert [row["order_id"] for row in after["orders"] if row.get("state") == "accepted"] == [
+        row["order_id"] for row in before["orders"] if row.get("state") == "accepted"
+    ]
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == plan["strategy_plan_id"]
+
+
+def test_replace_grid_retry_repairs_final_runtime_write_without_duplicate_orders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    _preview, request = _range_replacement_request(
+        plane,
+        cycle_id,
+        started["plan"],
+    )
+    original_write_runtime = plane._write_runtime
+    failed_once = False
+
+    def fail_final_runtime(row: dict) -> None:
+        nonlocal failed_once
+        if (
+            not failed_once
+            and row.get("last_action") == "replace_grid"
+            and row.get("actual_state") == "running"
+        ):
+            failed_once = True
+            raise OSError("injected final runtime write failure")
+        original_write_runtime(row)
+
+    monkeypatch.setattr(plane, "_write_runtime", fail_final_runtime)
+    with pytest.raises(OSError, match="injected final runtime write failure"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:43:00+00:00",
+        )
+
+    active = plane.active_plan(cycle_id)
+    assert active["replacement_request"]["phase"] == "complete"
+    before_retry = build_execution_engine_adapter(output).snapshot(cycle_id)
+    order_ids = [row["order_id"] for row in before_retry["orders"]]
+    assert len(order_ids) == len(set(order_ids))
+
+    retried = plane.control(
+        cycle_id,
+        "replace_grid",
+        request,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:44:00+00:00",
+    )
+    after_retry = build_execution_engine_adapter(output).snapshot(cycle_id)
+    assert retried["idempotent"] is True
+    assert retried["runtime"]["strategy_plan_id"] == active["strategy_plan_id"]
+    assert [row["order_id"] for row in after_retry["orders"]] == order_ids
+
+
+def test_replace_grid_failure_cleans_only_staged_plan_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    old_plan = started["plan"]
+    _preview, request = _range_replacement_request(plane, cycle_id, old_plan)
+    base_adapter = build_execution_engine_adapter(output)
+
+    class ForeignOrderRaceAdapter:
+        name = "legacy_paper"
+
+        def __init__(self) -> None:
+            self.injected = False
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return base_adapter.snapshot(requested_cycle, **kwargs)
+
+        def submit_order(self, command: dict) -> dict:
+            receipt = base_adapter.submit_order(command)
+            if (
+                not self.injected
+                and command.get("event") == "entry"
+                and command.get("strategy_plan_id") != old_plan["strategy_plan_id"]
+            ):
+                self.injected = True
+                base_adapter.submit_order({
+                    **command,
+                    "source_fill_id": "foreign-plan-order",
+                    "strategy_plan_id": "foreign-plan",
+                    "strategy_plan_version": 1,
+                    "price": 80.0,
+                    "requested_price": 80.0,
+                })
+            return receipt
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            return base_adapter.cancel_orders(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            return base_adapter.reconcile(requested_cycle)
+
+    adapter = ForeignOrderRaceAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+
+    with pytest.raises(ValueError, match="unexpected_accepted"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:43:00+00:00",
+        )
+
+    snapshot = base_adapter.snapshot(cycle_id)
+    accepted = [row for row in snapshot["orders"] if row.get("state") == "accepted"]
+    assert [row.get("strategy_plan_id") for row in accepted] == ["foreign-plan"]
+    failed = max(load_json(plane._plans_path(cycle_id)), key=lambda row: row["version"])
+    assert failed["status"] == "failed"
+    assert failed["replacement_request"]["phase"] == "failed"
+
+
+def test_replace_grid_second_preflight_failure_after_stop_is_durable_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    _preview, request = _range_replacement_request(
+        plane,
+        cycle_id,
+        started["plan"],
+    )
+    original_preview = plane.preview
+
+    def changed_preview(*args, **kwargs):
+        result = original_preview(*args, **kwargs)
+        return {**result, "preview_id": "market-drifted-after-stop"}
+
+    monkeypatch.setattr(plane, "preview", changed_preview)
+    with pytest.raises(ValueError, match="strategy_preview_changed"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:43:00+00:00",
+        )
+
+    failed = max(load_json(plane._plans_path(cycle_id)), key=lambda row: row["version"])
+    assert failed["status"] == "failed"
+    assert failed["replacement_request"]["phase"] == "failed"
+    runtime = plane.runtime_state(cycle_id)
+    assert runtime["desired_state"] == "stopped"
+    assert runtime["actual_state"] == "error"
+    assert runtime["last_action"] == "replace_grid"
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["positions"] == []
+
+
+def test_replace_grid_rejects_duplicate_ids_in_current_execution_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+
+    class DuplicateIdentityAdapter:
+        def snapshot(self, _cycle_id: str) -> dict:
+            row = {
+                "order_id": "duplicate-order",
+                "state": "accepted",
+                "event": "entry",
+                "strategy_plan_id": "plan-1",
+            }
+            return {"orders": [dict(row), dict(row)], "positions": []}
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: DuplicateIdentityAdapter(),
+    )
+    with pytest.raises(ValueError, match="execution_state_changed"):
+        plane._assert_expected_execution(
+            "2026-07-05_DAY",
+            {
+                "accepted_order_ids": ["duplicate-order"],
+                "open_position_ids": [],
+            },
+            expected_strategy_plan_id="plan-1",
+        )
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        {"accepted_order_ids": ["   "], "open_position_ids": []},
+        {"accepted_order_ids": [], "open_position_ids": ["\t"]},
+        {"accepted_order_ids": [123], "open_position_ids": []},
+        {"accepted_order_ids": [], "open_position_ids": [456]},
+    ],
+)
+def test_replace_grid_rejects_blank_or_non_string_expected_execution_ids(
+    expected: dict,
+) -> None:
+    with pytest.raises(ValueError, match="execution_state_changed"):
+        StrategyControlPlane._expected_execution_sets(expected)
+
+
+@pytest.mark.parametrize("kind", ["order", "position"])
+def test_replace_grid_rejects_blank_current_execution_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+
+    class BlankIdentityAdapter:
+        def snapshot(self, _cycle_id: str) -> dict:
+            return {
+                "orders": ([{
+                    "order_id": "   ",
+                    "state": "accepted",
+                    "strategy_plan_id": "plan-1",
+                }] if kind == "order" else []),
+                "positions": ([{
+                    "position_id": "\t",
+                    "status": "open",
+                    "strategy_plan_id": "plan-1",
+                }] if kind == "position" else []),
+            }
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: BlankIdentityAdapter(),
+    )
+    with pytest.raises(ValueError, match="execution_state_changed"):
+        plane._assert_expected_execution(
+            "2026-07-05_DAY",
+            {"accepted_order_ids": [], "open_position_ids": []},
+            expected_strategy_plan_id="plan-1",
+        )
+
+
+def test_replace_grid_same_fingerprint_recovers_after_process_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    old_plan = started["plan"]
+    _preview, request = _range_replacement_request(plane, cycle_id, old_plan)
+    original_activate = plane._activate_staged_range_plan
+
+    def hard_crash(*_args, **_kwargs):
+        raise SystemExit("injected process crash before activation")
+
+    monkeypatch.setattr(plane, "_activate_staged_range_plan", hard_crash)
+    with pytest.raises(SystemExit, match="injected process crash"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:43:00+00:00",
+        )
+
+    crashed_runtime = plane.runtime_state(cycle_id)
+    assert crashed_runtime["actual_state"] == "replanning"
+    crashed_plan = max(
+        load_json(plane._plans_path(cycle_id)),
+        key=lambda row: row["version"],
+    )
+    assert crashed_plan["status"] == "staging"
+    assert crashed_plan["replacement_request"]["phase"] == "launch_authorized"
+    staged_orders = [
+        row
+        for row in build_execution_engine_adapter(output).snapshot(cycle_id)["orders"]
+        if row.get("state") == "accepted"
+    ]
+    assert staged_orders
+    assert {row.get("strategy_plan_id") for row in staged_orders} == {
+        crashed_plan["strategy_plan_id"]
+    }
+
+    monkeypatch.setattr(plane, "_activate_staged_range_plan", original_activate)
+    recovered = plane.control(
+        cycle_id,
+        "replace_grid",
+        request,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:44:00+00:00",
+    )
+
+    assert recovered["recovered"] is True
+    assert recovered["runtime"]["actual_state"] == "running"
+    assert recovered["plan"]["status"] == "active"
+    assert recovered["plan"]["replacement_request"]["phase"] == "complete"
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == crashed_plan["strategy_plan_id"]
+    terminal_orders = build_execution_engine_adapter(output).snapshot(cycle_id)["orders"]
+    order_ids = [row["order_id"] for row in terminal_orders]
+    assert len(order_ids) == len(set(order_ids))
+
+
 def test_edge_adjustment_risk_rejects_before_submit_or_cancel(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

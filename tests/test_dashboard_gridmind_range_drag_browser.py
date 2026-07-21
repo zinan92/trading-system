@@ -229,7 +229,7 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         if artifact_dir:
             path = Path(artifact_dir)
             path.mkdir(parents=True, exist_ok=True)
-            page.screenshot(path=str(path / "issue-65-range-draft.png"), full_page=True)
+            page.screenshot(path=str(path / "issue-66-range-draft.png"), full_page=True)
 
         page.locator('[data-grid-action="confirm"]').click()
         page.locator("#gridRangeReviewDialog[open]").wait_for(state="visible")
@@ -239,10 +239,25 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         assert page.locator("#gridRangeComparison").inner_text().count("→") >= 10
         if artifact_dir:
             page.screenshot(
-                path=str(Path(artifact_dir) / "issue-65-range-review-card.png"),
+                path=str(Path(artifact_dir) / "issue-66-replacement-card.png"),
                 full_page=True,
             )
-        page.locator("#cancelGridRangeReview").click()
+        assert page.locator("#executeGridRangeReplacement").inner_text() == (
+            "停止+平仓+撤单+交易新网格"
+        )
+        page.locator("#executeGridRangeReplacement").click()
+        page.wait_for_function("() => state.gridAdjustMode === false")
+        assert len(control_requests) == 2
+        assert control_requests[1]["action"] == "replace_grid"
+        assert control_requests[1]["expected_preview_id"] == (
+            "range-preview-browser-1"
+        )
+        assert control_requests[1]["expected_strategy_plan_id"] == "plan-7"
+        assert control_requests[1]["expected_strategy_plan_version"] == 7
+        assert control_requests[1]["expected_execution"] == {
+            "accepted_order_ids": ["order-lifecycle-browser-1"],
+            "open_position_ids": [],
+        }
         assert page.evaluate("() => [state.gridAdjustMode,state.gridDraft]") == [False, None]
         assert page.locator(".grid-adjust-overlay.on").count() == 0
         before_pan_requests = len(control_requests)
