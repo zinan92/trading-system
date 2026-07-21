@@ -8160,3 +8160,56 @@ auditable datafeed port; broker execution remains a separate port.
 - Inline dashboard JavaScript syntax check passed.
 - Full-suite execution was intentionally not used for this bounded top-bar UI
   milestone.
+
+## 2026-07-21 - Authoritative trade activity notifications
+
+### User outcome
+
+- New entries, partial reductions, take-profits, stop-losses, and final closes
+  now appear as compact top-right notifications without replaying the account's
+  historical fills whenever the page opens.
+
+### Decisions
+
+- Seed the browser tracker from the first complete, reconciled accounting
+  snapshot and emit nothing for that baseline.
+- Deduplicate a fill only with a stable lineage plus fill identity. Prefer
+  `fill_id`, then source fill ID, then order ID; a fill without enough lineage
+  evidence remains silent.
+- Require an authoritative decrease in remaining units before announcing a
+  partial close. Require a closed trade or zero remaining units before the one
+  final completion notification.
+- Require both historical and current accounting snapshots to be complete and
+  reconciled before current position rows can authorize a notification.
+- Keep trade tracking across current execution-cycle changes so a prior-cycle
+  position can still emit its one eventual close notification without reviving
+  it as a current position.
+- Create Web Audio only after a pointer or keyboard gesture. Unsupported,
+  suspended, or failed audio stays silent and cannot break polling or control.
+
+### Gotchas
+
+- A new exit fill is not by itself proof that the position is fully closed;
+  fills and authoritative remaining units can arrive in different snapshots.
+- The fill row and closed trade can become visible in the same snapshot. The
+  tracker must coalesce them into one completion toast.
+- Trade IDs alone may collide across cycles or plans. Missing lineage fails
+  closed instead of risking a duplicate or wrong notification.
+- Current positions join historical trades by the same lineage plus trade ID;
+  a bare duplicate trade ID cannot overwrite a prior-cycle lifecycle.
+- Browser refresh intentionally resets the in-memory tracker and establishes a
+  new silent baseline; this feature is not a durable notification inbox.
+- Audio autoplay policy varies by browser. Sound is an enhancement after user
+  interaction, never evidence that a trade occurred.
+
+### Verification
+
+- Trade activity Node suite: 8 passed.
+- GridMind static plus adjacent real-browser lifecycle/header pack: 21 passed.
+- Covered silent authoritative baseline, degraded-snapshot rejection, fill
+  deduplication, two fills on one order, partial/final close ordering,
+  same-snapshot coalescing, degraded current-accounting rejection, colliding
+  cross-cycle IDs, cross-cycle completion, and no-Web-Audio fallback.
+- Inline dashboard JavaScript syntax and diff checks passed.
+- Full-suite execution was intentionally not used for this browser-only
+  notification milestone.

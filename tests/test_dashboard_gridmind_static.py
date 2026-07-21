@@ -66,6 +66,26 @@ def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
     assert "build_strategy_timeframes" not in html
 
 
+def test_gridmind_trade_activity_toasts_are_read_only_and_fail_silent() -> None:
+    html = _html()
+
+    assert 'id="tradeToasts"' in html
+    assert 'aria-live="polite"' in html
+    assert "function tradeActivitySnapshotTrusted(data)" in html
+    assert 'accounting?.completeness?.status==="complete"' in html
+    assert "accountingSnapshotTrusted(execution.current_accounting)" in html
+    assert 'const CLOSE_FILL_EVENTS=new Set(["exit","stop","target"' in html
+    assert "function fillStableKey(fill,trade=null)" in html
+    assert "function observeTradeActivity(data)" in html
+    assert "observeTradeActivity(data)" in html.split("function applyReadModel", 1)[1].split("function renderTrend", 1)[0]
+    assert "observeTradeActivity" not in html.split("function render(){", 1)[1].split("function renderRobotControls", 1)[0]
+    assert "function armTradeAudio()" in html
+    assert "window.AudioContext||window.webkitAudioContext" in html
+    assert 'window.addEventListener("pointerdown",armTradeAudio' in html
+    assert 'window.addEventListener("keydown",armTradeAudio' in html
+    assert "new Notification" not in html
+
+
 def test_gridmind_draws_only_visible_price_overlays_with_one_axis_label() -> None:
     html = _html()
 
