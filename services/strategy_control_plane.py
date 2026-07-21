@@ -647,7 +647,19 @@ class StrategyControlPlane:
         if not current or runtime.get("actual_state") != "running":
             raise ValueError("range drag preview requires a running StrategyPlan")
         expected_plan_id = str(payload.get("expected_strategy_plan_id") or "")
-        if expected_plan_id != str(current.get("strategy_plan_id") or ""):
+        expected_plan_version = int(
+            payload.get("expected_strategy_plan_version") or 0
+        )
+        current_plan_id = str(current.get("strategy_plan_id") or "")
+        current_plan_version = int(current.get("version") or 0)
+        runtime_plan_id = str(runtime.get("strategy_plan_id") or "")
+        runtime_plan_version = int(runtime.get("strategy_plan_version") or 0)
+        if (
+            expected_plan_id != current_plan_id
+            or expected_plan_version != current_plan_version
+            or runtime_plan_id != current_plan_id
+            or runtime_plan_version != current_plan_version
+        ):
             raise ValueError("strategy_plan_changed")
         requested = payload.get("range") if isinstance(payload.get("range"), dict) else {}
         geometry = build_dragged_range(
@@ -876,6 +888,7 @@ class StrategyControlPlane:
             "schema_version": "grid-range-drag-preview-v1",
             "cycle_id": cycle_id,
             "expected_strategy_plan_id": expected_plan_id,
+            "expected_strategy_plan_version": expected_plan_version,
             "preview_id": candidate["preview_id"],
             "geometry": geometry,
             "old": _range_preview_specification(

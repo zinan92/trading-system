@@ -1577,6 +1577,7 @@ def test_range_drag_preview_is_read_only_and_preserves_fixed_count_and_notional(
         "preview_range",
         {
             "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "expected_strategy_plan_version": plan["version"],
             "handle": "range",
             "range": {
                 "low": float(plan["range"]["low"]) + 1.0,
@@ -1630,6 +1631,7 @@ def test_range_boundary_preview_recomputes_spacing_without_resizing_orders(
         "preview_range",
         {
             "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "expected_strategy_plan_version": plan["version"],
             "handle": "upper",
             "range": {
                 "low": plan["range"]["low"],
@@ -1673,6 +1675,7 @@ def test_range_preview_blocks_over_budget_without_silent_notional_recalculation(
         "preview_range",
         {
             "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "expected_strategy_plan_version": plan["version"],
             "handle": "upper",
             "range": {
                 "low": plan["range"]["low"],
@@ -1696,6 +1699,7 @@ def test_range_preview_blocks_over_budget_without_silent_notional_recalculation(
         "preview_range",
         {
             "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "expected_strategy_plan_version": plan["version"],
             "handle": "upper",
             "range": {
                 "low": plan["range"]["low"],
@@ -1738,6 +1742,7 @@ def test_range_preview_fails_closed_for_stale_identity_or_market_outside_range(
             "preview_range",
             {
                 "expected_strategy_plan_id": "stale-plan",
+                "expected_strategy_plan_version": plan["version"],
                 "handle": "upper",
                 "range": plan["range"],
             },
@@ -1751,6 +1756,7 @@ def test_range_preview_fails_closed_for_stale_identity_or_market_outside_range(
         "preview_range",
         {
             "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "expected_strategy_plan_version": plan["version"],
             "handle": "lower",
             "range": {
                 "low": 115.0,
@@ -1763,6 +1769,52 @@ def test_range_preview_fails_closed_for_stale_identity_or_market_outside_range(
     )["preview"]
     assert blocked["can_apply"] is False
     assert "market_price_outside_range" in blocked["confirm_disabled_reasons"]
+
+
+@pytest.mark.parametrize("runtime_change", ("id", "version"))
+def test_range_preview_rejects_runtime_active_plan_identity_drift(
+    tmp_path: Path,
+    runtime_change: str,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    runtime_rows = load_json(plane.root / "runtime.json")
+    runtime = dict(runtime_rows[-1])
+    if runtime_change == "id":
+        runtime["strategy_plan_id"] = "runtime-old-plan"
+    else:
+        runtime["strategy_plan_version"] = int(plan["version"]) - 1
+    write_json(plane.root / "runtime.json", [*runtime_rows[:-1], runtime])
+
+    with pytest.raises(ValueError, match="strategy_plan_changed"):
+        plane.control(
+            cycle_id,
+            "preview_range",
+            {
+                "expected_strategy_plan_id": plan["strategy_plan_id"],
+                "expected_strategy_plan_version": plan["version"],
+                "handle": "upper",
+                "range": {
+                    "low": plan["range"]["low"],
+                    "high": float(plan["range"]["high"]) + 5.0,
+                },
+            },
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:42:00+00:00",
+        )
 
 
 def test_range_preview_old_and_new_risk_share_current_canonical_accounting(
@@ -1804,6 +1856,7 @@ def test_range_preview_old_and_new_risk_share_current_canonical_accounting(
         "preview_range",
         {
             "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "expected_strategy_plan_version": plan["version"],
             "handle": "range",
             "range": {
                 "low": float(plan["range"]["low"]) + 1.0,
@@ -1865,6 +1918,7 @@ def test_range_risk_recalculation_clears_projected_margin_and_leverage_blockers(
     })
     request = {
         "expected_strategy_plan_id": plan["strategy_plan_id"],
+        "expected_strategy_plan_version": plan["version"],
         "handle": "upper",
         "range": {
             "low": plan["range"]["low"],
@@ -1936,6 +1990,7 @@ def test_range_risk_recalculation_is_unavailable_when_open_loss_uses_budget(
     })
     request = {
         "expected_strategy_plan_id": plan["strategy_plan_id"],
+        "expected_strategy_plan_version": plan["version"],
         "handle": "upper",
         "range": {
             "low": plan["range"]["low"],

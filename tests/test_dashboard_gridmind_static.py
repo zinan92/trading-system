@@ -302,8 +302,62 @@ def test_gridmind_lifecycle_retention_cannot_change_controls_or_chart_truth() ->
     assert "applyReadModel(data)" in html
     assert "applyReadModel(latest)" in html
     assert "renderRobotControls(data,fresh,execution)" in html
-    assert "visibleOrders=previewing?state.preview.orders:(execution.open_orders||[])" in html
+    assert "visibleOrders=previewing?startupPreview.orders:(execution.open_orders||[])" in html
     assert "openOrders=counts.open_order_count" in html
+
+
+def test_gridmind_range_adjustment_is_an_explicit_read_only_draft_mode() -> None:
+    html = _html()
+
+    assert 'id="gridAdjustToggle"' in html
+    assert 'aria-pressed="false"' in html
+    assert "function toggleGridAdjustMode()" in html
+    assert "function runtimeMatchesProductionPlan" in html
+    assert 'actual==="running"' in html
+    assert "runtimePlanId===planId" in html
+    assert "Number(runtime.strategy_plan_version)===Number(plan.version)" in html
+    assert "expected_strategy_plan_version:draft.expectedPlanVersion" in html
+    assert "state.gridAdjustMode&&Boolean(draft)" in html
+    assert 'data-grid-drag="upper"' in html
+    assert 'data-grid-drag="move"' in html
+    assert 'data-grid-drag="lower"' in html
+    assert ".grid-hit.upper,.grid-hit.lower{height:16px;cursor:ns-resize}" in html
+    assert ".grid-hit.interior{cursor:grab" in html
+    assert "grid-ghost-line" in html
+    assert 'data-grid-action="confirm"' in html
+    assert 'data-grid-action="cancel"' in html
+    assert 'control("preview_range"' in html
+    assert "grid-range-drag-preview-v1" in html
+    assert "只读核对卡" in html
+    assert "orders_created: 0" not in html
+    assert "Object.entries(requiredEffects).some" in html
+
+
+def test_gridmind_range_review_card_shows_required_old_to_new_fields() -> None:
+    html = _html()
+
+    assert 'id="gridRangeReviewDialog"' in html
+    for label in (
+        "下边界",
+        "上边界",
+        "Range 总宽度",
+        "网格模式",
+        "网格数量",
+        "单格间距 / 比例",
+        "每格名义",
+        "总名义仓位",
+        "预计保证金",
+        "实际杠杆",
+        "最大风险",
+        "撤单 / 新单",
+        "当前持仓",
+        "TP / SL",
+    ):
+        assert label in html
+    assert 'id="recalculateGridRangeRisk"' in html
+    assert "recalculate_notional_by_risk_budget:recalculate" in html
+    assert "尚未交易新网格" in html
+    assert "停止+平仓+撤单+交易新网格" not in html
 
 
 def test_uncertain_start_requires_persisted_complete_start_evidence() -> None:

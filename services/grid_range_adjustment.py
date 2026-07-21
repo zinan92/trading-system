@@ -14,7 +14,7 @@ from typing import Any
 from services.grid_sizing import number_or, positive_number, preview_id, validate_market
 
 
-DRAG_HANDLES = frozenset({"range", "lower", "upper"})
+DRAG_HANDLES = frozenset({"range", "lower", "upper", "draft"})
 
 
 def build_dragged_range(
@@ -27,7 +27,7 @@ def build_dragged_range(
 
     resolved_handle = str(handle or "").lower()
     if resolved_handle not in DRAG_HANDLES:
-        raise ValueError("range drag handle must be range, lower, or upper")
+        raise ValueError("range drag handle must be range, lower, upper, or draft")
     current = dict(plan.get("range") or {})
     old_low = positive_number(current.get("low"), "current grid low")
     old_high = positive_number(current.get("high"), "current grid high")
@@ -50,6 +50,9 @@ def build_dragged_range(
         if abs(new_low - old_low) > tolerance:
             raise ValueError("upper-boundary drag must keep the lower boundary fixed")
         new_low = old_low
+    # A draft is the consolidated result of two or more individually valid
+    # pointer drags.  Both edges may therefore differ from the production
+    # plan even though every gesture was constrained to one legal handle.
     return {
         "handle": resolved_handle,
         "old_range": {"low": old_low, "high": old_high},

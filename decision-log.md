@@ -8459,3 +8459,67 @@ auditable datafeed port; broker execution remains a separate port.
   and byte-level proof that plan/runtime/risk/audit artifacts remain unchanged.
 - Ruff and diff checks passed. Full-suite execution was intentionally not used
   for this read-only calculation milestone.
+
+## 2026-07-21 - Chart Range draft interaction
+
+### User outcome
+
+- The production chart remains a normal pan/zoom chart until the operator
+  explicitly enables `调整网格` on a running paper plan.
+- Inside adjustment mode, the Range body moves as one fixed-width band while
+  the upper and lower handles resize only their respective edge. Pointer
+  release keeps a dashed draft and small confirm/cancel controls; it never
+  opens a card or writes an order.
+- Successive pointer releases accumulate. Only the small confirm control asks
+  the server for the read-only old-to-new risk card; cancel removes the draft
+  and restores the current production overlay.
+
+### Decisions
+
+- Put the interaction layer inside the standard K-line chart's existing
+  coordinate adapter instead of adding another chart engine. The overlay is
+  absent from pointer routing outside adjustment mode, avoiding a chart-pan
+  conflict.
+- Keep the production price lines authoritative throughout adjustment. Draft
+  levels are a separate translucent dashed layer and never replace the current
+  order/position overlay.
+- Disable other production controls while a draft is active. A draft cannot be
+  entered unless the authenticated paper runtime is running with an exact
+  StrategyPlan.
+- Treat a mixed sequence of individually constrained upper/lower/body gestures
+  as one consolidated `draft` geometry for the read-only server preview. Count
+  and per-grid notional remain fixed unless the operator explicitly requests
+  risk-budget recalculation from the card.
+- Validate the preview identity, requested bounds, fixed count/notional, and
+  zero-side-effect receipt before displaying the card.
+
+### Gotchas
+
+- The visible edge can be outside the current candle window. Drag math must use
+  price deltas from the gesture start, not snap to a currently visible price.
+- Releasing the pointer is intentionally not confirmation. Network calls and
+  modal opening occur only from the small `确认` button so repeated fine tuning
+  stays uninterrupted.
+- A polling render may redraw candles while a draft exists. The overlay is
+  derived from the stored draft after every chart update, while the server
+  still rejects a changed production plan ID on confirmation.
+- `actual_state=running` is not sufficient identity evidence. Both UI entry and
+  server preview require runtime plan ID/version to equal the active
+  StrategyPlan; a polling mismatch cancels the local draft and requires a fresh
+  operator review.
+- Risk recalculation changes only the returned card. It does not silently
+  rewrite the geometric draft or current production plan.
+
+### Verification
+
+- Dashboard static/browser, pure drag geometry, control-plane preview, and Node
+  behavior/syntax suites: 67
+  focused assertions passed.
+- Covered explicit-mode gating, grab/ns-resize semantics, fixed-body and
+  fixed-edge math, successive mixed gestures, no pointer-release request,
+  outside release and pointer cancellation, cancel-to-production restoration,
+  normal chart pan isolation, runtime/active-plan identity drift, zero-side-
+  effect preview validation, required old-to-new card fields, and explicit
+  risk-budget recalculation.
+- Full-suite execution was intentionally not used for this bounded UI
+  milestone.

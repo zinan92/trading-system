@@ -274,3 +274,15 @@ def test_drag_returns_authoritative_stored_fixed_boundary() -> None:
 
     assert lower["new_range"]["high"] == 120.0
     assert upper["new_range"]["low"] == 100.0
+
+
+def test_consolidated_draft_accepts_two_individually_constrained_edge_drags() -> None:
+    result = build_dragged_range(
+        arithmetic_plan(),
+        {"low": 98.0, "high": 126.0},
+        handle="draft",
+    )
+
+    assert result["handle"] == "draft"
+    assert result["new_range"] == {"low": 98.0, "high": 126.0}
+    assert result["width"] == {"old": 20.0, "new": 28.0}
