@@ -7876,3 +7876,33 @@ auditable datafeed port; broker execution remains a separate port.
   reproductions passed after hardening.
 - No live/broker file, credential, branch protection, production process,
   strategy parameter, or risk threshold is changed.
+
+## 2026-07-21 - Trusted historical K-lines and finalized execution bars
+
+### Decision
+
+- Only a bar whose start plus timeframe is at or before the current time may
+  enter the execution adapter. The forming bar remains display-only.
+- A historical page still passes through the typed market envelope. It may be
+  `trusted_history=true` for display while always remaining `fresh=false` and
+  therefore cannot authorize an entry.
+- A failed live refresh keeps the last trusted candles visible but explicitly
+  clears `trusted` and `fresh`; retained pixels never satisfy the trade gate.
+- History uses an exclusive `end`, server `has_more`, timestamp deduplication,
+  and logical-range restoration after prepend.
+
+### Gotchas
+
+- Treating a historical page as live-ready would let an old candle authorize a
+  new order. Display trust and execution freshness are intentionally separate.
+- Reusing a bar id while its high/low is still changing can permanently hide
+  the final range behind idempotency. Event identity is cycle, timeframe, and
+  bar start, and creation is delayed until close.
+- A retained chart must set `trusted=false`; changing only its status text is a
+  cosmetic block and is not a safety boundary.
+
+### Verification
+
+- Focused Python regression: `139 passed`.
+- Standard K-line plus market-state Node tests: `23 passed`.
+- Inline dashboard JavaScript syntax, `git diff --check`, and gitleaks passed.

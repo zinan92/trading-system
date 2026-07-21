@@ -410,6 +410,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         params = parse_qs(query)
         symbol = (params.get("symbol") or [""])[0].strip()
         timeframe = (params.get("timeframe") or [""])[0].strip()
+        end = (params.get("end") or [""])[0].strip()
         if symbol and not _SYMBOL_PATTERN.match(symbol):
             self._write_error(400, "invalid_symbol", "symbol contains unsupported characters")
             return
@@ -421,12 +422,19 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         except ValueError:
             self._write_error(400, "invalid_limit", "limit must be an integer")
             return
+        if end:
+            try:
+                parse_utc(end)
+            except (TypeError, ValueError):
+                self._write_error(400, "invalid_end", "end must be an ISO-8601 timestamp")
+                return
         self._write_json(
             200,
             build_dualtrack_market_bars_response(
                 symbol=symbol or None,
                 timeframe=timeframe or None,
                 limit=limit,
+                end=end or None,
             ),
         )
 
@@ -1705,6 +1713,7 @@ def build_dualtrack_market_bars_response(
     market_db: Path | None = None,
     config: dict | None = None,
     as_of: str | None = None,
+    end: str | None = None,
 ) -> dict:
     return project_market_read_model(
         DualTrackMarketFeed(market_db=market_db, config=config).snapshot(
@@ -1712,6 +1721,7 @@ def build_dualtrack_market_bars_response(
             timeframe=timeframe,
             limit=limit,
             as_of=as_of,
+            end=end,
         )
     )
 

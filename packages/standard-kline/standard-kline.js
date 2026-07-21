@@ -732,6 +732,20 @@
       return this._nativeGetVisibleLogicalRange?.() || this._timeScale?.getVisibleLogicalRange?.() || null;
     }
 
+    getVisibleLogicalRange(){
+      const range = this._readLogicalRange();
+      return range ? {from:Number(range.from), to:Number(range.to)} : null;
+    }
+
+    restoreVisibleLogicalRange(range, prependedBars){
+      if(!range) return null;
+      const shift = Math.max(0, Math.floor(numberOrNull(prependedBars) ?? 0));
+      return this._setVisibleLogicalRange({
+        from:Number(range.from) + shift,
+        to:Number(range.to) + shift,
+      });
+    }
+
     _isNearLiveEdge(range, barCount){
       if(!range || !Number.isFinite(Number(barCount)) || Number(barCount) <= 0) return true;
       return Number(range.to) >= Number(barCount) - 2;

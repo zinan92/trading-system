@@ -22,6 +22,21 @@ def test_gridmind_keeps_the_compact_production_console_layout() -> None:
     assert "includeGridRange" in html
 
 
+def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> None:
+    html = _html()
+
+    assert 'id="chartHistoryNotice"' in html
+    assert "retainLastTrustedMarket" in html
+    assert "retained_last_trusted" in html
+    assert "loadOlderMarketBars" in html
+    assert "page.historical_page!==true||page.trusted_history!==true" in html
+    assert "pagination?.has_more===false" in html
+    assert "getVisibleLogicalRange" in html
+    assert "restoreVisibleLogicalRange" in html
+    assert "standard-kline:viewchange" in html
+    assert 'status:"error",fresh:false,trusted:false' in html
+
+
 def test_gridmind_restores_all_production_controls() -> None:
     html = _html()
 
