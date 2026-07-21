@@ -9,7 +9,7 @@ import pipelines.dashboard_server as dashboard_server
 from schemas.accounting import build_accounting_snapshot
 from services.dualtrack_execution_adapter import build_execution_engine_adapter
 from services.dualtrack_config import dualtrack_config as load_test_config
-from services.journal_store import load_json
+from services.journal_store import load_json, write_json
 from services.strategy_control_plane import StrategyControlPlane
 import services.strategy_control_plane as strategy_control_plane_module
 
@@ -523,6 +523,130 @@ def test_pre_submit_recheck_reads_same_state_source_and_rejects_drift_without_mu
     assert adapter.submissions == 0
     assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
     assert plane.runtime_state(cycle_id)["desired_state"] == "stopped"
+
+
+def test_rollover_start_guard_rechecks_operator_runtime_after_risk_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    previous_cycle_id = "2026-07-04_NIGHT"
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    active = plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    runtime_path = output / "dualtrack" / "strategy_control" / "runtime.json"
+    write_json(runtime_path, [{
+        "cycle_id": previous_cycle_id,
+        "desired_state": "stopped",
+        "actual_state": "stopped",
+        "updated_at": "2026-07-05T01:00:00+00:00",
+    }])
+
+    def operator_stops_during_risk_work(*_args, **_kwargs):
+        write_json(runtime_path, [{
+            "cycle_id": cycle_id,
+            "desired_state": "stopped",
+            "actual_state": "stopped",
+            "updated_at": "2026-07-05T01:00:30+00:00",
+        }])
+        return {"decision_id": "unused", "policy": {"policy_id": "unused"}}
+
+    monkeypatch.setattr(plane, "_authorize_grid_mutation", operator_stops_during_risk_work)
+    payload = {
+        **safe_grid("neutral", "steady"),
+        "rollover_guard": {
+            "previous_cycle_id": previous_cycle_id,
+            "expected_runtime_updated_at": "2026-07-05T01:00:00+00:00",
+        },
+    }
+
+    with pytest.raises(ValueError, match="runtime changed before rollover start"):
+        plane.control(
+            cycle_id,
+            "start",
+            payload,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:01:00+00:00",
+        )
+
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
+    assert plane.persisted_runtime_state()["cycle_id"] == cycle_id
+
+
+def test_start_cleanup_snapshot_failure_still_persists_error_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    class SnapshotFailsAfterSubmitAdapter:
+        name = "legacy_paper"
+
+        def __init__(self) -> None:
+            self.submission_attempted = False
+
+        def snapshot(self, requested_cycle: str, **_kwargs) -> dict:
+            if self.submission_attempted:
+                raise RuntimeError("snapshot unavailable after submit")
+            return {
+                "schema_version": "dualtrack-execution-v1",
+                "engine": self.name,
+                "cycle_id": requested_cycle,
+                "orders": [],
+                "fills": [],
+                "positions": [],
+                "account": {
+                    "starting_cash": 10_000.0,
+                    "realized_pnl": 0.0,
+                    "ending_cash": 10_000.0,
+                    "equity": 10_000.0,
+                    "margin": 0.0,
+                    "exposure": 0.0,
+                    "slippage": 0.0,
+                    "fees": 0.0,
+                    "funding": 0.0,
+                },
+                "pnl": {"realized": 0.0, "unrealized": 0.0},
+            }
+
+        def submit_order(self, _command: dict) -> dict:
+            self.submission_attempted = True
+            raise RuntimeError("submit exploded")
+
+        def cancel_orders(self, _cycle_id: str, **_kwargs) -> dict:
+            return {"cancelled_order_count": 0, "cancelled_order_ids": []}
+
+        def reconcile(self, _cycle_id: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+    adapter = SnapshotFailsAfterSubmitAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+
+    with pytest.raises(RuntimeError, match="submit exploded"):
+        plane.control(
+            cycle_id,
+            "start",
+            safe_grid("long", "steady"),
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    runtime = plane.persisted_runtime_state()
+    assert runtime["actual_state"] == "error"
+    assert runtime["desired_state"] == "stopped"
+    assert runtime["accepted_order_count_known"] is False
+    assert "final_snapshot: snapshot unavailable after submit" in runtime["last_error"]
 
 
 def test_start_requires_plan_selection_and_does_not_auto_lock_on_risk_path(tmp_path: Path) -> None:
@@ -1065,6 +1189,28 @@ def test_safe_control_api_skips_planning_timeframes_and_account_history(
     )
 
     assert result["action"] == "cancel_all"
+    assert result["safe_action_market_gates"][0]["market_status"] == "blocked"
+    assert result["safe_action_market_gates"][0]["pricing_required"] is False
+
+
+def test_stop_api_cancels_without_live_datafeed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_market(*_args, **_kwargs):
+        raise ConnectionError("datafeed unavailable")
+
+    monkeypatch.setattr(dashboard_server, "build_dualtrack_market_bars_response", unavailable_market)
+    result = dashboard_server.build_strategy_console_control_response(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "action": "stop",
+            "as_of": "2026-07-05T01:45:00+00:00",
+        },
+        output_root=tmp_path / "outputs",
+    )
+
+    assert result["runtime"]["actual_state"] == "stopped"
     assert result["safe_action_market_gates"][0]["market_status"] == "blocked"
     assert result["safe_action_market_gates"][0]["pricing_required"] is False
 

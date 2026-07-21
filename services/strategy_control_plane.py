@@ -8,7 +8,9 @@ same-schema proposals until a production plan is locked.
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
+import os
 import threading
 from collections import Counter
 from contextlib import contextmanager
@@ -50,6 +52,7 @@ PLAN_SCHEMA = "strategy-plan-v1"
 PLAN_FIELDS = ("direction", "style", "range", "key_levels", "grid", "signal", "tp_sl", "risk_budget", "intraday_rules")
 FIELD_SOURCES = {"human", "ai", "confirmed"}
 _CONTROL_LOCK = threading.RLock()
+_PROCESS_LOCK_STATE = threading.local()
 
 
 def paper_safe_action_market_mark_is_trusted(
@@ -70,11 +73,34 @@ def paper_safe_action_market_mark_is_trusted(
 
 
 @contextmanager
-def production_mutation_lock():
-    """Serialize every in-process plan, grid, and manual-order mutation."""
+def production_mutation_lock(output_root: Path):
+    """Serialize production mutations across threads and local processes."""
 
+    root = Path(output_root)
+    lock_path = root / "dualtrack" / "strategy_control" / ".mutation.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    key = str(lock_path.resolve())
     with _CONTROL_LOCK:
-        yield
+        held = getattr(_PROCESS_LOCK_STATE, "held", None)
+        if held is None:
+            held = {}
+            _PROCESS_LOCK_STATE.held = held
+        if key in held:
+            held[key][1] += 1
+            try:
+                yield
+            finally:
+                held[key][1] -= 1
+            return
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            held[key] = [descriptor, 1]
+            yield
+        finally:
+            held.pop(key, None)
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
 
 def resolve_paper_safe_action_pricing(
@@ -394,7 +420,7 @@ class StrategyControlPlane:
         field_sources: dict[str, str] | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
-        with _CONTROL_LOCK:
+        with production_mutation_lock(self.output_root):
             return self._lock_production_plan(
                 cycle_id,
                 selected_proposal_id=selected_proposal_id,
@@ -436,8 +462,19 @@ class StrategyControlPlane:
         active = [row for row in plans if row.get("status") == "active"]
         return active[-1] if active else None
 
+    def latest_plan(self, cycle_id: str) -> dict[str, Any] | None:
+        """Return the latest archived plan even after the cycle was closed."""
+
+        plans = [row for row in load_json(self._plans_path(cycle_id)) if isinstance(row, dict)]
+        if not plans:
+            return None
+        return max(
+            plans,
+            key=lambda row: (int(row.get("version") or 0), str(row.get("locked_at") or "")),
+        )
+
     def ensure_compatible_active_plan(self, cycle_id: str, *, as_of: str | None = None) -> dict[str, Any] | None:
-        with _CONTROL_LOCK:
+        with production_mutation_lock(self.output_root):
             return self._ensure_compatible_active_plan(cycle_id, as_of=as_of)
 
     def _ensure_compatible_active_plan(self, cycle_id: str, *, as_of: str | None = None) -> dict[str, Any] | None:
@@ -493,6 +530,8 @@ class StrategyControlPlane:
                 "risk_decision_id": None,
                 "risk_policy_id": None,
                 "accepted_order_count": 0,
+                "accepted_order_count_known": True,
+                "transition_owner": None,
                 "last_action": None,
                 "last_error": None,
                 "stale_cycle": True,
@@ -512,6 +551,8 @@ class StrategyControlPlane:
             "risk_decision_id": row.get("risk_decision_id"),
             "risk_policy_id": row.get("risk_policy_id"),
             "accepted_order_count": int(row.get("accepted_order_count") or 0),
+            "accepted_order_count_known": bool(row.get("accepted_order_count_known", True)),
+            "transition_owner": row.get("transition_owner"),
             "last_action": row.get("last_action"),
             "last_error": row.get("last_error"),
             "stale_cycle": False,
@@ -528,6 +569,43 @@ class StrategyControlPlane:
 
     def runtime_configured(self) -> bool:
         return (self.root / "runtime.json").exists()
+
+    def persisted_runtime_state(self) -> dict[str, Any]:
+        """Return the stored runtime row without current-cycle masking.
+
+        ``runtime_state(cycle_id)`` deliberately presents an old cycle as
+        stopped.  Rollover needs the underlying row so it can distinguish an
+        operator stop from a strategy that was running when the cycle ended.
+        """
+
+        rows = load_json(self.root / "runtime.json")
+        row = dict(rows[-1]) if rows and isinstance(rows[-1], dict) else {}
+        return {
+            **row,
+            "cycle_id": str(row.get("cycle_id") or ""),
+            "desired_state": str(row.get("desired_state") or "stopped"),
+            "actual_state": str(row.get("actual_state") or row.get("desired_state") or "stopped"),
+            "accepted_order_count": int(row.get("accepted_order_count") or 0),
+            "accepted_order_count_known": bool(row.get("accepted_order_count_known", True)),
+            "transition_owner": row.get("transition_owner"),
+        }
+
+    def _assert_rollover_start_guard(self, body: dict[str, Any]) -> None:
+        guard = body.get("rollover_guard")
+        if not isinstance(guard, dict):
+            return
+        expected_cycle_id = str(guard.get("previous_cycle_id") or "")
+        expected_updated_at = str(guard.get("expected_runtime_updated_at") or "")
+        persisted = self.persisted_runtime_state()
+        if (
+            not expected_cycle_id
+            or not expected_updated_at
+            or persisted.get("cycle_id") != expected_cycle_id
+            or persisted.get("desired_state") != "stopped"
+            or persisted.get("actual_state") != "stopped"
+            or str(persisted.get("updated_at") or "") != expected_updated_at
+        ):
+            raise ValueError("paper runtime changed before rollover start")
 
     def preview(
         self,
@@ -552,7 +630,7 @@ class StrategyControlPlane:
         now: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        with _CONTROL_LOCK:
+        with production_mutation_lock(self.output_root):
             try:
                 result = self._control_locked(cycle_id, action, payload, market=market, account=account, now=now)
             except ValueError as exc:
@@ -627,7 +705,21 @@ class StrategyControlPlane:
         if action == "start":
             return self._start(cycle_id, body, market=market or {}, account=account or {}, now=now)
         if action == "stop":
-            return self._stop(cycle_id, market=market, now=now)
+            return self._stop(
+                cycle_id,
+                market=market,
+                now=now,
+                transition_owner=(
+                    str(body["transition_owner"])
+                    if body.get("transition_owner") not in (None, "")
+                    else None
+                ),
+                expected_runtime_updated_at=(
+                    str(body["expected_runtime_updated_at"])
+                    if body.get("expected_runtime_updated_at") not in (None, "")
+                    else None
+                ),
+            )
         if action == "reset_statistics":
             previous = self.runtime_state(cycle_id)
             row = {
@@ -735,6 +827,7 @@ class StrategyControlPlane:
             adapter=adapter,
             timestamp=timestamp,
         )
+        self._assert_rollover_start_guard(body)
         # From this point through the first submit the shared control lock owns
         # every in-process production mutation path. Plan/runtime writes do not
         # alter any economic input bound by the immediately preceding recheck.
@@ -753,6 +846,12 @@ class StrategyControlPlane:
             "risk_decision_id": risk_decision["decision_id"],
             "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
             "accepted_order_count": 0,
+            "accepted_order_count_known": True,
+            "transition_owner": (
+                f"rollover:{body['rollover_guard'].get('previous_cycle_id')}->{cycle_id}"
+                if isinstance(body.get("rollover_guard"), dict)
+                else None
+            ),
         }
         self._write_runtime(starting)
         try:
@@ -860,12 +959,21 @@ class StrategyControlPlane:
                 cleanup_errors.append(f"advance: {cleanup_exc}")
             adjusted["status"] = "failed"
             current["status"] = "active"
-            self._write_plan(adjusted)
-            self._write_plan(current)
+            try:
+                self._write_plan(adjusted)
+                self._write_plan(current)
+            except Exception as cleanup_exc:
+                cleanup_errors.append(f"plan_restore: {cleanup_exc}")
             failure_detail = str(exc)
+            accepted_after_cleanup = 0
+            accepted_order_count_known = True
+            try:
+                accepted_after_cleanup = len(self._accepted_orders(cycle_id, adapter=adapter))
+            except Exception as cleanup_exc:
+                accepted_order_count_known = False
+                cleanup_errors.append(f"final_snapshot: {cleanup_exc}")
             if cleanup_errors:
                 failure_detail = f"{failure_detail}; start cleanup failed: {'; '.join(cleanup_errors)}"
-            accepted_after_cleanup = len(self._accepted_orders(cycle_id, adapter=adapter))
             self._write_runtime({
                 **starting,
                 "desired_state": "stopped",
@@ -873,6 +981,7 @@ class StrategyControlPlane:
                 "updated_at": _timestamp(now),
                 "last_error": failure_detail,
                 "accepted_order_count": accepted_after_cleanup,
+                "accepted_order_count_known": accepted_order_count_known,
             })
             raise
 
@@ -881,6 +990,7 @@ class StrategyControlPlane:
             "actual_state": "running",
             "updated_at": _timestamp(now),
             "accepted_order_count": len(accepted),
+            "accepted_order_count_known": True,
         }
         self._write_runtime(running)
         return {
@@ -1186,7 +1296,22 @@ class StrategyControlPlane:
             replaced_order_ids=replaced_order_ids,
         )
 
-    def _stop(self, cycle_id: str, *, market: dict[str, Any] | None, now: str | None) -> dict[str, Any]:
+    def _stop(
+        self,
+        cycle_id: str,
+        *,
+        market: dict[str, Any] | None,
+        now: str | None,
+        transition_owner: str | None = None,
+        expected_runtime_updated_at: str | None = None,
+    ) -> dict[str, Any]:
+        if expected_runtime_updated_at is not None:
+            persisted = self.persisted_runtime_state()
+            if (
+                persisted.get("cycle_id") != cycle_id
+                or str(persisted.get("updated_at") or "") != expected_runtime_updated_at
+            ):
+                raise ValueError("paper runtime changed after rollover intent")
         previous = self.runtime_state(cycle_id)
         stopping = {
             **previous,
@@ -1196,6 +1321,7 @@ class StrategyControlPlane:
             "updated_at": _timestamp(now),
             "last_action": "stop",
             "last_error": None,
+            "transition_owner": transition_owner,
         }
         self._write_runtime(stopping)
         adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
@@ -1327,12 +1453,21 @@ class StrategyControlPlane:
             if reconciliation.get("status") != "ok":
                 raise ValueError("paper ledger reconciliation failed")
         except Exception as exc:
+            accepted_after_failure = 0
+            accepted_order_count_known = True
+            failure_detail = str(exc)
+            try:
+                accepted_after_failure = len(self._accepted_orders(cycle_id))
+            except Exception as snapshot_exc:
+                accepted_order_count_known = False
+                failure_detail = f"{failure_detail}; final_snapshot: {snapshot_exc}"
             self._write_runtime({
                 **stopping,
                 "actual_state": "error",
                 "updated_at": _timestamp(now),
-                "last_error": str(exc),
-                "accepted_order_count": len(self._accepted_orders(cycle_id)),
+                "last_error": failure_detail,
+                "accepted_order_count": accepted_after_failure,
+                "accepted_order_count_known": accepted_order_count_known,
             })
             raise
 
@@ -1341,6 +1476,7 @@ class StrategyControlPlane:
             "actual_state": "stopped",
             "updated_at": _timestamp(now),
             "accepted_order_count": 0,
+            "accepted_order_count_known": True,
         }
         self._write_runtime(stopped)
         return {

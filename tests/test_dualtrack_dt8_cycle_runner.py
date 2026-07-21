@@ -618,6 +618,11 @@ def test_midnight_cutover_closes_legacy_night_and_opens_daily_cycle(tmp_path: Pa
     assert results == [
         {"event": "close", "cycle_id": "2026-07-13_NIGHT"},
         {"event": "pre_cycle", "cycle_id": "2026-07-14_DAY"},
+        {
+            "event": "production_rollover",
+            "status": "skipped",
+            "reason": "production_runtime_not_configured",
+        },
     ]
 
 
@@ -1526,7 +1531,12 @@ def test_dt8_empty_market_db_skip_paths_and_auto_are_safe(tmp_path: Path) -> Non
     auto = runner.auto(as_of="2026-07-05T01:00:00+00:00")
 
     assert auto["event"] == "auto"
-    assert [row["status"] for row in auto["results"]] == ["skipped", "skipped", "skipped"]
+    assert [row["status"] for row in auto["results"]] == [
+        "skipped",
+        "skipped",
+        "skipped",
+        "skipped",
+    ]
 
 
 def test_comex_session_auto_skips_during_daily_break(tmp_path: Path) -> None:

@@ -915,17 +915,38 @@ def build_strategy_console_control_response(
     # The chart selector is display-only. Production planning always receives
     # the fixed 1m execution tape. Grid geometry needs only D1/4H; the AI
     # recommendation path separately requires D1/4H/1H/15m.
-    trusted_market = (
-        dict(market)
-        if market is not None
-        else {}
-        if action == "cancel_all"
-        else dict(build_dualtrack_market_bars_response(
+    if market is not None:
+        trusted_market = dict(market)
+    elif action == "cancel_all":
+        trusted_market = {}
+    elif action == "stop":
+        try:
+            trusted_market = dict(build_dualtrack_market_bars_response(
+                timeframe="1m",
+                limit=240,
+                as_of=payload.get("as_of"),
+            ))
+        except Exception as exc:
+            trusted_market = {
+                "schema_version": "dualtrack-market-bars-v1",
+                "status": "blocked",
+                "fresh": False,
+                "is_synthetic": False,
+                "provider": "",
+                "source_mode": "unavailable",
+                "symbol": "GOLD",
+                "timeframe": "1m",
+                "latest_close": None,
+                "latest_timestamp": "",
+                "bars": [],
+                "access_issues": [f"{type(exc).__name__}: {exc}"],
+            }
+    else:
+        trusted_market = dict(build_dualtrack_market_bars_response(
             timeframe="1m",
             limit=240,
             as_of=payload.get("as_of"),
         ))
-    )
     if not safe_control and not isinstance(trusted_market.get("strategy_timeframes"), dict):
         required = ("1d", "4h") if action != "refresh_recommendation" else ("1d", "4h", "1h", "15m")
         trusted_market["strategy_timeframes"] = build_strategy_timeframes_response(
@@ -1137,10 +1158,11 @@ def build_dualtrack_order_post_response(
     market: dict | None = None,
     account: dict | None = None,
 ) -> dict:
-    with production_mutation_lock():
+    root = _dualtrack_output_root(output_root)
+    with production_mutation_lock(root):
         return _build_dualtrack_order_post_response_locked(
             payload,
-            output_root=output_root,
+            output_root=root,
             enforce_risk=enforce_risk,
             market=market,
             account=account,

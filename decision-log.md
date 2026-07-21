@@ -7876,3 +7876,89 @@ auditable datafeed port; broker execution remains a separate port.
   reproductions passed after hardening.
 - No live/broker file, credential, branch protection, production process,
   strategy parameter, or risk threshold is changed.
+
+## 2026-07-21 - Durable paper cycle rollover and terminal package
+
+### User outcome
+
+- A paper grid that was running at the 09:00/21:00 boundary closes safely,
+  leaves one auditable terminal package, and starts the next trusted plan
+  without requiring an operator to notice a stopped cycle.
+
+### Decision
+
+- Treat rollover as a persisted state machine: record intent, stop the old
+  cycle, verify cancellation/flatten reconciliation, package immutable facts,
+  then start the next cycle. Every failure writes a blocked fail-closed row.
+- Bind rollover intent to the persisted runtime timestamp and compare it again
+  inside the stop mutation and immediately before start. A later operator
+  action cancels continuation instead of being overwritten by the scheduler.
+- Carry the stopped-runtime token into `start` and recheck it after risk work,
+  under a re-entrant cross-process file lock immediately before any
+  plan/runtime or order write. Dashboard and scheduler therefore share one
+  local production writer boundary, closing the planning/risk race window.
+- Read the raw persisted runtime row at the boundary. The normal current-cycle
+  read model intentionally masks an older cycle as stopped and cannot decide
+  whether automatic continuation was authorized.
+- Size the next cycle from the terminal post-flatten account in the package,
+  never the pre-stop snapshot. Preserve explicit plan range, count and per-grid
+  notional; a changed risk ceiling blocks instead of silently resizing.
+- Keep optional Strategy Shadow evidence outside the production close gate.
+  A shadow exception is captured once in the immutable package and only an
+  explicit append-only revision may retry it.
+- A new-cycle runtime row in stopped or error state is never automatically
+  restarted. This protects an operator stop and prevents a failed start from
+  looping every minute.
+- If the process dies after a successful start but before the final rollover
+  receipt, the persisted running state repairs the missing completed receipt.
+  A crash leaving `starting` or `stopping` is blocked for inspection instead
+  of being mistaken for a healthy running strategy.
+- Verify every stored package hash before trusting `status=closed`. A mismatch
+  creates a new fail-closed integrity incident without claiming to supersede
+  the untrusted hash. The incident remains latched across scheduler ticks until
+  an explicit actor/hash-bound acknowledgement; only then may fresh evidence
+  create an append-only revision. A transient non-integrity blocked package is
+  re-snapshotted and may close through a revision linked to its verified hash.
+- Integrity acknowledgement requires a structured, non-empty actor id and
+  transport plus the current incident hash; rejected acknowledgements leave
+  the package journal byte-for-byte unchanged.
+- Use the same cross-process production mutation lock for rollover receipts,
+  terminal-package revisions, integrity acknowledgements and control-plane
+  writes. This prevents scheduler and dashboard processes from interleaving
+  state transitions or append-only evidence.
+- Persist a rollover-specific transition owner in `starting`, `stopping` and
+  error runtimes. Only scheduler-owned incomplete work is retried; an operator
+  stop or unrelated failed start remains stopped and is never auto-restarted.
+- Validate every package row and every supersedes link, not only the latest
+  hash. An integrity incident records the exact historical row and remains
+  latched until an actor/hash-bound acknowledgement.
+
+### Gotchas
+
+- Stop uses only the safe-action market contract, so unavailable planning
+  timeframes cannot strand the old cycle. If no trusted execution-ledger price
+  can flatten an open position, stop records a blocked receipt and resumes
+  only after that safety evidence exists.
+- A datafeed transport exception is converted into an explicit blocked market
+  envelope so cancellation still runs. Flattening may use only trusted
+  execution-ledger prices; the rollover never invents a quote.
+- Cleanup must persist an error runtime even when its final adapter snapshot
+  also fails. In that case `accepted_order_count_known=false` prevents a zero
+  count from being mistaken for proof that no orders remain.
+- The protective order sweep is also a production-ledger writer. Its snapshot,
+  market-event processing and shadow flush must stay inside the same
+  cross-process mutation boundary as dashboard controls and rollover.
+- Once stop succeeds, package/start may resume from persisted evidence, but
+  only while the runtime namespace still belongs to the previous cycle.
+- Historical packages prove local paper execution and reconciliation facts;
+  they are not evidence of live venue execution or liquidity.
+- The new cycle still requires fresh, non-synthetic 1m data plus completed D1
+  and 4H planning bars. Missing context blocks start rather than degrading to
+  synthetic inputs.
+
+### Verification
+
+- Focused rollover, package, cycle-runner, dashboard and control-plane pack:
+  144 passed, including an independent-process lock barrier test.
+- Ruff and git diff checks passed. Full-suite execution was intentionally not
+  used for this bounded lifecycle milestone.
