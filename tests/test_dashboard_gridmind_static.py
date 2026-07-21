@@ -146,8 +146,12 @@ def test_gridmind_restores_all_production_controls() -> None:
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
 
-    for action in ("preview", "start", "stop", "adjust_plan", "reset_statistics"):
+    for action in ("preview", "start", "stop", "extend_range", "reset_statistics"):
         assert f"control('{action}'" in html or f'control("{action}"' in html
+
+    assert "expected_strategy_plan_id:plan.strategy_plan_id" in html
+    assert "间距、每格金额和已有持仓 TP/SL 保持不变" in html
+    assert "await requestPreview({useInputs:true});const result=await control('adjust_plan'" not in html
 
 
 def test_gridmind_preserves_traceability_and_safe_control_copy() -> None:

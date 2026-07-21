@@ -261,6 +261,25 @@ class NautilusExecutionAdapter:
         return dict(max(rows, key=_market_event_sort_key))
 
     def flush(self, cycle_id: str) -> dict[str, Any]:
+        return self._flush(cycle_id, reject_pending_market_events=False)
+
+    def flush_commands(self, cycle_id: str) -> dict[str, Any]:
+        """Replay persisted commands only when no market event is awaiting replay.
+
+        Control-plane mutations must never acknowledge a market event as a side
+        effect.  The replay still rebuilds from the immutable event history, but
+        it uses the exact event snapshot checked here; an event appended later
+        remains pending for the normal market-event path.
+        """
+
+        return self._flush(cycle_id, reject_pending_market_events=True)
+
+    def _flush(
+        self,
+        cycle_id: str,
+        *,
+        reject_pending_market_events: bool,
+    ) -> dict[str, Any]:
         rows = load_json(self._events_path(cycle_id))
         processed_rows = load_json(self._processed_events_path(cycle_id))
         processed_ids = {str(row.get("event_id") or "") for row in processed_rows}
@@ -269,6 +288,11 @@ class NautilusExecutionAdapter:
             for row in rows
             if str(row.get("event_id") or "") not in processed_ids
         ]
+        if reject_pending_market_events and pending_ids:
+            raise RuntimeError(
+                "Nautilus command flush blocked by pending market events"
+                f"; pending_event_ids={pending_ids}"
+            )
         commands = load_json(self._commands_path(cycle_id))
         processed_commands = load_json(self._processed_commands_path(cycle_id))
         processed_command_ids = {str(row.get("command_id") or "") for row in processed_commands}
@@ -287,7 +311,11 @@ class NautilusExecutionAdapter:
                 "processed_command_count": 0,
                 "snapshot": self.snapshot(cycle_id),
             }
-        snapshot = self._replay(cycle_id)
+        snapshot = self._replay(
+            cycle_id,
+            events=rows,
+            commands=commands,
+        )
         processed_by_id = {str(row.get("event_id") or ""): row for row in processed_rows}
         for persisted in rows:
             persisted_id = str(persisted.get("event_id") or "")
@@ -425,9 +453,19 @@ class NautilusExecutionAdapter:
             },
         }
 
-    def _replay(self, cycle_id: str) -> dict[str, Any]:
-        events = sorted(load_json(self._events_path(cycle_id)), key=_market_event_sort_key)
-        commands = sorted(load_json(self._commands_path(cycle_id)), key=_command_sort_key)
+    def _replay(
+        self,
+        cycle_id: str,
+        *,
+        events: list[dict[str, Any]] | None = None,
+        commands: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        event_rows = events if events is not None else load_json(self._events_path(cycle_id))
+        command_rows = (
+            commands if commands is not None else load_json(self._commands_path(cycle_id))
+        )
+        events = sorted(event_rows, key=_market_event_sort_key)
+        commands = sorted(command_rows, key=_command_sort_key)
         bundle = build_shadow_input(
             cycle_id=cycle_id,
             authoritative_snapshot={"cycle_id": cycle_id, "engine": self.name, "fills": []},

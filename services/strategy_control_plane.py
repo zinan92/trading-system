@@ -29,6 +29,7 @@ from services.grid_sizing import (
     validate_market as _validate_market,
     positive_number as _positive_number,
 )
+from services.grid_range_adjustment import build_range_extension, range_adjustment_steps
 from services.journal_store import load_json, write_json
 from services.risk_policy_composition import (
     build_risk_decision_store,
@@ -502,6 +503,11 @@ class StrategyControlPlane:
             "schema_version": "strategy-production-console-v1",
             "cycle_id": cycle_id,
             "production_plan": plan,
+            "production_plan_history": [
+                dict(row)
+                for row in load_json(self._plans_path(cycle_id))
+                if isinstance(row, dict)
+            ],
             "proposals": proposals,
             "proposal_diff": self.proposal_diff(cycle_id),
             "migration": {
@@ -749,6 +755,14 @@ class StrategyControlPlane:
             adjusted["strategy_plan_id"] = _plan_id(cycle_id, adjusted["version"], f"console-adjust-{_timestamp(now)}")
             self._activate_plan(adjusted)
             return {"action": action, "plan": adjusted}
+        if action == "extend_range":
+            return self._extend_range(
+                cycle_id,
+                body,
+                market=market or {},
+                account=account or {},
+                now=now,
+            )
         if action == "cancel_all":
             adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
             receipt = adapter.cancel_orders(
@@ -1008,6 +1022,516 @@ class StrategyControlPlane:
             "idempotent": False,
         }
 
+    def _extend_range(
+        self,
+        cycle_id: str,
+        body: dict[str, Any],
+        *,
+        market: dict[str, Any],
+        account: dict[str, Any],
+        now: str | None,
+    ) -> dict[str, Any]:
+        """Move only whole-grid edges while preserving live internal orders."""
+
+        runtime = self.runtime_state(cycle_id)
+        current = self.active_plan(cycle_id)
+        if runtime.get("desired_state") != "running":
+            raise ValueError("strategy_not_running")
+        if not current:
+            raise ValueError("strategy_plan_changed")
+
+        expected_plan_id = str(body.get("expected_strategy_plan_id") or "")
+        requested = body.get("range") if isinstance(body.get("range"), dict) else {}
+        if not expected_plan_id:
+            raise ValueError("strategy_plan_changed")
+        if requested.get("low") in (None, "") or requested.get("high") in (None, ""):
+            raise ValueError("requested_range_missing")
+        requested_range = {
+            "low": _positive_number(requested.get("low"), "requested grid low"),
+            "high": _positive_number(requested.get("high"), "requested grid high"),
+        }
+        request_fingerprint = _extend_range_request_fingerprint(
+            expected_plan_id,
+            requested_range,
+        )
+        current_plan_id = str(current.get("strategy_plan_id") or "")
+        if expected_plan_id != current_plan_id:
+            prior = (
+                dict(current.get("range_adjustment") or {})
+                if isinstance(current.get("range_adjustment"), dict)
+                else {}
+            )
+            if (
+                str(prior.get("from_plan_id") or "") == expected_plan_id
+                and str(prior.get("request_fingerprint") or "") == request_fingerprint
+            ):
+                repaired_runtime = {
+                    **runtime,
+                    "actual_state": "running",
+                    "last_action": "extend_range",
+                    "last_error": None,
+                    "strategy_plan_id": current_plan_id,
+                    "strategy_plan_version": current.get("version"),
+                    "preview_id": current.get("preview_id"),
+                    "risk_decision_id": current.get("risk_decision_id"),
+                    "risk_policy_id": current.get("risk_policy_id"),
+                    "updated_at": _timestamp(now),
+                }
+                if (
+                    runtime.get("actual_state") != "running"
+                    or str(runtime.get("strategy_plan_id") or "") != current_plan_id
+                ):
+                    self._write_runtime(repaired_runtime)
+                return {
+                    "action": "extend_range",
+                    "runtime": repaired_runtime,
+                    "plan": current,
+                    "effective_range": dict(
+                        prior.get("effective_range") or current.get("range") or {}
+                    ),
+                    "steps": dict(prior.get("steps") or {"low": 0, "high": 0}),
+                    "created_orders": 0,
+                    "cancelled_orders": 0,
+                    "positions_preserved": True,
+                    "tp_sl_affected": False,
+                    "idempotent": True,
+                }
+            raise ValueError("strategy_plan_changed")
+        if (
+            runtime.get("actual_state") != "running"
+            or str(runtime.get("strategy_plan_id") or "") != current_plan_id
+        ):
+            raise ValueError("strategy_plan_changed")
+
+        staged_adjustment = _matching_staged_range_adjustment(
+            load_json(self._plans_path(cycle_id)),
+            from_plan_id=current_plan_id,
+            request_fingerprint=request_fingerprint,
+        )
+        steps = range_adjustment_steps(current, requested_range)
+        if not steps["low"] and not steps["high"]:
+            return {
+                "action": "extend_range",
+                "runtime": runtime,
+                "plan": current,
+                "effective_range": {
+                    "low": float((current.get("range") or {}).get("low")),
+                    "high": float((current.get("range") or {}).get("high")),
+                },
+                "steps": steps,
+                "created_orders": 0,
+                "cancelled_orders": 0,
+                "positions_preserved": True,
+                "tp_sl_affected": False,
+                "idempotent": True,
+            }
+
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        before = adapter.snapshot(cycle_id)
+        before_orders = [dict(row) for row in before.get("orders") or []]
+        accepted_before = [
+            row
+            for row in before_orders
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
+        accepted_entries = [
+            row
+            for row in accepted_before
+            if str(row.get("event") or "entry").lower() == "entry"
+        ]
+        protections_before = [
+            row
+            for row in accepted_before
+            if str(row.get("event") or "entry").lower() != "entry"
+        ]
+        positions_before = [dict(row) for row in before.get("positions") or []]
+        adjustment = build_range_extension(
+            cycle_id,
+            current,
+            requested_range,
+            market=market,
+            accepted_entries=accepted_entries,
+            positions=positions_before,
+        )
+
+        effective_low = float(adjustment["effective_range"]["low"])
+        effective_high = float(adjustment["effective_range"]["high"])
+        retained_entries = [
+            row
+            for row in accepted_entries
+            if effective_low - 1e-8
+            <= _positive_number(row.get("price"), "accepted entry price")
+            <= effective_high + 1e-8
+        ]
+        outside_entries = [
+            row
+            for row in accepted_entries
+            if not (
+                effective_low - 1e-8
+                <= _positive_number(row.get("price"), "accepted entry price")
+                <= effective_high + 1e-8
+            )
+        ]
+        retained_ids = _required_order_ids(retained_entries, "retained entry")
+        outside_ids = _required_order_ids(outside_entries, "outside entry")
+
+        timestamp = _timestamp(now)
+        version = (
+            int(staged_adjustment.get("version") or 0)
+            if staged_adjustment
+            else self._next_plan_version(cycle_id)
+        )
+        old_context = (
+            dict(current.get("execution_context") or {})
+            if isinstance(current.get("execution_context"), dict)
+            else {}
+        )
+        old_market_context = (
+            dict(old_context.get("market") or {})
+            if isinstance(old_context.get("market"), dict)
+            else {}
+        )
+        adjusted = {
+            **current,
+            **dict(staged_adjustment or {}),
+            "strategy_plan_id": (
+                str(staged_adjustment.get("strategy_plan_id") or "")
+                if staged_adjustment
+                else _plan_id(
+                    cycle_id,
+                    version,
+                    f"extend-range:{adjustment['preview_id']}",
+                )
+            ),
+            "version": version,
+            "status": "staging",
+            "locked_at": (
+                staged_adjustment.get("locked_at") if staged_adjustment else timestamp
+            ),
+            "range": {
+                **dict(current.get("range") or {}),
+                **adjustment["effective_range"],
+            },
+            "grid": adjustment["grid"],
+            "execution_context": {
+                **old_context,
+                "market": {
+                    **old_market_context,
+                    "price": _positive_number(
+                        market.get("latest_close"),
+                        "market latest_close",
+                    ),
+                    "symbol": str(
+                        market.get("symbol")
+                        or old_market_context.get("symbol")
+                        or "GOLD"
+                    ),
+                    "timestamp": market.get("latest_timestamp"),
+                    "provider": market.get("provider"),
+                    "timeframe": market.get("timeframe"),
+                },
+            },
+            "field_sources": {
+                **dict(current.get("field_sources") or {}),
+                "range": "confirmed",
+                "grid": "confirmed",
+                "risk_budget": "confirmed",
+            },
+            "preview_id": adjustment["preview_id"],
+            "range_adjustment": {
+                "from_plan_id": current_plan_id,
+                "requested_range": dict(requested_range),
+                "request_fingerprint": request_fingerprint,
+                "effective_range": dict(adjustment["effective_range"]),
+                "steps": dict(adjustment["steps"]),
+            },
+            "inherited_plan_ids": list(
+                dict.fromkeys(
+                    [
+                        *list(current.get("inherited_plan_ids") or []),
+                        current_plan_id,
+                    ]
+                )
+            ),
+        }
+        if staged_adjustment and (
+            str(staged_adjustment.get("preview_id") or "") != adjustment["preview_id"]
+            or dict(staged_adjustment.get("range") or {}).get("low")
+            != adjustment["effective_range"]["low"]
+            or dict(staged_adjustment.get("range") or {}).get("high")
+            != adjustment["effective_range"]["high"]
+            or list((staged_adjustment.get("grid") or {}).get("levels") or [])
+            != list(adjustment["grid"].get("levels") or [])
+        ):
+            raise RuntimeError("staged range adjustment identity changed")
+        edge_plan = {
+            **adjusted,
+            "grid": {
+                **dict(adjusted["grid"]),
+                "orders": [dict(row) for row in adjustment["edge_orders"]],
+            },
+        }
+        edge_commands = (
+            build_plan_grid_entry_commands(edge_plan, timestamp=timestamp)
+            if adjustment["edge_orders"]
+            else []
+        )
+        edge_commands = _rearm_completed_edge_commands(edge_commands, before_orders)
+        plan_history = [dict(row) for row in load_json(self._plans_path(cycle_id))]
+        retained_commands = _retained_entry_risk_commands(
+            retained_entries,
+            plan_history=plan_history,
+            candidate_plan=adjusted,
+            timestamp=timestamp,
+        )
+        risk_decision = self._authorize_grid_mutation(
+            cycle_id,
+            action_class="replace_pending",
+            intent="adjust_grid_edges",
+            plan=adjusted,
+            commands=[*retained_commands, *edge_commands],
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+            replaced_order_ids=outside_ids,
+            retained_order_ids=retained_ids,
+        )
+        risk_metrics = dict(risk_decision.get("metrics") or {})
+        adjusted["risk_budget"] = {
+            **dict(current.get("risk_budget") or {}),
+            "leverage": adjusted["grid"].get("leverage"),
+            "max_loss": risk_metrics.get("projected_max_loss"),
+            "estimated_margin": risk_metrics.get("projected_margin"),
+        }
+        adjusted["risk_request_id"] = risk_decision.get("request_id")
+        adjusted["risk_decision_id"] = risk_decision.get("decision_id")
+        adjusted["risk_policy_id"] = (risk_decision.get("policy") or {}).get(
+            "policy_id"
+        )
+        self._write_plan(adjusted)
+
+        retained_before_core = _entry_core(retained_entries)
+        protection_before_core = _protection_core(protections_before)
+        position_before_core = _position_core(positions_before)
+        receipts: list[dict[str, Any]] = []
+        staged_ids: set[str] = set()
+        cancelled = 0
+        cancellation_started = False
+        execution_event: dict[str, Any] | None = None
+        reconciliation: dict[str, Any] = {}
+        try:
+            receipts = self._submit_plan_orders(
+                adapter,
+                edge_plan,
+                timestamp=timestamp,
+                commands=edge_commands,
+            )
+            staged_ids = _required_order_ids(receipts, "staged entry")
+            staged_snapshot = {
+                str(row.get("order_id") or ""): row
+                for row in adapter.snapshot(cycle_id).get("orders") or []
+                if row.get("order_id")
+            }
+            incomplete_stage = sorted(
+                order_id
+                for order_id in staged_ids
+                if order_id not in staged_snapshot
+                or str(staged_snapshot[order_id].get("state") or "").lower()
+                not in {"accepted", "filled"}
+            )
+            if incomplete_stage:
+                raise ValueError(
+                    f"extend_range_stage_incomplete:{incomplete_stage}"
+                )
+
+            if outside_ids:
+                cancellation_started = True
+                cancel_receipt = adapter.cancel_orders(
+                    cycle_id,
+                    order_ids=outside_ids,
+                    ts=timestamp,
+                    reason="extend_range_outside",
+                )
+                cancelled = int(
+                    cancel_receipt.get("cancelled_order_count")
+                    or len(cancel_receipt.get("cancelled_order_ids") or [])
+                )
+                if cancelled != len(outside_ids):
+                    raise ValueError("extend_range_cancel_incomplete")
+
+            execution_event = self._settle_selected_execution_mutations(
+                adapter,
+                cycle_id,
+            )
+            terminal = adapter.snapshot(cycle_id)
+            terminal_orders = {
+                str(row.get("order_id") or ""): dict(row)
+                for row in terminal.get("orders") or []
+                if row.get("order_id")
+            }
+            retained_after = [
+                terminal_orders[order_id]
+                for order_id in retained_ids
+                if order_id in terminal_orders
+                and str(terminal_orders[order_id].get("state") or "").lower()
+                in {"accepted", "filled"}
+            ]
+            if set(retained_ids) != {
+                str(row.get("order_id") or "") for row in retained_after
+            } or _entry_core(retained_after) != retained_before_core:
+                raise RuntimeError("extend_range changed an internal entry order")
+            if any(
+                str(terminal_orders.get(order_id, {}).get("state") or "").lower()
+                == "accepted"
+                for order_id in outside_ids
+            ):
+                raise RuntimeError("extend_range left an out-of-range entry order")
+            invalid_staged = sorted(
+                order_id
+                for order_id in staged_ids
+                if order_id not in terminal_orders
+                or str(terminal_orders[order_id].get("state") or "").lower()
+                not in {"accepted", "filled"}
+            )
+            if invalid_staged:
+                raise RuntimeError(f"extend_range lost staged orders: {invalid_staged}")
+            terminal_accepted = [
+                row
+                for row in terminal_orders.values()
+                if str(row.get("state") or "").lower() == "accepted"
+            ]
+            if _protection_core(
+                [
+                    row
+                    for row in terminal_accepted
+                    if str(row.get("event") or "entry").lower() != "entry"
+                ]
+            ) != protection_before_core:
+                raise RuntimeError("extend_range changed protection orders")
+            if _position_core(
+                [dict(row) for row in terminal.get("positions") or []]
+            ) != position_before_core:
+                raise RuntimeError("extend_range changed open positions")
+            reconciliation = adapter.reconcile(cycle_id)
+            if reconciliation.get("status") != "ok":
+                raise ValueError("paper ledger reconciliation failed")
+            self._activate_staged_range_plan(
+                adjusted,
+                expected_active_plan_id=current_plan_id,
+            )
+        except Exception as exc:
+            cleanup_error = ""
+            if not cancellation_started:
+                try:
+                    adapter.cancel_orders(
+                        cycle_id,
+                        strategy_plan_id=adjusted["strategy_plan_id"],
+                        ts=timestamp,
+                        reason="extend_range_stage_failed",
+                    )
+                    self._settle_selected_execution_mutations(adapter, cycle_id)
+                    cleanup = adapter.snapshot(cycle_id)
+                    remaining_staged = [
+                        row
+                        for row in cleanup.get("orders") or []
+                        if str(row.get("state") or "").lower() == "accepted"
+                        and str(row.get("strategy_plan_id") or "")
+                        == adjusted["strategy_plan_id"]
+                    ]
+                    staged_positions = [
+                        row
+                        for row in cleanup.get("positions") or []
+                        if str(row.get("status") or "").lower() == "open"
+                        and str(row.get("strategy_plan_id") or "")
+                        == adjusted["strategy_plan_id"]
+                    ]
+                    if remaining_staged or staged_positions:
+                        raise RuntimeError("extend_range cleanup left staged live state")
+                    cleanup_accepted = [
+                        dict(row)
+                        for row in cleanup.get("orders") or []
+                        if str(row.get("state") or "").lower() == "accepted"
+                    ]
+                    if _protection_core(
+                        [
+                            row
+                            for row in cleanup_accepted
+                            if str(row.get("event") or "entry").lower() != "entry"
+                        ]
+                    ) != protection_before_core:
+                        raise RuntimeError("extend_range cleanup changed protection orders")
+                    if _position_core(
+                        [dict(row) for row in cleanup.get("positions") or []]
+                    ) != position_before_core:
+                        raise RuntimeError("extend_range cleanup changed open positions")
+                except Exception as cleanup_exc:
+                    cleanup_error = str(cleanup_exc)
+            adjusted["status"] = "partial" if cancellation_started else "failed"
+            current["status"] = "active"
+            self._write_plan(adjusted)
+            self._write_plan(current)
+            failure_detail = str(exc)
+            if cleanup_error:
+                failure_detail = (
+                    f"{failure_detail}; extend_range cleanup failed: {cleanup_error}"
+                )
+            accepted_after_failure = len(
+                self._accepted_orders(cycle_id, adapter=adapter)
+            )
+            self._write_runtime(
+                {
+                    **runtime,
+                    "actual_state": (
+                        "error"
+                        if cancellation_started or cleanup_error
+                        else "running"
+                    ),
+                    "updated_at": _timestamp(now),
+                    "last_action": "extend_range",
+                    "last_error": failure_detail,
+                    "accepted_order_count": accepted_after_failure,
+                    "accepted_order_count_known": True,
+                }
+            )
+            raise
+
+        accepted_after = self._accepted_orders(cycle_id, adapter=adapter)
+        running = {
+            **runtime,
+            "actual_state": "running",
+            "updated_at": _timestamp(now),
+            "last_action": "extend_range",
+            "last_error": None,
+            "strategy_plan_id": adjusted["strategy_plan_id"],
+            "strategy_plan_version": adjusted["version"],
+            "preview_id": adjusted["preview_id"],
+            "risk_decision_id": risk_decision["decision_id"],
+            "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
+            "accepted_order_count": len(accepted_after),
+            "accepted_order_count_known": True,
+        }
+        self._write_runtime(running)
+        return {
+            "action": "extend_range",
+            "runtime": running,
+            "plan": adjusted,
+            "effective_range": adjustment["effective_range"],
+            "steps": adjustment["steps"],
+            "orders": receipts,
+            "created_orders": len(receipts),
+            "cancelled_orders": cancelled,
+            "positions_preserved": True,
+            "tp_sl_affected": False,
+            "execution_event": execution_event,
+            "reconciliation": reconciliation,
+            "risk_decision": risk_decision,
+            "idempotent": False,
+        }
+
     def _regrid(
         self,
         cycle_id: str,
@@ -1234,6 +1758,7 @@ class StrategyControlPlane:
         adapter,
         timestamp: str,
         replaced_order_ids: list[str] | None = None,
+        retained_order_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         request = self._grid_risk_request(
             cycle_id,
@@ -1246,6 +1771,7 @@ class StrategyControlPlane:
             adapter=adapter,
             timestamp=timestamp,
             replaced_order_ids=replaced_order_ids,
+            retained_order_ids=retained_order_ids,
         )
         decision = self.risk_port.evaluate(request)
         self.risk_store.persist(decision)
@@ -1264,6 +1790,7 @@ class StrategyControlPlane:
             adapter=adapter,
             timestamp=timestamp,
             replaced_order_ids=replaced_order_ids,
+            retained_order_ids=retained_order_ids,
         )
         return assert_matching_risk_decision(self.risk_port, decision, current_request).to_dict()
 
@@ -1280,6 +1807,7 @@ class StrategyControlPlane:
         adapter,
         timestamp: str,
         replaced_order_ids: list[str] | None,
+        retained_order_ids: list[str] | None,
     ):
         return build_grid_risk_request(
             checked_at=timestamp,
@@ -1294,6 +1822,7 @@ class StrategyControlPlane:
             policy=self.risk_port.resolve_policy(self.config),
             evaluator=self.risk_port.evaluator_metadata(),
             replaced_order_ids=replaced_order_ids,
+            retained_order_ids=retained_order_ids,
         )
 
     def _stop(
@@ -1582,6 +2111,19 @@ class StrategyControlPlane:
             "is_synthetic": False,
         })
 
+    @staticmethod
+    def _settle_selected_execution_mutations(adapter, cycle_id: str) -> dict[str, Any] | None:
+        """Flush accepted/cancel commands without injecting a synthetic market tick."""
+
+        if str(getattr(adapter, "name", "")) != "nautilus_paper":
+            return None
+        flush = getattr(adapter, "flush_commands", None)
+        if not callable(flush):
+            raise RuntimeError(
+                "nautilus paper adapter cannot flush commands without market events"
+            )
+        return flush(cycle_id)
+
     def _cancel_pending(
         self,
         cycle_id: str,
@@ -1613,11 +2155,65 @@ class StrategyControlPlane:
         plan["status"] = "active"
         self._write_plan(plan)
 
+    def _activate_staged_range_plan(
+        self,
+        plan: dict[str, Any],
+        *,
+        expected_active_plan_id: str,
+    ) -> None:
+        """Atomically swap two same-cycle plans after edge mutation verification."""
+
+        cycle_id = str(plan.get("cycle_id") or "")
+        target_id = str(plan.get("strategy_plan_id") or "")
+        if not cycle_id or not target_id or not expected_active_plan_id:
+            raise ValueError("range adjustment activation identity is incomplete")
+        path = self._plans_path(cycle_id)
+        rows = [dict(row) for row in load_json(path) if isinstance(row, dict)]
+        target = next(
+            (row for row in rows if str(row.get("strategy_plan_id") or "") == target_id),
+            None,
+        )
+        current = next(
+            (
+                row
+                for row in rows
+                if str(row.get("strategy_plan_id") or "")
+                == expected_active_plan_id
+            ),
+            None,
+        )
+        if not target or str(target.get("status") or "") != "staging":
+            raise RuntimeError("range adjustment staging plan is unavailable")
+        if not current or str(current.get("status") or "") != "active":
+            raise RuntimeError("range adjustment source plan is no longer active")
+        foreign_active = [
+            row
+            for row in self._all_active_plans()
+            if str(row.get("strategy_plan_id") or "") != expected_active_plan_id
+        ]
+        if foreign_active:
+            raise RuntimeError("another production plan is active")
+        for row in rows:
+            row_id = str(row.get("strategy_plan_id") or "")
+            if row_id == expected_active_plan_id:
+                row["status"] = "superseded"
+            elif row_id == target_id:
+                row["status"] = "active"
+        write_json(path, rows)
+        plan["status"] = "active"
+
     def _proposals_path(self, cycle_id: str) -> Path:
         return self.root / "proposals" / f"{cycle_id}.json"
 
     def _plans_path(self, cycle_id: str) -> Path:
         return self.root / "plans" / f"{cycle_id}.json"
+
+    def _next_plan_version(self, cycle_id: str) -> int:
+        versions = [
+            int(row.get("version") or 0)
+            for row in load_json(self._plans_path(cycle_id))
+        ]
+        return max(versions, default=0) + 1
 
     def _write_plan(self, plan: dict[str, Any]) -> None:
         path = self._plans_path(str(plan["cycle_id"]))
@@ -1630,6 +2226,263 @@ class StrategyControlPlane:
         if not folder.exists():
             return []
         return [row for path in folder.glob("*.json") for row in load_json(path) if row.get("status") == "active"]
+
+
+def _required_order_ids(rows: list[dict[str, Any]], label: str) -> list[str]:
+    order_ids = [str(row.get("order_id") or "").strip() for row in rows]
+    if any(not value for value in order_ids):
+        raise ValueError(f"{label} requires an order_id")
+    if len(set(order_ids)) != len(order_ids):
+        raise ValueError(f"{label} contains duplicate order_id")
+    return order_ids
+
+
+def _retained_entry_risk_commands(
+    accepted_entries: list[dict[str, Any]],
+    *,
+    plan_history: list[dict[str, Any]],
+    candidate_plan: dict[str, Any],
+    timestamp: str,
+) -> list[dict[str, Any]]:
+    """Bind each retained engine order to its exact planned SL/TP economics."""
+
+    references = [
+        {
+            **dict(order),
+            "_strategy_plan_id": str(plan.get("strategy_plan_id") or ""),
+            "_strategy_plan_version": plan.get("version"),
+        }
+        for plan in plan_history
+        for order in (plan.get("grid") or {}).get("orders") or []
+        if isinstance(order, dict)
+    ]
+    context = (
+        dict(candidate_plan.get("execution_context") or {})
+        if isinstance(candidate_plan.get("execution_context"), dict)
+        else {}
+    )
+    market = (
+        dict(context.get("market") or {})
+        if isinstance(context.get("market"), dict)
+        else {}
+    )
+    symbol = str(market.get("symbol") or "").strip()
+    market_price = _positive_number(market.get("price"), "execution market context price")
+    if not symbol:
+        raise ValueError("execution market context symbol is required")
+
+    commands: list[dict[str, Any]] = []
+    for row in accepted_entries:
+        order_id = str(row.get("order_id") or "").strip()
+        if not order_id:
+            raise ValueError("retained entry requires an order_id")
+        side = str(row.get("side") or "").lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("retained entry side is invalid")
+        price = _positive_number(row.get("price"), "retained entry price")
+        source_plan_id = str(row.get("strategy_plan_id") or "")
+        candidates = [
+            planned
+            for planned in references
+            if str(planned.get("side") or "").lower() == side
+            and _same_core_number(planned.get("price"), price)
+        ]
+        if source_plan_id:
+            candidates = [
+                planned
+                for planned in candidates
+                if str(planned.get("_strategy_plan_id") or "") == source_plan_id
+            ]
+        if len(candidates) > 1:
+            raise ValueError(f"retained entry risk reference is ambiguous:{order_id}")
+        planned = candidates[0] if candidates else {}
+        quantity = _positive_number(
+            row.get("quantity", planned.get("quantity")),
+            "retained entry quantity",
+        )
+        sl = _positive_number(row.get("sl", planned.get("sl")), "retained entry sl")
+        tp = _positive_number(row.get("tp", planned.get("tp")), "retained entry tp")
+        commands.append(
+            {
+                "cycle_id": str(candidate_plan.get("cycle_id") or ""),
+                "ts": timestamp,
+                "symbol": symbol,
+                "side": side,
+                "event": "entry",
+                "order_type": str(row.get("order_type") or "limit").lower(),
+                "price": price,
+                "market_price": market_price,
+                "quantity": quantity,
+                "notional": price * quantity,
+                "sl": sl,
+                "tp": tp,
+                "source": "existing_execution_order",
+                "source_fill_id": f"risk-retained:{order_id}",
+                "existing_order_id": order_id,
+                "strategy_plan_id": source_plan_id
+                or str(planned.get("_strategy_plan_id") or ""),
+                "strategy_plan_version": row.get(
+                    "strategy_plan_version",
+                    planned.get("_strategy_plan_version"),
+                ),
+            }
+        )
+    return commands
+
+
+def _entry_core(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+    return sorted(
+        (
+            str(row.get("order_id") or ""),
+            str(row.get("side") or "").lower(),
+            str(row.get("event") or "entry").lower(),
+            str(row.get("order_type") or "").lower(),
+            _core_number(row.get("price")),
+            _core_number(row.get("quantity")),
+            _core_number(row.get("sl")),
+            _core_number(row.get("tp")),
+            str(row.get("strategy_plan_id") or ""),
+            str(row.get("strategy_plan_version") or ""),
+        )
+        for row in rows
+    )
+
+
+def _protection_core(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+    return sorted(
+        (
+            str(row.get("order_id") or ""),
+            str(row.get("state") or "").lower(),
+            str(row.get("side") or "").lower(),
+            str(row.get("event") or "").lower(),
+            str(row.get("order_type") or "").lower(),
+            _core_number(row.get("price")),
+            _core_number(row.get("quantity")),
+            str(row.get("trade_id") or ""),
+            str(row.get("position_id") or ""),
+            str(row.get("strategy_plan_id") or ""),
+        )
+        for row in rows
+    )
+
+
+def _position_core(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+    return sorted(
+        (
+            str(row.get("position_id") or ""),
+            str(row.get("trade_id") or ""),
+            str(row.get("status") or "").lower(),
+            str(row.get("side") or "").lower(),
+            _core_number(
+                row.get("remaining_units", row.get("remaining_quantity", row.get("quantity")))
+            ),
+            _core_number(row.get("entry_price")),
+            _core_number(row.get("sl")),
+            _core_number(row.get("tp")),
+            str(row.get("strategy_plan_id") or ""),
+        )
+        for row in rows
+        if str(row.get("status") or "").lower() == "open"
+    )
+
+
+def _core_number(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{float(value):.8f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _same_core_number(left: Any, right: Any) -> bool:
+    try:
+        left_value = float(left)
+        right_value = float(right)
+    except (TypeError, ValueError):
+        return False
+    return abs(left_value - right_value) <= max(1e-8, abs(right_value) * 1e-8)
+
+
+def _extend_range_request_fingerprint(
+    from_plan_id: str,
+    requested_range: dict[str, Any],
+) -> str:
+    raw = json.dumps(
+        {
+            "from_plan_id": str(from_plan_id),
+            "requested_range": {
+                "low": float(requested_range["low"]),
+                "high": float(requested_range["high"]),
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _rearm_completed_edge_commands(
+    commands: list[dict[str, Any]],
+    execution_orders: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Give a completed edge lifecycle a new deterministic command identity."""
+
+    rearmed: list[dict[str, Any]] = []
+    for command in commands:
+        plan_id = str(command.get("strategy_plan_id") or "")
+        side = str(command.get("side") or "").lower()
+        price = command.get("price")
+        completed_count = sum(
+            1
+            for row in execution_orders
+            if str(row.get("event") or "entry").lower() == "entry"
+            and str(row.get("state") or "").lower() == "filled"
+            and str(row.get("strategy_plan_id") or "") == plan_id
+            and str(row.get("side") or "").lower() == side
+            and _same_core_number(row.get("price"), price)
+        )
+        if not completed_count:
+            rearmed.append(dict(command))
+            continue
+        source_id = str(command.get("source_fill_id") or "")
+        if not source_id:
+            raise ValueError("edge rearm requires source_fill_id")
+        rearmed.append(
+            {
+                **command,
+                "source_fill_id": f"{source_id}:rearm:{completed_count}",
+            }
+        )
+    return rearmed
+
+
+def _matching_staged_range_adjustment(
+    plans: list[Any],
+    *,
+    from_plan_id: str,
+    request_fingerprint: str,
+) -> dict[str, Any]:
+    candidates = []
+    matches = []
+    for row in plans:
+        if not isinstance(row, dict) or str(row.get("status") or "") != "staging":
+            continue
+        adjustment = (
+            dict(row.get("range_adjustment") or {})
+            if isinstance(row.get("range_adjustment"), dict)
+            else {}
+        )
+        if str(adjustment.get("from_plan_id") or "") != from_plan_id:
+            continue
+        candidates.append(dict(row))
+        if str(adjustment.get("request_fingerprint") or "") == request_fingerprint:
+            matches.append(dict(row))
+    if candidates and not matches:
+        raise ValueError("range_adjustment_in_progress")
+    if len(matches) > 1:
+        raise RuntimeError("multiple staged range adjustments match one request")
+    return matches[0] if matches else {}
 
 
 def normalize_proposal(payload: dict[str, Any], *, now: str | None = None, legacy: bool = False) -> dict[str, Any]:

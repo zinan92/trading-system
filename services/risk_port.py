@@ -71,12 +71,14 @@ def build_grid_risk_request(
     policy: Mapping[str, Any],
     evaluator: Mapping[str, Any],
     replaced_order_ids: list[str] | None = None,
+    retained_order_ids: list[str] | None = None,
 ) -> RiskRequest:
     candidate = _grid_candidate(
         plan,
         commands,
         intent=intent,
         replaced_order_ids=replaced_order_ids or [],
+        retained_order_ids=retained_order_ids or [],
     )
     return build_risk_request(
         checked_at=checked_at,
@@ -397,6 +399,7 @@ def _normalized_risk_command(command: Mapping[str, Any]) -> dict[str, Any]:
     identity = str(command.get("source_fill_id") or command.get("command_id") or "")
     return {
         "command_id": identity or f"manual-command-{_digest(identity_payload)}",
+        "existing_order_id": str(command.get("existing_order_id") or ""),
         **identity_payload,
     }
 
@@ -407,6 +410,7 @@ def _grid_candidate(
     *,
     intent: str,
     replaced_order_ids: list[str],
+    retained_order_ids: list[str],
 ) -> dict[str, Any]:
     grid = plan.get("grid") if isinstance(plan.get("grid"), Mapping) else {}
     price_range = plan.get("range") if isinstance(plan.get("range"), Mapping) else {}
@@ -432,4 +436,5 @@ def _grid_candidate(
         "leverage": _finite_positive(grid.get("leverage")),
         "commands": normalized_commands,
         "replaced_order_ids": sorted({str(value) for value in replaced_order_ids if str(value)}),
+        "retained_order_ids": sorted({str(value) for value in retained_order_ids if str(value)}),
     }

@@ -410,6 +410,96 @@ def test_deferred_mode_queues_many_events_and_replays_the_batch_once(tmp_path: P
     assert len(load_json(adapter.root / "processed_commands" / f"{CYCLE_ID}.json")) == 1
 
 
+def test_command_flush_replays_pending_commands_without_market_events(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    attempts = []
+
+    def replay(_preflight: Path, _input: Path, _output: Path) -> dict:
+        attempts.append(1)
+        return _candidate(CYCLE_ID)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    adapter.process_market_event({
+        "cycle_id": CYCLE_ID,
+        "event_id": "processed-baseline",
+        "ts_event": "2026-07-10T01:00:00+00:00",
+        "price": 101.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    })
+    adapter.flush(CYCLE_ID)
+    attempts.clear()
+    adapter.submit_order({
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "source_fill_id": "command-only-1",
+    })
+
+    result = adapter.flush_commands(CYCLE_ID)
+
+    assert result["status"] == "replayed"
+    assert result["processed_event_count"] == 0
+    assert result["processed_command_count"] == 1
+    assert attempts == [1]
+    assert [
+        row["event_id"]
+        for row in load_json(adapter.root / "processed_events" / f"{CYCLE_ID}.json")
+    ] == ["processed-baseline"]
+
+
+def test_command_flush_fails_closed_when_market_event_is_pending(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    attempts = []
+
+    def replay(_preflight: Path, _input: Path, _output: Path) -> dict:
+        attempts.append(1)
+        return _candidate(CYCLE_ID)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    queued = adapter.process_market_event({
+        "cycle_id": CYCLE_ID,
+        "event_id": "pending-event",
+        "ts_event": "2026-07-10T01:01:00+00:00",
+        "price": 100.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    })
+    assert queued["status"] == "queued"
+
+    with pytest.raises(RuntimeError, match="pending market events"):
+        adapter.flush_commands(CYCLE_ID)
+
+    assert attempts == []
+    assert load_json(adapter.root / "processed_events" / f"{CYCLE_ID}.json") == []
+
+
 def test_persists_idempotent_cancel_commands_for_authoritative_order_ids(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"

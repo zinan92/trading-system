@@ -1433,6 +1433,853 @@ def test_regrid_stages_every_replacement_before_cancel_and_advances_market_only_
     assert "process" not in adapter.events[:cancel_index]
 
 
+def test_edge_adjustment_preserves_internal_orders_positions_and_fixed_sizing(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original_plan = started["plan"]
+    adapter = build_execution_engine_adapter(output)
+    accepted = [
+        row
+        for row in adapter.snapshot(cycle_id)["orders"]
+        if row["state"] == "accepted" and row.get("event") == "entry"
+    ]
+    filled_level = max(
+        (row for row in accepted if row["side"] == "buy"),
+        key=lambda row: row["price"],
+    )
+    adapter.process_market_event(
+        {
+            "cycle_id": cycle_id,
+            "ts_event": "2026-07-05T01:41:00+00:00",
+            "price": filled_level["price"],
+            "fresh": True,
+            "is_synthetic": False,
+            "source": "canonical_test_feed",
+        }
+    )
+    before = adapter.snapshot(cycle_id)
+    open_positions_before = [
+        deepcopy(row)
+        for row in before["positions"]
+        if row["status"] == "open"
+    ]
+    accepted_before = [
+        deepcopy(row)
+        for row in before["orders"]
+        if row["state"] == "accepted" and row.get("event") == "entry"
+    ]
+    spacing = float(original_plan["grid"]["spacing"])
+    requested = {
+        "expected_strategy_plan_id": original_plan["strategy_plan_id"],
+        "range": {
+            "low": float(original_plan["range"]["low"]) - spacing * 0.8,
+            "high": float(original_plan["range"]["high"]) - spacing * 0.8,
+        },
+    }
+
+    adjusted = plane.control(
+        cycle_id,
+        "extend_range",
+        requested,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )
+    terminal = adapter.snapshot(cycle_id)
+    terminal_by_id = {row["order_id"]: row for row in terminal["orders"]}
+    low = adjusted["effective_range"]["low"]
+    high = adjusted["effective_range"]["high"]
+    retained_before = [row for row in accepted_before if low <= row["price"] <= high]
+    outside_before = [row for row in accepted_before if not low <= row["price"] <= high]
+
+    assert adjusted["steps"] == {"low": 1, "high": -1}
+    assert adjusted["created_orders"] == 1
+    assert adjusted["cancelled_orders"] == len(outside_before) == 1
+    for row in retained_before:
+        after = terminal_by_id[row["order_id"]]
+        assert after["state"] in {"accepted", "filled"}
+        assert after["price"] == row["price"]
+        assert after["quantity"] == row["quantity"]
+        assert after["strategy_plan_id"] == row["strategy_plan_id"]
+    assert terminal_by_id[outside_before[0]["order_id"]]["state"] == "cancelled"
+    assert [
+        {key: row.get(key) for key in ("trade_id", "status", "side", "remaining_units", "entry_price", "sl", "tp", "strategy_plan_id")}
+        for row in terminal["positions"]
+        if row["status"] == "open"
+    ] == [
+        {key: row.get(key) for key in ("trade_id", "status", "side", "remaining_units", "entry_price", "sl", "tp", "strategy_plan_id")}
+        for row in open_positions_before
+    ]
+    assert adjusted["positions_preserved"] is True
+    assert adjusted["tp_sl_affected"] is False
+    assert adjusted["plan"]["grid"]["spacing"] == original_plan["grid"]["spacing"]
+    assert adjusted["plan"]["grid"]["notional_per_grid"] == original_plan["grid"]["notional_per_grid"]
+    assert adjusted["plan"]["grid"]["notional_mode"] == original_plan["grid"]["notional_mode"]
+    assert adjusted["risk_decision"]["outcome"] == "allow"
+    assert adjusted["risk_decision"]["request"]["candidate"]["retained_order_ids"] == sorted(
+        row["order_id"] for row in retained_before
+    )
+
+    retry = plane.control(
+        cycle_id,
+        "extend_range",
+        requested,
+        market=market(close=111.0),
+        account=account_context(1.0),
+        now="2026-07-05T01:43:00+00:00",
+    )
+    assert retry["idempotent"] is True
+    assert retry["created_orders"] == retry["cancelled_orders"] == 0
+
+
+def test_edge_adjustment_risk_rejects_before_submit_or_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original = started["plan"]
+    real = build_execution_engine_adapter(output)
+
+    class RecordingAdapter:
+        name = real.name
+
+        def __init__(self) -> None:
+            self.submissions = 0
+            self.cancellations = 0
+
+        def submit_order(self, command: dict) -> dict:
+            self.submissions += 1
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            self.cancellations += 1
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return real.snapshot(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            return real.reconcile(requested_cycle)
+
+    adapter = RecordingAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+    spacing = float(original["grid"]["spacing"])
+
+    with pytest.raises(ValueError, match="plan_loss_budget_exceeded|projected_margin_exceeded"):
+        plane.control(
+            cycle_id,
+            "extend_range",
+            {
+                "expected_strategy_plan_id": original["strategy_plan_id"],
+                "range": {
+                    "low": float(original["range"]["low"]) - spacing,
+                    "high": float(original["range"]["high"]) + spacing,
+                },
+            },
+            market=market(),
+            account=account_context(10.0),
+            now="2026-07-05T01:42:00+00:00",
+        )
+
+    assert adapter.submissions == 0
+    assert adapter.cancellations == 0
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == original["strategy_plan_id"]
+
+
+def test_edge_contraction_can_remove_last_pending_entry_without_replacement(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original = started["plan"]
+    adapter = build_execution_engine_adapter(output)
+    accepted = [
+        row for row in adapter.snapshot(cycle_id)["orders"] if row["state"] == "accepted"
+    ]
+    last = max(accepted, key=lambda row: row["price"])
+    adapter.cancel_orders(
+        cycle_id,
+        order_ids=[row["order_id"] for row in accepted if row["order_id"] != last["order_id"]],
+        ts="2026-07-05T01:41:00+00:00",
+        reason="test_setup",
+    )
+    spacing = float(original["grid"]["spacing"])
+
+    result = plane.control(
+        cycle_id,
+        "extend_range",
+        {
+            "expected_strategy_plan_id": original["strategy_plan_id"],
+            "range": {
+                "low": float(original["range"]["low"]),
+                "high": float(original["range"]["high"]) - spacing,
+            },
+        },
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )
+
+    assert result["created_orders"] == 0
+    assert result["cancelled_orders"] == 1
+    assert result["risk_decision"]["outcome"] == "allow"
+    assert not [
+        row for row in adapter.snapshot(cycle_id)["orders"] if row["state"] == "accepted"
+    ]
+
+
+def test_edge_adjustment_stage_failure_removes_only_new_plan_orders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original = started["plan"]
+    real = build_execution_engine_adapter(output)
+    original_accepted_ids = {
+        row["order_id"]
+        for row in real.snapshot(cycle_id)["orders"]
+        if row["state"] == "accepted"
+    }
+
+    class FailingAdapter:
+        name = real.name
+
+        def __init__(self) -> None:
+            self.submissions = 0
+
+        def submit_order(self, command: dict) -> dict:
+            self.submissions += 1
+            if self.submissions == 2:
+                raise RuntimeError("injected edge stage failure")
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return real.snapshot(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            return real.reconcile(requested_cycle)
+
+    adapter = FailingAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+    spacing = float(original["grid"]["spacing"])
+
+    with pytest.raises(RuntimeError, match="injected edge stage failure"):
+        plane.control(
+            cycle_id,
+            "extend_range",
+            {
+                "expected_strategy_plan_id": original["strategy_plan_id"],
+                "range": {
+                    "low": float(original["range"]["low"]) - spacing,
+                    "high": float(original["range"]["high"]) + spacing,
+                },
+            },
+            market=market(),
+            account=account_context(1_000_000.0),
+            now="2026-07-05T01:42:00+00:00",
+        )
+
+    terminal = real.snapshot(cycle_id)
+    accepted = {
+        row["order_id"]
+        for row in terminal["orders"]
+        if row["state"] == "accepted"
+    }
+    assert accepted == original_accepted_ids
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == original["strategy_plan_id"]
+    assert plane.runtime_state(cycle_id)["actual_state"] == "running"
+
+
+def test_edge_adjustment_resumes_same_staged_plan_after_process_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessCrash(BaseException):
+        pass
+
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original = started["plan"]
+    real = build_execution_engine_adapter(output)
+    class CrashDuringStage:
+        name = real.name
+
+        def __init__(self) -> None:
+            self.submissions = 0
+
+        def submit_order(self, command: dict) -> dict:
+            self.submissions += 1
+            if self.submissions == 2:
+                raise SimulatedProcessCrash("process exited during edge staging")
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return real.snapshot(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            return real.reconcile(requested_cycle)
+
+    crashing = CrashDuringStage()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: crashing,
+    )
+    spacing = float(original["grid"]["spacing"])
+    request = {
+        "expected_strategy_plan_id": original["strategy_plan_id"],
+        "range": {
+            "low": float(original["range"]["low"]) - spacing,
+            "high": float(original["range"]["high"]) + spacing,
+        },
+    }
+
+    with pytest.raises(SimulatedProcessCrash):
+        plane.control(
+            cycle_id,
+            "extend_range",
+            request,
+            market=market(),
+            account=account_context(1_000_000.0),
+            now="2026-07-05T01:42:00+00:00",
+        )
+    staged = [
+        row
+        for row in load_json(plane._plans_path(cycle_id))
+        if row.get("status") == "staging"
+    ]
+    assert len(staged) == 1
+    assert staged[0]["risk_request_id"].startswith("risk-request-")
+    assert staged[0]["risk_decision_id"].startswith("risk-decision-")
+    assert staged[0]["risk_policy_id"]
+    assert plane.runtime_state(cycle_id)["actual_state"] == "running"
+    with pytest.raises(ValueError, match="range_adjustment_in_progress"):
+        plane.control(
+            cycle_id,
+            "extend_range",
+            {
+                "expected_strategy_plan_id": original["strategy_plan_id"],
+                "range": dict(original["range"]),
+            },
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:42:30+00:00",
+        )
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: real,
+    )
+    resumed = plane.control(
+        cycle_id,
+        "extend_range",
+        request,
+        market=market(),
+        account=account_context(1_000_000.0),
+        now="2026-07-05T01:43:00+00:00",
+    )
+
+    assert resumed["plan"]["strategy_plan_id"] == staged[0]["strategy_plan_id"]
+    assert resumed["plan"]["status"] == "active"
+    assert plane.runtime_state(cycle_id)["actual_state"] == "running"
+    assert (
+        plane.runtime_state(cycle_id)["risk_decision_id"]
+        == resumed["plan"]["risk_decision_id"]
+    )
+    assert not [
+        row
+        for row in load_json(plane._plans_path(cycle_id))
+        if row.get("status") == "staging"
+    ]
+
+
+def test_edge_adjustment_repairs_runtime_after_activation_process_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessCrash(BaseException):
+        pass
+
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original = started["plan"]
+    spacing = float(original["grid"]["spacing"])
+    request = {
+        "expected_strategy_plan_id": original["strategy_plan_id"],
+        "range": {
+            "low": float(original["range"]["low"]) - spacing,
+            "high": float(original["range"]["high"]),
+        },
+    }
+    real_write_runtime = plane._write_runtime
+
+    def crash_after_activation(row: dict) -> None:
+        if (
+            row.get("last_action") == "extend_range"
+            and row.get("strategy_plan_id") != original["strategy_plan_id"]
+        ):
+            raise SimulatedProcessCrash("process exited before runtime repair")
+        real_write_runtime(row)
+
+    monkeypatch.setattr(plane, "_write_runtime", crash_after_activation)
+    with pytest.raises(SimulatedProcessCrash):
+        plane.control(
+            cycle_id,
+            "extend_range",
+            request,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:42:00+00:00",
+        )
+
+    activated = plane.active_plan(cycle_id)
+    assert activated is not None
+    assert activated["strategy_plan_id"] != original["strategy_plan_id"]
+    assert plane.runtime_state(cycle_id)["strategy_plan_id"] == original["strategy_plan_id"]
+
+    monkeypatch.setattr(plane, "_write_runtime", real_write_runtime)
+    repaired = plane.control(
+        cycle_id,
+        "extend_range",
+        request,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:43:00+00:00",
+    )
+
+    assert repaired["idempotent"] is True
+    runtime = plane.runtime_state(cycle_id)
+    assert runtime["strategy_plan_id"] == activated["strategy_plan_id"]
+    assert runtime["risk_decision_id"] == activated["risk_decision_id"]
+    assert runtime["risk_policy_id"] == activated["risk_policy_id"]
+
+
+def test_edge_adjustment_rearms_completed_staged_edge_after_process_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessCrash(BaseException):
+        pass
+
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original = started["plan"]
+    real = build_execution_engine_adapter(output)
+    real.cancel_orders(
+        cycle_id,
+        strategy_plan_id=original["strategy_plan_id"],
+        ts="2026-07-05T01:41:00+00:00",
+        reason="isolate_staged_rearm_test",
+    )
+    assert not [
+        row
+        for row in real.snapshot(cycle_id)["orders"]
+        if row.get("state") == "accepted"
+    ]
+
+    class CrashDuringStage:
+        name = real.name
+
+        def __init__(self) -> None:
+            self.submissions = 0
+
+        def submit_order(self, command: dict) -> dict:
+            self.submissions += 1
+            if self.submissions == 2:
+                raise SimulatedProcessCrash("process exited during edge staging")
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return real.snapshot(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            return real.reconcile(requested_cycle)
+
+    crashing = CrashDuringStage()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: crashing,
+    )
+    spacing = float(original["grid"]["spacing"])
+    request = {
+        "expected_strategy_plan_id": original["strategy_plan_id"],
+        "range": {
+            "low": float(original["range"]["low"]) - spacing,
+            "high": float(original["range"]["high"]) + spacing,
+        },
+    }
+    with pytest.raises(SimulatedProcessCrash):
+        plane.control(
+            cycle_id,
+            "extend_range",
+            request,
+            market=market(),
+            account=account_context(1_000_000.0),
+            now="2026-07-05T01:42:00+00:00",
+        )
+    staged = next(
+        row
+        for row in load_json(plane._plans_path(cycle_id))
+        if row.get("status") == "staging"
+    )
+    staged_order = next(
+        row
+        for row in real.snapshot(cycle_id)["orders"]
+        if row.get("state") == "accepted"
+        and row.get("strategy_plan_id") == staged["strategy_plan_id"]
+    )
+    real.process_market_event({
+        "cycle_id": cycle_id,
+        "ts_event": "2026-07-05T01:42:10+00:00",
+        "price": staged_order["price"],
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "canonical_test_feed",
+    })
+    staged_position = next(
+        row
+        for row in real.snapshot(cycle_id)["positions"]
+        if row.get("status") == "open"
+        and row.get("strategy_plan_id") == staged["strategy_plan_id"]
+    )
+    real.process_market_event({
+        "cycle_id": cycle_id,
+        "ts_event": "2026-07-05T01:42:20+00:00",
+        "price": staged_position["tp"],
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "canonical_test_feed",
+    })
+    assert not [
+        row
+        for row in real.snapshot(cycle_id)["positions"]
+        if row.get("status") == "open"
+        and row.get("strategy_plan_id") == staged["strategy_plan_id"]
+    ]
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: real,
+    )
+    resumed = plane.control(
+        cycle_id,
+        "extend_range",
+        request,
+        market=market(),
+        account=account_context(1_000_000.0),
+        now="2026-07-05T01:43:00+00:00",
+    )
+
+    rearmed = [
+        row
+        for row in real.snapshot(cycle_id)["orders"]
+        if row.get("state") == "accepted"
+        and row.get("strategy_plan_id") == staged["strategy_plan_id"]
+        and row.get("side") == staged_order["side"]
+        and row.get("price") == pytest.approx(staged_order["price"])
+    ]
+    assert len(rearmed) == 1
+    assert rearmed[0]["order_id"] != staged_order["order_id"]
+    assert resumed["plan"]["strategy_plan_id"] == staged["strategy_plan_id"]
+    assert resumed["plan"]["status"] == "active"
+
+
+def test_edge_plan_activation_swaps_same_cycle_statuses_in_one_atomic_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    current = plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    staged = {
+        **deepcopy(current),
+        "strategy_plan_id": f"{current['strategy_plan_id']}-edge",
+        "version": int(current["version"]) + 1,
+        "status": "staging",
+    }
+    plane._write_plan(staged)
+    real_write_json = strategy_control_plane_module.write_json
+    plan_writes: list[list[dict]] = []
+
+    def record_write(path: Path, rows: list[dict]) -> None:
+        if path == plane._plans_path(cycle_id):
+            plan_writes.append(deepcopy(rows))
+        real_write_json(path, rows)
+
+    monkeypatch.setattr(strategy_control_plane_module, "write_json", record_write)
+    plane._activate_staged_range_plan(
+        staged,
+        expected_active_plan_id=current["strategy_plan_id"],
+    )
+
+    assert len(plan_writes) == 1
+    statuses = {
+        row["strategy_plan_id"]: row["status"]
+        for row in load_json(plane._plans_path(cycle_id))
+    }
+    assert statuses[current["strategy_plan_id"]] == "superseded"
+    assert statuses[staged["strategy_plan_id"]] == "active"
+
+
+def test_edge_adjustment_post_cancel_failure_keeps_staged_edges_for_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original = started["plan"]
+    real = build_execution_engine_adapter(output)
+
+    class DriftAfterCancel:
+        name = real.name
+
+        def __init__(self) -> None:
+            self.reconciliations = 0
+
+        def submit_order(self, command: dict) -> dict:
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return real.snapshot(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            self.reconciliations += 1
+            if self.reconciliations >= 3:
+                return {"status": "drift", "issues": [{"code": "injected"}]}
+            return real.reconcile(requested_cycle)
+
+    adapter = DriftAfterCancel()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+    spacing = float(original["grid"]["spacing"])
+
+    with pytest.raises(ValueError, match="paper ledger reconciliation failed"):
+        plane.control(
+            cycle_id,
+            "extend_range",
+            {
+                "expected_strategy_plan_id": original["strategy_plan_id"],
+                "range": {
+                    "low": float(original["range"]["low"]) - spacing,
+                    "high": float(original["range"]["high"]) - spacing,
+                },
+            },
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:42:00+00:00",
+        )
+
+    partial = next(
+        row
+        for row in load_json(plane._plans_path(cycle_id))
+        if row.get("status") == "partial"
+    )
+    snapshot = real.snapshot(cycle_id)
+    assert any(
+        row["state"] == "accepted"
+        and row.get("strategy_plan_id") == partial["strategy_plan_id"]
+        for row in snapshot["orders"]
+    )
+    assert plane.runtime_state(cycle_id)["actual_state"] == "error"
+
+
+def test_nautilus_edge_adjustment_flushes_commands_without_injecting_market_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    original = started["plan"]
+    real = build_execution_engine_adapter(output)
+
+    class NautilusCommandFlushAdapter:
+        name = "nautilus_paper"
+
+        def __init__(self) -> None:
+            self.flushes = 0
+
+        def submit_order(self, command: dict) -> dict:
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            snapshot = real.snapshot(requested_cycle, **kwargs)
+            snapshot["engine"] = self.name
+            return snapshot
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            result = real.reconcile(requested_cycle)
+            return {**result, "engine": self.name}
+
+        def flush_commands(self, requested_cycle: str) -> dict:
+            self.flushes += 1
+            return {"status": "ok", "cycle_id": requested_cycle}
+
+        def process_market_event(self, _event: dict) -> dict:
+            raise AssertionError("edge adjustment must not inject a market event")
+
+    adapter = NautilusCommandFlushAdapter()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+    spacing = float(original["grid"]["spacing"])
+    result = plane.control(
+        cycle_id,
+        "extend_range",
+        {
+            "expected_strategy_plan_id": original["strategy_plan_id"],
+            "range": {
+                "low": float(original["range"]["low"]) - spacing,
+                "high": float(original["range"]["high"]),
+            },
+        },
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )
+
+    assert result["runtime"]["actual_state"] == "running"
+    assert adapter.flushes == 1
+
+
 def test_failed_running_adjustment_keeps_previous_grid_and_removes_staged_orders(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
