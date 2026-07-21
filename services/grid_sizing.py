@@ -95,17 +95,23 @@ def _grid_geometry(
     return levels, spacing_ratio, lower_stop, upper_stop, provisional
 
 
-def _orders_at_notional(
+def order_at_notional(
+    order: dict[str, Any],
+    notional: float,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = normalize_execution_command(order, config)
+    price = positive_number(normalized.get("price"), "executable grid price")
+    quantity = _floor_quantity(notional / price, config)
+    return normalize_execution_command({**normalized, "quantity": quantity}, config)
+
+
+def orders_at_notional(
     provisional: list[dict[str, Any]],
     notional: float,
     config: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    orders = []
-    for order in provisional:
-        price = positive_number(order.get("price"), "executable grid price")
-        quantity = _floor_quantity(notional / price, config)
-        orders.append(normalize_execution_command({**order, "quantity": quantity}, config))
-    return orders
+    return [order_at_notional(order, notional, config) for order in provisional]
 
 
 def planned_net_profit_usd(order: dict[str, Any], cost_per_side_rate: float) -> float:
@@ -334,7 +340,7 @@ def build_grid_preview(
         capital_notional_cap = capital_budget / max_simultaneous_levels
         notional = requested_notional if notional_mode == "manual" else capital_notional_cap
         try:
-            orders = _orders_at_notional(provisional_orders, notional, config)
+            orders = orders_at_notional(provisional_orders, notional, config)
         except ValueError as error:
             if (
                 requested_count > 0

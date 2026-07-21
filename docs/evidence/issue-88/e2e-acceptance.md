@@ -30,7 +30,10 @@ reconciliation passes, with zero open positions at capture time. The chart held
 Adversarial review found four follow-ups before Ready: candidate-level venue
 precision fallback, edge-order planned profit, adjusted actual leverage, and
 legacy tests encoding the removed max-loss/2x/12–24-grid contract. All four were
-corrected. Focused post-review validation passed 140 Python tests, 12 Node
+corrected. A second review also caught edge profit being calculated before
+venue normalization; edge price/TP/SL and floor-rounded quantity now share the
+same execution object used by risk and submission. Focused final validation
+passed 141 Python tests, 12 Node
 interaction tests, 2 Playwright tests, and Python 3.9 compilation.
 
 Artifacts `01` through `07` are the baseline, first running grid, refreshed

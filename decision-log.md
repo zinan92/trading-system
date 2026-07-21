@@ -8779,7 +8779,7 @@ auditable datafeed port; broker execution remains a separate port.
 ### Verification
 
 - Focused control-plane, sizing, edge-adjustment, read-model, and static
-  dashboard tests: 140 passed.
+  dashboard tests: 141 passed.
 - Dashboard JavaScript market/history and Range tests: 12 passed.
 - Focused Playwright profit-control and Range acceptance: 2 passed.
 - Real-browser acceptance evidence is recorded under
@@ -8806,6 +8806,9 @@ auditable datafeed port; broker execution remains a separate port.
   explicit 70-grid request must not silently become a different strategy.
 - Edge-only adjustment retains the existing notional. It cannot repair a
   profit shortfall by resizing; it rejects before staging any order.
+- Edge prices, TP/SL, and downward-rounded quantities must pass through the
+  same execution contract before profit, risk, dedupe, or submission. Raw
+  geometry is retained as `requested_price` only for Range membership.
 - Lifecycle tests need account headroom when intentionally adding edges. That
   is test setup for post-risk failure paths, not permission for production to
   bypass the 10x gate.
