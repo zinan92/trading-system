@@ -111,6 +111,7 @@ def build_grid_preview(
     market: dict[str, Any],
     account: dict[str, Any] | None = None,
     config: dict[str, Any],
+    allow_unsafe_manual_preview: bool = False,
 ) -> dict[str, Any]:
     body = dict(payload or {})
     validate_market(market)
@@ -245,7 +246,7 @@ def build_grid_preview(
     if notional_mode == "manual":
         if requested_notional <= 0:
             raise ValueError("manual notional_per_grid must be greater than zero")
-        if requested_notional > safe_notional + 1e-8:
+        if requested_notional > safe_notional + 1e-8 and not allow_unsafe_manual_preview:
             raise ValueError(
                 f"notional_per_grid {requested_notional:.2f} exceeds safe cap {safe_notional:.2f} "
                 "for the selected leverage and risk budget"
@@ -330,11 +331,16 @@ def build_grid_preview(
             "capital_budget": round(capital_budget, 2),
             "capital_notional_cap_per_grid": round(capital_notional_cap, 2),
             "risk_notional_cap_per_grid": round(risk_notional_cap, 2),
+            "safe_notional_cap_per_grid": round(
+                min(capital_notional_cap, risk_notional_cap),
+                2,
+            ),
             "max_simultaneous_same_side_levels": max_simultaneous_levels,
             "actual_leverage": round(max_side_notional / equity, 4) if equity else None,
             "capital_utilization_pct": round(max_side_notional / absolute_notional_ceiling * 100.0, 4),
             "sizing_constraint": "leverage_capacity",
             "risk_budget_exceeded": max_loss > max_loss_budget + 1e-8,
+            "capital_budget_exceeded": max_side_notional > capital_budget + 1e-8,
             "calibration_status": "shadow_candidate",
         },
         "strategy_timeframes": {

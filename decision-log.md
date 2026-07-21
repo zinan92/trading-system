@@ -8392,3 +8392,70 @@ auditable datafeed port; broker execution remains a separate port.
   Nautilus command-only flush, and staged-order-only cleanup.
 - Full-suite execution was intentionally not used for this bounded paper-order
   milestone.
+
+## 2026-07-21 - Read-only Range drag specification and risk preview
+
+### User outcome
+
+- A Range drag can be evaluated before any chart interaction or order mutation:
+  whole-Range movement preserves width, count, and per-grid notional; one-edge
+  movement fixes the opposite edge, preserves count and notional, and recomputes
+  arithmetic spacing or the geometric ratio.
+- The result is one explicit old-to-new specification with current canonical
+  risk, order deltas, position/TP-SL statements, and a disabled confirmation
+  state when current facts do not pass.
+
+### Decisions
+
+- Add `preview_range` as a read-only control action. It requires the exact
+  active StrategyPlan ID and a running runtime, but does not append a control
+  audit, risk decision, plan, order, fill, or runtime record.
+- Keep pointer geometry validation pure and separate from market, account, risk,
+  execution, and persistence adapters.
+- Reuse the existing deterministic grid preview with fixed grid count and fixed
+  manual notional. Only this read-only path may return an over-budget manual
+  preview so the operator can see why confirmation is disabled.
+- Evaluate the candidate through the canonical `replace_pending` risk port
+  against the current trusted market, account, accepted entries, open positions,
+  policy, and reconciliation. The decision is returned but not persisted.
+- Evaluate the current grid through that same canonical port with every accepted
+  entry retained. Old and new margin, actual leverage, maximum loss, and
+  max-side notional therefore share current account/execution facts and one
+  calculation basis.
+- Never apply a sizing recommendation automatically. A second explicit
+  `recalculate_notional_by_risk_budget` preview recomputes the candidate using
+  the fresh server-side loss, projected leverage, and projected margin caps,
+  then advertises the operation only if a trial candidate clears the complete
+  canonical decision; production remains untouched.
+
+### Gotchas
+
+- Additive movement preserves arithmetic spacing because width and count remain
+  fixed. On a geometric grid, additive movement preserves absolute width but
+  necessarily changes the ratio; the old-to-new card exposes that change.
+- Whole-Range equality uses a tight width-relative tolerance, then derives the
+  upper boundary from the authoritative lower-boundary delta. A boundary drag
+  returns the exact stored opposite edge; absolute-price-scaled tolerance must
+  not introduce a tiny hidden width/spacing change.
+- A local geometry risk estimate is not enough. Current open positions or an
+  execution reconciliation problem can still block the canonical risk decision.
+- A positive local cap is not a valid recommendation when open-position loss has
+  consumed the canonical budget. Zero/unavailable canonical recommendations
+  remain unavailable; they are never replaced by the local cap.
+- An unsafe manual notional may be visible only as a read-only preview. Normal
+  start/replace paths retain the strict manual-notional rejection and must run a
+  new canonical risk decision before mutation.
+- Order-delta counts describe a future full replacement. This milestone never
+  performs that replacement and reports zero side effects explicitly.
+
+### Verification
+
+- Geometry, sizing, canonical risk, and control-plane focused suite: 93 passed.
+- Covered whole-Range and fixed-edge geometry, arithmetic/geometric recompute,
+  fixed count/notional, stale plan and current-price gates, exact order delta,
+  over-budget visibility, explicit server-side risk recalculation, open-position
+  old/new risk parity, projected margin/leverage clearance, zero remaining loss
+  budget, high-price near-tolerance width drift, authoritative fixed boundaries,
+  and byte-level proof that plan/runtime/risk/audit artifacts remain unchanged.
+- Ruff and diff checks passed. Full-suite execution was intentionally not used
+  for this read-only calculation milestone.

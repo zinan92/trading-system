@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from services.grid_range_adjustment import build_range_extension
+from services.grid_range_adjustment import build_dragged_range, build_range_extension
 
 
 def market(price: float = 110.0) -> dict:
@@ -203,3 +203,74 @@ def test_adjustment_rejects_range_that_excludes_current_market() -> None:
             accepted_entries=[],
             positions=[],
         )
+
+
+def test_middle_drag_moves_both_boundaries_by_same_delta_and_keeps_width() -> None:
+    result = build_dragged_range(
+        arithmetic_plan(),
+        {"low": 107.5, "high": 127.5},
+        handle="range",
+    )
+
+    assert result["delta"] == {"low": 7.5, "high": 7.5}
+    assert result["width"] == {"old": 20.0, "new": 20.0}
+
+
+@pytest.mark.parametrize(
+    ("handle", "requested", "fixed_boundary"),
+    (
+        ("lower", {"low": 96.0, "high": 120.0}, ("high", 120.0)),
+        ("upper", {"low": 100.0, "high": 126.0}, ("low", 100.0)),
+    ),
+)
+def test_boundary_drag_keeps_the_opposite_boundary_fixed(
+    handle: str,
+    requested: dict[str, float],
+    fixed_boundary: tuple[str, float],
+) -> None:
+    result = build_dragged_range(arithmetic_plan(), requested, handle=handle)
+
+    assert result["new_range"][fixed_boundary[0]] == fixed_boundary[1]
+
+
+def test_drag_geometry_rejects_moving_the_wrong_boundary() -> None:
+    with pytest.raises(ValueError, match="same delta"):
+        build_dragged_range(
+            arithmetic_plan(),
+            {"low": 101.0, "high": 123.0},
+            handle="range",
+        )
+    with pytest.raises(ValueError, match="upper boundary fixed"):
+        build_dragged_range(
+            geometric_plan(),
+            {"low": 99.0, "high": 147.0},
+            handle="lower",
+        )
+
+
+def test_middle_drag_rejects_price_scaled_tolerance_that_would_change_width() -> None:
+    plan = arithmetic_plan()
+    plan["range"] = {"low": 3900.0, "high": 4000.0}
+    with pytest.raises(ValueError, match="same delta"):
+        build_dragged_range(
+            plan,
+            {"low": 3900.00006, "high": 4000.00002},
+            handle="range",
+        )
+
+
+def test_drag_returns_authoritative_stored_fixed_boundary() -> None:
+    plan = arithmetic_plan()
+    lower = build_dragged_range(
+        plan,
+        {"low": 99.0, "high": 120.0 + 1e-12},
+        handle="lower",
+    )
+    upper = build_dragged_range(
+        plan,
+        {"low": 100.0 - 1e-12, "high": 121.0},
+        handle="upper",
+    )
+
+    assert lower["new_range"]["high"] == 120.0
+    assert upper["new_range"]["low"] == 100.0

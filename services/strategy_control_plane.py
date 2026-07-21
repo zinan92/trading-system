@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import fcntl
 import json
+import math
 import os
 import threading
 from collections import Counter
@@ -26,10 +27,15 @@ from services.control_audit import append_control_event, build_control_event, re
 from services.grid_sizing import (
     GRID_STYLES,
     build_grid_preview,
+    number_or as _number_or,
     validate_market as _validate_market,
     positive_number as _positive_number,
 )
-from services.grid_range_adjustment import build_range_extension, range_adjustment_steps
+from services.grid_range_adjustment import (
+    build_dragged_range,
+    build_range_extension,
+    range_adjustment_steps,
+)
 from services.journal_store import load_json, write_json
 from services.risk_policy_composition import (
     build_risk_decision_store,
@@ -625,6 +631,316 @@ class StrategyControlPlane:
         # the control plane owns only locking, persistence and runtime state.
         return build_grid_preview(cycle_id, payload, market=market, account=account, config=self.config)
 
+    def preview_range_adjustment(
+        self,
+        cycle_id: str,
+        payload: dict[str, Any],
+        *,
+        market: dict[str, Any],
+        account: dict[str, Any],
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Return geometry, order delta, and current canonical risk without writes."""
+
+        current = self.active_plan(cycle_id)
+        runtime = self.runtime_state(cycle_id)
+        if not current or runtime.get("actual_state") != "running":
+            raise ValueError("range drag preview requires a running StrategyPlan")
+        expected_plan_id = str(payload.get("expected_strategy_plan_id") or "")
+        if expected_plan_id != str(current.get("strategy_plan_id") or ""):
+            raise ValueError("strategy_plan_changed")
+        requested = payload.get("range") if isinstance(payload.get("range"), dict) else {}
+        geometry = build_dragged_range(
+            current,
+            requested,
+            handle=str(payload.get("handle") or ""),
+        )
+        grid = dict(current.get("grid") or {})
+        notional = _positive_number(
+            grid.get("notional_per_grid"),
+            "current notional_per_grid",
+        )
+        def build_candidate(fixed_notional: float) -> dict[str, Any]:
+            return build_grid_preview(
+                cycle_id,
+                {
+                "direction": current.get("direction"),
+                "style": current.get("style"),
+                "out_of_range": grid.get("out_of_range"),
+                "range": geometry["new_range"],
+                "grid": {
+                    "count": grid.get("count"),
+                    "mode": grid.get("mode"),
+                    "notional_per_grid": fixed_notional,
+                    "notional_mode": "manual",
+                    "out_of_range": grid.get("out_of_range"),
+                },
+                "risk_budget": {"leverage": grid.get("leverage")},
+                },
+                market=market,
+                account=account,
+                config=self.config,
+                allow_unsafe_manual_preview=True,
+            )
+
+        candidate = build_candidate(notional)
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        execution = adapter.snapshot(cycle_id)
+        accepted_orders = [
+            dict(row)
+            for row in execution.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
+        accepted_entries = [
+            row
+            for row in accepted_orders
+            if str(row.get("event") or "entry").lower() == "entry"
+        ]
+        replaced_order_ids = _required_order_ids(
+            accepted_entries,
+            "range preview replaced entry",
+        )
+        timestamp = _timestamp(now)
+        current_risk_commands = _retained_entry_risk_commands(
+            accepted_entries,
+            plan_history=[
+                dict(row)
+                for row in load_json(self._plans_path(cycle_id))
+                if isinstance(row, dict)
+            ],
+            candidate_plan=current,
+            timestamp=timestamp,
+        )
+        current_risk_request = self._grid_risk_request(
+            cycle_id,
+            action_class="replace_pending",
+            intent="preview_current_grid_risk",
+            plan=current,
+            commands=current_risk_commands,
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+            replaced_order_ids=[],
+            retained_order_ids=replaced_order_ids,
+        )
+        current_risk_decision = self.risk_port.evaluate(
+            current_risk_request
+        ).to_dict()
+        def evaluate_candidate(
+            preview: dict[str, Any],
+        ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+            candidate_plan = {
+                **current,
+                "strategy_plan_id": f"range-preview-plan:{preview['preview_id']}",
+                "version": int(current.get("version") or 0) + 1,
+                "status": "preview",
+                "locked_at": timestamp,
+                "range": dict(preview["range"]),
+                "grid": {
+                    **dict(preview["grid"]),
+                    "orders": list(preview["orders"]),
+                },
+                "risk_budget": dict(preview["risk"]),
+                "preview_id": preview["preview_id"],
+                "execution_context": {
+                    **dict(current.get("execution_context") or {}),
+                    "market": {
+                        "price": _positive_number(
+                            market.get("latest_close"),
+                            "market latest_close",
+                        ),
+                        "symbol": str(market.get("symbol") or "GOLD"),
+                        "timestamp": market.get("latest_timestamp"),
+                        "provider": market.get("provider"),
+                        "timeframe": market.get("timeframe"),
+                    },
+                },
+            }
+            commands = build_plan_grid_entry_commands(
+                candidate_plan,
+                timestamp=timestamp,
+            )
+            risk_request = self._grid_risk_request(
+                cycle_id,
+                action_class="replace_pending",
+                intent="preview_range_drag",
+                plan=candidate_plan,
+                commands=commands,
+                account=account,
+                market=market,
+                adapter=adapter,
+                timestamp=timestamp,
+                replaced_order_ids=replaced_order_ids,
+                retained_order_ids=[],
+            )
+            decision = self.risk_port.evaluate(risk_request).to_dict()
+            return commands, decision
+
+        commands, risk_decision = evaluate_candidate(candidate)
+        local_risk = dict(candidate.get("risk") or {})
+        local_budget_blocked = bool(
+            local_risk.get("risk_budget_exceeded")
+            or local_risk.get("capital_budget_exceeded")
+        )
+        blockers = list(risk_decision.get("blockers") or [])
+        budget_blocker_codes = {
+            "plan_loss_budget_exceeded",
+            "leverage_limit_exceeded",
+            "projected_leverage_exceeded",
+            "projected_margin_exceeded",
+        }
+        canonical_budget_blocked = any(
+            str(row.get("code") or "") in budget_blocker_codes
+            for row in blockers
+            if isinstance(row, dict)
+        )
+        recommendation = dict(risk_decision.get("recommendation") or {})
+        metrics = dict(risk_decision.get("metrics") or {})
+        limits = dict(risk_decision.get("limits") or {})
+        candidate_by_side = dict(metrics.get("candidate_notional_by_side") or {})
+        existing_by_side = dict(metrics.get("existing_notional_by_side") or {})
+        equity = _number_or(metrics.get("equity"), 0.0)
+        max_leverage = _number_or(limits.get("max_leverage"), 0.0)
+        margin_budget = _number_or(limits.get("margin_budget"), 0.0)
+        requested_leverage = _number_or(grid.get("leverage"), 0.0)
+        notional_caps = []
+        if recommendation.get("available") is True:
+            recommended = _number_or(
+                recommendation.get("recommended_notional_per_grid"),
+                0.0,
+            )
+            if recommended > 0:
+                notional_caps.append(recommended)
+        local_cap = _number_or(local_risk.get("safe_notional_cap_per_grid"), 0.0)
+        if local_cap > 0:
+            notional_caps.append(local_cap)
+        leverage_capacity = equity * max_leverage
+        margin_capacity = margin_budget * requested_leverage
+        for side in ("buy", "sell"):
+            candidate_side = _number_or(candidate_by_side.get(side), 0.0)
+            if candidate_side <= 0:
+                continue
+            existing_side = _number_or(existing_by_side.get(side), 0.0)
+            for capacity in (leverage_capacity, margin_capacity):
+                remaining = max(0.0, capacity - existing_side)
+                notional_caps.append(notional * remaining / candidate_side)
+        safe_notional = (
+            math.floor(min(notional_caps) * 100.0) / 100.0
+            if notional_caps
+            else 0.0
+        )
+        recalculated = bool(payload.get("recalculate_notional_by_risk_budget"))
+        trial_candidate: dict[str, Any] | None = None
+        trial_commands: list[dict[str, Any]] | None = None
+        trial_decision: dict[str, Any] | None = None
+        trial_local_blocked = True
+        if (
+            safe_notional > 0
+            and safe_notional < notional - 1e-8
+            and (local_budget_blocked or canonical_budget_blocked)
+            and recommendation.get("available") is True
+        ):
+            trial_candidate = build_candidate(safe_notional)
+            trial_commands, trial_decision = evaluate_candidate(
+                trial_candidate
+            )
+            trial_local_risk = dict(trial_candidate.get("risk") or {})
+            trial_local_blocked = bool(
+                trial_local_risk.get("risk_budget_exceeded")
+                or trial_local_risk.get("capital_budget_exceeded")
+            )
+        recalculation_available = bool(
+            trial_candidate
+            and trial_decision
+            and trial_decision.get("allow_exposure_increase") is True
+            and not trial_local_blocked
+        )
+        if recalculated:
+            if not recalculation_available:
+                raise ValueError("risk notional recalculation is unavailable")
+            candidate = dict(trial_candidate or {})
+            commands = list(trial_commands or [])
+            risk_decision = dict(trial_decision or {})
+            local_risk = dict(candidate.get("risk") or {})
+            local_budget_blocked = bool(
+                local_risk.get("risk_budget_exceeded")
+                or local_risk.get("capital_budget_exceeded")
+            )
+            blockers = list(risk_decision.get("blockers") or [])
+        can_apply = bool(risk_decision.get("allow_exposure_increase")) and not local_budget_blocked
+        return {
+            "schema_version": "grid-range-drag-preview-v1",
+            "cycle_id": cycle_id,
+            "expected_strategy_plan_id": expected_plan_id,
+            "preview_id": candidate["preview_id"],
+            "geometry": geometry,
+            "old": _range_preview_specification(
+                current,
+                canonical_metrics=current_risk_decision.get("metrics"),
+            ),
+            "new": _range_preview_specification(
+                candidate,
+                canonical_metrics=risk_decision.get("metrics"),
+            ),
+            "candidate": candidate,
+            "canonical_risk": {
+                "basis": "exact_commands_plus_current_canonical_accounting",
+                "old": current_risk_decision,
+                "new": risk_decision,
+            },
+            "risk_decision": risk_decision,
+            "can_apply": can_apply,
+            "confirm_disabled_reasons": [
+                str(row.get("code") or "risk_blocked")
+                for row in blockers
+                if isinstance(row, dict)
+            ]
+            + (
+                ["preview_risk_budget_exceeded"]
+                if local_budget_blocked
+                else []
+            ),
+            "risk_recalculation": {
+                "available": recalculation_available and not recalculated,
+                "applied_automatically": False,
+                "applied_to_preview": recalculated,
+                "original_notional_per_grid": notional,
+                "notional_per_grid": round(safe_notional, 2) if safe_notional > 0 else None,
+            },
+            "order_delta": {
+                "cancel_pending_entries": len(accepted_entries),
+                "submit_new_entries": len(commands),
+                "accepted_protection_orders_unchanged_by_preview": sum(
+                    1
+                    for row in accepted_orders
+                    if str(row.get("event") or "entry").lower() != "entry"
+                ),
+            },
+            "positions": {
+                "open_count": sum(
+                    1
+                    for row in execution.get("positions") or []
+                    if str(row.get("status") or "").lower() == "open"
+                ),
+                "preview_effect": "none",
+            },
+            "tp_sl": {
+                "existing_orders_affected_by_preview": False,
+                "candidate_orders_recomputed": True,
+            },
+            "side_effects": {
+                "orders_created": 0,
+                "orders_cancelled": 0,
+                "positions_changed": 0,
+                "strategy_plan_written": False,
+                "risk_decision_persisted": False,
+            },
+        }
+
     def control(
         self,
         cycle_id: str,
@@ -642,10 +958,10 @@ class StrategyControlPlane:
             except ValueError as exc:
                 # A rejected mutation is still an operator action and must
                 # stay attributable; the original rejection is re-raised.
-                if str(action or "").lower() != "preview":
+                if str(action or "").lower() not in {"preview", "preview_range"}:
                     self._audit_control(cycle_id, action, payload, actor=actor, result="rejected", error=str(exc), now=now)
                 raise
-            if str(action or "").lower() != "preview":
+            if str(action or "").lower() not in {"preview", "preview_range"}:
                 evidence = None
                 if isinstance(result, dict) and result.get("safe_action_market_gates"):
                     evidence = {"safe_action_market_gates": result["safe_action_market_gates"]}
@@ -708,6 +1024,17 @@ class StrategyControlPlane:
         action = str(action or "").lower()
         if action == "preview":
             return {"action": action, "preview": self.preview(cycle_id, body, market=market or {}, account=account)}
+        if action == "preview_range":
+            return {
+                "action": action,
+                "preview": self.preview_range_adjustment(
+                    cycle_id,
+                    body,
+                    market=market or {},
+                    account=account or {},
+                    now=now,
+                ),
+            }
         if action == "start":
             return self._start(cycle_id, body, market=market or {}, account=account or {}, now=now)
         if action == "stop":
@@ -2235,6 +2562,78 @@ def _required_order_ids(rows: list[dict[str, Any]], label: str) -> list[str]:
     if len(set(order_ids)) != len(order_ids):
         raise ValueError(f"{label} contains duplicate order_id")
     return order_ids
+
+
+def _range_preview_specification(
+    source: dict[str, Any],
+    *,
+    canonical_metrics: Any = None,
+) -> dict[str, Any]:
+    current_range = dict(source.get("range") or {})
+    grid = dict(source.get("grid") or {})
+    risk = (
+        dict(source.get("risk") or {})
+        if isinstance(source.get("risk"), dict)
+        else dict(source.get("risk_budget") or {})
+    )
+    metrics = (
+        dict(canonical_metrics)
+        if isinstance(canonical_metrics, dict)
+        else {}
+    )
+    low = _positive_number(current_range.get("low"), "grid low")
+    high = _positive_number(current_range.get("high"), "grid high")
+    count = int(grid.get("count") or 0)
+    notional = _positive_number(grid.get("notional_per_grid"), "notional_per_grid")
+    orders = (
+        list(source.get("orders") or [])
+        if isinstance(source.get("orders"), list)
+        else list(grid.get("orders") or [])
+    )
+    notional_by_side = {"buy": 0.0, "sell": 0.0}
+    for row in orders:
+        if not isinstance(row, dict):
+            continue
+        side = str(row.get("side") or "").lower()
+        if side not in notional_by_side:
+            continue
+        order_notional = _number_or(row.get("notional"), 0.0)
+        if order_notional <= 0:
+            order_notional = _number_or(row.get("price"), 0.0) * _number_or(
+                row.get("quantity"),
+                0.0,
+            )
+        notional_by_side[side] += max(0.0, order_notional)
+    return {
+        "range_low": low,
+        "range_high": high,
+        "range_width": high - low,
+        "mode": str(grid.get("mode") or "arithmetic"),
+        "grid_count": count,
+        "spacing": grid.get("spacing"),
+        "spacing_ratio": grid.get("spacing_ratio"),
+        "notional_per_grid": notional,
+        "notional_mode": grid.get("notional_mode"),
+        "total_grid_notional": round(count * notional, 2),
+        "order_count": len(orders),
+        "total_order_notional": round(sum(notional_by_side.values()), 2),
+        "max_side_order_notional": round(max(notional_by_side.values()), 2),
+        "estimated_margin": metrics.get(
+            "projected_margin",
+            risk.get("estimated_margin"),
+        ),
+        "actual_leverage": metrics.get(
+            "projected_actual_leverage",
+            risk.get("actual_leverage"),
+        ),
+        "max_loss": metrics.get(
+            "projected_max_loss",
+            risk.get("max_loss"),
+        ),
+        "canonical_max_side_notional": metrics.get("projected_max_side_notional"),
+        "canonical_equity": metrics.get("equity"),
+        "leverage": grid.get("leverage"),
+    }
 
 
 def _retained_entry_risk_commands(

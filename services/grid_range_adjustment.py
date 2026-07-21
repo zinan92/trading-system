@@ -14,6 +14,57 @@ from typing import Any
 from services.grid_sizing import number_or, positive_number, preview_id, validate_market
 
 
+DRAG_HANDLES = frozenset({"range", "lower", "upper"})
+
+
+def build_dragged_range(
+    plan: dict[str, Any],
+    requested_range: dict[str, Any],
+    *,
+    handle: str,
+) -> dict[str, Any]:
+    """Validate one pointer geometry change without creating a StrategyPlan."""
+
+    resolved_handle = str(handle or "").lower()
+    if resolved_handle not in DRAG_HANDLES:
+        raise ValueError("range drag handle must be range, lower, or upper")
+    current = dict(plan.get("range") or {})
+    old_low = positive_number(current.get("low"), "current grid low")
+    old_high = positive_number(current.get("high"), "current grid high")
+    new_low = positive_number(requested_range.get("low"), "requested grid low")
+    new_high = positive_number(requested_range.get("high"), "requested grid high")
+    if old_high <= old_low or new_high <= new_low:
+        raise ValueError("grid range must have positive low below high")
+    tolerance = max(1e-10, (old_high - old_low) * 1e-12)
+    if resolved_handle == "range":
+        low_delta = new_low - old_low
+        high_delta = new_high - old_high
+        if abs(low_delta - high_delta) > tolerance:
+            raise ValueError("range drag must move both boundaries by the same delta")
+        new_high = old_high + low_delta
+    elif resolved_handle == "lower":
+        if abs(new_high - old_high) > tolerance:
+            raise ValueError("lower-boundary drag must keep the upper boundary fixed")
+        new_high = old_high
+    elif resolved_handle == "upper":
+        if abs(new_low - old_low) > tolerance:
+            raise ValueError("upper-boundary drag must keep the lower boundary fixed")
+        new_low = old_low
+    return {
+        "handle": resolved_handle,
+        "old_range": {"low": old_low, "high": old_high},
+        "new_range": {"low": new_low, "high": new_high},
+        "delta": {
+            "low": new_low - old_low,
+            "high": new_high - old_high,
+        },
+        "width": {
+            "old": old_high - old_low,
+            "new": new_high - new_low,
+        },
+    }
+
+
 def range_adjustment_steps(
     plan: dict[str, Any],
     requested_range: dict[str, Any],

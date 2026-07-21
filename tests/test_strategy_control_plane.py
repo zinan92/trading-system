@@ -1545,6 +1545,424 @@ def test_edge_adjustment_preserves_internal_orders_positions_and_fixed_sizing(
     assert retry["created_orders"] == retry["cancelled_orders"] == 0
 
 
+def test_range_drag_preview_is_read_only_and_preserves_fixed_count_and_notional(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    paths = [
+        plane._plans_path(cycle_id),
+        plane.root / "runtime.json",
+        output / "dualtrack" / "risk_decisions" / f"{cycle_id}.json",
+        plane.root / "control_events" / "2026-07-05.jsonl",
+    ]
+    before = {
+        path: path.read_bytes() if path.exists() else None
+        for path in paths
+    }
+    result = plane.control(
+        cycle_id,
+        "preview_range",
+        {
+            "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "handle": "range",
+            "range": {
+                "low": float(plan["range"]["low"]) + 1.0,
+                "high": float(plan["range"]["high"]) + 1.0,
+            },
+        },
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+
+    assert result["geometry"]["delta"] == {"low": 1.0, "high": 1.0}
+    assert result["old"]["range_width"] == result["new"]["range_width"]
+    assert result["old"]["grid_count"] == result["new"]["grid_count"]
+    assert result["old"]["spacing"] == result["new"]["spacing"]
+    assert result["old"]["notional_per_grid"] == result["new"]["notional_per_grid"]
+    assert result["side_effects"] == {
+        "orders_created": 0,
+        "orders_cancelled": 0,
+        "positions_changed": 0,
+        "strategy_plan_written": False,
+        "risk_decision_persisted": False,
+    }
+    assert {
+        path: path.read_bytes() if path.exists() else None
+        for path in paths
+    } == before
+
+
+def test_range_boundary_preview_recomputes_spacing_without_resizing_orders(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    payload = safe_grid("neutral", "steady")
+    payload["grid"]["mode"] = "geometric"
+    started = plane.control(
+        cycle_id,
+        "start",
+        payload,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    result = plane.control(
+        cycle_id,
+        "preview_range",
+        {
+            "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "handle": "upper",
+            "range": {
+                "low": plan["range"]["low"],
+                "high": float(plan["range"]["high"]) + 10.0,
+            },
+        },
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+
+    assert result["new"]["range_low"] == result["old"]["range_low"]
+    assert result["new"]["grid_count"] == result["old"]["grid_count"]
+    assert result["new"]["notional_per_grid"] == result["old"]["notional_per_grid"]
+    assert result["new"]["spacing_ratio"] != result["old"]["spacing_ratio"]
+    assert result["order_delta"]["cancel_pending_entries"] > 0
+    assert result["order_delta"]["submit_new_entries"] > 0
+    assert result["positions"]["preview_effect"] == "none"
+    assert result["tp_sl"]["existing_orders_affected_by_preview"] is False
+
+
+def test_range_preview_blocks_over_budget_without_silent_notional_recalculation(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    result = plane.control(
+        cycle_id,
+        "preview_range",
+        {
+            "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "handle": "upper",
+            "range": {
+                "low": plan["range"]["low"],
+                "high": float(plan["range"]["high"]) + 25.0,
+            },
+        },
+        market=market(),
+        account=account_context(1_000.0),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+
+    assert result["new"]["notional_per_grid"] == plan["grid"]["notional_per_grid"]
+    assert result["can_apply"] is False
+    assert result["confirm_disabled_reasons"]
+    assert result["risk_recalculation"]["available"] is True
+    assert result["risk_recalculation"]["applied_automatically"] is False
+    assert 0 < result["risk_recalculation"]["notional_per_grid"] < result["new"]["notional_per_grid"]
+
+    recalculated = plane.control(
+        cycle_id,
+        "preview_range",
+        {
+            "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "handle": "upper",
+            "range": {
+                "low": plan["range"]["low"],
+                "high": float(plan["range"]["high"]) + 25.0,
+            },
+            "recalculate_notional_by_risk_budget": True,
+        },
+        market=market(),
+        account=account_context(1_000.0),
+        now="2026-07-05T01:42:01+00:00",
+    )["preview"]
+    assert recalculated["risk_recalculation"]["applied_to_preview"] is True
+    assert recalculated["new"]["notional_per_grid"] == pytest.approx(
+        result["risk_recalculation"]["notional_per_grid"],
+        abs=0.01,
+    )
+    assert recalculated["side_effects"]["orders_created"] == 0
+
+
+def test_range_preview_fails_closed_for_stale_identity_or_market_outside_range(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    with pytest.raises(ValueError, match="strategy_plan_changed"):
+        plane.control(
+            cycle_id,
+            "preview_range",
+            {
+                "expected_strategy_plan_id": "stale-plan",
+                "handle": "upper",
+                "range": plan["range"],
+            },
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:42:00+00:00",
+        )
+
+    blocked = plane.control(
+        cycle_id,
+        "preview_range",
+        {
+            "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "handle": "lower",
+            "range": {
+                "low": 115.0,
+                "high": plan["range"]["high"],
+            },
+        },
+        market=market(close=110.0),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+    assert blocked["can_apply"] is False
+    assert "market_price_outside_range" in blocked["confirm_disabled_reasons"]
+
+
+def test_range_preview_old_and_new_risk_share_current_canonical_accounting(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    adapter = build_execution_engine_adapter(output)
+    entry = max(
+        (
+            row
+            for row in adapter.snapshot(cycle_id)["orders"]
+            if row.get("state") == "accepted" and row.get("side") == "buy"
+        ),
+        key=lambda row: row["price"],
+    )
+    adapter.process_market_event({
+        "cycle_id": cycle_id,
+        "ts_event": "2026-07-05T01:41:00+00:00",
+        "price": entry["price"],
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "canonical_test_feed",
+    })
+    result = plane.control(
+        cycle_id,
+        "preview_range",
+        {
+            "expected_strategy_plan_id": plan["strategy_plan_id"],
+            "handle": "range",
+            "range": {
+                "low": float(plan["range"]["low"]) + 1.0,
+                "high": float(plan["range"]["high"]) + 1.0,
+            },
+        },
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+
+    old_metrics = result["canonical_risk"]["old"]["metrics"]
+    new_metrics = result["canonical_risk"]["new"]["metrics"]
+    assert result["canonical_risk"]["basis"] == "exact_commands_plus_current_canonical_accounting"
+    assert old_metrics["open_position_count"] == new_metrics["open_position_count"] == 1
+    assert result["old"]["max_loss"] == old_metrics["projected_max_loss"]
+    assert result["old"]["estimated_margin"] == old_metrics["projected_margin"]
+    assert result["old"]["actual_leverage"] == old_metrics["projected_actual_leverage"]
+    assert result["new"]["max_loss"] == new_metrics["projected_max_loss"]
+    assert result["new"]["estimated_margin"] == new_metrics["projected_margin"]
+    assert result["new"]["actual_leverage"] == new_metrics["projected_actual_leverage"]
+
+
+def test_range_risk_recalculation_clears_projected_margin_and_leverage_blockers(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    payload = safe_grid("neutral", "steady")
+    payload["risk_budget"]["leverage"] = 10.0
+    started = plane.control(
+        cycle_id,
+        "start",
+        payload,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    adapter = build_execution_engine_adapter(output)
+    entry = max(
+        (
+            row
+            for row in adapter.snapshot(cycle_id)["orders"]
+            if row.get("state") == "accepted" and row.get("side") == "buy"
+        ),
+        key=lambda row: row["price"],
+    )
+    adapter.process_market_event({
+        "cycle_id": cycle_id,
+        "ts_event": "2026-07-05T01:41:00+00:00",
+        "price": entry["price"],
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "canonical_test_feed",
+    })
+    request = {
+        "expected_strategy_plan_id": plan["strategy_plan_id"],
+        "handle": "upper",
+        "range": {
+            "low": plan["range"]["low"],
+            "high": float(plan["range"]["high"]) + 5.0,
+        },
+    }
+    blocked = plane.control(
+        cycle_id,
+        "preview_range",
+        request,
+        market=market(),
+        account=account_context(800.0),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+    blocker_codes = {
+        row["code"] for row in blocked["canonical_risk"]["new"]["blockers"]
+    }
+    assert {"projected_margin_exceeded", "projected_leverage_exceeded"} <= blocker_codes
+    assert blocked["risk_recalculation"]["available"] is True
+
+    recalculated = plane.control(
+        cycle_id,
+        "preview_range",
+        {**request, "recalculate_notional_by_risk_budget": True},
+        market=market(),
+        account=account_context(800.0),
+        now="2026-07-05T01:42:01+00:00",
+    )["preview"]
+    assert recalculated["risk_recalculation"]["applied_to_preview"] is True
+    assert recalculated["can_apply"] is True
+    assert not {
+        row["code"] for row in recalculated["canonical_risk"]["new"]["blockers"]
+    } & {"projected_margin_exceeded", "projected_leverage_exceeded"}
+
+
+def test_range_risk_recalculation_is_unavailable_when_open_loss_uses_budget(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("neutral", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    adapter = build_execution_engine_adapter(output)
+    entry = max(
+        (
+            row
+            for row in adapter.snapshot(cycle_id)["orders"]
+            if row.get("state") == "accepted" and row.get("side") == "buy"
+        ),
+        key=lambda row: row["price"],
+    )
+    adapter.process_market_event({
+        "cycle_id": cycle_id,
+        "ts_event": "2026-07-05T01:41:00+00:00",
+        "price": entry["price"],
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "canonical_test_feed",
+    })
+    request = {
+        "expected_strategy_plan_id": plan["strategy_plan_id"],
+        "handle": "upper",
+        "range": {
+            "low": plan["range"]["low"],
+            "high": float(plan["range"]["high"]) + 5.0,
+        },
+    }
+    blocked = plane.control(
+        cycle_id,
+        "preview_range",
+        request,
+        market=market(),
+        account=account_context(50.0),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+    assert blocked["canonical_risk"]["new"]["recommendation"]["available"] is False
+    assert blocked["risk_recalculation"]["available"] is False
+    with pytest.raises(ValueError, match="recalculation is unavailable"):
+        plane.control(
+            cycle_id,
+            "preview_range",
+            {**request, "recalculate_notional_by_risk_budget": True},
+            market=market(),
+            account=account_context(50.0),
+            now="2026-07-05T01:42:01+00:00",
+        )
+
+
 def test_edge_adjustment_risk_rejects_before_submit_or_cancel(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
