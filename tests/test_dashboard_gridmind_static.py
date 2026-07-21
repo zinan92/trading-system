@@ -328,7 +328,7 @@ def test_gridmind_range_adjustment_is_an_explicit_read_only_draft_mode() -> None
     assert 'data-grid-action="cancel"' in html
     assert 'control("preview_range"' in html
     assert "grid-range-drag-preview-v1" in html
-    assert "只读核对卡" in html
+    assert "点击最终按钮前仍是只读草稿" in html
     assert "orders_created: 0" not in html
     assert "Object.entries(requiredEffects).some" in html
 
@@ -356,8 +356,9 @@ def test_gridmind_range_review_card_shows_required_old_to_new_fields() -> None:
         assert label in html
     assert 'id="recalculateGridRangeRisk"' in html
     assert "recalculate_notional_by_risk_budget:recalculate" in html
-    assert "尚未交易新网格" in html
-    assert "停止+平仓+撤单+交易新网格" not in html
+    assert "尚未交易新网格" not in html
+    assert "停止+平仓+撤单+交易新网格" in html
+    assert "再次核对计划版本、行情、风险、挂单和持仓" in html
 
 
 def test_uncertain_start_requires_persisted_complete_start_evidence() -> None:

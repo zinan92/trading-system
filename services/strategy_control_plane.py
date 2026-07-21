@@ -1066,6 +1066,14 @@ class StrategyControlPlane:
                     else None
                 ),
             )
+        if action == "replace_grid":
+            return self._replace_grid(
+                cycle_id,
+                body,
+                market=market or {},
+                account=account or {},
+                now=now,
+            )
         if action == "reset_statistics":
             previous = self.runtime_state(cycle_id)
             row = {
@@ -1360,6 +1368,939 @@ class StrategyControlPlane:
             "filled_orders": filled_count,
             "risk_decision": risk_decision,
             "idempotent": False,
+        }
+
+    def _replace_grid(
+        self,
+        cycle_id: str,
+        body: dict[str, Any],
+        *,
+        market: dict[str, Any],
+        account: dict[str, Any],
+        now: str | None,
+    ) -> dict[str, Any]:
+        """Stop the old paper grid and atomically activate one staged replacement."""
+
+        expected_plan_id = str(body.get("expected_strategy_plan_id") or "")
+        try:
+            expected_plan_version = int(
+                body.get("expected_strategy_plan_version") or 0
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("strategy_plan_changed") from exc
+        expected_preview_id = str(body.get("expected_preview_id") or "")
+        handle = str(body.get("handle") or "")
+        requested_range = (
+            dict(body.get("range") or {})
+            if isinstance(body.get("range"), dict)
+            else {}
+        )
+        recalculate = body.get("recalculate_notional_by_risk_budget") is True
+        expected_execution = self._expected_execution_sets(
+            body.get("expected_execution")
+        )
+        if not expected_plan_id or expected_plan_version <= 0:
+            raise ValueError("strategy_plan_changed")
+        if not expected_preview_id:
+            raise ValueError("strategy_preview_changed")
+        request_fingerprint = _range_replacement_request_fingerprint(
+            expected_plan_id,
+            expected_plan_version,
+            expected_preview_id,
+            handle=handle,
+            requested_range=requested_range,
+            recalculate_notional=recalculate,
+            expected_execution=expected_execution,
+        )
+        prior = self._replacement_plan(cycle_id, request_fingerprint)
+        if prior and str(prior.get("status") or "") == "active":
+            return self._reconcile_completed_replacement(
+                cycle_id,
+                prior,
+                market=market,
+                now=now,
+            )
+
+        runtime = self.runtime_state(cycle_id)
+        current = self.active_plan(cycle_id)
+        if (
+            prior
+            and str(prior.get("status") or "") == "staging"
+            and current
+            and str(current.get("strategy_plan_id") or "") == expected_plan_id
+            and int(current.get("version") or 0) == expected_plan_version
+            and runtime.get("actual_state") in {"stopped", "replanning", "error"}
+        ):
+            return self._resume_staged_replacement(
+                cycle_id,
+                current=current,
+                staged=prior,
+                market=market,
+                account=account,
+                now=now,
+            )
+        if (
+            not current
+            or str(current.get("strategy_plan_id") or "") != expected_plan_id
+            or int(current.get("version") or 0) != expected_plan_version
+            or str(runtime.get("strategy_plan_id") or "") != expected_plan_id
+            or int(runtime.get("strategy_plan_version") or 0)
+            != expected_plan_version
+            or runtime.get("desired_state") != "running"
+            or runtime.get("actual_state") != "running"
+        ):
+            raise ValueError("strategy_plan_changed")
+
+        self._assert_expected_execution(
+            cycle_id,
+            body.get("expected_execution"),
+            expected_strategy_plan_id=expected_plan_id,
+        )
+        preview_request = {
+            "expected_strategy_plan_id": expected_plan_id,
+            "expected_strategy_plan_version": expected_plan_version,
+            "handle": handle,
+            "range": requested_range,
+            "recalculate_notional_by_risk_budget": recalculate,
+        }
+        latest = self.preview_range_adjustment(
+            cycle_id,
+            preview_request,
+            market=market,
+            account=account,
+            now=now,
+        )
+        if str(latest.get("preview_id") or "") != expected_preview_id:
+            raise ValueError("strategy_preview_changed")
+        if latest.get("can_apply") is not True:
+            reasons = ",".join(latest.get("confirm_disabled_reasons") or [])
+            raise ValueError(f"range_replacement_blocked:{reasons or 'risk_blocked'}")
+
+        staged = prior
+        if staged is None:
+            replacement_in_progress = [
+                row
+                for row in load_json(self._plans_path(cycle_id))
+                if isinstance(row, dict)
+                and row.get("status") == "staging"
+                and isinstance(row.get("replacement_request"), dict)
+            ]
+            if replacement_in_progress:
+                raise ValueError("replacement_request_in_progress")
+            staged = self._plan_from_preview(current, latest["candidate"], now=now)
+            next_version = self._next_plan_version(cycle_id)
+            if int(staged.get("version") or 0) != next_version:
+                staged["version"] = next_version
+                staged["strategy_plan_id"] = _plan_id(
+                    cycle_id,
+                    next_version,
+                    str(latest["candidate"]["preview_id"]),
+                )
+            staged["status"] = "staging"
+            staged["replacement_request"] = {
+                "schema_version": "grid-replacement-request-v1",
+                "request_fingerprint": request_fingerprint,
+                "from_plan_id": expected_plan_id,
+                "from_plan_version": expected_plan_version,
+                "requested_preview_id": expected_preview_id,
+                "handle": handle,
+                "range": requested_range,
+                "recalculate_notional_by_risk_budget": recalculate,
+                "expected_execution": {
+                    "accepted_order_ids": sorted(expected_execution[0]),
+                    "open_position_ids": sorted(expected_execution[1]),
+                },
+                "phase": "prepared",
+                "prepared_at": _timestamp(now),
+            }
+        elif (
+            str(staged.get("status") or "") != "staging"
+            or str(staged.get("preview_id") or "") != expected_preview_id
+            or str((staged.get("replacement_request") or {}).get("from_plan_id") or "")
+            != expected_plan_id
+        ):
+            raise ValueError("replacement_request_conflict")
+
+        timestamp = _timestamp(now)
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        commands = build_plan_grid_entry_commands(staged, timestamp=timestamp)
+        accepted_entries = [
+            row
+            for row in adapter.snapshot(cycle_id).get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+            and str(row.get("event") or "entry").lower() == "entry"
+        ]
+        risk_decision = self._authorize_grid_mutation(
+            cycle_id,
+            action_class="replace_pending",
+            intent="replace_grid",
+            plan=staged,
+            commands=commands,
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+            replaced_order_ids=_required_order_ids(
+                accepted_entries,
+                "grid replacement entry",
+            ),
+            retained_order_ids=[],
+        )
+        self._assert_expected_execution(
+            cycle_id,
+            body.get("expected_execution"),
+            expected_strategy_plan_id=expected_plan_id,
+        )
+        staged["replacement_request"] = {
+            **dict(staged.get("replacement_request") or {}),
+            "risk_decision_id": risk_decision["decision_id"],
+            "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
+        }
+        # The durable candidate and request fingerprint exist before any order,
+        # position, active-plan, or runtime mutation begins.
+        self._write_plan(staged)
+        try:
+            stopped = self._stop(cycle_id, market=market, now=now)
+        except Exception as exc:
+            staged["replacement_request"] = {
+                **dict(staged.get("replacement_request") or {}),
+                "phase": "stop_failed",
+                "last_error": str(exc),
+                "updated_at": _timestamp(now),
+            }
+            self._write_plan(staged)
+            raise
+
+        staged["replacement_request"] = {
+            **dict(staged.get("replacement_request") or {}),
+            "phase": "old_grid_stopped",
+            "stopped_at": _timestamp(now),
+            "cancelled_orders": int(stopped.get("cancelled_orders") or 0),
+            "flattened_positions": int(stopped.get("flattened_positions") or 0),
+        }
+        self._write_plan(staged)
+        try:
+            return self._launch_staged_replacement(
+                cycle_id,
+                current=current,
+                staged=staged,
+                stopped=stopped,
+                market=market,
+                account=account,
+                now=now,
+            )
+        except Exception as exc:
+            # Submission/activation failures are handled inside the launcher.
+            # This outer boundary covers the second market/preview/risk checks
+            # that can reject after the old grid has already stopped.
+            if str(staged.get("status") or "") == "staging":
+                adapter = build_configured_execution_engine_adapter(
+                    self.output_root,
+                    config=self.config,
+                )
+                cleanup_error = self._cleanup_staged_replacement(
+                    cycle_id,
+                    staged,
+                    adapter=adapter,
+                    market=market,
+                    now=now,
+                )
+                staged["status"] = "failed"
+                staged["replacement_request"] = {
+                    **dict(staged.get("replacement_request") or {}),
+                    "phase": "failed",
+                    "last_error": str(exc),
+                    "cleanup_error": cleanup_error or None,
+                    "updated_at": _timestamp(now),
+                }
+                self._write_plan(staged)
+                failure_detail = str(exc)
+                if cleanup_error:
+                    failure_detail = (
+                        f"{failure_detail}; staged cleanup failed: {cleanup_error}"
+                    )
+                runtime_after = self.runtime_state(cycle_id)
+                self._write_runtime({
+                    **runtime_after,
+                    "desired_state": "stopped",
+                    "actual_state": "error",
+                    "updated_at": _timestamp(now),
+                    "last_action": "replace_grid",
+                    "last_error": failure_detail,
+                    "accepted_order_count": len(
+                        self._accepted_orders(cycle_id, adapter=adapter)
+                    ),
+                    "accepted_order_count_known": True,
+                })
+            raise
+
+    def _resume_staged_replacement(
+        self,
+        cycle_id: str,
+        *,
+        current: dict[str, Any],
+        staged: dict[str, Any],
+        market: dict[str, Any],
+        account: dict[str, Any],
+        now: str | None,
+    ) -> dict[str, Any]:
+        """Converge a same-fingerprint retry after a process-level interruption."""
+
+        timestamp = _timestamp(now)
+        latest_price = _positive_number(market.get("latest_close"), "market latest_close")
+        candidate_range = dict(staged.get("range") or {})
+        if not (
+            _positive_number(candidate_range.get("low"), "replacement range low")
+            <= latest_price
+            <= _positive_number(candidate_range.get("high"), "replacement range high")
+        ):
+            raise ValueError("market_outside_requested_range")
+        rebuilt = self.preview(
+            cycle_id,
+            _grid_preview_payload_from_plan(staged),
+            market=market,
+            account=account,
+        )
+        if str(rebuilt.get("preview_id") or "") != str(staged.get("preview_id") or ""):
+            raise ValueError("strategy_preview_changed")
+
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        snapshot = adapter.snapshot(cycle_id)
+        active_rows = [
+            row
+            for row in [
+                *(snapshot.get("orders") or []),
+                *(snapshot.get("positions") or []),
+            ]
+            if (
+                str(row.get("state") or "").lower() == "accepted"
+                or str(row.get("status") or "").lower() == "open"
+            )
+        ]
+        staged_plan_id = str(staged.get("strategy_plan_id") or "")
+        if any(
+            str(row.get("strategy_plan_id") or "") != staged_plan_id
+            for row in active_rows
+        ):
+            raise ValueError("execution_state_changed_during_replacement_recovery")
+
+        commands = build_plan_grid_entry_commands(staged, timestamp=timestamp)
+        accepted_entries = [
+            row
+            for row in snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+            and str(row.get("event") or "entry").lower() == "entry"
+        ]
+        replaced_ids = _required_order_ids(
+            accepted_entries,
+            "replacement recovery entry",
+        )
+        risk_decision = self._authorize_grid_mutation(
+            cycle_id,
+            action_class=("replace_pending" if active_rows else "increase_exposure"),
+            intent="replace_grid",
+            plan=staged,
+            commands=commands,
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+            replaced_order_ids=replaced_ids,
+            retained_order_ids=[],
+        )
+        staged["replacement_request"] = {
+            **dict(staged.get("replacement_request") or {}),
+            "phase": "launch_authorized",
+            "recovery_started_at": timestamp,
+            "risk_decision_id": risk_decision["decision_id"],
+            "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
+        }
+        self._write_plan(staged)
+        replanning = {
+            **self.runtime_state(cycle_id),
+            "cycle_id": cycle_id,
+            "desired_state": "running",
+            "actual_state": "replanning",
+            "updated_at": timestamp,
+            "last_action": "replace_grid",
+            "last_error": None,
+            "strategy_plan_id": staged_plan_id,
+            "strategy_plan_version": staged["version"],
+            "preview_id": staged["preview_id"],
+            "risk_decision_id": risk_decision["decision_id"],
+            "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
+            "accepted_order_count": len(accepted_entries),
+            "accepted_order_count_known": True,
+        }
+        self._write_runtime(replanning)
+        before_ids = {
+            str(row.get("order_id") or "")
+            for row in snapshot.get("orders") or []
+        }
+        try:
+            receipts = self._submit_plan_orders(
+                adapter,
+                staged,
+                timestamp=timestamp,
+                commands=commands,
+                allow_terminal_retry=True,
+            )
+            submitted_ids = [str(row.get("order_id") or "") for row in receipts]
+            if (
+                any(not order_id for order_id in submitted_ids)
+                or len(set(submitted_ids)) != len(submitted_ids)
+            ):
+                raise ValueError("replacement recovery requires unique order IDs")
+            terminal = self._validate_replacement_recovery_snapshot(
+                adapter,
+                cycle_id,
+                submitted_ids=set(submitted_ids),
+                strategy_plan_id=staged_plan_id,
+            )
+            reconciliation = adapter.reconcile(cycle_id)
+            if reconciliation.get("status") != "ok":
+                raise ValueError("paper ledger reconciliation failed")
+            self._activate_staged_range_plan(
+                staged,
+                expected_active_plan_id=str(current["strategy_plan_id"]),
+            )
+        except Exception as exc:
+            cleanup_error = self._cleanup_staged_replacement(
+                cycle_id,
+                staged,
+                adapter=adapter,
+                market=market,
+                now=now,
+            )
+            staged["status"] = "failed"
+            staged["replacement_request"] = {
+                **dict(staged.get("replacement_request") or {}),
+                "phase": "failed",
+                "last_error": str(exc),
+                "cleanup_error": cleanup_error or None,
+                "updated_at": _timestamp(now),
+            }
+            self._write_plan(staged)
+            failure_detail = str(exc)
+            if cleanup_error:
+                failure_detail = f"{failure_detail}; staged cleanup failed: {cleanup_error}"
+            self._write_runtime({
+                **replanning,
+                "desired_state": "stopped",
+                "actual_state": "error",
+                "updated_at": _timestamp(now),
+                "last_error": failure_detail,
+                "accepted_order_count": len(
+                    self._accepted_orders(cycle_id, adapter=adapter)
+                ),
+            })
+            raise
+
+        accepted = sum(
+            str(terminal[order_id].get("state") or "").lower() == "accepted"
+            for order_id in submitted_ids
+        )
+        staged["replacement_request"] = {
+            **dict(staged.get("replacement_request") or {}),
+            "phase": "complete",
+            "completed_at": _timestamp(now),
+            "recovered": True,
+        }
+        self._write_plan(staged)
+        running = {
+            **replanning,
+            "actual_state": "running",
+            "updated_at": _timestamp(now),
+            "accepted_order_count": accepted,
+        }
+        self._write_runtime(running)
+        return {
+            "action": "replace_grid",
+            "runtime": running,
+            "plan": staged,
+            "preview": rebuilt,
+            "stopped": True,
+            "cancelled_orders": int(
+                (staged.get("replacement_request") or {}).get("cancelled_orders")
+                or 0
+            ),
+            "flattened_positions": int(
+                (staged.get("replacement_request") or {}).get("flattened_positions")
+                or 0
+            ),
+            "created_orders": sum(order_id not in before_ids for order_id in submitted_ids),
+            "accepted_orders": accepted,
+            "filled_orders": len(submitted_ids) - accepted,
+            "reconciliation": reconciliation,
+            "risk_decision": risk_decision,
+            "idempotent": False,
+            "recovered": True,
+        }
+
+    def _launch_staged_replacement(
+        self,
+        cycle_id: str,
+        *,
+        current: dict[str, Any],
+        staged: dict[str, Any],
+        stopped: dict[str, Any],
+        market: dict[str, Any],
+        account: dict[str, Any],
+        now: str | None,
+    ) -> dict[str, Any]:
+        timestamp = _timestamp(now)
+        latest_price = _positive_number(market.get("latest_close"), "market latest_close")
+        candidate_range = dict(staged.get("range") or {})
+        if not (
+            _positive_number(candidate_range.get("low"), "replacement range low")
+            <= latest_price
+            <= _positive_number(candidate_range.get("high"), "replacement range high")
+        ):
+            raise ValueError("market_outside_requested_range")
+        rebuilt = self.preview(
+            cycle_id,
+            _grid_preview_payload_from_plan(staged),
+            market=market,
+            account=account,
+        )
+        if str(rebuilt.get("preview_id") or "") != str(staged.get("preview_id") or ""):
+            raise ValueError("strategy_preview_changed")
+
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        before = adapter.snapshot(cycle_id)
+        if [
+            row
+            for row in before.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ] or [
+            row
+            for row in before.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+        ]:
+            raise ValueError("execution_state_changed_after_stop")
+        commands = build_plan_grid_entry_commands(staged, timestamp=timestamp)
+        risk_decision = self._authorize_grid_mutation(
+            cycle_id,
+            action_class="increase_exposure",
+            intent="start_replacement_grid",
+            plan=staged,
+            commands=commands,
+            account=account,
+            market=market,
+            adapter=adapter,
+            timestamp=timestamp,
+        )
+        staged["replacement_request"] = {
+            **dict(staged.get("replacement_request") or {}),
+            "phase": "launch_authorized",
+            "launch_authorized_at": timestamp,
+            "risk_decision_id": risk_decision["decision_id"],
+            "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
+        }
+        self._write_plan(staged)
+        replanning = {
+            **self.runtime_state(cycle_id),
+            "cycle_id": cycle_id,
+            "desired_state": "running",
+            "actual_state": "replanning",
+            "updated_at": timestamp,
+            "last_action": "replace_grid",
+            "last_error": None,
+            "strategy_plan_id": staged["strategy_plan_id"],
+            "strategy_plan_version": staged["version"],
+            "preview_id": staged["preview_id"],
+            "risk_decision_id": risk_decision["decision_id"],
+            "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
+            "accepted_order_count": 0,
+            "accepted_order_count_known": True,
+        }
+        self._write_runtime(replanning)
+        receipts: list[dict[str, Any]] = []
+        try:
+            receipts = self._submit_plan_orders(
+                adapter,
+                staged,
+                timestamp=timestamp,
+                commands=commands,
+            )
+            submitted_ids = {str(row.get("order_id") or "") for row in receipts}
+            if "" in submitted_ids or len(submitted_ids) != len(receipts):
+                raise ValueError("replacement receipts require valid unique order IDs")
+            self._validate_start_grid_snapshot(
+                adapter,
+                cycle_id,
+                submitted_ids=submitted_ids,
+            )
+            execution_event = self._advance_selected_execution(
+                adapter,
+                cycle_id,
+                market=market,
+                now=now,
+                identity="strategy-replacement",
+            )
+            terminal = self._validate_start_grid_snapshot(
+                adapter,
+                cycle_id,
+                submitted_ids=submitted_ids,
+            )
+            reconciliation = adapter.reconcile(cycle_id)
+            if reconciliation.get("status") != "ok":
+                raise ValueError("paper ledger reconciliation failed")
+            self._activate_staged_range_plan(
+                staged,
+                expected_active_plan_id=str(current["strategy_plan_id"]),
+            )
+        except Exception as exc:
+            cleanup_error = self._cleanup_staged_replacement(
+                cycle_id,
+                staged,
+                adapter=adapter,
+                market=market,
+                now=now,
+            )
+            staged["status"] = "failed"
+            staged["replacement_request"] = {
+                **dict(staged.get("replacement_request") or {}),
+                "phase": "failed",
+                "last_error": str(exc),
+                "cleanup_error": cleanup_error or None,
+                "updated_at": _timestamp(now),
+            }
+            self._write_plan(staged)
+            failure_detail = str(exc)
+            if cleanup_error:
+                failure_detail = f"{failure_detail}; staged cleanup failed: {cleanup_error}"
+            remaining = len(self._accepted_orders(cycle_id, adapter=adapter))
+            self._write_runtime({
+                **replanning,
+                "desired_state": "stopped",
+                "actual_state": "error",
+                "updated_at": _timestamp(now),
+                "last_error": failure_detail,
+                "accepted_order_count": remaining,
+            })
+            raise
+
+        accepted = sum(
+            str(terminal[order_id].get("state") or "").lower() == "accepted"
+            for order_id in submitted_ids
+        )
+        filled = len(submitted_ids) - accepted
+        staged["replacement_request"] = {
+            **dict(staged.get("replacement_request") or {}),
+            "phase": "complete",
+            "completed_at": _timestamp(now),
+        }
+        self._write_plan(staged)
+        running = {
+            **replanning,
+            "actual_state": "running",
+            "updated_at": _timestamp(now),
+            "accepted_order_count": accepted,
+        }
+        # If this final write fails, the active plan remains a complete durable
+        # replacement; an identical retry repairs runtime without resubmission.
+        self._write_runtime(running)
+        return {
+            "action": "replace_grid",
+            "runtime": running,
+            "plan": staged,
+            "preview": rebuilt,
+            "stopped": True,
+            "cancelled_orders": int(stopped.get("cancelled_orders") or 0),
+            "flattened_positions": int(stopped.get("flattened_positions") or 0),
+            "created_orders": len(receipts),
+            "accepted_orders": accepted,
+            "filled_orders": filled,
+            "execution_event": execution_event,
+            "reconciliation": reconciliation,
+            "risk_decision": risk_decision,
+            "idempotent": False,
+        }
+
+    def _cleanup_staged_replacement(
+        self,
+        cycle_id: str,
+        staged: dict[str, Any],
+        *,
+        adapter,
+        market: dict[str, Any],
+        now: str | None,
+    ) -> str:
+        errors: list[str] = []
+        plan_id = str(staged.get("strategy_plan_id") or "")
+        try:
+            initial = adapter.snapshot(cycle_id)
+        except Exception as exc:
+            return f"staged cleanup snapshot unavailable: {exc}"
+        foreign = [
+            row
+            for row in [*(initial.get("orders") or []), *(initial.get("positions") or [])]
+            if (
+                str(row.get("state") or "").lower() == "accepted"
+                or str(row.get("status") or "").lower() == "open"
+            )
+            and str(row.get("strategy_plan_id") or "") != plan_id
+        ]
+        if foreign:
+            try:
+                self._cancel_pending(
+                    cycle_id,
+                    now=now,
+                    strategy_plan_id=plan_id,
+                    adapter=adapter,
+                    reason="replacement_stage_failed_foreign_state",
+                )
+                terminal = adapter.snapshot(cycle_id)
+                staged_left = [
+                    row
+                    for row in [
+                        *(terminal.get("orders") or []),
+                        *(terminal.get("positions") or []),
+                    ]
+                    if (
+                        str(row.get("state") or "").lower() == "accepted"
+                        or str(row.get("status") or "").lower() == "open"
+                    )
+                    and str(row.get("strategy_plan_id") or "") == plan_id
+                ]
+                if not staged_left:
+                    return ""
+            except Exception as exc:
+                return f"foreign paper state prevents staged-only cleanup: {exc}"
+            return "foreign paper state prevents complete staged cleanup"
+        try:
+            self._cancel_pending(
+                cycle_id,
+                now=now,
+                strategy_plan_id=plan_id,
+                adapter=adapter,
+                reason="replacement_stage_failed",
+            )
+        except Exception as exc:
+            errors.append(f"cancel: {exc}")
+        try:
+            snapshot = adapter.snapshot(cycle_id)
+            price = _positive_number(market.get("latest_close"), "market latest_close")
+            for position in snapshot.get("positions") or []:
+                if (
+                    str(position.get("status") or "").lower() != "open"
+                    or str(position.get("strategy_plan_id") or "") != plan_id
+                ):
+                    continue
+                side = "sell" if str(position.get("side") or "").lower() in {"buy", "long"} else "buy"
+                adapter.submit_order(normalize_manual_order_command({
+                    "cycle_id": cycle_id,
+                    "ts": _timestamp(now),
+                    "side": side,
+                    "event": "flatten",
+                    "order_type": "market",
+                    "price": price,
+                    "market_price": price,
+                    "trade_id": position.get("trade_id"),
+                    "position_id": position.get("position_id"),
+                    "target_position_side": position.get("side"),
+                    "target_entry_price": position.get("entry_price"),
+                    "symbol": position.get("symbol") or str(market.get("symbol") or "GOLD"),
+                    "source": "strategy_production_console",
+                    "source_fill_id": f"replacement-cleanup:{cycle_id}:{position.get('trade_id')}",
+                    "strategy_plan_id": plan_id,
+                    "strategy_plan_version": staged.get("version"),
+                }, config=self.config))
+            terminal = adapter.snapshot(cycle_id)
+            staged_orders = [
+                row
+                for row in terminal.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+                and str(row.get("strategy_plan_id") or "") == plan_id
+            ]
+            staged_positions = [
+                row
+                for row in terminal.get("positions") or []
+                if str(row.get("status") or "").lower() == "open"
+                and str(row.get("strategy_plan_id") or "") == plan_id
+            ]
+            if staged_orders or staged_positions:
+                raise RuntimeError(
+                    "staged replacement cleanup left paper state"
+                    f"; orders={len(staged_orders)}; positions={len(staged_positions)}"
+                )
+        except Exception as exc:
+            errors.append(f"flatten: {exc}")
+        return "; ".join(errors)
+
+    def _assert_expected_execution(
+        self,
+        cycle_id: str,
+        expected: Any,
+        *,
+        expected_strategy_plan_id: str,
+    ) -> None:
+        expected_orders, expected_positions = self._expected_execution_sets(expected)
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        snapshot = adapter.snapshot(cycle_id)
+        accepted = [
+            row
+            for row in snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
+        positions = [
+            row
+            for row in snapshot.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+        ]
+        raw_order_ids = [
+            row.get("order_id") or row.get("command_id") or ""
+            for row in accepted
+        ]
+        raw_position_ids = [
+            row.get("position_id") or row.get("trade_id") or ""
+            for row in positions
+        ]
+        if any(not isinstance(value, str) for value in [*raw_order_ids, *raw_position_ids]):
+            raise ValueError("execution_state_changed")
+        current_order_ids = [value.strip() for value in raw_order_ids]
+        current_position_ids = [value.strip() for value in raw_position_ids]
+        current_orders = set(current_order_ids)
+        current_positions = set(current_position_ids)
+        foreign = [
+            row
+            for row in [*accepted, *positions]
+            if str(row.get("strategy_plan_id") or "") != expected_strategy_plan_id
+        ]
+        if (
+            "" in current_orders
+            or "" in current_positions
+            or len(current_orders) != len(current_order_ids)
+            or len(current_positions) != len(current_position_ids)
+            or current_orders != expected_orders
+            or current_positions != expected_positions
+            or foreign
+        ):
+            raise ValueError("execution_state_changed")
+
+    @staticmethod
+    def _expected_execution_sets(expected: Any) -> tuple[set[str], set[str]]:
+        if not isinstance(expected, dict):
+            raise ValueError("execution_state_changed")
+        order_ids = expected.get("accepted_order_ids")
+        position_ids = expected.get("open_position_ids")
+        if not isinstance(order_ids, list) or not isinstance(position_ids, list):
+            raise ValueError("execution_state_changed")
+        if any(not isinstance(value, str) for value in [*order_ids, *position_ids]):
+            raise ValueError("execution_state_changed")
+        normalized_orders = [value.strip() for value in order_ids]
+        normalized_positions = [value.strip() for value in position_ids]
+        if any(not value for value in [*normalized_orders, *normalized_positions]):
+            raise ValueError("execution_state_changed")
+        orders = set(normalized_orders)
+        positions = set(normalized_positions)
+        if len(orders) != len(order_ids) or len(positions) != len(position_ids):
+            raise ValueError("execution_state_changed")
+        return orders, positions
+
+    def _replacement_plan(
+        self,
+        cycle_id: str,
+        request_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        matches = []
+        for row in load_json(self._plans_path(cycle_id)):
+            if not isinstance(row, dict):
+                continue
+            replacement = row.get("replacement_request")
+            if not isinstance(replacement, dict):
+                continue
+            if str(replacement.get("request_fingerprint") or "") == request_fingerprint:
+                matches.append(dict(row))
+        if len(matches) > 1:
+            raise RuntimeError("duplicate replacement request fingerprint")
+        return matches[0] if matches else None
+
+    def _reconcile_completed_replacement(
+        self,
+        cycle_id: str,
+        plan: dict[str, Any],
+        *,
+        market: dict[str, Any],
+        now: str | None,
+    ) -> dict[str, Any]:
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        reconciliation = adapter.reconcile(cycle_id)
+        if reconciliation.get("status") != "ok":
+            raise ValueError("paper ledger reconciliation failed")
+        snapshot = adapter.snapshot(cycle_id)
+        foreign = [
+            row
+            for row in [*(snapshot.get("orders") or []), *(snapshot.get("positions") or [])]
+            if (
+                str(row.get("state") or "").lower() == "accepted"
+                or str(row.get("status") or "").lower() == "open"
+            )
+            and str(row.get("strategy_plan_id") or "")
+            != str(plan.get("strategy_plan_id") or "")
+        ]
+        if foreign:
+            raise ValueError("execution_state_changed")
+        replacement = (
+            dict(plan.get("replacement_request") or {})
+            if isinstance(plan.get("replacement_request"), dict)
+            else {}
+        )
+        if replacement.get("phase") != "complete":
+            plan["replacement_request"] = {
+                **replacement,
+                "phase": "complete",
+                "completed_at": _timestamp(now),
+                "recovered": True,
+            }
+            self._write_plan(plan)
+        accepted = sum(
+            str(row.get("state") or "").lower() == "accepted"
+            for row in snapshot.get("orders") or []
+        )
+        runtime = {
+            **self.runtime_state(cycle_id),
+            "cycle_id": cycle_id,
+            "desired_state": "running",
+            "actual_state": "running",
+            "updated_at": _timestamp(now),
+            "last_action": "replace_grid",
+            "last_error": None,
+            "strategy_plan_id": plan["strategy_plan_id"],
+            "strategy_plan_version": plan["version"],
+            "preview_id": plan.get("preview_id"),
+            "accepted_order_count": accepted,
+            "accepted_order_count_known": True,
+        }
+        self._write_runtime(runtime)
+        return {
+            "action": "replace_grid",
+            "runtime": runtime,
+            "plan": plan,
+            "preview": _grid_preview_payload_from_plan(plan),
+            "stopped": False,
+            "cancelled_orders": 0,
+            "flattened_positions": 0,
+            "created_orders": 0,
+            "accepted_orders": accepted,
+            "reconciliation": reconciliation,
+            "idempotent": True,
         }
 
     def _extend_range(
@@ -2029,15 +2970,71 @@ class StrategyControlPlane:
         *,
         timestamp: str,
         commands: list[dict[str, Any]] | None = None,
+        allow_terminal_retry: bool = False,
     ) -> list[dict[str, Any]]:
         receipts: list[dict[str, Any]] = []
         command_rows = commands if commands is not None else build_plan_grid_entry_commands(plan, timestamp=timestamp)
         for command in command_rows:
             receipt = adapter.submit_order(command)
-            if str(receipt.get("state") or receipt.get("status") or "") != "accepted":
+            state = str(receipt.get("state") or receipt.get("status") or "").lower()
+            if state != "accepted" and not (
+                allow_terminal_retry and state == "filled"
+            ):
                 raise ValueError("paper execution did not accept a grid order")
             receipts.append(receipt)
         return receipts
+
+    @staticmethod
+    def _validate_replacement_recovery_snapshot(
+        adapter,
+        cycle_id: str,
+        *,
+        submitted_ids: set[str],
+        strategy_plan_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        snapshot = adapter.snapshot(cycle_id)
+        rows = snapshot.get("orders") or []
+        positions = snapshot.get("positions") or []
+        if not all(isinstance(row, dict) for row in [*rows, *positions]):
+            raise ValueError("replacement recovery snapshot contains invalid rows")
+        order_ids = [str(row.get("order_id") or "") for row in rows]
+        if (
+            any(not order_id for order_id in order_ids)
+            or len(set(order_ids)) != len(order_ids)
+        ):
+            raise ValueError("replacement recovery snapshot requires unique order IDs")
+        by_id = dict(zip(order_ids, rows, strict=True))
+        missing = sorted(submitted_ids - set(by_id))
+        invalid = sorted(
+            order_id
+            for order_id in submitted_ids & set(by_id)
+            if str(by_id[order_id].get("state") or "").lower()
+            not in {"accepted", "filled"}
+        )
+        foreign = [
+            row
+            for row in [*rows, *positions]
+            if (
+                str(row.get("state") or "").lower() == "accepted"
+                or str(row.get("status") or "").lower() == "open"
+            )
+            and str(row.get("strategy_plan_id") or "") != strategy_plan_id
+        ]
+        unexpected_entries = sorted(
+            str(row.get("order_id") or "")
+            for row in rows
+            if str(row.get("state") or "").lower() == "accepted"
+            and str(row.get("event") or "entry").lower() == "entry"
+            and str(row.get("order_id") or "") not in submitted_ids
+        )
+        if missing or invalid or foreign or unexpected_entries:
+            raise ValueError(
+                "replacement recovery did not converge exact staged state"
+                f"; missing={missing}; invalid={invalid}"
+                f"; foreign={len(foreign)}"
+                f"; unexpected_entries={unexpected_entries}"
+            )
+        return by_id
 
     @staticmethod
     def _validate_start_grid_snapshot(
@@ -2832,6 +3829,60 @@ def _extend_range_request_fingerprint(
         separators=(",", ":"),
     )
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _range_replacement_request_fingerprint(
+    from_plan_id: str,
+    from_plan_version: int,
+    preview_id: str,
+    *,
+    handle: str,
+    requested_range: dict[str, Any],
+    recalculate_notional: bool,
+    expected_execution: tuple[set[str], set[str]],
+) -> str:
+    low = _positive_number(requested_range.get("low"), "replacement range low")
+    high = _positive_number(requested_range.get("high"), "replacement range high")
+    if high <= low:
+        raise ValueError("replacement range high must be above low")
+    raw = json.dumps(
+        {
+            "from_plan_id": str(from_plan_id),
+            "from_plan_version": int(from_plan_version),
+            "preview_id": str(preview_id),
+            "handle": str(handle),
+            "requested_range": {
+                "low": low,
+                "high": high,
+            },
+            "recalculate_notional": bool(recalculate_notional),
+            "expected_execution": {
+                "accepted_order_ids": sorted(expected_execution[0]),
+                "open_position_ids": sorted(expected_execution[1]),
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _grid_preview_payload_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    grid = dict(plan.get("grid") or {})
+    return {
+        "direction": plan.get("direction"),
+        "style": plan.get("style"),
+        "out_of_range": grid.get("out_of_range"),
+        "range": dict(plan.get("range") or {}),
+        "grid": {
+            "count": grid.get("count"),
+            "mode": grid.get("mode"),
+            "notional_per_grid": grid.get("notional_per_grid"),
+            "notional_mode": "manual",
+            "out_of_range": grid.get("out_of_range"),
+        },
+        "risk_budget": {"leverage": grid.get("leverage")},
+    }
 
 
 def _rearm_completed_edge_commands(

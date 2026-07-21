@@ -29,7 +29,11 @@ const gridDraftHandle = extractedFunction(
 );
 const gridRangePreviewContractIssue = extractedFunction(
   "gridRangePreviewContractIssue",
-  "gridSpacingText",
+  "executionIdentity",
+);
+const executionIdentity = extractedFunction(
+  "executionIdentity",
+  "gridReplacementPayload",
 );
 
 test("inline dashboard JavaScript parses", () => {
@@ -179,4 +183,33 @@ test("pointer release retains the draft without opening a card or calling the ba
   const body = html.slice(start, end);
   assert.match(body, /state\.gridDrag=null/);
   assert.doesNotMatch(body, /requestGridRangePreview|showModal|control\(/);
+});
+
+test("replacement confirmation has the exact destructive label and sends stable execution ids", () => {
+  assert.match(
+    html,
+    /id="executeGridRangeReplacement"[^>]*>停止\+平仓\+撤单\+交易新网格<\/button>/,
+  );
+  const identity = executionIdentity({
+    execution: {
+      open_orders: [{order_id: "order-b"}, {order_id: "order-a"}],
+      open_positions: [{position_id: "position-2"}, {trade_id: "trade-1"}],
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(identity)), {
+    accepted_order_ids: ["order-a", "order-b"],
+    open_position_ids: ["position-2", "trade-1"],
+  });
+  assert.match(html, /expected_preview_id:preview\.preview_id/);
+  assert.match(html, /control\("replace_grid",payload/);
+});
+
+test("replacement confirmation fails closed on ambiguous execution identity", () => {
+  assert.throws(
+    () => executionIdentity({execution: {open_orders: [{order_id: "same"}, {order_id: "same"}], open_positions: []}}),
+    /缺少唯一身份/,
+  );
+  assert.match(html, /再次核对计划版本、行情、风险、挂单和持仓/);
+  assert.match(html, /确认后全部平仓/);
+  assert.match(html, /随旧持仓撤销；新网格重建/);
 });
