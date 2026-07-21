@@ -1,4 +1,8 @@
+import json
+import math
 from pathlib import Path
+
+import pytest
 
 import pipelines.dashboard_server as dashboard_server
 from pipelines.dashboard_server import (
@@ -20,6 +24,51 @@ ORAL_MARKET_VIEW = (
     "计划只做空，反弹到 EMA50 附近出现顶分型入场，止损放顶分型高点。"
     "观点有效 4 小时，价格偏离 0.8% 失效，上破 4100 后停止使用。"
 )
+
+
+def test_dashboard_json_boundary_replaces_nonfinite_values_without_mutating_source() -> None:
+    payload = {
+        "orders": [
+            {"price": float("nan")},
+            {"price": float("inf")},
+            {"price": 4017.25},
+        ]
+    }
+
+    sanitized = dashboard_server._json_safe(payload)
+
+    assert sanitized == {
+        "orders": [
+            {"price": None},
+            {"price": None},
+            {"price": 4017.25},
+        ]
+    }
+    assert math.isnan(payload["orders"][0]["price"])
+    assert json.loads(json.dumps(sanitized, allow_nan=False)) == sanitized
+
+
+def test_strategy_console_control_returns_structured_500_for_execution_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler = object.__new__(dashboard_server.DashboardHandler)
+    errors: list[tuple[int, str, str]] = []
+    handler._read_json_body = lambda **_kwargs: {"action": "replace_grid"}
+    handler._control_actor = lambda: {"transport": "local"}
+    handler._write_json = lambda *_args, **_kwargs: None
+    handler._write_error = lambda status, code, detail: errors.append((status, code, detail))
+    handler.log_error = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_strategy_console_control_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("partial execution failed")),
+    )
+
+    handler._handle_strategy_console_control()
+
+    assert errors == [
+        (500, "strategy_console_control_failed", "RuntimeError: partial execution failed")
+    ]
 
 
 def test_market_view_intake_api_draft_only_does_not_write_artifacts(tmp_path: Path):
@@ -1280,6 +1329,88 @@ def test_dashboard_v5_is_a_stable_alias_for_the_production_strategy_console():
     assert 'http://127.0.0.1:8766/dashboard-v5.html' in source
 
 
+def test_strategy_console_current_reuses_one_server_market_snapshot(tmp_path: Path, monkeypatch):
+    calls = []
+    snapshot = {
+        "schema_version": "dualtrack-market-bars-v1",
+        "status": "ready",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "provider": "binance_usdm",
+        "source_mode": "requested_symbol",
+        "fresh": True,
+        "is_synthetic": False,
+        "latest_timestamp": "2026-07-17T01:59:00+00:00",
+        "latest_close": 4050.0,
+        "bars": [{"timestamp": "2026-07-17T01:59:00+00:00", "close": 4050.0}],
+    }
+
+    class CountingMarketFeed:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def snapshot(self, *args, **kwargs):
+            calls.append({"args": args, "kwargs": kwargs})
+            return snapshot
+
+    class EmptyExecutionAdapter:
+        def snapshot(self, cycle_id, **kwargs):
+            return {
+                "schema_version": "dualtrack-execution-v1",
+                "engine": "legacy_paper",
+                "cycle_id": cycle_id,
+                "account": {},
+                "pnl": {},
+                "fills": [],
+                "positions": [],
+                "orders": [],
+            }
+
+        def reconcile(self, cycle_id):
+            return {"cycle_id": cycle_id, "status": "ok"}
+
+    monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", CountingMarketFeed)
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda _output: EmptyExecutionAdapter(),
+    )
+
+    result = dashboard_server.build_strategy_console_current_response(
+        output_root=tmp_path / "outputs",
+        as_of="2026-07-17T02:00:00+00:00",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["kwargs"]["limit"] == 240
+    assert result["market"] == snapshot
+
+
+def test_strategy_console_surfaces_latest_current_cycle_rollover_failure(tmp_path: Path):
+    output = tmp_path / "outputs"
+    folder = output / "dualtrack" / "strategy_control" / "rollovers"
+    write_json(folder / "2026-07-04_NIGHT__2026-07-05_DAY.json", [
+        {
+            "previous_cycle_id": "2026-07-04_NIGHT",
+            "current_cycle_id": "2026-07-05_DAY",
+            "status": "intent_recorded",
+            "recorded_at": "2026-07-05T01:00:00+00:00",
+        },
+        {
+            "previous_cycle_id": "2026-07-04_NIGHT",
+            "current_cycle_id": "2026-07-05_DAY",
+            "status": "blocked",
+            "reason": "previous production cycle package is not terminal",
+            "recorded_at": "2026-07-05T01:00:05+00:00",
+        },
+    ])
+
+    result = dashboard_server._latest_strategy_rollover(output, "2026-07-05_DAY")
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "previous production cycle package is not terminal"
+
+
 def test_strategy_console_production_history_keeps_prior_versioned_trades(tmp_path: Path):
     output = tmp_path / "outputs"
     cycle_id = "2026-07-04_NIGHT"
@@ -1445,6 +1576,51 @@ def test_strategy_console_history_combines_legacy_archive_with_authoritative_nau
     }
     assert result["history_contract"]["source"] == "versioned_strategy_plan_and_nautilus_authoritative"
     assert result["history_contract"]["nautilus_shadow_excluded"] is True
+
+
+def test_strategy_console_daily_nav_uses_closed_nautilus_position_pnl_when_fills_have_no_pnl(tmp_path: Path):
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-16_NIGHT"
+    write_json(
+        output / "dualtrack" / "nautilus_authoritative" / "snapshots" / f"{cycle_id}.json",
+        [{
+            "engine": "nautilus_paper",
+            "cycle_id": cycle_id,
+            "fills": [
+                {"fill_id": "entry", "trade_id": "fill-trade", "event": "entry", "ts": "2026-07-16T16:51:00+00:00", "price": 3998.99, "quantity": 1.001, "realized_pnl": 0.0, "strategy_plan_id": "plan-2", "strategy_plan_version": 2},
+                {"fill_id": "target", "trade_id": "fill-trade", "event": "target", "ts": "2026-07-16T17:11:56+00:00", "price": 3990.87, "quantity": 1.001, "realized_pnl": 8.12812, "strategy_plan_id": "plan-2", "strategy_plan_version": 2},
+            ],
+            "positions": [{
+                "trade_id": "position-trade",
+                "position_id": "POS-trade-1",
+                "status": "closed",
+                "side": "short",
+                "remaining_units": 0,
+                "entry_price": 3998.99,
+                "exit_price": 3990.87,
+                "entry_ts": "2026-07-16T16:51:00+00:00",
+                "exit_ts": "2026-07-16T17:11:56+00:00",
+                "realized_pnl": 8.12812,
+                "strategy_plan_id": "plan-2",
+                "strategy_plan_version": 2,
+            }],
+        }],
+    )
+
+    result = dashboard_server.build_strategy_console_production_history(
+        output_root=output,
+        authoritative_engine="nautilus_paper",
+    )
+
+    assert result["pnl"]["realized"] == 8.12812
+    assert result["daily"] == [{
+        "date": "2026-07-17",
+        "realized_pnl": 8.12812,
+        "fill_count": 2,
+        "notional": 7997.84986,
+        "cumulative_realized_pnl": 8.12812,
+        "nav": 1.00081281,
+    }]
 
 
 def test_compact_strategy_payload_keeps_replay_fields_and_drops_ops_bulk():

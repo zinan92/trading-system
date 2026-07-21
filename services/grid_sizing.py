@@ -2,10 +2,9 @@
 
 Single source of truth for the fixed-timeframe grid contract: complete D1
 ATR14 owns the range, complete 4H ATR14 owns the spacing, and per-grid
-notional comes from the operator-visible leverage capacity (`equity ×
-leverage ÷ max simultaneous same-side levels`).  Plan-loss remains an
-explicit risk diagnostic; it must never silently shrink the configured
-capital deployment.
+notional comes from the stricter of leverage capacity and the configured
+plan-loss budget.  Manual previews remain fully visible above that safe cap;
+mutation paths decide whether a preview may reach execution.
 
 Pure functions only: no I/O, no plan or ledger mutation, no clock reads.
 Identical market/account/config inputs must produce an identical preview,
@@ -70,11 +69,18 @@ def average_true_range(bars: list[dict[str, Any]], period: int = 14) -> float:
 
 
 def account_equity(account: dict[str, Any]) -> float:
+    return trusted_account_equity(account)
+
+
+def trusted_account_equity(account: dict[str, Any]) -> float:
     for key in ("equity", "ending_cash", "starting_cash"):
+        if key not in account:
+            continue
         value = number_or(account.get(key), 0.0)
-        if value > 0:
-            return value
-    return 10_000.0
+        if value <= 0:
+            raise ValueError("risk_evidence_missing")
+        return value
+    raise ValueError("risk_evidence_missing")
 
 
 def positive_number(value: Any, label: str) -> float:
@@ -233,10 +239,9 @@ def build_grid_preview(
     max_side_loss_rate = max(side_loss_rates.values())
     max_loss_budget = equity * max_plan_loss_pct
     risk_notional_cap = max_loss_budget / max_side_loss_rate if max_side_loss_rate > 0 else capital_notional_cap
-    # The leverage ceiling owns sizing.  The plan-loss calculation below is
-    # advisory and remains visible so an operator can lower leverage or edit
-    # the range deliberately instead of receiving a hidden haircut.
-    safe_notional = capital_notional_cap
+    # Floor the executable cap to cents so a client can copy it back into a
+    # manual preview without crossing the exact, unrounded boundary.
+    safe_notional = math.floor(min(capital_notional_cap, risk_notional_cap) * 100.0) / 100.0
     requested_notional = number_or(grid_input.get("notional_per_grid"), 0.0)
     default_notional_mode = "manual" if requested_notional > 0 else "auto"
     notional_mode = str(grid_input.get("notional_mode") or default_notional_mode).lower()
@@ -245,11 +250,6 @@ def build_grid_preview(
     if notional_mode == "manual":
         if requested_notional <= 0:
             raise ValueError("manual notional_per_grid must be greater than zero")
-        if requested_notional > safe_notional + 1e-8:
-            raise ValueError(
-                f"notional_per_grid {requested_notional:.2f} exceeds safe cap {safe_notional:.2f} "
-                "for the selected leverage and risk budget"
-            )
         notional = requested_notional
     else:
         # Auto sizing is a policy, not a fixed quote. Recalculate it from the
@@ -272,6 +272,8 @@ def build_grid_preview(
     max_loss = max(side_losses.values())
     max_side_notional = max(side_counts[side] * notional for side in side_counts)
     estimated_margin = max_side_notional / leverage
+    capital_budget_exceeded = max_side_notional > capital_budget + 1e-8
+    max_loss_budget_exceeded = max_loss > max_loss_budget + 1e-8
     round_trip_cost_rate = 2.0 * float(config.get("cost_per_side_bp") or 0.0) / 10_000.0
     net_profit_rates = [
         abs(order["tp"] - order["price"]) / order["price"] - round_trip_cost_rate
@@ -329,11 +331,17 @@ def build_grid_preview(
             "capital_budget": round(capital_budget, 2),
             "capital_notional_cap_per_grid": round(capital_notional_cap, 2),
             "risk_notional_cap_per_grid": round(risk_notional_cap, 2),
+            "safe_notional_cap_per_grid": round(safe_notional, 2),
             "max_simultaneous_same_side_levels": max_simultaneous_levels,
             "actual_leverage": round(max_side_notional / equity, 4) if equity else None,
             "capital_utilization_pct": round(max_side_notional / absolute_notional_ceiling * 100.0, 4),
-            "sizing_constraint": "leverage_capacity",
-            "risk_budget_exceeded": max_loss > max_loss_budget + 1e-8,
+            "sizing_constraint": (
+                "risk_budget" if risk_notional_cap < capital_notional_cap
+                else "leverage_capacity"
+            ),
+            "capital_budget_exceeded": capital_budget_exceeded,
+            "max_loss_budget_exceeded": max_loss_budget_exceeded,
+            "risk_budget_exceeded": capital_budget_exceeded or max_loss_budget_exceeded,
             "calibration_status": "shadow_candidate",
         },
         "strategy_timeframes": {

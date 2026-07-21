@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from services.run_date import utc_run_date
 
@@ -15,9 +16,11 @@ from services.data_source_lineage import DataSourceLineage
 from services.data_source_preflight import DataSourcePreflight
 from services.live_submission_safety import LiveSubmissionSafetySmoke
 from services.datafeed_source_jobs import run_oanda_feed_import
+from services.datafeed_market_client import DatafeedUnavailable
 from pipelines.collect import collect_once
 from pipelines.daily import run_daily_pipeline
-from services.journal_store import JournalStore, load_json
+from services.config_loader import ROOT
+from services.journal_store import JournalStore, load_json, write_json
 from services.live_readiness import LiveReadiness
 from services.mock_runtime import MockTradingRuntime
 from services.paper_auto_approval_gate import PaperAutoApprovalGate
@@ -28,12 +31,36 @@ from services.strategy_guardrails import StrategyGuardrails  # noqa: F401 - comp
 
 
 def run_binance_usdm_feed_import(run_date: str) -> dict:
-    return refresh_market_data(
-        run_date=run_date,
-        symbol="GOLD",
-        timeframe="5m",
-        output_kind="binance_usdm_feed",
-    )
+    try:
+        return refresh_market_data(
+            run_date=run_date,
+            symbol="GOLD",
+            timeframe="5m",
+            output_kind="binance_usdm_feed",
+        )
+    except DatafeedUnavailable as error:
+        # A data outage blocks fresh market use but must not prevent the rest
+        # of the runner from writing health, lineage, and fail-closed evidence.
+        result = {
+            "status": "fail",
+            "run_date": run_date,
+            "provider": "",
+            "source": "binance_usdm_futures",
+            "symbol": "GOLD",
+            "timeframe": "5m",
+            "imported_rows": 0,
+            "latest_timestamp": None,
+            "latest_price": None,
+            "fresh": False,
+            "is_synthetic": False,
+            "ready": False,
+            "market_data_backend": "datafeed",
+            "error": str(error),
+        }
+        output = Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / "outputs")))
+        write_json(output / "binance_usdm_feed" / "current.json", [result])
+        write_json(output / "binance_usdm_feed" / f"{run_date}.json", [result])
+        return result
 
 
 def run_bot_cycle(run_date: str, paper_auto_approve: bool = False) -> dict:

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from schemas.market_data import Bar
+from services.datafeed_market_client import DatafeedUnavailable
 from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.market_store import MarketStore
 
@@ -80,6 +81,123 @@ def test_dualtrack_market_feed_consumes_datafeed_port_without_private_db(tmp_pat
     assert payload["provider_symbol"] == "XAUUSDT"
     assert payload["latest_close"] == 4061
     assert payload["safety"]["reads_private_market_db"] is False
+
+
+def test_dualtrack_market_feed_reads_a_trusted_historical_page_before_cursor(tmp_path: Path):
+    seen = {}
+
+    class HistoricalClient:
+        base_url = "http://datafeed.test"
+
+        def candles(self, **kwargs):
+            seen.update(kwargs)
+            return {
+                "provider": "binance_usdm_futures",
+                "selected_source": "binance_usdm_futures",
+                "instrument_id": "GOLD",
+                "provider_symbol": "XAUUSDT",
+                "quality_flags": ["execution_venue", "stale"],
+                "is_synthetic": False,
+                "candles": [
+                    {
+                        "timestamp": "2026-07-15T01:57:00+00:00",
+                        "open": 4057,
+                        "high": 4058,
+                        "low": 4056,
+                        "close": 4057.5,
+                        "volume": 7,
+                    },
+                    {
+                        "timestamp": "2026-07-15T01:58:00+00:00",
+                        "open": 4058,
+                        "high": 4059,
+                        "low": 4057,
+                        "close": 4058.5,
+                        "volume": 8,
+                    },
+                    {
+                        "timestamp": "2026-07-15T01:59:00+00:00",
+                        "open": 4058.5,
+                        "high": 4060,
+                        "low": 4058,
+                        "close": 4059.5,
+                        "volume": 9,
+                    },
+                ],
+            }
+
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "base_url": "http://datafeed.test",
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+    }
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "must-not-exist.db",
+        config=config,
+        datafeed_client=HistoricalClient(),
+    ).snapshot(
+        symbol="GOLD",
+        timeframe="1m",
+        limit=2,
+        end="2026-07-15T02:00:00+00:00",
+        as_of="2026-07-17T02:00:00+00:00",
+    )
+
+    assert seen["end"] == "2026-07-15T02:00:00+00:00"
+    assert seen["cache_policy"] == "require"
+    assert seen["quality"] == "standard"
+    assert seen["limit"] == 3
+    assert payload["status"] == "ready"
+    assert payload["fresh"] is False
+    assert payload["historical_page"] is True
+    assert payload["trusted_history"] is True
+    assert [bar["timestamp"] for bar in payload["bars"]] == [
+        "2026-07-15T01:58:00+00:00",
+        "2026-07-15T01:59:00+00:00",
+    ]
+    assert payload["pagination"] == {
+        "has_more": True,
+        "next_before": "2026-07-15T01:58:00+00:00",
+        "oldest_timestamp": "2026-07-15T01:58:00+00:00",
+        "newest_timestamp": "2026-07-15T01:59:00+00:00",
+    }
+
+
+def test_dualtrack_market_feed_retries_same_live_source_once_after_transient_failure(tmp_path: Path):
+    class TransientClient(_FakeDatafeedClient):
+        calls = 0
+
+        def candles(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise DatafeedUnavailable("datafeed HTTP 502: transient proxy timeout")
+            return super().candles(**kwargs)
+
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "base_url": "http://datafeed.test",
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+    }
+    client = TransientClient()
+
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "must-not-exist.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(
+        symbol="GOLD",
+        timeframe="1m",
+        limit=10,
+        as_of="2026-07-15T02:01:00+00:00",
+    )
+
+    assert client.calls == 2
+    assert payload["status"] == "ready"
+    assert payload["source_mode"] == "binance_usdm_futures"
 
 
 def _bars(symbol: str, provider: str, start_price: float, *, start: datetime | None = None) -> list[Bar]:

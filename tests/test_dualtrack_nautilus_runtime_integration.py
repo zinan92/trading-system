@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from services.dualtrack_config import dualtrack_config
 from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
 
 
@@ -42,6 +43,136 @@ def _event(index: int, *, price: float, low: float, high: float) -> dict:
         "fresh": True,
         "is_synthetic": False,
     }
+
+
+def _ohlc_event(
+    index: int,
+    *,
+    open_price: float,
+    high: float,
+    low: float,
+    close: float,
+) -> dict:
+    event = _event(index, price=close, low=low, high=high)
+    event["open"] = open_price
+    event["close"] = close
+    return event
+
+
+def test_real_runtime_fills_every_grid_level_crossed_by_completed_bar(tmp_path: Path) -> None:
+    adapter = NautilusExecutionAdapter(
+        tmp_path / "outputs",
+        nautilus_python=RUNTIME,
+        preflight_path=PREFLIGHT,
+        defer_replay=True,
+    )
+    cycle_id = "2026-07-10_DAY"
+    levels = [
+        (3989.44, 3981.92),
+        (3996.96, 3989.44),
+        (4004.49, 3996.96),
+    ]
+    for index, (price, tp) in enumerate(levels):
+        adapter.submit_order({
+            "cycle_id": cycle_id,
+            "ts": "2026-07-10T01:00:10+00:00",
+            "side": "sell",
+            "event": "entry",
+            "order_type": "limit",
+            "price": price,
+            "quantity": 0.369,
+            "sl": 4170.0,
+            "tp": tp,
+            "source_fill_id": f"runtime-grid-cross-{index}",
+            "strategy_plan_id": "plan-runtime-grid-cross",
+            "strategy_plan_version": 1,
+        })
+    adapter.process_market_event(_ohlc_event(
+        0,
+        open_price=3966.87,
+        high=3966.87,
+        low=3966.87,
+        close=3966.87,
+    ))
+    adapter.process_market_event(_ohlc_event(
+        1,
+        open_price=3988.14,
+        high=3996.65,
+        low=3988.13,
+        close=3996.65,
+    ))
+    adapter.process_market_event(_ohlc_event(
+        2,
+        open_price=3996.66,
+        high=4008.24,
+        low=3996.0,
+        close=3999.05,
+    ))
+    adapter.flush(cycle_id)
+
+    snapshot = adapter.snapshot(cycle_id)
+    entry_fills = [row for row in snapshot["fills"] if row["event"] == "entry"]
+
+    assert [row["price"] for row in entry_fills] == [3989.44, 3996.96, 4004.49]
+    assert len([row for row in snapshot["positions"] if row["status"] == "open"]) == 3
+    assert not [
+        row
+        for row in snapshot["orders"]
+        if row["event"] == "entry" and row["state"] == "accepted" and row["price"] <= 4004.49
+    ]
+
+
+def test_real_runtime_fills_large_same_side_orders_at_one_crossed_level(tmp_path: Path) -> None:
+    config = dualtrack_config()
+    config["capital_per_track_usd"] = 1_000_000
+    adapter = NautilusExecutionAdapter(
+        tmp_path / "outputs",
+        nautilus_python=RUNTIME,
+        preflight_path=PREFLIGHT,
+        defer_replay=True,
+        config=config,
+    )
+    cycle_id = "2026-07-10_DAY"
+    for index in range(2):
+        adapter.submit_order({
+            "cycle_id": cycle_id,
+            "ts": "2026-07-10T01:00:10+00:00",
+            "side": "sell",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 4000.0,
+            "quantity": 150.0,
+            "source_fill_id": f"runtime-same-level-{index}",
+            "strategy_plan_id": "plan-runtime-same-level",
+            "strategy_plan_version": 1,
+        })
+    adapter.process_market_event(_ohlc_event(
+        0,
+        open_price=3990.0,
+        high=3990.0,
+        low=3990.0,
+        close=3990.0,
+    ))
+    adapter.process_market_event(_ohlc_event(
+        1,
+        open_price=3995.0,
+        high=4005.0,
+        low=3995.0,
+        close=4001.0,
+    ))
+    adapter.flush(cycle_id)
+
+    snapshot = adapter.snapshot(cycle_id)
+    entry_fills = [row for row in snapshot["fills"] if row["event"] == "entry"]
+    quantities_by_order: dict[str, float] = {}
+    for fill in entry_fills:
+        order_id = str(fill["order_id"])
+        quantities_by_order[order_id] = quantities_by_order.get(order_id, 0.0) + float(fill["quantity"])
+
+    assert len(quantities_by_order) == 2
+    assert set(quantities_by_order.values()) == {150.0}
+    assert {row["price"] for row in entry_fills} == {4000.0}
+    assert not [row for row in snapshot["orders"] if row["state"] == "accepted"]
 
 
 def test_real_runtime_cancels_pending_order_and_flattens_exact_hedged_position(tmp_path: Path) -> None:

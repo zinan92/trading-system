@@ -142,6 +142,8 @@ test("chart wrapper emits a provider-agnostic view change event", () => {
   assert.match(source, /_emitViewChange\(reason, range\)/);
   assert.match(source, /_isNearLiveEdge\(range, barCount\)/);
   assert.match(source, /live-update/);
+  assert.match(source, /getVisibleLogicalRange\(\)/);
+  assert.match(source, /restoreVisibleLogicalRange\(range, prependedBars\)/);
 });
 
 test("chart wrapper surfaces TradingView-style OHLC and scale controls", () => {

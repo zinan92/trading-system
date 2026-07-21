@@ -60,6 +60,7 @@ def test_trade_record_acceptance_samples_across_strategies_and_dates(tmp_path: P
     assert result["schema_version"] == TRADE_RECORD_ACCEPTANCE_VERSION
     assert result["status"] == "pass"
     assert result["sample_size_actual"] == 2
+    assert all(row["latest_price_evidence"]["status"] in {"available", "unknown"} for row in result["samples"])
     assert result["strategy_count"] == 2
     assert {row["strategy_id"] for row in result["samples"]} == {"gold_1m_breakout", "gold_1m_macd"}
     assert all(row["pnl_check"]["status"] == "pass" for row in result["samples"])

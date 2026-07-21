@@ -95,7 +95,7 @@ def test_direction_arms_sides_without_moving_range(tmp_path: Path) -> None:
     assert {o["side"] for o in previews["neutral"]["orders"]} == {"buy", "sell"}
 
 
-def test_auto_notional_uses_the_full_leverage_capacity_on_the_worst_side(tmp_path: Path) -> None:
+def test_auto_notional_uses_the_stricter_executable_risk_cap(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     preview = grid_sizing.build_grid_preview(
         "2026-07-05_DAY", {"direction": "neutral", "style": "steady"},
@@ -103,13 +103,14 @@ def test_auto_notional_uses_the_full_leverage_capacity_on_the_worst_side(tmp_pat
     )
     risk = preview["risk"]
     assert preview["grid"]["notional_per_grid"] == pytest.approx(
-        risk["capital_notional_cap_per_grid"], abs=0.01,
+        risk["safe_notional_cap_per_grid"], abs=0.01,
+    )
+    assert risk["safe_notional_cap_per_grid"] == pytest.approx(
+        min(risk["capital_notional_cap_per_grid"], risk["risk_notional_cap_per_grid"]),
+        abs=0.01,
     )
     assert risk["capital_budget"] == 100_000.0
-    assert (
-        preview["grid"]["notional_per_grid"]
-        * risk["max_simultaneous_same_side_levels"]
-    ) == pytest.approx(risk["absolute_notional_ceiling"], abs=0.25)
+    assert risk["risk_budget_exceeded"] is False
     assert preview["grid"]["notional_mode"] == "auto"
 
 
@@ -129,7 +130,8 @@ def test_style_changes_geometry_but_not_the_capital_utilization_policy(tmp_path:
     assert steady["grid"]["spacing"] != aggressive["grid"]["spacing"]
     assert steady["risk"]["capital_budget"] == aggressive["risk"]["capital_budget"] == 100_000.0
     assert steady["grid"]["margin_utilization_cap"] == aggressive["grid"]["margin_utilization_cap"] == 1.0
-    assert steady["grid"]["notional_per_grid"] == aggressive["grid"]["notional_per_grid"]
+    assert steady["grid"]["notional_per_grid"] == steady["risk"]["safe_notional_cap_per_grid"]
+    assert aggressive["grid"]["notional_per_grid"] == aggressive["risk"]["safe_notional_cap_per_grid"]
 
 
 def test_arithmetic_and_geometric_modes_generate_their_declared_geometry(tmp_path: Path) -> None:
@@ -174,14 +176,27 @@ def test_unknown_grid_mode_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_manual_notional_above_safe_cap_is_rejected(tmp_path: Path) -> None:
+def test_manual_notional_above_safe_cap_returns_a_complete_blocked_preview(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
-    with pytest.raises(ValueError, match="exceeds safe cap"):
-        grid_sizing.build_grid_preview(
-            "2026-07-05_DAY",
-            {"direction": "neutral", "style": "steady", "grid": {"notional_per_grid": 10_000_000.0, "notional_mode": "manual"}},
-            market=market(), account=account(), config=plane.config,
-        )
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        {"direction": "neutral", "style": "steady", "grid": {"notional_per_grid": 10_000_000.0, "notional_mode": "manual"}},
+        market=market(), account=account(), config=plane.config,
+    )
+
+    assert preview["grid"]["notional_per_grid"] == 10_000_000.0
+    assert preview["orders"]
+    assert preview["preview_id"]
+    assert preview["risk"]["risk_budget_exceeded"] is True
+    assert preview["risk"]["capital_budget_exceeded"] is True
+    assert preview["risk"]["max_loss_budget_exceeded"] is True
+    assert preview["risk"]["safe_notional_cap_per_grid"] == pytest.approx(
+        min(
+            preview["risk"]["capital_notional_cap_per_grid"],
+            preview["risk"]["risk_notional_cap_per_grid"],
+        ),
+        abs=0.01,
+    )
 
 
 def test_leverage_above_limit_is_rejected(tmp_path: Path) -> None:
@@ -201,4 +216,17 @@ def test_stale_market_is_rejected(tmp_path: Path) -> None:
         grid_sizing.build_grid_preview(
             "2026-07-05_DAY", {"direction": "neutral", "style": "steady"},
             market=market(fresh=False), account=account(), config=plane.config,
+        )
+
+
+def test_grid_preview_rejects_nonpositive_authoritative_equity(tmp_path: Path) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+
+    with pytest.raises(ValueError, match="risk_evidence_missing"):
+        grid_sizing.build_grid_preview(
+            "2026-07-05_DAY",
+            {"direction": "neutral", "style": "steady"},
+            market=market(),
+            account={"equity": 0.0, "starting_cash": 1_000_000.0},
+            config=plane.config,
         )

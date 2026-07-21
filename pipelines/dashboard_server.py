@@ -20,7 +20,7 @@ from services.command_center import build_command_center_state
 from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
-from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
+from services.dualtrack_clock import BJ_TZ, cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_execution_adapter import build_configured_execution_engine_adapter
 from services.dualtrack_machine import DualTrackMachineRunner
@@ -34,6 +34,8 @@ from services.dualtrack_scoring import (
 from services.dualtrack_store import DualTrackPlanStore
 from services.strategy_control_plane import StrategyControlPlane
 from services.strategy_recommendation import StrategyRecommendationService
+from services.strategy_market_context import build_strategy_timeframes
+from services.strategy_cycle_package import StrategyCyclePackager
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
 from services.replay_state import ReplayState
@@ -101,6 +103,19 @@ _TIGER_PAPER_ORDER_REFRESH_RUNBOOK_ENDPOINT_SAFETY = {
     "credential_values_exposed": False,
     "raw_command_text_exposed": False,
 }
+
+
+def _json_safe(value: Any) -> Any:
+    """Return standards-compliant JSON data without mutating source artifacts."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -287,6 +302,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_json(200, build_strategy_console_control_response(payload, actor=self._control_actor()))
         except ValueError as exc:
             self._write_error(400, "invalid_strategy_console_control", str(exc))
+        except Exception as exc:  # noqa: BLE001 - HTTP boundary must return a durable failure receipt.
+            detail = str(exc).strip()
+            self.log_error("strategy-console control failed: %s", detail or type(exc).__name__)
+            self._write_error(
+                500,
+                "strategy_console_control_failed",
+                f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__,
+            )
 
     def _control_actor(self) -> dict:
         # The gateway asserts this header only after validating the Cloudflare
@@ -372,6 +395,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         params = parse_qs(query)
         symbol = (params.get("symbol") or [""])[0].strip()
         timeframe = (params.get("timeframe") or [""])[0].strip()
+        end = (params.get("end") or [""])[0].strip()
         if symbol and not _SYMBOL_PATTERN.match(symbol):
             self._write_error(400, "invalid_symbol", "symbol contains unsupported characters")
             return
@@ -383,12 +407,19 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         except ValueError:
             self._write_error(400, "invalid_limit", "limit must be an integer")
             return
+        if end:
+            try:
+                parse_utc(end)
+            except (TypeError, ValueError):
+                self._write_error(400, "invalid_end", "end must be an ISO-8601 timestamp")
+                return
         self._write_json(
             200,
             build_dualtrack_market_bars_response(
                 symbol=symbol or None,
                 timeframe=timeframe or None,
                 limit=limit,
+                end=end or None,
             ),
         )
 
@@ -559,7 +590,11 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
 
     def _write_json(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(
+            _json_safe(payload),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -727,10 +762,22 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
     output = _dualtrack_output_root(output_root)
     cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
     cycle_id = str(cycle["cycle_id"])
+    rollover = _latest_strategy_rollover(output, cycle_id)
     control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
     market = build_dualtrack_market_bars_response(limit=240, as_of=as_of)
-    trades = build_dualtrack_trades_response(cycle_id, track="human", output_root=output, as_of=as_of)
-    execution = build_dualtrack_execution_response(cycle_id, output_root=output, as_of=as_of)
+    trades = build_dualtrack_trades_response(
+        cycle_id,
+        track="human",
+        output_root=output,
+        as_of=as_of,
+        _trusted_market_snapshot=market,
+    )
+    execution = build_dualtrack_execution_response(
+        cycle_id,
+        output_root=output,
+        as_of=as_of,
+        _trusted_market_snapshot=market,
+    )
     production_history = build_strategy_console_production_history(
         output_root=output,
         mark_price=market.get("latest_close"),
@@ -743,8 +790,19 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
         "margin": (execution.get("account") or {}).get("margin", 0),
         "slippage": (execution.get("account") or {}).get("slippage", 0),
     }
+    packages = StrategyCyclePackager(output).list_packages(limit=12)
     folder = output / "dualtrack" / "strategy_shadows"
-    shadows = [rows[-1] for path in sorted(folder.glob(f"{cycle_id}_*.json")) if (rows := load_json(path))] if folder.exists() else []
+    shadows_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    if folder.exists():
+        for path in sorted(folder.glob("*.json")):
+            rows = load_json(path)
+            if rows and isinstance(rows[-1], dict):
+                row = rows[-1]
+                shadows_by_key[(str(row.get("cycle_id") or ""), str(row.get("variant_id") or ""))] = row
+    for package in packages:
+        for row in package.get("strategy_shadows") or []:
+            shadows_by_key[(str(row.get("cycle_id") or ""), str(row.get("variant_id") or ""))] = row
+    shadows = sorted(shadows_by_key.values(), key=lambda row: (str(row.get("cycle_id") or ""), str(row.get("variant_id") or "")), reverse=True)
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
@@ -766,6 +824,12 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
             "history_contract": production_history["history_contract"],
         },
         "ledger": build_dualtrack_ledger_response(output_root=output),
+        "production_history": {
+            "daily": production_history.get("daily") or [],
+            "history_contract": production_history["history_contract"],
+        },
+        "cycle_packages": packages,
+        "production_rollover": rollover,
         "strategy_shadows": shadows,
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
@@ -786,6 +850,18 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
             "runtime_actual_state": True,
         },
     }
+
+
+def _latest_strategy_rollover(output_root: Path, current_cycle_id: str) -> dict[str, Any]:
+    folder = output_root / "dualtrack" / "strategy_control" / "rollovers"
+    if not folder.exists():
+        return {}
+    rows: list[dict[str, Any]] = []
+    for path in folder.glob(f"*__{current_cycle_id}.json"):
+        values = load_json(path)
+        if values and isinstance(values[-1], dict):
+            rows.append(values[-1])
+    return max(rows, key=lambda row: str(row.get("recorded_at") or ""), default={})
 
 
 def build_strategy_console_production_history(
@@ -853,8 +929,8 @@ def build_strategy_console_production_history(
                     row for row in snapshot.get("positions") or []
                     if isinstance(row, dict) and row.get("strategy_plan_id") not in (None, "")
                 ]
-                production_fills.extend({**row, "source_cycle_id": cycle_id} for row in selected_fills)
-                production_trades.extend({**row, "source_cycle_id": cycle_id} for row in selected_trades)
+                production_fills.extend({**row, "source_cycle_id": cycle_id, "_history_source": "nautilus_authoritative"} for row in selected_fills)
+                production_trades.extend({**row, "source_cycle_id": cycle_id, "_history_source": "nautilus_authoritative"} for row in selected_trades)
     enriched = apply_unrealized(production_trades, mark_price, mark_fresh=mark_fresh)
     enriched.sort(key=lambda trade: str(trade.get("exit_ts") or trade.get("entry_ts") or ""))
     production_fills.sort(key=lambda fill: str(fill.get("ts") or ""))
@@ -870,6 +946,54 @@ def build_strategy_console_production_history(
     unrealized = summary.get("unrealized_pnl")
     ending_cash = round(starting_cash + realized, 8)
     equity = None if unrealized is None else round(ending_cash + float(unrealized), 8)
+    daily_by_date: dict[str, dict[str, Any]] = {}
+    for fill in production_fills:
+        try:
+            date = parse_utc(fill.get("ts")).astimezone(BJ_TZ).date().isoformat()
+        except (TypeError, ValueError):
+            continue
+        row = daily_by_date.setdefault(date, {"date": date, "realized_pnl": 0.0, "fill_count": 0, "notional": 0.0})
+        row["fill_count"] += 1
+        row["notional"] += (
+            float(fill.get("notional") or 0.0)
+            or float(fill.get("price") or 0.0) * float(fill.get("pnl_units") or fill.get("quantity") or 0.0)
+        )
+    realized_trade_ids: set[str] = set()
+    for trade in enriched:
+        exit_ts = trade.get("exit_ts")
+        if not exit_ts or trade.get("realized_pnl") is None:
+            continue
+        try:
+            date = parse_utc(exit_ts).astimezone(BJ_TZ).date().isoformat()
+        except (TypeError, ValueError):
+            continue
+        trade_id = str(trade.get("trade_id") or trade.get("position_id") or "")
+        if trade_id:
+            realized_trade_ids.add(trade_id)
+        row = daily_by_date.setdefault(date, {"date": date, "realized_pnl": 0.0, "fill_count": 0, "notional": 0.0})
+        row["realized_pnl"] += float(trade.get("realized_pnl") or 0.0)
+    for fill in production_fills:
+        trade_id = str(fill.get("trade_id") or "")
+        if fill.get("_history_source") == "nautilus_authoritative" or trade_id in realized_trade_ids or fill.get("realized_pnl") is None:
+            continue
+        try:
+            date = parse_utc(fill.get("ts")).astimezone(BJ_TZ).date().isoformat()
+        except (TypeError, ValueError):
+            continue
+        row = daily_by_date.setdefault(date, {"date": date, "realized_pnl": 0.0, "fill_count": 0, "notional": 0.0})
+        row["realized_pnl"] += float(fill.get("realized_pnl") or 0.0)
+    cumulative = 0.0
+    daily: list[dict[str, Any]] = []
+    for date in sorted(daily_by_date):
+        row = daily_by_date[date]
+        cumulative += float(row["realized_pnl"])
+        daily.append({
+            **row,
+            "realized_pnl": round(float(row["realized_pnl"]), 8),
+            "notional": round(float(row["notional"]), 8),
+            "cumulative_realized_pnl": round(cumulative, 8),
+            "nav": round((starting_cash + cumulative) / starting_cash, 8) if starting_cash > 0 else None,
+        })
     return {
         "schema_version": "strategy-production-history-v1",
         "trades": enriched[-max(1, int(limit)):],
@@ -882,6 +1006,7 @@ def build_strategy_console_production_history(
             "ending_cash": ending_cash,
             "equity": equity,
         },
+        "daily": daily,
         "history_contract": {
             "source": (
                 "versioned_strategy_plan_and_nautilus_authoritative"
@@ -1033,52 +1158,13 @@ def build_strategy_timeframes_response(
     timeframes: tuple[str, ...] = ("1d", "4h", "1h", "15m"),
 ) -> dict[str, dict[str, Any]]:
     """Build fixed, completed strategy bars; never follows the chart timeframe."""
-    checked_at = parse_utc(as_of)
-    feed = DualTrackMarketFeed(market_db=market_db, config=config)
-    specs = {"1d": 32, "4h": 64, "1h": 96, "15m": 160}
-    seconds = {"1d": 86_400, "4h": 14_400, "1h": 3_600, "15m": 900}
-    minimum = {"1d": 15, "4h": 15, "1h": 15, "15m": 50}
-    result: dict[str, dict[str, Any]] = {}
-    unknown = set(timeframes) - set(specs)
-    if unknown:
-        raise ValueError(f"unsupported strategy timeframes: {sorted(unknown)}")
-    for timeframe in timeframes:
-        limit = specs[timeframe]
-        snapshot = feed.snapshot(symbol="GOLD", timeframe=timeframe, limit=limit, as_of=as_of)
-        trusted = snapshot.get("status") in {"ready", "derived"} and snapshot.get("is_synthetic") is False
-        # A single upstream connection reset must not make the operator's selected
-        # grid mode disagree with the chart. Retry only the exact same trusted
-        # source/timeframe once; synthetic data is never retried or accepted.
-        if not trusted and snapshot.get("is_synthetic") is False:
-            snapshot = feed.snapshot(symbol="GOLD", timeframe=timeframe, limit=limit, as_of=as_of)
-            trusted = snapshot.get("status") in {"ready", "derived"} and snapshot.get("is_synthetic") is False
-        if not trusted:
-            issues = snapshot.get("access_issues") or []
-            detail = f": {issues[0]}" if issues else ""
-            raise ValueError(f"strategy timeframe {timeframe} is unavailable or untrusted{detail}")
-        completed: list[dict[str, Any]] = []
-        for bar in snapshot.get("bars") or []:
-            started = parse_utc(str(bar.get("timestamp") or ""))
-            if started + timedelta(seconds=seconds[timeframe]) > checked_at:
-                continue
-            if timeframe == "1d" and started.weekday() >= 5:
-                continue
-            completed.append(dict(bar))
-        if len(completed) < minimum[timeframe]:
-            raise ValueError(f"strategy timeframe {timeframe} has insufficient completed bars")
-        result[timeframe] = {
-            "timeframe": timeframe,
-            "provider": snapshot.get("provider"),
-            "is_synthetic": False,
-            "status": snapshot.get("status"),
-            "fresh": snapshot.get("fresh"),
-            "bars": completed,
-            "bar_count": len(completed),
-            "latest_timestamp": completed[-1].get("timestamp"),
-            "completed_only": True,
-            "weekends_excluded": timeframe == "1d",
-        }
-    return result
+    return build_strategy_timeframes(
+        as_of=as_of,
+        market_db=market_db,
+        config=config,
+        timeframes=timeframes,
+        feed_cls=DualTrackMarketFeed,
+    )
 
 
 def build_dualtrack_config_response() -> dict:
@@ -1267,7 +1353,11 @@ def build_dualtrack_trades_response(
     as_of: str | None = None,
     mark_price: float | str | None = None,
     mark_source: str | None = None,
+    _trusted_market_snapshot: dict[str, Any] | None = None,
 ) -> dict:
+    # Public callers cannot override the mark.  The underscored snapshot is
+    # only used by the server-side aggregate builder after it fetched the
+    # canonical market response itself.
     del mark_price, mark_source
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
@@ -1276,7 +1366,13 @@ def build_dualtrack_trades_response(
         raise ValueError("track must be human or machine")
     closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
     output = _dualtrack_output_root(output_root)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
+    mark = _dualtrack_mark_price(
+        output,
+        cycle_id,
+        closed=closed,
+        as_of=as_of,
+        trusted_market_snapshot=_trusted_market_snapshot,
+    )
     rows = _dualtrack_trade_rows_for_cycle(output, cycle_id, normalized_track, mark)
     enriched = rows["trades"]
     summary = _trade_summary(enriched)
@@ -1320,6 +1416,7 @@ def build_dualtrack_execution_response(
     *,
     output_root: Path | None = None,
     as_of: str | None = None,
+    _trusted_market_snapshot: dict[str, Any] | None = None,
 ) -> dict:
     """Read-only execution/accounting view for the human paper track.
 
@@ -1332,7 +1429,13 @@ def build_dualtrack_execution_response(
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
     output = _dualtrack_output_root(output_root)
     closed = _dualtrack_cycle_closed(cycle_id, as_of=as_of)
-    mark = _dualtrack_mark_price(output, cycle_id, closed=closed, as_of=as_of)
+    mark = _dualtrack_mark_price(
+        output,
+        cycle_id,
+        closed=closed,
+        as_of=as_of,
+        trusted_market_snapshot=_trusted_market_snapshot,
+    )
     adapter = build_configured_execution_engine_adapter(output)
     snapshot = adapter.snapshot(
         cycle_id,
@@ -1371,12 +1474,14 @@ def build_dualtrack_market_bars_response(
     market_db: Path | None = None,
     config: dict | None = None,
     as_of: str | None = None,
+    end: str | None = None,
 ) -> dict:
     return DualTrackMarketFeed(market_db=market_db, config=config).snapshot(
         symbol=symbol,
         timeframe=timeframe,
         limit=limit,
         as_of=as_of,
+        end=end,
     )
 
 
@@ -1399,6 +1504,7 @@ def _dualtrack_mark_price(
     *,
     closed: bool,
     as_of: str | None = None,
+    trusted_market_snapshot: dict[str, Any] | None = None,
 ) -> dict:
     if closed:
         cycle_rows = load_json(output_root / "dualtrack" / "cycles" / f"{cycle_id}.json")
@@ -1406,7 +1512,9 @@ def _dualtrack_mark_price(
         close_price = _finite_float(cycle.get("close_price"))
         if close_price is not None:
             return {"price": close_price, "fresh": True, "source": "cycle_close"}
-    market = DualTrackMarketFeed().snapshot(symbol="GOLD", timeframe="1m", limit=1, as_of=as_of)
+    market = trusted_market_snapshot
+    if market is None:
+        market = DualTrackMarketFeed().snapshot(symbol="GOLD", timeframe="1m", limit=1, as_of=as_of)
     latest_bar = (market.get("bars") or [{}])[-1] if isinstance(market.get("bars"), list) else {}
     price = _finite_float(market.get("latest_close"))
     if price is None:

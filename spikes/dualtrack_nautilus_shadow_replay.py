@@ -119,19 +119,26 @@ def _run_market_replay(
 
     bar_type = BarType.from_str(f"{instrument.id}-1-MINUTE-LAST-EXTERNAL")
     bars = []
+    execution_levels = _execution_levels(commands)
     for event in events:
         timestamp = datetime.fromisoformat(str(event["ts_event"]).replace("Z", "+00:00"))
         timestamp_ns = int(timestamp.timestamp() * 1_000_000_000)
-        bars.append(Bar(
-            bar_type=bar_type,
-            open=instrument.make_price(event["open"]),
-            high=instrument.make_price(event["high"]),
-            low=instrument.make_price(event["low"]),
-            close=instrument.make_price(event["price"]),
-            volume=instrument.make_qty(100),
-            ts_event=timestamp_ns,
-            ts_init=timestamp_ns,
-        ))
+        active_levels = [
+            price
+            for command_at, price in execution_levels
+            if command_at <= timestamp
+        ]
+        for price in _bar_execution_path(event, active_levels):
+            bars.append(Bar(
+                bar_type=bar_type,
+                open=instrument.make_price(price),
+                high=instrument.make_price(price),
+                low=instrument.make_price(price),
+                close=instrument.make_price(price),
+                volume=instrument.make_qty(100),
+                ts_event=timestamp_ns,
+                ts_init=timestamp_ns,
+            ))
     command_by_id = {str(row.get("command_id") or ""): dict(row.get("command") or {}) for row in commands}
     command_batches: list[tuple[datetime, list[str]]] = []
     for command_row in commands:
@@ -293,6 +300,67 @@ def _command_quantity(command: dict[str, Any]) -> float:
     if value <= 0:
         raise ValueError("shadow command quantity is invalid")
     return value
+
+
+def _execution_levels(commands: list[dict[str, Any]]) -> list[tuple[datetime, float]]:
+    """Return executable prices which need their own L1 bar matching update.
+
+    Nautilus converts a LAST bar into only four synthetic trade ticks. A single
+    tick advances one resting order at a crossed price, so a wide bar can leave
+    later grid orders accepted even though its high/low crossed their limits.
+    Expanding the same deterministic OHLC path at every entry/TP/SL level keeps
+    Nautilus authoritative while giving each touched order one matching event.
+    """
+
+    levels: list[tuple[datetime, float]] = []
+    for row in commands:
+        command = dict(row.get("command") or {})
+        command_at = _command_time(row)
+        for key in ("price", "tp", "sl"):
+            value = command.get(key)
+            if value not in (None, "") and float(value) > 0:
+                levels.append((command_at, float(value)))
+    return levels
+
+
+def _bar_execution_path(event: dict[str, Any], levels: list[float]) -> list[float]:
+    """Expand one OHLC bar using Nautilus' adaptive high/low ordering.
+
+    The returned point bars contain no invented prices: every intermediate
+    point is an executable order level inside the original bar range.
+    """
+
+    open_price = float(event["open"])
+    high_price = float(event["high"])
+    low_price = float(event["low"])
+    close_price = float(event["price"])
+    high_first = abs(high_price - open_price) < abs(low_price - open_price)
+    anchors = (
+        [open_price, high_price, low_price, close_price]
+        if high_first
+        else [open_price, low_price, high_price, close_price]
+    )
+    bounded_levels = {
+        float(price)
+        for price in levels
+        if low_price <= float(price) <= high_price
+    }
+    path = [anchors[0]]
+    for target in anchors[1:]:
+        cursor = path[-1]
+        if target > cursor:
+            points = sorted(price for price in bounded_levels if cursor < price <= target)
+        elif target < cursor:
+            points = sorted(
+                (price for price in bounded_levels if target <= price < cursor),
+                reverse=True,
+            )
+        else:
+            points = []
+        if not points or points[-1] != target:
+            points.append(target)
+        path.extend(points)
+    return [price for index, price in enumerate(path) if index == 0 or price != path[index - 1]]
 
 
 def _snapshot_reports(

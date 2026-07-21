@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Iterable
 
 from services.config_loader import ROOT, load_pipeline_config
+from services.datafeed_market_client import DatafeedUnavailable
 from services.market_data_access import market_data_repository, uses_independent_datafeed
 
 
@@ -77,8 +78,23 @@ class DataHealthAuditor:
         self.timeframe_seconds = _TIMEFRAME_SECONDS.get(timeframe, 300)
 
     def run(self, run_date: str | None = None) -> dict:
-        rows = self._load_rows()
         checked_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        try:
+            rows = self._load_rows()
+        except (DatafeedUnavailable, RuntimeError, OSError) as error:
+            return {
+                "run_date": run_date or "",
+                "checked_at": checked_at,
+                "symbol": self.symbol,
+                "timeframe": self.timeframe,
+                "market_data_backend": "datafeed",
+                "status": "error",
+                "message": f"market data port unavailable: {error}",
+                "summary": {"issue_count": 1},
+                "issues": [{"type": "market_data_unavailable", "severity": "block", "detail": str(error)}],
+                "providers": [],
+                "recommendations": ["restore the trusted datafeed before using market data"],
+            }
         if not rows:
             return {
                 "run_date": run_date or "",

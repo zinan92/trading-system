@@ -5782,3 +5782,495 @@ auditable datafeed port; broker execution remains a separate port.
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-order-lifecycle-desktop.png`.
 - 390px position-time evidence (zero horizontal page overflow):
   `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-16-gridmind-order-lifecycle-mobile.png`.
+
+## 2026-07-17 - Automatic cycle rollover, trusted K-line history, and terminal cycle evidence
+
+### Decision
+
+- Treat 09:00/21:00 Beijing rollover as a durable state machine, not a UI
+  status change. The runner closes the prior production cycle, cancels accepted
+  orders, flattens positions, reconciles the authoritative paper ledger,
+  appends a terminal cycle package, then starts the current cycle. Any failed
+  gate records a `blocked` rollover and remains fail-closed.
+- Only finalized market bars may become execution events. The forming candle is
+  display-only until its interval closes, and the durable event identity is
+  based on cycle, timeframe, and bar start time so a later refresh cannot replay
+  the same minute under a new ID.
+- Preserve the last trusted visible K-line snapshot when a later Binance
+  refresh fails, but force `fresh=false`, show the failure, and disable new
+  entries. This is not fallback: the retained bars are explicitly historical
+  and cannot satisfy the trading health gate.
+- Paginate `standard-kline` history with an exclusive `end` timestamp and
+  restore the previous logical viewport after prepending bars. Do not infer
+  history exhaustion merely because a boundary page deduplicates to zero rows;
+  use the server's `has_more` contract.
+- Package each completed cycle with the archived StrategyPlan/version,
+  proposals, production orders/fills/positions/PnL, reconciliation, review,
+  market-event hash, and strategy counterfactuals. `strategy_shadow` remains
+  separate from `execution_shadow` and never writes the production ledger.
+- Use `execution.pnl.realized` as the terminal cycle PnL authority. Nautilus
+  fills are immutable events but do not carry per-fill realized PnL; Beijing-day
+  NAV therefore attributes realized PnL from authoritative closed positions
+  and uses fills only for event count/notional.
+- Historical cycle-package repairs are append-only. A repaired record carries a
+  new hash plus `supersedes_package_hash`; the original record is retained.
+  Shadow backfill attempts are themselves idempotent so an unavailable shadow
+  cannot create one new revision per scheduler tick.
+
+### Root cause and runtime finding
+
+- There was no missing fill between 01:11 and 08:59 Beijing. The exact 468
+  completed 1m bars topped at 3,996.50 while the lowest accepted sell was
+  4,007.11, so no accepted level was crossed.
+- The apparent overnight stop had two independent causes: prior-cycle orders
+  were not formally cancelled/packaged at the boundary, and the new cycle plan
+  was generated but not automatically started. In addition, the live-tick
+  LaunchAgent had exited with macOS code 78 before Python started. Restarting
+  the agent restored the 60-second scheduler; automatic rollover then completed
+  and started `2026-07-17_DAY` without editing historical fills.
+
+### Gotchas
+
+- A market endpoint can return valid JSON with `status=error` and zero bars.
+  Catching only HTTP exceptions is insufficient; accepting that payload had
+  replaced 241 valid candles with an empty chart.
+- A completed Nautilus target fill has price/quantity/event identity but no
+  `realized_pnl`. Summing fill-level realized fields silently produced zero in
+  both the 12-hour review and daily NAV even though the account snapshot was
+  correct.
+- `active_plan(cycle_id)` correctly returns nothing after the next cycle
+  supersedes it. Cycle evidence must read the latest archived plan for the
+  completed cycle rather than treating the missing active plan as missing
+  history.
+- Recorded market events use `price` as the event close. Requiring a separate
+  `close` field caused a false `market_event_history_missing` shadow result even
+  though 954 trusted events were present.
+- A failed strategy-shadow backfill must not unwind production-cycle closure or
+  retry forever. Unexpected shadow exceptions are captured as counterfactual
+  errors, while the reconciled production package still closes.
+- `dashboard-dualtrack-split.html` remains the compatibility surface by design;
+  production V5 is `/dashboard-v5.html`, which aliases `dashboard-gridmind.html`.
+  Browser acceptance against the legacy URL can therefore produce a false
+  lazy-history failure even when V5 is correct. Always verify the deployed V5
+  route for current-product claims.
+- The trusted strategy context intentionally retries one transient failure once
+  against the same feed. Removing that retry caused the full suite to fail; the
+  bounded retry was restored while synthetic data still fails immediately and
+  no provider fallback is allowed.
+
+### Verification and evidence
+
+- Exact runtime replay: 468 completed bars from 01:11–08:59 Beijing; high
+  3,996.50 below lowest sell 4,007.11; zero-fill result explained.
+- Initial full repository regression before independent review fixes:
+  `1571 passed in 500.60s`.
+- Final regression after review fixes, same-source retry restoration, and NAV
+  precision: `1574 passed in 620.41s`; standard-kline Node tests `21 passed`;
+  `git diff --check` passed.
+- Claude Sonnet (`claude-sonnet-5`) read-only re-review verified the former P1
+  shadow-repair loop is closed and found no remaining P0/P1. Receipt:
+  `/Users/wendy/.codex/cc-receipts/2026-07-17/20260717T043433Z_ab002c62-e65f-434f-b686-35210f4a6921.json`.
+- Browser left-drag acceptance expanded the visible 1m series from 240/241 to
+  721 trusted bars while preserving the viewport; browser console errors: 0.
+- Final V5 acceptance showed a running `2026-07-17_DAY` cycle, trusted Binance
+  USD-M data, 24 visible working orders, real 12-hour review, six Strategy
+  Shadows, and six-decimal NAV history. At 390px the page scroll width equaled
+  its client width, so there was no horizontal page overflow.
+- Runtime after automatic rollover: `2026-07-17_DAY`, Nautilus Paper, running,
+  24 accepted orders, reconciliation `ok`; during browser acceptance two long
+  grids opened and later closed at target, and daily NAV updated from the
+  immutable fills/closed positions.
+- Desktop running console:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-desktop-running.png`.
+- Trusted lazy-history grid:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-lazy-history-grid.png`.
+- 12-hour review:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-12h-review.png`.
+- Strategy Shadow comparison:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-strategy-shadows.png`.
+- Mobile header/chart and mobile controls:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-mobile-header.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-mobile-controls.png`.
+- Final desktop, 721-bar history, review, shadows, NAV, and mobile proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-final-desktop.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-final-history-721-bars.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-final-12h-review.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-final-strategy-shadows.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-final-nav-history.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-final-mobile-header.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-final-mobile-controls.png`.
+
+## 2026-07-17 — V5 chart readability and lifecycle explanations
+
+### Decisions
+
+- The dashboard now opens on `30m`. The display timeframe remains a view-only
+  choice and does not alter the fixed D1/4H strategy inputs.
+- Candle autoscaling follows visible OHLC data instead of forcing the complete
+  production Range into the price scale. Full Range and all grid levels remain
+  in the model and summary; only levels inside the visible price window render
+  on screen. The existing auto-scale control can restore the candle view.
+- Passive grid lines use low-alpha neutral strokes; accepted orders use
+  low-alpha side colors and only the six closest prices receive axis labels.
+  Crosshair time is shown at the bottom of the chart rather than in the toolbar.
+- `当前委托` resolves TP/SL from the same-plan deterministic preview order by
+  side and price when the execution order omits those fields. It displays the
+  target/stop price plus approximate gross USD gain/loss; stale-plan orders are
+  not matched to the current plan and show `未设`.
+- `成交记录` is a trade-lifecycle view, not a mutable raw-fill list: one row
+  contains entry time/price, exit time/price, TP/SL/manual result, quantity, and
+  realized PnL. Immutable fills remain the backing evidence and hidden
+  compatibility table.
+- The 12-hour review renders visible raw facts plus a descriptive assessment:
+  AI proposal, locked production plan, range/spacing, fills, reconciliation,
+  direction grade, same-history counterfactual comparison, and next-cycle
+  change. It explicitly separates a profitable cycle from whether the direction
+  call was correct.
+- Strategy Shadow cards use human names and descriptions. Comparisons use the
+  same-cycle production replay as the baseline; realized and unrealized PnL are
+  shown separately. Missing historical style or same-cycle baseline is stated,
+  not inferred.
+
+### Gotchas
+
+- Execution working orders do not currently repeat TP/SL fields. The plan's
+  `grid.orders` is authoritative only when `strategy_plan_id` matches; matching
+  solely by price can silently attach current-plan protection to a stale order.
+  A missing plan ID is also unknown evidence, not implicit current-plan
+  membership: after independent review, both missing and mismatched IDs fail
+  closed to `未设`.
+- A closed Nautilus trade record can omit quantity and exit-event text even
+  though immutable fills contain both. The UI resolves quantity by `trade_id`
+  and classifies TP/SL from exit fills or exact protected-price equality.
+- Shadow `net_pnl` may be almost entirely unrealized. Showing only net PnL next
+  to `trade_count=0` looked contradictory, so realized/unrealized are now
+  explicit.
+- Browser visual truth differed from source-level expectations: forcing the
+  complete 3,799–4,191 Range compressed current 30m candles into a thin strip.
+  Removing the Range expansion made candles readable while retaining nearby
+  grid/order overlays.
+
+### Verification and evidence
+
+- Focused dashboard tests: `10 passed`; standard-kline Node tests: `21 passed`;
+  inline dashboard JavaScript passed `node --check`.
+- Claude Sonnet read-only review found one P1 fail-open plan-ID predicate in
+  order protection inference. A regression test now pins the fail-closed rule;
+  no P0 findings or production-ledger mutation paths were found.
+- Desktop Playwright acceptance: default `30m`, clear candles, faded grid/order
+  overlays, lifecycle trades, explicit order TP/SL, six explained Shadows, and
+  expanded 12-hour review. Current-order table horizontal overflow: `0px`.
+- Mobile Playwright acceptance at `390x844`: page scroll width `380px`, chart
+  width `346px`, no global horizontal overflow. Crosshair time measured `3px`
+  above the chart bottom.
+- Evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-orders-tpsl.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-12h-review.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-strategy-shadows.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-mobile-30m.png`.
+
+## 2026-07-17 — Debug closure and two safe Range-adjustment workflows
+
+### Decisions
+
+- Production start receipts use only the current accepted-order snapshot. Historic
+  cancel events remain in the journal as evidence but can no longer masquerade as
+  accepted orders or make a complete start fail.
+- A current-cycle manual stop is authoritative over stale rollover intent. Failed
+  start cleanup is scoped to the failed StrategyPlan version and cannot flatten
+  another plan.
+- The dashboard owns one canonical live market snapshot per current-state request.
+  Market, historical-load, and control messages have independent UI channels, so
+  a history failure cannot overwrite the running-adjustment status.
+- Strict Binance USD-M remains fail-closed and has no venue fallback. One bounded
+  retry is allowed against the same source; empty transport messages include the
+  concrete exception type. Datafeed liveness skips deep SQLite integrity unless
+  `deep=true` is requested.
+- The right-side `调整区间（不停止网格）` preserves spacing/ratio and per-grid
+  notional, changes only whole edge-grid steps, and preserves positions plus TP/SL.
+- Chart `调整网格` is a separate replacement workflow. Middle drag preserves
+  width/count/spacing/notional; edge drag preserves count/notional and recalculates
+  spacing. Pointer release only updates a dashed draft; the small `确认` opens the
+  full old-to-new card.
+- Over-budget manual sizing remains visible in a read-only preview. The executable
+  safe cap is the stricter of leverage capacity and max-loss budget; production
+  start, running regrid, and replacement all reject the same risk flag. Applying
+  the safe cap is an explicit operator action and never a silent haircut.
+- Final replacement revalidates trusted market, current price, plan/preview IDs,
+  authoritative equity, and exact accepted-order/open-position IDs before stop.
+  The request fingerprint is persisted with the new plan before execution so a
+  lost response cannot execute the replacement twice.
+
+### Gotchas
+
+- The original Binance HTTP 502 was an intermittent Clash upstream timeout. The
+  empty message hid `ReadTimeout`; it was not evidence that Binance returned an
+  application-level 502.
+- Full SQLite integrity work on every health probe can block an otherwise healthy
+  API and amplify one dashboard refresh into several upstream calls.
+- Standard Kline namespaces element IDs inside its chart host. Draft buttons must
+  use stable `data-grid-action` selectors rather than IDs.
+- A staged edge order can fill immediately if its price equals the current price.
+  Equal-price edges are skipped, and failure cleanup now flattens only positions
+  created by the staged plan and verifies zero staged live state.
+- Durable plan/runtime writes are part of the execution boundary. Activation
+  failure cleans staged orders; a failure after old-order cancellation marks the
+  runtime error rather than pretending the old plan is intact.
+- The first present equity field is authoritative. Explicit zero/invalid current
+  equity cannot fall through to historical starting cash or a default account.
+- Existing accepted, filled, or positioned edge levels must be included in
+  duplicate detection; otherwise a Range extension can double risk at one price.
+
+### Verification and evidence
+
+- Trading focused/adjacent regression: `205 passed`; chart behavior: `5 passed`;
+  inline JavaScript syntax and `git diff --check` passed.
+- Datafeed regression: `72 passed`; Ruff passed. Live strict Binance USD-M request
+  returned fresh, non-synthetic execution-venue candles; health returned
+  `storage.status=ok` with deep integrity intentionally not checked.
+- Adversarial review reproduced seven production-boundary exploits, all received
+  direct regression tests, and the final 100% re-review reported no P0/P1.
+- Browser acceptance used a preview-only fixture that rejected every mutation.
+  It verified draft accumulation, the full confirmation card, disabled execution
+  while risk exceeded, and explicit safe-notional recalculation without clicking
+  the final production button.
+- Final real runtime remained `stopped/stopped`, `last_error=null`, zero accepted
+  orders, zero open positions, fresh Binance USD-M market data. The authoritative
+  command journal remained at 760 rows and the live-tick agent exited cleanly.
+- Evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-dashboard-history-notice-isolation.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-grid-range-draft-controls.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-grid-range-replacement-card.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-grid-range-risk-recalculated.png`.
+
+## 2026-07-17 — Live counts and recovered rollover truth
+
+### Decisions
+
+- Keep the immutable blocked rollover receipt as historical evidence, but do not
+  present it as the current state after a newer same-cycle start is running,
+  error-free, and has accepted orders. The UI labels that history as
+  `blocked（后续启动已恢复）`.
+- Tab counts have distinct meanings: `当前持仓` counts open trade lifecycles,
+  `当前委托` counts accepted pending orders, and `成交记录` counts unique trade
+  lifecycles. Entry creates one trade; closing updates that trade and does not
+  create a second record.
+
+### Gotchas
+
+- The banner color already came from current runtime health while its text
+  unconditionally came from the older rollover receipt. That mixed two timestamps
+  and produced a green `自动续跑失败` contradiction without a current failure.
+- A 25-order count for one side of a 50-level grid is a useful visual sanity check,
+  not a universal invariant: current price, direction, Range position, and skipped
+  equal-price levels determine the exact accepted count.
+
+### Verification and evidence
+
+- Live read-only check: runtime `running/running`, 25 accepted orders, zero open
+  trades, 16 trade lifecycles, `last_error=null`, reconciliation `ok`.
+- Focused dashboard tests: `17 passed`; drag/lifecycle Node tests: `7 passed`;
+  inline JavaScript syntax and `git diff --check` passed.
+- Browser proof:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-live-counts-rollover-recovered.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-rollover-recovered-live-panel.png`.
+
+## 2026-07-17 — Live market tape, trade notifications, and paired 12-hour review
+
+### Decisions
+
+- This change is UI-only. It does not alter strategy selection, risk limits,
+  order generation, control endpoints, or the production ledger.
+- The header uses the canonical `provider_symbol` from the always-current 1m
+  console snapshot, so the venue ticker renders as `XAU / USDT` even when the
+  chart is switched to 30m or another display timeframe. Price color compares
+  consecutive fresh 1m snapshots; equal prices retain the previous direction.
+- “今日涨跌幅” uses the current trusted 1d candle open from the existing market
+  endpoint and the latest trusted 1m close. It is shown only when symbol,
+  provider, freshness, and non-synthetic provenance match.
+- The green blinking `运行中` chip requires a healthy running runtime, accepted
+  orders, fresh market data, and no active rollover/inconsistency gate. Detailed
+  order count remains a separate header fact. The redundant `自检` button and
+  its listener were removed.
+- Trade notifications observe authoritative production fills and positions.
+  The first snapshot seeds stable `cycle + source_fill_id/fill_id/order_id`
+  identities and emits nothing. Partial reductions require a verified decrease
+  in authoritative remaining units; final completion comes from the closed
+  lifecycle, so same-poll partial/final fills and split final-order fills still
+  produce one correct completion toast. A notification-only view also retains
+  unmatched historical closed rows across cycle rollover without reviving
+  historical open rows.
+- Trade sound uses a short Web Audio chime after the first user gesture. TP,
+  entry, and stop tones are distinct; missing audio support never affects order
+  or dashboard behavior.
+- The 12-hour review is a paired ledger: left is the plan known at the time,
+  center is an explicit verdict, and right is outcome/analysis. Direction,
+  execution, PnL, key levels, TP/SL geometry, and counterfactuals are graded
+  independently. The next-cycle review suggestion is displayed beside the
+  current plan without claiming causal auto-application.
+- Review grades fail closed. Missing plan fields, counts, regimes,
+  reconciliation status, or required numeric fields do not become invented
+  defaults or verdicts. A legacy direction grade may judge the locked production
+  plan only when its recorded decision matches that plan's direction; otherwise
+  the row says `口径不一致` and explains both baselines.
+
+### Gotchas
+
+- The UI refreshes the latest 1m candle close every five seconds; this is not a
+  venue WebSocket tick stream. “Today” is the exchange daily-candle session,
+  not rolling 24-hour change.
+- Browsers block programmatic audio before a user gesture. A notification can
+  still appear silently if the page has not yet been clicked or keyed.
+- Notification deduplication is deliberately in-memory. Reloading the page
+  seeds all existing fills as history again, preventing old trades from
+  replaying as new notifications.
+- Positive PnL does not validate an unrelated direction grade. The current
+  closed cycle is profitable, but its legacy grade evaluated a different plan
+  direction. The UI keeps those facts separate and does not reuse that grade as
+  a production-direction verdict.
+- The notification screenshot is a UI-only injected preview of a historical TP
+  shape. It created no order and wrote no production ledger entry.
+
+### Verification and evidence
+
+- Dashboard static tests: `21 passed`; focused Node behavior tests: `23 passed`;
+  inline JavaScript parsing and `git diff --check` passed.
+- Live browser verification showed `运行中`, `XAU / USDT`, red/green price-tick
+  state, non-empty exchange-day percentage, 51 accepted orders, one open
+  position, 17 trade lifecycles, seven paired review rows, no global horizontal
+  overflow, and zero browser console errors.
+- Mobile verification at `390x844` kept the pair and runtime status visible and
+  reported no horizontal overflow; `PAPER` remains visible.
+- Claude Opus completed a final read-only review with no remaining P0/P1
+  findings. Verified receipt:
+  `/Users/wendy/.codex/cc-receipts/2026-07-17/20260717T132205Z_94e08af0-b31d-48d0-8a41-53f34b7ec629.json`.
+- Evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-live-header-and-review.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-review-full.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-trade-toast-ui-preview.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-mobile-header.png`,
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-mobile-review.png`.
+
+## 2026-07-17 — Nautilus bar-grid fill coverage
+
+### Decisions
+
+- Keep Nautilus as the authoritative paper execution engine; do not add a
+  second fill ledger or rewrite its order lifecycle.
+- The replay bridge now expands each completed OHLC bar into a deterministic
+  point path containing the original OHLC anchors plus only the active entry,
+  TP, and SL levels crossed by that bar. High/low ordering follows Nautilus's
+  existing adaptive bar-path heuristic.
+- Preserve the original market-event timestamp on every point in the path so
+  previously accepted immutable fills retain their business values and stable
+  ordering.
+- Bump the replay contract to `dualtrack-nautilus-replay-v7` so the authoritative
+  paper snapshot is rebuilt once under the corrected bar-to-execution input.
+
+### Gotchas
+
+- A single Nautilus `LAST` OHLC bar supplies only four synthetic market updates;
+  it does not guarantee a separate matching opportunity for every same-side
+  grid order crossed inside that candle.
+- The new path is deterministic bar-derived execution, not a claim of tick-level
+  truth. It invents no prices, but intrabar ordering is still an OHLC assumption.
+- The 4,004.49 short is not missing from current positions: it entered at 21:40
+  Beijing time and reached its 3,996.96 TP at 21:41, so its correct home is the
+  completed trade history.
+- Nautilus applies synthetic bar volume to large fills. A real-runtime stress
+  test confirmed two same-side 150-unit orders at the same price both complete,
+  but each is split into multiple fills. Production grid quantities are far
+  below that synthetic liquidity threshold.
+- The authoritative adapter currently replays on each completed market event;
+  the deferred shadow adapter batches until flush. This is a known P3 scaling
+  caveat, not a correctness blocker for the current 12-hour cycle size.
+
+### Verification and evidence
+
+- Focused replay, runtime-integration, adapter, shadow-adapter, and parity tests:
+  `42 passed`.
+- Replaying the real 52-level plan produced the 4,004.49 entry and 3,996.96 TP
+  while preserving every pre-existing fill's immutable values.
+- The authoritative runtime snapshot rebuilt on replay v7 and the dashboard now
+  shows the closed 4,004.49 lifecycle with `+2.78` realized PnL.
+- Claude Opus (`claude-opus-4-8`) completed a verified read-only review with no
+  P0/P1/P2 findings. Its quantity P3 was resolved by the same-price/large-fill
+  runtime regression; its performance P3 was confirmed and recorded as a
+  bounded current-cycle caveat.
+  Receipt:
+  `/Users/wendy/.codex/cc-receipts/2026-07-17/20260717T140813Z_0fd96f51-0fc4-4454-851c-17db79c833fc.json`.
+- Evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-nautilus-grid-fill-v7.png`.
+
+## 2026-07-17 — Always-visible running strategy summary
+
+### Decisions
+
+- Add one compact, always-authoritative line directly below the K-line market
+  metadata. It reads the locked production plan rather than the editable form
+  or startup preview.
+- Show the decision fields needed to understand current exposure at a glance:
+  running/stopped state, plan version, bilateral or unilateral direction,
+  style, grid mode/count, per-grid notional and its sizing mode, maximum risk,
+  and leverage.
+- Keep range geometry and accepted buy/sell counts on the existing second line;
+  no strategy, risk, order, or control behavior changes.
+
+### Gotchas
+
+- `1,477.48 USD/格` is not a display error. The current neutral-steady plan uses
+  auto sizing and was capped by the approximately 10% maximum-plan-loss budget:
+  maximum risk is `1,001.43 USD` on roughly `10,010 USD` equity.
+- Older per-grid notionals are not carried forward in auto mode. Start rechecks
+  the safe cap against the current account, market, direction, range, and
+  same-side loss geometry; a wider bilateral plan can therefore size lower than
+  an earlier narrower or unilateral plan.
+- The line says `当前生产计划（未运行）` when the runtime is stopped, so a saved
+  plan is never presented as active execution.
+
+### Verification and evidence
+
+- Focused dashboard static tests: `22 passed`; inline JavaScript syntax and
+  `git diff --check` passed.
+- Browser proof shows one line reading `当前运行策略 v2 · 中性双边 · 稳健 ·
+  等价差 · 52 格 · 每格 1,477.48 USD（风险自动定额） · 最大风险 1,001.43 USD · 10x`.
+- Evidence:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-17-gridmind-running-strategy-summary.png`.
+
+## 2026-07-20 — GridMind JSON boundary and public tunnel recovery
+
+### Decisions
+
+- Treat every Dashboard API response as a standards-compliant JSON boundary:
+  historical non-finite floats are projected as `null` without rewriting the
+  source ledger, and serialization uses `allow_nan=False` to prevent future
+  browser-wide parse failures.
+- Preserve strict trusted-market behavior. The K-line incident was caused by
+  six historical `NaN` order prices in the combined console payload, not by an
+  empty datafeed, so no synthetic or fallback行情 was introduced.
+- Recover the existing named Cloudflare tunnel through its launchd owner
+  instead of creating a second tunnel or changing DNS.
+
+### Gotchas
+
+- Python's default `json.dumps` and `jq` accept `NaN`, while browser
+  `JSON.parse` correctly rejects it. A command-line `200` or permissive parser
+  therefore does not prove that the web product can consume the response.
+- A live `cloudflared` process is not proof of a live connector. The failed
+  process kept retrying while Cloudflare reported zero active connections and
+  served Error 1033.
+- The named tunnel serves both `desk.park-ai-intel.com` and
+  `goldbot.park-ai-intel.com`; restart it through
+  `com.wendy.topic-workbench-tunnel` so both ingress rules retain one owner.
+
+### Verification and evidence
+
+- Focused Dashboard/API tests: `65 passed`.
+- Strict JSON parsing passed with zero `NaN`; the console returned 240 fresh,
+  non-synthetic Binance USD-M 30m bars.
+- Browser verification rendered seven chart canvases, five account cards,
+  current price, 74 open orders, and no console warnings/errors.
+- Cloudflare tunnel inspection showed two registered QUIC edge connections;
+  the public URL returned the expected Access login redirect instead of 1033.
+- Screenshot:
+  `/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence/2026-07-20-gridmind-kline-restored.png`.

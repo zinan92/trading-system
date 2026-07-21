@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from services.config_loader import ROOT, load_pipeline_config, load_strategy_config
+from services.datafeed_market_client import DatafeedUnavailable
 from services.journal_store import load_json, write_json
 from services.market_data_access import market_data_repository
 from services.trade_record_card import TradeRecordCardBuilder
@@ -114,11 +115,12 @@ class TradeRecordAcceptanceAudit:
     def _evaluate(self, item: dict) -> dict:
         trade = item["trade"]
         strategy_id = str(trade.get("strategy_id") or item["strategy_id"])
+        latest_price_evidence = self._latest_price_evidence(trade)
         card = TradeRecordCardBuilder(
             run_date=item["run_date"],
             strategy_id=strategy_id,
             strategy_config=self.strategy_config.get(strategy_id, {}) if isinstance(self.strategy_config, dict) else {},
-            latest_price=self._latest_price(trade),
+            latest_price=latest_price_evidence["price"],
         ).build({**trade, "strategy_id": strategy_id})
         card_failures = self._card_failures(card)
         pnl_check = self._pnl_check(trade, card)
@@ -133,6 +135,7 @@ class TradeRecordAcceptanceAudit:
             "protection_status": (card.get("protection") or {}).get("status", ""),
             "compliance_verdict": (card.get("compliance") or {}).get("verdict", ""),
             "pnl_check": pnl_check,
+            "latest_price_evidence": latest_price_evidence,
             "failures": failures,
             "display": card.get("display", {}),
         }
@@ -213,19 +216,36 @@ class TradeRecordAcceptanceAudit:
         return str(trade.get("trade_id") or trade.get("order_id") or trade.get("opened_at") or item.get("index") or "")
 
     def _latest_price(self, trade: dict) -> float | None:
+        return self._latest_price_evidence(trade)["price"]
+
+    def _latest_price_evidence(self, trade: dict) -> dict[str, Any]:
         direct = self._number(trade.get("latest_price"))
         if direct is not None:
-            return direct
+            return {"status": "available", "source": "trade", "price": direct}
         exit_decision = trade.get("exit_decision") if isinstance(trade.get("exit_decision"), dict) else {}
         direct = self._number(exit_decision.get("latest_price"))
         if direct is not None:
-            return direct
+            return {"status": "available", "source": "exit_decision", "price": direct}
         symbol = str(trade.get("symbol") or "GOLD")
-        store = market_data_repository(self.market_db)
-        latest = store.load_latest_bar(symbol, "1m") or store.load_latest_bar(symbol, "5m")
-        if not latest and symbol != "GOLD":
-            latest = store.load_latest_bar("GOLD", "1m") or store.load_latest_bar("GOLD", "5m")
-        return self._number(latest.get("close")) if latest else None
+        try:
+            store = market_data_repository(self.market_db)
+            latest = store.load_latest_bar(symbol, "1m") or store.load_latest_bar(symbol, "5m")
+            if not latest and symbol != "GOLD":
+                latest = store.load_latest_bar("GOLD", "1m") or store.load_latest_bar("GOLD", "5m")
+        except (DatafeedUnavailable, KeyError, RuntimeError, OSError) as error:
+            return {
+                "status": "unknown",
+                "source": "datafeed",
+                "price": None,
+                "reason": f"{type(error).__name__}: {error}",
+            }
+        price = self._number(latest.get("close")) if latest else None
+        return {
+            "status": "available" if price is not None else "unknown",
+            "source": "datafeed",
+            "price": price,
+            "reason": None if price is not None else "latest_price_missing",
+        }
 
     def _date_from_ts(self, value: Any) -> str:
         parsed = self._parse_ts(value)

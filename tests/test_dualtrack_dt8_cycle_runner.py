@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import pipelines.dualtrack_cycle_runner as cycle_runner_module
-from pipelines.dualtrack_cycle_runner import DualTrackCycleRunner
+from pipelines.dualtrack_cycle_runner import DualTrackCycleRunner, compact_live_tick_output
 from schemas.market_data import Bar
 from services.dualtrack_config import base_rung_notional
 from services.dualtrack_clock import parse_utc
@@ -81,6 +81,38 @@ def _plan(cycle_id: str, direction: str = "long") -> dict:
     }
 
 
+def test_live_tick_cli_summary_does_not_serialize_full_ledgers() -> None:
+    result = compact_live_tick_output({
+        "event": "live_tick",
+        "as_of": "2026-07-17T02:00:00+00:00",
+        "lifecycle": [{
+            "event": "close",
+            "cycle_id": "2026-07-16_NIGHT",
+            "status": "closed",
+            "attribution": {"fills": [dict(big="payload")]},
+        }],
+        "protective_sweep": {
+            "status": "ok",
+            "processed_events": 10,
+            "snapshot": {"orders": [dict(big="payload")]},
+        },
+        "intraday": {"status": "ran", "bar_count": 60, "state": {"large": True}},
+        "ledger_refreshed": True,
+        "ledger_daily_count": 4,
+    })
+
+    assert result["lifecycle"] == [{
+        "event": "close",
+        "cycle_id": "2026-07-16_NIGHT",
+        "status": "closed",
+        "reason": None,
+    }]
+    assert result["protective_sweep"] == {"status": "ok", "processed_events": 10}
+    assert result["intraday"] == {"status": "ran", "bar_count": 60}
+    assert "attribution" not in str(result)
+    assert "snapshot" not in str(result)
+
+
 def _neutral_machine_plan(cycle_id: str, *, low: float = 4090.0, high: float = 4130.0) -> dict:
     return {
         "cycle_id": cycle_id,
@@ -133,6 +165,163 @@ def _seed_previous_and_day(db: Path) -> MarketStore:
 
 def _realized_pnl(fills: list[dict]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
+
+
+def test_production_rollover_stops_packages_and_restarts_the_next_cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    calls: list[str] = []
+
+    class Control:
+        def __init__(self, _output_root):
+            pass
+
+        def runtime_configured(self):
+            return True
+
+        def persisted_runtime_state(self):
+            return {
+                "cycle_id": "2026-07-04_NIGHT",
+                "desired_state": "running",
+                "actual_state": "running",
+            }
+
+        def control(self, cycle_id, action, payload, **_kwargs):
+            calls.append(f"{action}:{cycle_id}")
+            if action == "stop":
+                return {"cancelled_orders": 12, "flattened_positions": 0}
+            return {
+                "accepted_orders": 24,
+                "plan": {"strategy_plan_id": "plan-new", "version": 2},
+            }
+
+        def active_plan(self, _cycle_id):
+            return {
+                "strategy_plan_id": "plan-candidate",
+                "version": 1,
+                "direction": "neutral",
+                "style": "steady",
+                "grid": {"mode": "arithmetic"},
+                "risk_budget": {"leverage": 10},
+            }
+
+        def ensure_compatible_active_plan(self, *_args, **_kwargs):
+            raise AssertionError("active plan should be reused")
+
+    class Execution:
+        def snapshot(self, cycle_id):
+            calls.append(f"snapshot:{cycle_id}")
+            return {"account": {"equity": 10_000}}
+
+    class Packager:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def package(self, cycle_id, *, now):
+            calls.append(f"package:{cycle_id}")
+            return {"cycle_id": cycle_id, "status": "closed", "package_hash": "hash-1"}
+
+    monkeypatch.setattr(cycle_runner_module, "StrategyControlPlane", Control)
+    monkeypatch.setattr(cycle_runner_module, "StrategyCyclePackager", Packager)
+    runner = object.__new__(DualTrackCycleRunner)
+    runner.output_root = output
+    runner.config = TEST_CONFIG
+    runner.execution = Execution()
+    runner._production_market_snapshot = lambda _now: {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "binance_usdm_futures",
+        "latest_close": 4000,
+        "bars": [{}] * 20,
+        "strategy_timeframes": {},
+    }
+
+    result = runner._rollover_production(
+        "2026-07-04_NIGHT",
+        "2026-07-05_DAY",
+        now=parse_utc("2026-07-05T01:00:00+00:00"),
+    )
+
+    assert result["status"] == "completed"
+    assert result["accepted_orders"] == 24
+    assert calls == [
+        "snapshot:2026-07-04_NIGHT",
+        "stop:2026-07-04_NIGHT",
+        "package:2026-07-04_NIGHT",
+        "start:2026-07-05_DAY",
+    ]
+    rows = load_json(
+        output / "dualtrack" / "strategy_control" / "rollovers" / "2026-07-04_NIGHT__2026-07-05_DAY.json"
+    )
+    assert [row["status"] for row in rows] == [
+        "intent_recorded",
+        "previous_cycle_stopped",
+        "previous_cycle_packaged",
+        "completed",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("desired_state", "actual_state"),
+    (("stopped", "stopped"), ("stopped", "error"), ("running", "error")),
+)
+def test_production_rollover_does_not_restart_a_stopped_current_cycle_from_stale_intent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    desired_state: str,
+    actual_state: str,
+) -> None:
+    output = tmp_path / "outputs"
+    previous_cycle_id = "2026-07-04_NIGHT"
+    current_cycle_id = "2026-07-05_DAY"
+
+    class Control:
+        def __init__(self, _output_root):
+            pass
+
+        def runtime_configured(self):
+            return True
+
+        def persisted_runtime_state(self):
+            return {
+                "cycle_id": current_cycle_id,
+                "desired_state": desired_state,
+                "actual_state": actual_state,
+            }
+
+    monkeypatch.setattr(cycle_runner_module, "StrategyControlPlane", Control)
+    runner = object.__new__(DualTrackCycleRunner)
+    runner.output_root = output
+    rollover_path = runner._rollover_path(previous_cycle_id, current_cycle_id)
+    write_json(rollover_path, [{
+        "previous_cycle_id": previous_cycle_id,
+        "current_cycle_id": current_cycle_id,
+        "status": "blocked",
+        "should_continue": True,
+        "reason": "old transient failure",
+    }])
+    runner._production_market_snapshot = lambda _now: (_ for _ in ()).throw(
+        AssertionError("stale rollover intent must not restart the current cycle")
+    )
+
+    result = runner._rollover_production(
+        previous_cycle_id,
+        current_cycle_id,
+        now=parse_utc("2026-07-05T01:10:00+00:00"),
+    )
+
+    assert result == {
+        "event": "production_rollover",
+        "status": "skipped",
+        "reason": "current_cycle_runtime_not_running",
+        "cycle_id": current_cycle_id,
+        "desired_state": desired_state,
+        "actual_state": actual_state,
+    }
+    assert len(load_json(rollover_path)) == 1
 
 
 def test_already_closed_cycle_finalizes_shadow_qualification(tmp_path: Path) -> None:
@@ -465,6 +654,7 @@ def test_midnight_cutover_closes_legacy_night_and_opens_daily_cycle(tmp_path: Pa
     assert results == [
         {"event": "close", "cycle_id": "2026-07-13_NIGHT"},
         {"event": "pre_cycle", "cycle_id": "2026-07-14_DAY"},
+        {"event": "production_rollover", "status": "skipped", "reason": "production_runtime_not_configured"},
     ]
 
 
@@ -488,7 +678,7 @@ def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: 
     })
     runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
 
-    result = runner.live_tick(as_of="2026-07-05T01:01:30+00:00")
+    result = runner.live_tick(as_of="2026-07-05T01:02:00+00:00")
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
     assert result["protective_sweep"]["status"] == "triggered"
@@ -496,6 +686,52 @@ def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: 
     assert len(fills) == 2
     assert fills[-1]["event"] == "stop"
     assert fills[-1]["price"] == 105.0
+
+
+def test_live_tick_waits_for_final_one_minute_ohlc_before_execution(tmp_path: Path) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    MarketStore(db).upsert_bars([
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp="2026-07-05T01:01:00+00:00",
+            open=100.0,
+            high=106.0,
+            low=99.0,
+            close=106.0,
+            volume=1.0,
+            provider="test",
+        )
+    ])
+    DualTrackHumanEngine(output, config=TEST_CONFIG).submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:00:30+00:00",
+        "side": "sell",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "notional": 1000.0,
+        "sl": 105.0,
+        "tp": 90.0,
+    })
+    runner = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG)
+
+    forming = runner.live_tick(as_of="2026-07-05T01:01:30+00:00")
+    fills_while_forming = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
+    final = runner.live_tick(as_of="2026-07-05T01:02:00+00:00")
+    fills_after_close = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
+    event = runner._protective_bar_event(
+        "2026-07-05_DAY",
+        MarketStore(db).load_bars("GOLD", "1m", 1)[0],
+        now=parse_utc("2026-07-05T01:02:00+00:00"),
+    )
+
+    assert forming["protective_sweep"]["reason"] == "waiting_for_completed_market_bar"
+    assert len(fills_while_forming) == 1
+    assert final["protective_sweep"]["status"] == "triggered"
+    assert fills_after_close[-1]["event"] == "stop"
+    assert event["event_id"] == "2026-07-05_DAY:1m:2026-07-05T01:01:00+00:00"
 
 
 def test_live_tick_keeps_prior_cycle_human_tp_sl_active(
@@ -524,7 +760,7 @@ def test_live_tick_keeps_prior_cycle_human_tp_sl_active(
     monkeypatch.setattr(runner, "sync_obsidian_human_plans", lambda **_kwargs: {"status": "skipped"})
     monkeypatch.setattr(runner, "intraday_tick", lambda **_kwargs: {"status": "skipped"})
 
-    result = runner.live_tick(as_of="2026-07-05T13:01:30+00:00")
+    result = runner.live_tick(as_of="2026-07-05T13:02:00+00:00")
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
     assert result["protective_sweep"]["status"] == "triggered"
@@ -574,7 +810,7 @@ def test_live_tick_replays_intermediate_bar_wick_after_close_recovers(tmp_path: 
     })
 
     result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
-        as_of="2026-07-05T01:02:30+00:00"
+        as_of="2026-07-05T01:03:00+00:00"
     )
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
@@ -614,7 +850,7 @@ def test_live_tick_same_bar_stop_and_target_uses_conservative_stop_first(tmp_pat
     })
 
     DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
-        as_of="2026-07-05T01:01:30+00:00"
+        as_of="2026-07-05T01:02:00+00:00"
     )
 
     fills = load_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_human.json")
@@ -811,7 +1047,7 @@ def test_live_tick_routes_trusted_market_event_through_execution_adapter(tmp_pat
     )
 
     result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
-        as_of="2026-07-05T01:01:30+00:00"
+        as_of="2026-07-05T01:02:30+00:00"
     )
 
     assert result["protective_sweep"]["status"] == "triggered"
@@ -854,7 +1090,7 @@ def test_live_tick_processes_pending_limit_without_an_open_position(tmp_path: Pa
     )
 
     result = DualTrackCycleRunner(output_root=output, market_db=db, config=TEST_CONFIG).live_tick(
-        as_of="2026-07-05T01:01:30+00:00"
+        as_of="2026-07-05T01:02:30+00:00"
     )
 
     assert result["protective_sweep"]["processed_events"] > 0
@@ -915,8 +1151,8 @@ def test_live_tick_replays_datafeed_limit_fill_and_target_exactly_once(
     monkeypatch.setattr(runner, "sync_obsidian_human_plans", lambda **_kwargs: {"status": "skipped"})
     monkeypatch.setattr(runner, "intraday_tick", lambda **_kwargs: {"status": "skipped"})
 
-    first = runner.live_tick(as_of="2026-07-05T01:02:30+00:00")
-    second = runner.live_tick(as_of="2026-07-05T01:02:30+00:00")
+    first = runner.live_tick(as_of="2026-07-05T01:03:00+00:00")
+    second = runner.live_tick(as_of="2026-07-05T01:03:00+00:00")
 
     snapshot = runner.execution.snapshot("2026-07-05_DAY", mark_price=110.0, mark_fresh=True)
     assert first["protective_sweep"]["status"] == "triggered"
@@ -1373,7 +1609,7 @@ def test_dt8_empty_market_db_skip_paths_and_auto_are_safe(tmp_path: Path) -> Non
     auto = runner.auto(as_of="2026-07-05T01:00:00+00:00")
 
     assert auto["event"] == "auto"
-    assert [row["status"] for row in auto["results"]] == ["skipped", "skipped", "skipped"]
+    assert [row["status"] for row in auto["results"]] == ["skipped", "skipped", "skipped", "skipped"]
 
 
 def test_comex_session_auto_skips_during_daily_break(tmp_path: Path) -> None:

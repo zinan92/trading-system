@@ -12,7 +12,7 @@ from services.live_env import apply_live_env
 
 
 DEFAULT_MAX_CHARS = 3500
-DIGEST_KINDS = {"pm_morning", "pm_evening", "strategy_research"}
+DIGEST_KINDS = {"pm_morning", "pm_evening", "strategy_research", "trading_daily_24h"}
 REPORT_WEBHOOK_KEYS = (
     "TRADING_ORCHESTRATOR_REPORT_FEISHU_WEBHOOK_URL",
     "TRADING_ORCHESTRATOR_FEISHU_REPORT_WEBHOOK_URL",
@@ -145,6 +145,8 @@ class FeishuReportSender:
             return _pm_digest(kind, body, source_path)
         if kind == "strategy_research":
             return _strategy_research_digest(body, source_path)
+        if kind == "trading_daily_24h":
+            return _trading_daily_digest(body)
         return body
 
     def _record(self, payload: dict) -> None:
@@ -205,7 +207,20 @@ def _kind_label(kind: str) -> str:
         "dualtrack_machine_brief": "机器轨作战单",
         "dualtrack_trade_record": "黄金交易记录",
         "market_analysis_prompt": "市场分析提醒",
+        "trading_daily_24h": "24 小时交易报告",
     }.get(kind, kind)
+
+
+def _trading_daily_digest(body: str) -> str:
+    trades = _first_paragraph(_section(body, "成交"))
+    cycle_lines = _pick_bullets(_section(body, "成交"), tuple(), 2)
+    direction = _first_paragraph(_section(body, "方向变化"))
+    learning = _first_paragraph(_section(body, "值得学习"))
+    lines = ["成交", _shorten(_clean_text(trades), 180)]
+    lines.extend(f"- {_shorten(_clean_text(item), 140)}" for item in cycle_lines[:2])
+    lines.extend(["", "方向变化", _shorten(_clean_text(direction), 180)])
+    lines.extend(["", "值得学习", _shorten(_clean_text(learning), 420)])
+    return "\n".join(_drop_empty_tail(lines))
 
 
 def _pm_digest(kind: str, body: str, source_path: str) -> str:

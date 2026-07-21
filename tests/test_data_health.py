@@ -4,6 +4,7 @@ from pathlib import Path
 
 from schemas.market_data import Bar
 from services.data_health import DataHealthAuditor
+from services.datafeed_market_client import DatafeedUnavailable
 from services.market_store import MarketStore
 
 
@@ -132,3 +133,11 @@ def test_audit_passes_clean_dataset(tmp_path: Path) -> None:
     assert "degenerate_snapshots_in_bars_table" not in codes
     assert "misaligned_timestamps" not in codes
     assert "provider_conflicts" not in codes
+def test_data_health_reports_datafeed_outage_without_throwing(tmp_path, monkeypatch):
+    auditor = DataHealthAuditor(db_path=tmp_path / "market.db")
+    monkeypatch.setattr(auditor, "_load_rows", lambda: (_ for _ in ()).throw(DatafeedUnavailable("offline")))
+
+    result = auditor.run("2026-05-29")
+
+    assert result["status"] == "error"
+    assert result["issues"][0]["type"] == "market_data_unavailable"

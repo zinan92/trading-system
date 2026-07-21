@@ -47,6 +47,7 @@ class DualTrackMarketFeed:
         timeframe: str | None = None,
         limit: int = 96,
         as_of: str | None = None,
+        end: str | None = None,
     ) -> dict:
         if self.datafeed_enabled:
             return self._datafeed_snapshot(
@@ -54,6 +55,7 @@ class DualTrackMarketFeed:
                 timeframe=timeframe,
                 limit=limit,
                 as_of=as_of,
+                end=end,
             )
         resolved_limit = max(1, min(int(limit), 500))
         checked_at = self._parse_as_of(as_of)
@@ -62,20 +64,31 @@ class DualTrackMarketFeed:
             "timeframe": timeframe or "",
             "limit": resolved_limit,
         }
+        if end:
+            requested["end"] = end
         candidates = self._candidates(symbol=symbol, timeframe=timeframe)
         access_issues: list[str] = []
         stale_exact: dict | None = None
         if self.market_db.exists():
             for candidate in candidates:
                 try:
-                    bars = self._load_bars(candidate["symbol"], candidate["timeframe"], resolved_limit)
+                    load_limit = resolved_limit + 1 if end and resolved_limit < 500 else resolved_limit
+                    bars = self._load_bars(candidate["symbol"], candidate["timeframe"], load_limit, end=end)
                 except OSError as exc:
                     access_issues.append(f"{type(exc).__name__}: {exc}")
                     bars = []
                 if bars:
+                    has_more = bool(end and len(bars) > resolved_limit)
+                    if end:
+                        bars = bars[-resolved_limit:]
                     freshness = self._freshness(bars[-1], checked_at=checked_at)
                     if freshness["fresh"]:
-                        return self._payload("ready", candidate, bars, requested, access_issues, freshness=freshness)
+                        return self._history_metadata(
+                            self._payload("ready", candidate, bars, requested, access_issues, freshness=freshness),
+                            requested_limit=resolved_limit,
+                            historical=bool(end),
+                            has_more=has_more,
+                        )
                     access_issues.append(
                         f"stale_exact_source:{candidate['symbol']}:{candidate['timeframe']}:"
                         f"{bars[-1].get('timestamp', '')}"
@@ -128,6 +141,7 @@ class DualTrackMarketFeed:
         timeframe: str | None,
         limit: int,
         as_of: str | None,
+        end: str | None,
     ) -> dict:
         resolved_symbol = symbol or "GOLD"
         resolved_timeframe = timeframe or "1m"
@@ -137,19 +151,31 @@ class DualTrackMarketFeed:
             "timeframe": timeframe or "",
             "limit": resolved_limit,
         }
-        try:
-            response = self.datafeed_client.candles(
-                asset_class=self.datafeed_asset_class,
-                ticker=resolved_symbol,
-                timeframe=resolved_timeframe,
-                limit=resolved_limit,
-                source=self.datafeed_source,
-                cache_policy="bypass",
-                quality="strict",
-                require_execution_venue=True,
-            )
-        except DatafeedUnavailable as error:
-            return {
+        historical = bool(end)
+        if end:
+            requested["end"] = end
+        upstream_limit = resolved_limit + 1 if historical and resolved_limit < 60000 else resolved_limit
+        response: dict | None = None
+        request_errors: list[str] = []
+        attempts = 1 if historical else 2
+        for _attempt in range(attempts):
+            try:
+                response = self.datafeed_client.candles(
+                    asset_class=self.datafeed_asset_class,
+                    ticker=resolved_symbol,
+                    timeframe=resolved_timeframe,
+                    limit=upstream_limit,
+                    source=self.datafeed_source,
+                    cache_policy="require" if historical else "bypass",
+                    quality="standard" if historical else "strict",
+                    require_execution_venue=True,
+                    end=end,
+                )
+                break
+            except DatafeedUnavailable as error:
+                request_errors.append(str(error))
+        if response is None:
+            return self._history_metadata({
                 "schema_version": "dualtrack-market-bars-v1",
                 "status": "blocked",
                 "source_mode": "unavailable",
@@ -166,11 +192,15 @@ class DualTrackMarketFeed:
                 "age_minutes": None,
                 "max_age_minutes": self._max_age_minutes(resolved_timeframe),
                 "bars": [],
-                "access_issues": [str(error)],
+                "access_issues": request_errors,
                 "datafeed": self.datafeed_client.base_url,
                 "safety": self._datafeed_safety(),
-            }
+            }, requested_limit=resolved_limit, historical=historical)
 
+        response_candles = response.get("candles", [])
+        has_more = bool(historical and len(response_candles) > resolved_limit)
+        if historical:
+            response_candles = response_candles[-resolved_limit:]
         bars = [
             {
                 "symbol": response.get("instrument_id") or resolved_symbol,
@@ -185,14 +215,21 @@ class DualTrackMarketFeed:
                 "provider": response.get("provider", ""),
                 "quality_flags": candle.get("quality_flags") or response.get("quality_flags") or [],
             }
-            for candle in response.get("candles", [])
+            for candle in response_candles
         ]
         freshness = self._freshness(
             bars[-1] if bars else {"timeframe": resolved_timeframe},
             checked_at=self._parse_as_of(as_of),
         )
-        status = "ready" if bars and freshness["fresh"] else "stale" if bars else "blocked"
-        return {
+        trusted_history = bool(
+            historical
+            and bars
+            and not bool(response.get("is_synthetic", False))
+            and "mock" not in str(response.get("provider") or "").lower()
+            and "synthetic" not in str(response.get("provider") or "").lower()
+        )
+        status = "ready" if bars and (freshness["fresh"] or trusted_history) else "stale" if bars else "blocked"
+        return self._history_metadata({
             "schema_version": "dualtrack-market-bars-v1",
             "status": status,
             "source_mode": response.get("selected_source") or response.get("source_mode") or "",
@@ -215,7 +252,7 @@ class DualTrackMarketFeed:
             "selection_reason": response.get("selection_reason"),
             "attempted_sources": response.get("attempted_sources") or [],
             "safety": self._datafeed_safety(),
-        }
+        }, requested_limit=resolved_limit, historical=historical, trusted_history=trusted_history, has_more=has_more)
 
     @staticmethod
     def _datafeed_safety() -> dict:
@@ -266,13 +303,48 @@ class DualTrackMarketFeed:
                 rows.append(derived)
         return rows
 
-    def _load_bars(self, symbol: str, timeframe: str, limit: int) -> list[dict]:
+    def _load_bars(self, symbol: str, timeframe: str, limit: int, *, end: str | None = None) -> list[dict]:
+        repository = market_data_repository(self.market_db)
+        if end:
+            rows = repository.load_bars_between(symbol, timeframe, "1970-01-01T00:00:00+00:00", end)[-limit:]
+        else:
+            rows = repository.load_bars(symbol, timeframe, limit)
         return [
             bar.to_dict()
-            for bar in market_data_repository(self.market_db).load_bars(
-                symbol, timeframe, limit
-            )
+            for bar in rows
         ]
+
+    @staticmethod
+    def _history_metadata(
+        payload: dict,
+        *,
+        requested_limit: int,
+        historical: bool,
+        trusted_history: bool | None = None,
+        has_more: bool | None = None,
+    ) -> dict:
+        bars = payload.get("bars") or []
+        trusted = bool(
+            historical
+            and bars
+            and not payload.get("is_synthetic")
+            and (trusted_history if trusted_history is not None else True)
+        )
+        return {
+            **payload,
+            "historical_page": historical,
+            "trusted_history": trusted,
+            "pagination": {
+                "has_more": bool(
+                    historical and (
+                        has_more if has_more is not None else len(bars) >= requested_limit
+                    )
+                ),
+                "next_before": bars[0].get("timestamp", "") if bars else "",
+                "oldest_timestamp": bars[0].get("timestamp", "") if bars else "",
+                "newest_timestamp": bars[-1].get("timestamp", "") if bars else "",
+            },
+        }
 
     def _derived_bars(self, *, symbol: str | None, timeframe: str | None, limit: int) -> dict | None:
         if not symbol or not timeframe:

@@ -24,6 +24,9 @@ from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
 from services.strategy_control_plane import StrategyControlPlane
+from services.strategy_cycle_package import StrategyCyclePackager
+from services.strategy_market_context import build_strategy_timeframes
+from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_tiger_human_sync import DualTrackTigerHumanSync
 from services.journal_store import load_json, write_json
 from services.datafeed_market_repository import DatafeedMarketRepository
@@ -613,7 +616,167 @@ class DualTrackCycleRunner:
         return [
             self.close_cycle(previous.cycle_id, as_of=now),
             self.pre_cycle(current.cycle_id, as_of=now),
+            self._rollover_production(previous.cycle_id, current.cycle_id, now=now),
         ]
+
+    def _rollover_production(self, previous_cycle_id: str, current_cycle_id: str, *, now: datetime) -> dict[str, Any]:
+        control = StrategyControlPlane(self.output_root)
+        if not control.runtime_configured():
+            return {"event": "production_rollover", "status": "skipped", "reason": "production_runtime_not_configured"}
+        persisted = control.persisted_runtime_state()
+        rows = self._rollover_rows(previous_cycle_id, current_cycle_id)
+        latest = rows[-1] if rows else {}
+        if persisted.get("cycle_id") == current_cycle_id:
+            desired_state = str(persisted.get("desired_state") or "stopped")
+            actual_state = str(persisted.get("actual_state") or desired_state)
+            if desired_state == "running" and actual_state not in {"stopped", "error"}:
+                return {"event": "production_rollover", "status": "already_running", "cycle_id": current_cycle_id}
+            return {
+                "event": "production_rollover",
+                "status": "skipped",
+                "reason": "current_cycle_runtime_not_running",
+                "cycle_id": current_cycle_id,
+                "desired_state": desired_state,
+                "actual_state": actual_state,
+            }
+        should_continue = bool(latest.get("should_continue")) or (
+            persisted.get("cycle_id") == previous_cycle_id
+            and persisted.get("desired_state") == "running"
+        )
+        if not should_continue:
+            return {
+                "event": "production_rollover",
+                "status": "skipped",
+                "reason": "previous_cycle_not_running",
+                "previous_cycle_id": previous_cycle_id,
+                "current_cycle_id": current_cycle_id,
+            }
+        if not latest:
+            latest = self._record_rollover(previous_cycle_id, current_cycle_id, {
+                "status": "intent_recorded",
+                "should_continue": True,
+            }, now=now)
+        try:
+            market = self._production_market_snapshot(now)
+            previous_snapshot = self.execution.snapshot(previous_cycle_id)
+            if persisted.get("cycle_id") == previous_cycle_id and persisted.get("actual_state") != "stopped":
+                stopped = control.control(
+                    previous_cycle_id,
+                    "stop",
+                    {},
+                    market=market,
+                    now=now.isoformat(),
+                    actor={"transport": "system", "client": "dualtrack-live-tick"},
+                )
+                self._record_rollover(previous_cycle_id, current_cycle_id, {
+                    "status": "previous_cycle_stopped",
+                    "should_continue": True,
+                    "cancelled_orders": int(stopped.get("cancelled_orders") or 0),
+                    "flattened_positions": int(stopped.get("flattened_positions") or 0),
+                }, now=now)
+            package = StrategyCyclePackager(
+                self.output_root,
+                config=self.config,
+                adapter=self.execution,
+            ).package(previous_cycle_id, now=now.isoformat())
+            if package.get("status") != "closed":
+                raise ValueError("previous production cycle package is not terminal")
+            self._record_rollover(previous_cycle_id, current_cycle_id, {
+                "status": "previous_cycle_packaged",
+                "should_continue": True,
+                "package_hash": package.get("package_hash"),
+            }, now=now)
+            plan = control.active_plan(current_cycle_id) or control.ensure_compatible_active_plan(
+                current_cycle_id,
+                as_of=now.isoformat(),
+            )
+            if not plan:
+                raise ValueError("current cycle has no trusted production plan")
+            start_payload = self._rollover_start_payload(plan)
+            account = dict(previous_snapshot.get("account") or {})
+            started = control.control(
+                current_cycle_id,
+                "start",
+                start_payload,
+                market=market,
+                account=account,
+                now=now.isoformat(),
+                actor={"transport": "system", "client": "dualtrack-live-tick"},
+            )
+            final = self._record_rollover(previous_cycle_id, current_cycle_id, {
+                "status": "completed",
+                "should_continue": True,
+                "package_hash": package.get("package_hash"),
+                "strategy_plan_id": (started.get("plan") or {}).get("strategy_plan_id"),
+                "strategy_plan_version": (started.get("plan") or {}).get("version"),
+                "accepted_orders": int(started.get("accepted_orders") or 0),
+            }, now=now)
+            return {"event": "production_rollover", **final, "package": package}
+        except Exception as exc:
+            blocked = self._record_rollover(previous_cycle_id, current_cycle_id, {
+                "status": "blocked",
+                "should_continue": True,
+                "reason": str(exc),
+            }, now=now)
+            return {"event": "production_rollover", **blocked}
+
+    def _production_market_snapshot(self, now: datetime) -> dict[str, Any]:
+        feed = DualTrackMarketFeed(config=load_pipeline_config())
+        market = feed.snapshot(symbol=self.symbol, timeframe="1m", limit=240, as_of=now.isoformat())
+        market["strategy_timeframes"] = build_strategy_timeframes(
+            as_of=now.isoformat(),
+            config=load_pipeline_config(),
+            timeframes=("1d", "4h"),
+        )
+        return market
+
+    @staticmethod
+    def _rollover_start_payload(plan: dict[str, Any]) -> dict[str, Any]:
+        grid = dict(plan.get("grid") or {})
+        risk = dict(plan.get("risk_budget") or {})
+        return {
+            "direction": str(plan.get("direction") or "neutral"),
+            "style": str(plan.get("style") or "steady"),
+            "out_of_range": str(grid.get("out_of_range") or "wait"),
+            "grid": {
+                "mode": str(grid.get("mode") or "arithmetic"),
+                "notional_mode": "auto",
+            },
+            "risk_budget": {"leverage": float(risk.get("leverage") or risk.get("max_leverage") or 10.0)},
+        }
+
+    def _rollover_rows(self, previous_cycle_id: str, current_cycle_id: str) -> list[dict[str, Any]]:
+        return load_json(self._rollover_path(previous_cycle_id, current_cycle_id))
+
+    def _record_rollover(
+        self,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        payload: dict[str, Any],
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        path = self._rollover_path(previous_cycle_id, current_cycle_id)
+        rows = load_json(path)
+        row = {
+            "schema_version": "strategy-cycle-rollover-v1",
+            "previous_cycle_id": previous_cycle_id,
+            "current_cycle_id": current_cycle_id,
+            "recorded_at": now.isoformat(),
+            **payload,
+        }
+        signature = (row.get("status"), row.get("reason"), row.get("package_hash"), row.get("strategy_plan_id"))
+        if rows:
+            latest = rows[-1]
+            latest_signature = (latest.get("status"), latest.get("reason"), latest.get("package_hash"), latest.get("strategy_plan_id"))
+            if signature == latest_signature:
+                return latest
+        rows.append(row)
+        write_json(path, rows)
+        return row
+
+    def _rollover_path(self, previous_cycle_id: str, current_cycle_id: str) -> Path:
+        return self.output_root / "dualtrack" / "strategy_control" / "rollovers" / f"{previous_cycle_id}__{current_cycle_id}.json"
 
     def _close_execution_provenance(self, cycle_id: str, *, classified_at: datetime) -> dict[str, Any]:
         window = cycle_window_from_id(cycle_id)
@@ -761,22 +924,25 @@ class DualTrackCycleRunner:
         if rejected:
             return {"status": "skipped", "reason": rejected, "triggered": []}
 
-        events = [self._protective_bar_event(cycle_id, bar, now=now) for bar in bars]
+        # The market DB continuously replaces the current minute while it is
+        # still forming.  Only finalized bars are execution events; otherwise
+        # the same candle can be replayed with a different high/low or the
+        # later, final range can be silently ignored by event idempotency.
+        completed_bars = [
+            bar
+            for bar in bars
+            if parse_utc(bar.timestamp) + self._timeframe_duration() <= now
+        ]
+        events = [self._protective_bar_event(cycle_id, bar, now=now) for bar in completed_bars]
         if not events:
-            fallback_price = float(latest.get("close") or 0.0)
-            events = [{
-                "cycle_id": cycle_id,
-                "ts_event": now.isoformat(),
-                "price": fallback_price,
-                "open": fallback_price,
-                "high": fallback_price,
-                "low": fallback_price,
-                "fresh": True,
-                "is_synthetic": False,
-                "source": f"market_db:{provider or 'unknown'}",
-                "provider": provider,
-                "instrument_id": self._execution_instrument_id(),
-            }]
+            return {
+                "status": "ok",
+                "reason": "waiting_for_completed_market_bar",
+                "triggered": [],
+                "accepted_limit_fills": [],
+                "accepted_limit_fill_count": 0,
+                "processed_events": 0,
+            }
 
         triggered: list[dict[str, Any]] = []
         accepted_limit_fills: list[dict[str, Any]] = []
@@ -802,9 +968,12 @@ class DualTrackCycleRunner:
 
     def _protective_bar_event(self, cycle_id: str, bar: Bar, *, now: datetime) -> dict[str, Any]:
         started_at = parse_utc(bar.timestamp)
-        ended_at = min(started_at + self._timeframe_duration(), now)
+        ended_at = started_at + self._timeframe_duration()
+        if ended_at > now:
+            raise ValueError("market bar is not complete")
         return {
             "cycle_id": cycle_id,
+            "event_id": f"{cycle_id}:{self.timeframe}:{started_at.isoformat()}",
             "ts_event": ended_at.isoformat(),
             "event_started_at": started_at.isoformat(),
             "price": float(bar.close),
@@ -1234,6 +1403,47 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover - thin CLI wr
     return parser
 
 
+def compact_live_tick_output(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep the minute scheduler log useful without serializing whole ledgers."""
+
+    sweep = dict(payload.get("protective_sweep") or {})
+    intraday = dict(payload.get("intraday") or {})
+    sync = dict(payload.get("sync") or {})
+    return {
+        "event": payload.get("event"),
+        "as_of": payload.get("as_of"),
+        "lifecycle": [
+            {
+                "event": row.get("event"),
+                "cycle_id": row.get("cycle_id"),
+                "status": row.get("status"),
+                "reason": row.get("reason"),
+            }
+            for row in payload.get("lifecycle") or []
+        ],
+        "protective_sweep": {
+            key: sweep.get(key)
+            for key in (
+                "status",
+                "reason",
+                "processed_events",
+                "accepted_limit_fill_count",
+                "first_event_ts",
+                "last_event_ts",
+            )
+            if sweep.get(key) is not None
+        },
+        "sync_status": sync.get("status") or sync.get("event"),
+        "intraday": {
+            key: intraday.get(key)
+            for key in ("cycle_id", "status", "reason", "bar_count")
+            if intraday.get(key) is not None
+        },
+        "ledger_refreshed": bool(payload.get("ledger_refreshed")),
+        "ledger_daily_count": payload.get("ledger_daily_count"),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin CLI wrapper
     args = build_parser().parse_args(argv)
     runner = DualTrackCycleRunner(
@@ -1265,7 +1475,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin C
             payload = runner.intraday_tick(cycle_id, as_of=as_of)
         else:
             payload = runner.close_cycle(cycle_id, as_of=as_of)
-    print(payload)
+    print(compact_live_tick_output(payload) if args.event == "live-tick" else payload)
     return 0
 
 

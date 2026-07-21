@@ -8,11 +8,29 @@ import pytest
 import pipelines.dualtrack_nautilus_shadow_replay as replay_pipeline
 from spikes.dualtrack_nautilus_shadow_replay import (
     _account,
+    _bar_execution_path,
     _fills_from_reports,
     _latest,
     _orders_from_reports,
     run_replay,
 )
+
+
+def test_bar_execution_path_visits_every_crossed_grid_level() -> None:
+    event = {
+        "open": 3996.66,
+        "high": 4008.24,
+        "low": 3996.0,
+        "price": 3999.05,
+    }
+
+    path = _bar_execution_path(
+        event,
+        [3989.44, 3996.96, 4004.49, 4012.01],
+    )
+
+    assert path == [3996.66, 3996.0, 3996.96, 4004.49, 4008.24, 4004.49, 3999.05]
+    assert path[-1] == event["price"]
 
 
 def test_shadow_replay_loader_requires_nonempty_artifact_array(tmp_path: Path) -> None:

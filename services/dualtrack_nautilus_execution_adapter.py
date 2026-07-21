@@ -15,7 +15,7 @@ from services.journal_store import load_json, write_json
 
 
 ReplayExecutor = Callable[[Path, Path, Path], dict[str, Any]]
-REPLAY_VERSION = "dualtrack-nautilus-replay-v6"
+REPLAY_VERSION = "dualtrack-nautilus-replay-v7"
 
 
 class NautilusExecutionAdapter:
@@ -72,7 +72,7 @@ class NautilusExecutionAdapter:
         }
         rows.append(row)
         write_json(path, rows)
-        self._persist_accepted_orders(cycle_id, rows)
+        self._persist_accepted_orders(cycle_id, [row])
         return _order_receipt(row)
 
     def _prepare_command(self, command: dict[str, Any]) -> dict[str, Any]:
@@ -304,7 +304,13 @@ class NautilusExecutionAdapter:
     ) -> dict[str, Any]:
         rows = load_json(self._snapshot_path(cycle_id))
         if rows and isinstance(rows[-1], dict):
-            return dict(rows[-1])
+            snapshot = dict(rows[-1])
+            snapshot["orders"] = [
+                row
+                for row in snapshot.get("orders") or []
+                if str(row.get("event") or "entry").lower() != "cancel"
+            ]
+            return snapshot
         commands = load_json(self._commands_path(cycle_id))
         visible_commands = [
             row
@@ -426,6 +432,11 @@ class NautilusExecutionAdapter:
         normalized = {
             **snapshot,
             "engine": self.name,
+            "orders": [
+                row
+                for row in snapshot.get("orders") or []
+                if str(row.get("event") or "entry").lower() != "cancel"
+            ],
             "capabilities": {
                 **dict(snapshot.get("capabilities") or {}),
                 "paper_only": True,
@@ -438,6 +449,14 @@ class NautilusExecutionAdapter:
         return normalized
 
     def _persist_snapshot(self, cycle_id: str, snapshot: dict[str, Any]) -> None:
+        snapshot = {
+            **snapshot,
+            "orders": [
+                row
+                for row in snapshot.get("orders") or []
+                if str(row.get("event") or "entry").lower() != "cancel"
+            ],
+        }
         previous_fills = load_json(self._fills_path(cycle_id))
         next_fills = list(snapshot.get("fills") or [])
         if previous_fills:
@@ -470,17 +489,32 @@ class NautilusExecutionAdapter:
         write_json(self._snapshot_path(cycle_id), [snapshot])
 
     def _persist_accepted_orders(self, cycle_id: str, commands: list[dict[str, Any]]) -> None:
-        receipts = [_order_receipt(row) for row in commands]
+        receipts = [
+            _order_receipt(row)
+            for row in commands
+            if str((row.get("command") or {}).get("event") or "entry").lower() != "cancel"
+        ]
         snapshot_rows = load_json(self._snapshot_path(cycle_id))
         if snapshot_rows and isinstance(snapshot_rows[-1], dict):
             snapshot = dict(snapshot_rows[-1])
-            orders = list(snapshot.get("orders") or [])
+            orders = [
+                order
+                for order in snapshot.get("orders") or []
+                if str(order.get("event") or "entry").lower() != "cancel"
+            ]
             known_ids = {str(order.get("order_id") or "") for order in orders}
             orders.extend(order for order in receipts if str(order.get("order_id") or "") not in known_ids)
             snapshot["orders"] = orders
             self._persist_snapshot(cycle_id, snapshot)
             return
-        write_json(self._orders_path(cycle_id), receipts)
+        orders = [
+            order
+            for order in load_json(self._orders_path(cycle_id))
+            if str(order.get("event") or "entry").lower() != "cancel"
+        ]
+        known_ids = {str(order.get("order_id") or "") for order in orders}
+        orders.extend(order for order in receipts if str(order.get("order_id") or "") not in known_ids)
+        write_json(self._orders_path(cycle_id), orders)
 
     def _subprocess_replay(self, preflight_path: Path, input_path: Path, output_path: Path) -> dict[str, Any]:
         script = ROOT / "spikes" / "dualtrack_nautilus_shadow_replay.py"

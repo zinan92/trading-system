@@ -423,6 +423,104 @@ def test_persists_idempotent_cancel_commands_for_authoritative_order_ids(tmp_pat
     assert commands[-1]["command"]["strategy_plan_id"] == "plan-1"
 
 
+def test_accepted_snapshot_never_promotes_a_historical_cancel_command(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+        defer_replay=True,
+    )
+    base = {
+        "cycle_id": CYCLE_ID,
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "strategy_plan_id": "plan-1",
+        "strategy_plan_version": 1,
+    }
+    first = adapter.submit_order({
+        **base,
+        "ts": "2026-07-10T01:00:30+00:00",
+        "source_fill_id": "strategy-grid:plan-1:order-1",
+    })
+    adapter._persist_snapshot(CYCLE_ID, adapter.snapshot(CYCLE_ID))
+    adapter.cancel_orders(
+        CYCLE_ID,
+        order_ids=[first["order_id"]],
+        ts="2026-07-10T01:05:00+00:00",
+        reason="regrid",
+    )
+
+    second = adapter.submit_order({
+        **base,
+        "ts": "2026-07-10T01:06:00+00:00",
+        "source_fill_id": "strategy-grid:plan-1:order-2",
+    })
+
+    snapshot_orders = adapter.snapshot(CYCLE_ID)["orders"]
+    assert {row["order_id"] for row in snapshot_orders} == {first["order_id"], second["order_id"]}
+    assert all(row.get("event") != "cancel" for row in snapshot_orders)
+    assert load_json(adapter.root / "orders" / f"{CYCLE_ID}.json") == snapshot_orders
+
+
+def test_replay_result_snapshot_filters_cancel_orders_before_returning(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+
+    def replay(*_args) -> dict:
+        snapshot = _candidate(CYCLE_ID)
+        snapshot["orders"] = [
+            {"order_id": "entry-order", "state": "accepted", "event": "entry"},
+            {"order_id": "cancel-command", "state": "accepted", "event": "cancel"},
+        ]
+        return snapshot
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+        defer_replay=True,
+    )
+    adapter.submit_order({
+        "cycle_id": CYCLE_ID,
+        "ts": "2026-07-10T01:00:30+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "source_fill_id": "entry-order",
+    })
+    adapter.process_market_event({
+        "cycle_id": CYCLE_ID,
+        "event_id": "market-event-1",
+        "ts_event": "2026-07-10T01:01:00+00:00",
+        "event_started_at": "2026-07-10T01:00:00+00:00",
+        "price": 100.0,
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm",
+        "provider": "binance_usdm",
+        "instrument_id": "XAUUSDT",
+    })
+
+    result = adapter.flush(CYCLE_ID)
+
+    assert [row["order_id"] for row in result["snapshot"]["orders"]] == ["entry-order"]
+    assert adapter.snapshot(CYCLE_ID)["orders"] == result["snapshot"]["orders"]
+
+
 def test_close_command_resolves_one_hedged_position_and_persists_target_identity(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"

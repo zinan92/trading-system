@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import urllib.request
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 
 class DatafeedUnavailable(RuntimeError):
@@ -19,11 +20,14 @@ class DatafeedMarketClient:
         *,
         base_url: str = "http://127.0.0.1:8100",
         timeout_seconds: float = 10.0,
-        opener: Callable[..., Any] = urlopen,
+        opener: Callable[..., Any] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self.opener = opener
+        # Resolve the standard opener at construction time so offline tests
+        # and incident drills can reliably block network access.  Binding
+        # urlopen as a default argument at import time bypassed those guards.
+        self.opener = opener or urllib.request.urlopen
 
     def candles(
         self,
