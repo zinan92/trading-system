@@ -108,7 +108,7 @@ def _orders_at_notional(
     return orders
 
 
-def _net_profit_usd(order: dict[str, Any], cost_per_side_rate: float) -> float:
+def planned_net_profit_usd(order: dict[str, Any], cost_per_side_rate: float) -> float:
     price = positive_number(order.get("price"), "grid price")
     tp = positive_number(order.get("tp"), "grid take profit")
     quantity = positive_number(order.get("quantity"), "grid quantity")
@@ -309,15 +309,23 @@ def build_grid_preview(
     selected: dict[str, Any] | None = None
     first_candidate: dict[str, Any] | None = None
     for candidate_count in candidates:
-        levels, spacing_ratio, lower_stop, upper_stop, provisional_orders = _grid_geometry(
-            low=low,
-            high=high,
-            count=candidate_count,
-            mode=mode,
-            latest=latest,
-            direction=direction,
-            config=config,
-        )
+        try:
+            levels, spacing_ratio, lower_stop, upper_stop, provisional_orders = _grid_geometry(
+                low=low,
+                high=high,
+                count=candidate_count,
+                mode=mode,
+                latest=latest,
+                direction=direction,
+                config=config,
+            )
+        except ValueError as error:
+            if (
+                requested_count > 0
+                or str(error) != "grid spacing is smaller than venue price precision"
+            ):
+                raise
+            continue
         side_counts = {
             side: sum(1 for order in provisional_orders if order["side"] == side)
             for side in ("buy", "sell")
@@ -325,8 +333,16 @@ def build_grid_preview(
         max_simultaneous_levels = max(side_counts.values())
         capital_notional_cap = capital_budget / max_simultaneous_levels
         notional = requested_notional if notional_mode == "manual" else capital_notional_cap
-        orders = _orders_at_notional(provisional_orders, notional, config)
-        net_profits = [_net_profit_usd(order, cost_per_side_rate) for order in orders]
+        try:
+            orders = _orders_at_notional(provisional_orders, notional, config)
+        except ValueError as error:
+            if (
+                requested_count > 0
+                or str(error) != "execution quantity rounds to zero at venue precision"
+            ):
+                raise
+            continue
+        net_profits = [planned_net_profit_usd(order, cost_per_side_rate) for order in orders]
         for order, net_profit in zip(orders, net_profits):
             order["planned_net_profit_usd"] = round(net_profit, 8)
         side_notionals = {

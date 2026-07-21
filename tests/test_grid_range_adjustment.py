@@ -199,6 +199,36 @@ def test_arithmetic_contraction_removes_only_outer_geometry() -> None:
     ]
 
 
+def test_new_edge_persists_modeled_profit_and_enforces_the_active_target() -> None:
+    plan = arithmetic_operating_plan()
+    plan["grid"]["notional_per_grid"] = 2_000.0
+    plan["grid"]["target_net_profit_per_grid_usd"] = 10.0
+
+    result = build_range_extension(
+        plan["cycle_id"],
+        plan,
+        {"low": 99.0, "high": 132.0},
+        market=market(116.0),
+        accepted_entries=[],
+        positions=[],
+    )
+
+    edge = result["edge_orders"][0]
+    assert edge["planned_net_profit_usd"] >= 10.0
+    assert result["grid"]["min_net_profit_per_grid_usd"] >= 10.0
+
+    plan["grid"]["notional_per_grid"] = 50.0
+    with pytest.raises(ValueError, match="edge_order_profit_target_not_met"):
+        build_range_extension(
+            plan["cycle_id"],
+            plan,
+            {"low": 99.0, "high": 132.0},
+            market=market(116.0),
+            accepted_entries=[],
+            positions=[],
+        )
+
+
 def test_geometric_edges_preserve_ratio_for_expansion_and_contraction() -> None:
     plan = geometric_operating_plan()
     old_levels = deepcopy(plan["grid"]["levels"])

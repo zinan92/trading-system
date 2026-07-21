@@ -260,6 +260,26 @@ def test_auto_density_selects_the_highest_feasible_count_not_the_atr_count(
     assert preview["grid"]["profit_target_met"] is True
 
 
+def test_auto_density_skips_counts_below_venue_price_precision(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        {
+            "direction": "neutral",
+            "style": "steady",
+            "range": {"low": 109.65, "high": 110.34},
+        },
+        market=market(),
+        account={"equity": 2_000_000.0},
+        config=plane.config,
+    )
+
+    assert 30 <= preview["grid"]["count"] < 70
+    assert preview["grid"]["profit_target_met"] is True
+
+
 def test_manual_grid_below_ten_dollar_target_is_rejected(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     with pytest.raises(ValueError, match="planned net profit of 10.00 USD"):
