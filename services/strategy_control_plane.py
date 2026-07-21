@@ -920,6 +920,11 @@ class StrategyControlPlane:
             ),
             "risk_recalculation": {
                 "available": recalculation_available and not recalculated,
+                "reason": (
+                    None
+                    if recalculation_available
+                    else "profit_target_requires_grid_geometry_or_capital_change"
+                ),
                 "applied_automatically": False,
                 "applied_to_preview": recalculated,
                 "original_notional_per_grid": notional,
@@ -3372,7 +3377,11 @@ class StrategyControlPlane:
             "direction": preview["direction"],
             "style": preview["style"],
             "range": dict(preview["range"]),
-            "grid": {**preview["grid"], "orders": [dict(order) for order in preview["orders"]]},
+            "grid": {
+                **preview["grid"],
+                "actual_leverage": preview["risk"]["actual_leverage"],
+                "orders": [dict(order) for order in preview["orders"]],
+            },
             "execution_context": {"market": dict(preview["market"])},
             "tp_sl": {
                 "mode": "per_grid",
@@ -3383,6 +3392,7 @@ class StrategyControlPlane:
             "risk_budget": {
                 **dict(current.get("risk_budget") or {}),
                 "leverage": preview["grid"]["leverage"],
+                "actual_leverage": preview["risk"]["actual_leverage"],
                 "max_loss": preview["risk"]["max_loss"],
                 "estimated_margin": preview["risk"]["estimated_margin"],
             },

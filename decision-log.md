@@ -8647,7 +8647,30 @@ auditable datafeed port; broker execution remains a separate port.
 ### Verification
 
 - Focused sizing, exact-command canonical risk, policy registry, and selected
-  start-transaction tests: 45 passed.
+  start/range transaction tests: 60 passed.
 - Full-suite execution was intentionally omitted for this bounded policy
   change; obsolete tests that encode 2x, 12/24-grid, and max-loss blocking are
   being replaced in the chained operator-surface milestone.
+
+### Adversarial review corrections
+
+- Auto sizing now evaluates 70 down to 30 directly. ATR explains the proposed
+  spacing but cannot silently truncate the feasible density search.
+- The 30–70 operating band is enforced by sizing, fixed-spacing edge changes,
+  and the canonical paper risk decision, so neither UI nor a direct API call
+  can create an out-of-band production grid.
+- Range dragging intentionally keeps the active count and per-grid notional.
+  A change that no longer clears the profit/capital gates is blocked instead
+  of silently resizing the position; this preserves the operator contract.
+- Persist actual leverage on the StrategyPlan and risk budget. The UI must not
+  infer actual leverage from the 10x ceiling.
+
+### Gotchas
+
+- A narrower aggressive Range can make 70 grids too fine to clear the net
+  profit target. In that case the densest valid answer can have fewer grids
+  and a larger per-grid notional than the steady Range while using the same
+  capital policy.
+- The old risk-budget notional reduction can lower planned profit below 10 USD.
+  It remains unavailable for this product contract; the response explains
+  that geometry or capital must change instead.

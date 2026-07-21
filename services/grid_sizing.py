@@ -25,6 +25,8 @@ from services.dualtrack_execution_contract import normalize_execution_command
 GRID_DIRECTIONS = {"neutral", "long", "short"}
 GRID_STYLES = {"steady", "aggressive"}
 GRID_MODES = {"arithmetic", "geometric"}
+MIN_GRID_COUNT = 30
+MAX_GRID_COUNT = 70
 
 
 def _floor_quantity(value: float, config: dict[str, Any]) -> float:
@@ -268,8 +270,8 @@ def build_grid_preview(
         * float(strategy_cfg.get("cost_spacing_multiple") or 1.0) / 10_000.0,
         0.0001,
     )
-    min_count = max(2, int(strategy_cfg.get("min_grid_count") or 30))
-    max_count = max(min_count, int(strategy_cfg.get("max_grid_count") or 70))
+    min_count = max(2, int(strategy_cfg.get("min_grid_count") or MIN_GRID_COUNT))
+    max_count = max(min_count, int(strategy_cfg.get("max_grid_count") or MAX_GRID_COUNT))
     requested_count = number_or(grid_input.get("count"), 0.0)
     initial_count = int(requested_count) if requested_count > 0 else max(
         min_count,
@@ -301,7 +303,9 @@ def build_grid_preview(
     if notional_mode == "manual" and requested_notional <= 0:
         raise ValueError("manual notional_per_grid must be greater than zero")
 
-    candidates = [initial_count] if requested_count > 0 else list(range(initial_count, min_count - 1, -1))
+    # Auto mode promises the densest feasible grid in the configured band.
+    # ATR still explains target spacing, but must not truncate feasibility.
+    candidates = [initial_count] if requested_count > 0 else list(range(max_count, min_count - 1, -1))
     selected: dict[str, Any] | None = None
     first_candidate: dict[str, Any] | None = None
     for candidate_count in candidates:
@@ -357,7 +361,7 @@ def build_grid_preview(
             selected = first_candidate
         else:
             raise ValueError(
-                f"no grid between {min_count} and {initial_count} levels can deliver "
+                f"no grid between {min_count} and {max_count} levels can deliver "
                 f"planned net profit of {min_net_profit_target:.2f} USD per grid within {leverage:g}x capacity"
             )
 

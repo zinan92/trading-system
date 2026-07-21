@@ -167,7 +167,29 @@ class PaperGridRiskDecisionPort:
             )
 
         candidate_kind = str(candidate.get("kind") or "")
+        min_grid_count = _positive_integer(policy.get("min_grid_count"))
+        max_grid_count = _positive_integer(policy.get("max_grid_count"))
         if candidate_kind == "strategy_plan_grid":
+            raw_grid_count = candidate.get("grid_count")
+            grid_count = _positive_integer(raw_grid_count)
+            if (
+                grid_count is None
+                or min_grid_count is None
+                or max_grid_count is None
+                or not min_grid_count <= grid_count <= max_grid_count
+            ):
+                blockers.append(
+                    blocker(
+                        "candidate_grid_count_out_of_bounds",
+                        "strategy_plan.grid.count",
+                        "candidate grid count is outside the configured operating band",
+                        {
+                            "count": raw_grid_count,
+                            "minimum": min_grid_count,
+                            "maximum": max_grid_count,
+                        },
+                    )
+                )
             low = finite_positive(candidate.get("range_low"))
             high = finite_positive(candidate.get("range_high"))
             if low is None or high is None or high <= low:
@@ -357,6 +379,8 @@ class PaperGridRiskDecisionPort:
                 ("max_leverage", max_leverage),
                 ("required_leverage", required_leverage),
                 ("min_net_profit_per_grid_usd", min_net_profit),
+                ("min_grid_count", min_grid_count),
+                ("max_grid_count", max_grid_count),
                 ("margin_utilization_cap", utilization),
                 ("cost_per_side_bp", cost_per_side_bp),
             )
@@ -544,6 +568,8 @@ def grid_risk_policy(config: Mapping[str, Any]) -> dict[str, Any]:
         "min_net_profit_per_grid_usd": finite_positive(
             strategy.get("min_net_profit_per_grid_usd") or 10.0
         ),
+        "min_grid_count": _positive_integer(strategy.get("min_grid_count") or 30),
+        "max_grid_count": _positive_integer(strategy.get("max_grid_count") or 70),
         "cost_per_side_bp": _non_negative_number(
             config.get("cost_per_side_bp", 0.5)
         ),
@@ -786,3 +812,14 @@ def _non_negative_number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) and parsed >= 0 else None
+
+
+def _positive_integer(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if parsed > 0 and math.isfinite(numeric) and numeric == parsed else None

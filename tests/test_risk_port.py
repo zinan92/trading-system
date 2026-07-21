@@ -37,6 +37,8 @@ def config(*, max_leverage: float = 10.0) -> dict:
         "strategy_grid": {
             "required_leverage": 10.0,
             "min_net_profit_per_grid_usd": 10.0,
+            "min_grid_count": 30,
+            "max_grid_count": 70,
             "capital_utilization_cap": 1.0,
         },
     }
@@ -171,7 +173,7 @@ def plan(*, notional: float = 1_000.0, leverage: float = 10.0, low: float = 90.0
         "preview_id": "preview-risk-1",
         "direction": "neutral",
         "range": {"low": low, "high": high},
-        "grid": {"mode": "arithmetic", "count": 2, "notional_per_grid": notional, "leverage": leverage},
+        "grid": {"mode": "arithmetic", "count": 30, "notional_per_grid": notional, "leverage": leverage},
         # These are deliberately not trusted by the risk adapter.
         "risk_budget": {"max_loss": 0.01, "estimated_margin": 0.01},
     }
@@ -317,6 +319,19 @@ def test_market_range_and_execution_reconciliation_fail_closed() -> None:
 
     assert any(row["code"] == "market_price_outside_range" for row in outside.to_dict()["blockers"])
     assert any(row["code"] == "execution_reconciliation_drift" for row in drifted.to_dict()["blockers"])
+
+
+@pytest.mark.parametrize("grid_count", [29, 71])
+def test_grid_count_outside_operating_band_fails_closed(grid_count: int) -> None:
+    candidate = plan()
+    candidate["grid"]["count"] = grid_count
+
+    decision = PaperGridRiskDecisionPort().evaluate(request(plan_value=candidate))
+
+    assert any(
+        row["code"] == "candidate_grid_count_out_of_bounds"
+        for row in decision.to_dict()["blockers"]
+    )
 
 
 def test_missing_policy_limit_blocks_instead_of_disabling_the_rule() -> None:

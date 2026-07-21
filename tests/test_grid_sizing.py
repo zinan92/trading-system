@@ -133,7 +133,11 @@ def test_style_changes_geometry_but_not_the_capital_utilization_policy(tmp_path:
     assert steady["grid"]["spacing"] != aggressive["grid"]["spacing"]
     assert steady["risk"]["capital_budget"] == aggressive["risk"]["capital_budget"] == 100_000.0
     assert steady["grid"]["margin_utilization_cap"] == aggressive["grid"]["margin_utilization_cap"] == 1.0
-    assert steady["grid"]["notional_per_grid"] == aggressive["grid"]["notional_per_grid"]
+    assert steady["grid"]["count"] > aggressive["grid"]["count"]
+    assert steady["grid"]["min_net_profit_per_grid_usd"] >= 10.0
+    assert aggressive["grid"]["min_net_profit_per_grid_usd"] >= 10.0
+    assert steady["risk"]["actual_leverage"] <= 10.0
+    assert aggressive["risk"]["actual_leverage"] <= 10.0
 
 
 def test_arithmetic_and_geometric_modes_generate_their_declared_geometry(tmp_path: Path) -> None:
@@ -234,6 +238,26 @@ def test_auto_density_searches_from_70_down_to_30_for_ten_dollar_target(
     assert preview["grid"]["min_net_profit_per_grid_usd"] >= 10.0
     assert min(order["planned_net_profit_usd"] for order in preview["orders"]) >= 10.0
     assert preview["risk"]["actual_leverage"] <= 10.0
+
+
+def test_auto_density_selects_the_highest_feasible_count_not_the_atr_count(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        {
+            "direction": "neutral",
+            "style": "steady",
+            "range": {"low": 90.0, "high": 130.0},
+        },
+        market=market(),
+        account={"equity": 2_000_000.0},
+        config=plane.config,
+    )
+
+    assert preview["grid"]["count"] == 70
+    assert preview["grid"]["profit_target_met"] is True
 
 
 def test_manual_grid_below_ten_dollar_target_is_rejected(tmp_path: Path) -> None:
