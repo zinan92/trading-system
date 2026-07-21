@@ -120,6 +120,24 @@ def test_gridmind_profit_target_controls_are_visible_and_not_editable() -> None:
         assert "最低计划净利\n10.18 USD" in summary
         assert "计划净利目标\n≥ 10 USD" in summary
         assert "实际杠杆\n10x / 10x" in summary
+        missing_metrics = page.evaluate(
+            """productionStrategySummaryModel({
+                plan_id: "legacy-plan",
+                plan_version: 1,
+                direction: "neutral",
+                direction_label: "中性",
+                style_label: "稳健",
+                grid_mode_label: "等价差",
+                grid_count: 30,
+                notional_per_grid: 5000,
+                min_net_profit_per_grid_usd: null,
+                actual_leverage: null,
+                leverage: 10
+            }, {actual_state: "running"}).parts"""
+        )
+        assert "计划净利 ≥ -- USD / 格" in missing_metrics
+        assert "实际杠杆 --x（上限 10x）" in missing_metrics
+        assert "实际杠杆 10x（上限 10x）" not in missing_metrics
         assert browser_errors == []
 
         artifact_dir = os.environ.get("GRID_PROFIT_SCREENSHOT_DIR")

@@ -8701,6 +8701,9 @@ auditable datafeed port; broker execution remains a separate port.
   If the new geometry misses the 10 USD target, confirmation remains blocked;
   the old risk-budget downsize action cannot solve a profit shortfall and was
   removed from the card.
+- Missing legacy metrics render as `--`. JavaScript's `Number(null) === 0`
+  must not turn absent profit into zero or label the 10x ceiling as actual
+  leverage; only persisted canonical actual leverage is displayed.
 
 ### Verification
 

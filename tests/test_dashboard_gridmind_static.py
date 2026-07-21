@@ -195,6 +195,7 @@ def test_gridmind_always_shows_the_locked_production_strategy_summary() -> None:
     assert "directionScope" in html
     assert "计划净利 ≥" in html
     assert "上限 10x" in html
+    assert 'v===null||v===undefined||v===""?"--"' in html
     assert "renderProductionStrategySummary(strategySummary,runtime)" in html
     assert html.index('id="productionStrategySummary"') < html.index('id="gridSummary"')
     assert "accepted_buy_order_count" in html
@@ -203,6 +204,7 @@ def test_gridmind_always_shows_the_locked_production_strategy_summary() -> None:
     assert "state.preview" not in summary_body
     assert "formDirty" not in summary_body
     assert "#gridNotional" not in summary_body
+    assert "summary.actual_leverage??summary.leverage" not in summary_body
 
 
 def test_gridmind_review_is_a_same_cycle_evidence_ledger() -> None:

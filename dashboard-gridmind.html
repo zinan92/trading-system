@@ -118,7 +118,7 @@ const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const PUBLIC_OBSERVER=!['127.0.0.1','localhost','::1'].includes(location.hostname);
 const ACCESS_CONTROLLED=()=>!PUBLIC_OBSERVER||state.auth?.can_control===true;
 const esc=v=>String(v??"--").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-const num=v=>Number.isFinite(Number(v))?Number(v).toLocaleString("en-US",{maximumFractionDigits:2}):"--";
+const num=v=>v===null||v===undefined||v===""?"--":Number.isFinite(Number(v))?Number(v).toLocaleString("en-US",{maximumFractionDigits:2}):"--";
 const signed=v=>{const x=Number(v);return Number.isFinite(x)?`${x>0?"+":""}${num(x)}`:"--"};
 const pnlClass=v=>Number(v)>0?"pos":Number(v)<0?"neg":"";
 const DIR={range:"震荡 · 中性",range_long_bias:"震荡 · 偏多",range_short_bias:"震荡 · 偏空",long:"做多",short:"做空",neutral:"中性",flat:"观望"};
@@ -181,7 +181,7 @@ function aiEvaluations(data){return (data?.strategy?.proposals||[]).filter(row=>
 function styleLabel(value){return value==="aggressive"?"激进":"稳健"}
 function gridModeLabel(value){return value==="geometric"?"等比例网格":"等价差网格"}
 function productionStrategyLabel(summary){return summary?.display_label||"--"}
-function productionStrategySummaryModel(summary,runtime){if(!summary?.plan_id)return{state:"missing",parts:["没有锁定生产计划"]};const actual=String(runtime?.actual_state||runtime?.desired_state||"stopped"),running=actual==="running",stateLabel=running?"运行中":actual==="stopped"?"当前生产计划未运行":RUNTIME[actual]||runtime?.status_label||actual,directionScope=summary.direction==="neutral"?"双边":summary.direction==="long"||summary.direction==="short"?"单边":"方向范围未知";return{state:running?"running":"stopped",parts:[stateLabel,`Plan v${summary.plan_version??"--"}`,`${summary.direction_label||"方向未知"}（${directionScope}）`,summary.style_label||"风格未知",`${summary.grid_mode_label||"网格模式未知"} · ${num(summary.grid_count)} 格`,`每格 ${num(summary.notional_per_grid)} USD`,`计划净利 ≥ ${num(summary.min_net_profit_per_grid_usd)} USD / 格`,`实际杠杆 ${num(summary.actual_leverage??summary.leverage)}x（上限 10x）`]}}
+function productionStrategySummaryModel(summary,runtime){if(!summary?.plan_id)return{state:"missing",parts:["没有锁定生产计划"]};const actual=String(runtime?.actual_state||runtime?.desired_state||"stopped"),running=actual==="running",stateLabel=running?"运行中":actual==="stopped"?"当前生产计划未运行":RUNTIME[actual]||runtime?.status_label||actual,directionScope=summary.direction==="neutral"?"双边":summary.direction==="long"||summary.direction==="short"?"单边":"方向范围未知";return{state:running?"running":"stopped",parts:[stateLabel,`Plan v${summary.plan_version??"--"}`,`${summary.direction_label||"方向未知"}（${directionScope}）`,summary.style_label||"风格未知",`${summary.grid_mode_label||"网格模式未知"} · ${num(summary.grid_count)} 格`,`每格 ${num(summary.notional_per_grid)} USD`,`计划净利 ≥ ${num(summary.min_net_profit_per_grid_usd)} USD / 格`,`实际杠杆 ${num(summary.actual_leverage)}x（上限 10x）`]}}
 function renderProductionStrategySummary(summary,runtime){const target=$("#productionStrategySummary"),model=productionStrategySummaryModel(summary,runtime);target.className=`production-strategy-summary ${model.state}`;target.innerHTML=model.parts.map((part,index)=>index===0?`<b>${esc(part)}</b>`:`<span>${esc(part)}</span>`).join("<span>·</span>")}
 function readModelCycleId(data){return String(data?.execution?.cycle_id||data?.contract?.source_identities?.cycle_id||data?.cycle?.cycle_id||"")}
 function reconcileOrderLifecycle(data){
