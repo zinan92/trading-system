@@ -18,6 +18,9 @@ function sourceBetween(name, nextName) {
 const mergeMarketBars = vm.runInNewContext(
   `(${sourceBetween("mergeMarketBars", "marketDatasetKey")})`,
 );
+const shouldLoadOlderHistory = vm.runInNewContext(
+  `(${sourceBetween("shouldLoadOlderHistory", "setupHistoryGesture")})`,
+);
 const retainLastTrustedMarket = vm.runInNewContext(
   `(${sourceBetween("retainLastTrustedMarket", "acceptMarketSnapshot")})`,
 );
@@ -124,4 +127,11 @@ test("historical prepend deduplicates timestamps and preserves live authority", 
       "2026-07-21T08:00:00+00:00",
     ]),
   );
+});
+
+test("history loads when a right drag starts at the oldest fitted edge", () => {
+  assert.equal(shouldLoadOlderHistory({startX: 100, lastX: 120, startRange: {from: -1}}, {from: -1}), true);
+  assert.equal(shouldLoadOlderHistory({startX: 100, lastX: 108, startRange: {from: -1}}, {from: -1}), false);
+  assert.equal(shouldLoadOlderHistory({startX: 100, lastX: 120, startRange: {from: 100}}, {from: 100}), false);
+  assert.equal(shouldLoadOlderHistory({startX: 100, lastX: 120, startRange: {from: 20}}, {from: 10}), true);
 });

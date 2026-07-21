@@ -110,6 +110,7 @@ def _source(*, open_trade: bool = False) -> dict:
                         "price": 3900.0 + index,
                         "tp": 3903.0 + index,
                         "sl": 3823.0 + index,
+                        "planned_net_profit_usd": 10.5 + index / 100,
                     }
                     for index in range(25)
                 ],
@@ -518,6 +519,26 @@ def test_order_protection_is_completed_only_from_the_exact_strategy_plan() -> No
     assert orders[conflicting_identity["order_id"]]["protection"]["status"] == "unknown"
     assert orders[missing_preview["order_id"]]["protection"]["status"] == "unknown"
     assert orders[duplicate_preview["order_id"]]["protection"]["status"] == "unknown"
+
+
+def test_order_profit_and_open_position_fields_are_projected_from_exact_plan() -> None:
+    source = _source(open_trade=True)
+    source["production_execution"]["accounting_snapshot"]["positions"][0][
+        "trade_id"
+    ] = "order-0"
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    order = model["execution"]["orders"][0]
+    position = model["execution"]["open_positions"][0]
+    assert order["planned_net_profit_usd"] == 10.5
+    assert position["remaining_quantity"] == 1.0
+    assert position["protection"] == order["protection"]
 
 
 def test_inherited_running_order_resolves_protection_from_its_originating_plan() -> None:
