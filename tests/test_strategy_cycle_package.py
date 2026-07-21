@@ -227,6 +227,24 @@ def test_tampered_closed_package_fails_integrity_before_it_can_be_reused(tmp_pat
     assert adapter.snapshot_calls == 1
 
 
+def test_verified_package_listing_excludes_tampered_closed_journals(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    valid_cycle = "2026-07-02_DAY"
+    tampered_cycle = "2026-07-01_DAY"
+    for cycle_id in (valid_cycle, tampered_cycle):
+        _seed_plan(output, cycle_id)
+        StrategyCyclePackager(output, adapter=TerminalAdapter()).package(cycle_id)
+    tampered_path = output / "dualtrack" / "strategy_cycle_packages" / f"{tampered_cycle}.json"
+    rows = load_json(tampered_path)
+    rows[-1] = {**rows[-1], "review": {"realized_pnl": 999_999.0}}
+    write_json(tampered_path, rows)
+
+    packages = StrategyCyclePackager(output).list_verified_packages(limit=12)
+
+    assert [row["cycle_id"] for row in packages] == [valid_cycle]
+    assert packages[0]["review"]["realized_pnl"] == 3.5
+
+
 def test_tampered_historical_revision_latches_integrity_incident(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-01_NIGHT"
