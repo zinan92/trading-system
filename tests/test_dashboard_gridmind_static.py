@@ -19,7 +19,50 @@ def test_gridmind_keeps_the_compact_production_console_layout() -> None:
     assert 'packages/standard-kline/standard-kline.js' in html
     assert '<canvas id="chart"' not in html
     assert "autoscaleInfoProvider" in html
-    assert "includeGridRange" in html
+    assert "autoscaleInfoProvider:original=>original()" in html
+    assert "includeGridRange" not in html
+
+
+def test_gridmind_defaults_to_30m_without_changing_strategy_input_timeframes() -> None:
+    html = _html()
+
+    assert 'timeframe:"30m"' in html
+
+
+def test_gridmind_renders_last_trusted_read_model_before_optional_30m_refresh() -> None:
+    html = _html()
+
+    load_body = html.split("async function load", 1)[1].split("async function control", 1)[0]
+    assert "state.market=data.market;render();" in load_body
+    assert load_body.index("state.market=data.market;render();") < load_body.index("await refreshMarket()")
+    assert 'timeframe=${encodeURIComponent(state.timeframe)}' in html
+    assert 'state.timeframe==="1m"' in html
+    assert "build_strategy_timeframes" not in html
+
+
+def test_gridmind_draws_only_visible_price_overlays_with_one_axis_label() -> None:
+    html = _html()
+
+    assert "visibleOhlcPriceWindow(market)" in html
+    assert "state.chart?.getVisibleOhlcRange?.(100)" in html
+    assert "visibleWindowOrders=visibleOrders.filter" in html
+    assert "const labelledOrder=" in html
+    assert "showLabel=order===labelledOrder" in html
+    assert 'axisLabelVisible:showLabel' in html
+    assert 'rgba(148,163,184,.16)' in html
+    assert 'rgba(40,199,111,.38)' in html
+
+    install = html.index("state.chart.setAdaptedData(StandardKline.adaptBarPayload(market)")
+    overlay = html.index("state.chart.setPriceLines(buildVisibleChartPriceLines", install)
+    assert install < overlay
+
+
+def test_gridmind_mobile_layout_prevents_global_horizontal_overflow() -> None:
+    html = _html()
+
+    assert "html,body{max-width:100%;overflow-x:hidden}" in html
+    assert ".workspace,.market-column,.control-rail,.chart-card,.data-card,.chart-tools,.timeframes{min-width:0}" in html
+    assert ".console-wrap{max-width:100%;padding:7px}" in html
 
 
 def test_gridmind_restores_all_production_controls() -> None:

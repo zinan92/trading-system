@@ -8006,3 +8006,52 @@ auditable datafeed port; broker execution remains a separate port.
 - Daily-report, cycle-package and dashboard focused pack: 54 passed.
 - Full-suite execution was intentionally not used for this bounded financial
   reporting milestone.
+
+## 2026-07-21 - Readable K-line viewport and quiet grid overlays
+
+### User outcome
+
+- GridMind opens on a readable 30-minute chart; a wide production Range no
+  longer compresses the live candles into a flat line.
+
+### Decisions
+
+- Default only the operator's chart selector to 30m. Strategy planning and
+  execution continue to consume their fixed backend timeframes unchanged.
+- Restore native visible-candle autoscale. Price lines never expand the candle
+  scale to the complete strategy Range.
+- Derive the displayed price band from OHLC bars inside the current logical
+  viewport and draw only Range, grid, order and position lines that fall inside
+  that band. The complete Range remains in the production model and summary.
+- Expose provider-neutral visible-range and price-line methods on the shared
+  StandardKline adapter so the console does not reach into Lightweight Charts.
+- Use low-opacity overlay lines and show one axis label: the pending order
+  nearest the current price.
+- Constrain all grid/flex ancestors at the 390px layout boundary; tables retain
+  local scrolling while the page itself has no horizontal overflow.
+
+### Gotchas
+
+- Re-rendering the full chart on every visible-range event creates a feedback
+  loop because live-edge restoration also changes that range. View events now
+  update only the price-line overlay through the adapter.
+- A 30m fetch is optional enrichment, not permission to blank the console.
+  Render the trusted read-model market first, then replace it only when the
+  requested chart timeframe succeeds.
+- Hiding overflow alone does not make a grid responsive. Every minmax/flex
+  ancestor of the chart and control rail must also allow min-width zero.
+
+### Verification
+
+- GridMind static suite: 14 passed.
+- StandardKline Node suite: 21 passed.
+- Inline dashboard JavaScript syntax check passed.
+- Browser layout smoke test showed no page-level horizontal overflow at
+  390x844 or 1440x900. Screenshots are archived under
+  `/Users/wendy/.codex/visualizations/2026/07/21/trading-system-issue-57/`.
+- The browser smoke used a static server, so it proves responsive layout only;
+  it does not claim live API or candle-data acceptance.
+- Adversarial review found no remaining P0-P2 defects after fixing timeframe
+  overlay ordering and duplicate-price order labels.
+- Full-suite execution was intentionally not used for this read-only UI
+  milestone.
