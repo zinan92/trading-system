@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,6 +79,34 @@ def test_historical_projection_is_trusted_for_display_but_not_fresh_for_executio
     assert projected["trusted_history"] is True
     assert projected["fresh"] is False
     assert projected["market_data_contract"]["consumer_fresh"] is False
+
+
+def test_historical_projection_rejects_non_execution_venue_display_trust() -> None:
+    projected = project_dualtrack_market_payload(
+        replace(_envelope(), execution_venue=False),
+        requested={"symbol": "GOLD", "timeframe": "1m", "limit": 1},
+        datafeed_url="http://datafeed.test",
+        checked_at=datetime(2026, 7, 21, tzinfo=timezone.utc),
+        historical=True,
+    )
+
+    assert projected["historical_page"] is True
+    assert projected["trusted_history"] is False
+    assert projected["fresh"] is False
+
+
+def test_historical_projection_rejects_synthetic_display_trust() -> None:
+    projected = project_dualtrack_market_payload(
+        replace(_envelope(), is_synthetic=True),
+        requested={"symbol": "GOLD", "timeframe": "1m", "limit": 1},
+        datafeed_url="http://datafeed.test",
+        checked_at=datetime(2026, 7, 21, tzinfo=timezone.utc),
+        historical=True,
+    )
+
+    assert projected["historical_page"] is True
+    assert projected["trusted_history"] is False
+    assert projected["fresh"] is False
 
 
 def test_session_closed_is_blocked_instead_of_mislabeled_stale() -> None:
