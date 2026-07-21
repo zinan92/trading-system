@@ -33,8 +33,34 @@ def test_gridmind_renders_last_trusted_read_model_before_optional_30m_refresh() 
     html = _html()
 
     load_body = html.split("async function load", 1)[1].split("async function control", 1)[0]
-    assert "state.market=data.market;render();" in load_body
+    assert "if(!state.market||!isFresh(state.market))state.market=data.market;render();" in load_body
     assert load_body.index("state.market=data.market;render();") < load_body.index("await refreshMarket()")
+
+
+def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
+    html = _html()
+
+    assert 'id="headerPair">XAU / USDT<' in html
+    assert 'id="headerChange"' in html
+    assert "function displayTradingPair(market)" in html
+    assert "market?.provider_symbol" in html
+    assert 'function isTrustedHeaderMarket(m){return isFresh(m)&&m?.timeframe==="1m"}' in html
+    assert "function nextHeaderPriceDirection" in html
+    assert 'current>previous?"up":"down"' in html
+    assert "function marketTodayChangePct(market,dailyMarket=state.dailyMarket)" in html
+    assert "timeframe=1d&limit=2" in html
+    assert "sameVenueMarket(baseMarket,daily)" in html
+    assert "交易所当日开盘价至今" in html
+    assert 'class="pill run-state" id="marketBadge"' in html
+    assert "acceptedOrderCount>0" in html
+    assert 'data?.completeness?.status!=="complete"' in html
+    assert 'risk.outcome!=="allow"' in html
+    assert '(risk.blockers||[]).length>0' in html
+    assert 'identity!==state.headerMarketIdentity' in html
+    assert "gridmind-run-pulse" in html
+    assert "prefers-reduced-motion:reduce" in html
+    assert "healthButton" not in html
+    assert ">自检<" not in html
     assert 'timeframe=${encodeURIComponent(state.timeframe)}' in html
     assert 'state.timeframe==="1m"' in html
     assert "build_strategy_timeframes" not in html

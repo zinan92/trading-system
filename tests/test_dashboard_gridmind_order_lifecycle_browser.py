@@ -117,6 +117,19 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
             body=json.dumps(payload, ensure_ascii=False),
         )
 
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        payload = {
+            **responses[0]["market"],
+            "timeframe": timeframe,
+            "bars": [],
+        }
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(payload, ensure_ascii=False),
+        )
+
     with _static_server() as origin, playwright.sync_playwright() as runtime:
         try:
             browser = runtime.chromium.launch(headless=True, channel="chrome")
@@ -127,6 +140,7 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
         page.on("pageerror", lambda error: browser_errors.append(str(error)))
         page.add_init_script("window.setInterval = () => 0")
         page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
         page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
         page.locator("#orders tbody tr").first.wait_for(state="attached")
 
@@ -146,7 +160,7 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
         assert page.locator("#orders img").count() == 0
         assert page.evaluate("() => globalThis.pwned === true") is False
         assert "ok" not in (page.locator("#runBadge").get_attribute("class") or "").split()
-        assert page.locator("#runBadge").inner_text() == "异常"
+        assert page.locator("#runBadge").inner_text() == "运行异常"
 
         page.evaluate("() => load({withMarket:false})")
         assert page.locator("#orders tbody tr").first.locator("td").first.inner_text() == "已接受"
