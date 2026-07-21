@@ -8732,8 +8732,12 @@ auditable datafeed port; broker execution remains a separate port.
 - The failed start briefly wrote terminal paper-order rows before cleanup, but
   the authoritative read model confirmed zero accepted orders and zero open
   positions. No live process or exchange credential was involved.
+- A Nautilus cancel command can be visible briefly as an accepted command
+  receipt before replay settles it. Start validation still rejects every
+  unexpected accepted entry order, but does not misclassify a non-exposure
+  `event=cancel` receipt as a second grid.
 
 ### Verification
 
-- Five focused control-plane identity/readback tests passed.
+- Six focused control-plane identity/readback tests passed.
 - The exact validation path passed under `/usr/bin/python3` 3.9.6.

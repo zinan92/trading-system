@@ -3081,6 +3081,7 @@ class StrategyControlPlane:
             for order_id, row in orders_by_id.items()
             if order_id not in submitted_ids
             and str(row.get("state") or "").lower() == "accepted"
+            and str(row.get("event") or "entry").lower() == "entry"
         )
         if missing_ids or invalid_states or unexpected_accepted:
             raise ValueError(

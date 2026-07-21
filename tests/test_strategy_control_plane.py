@@ -963,6 +963,26 @@ def test_grid_snapshot_validation_remains_python39_compatible(
     )["paper-order-1"]["state"] == "accepted"
 
 
+def test_start_snapshot_ignores_pending_safe_action_command_receipts() -> None:
+    class SnapshotAdapter:
+        def snapshot(self, _cycle_id: str) -> dict:
+            return {
+                "orders": [
+                    {"order_id": "entry-1", "state": "accepted", "event": "entry"},
+                    {"order_id": "cancel-1", "state": "accepted", "event": "cancel"},
+                ],
+                "positions": [],
+            }
+
+    rows = StrategyControlPlane._validate_start_grid_snapshot(
+        SnapshotAdapter(),
+        "2026-07-05_DAY",
+        submitted_ids={"entry-1"},
+    )
+
+    assert set(rows) == {"entry-1", "cancel-1"}
+
+
 def test_start_rejects_unexpected_active_order_on_terminal_readback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
