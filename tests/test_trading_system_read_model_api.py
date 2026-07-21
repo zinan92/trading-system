@@ -148,6 +148,7 @@ def test_new_endpoint_uses_history_for_lifecycle_and_pnl_but_current_cycle_for_p
     assert response["execution"]["counts"] == {
         "order_count": 25,
         "open_order_count": 25,
+        "accepted_order_count": 25,
         "unknown_order_count": 0,
         "open_position_count": 1,
         "trade_count": 2,
