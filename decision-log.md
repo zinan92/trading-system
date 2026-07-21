@@ -8035,6 +8035,9 @@ auditable datafeed port; broker execution remains a separate port.
 - Re-rendering the full chart on every visible-range event creates a feedback
   loop because live-edge restoration also changes that range. View events now
   update only the price-line overlay through the adapter.
+- A 30m fetch is optional enrichment, not permission to blank the console.
+  Render the trusted read-model market first, then replace it only when the
+  requested chart timeframe succeeds.
 - Hiding overflow alone does not make a grid responsive. Every minmax/flex
   ancestor of the chart and control rail must also allow min-width zero.
 

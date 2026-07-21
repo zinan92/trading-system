@@ -27,6 +27,14 @@ def test_gridmind_defaults_to_30m_without_changing_strategy_input_timeframes() -
     html = _html()
 
     assert 'timeframe:"30m"' in html
+
+
+def test_gridmind_renders_last_trusted_read_model_before_optional_30m_refresh() -> None:
+    html = _html()
+
+    load_body = html.split("async function load", 1)[1].split("async function control", 1)[0]
+    assert "state.market=data.market;render();" in load_body
+    assert load_body.index("state.market=data.market;render();") < load_body.index("await refreshMarket()")
     assert 'timeframe=${encodeURIComponent(state.timeframe)}' in html
     assert 'state.timeframe==="1m"' in html
     assert "build_strategy_timeframes" not in html
