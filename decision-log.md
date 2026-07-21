@@ -8602,6 +8602,12 @@ auditable datafeed port; broker execution remains a separate port.
 - History dragging is disabled while Range adjustment mode owns the pointer;
   chart polling and prepend restoration are marked programmatic so neither can
   accidentally request another history page.
+- A retained snapshot has `fresh=false`, so the ordinary five-second read-model
+  refresh must reconcile it instead of treating it as disposable stale data;
+  otherwise the next poll would erase the last trusted candles.
+- Shadow contract mode still owns its legacy payload, but historical paging
+  metadata must be attached after comparison so the dashboard can apply the
+  same display-only trust contract in either cutover mode.
 
 ### Verification
 

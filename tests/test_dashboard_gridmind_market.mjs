@@ -21,6 +21,18 @@ const mergeMarketBars = vm.runInNewContext(
 const retainLastTrustedMarket = vm.runInNewContext(
   `(${sourceBetween("retainLastTrustedMarket", "acceptMarketSnapshot")})`,
 );
+const isFresh = (market) => market?.trusted === true;
+const acceptMarketSnapshot = vm.runInNewContext(
+  `(${sourceBetween("acceptMarketSnapshot", "reconcileReadModelMarket")})`,
+  {isFresh, mergeMarketBars, retainLastTrustedMarket, state: {market: null}},
+);
+const reconcileStart = html.indexOf("function reconcileReadModelMarket");
+const reconcileEnd = html.indexOf("\nasync function loadOlderMarketBars", reconcileStart);
+assert.ok(reconcileStart >= 0 && reconcileEnd > reconcileStart);
+const reconcileReadModelMarket = vm.runInNewContext(
+  `(${html.slice(reconcileStart, reconcileEnd)})`,
+  {isFresh, acceptMarketSnapshot},
+);
 
 test("failed refresh retains candles but removes execution trust", () => {
   const trusted = {
@@ -43,6 +55,36 @@ test("failed refresh retains candles but removes execution trust", () => {
   assert.equal(retained.retained_last_trusted, true);
   assert.deepEqual(retained.bars, trusted.bars);
   assert.deepEqual(retained.access_issues, ["upstream timeout"]);
+});
+
+test("polling cannot overwrite retained trusted candles with a blocked read model", () => {
+  const trusted = {
+    status: "ready",
+    trusted: true,
+    fresh: true,
+    symbol: "GOLD",
+    timeframe: "30m",
+    latest_timestamp: "2026-07-21T08:00:00+00:00",
+    bars: [{timestamp: "2026-07-21T08:00:00+00:00", close: 4000}],
+  };
+  const retained = retainLastTrustedMarket(trusted, {
+    status: "blocked",
+    bars: [],
+    access_issues: ["upstream timeout"],
+  });
+
+  const afterPoll = reconcileReadModelMarket(retained, {
+    status: "blocked",
+    trusted: false,
+    fresh: false,
+    bars: [],
+    access_issues: ["still blocked"],
+  });
+
+  assert.equal(afterPoll.retained_last_trusted, true);
+  assert.equal(afterPoll.trusted, false);
+  assert.deepEqual(afterPoll.bars, trusted.bars);
+  assert.deepEqual(afterPoll.access_issues, ["still blocked"]);
 });
 
 test("historical prepend deduplicates timestamps and preserves live authority", () => {

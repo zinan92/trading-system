@@ -274,7 +274,13 @@ class DualTrackMarketFeed:
                 legacy["market_data_contract_shadow"] = self._blocked_shadow_receipt(
                     error
                 )
-                return legacy
+                return self._history_metadata(
+                    legacy,
+                    requested_limit=resolved_limit,
+                    historical=historical,
+                    trusted_history=False,
+                    has_more=has_more,
+                )
             return self._contract_blocked_payload(
                 error=error,
                 response=response,
@@ -300,7 +306,13 @@ class DualTrackMarketFeed:
                 legacy["market_data_contract_shadow"] = self._blocked_shadow_receipt(
                     error
                 )
-                return legacy
+                return self._history_metadata(
+                    legacy,
+                    requested_limit=resolved_limit,
+                    historical=historical,
+                    trusted_history=False,
+                    has_more=has_more,
+                )
             return self._contract_blocked_payload(
                 error=error,
                 response=response,
@@ -315,7 +327,13 @@ class DualTrackMarketFeed:
                 "envelope_schema_version": envelope.schema_version,
                 "upstream_schema_version": envelope.upstream_schema_version,
             }
-            return legacy
+            return self._history_metadata(
+                legacy,
+                requested_limit=resolved_limit,
+                historical=historical,
+                trusted_history=candidate.get("trusted_history") is True,
+                has_more=has_more,
+            )
         candidate["market_data_contract_comparison"] = {
             **comparison,
             "authoritative": "envelope",

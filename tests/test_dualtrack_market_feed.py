@@ -159,6 +159,55 @@ def test_datafeed_historical_page_is_trusted_but_never_fresh(
     assert result["pagination"]["next_before"] == "2026-07-18T11:58:00+00:00"
 
 
+def test_shadow_contract_mode_preserves_historical_page_metadata(
+    tmp_path: Path,
+) -> None:
+    payload = _trusted_v2_payload()
+    template = payload["candles"][0]
+    payload["candles"] = [
+        {**template, "timestamp": f"2026-07-18T11:{minute:02d}:00+00:00"}
+        for minute in (57, 58, 59)
+    ]
+    payload.update(
+        count=3,
+        latest_timestamp="2026-07-18T11:59:00+00:00",
+        fresh=False,
+        cache_policy="require",
+        quality_policy="standard",
+        served_from="cache",
+    )
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "base_url": "http://datafeed.test",
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+        "market_data_contract_mode": "shadow",
+    }
+
+    result = DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=_FakeDatafeedClient(payload),
+    ).snapshot(
+        symbol="GOLD",
+        timeframe="1m",
+        limit=2,
+        end="2026-07-18T12:00:00+00:00",
+        as_of="2026-07-21T12:00:00+00:00",
+    )
+
+    assert result["market_data_contract_shadow"]["authoritative"] == "legacy"
+    assert result["historical_page"] is True
+    assert result["trusted_history"] is True
+    assert result["fresh"] is False
+    assert result["pagination"]["has_more"] is True
+    assert [row["timestamp"] for row in result["bars"]] == [
+        "2026-07-18T11:58:00+00:00",
+        "2026-07-18T11:59:00+00:00",
+    ]
+
+
 def test_live_datafeed_retries_the_same_source_once_after_transient_failure(
     tmp_path: Path,
 ) -> None:

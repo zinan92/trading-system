@@ -33,8 +33,8 @@ def test_gridmind_renders_last_trusted_read_model_before_optional_30m_refresh() 
     html = _html()
 
     load_body = html.split("async function load({", 1)[1].split("async function control", 1)[0]
-    assert "if(!state.market||!isFresh(state.market))state.market=data.market;render();" in load_body
-    assert load_body.index("state.market=data.market;render();") < load_body.index("await refreshMarket()")
+    assert "state.market=reconcileReadModelMarket(state.market,data.market);render();" in load_body
+    assert load_body.index("reconcileReadModelMarket") < load_body.index("await refreshMarket()")
 
 
 def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
