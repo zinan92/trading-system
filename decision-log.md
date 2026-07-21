@@ -8213,3 +8213,69 @@ auditable datafeed port; broker execution remains a separate port.
 - Inline dashboard JavaScript syntax and diff checks passed.
 - Full-suite execution was intentionally not used for this browser-only
   notification milestone.
+
+## 2026-07-21 - Same-cycle review ledger and Strategy Shadows
+
+### User outcome
+
+- The 12-hour review now reads as one paired ledger: what the locked production
+  plan said, how that exact plan was judged, and what the same cycle actually
+  produced.
+- Strategy Shadows explain the human meaning of each scenario and compare only
+  against a successful same-cycle replay of the locked production plan.
+
+### Decisions
+
+- Select only a closed cycle package for review and load its Shadows by the
+  identical cycle ID; the current open cycle cannot be blended into history.
+  Every displayed package must first pass its complete append-only hash-chain
+  verification.
+- Link a review track only through one unique source proposal referenced by the
+  locked StrategyPlan. Missing or ambiguous lineage is displayed as unknown.
+- Compare complete plan specifications, including direction, style, range,
+  mode, spacing, grid count, per-grid notional, leverage, and out-of-range
+  policy. A partial record cannot be called unchanged.
+- Keep realized and unrealized PnL separate. A missing value remains unknown
+  and is never normalized to zero.
+- Accept only `variant_id=production` with `status=pass` as the counterfactual
+  baseline, and require its plan identity to match the packaged production
+  plan. Candidates must share its market-event hash, evaluation window, and
+  execution and fee contracts.
+- Project one selected compact review package plus summary-only package history
+  into the five-second polling response. Raw replay events, commands, orders,
+  and fills remain in immutable evidence rather than the dashboard payload.
+- Present next-cycle output as advice. A record claiming automatic application
+  is flagged for human verification rather than repeated as production truth.
+
+### Gotchas
+
+- A ledger review can contain both machine and human assessments. Choosing a
+  default track would silently grade a different proposal than the locked plan.
+- A row with `status=closed` is not trusted evidence by itself. A forged hash or
+  broken supersedes link excludes the entire journal from review selection.
+- A Shadow named `production` is still not usable if its replay was blocked or
+  belongs to another cycle, has a different plan identity, or lacks replay
+  input lineage.
+- JavaScript numeric coercion turns `null` into zero. Review formatting must
+  reject missing values before conversion.
+- Range and grid values can match while the out-of-range policy differs; this
+  is a materially different production specification.
+- Key-level and TP/SL verdicts are dimension-specific. If those dimensions
+  changed after proposal review, the old verdict is marked口径不一致.
+- The packaged Shadow list can lag the dedicated read-model source. Same-cycle
+  rows from the current source take precedence, then scenario IDs are deduped.
+- Historical superiority is descriptive evidence for one replay window, not a
+  forecast and not authorization to promote a strategy.
+
+### Verification
+
+- Review behavior Node suite: 8 passed.
+- Cycle-package integrity, read-model, API, and GridMind static suite: 51 passed.
+- Covered missing-value preservation, unique proposal linkage, track selection,
+  complete specification comparison, direction mismatch, same-cycle Shadow
+  filtering, selected-cycle alignment, dimension-specific plan matching,
+  compact polling projection, deduplication, and strict same-input production
+  baseline gating.
+- Inline dashboard JavaScript syntax and diff checks passed.
+- Full-suite execution was intentionally not used for this bounded review UI
+  and read-model milestone.

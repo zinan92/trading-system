@@ -52,6 +52,7 @@ from services.risk_port import (
 )
 from services.strategy_recommendation import StrategyRecommendationService
 from services.strategy_shadow import load_strategy_shadow_runs
+from services.strategy_cycle_package import StrategyCyclePackager
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
 from services.production_accounting import build_production_accounting_history
@@ -831,7 +832,15 @@ def _assemble_strategy_console_snapshot(
         "margin": (execution.get("account") or {}).get("margin", 0),
         "slippage": (execution.get("account") or {}).get("slippage", 0),
     }
-    shadows = load_strategy_shadow_runs(output, cycle_id)
+    ledger = build_dualtrack_ledger_response(output_root=output)
+    raw_cycle_packages = StrategyCyclePackager(output).list_verified_packages(limit=12)
+    review_cycle_id = _latest_review_cycle_id(ledger, raw_cycle_packages)
+    cycle_packages = _compact_review_packages(raw_cycle_packages, review_cycle_id)
+    shadows = (
+        [_compact_strategy_shadow(row) for row in load_strategy_shadow_runs(output, review_cycle_id)]
+        if review_cycle_id
+        else []
+    )
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
@@ -853,7 +862,9 @@ def _assemble_strategy_console_snapshot(
             ),
             "history_contract": production_history["history_contract"],
         },
-        "ledger": build_dualtrack_ledger_response(output_root=output),
+        "ledger": ledger,
+        "cycle_packages": cycle_packages,
+        "review_cycle_id": review_cycle_id,
         "daily_reports": build_strategy_console_daily_reports_response(output_root=output),
         "strategy_shadows": shadows,
         "execution_shadow": execution.get("shadow_cutover", {}),
@@ -874,6 +885,97 @@ def _assemble_strategy_console_snapshot(
             "strategy_preview": True,
             "runtime_actual_state": True,
         },
+    }
+
+
+def _latest_review_cycle_id(ledger: dict[str, Any], packages: list[dict[str, Any]]) -> str:
+    """Choose one closed cycle with review evidence; never mix cycles."""
+
+    closed = {
+        str(row.get("cycle_id") or "")
+        for row in packages
+        if isinstance(row, dict) and row.get("status") == "closed" and row.get("cycle_id")
+    }
+    for review in ledger.get("recent_reviews") or []:
+        cycle_id = str((review or {}).get("cycle_id") or "")
+        if cycle_id in closed:
+            return cycle_id
+    return next(
+        (
+            str(row.get("cycle_id") or "")
+            for row in packages
+            if isinstance(row, dict) and row.get("status") == "closed" and row.get("cycle_id")
+        ),
+        "",
+    )
+
+
+def _compact_review_packages(
+    packages: list[dict[str, Any]],
+    selected_cycle_id: str,
+) -> list[dict[str, Any]]:
+    """Project polling-safe review evidence without replay event payloads."""
+
+    result: list[dict[str, Any]] = []
+    for package in packages:
+        cycle_id = str(package.get("cycle_id") or "")
+        summary = {
+            key: package.get(key)
+            for key in ("schema_version", "cycle_id", "status", "blockers", "packaged_at", "window", "package_hash")
+            if key in package
+        }
+        if cycle_id == selected_cycle_id:
+            execution = package.get("execution") or {}
+            summary.update({
+                "strategy_plan": package.get("strategy_plan"),
+                "proposals": package.get("proposals") or [],
+                "execution": {
+                    "engine": execution.get("engine"),
+                    "order_count": len(execution.get("orders") or []),
+                    "fill_count": len(execution.get("fills") or []),
+                    "position_count": len(execution.get("positions") or []),
+                    "pnl": execution.get("pnl") or {},
+                    "reconciliation": execution.get("reconciliation") or {},
+                },
+                "review": package.get("review") or {},
+                "strategy_shadows": [
+                    _compact_strategy_shadow(row)
+                    for row in package.get("strategy_shadows") or []
+                    if isinstance(row, dict)
+                ],
+                "traceability": package.get("traceability") or {},
+            })
+        result.append(summary)
+    return result
+
+
+def _compact_strategy_shadow(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep comparison lineage and metrics; omit replay orders and market events."""
+
+    scenario = row.get("scenario") or {}
+    compact_scenario = {
+        "plan_identity": scenario.get("plan_identity") or {},
+        "evaluation_window": scenario.get("evaluation_window") or {},
+        "contracts": scenario.get("contracts") or {},
+        "hashes": scenario.get("hashes") or {},
+    }
+    return {
+        key: value
+        for key, value in {
+            "schema_version": row.get("schema_version"),
+            "status": row.get("status"),
+            "blockers": row.get("blockers") or [],
+            "cycle_id": row.get("cycle_id"),
+            "variant_id": row.get("variant_id"),
+            "scenario_id": row.get("scenario_id"),
+            "input_hash": row.get("input_hash"),
+            "plan": row.get("plan") or {},
+            "scenario": compact_scenario,
+            "metrics": row.get("metrics") or {},
+            "review": row.get("review") or {},
+            "safety": row.get("safety") or {},
+        }.items()
+        if value not in (None, "")
     }
 
 

@@ -164,6 +164,23 @@ def test_gridmind_preserves_traceability_and_safe_control_copy() -> None:
     assert "12小时复盘" in html
 
 
+def test_gridmind_review_is_a_same_cycle_evidence_ledger() -> None:
+    html = _html()
+
+    for label in ("当时计划", "判断", "结果与分析", "方向", "网格规格", "执行", "PnL", "关键位", "TP / SL", "反事实"):
+        assert label in html
+    assert "data?.review?.cycle_packages" in html
+    assert "data?.review?.selected_cycle_id" in html
+    assert "reviewProposalForPlan" in html
+    assert "口径不一致" in html
+    assert 'row?.variant_id==="production"&&row?.status==="pass"' in html
+    assert "同周期、同历史、同执行契约且计划身份匹配的 production 基准" in html
+    assert "reviewShadowInputsMatch" in html
+    assert "reviewShadowPlanMatches" in html
+    assert "已实现" in html and "未实现" in html
+    assert "仅为建议，未自动应用" in html
+
+
 def test_gridmind_positions_show_lifecycle_times_and_keeps_immutable_fill_trace() -> None:
     html = _html()
 

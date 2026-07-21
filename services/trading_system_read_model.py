@@ -156,6 +156,8 @@ def project_trading_system_read_model(
         "risk": risk,
         "review": {
             "ledger": _json_copy(_mapping(source.get("ledger"))),
+            "cycle_packages": _json_copy(_list(source.get("cycle_packages"))),
+            "selected_cycle_id": str(source.get("review_cycle_id") or "") or None,
         },
         "research": {
             "strategy_shadows": _json_copy(_list(source.get("strategy_shadows"))),

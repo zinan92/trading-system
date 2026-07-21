@@ -183,6 +183,22 @@ class StrategyCyclePackager:
                 break
         return result
 
+    def list_verified_packages(self, *, limit: int = 12) -> list[dict[str, Any]]:
+        """Return only terminal journals whose full hash chain verifies."""
+
+        folder = self.root / "strategy_cycle_packages"
+        if not folder.exists():
+            return []
+        result: list[dict[str, Any]] = []
+        for path in sorted(folder.glob("*.json"), reverse=True):
+            try:
+                result.append(load_latest_verified_cycle_package(path))
+            except ValueError:
+                continue
+            if len(result) >= max(1, int(limit)):
+                break
+        return result
+
     def acknowledge_integrity_incident(
         self,
         cycle_id: str,
