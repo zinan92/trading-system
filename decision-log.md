@@ -9258,3 +9258,31 @@ auditable datafeed port; broker execution remains a separate port.
 - Browser geometry with a 304px data panel measured identical 975.05px bottom
   coordinates for both columns; responsive height overrides remain intact.
 - Focused dashboard static tests: 26 passed; gitleaks found no leaks.
+## 2026-07-22 - Give scroll ownership to production status, not configuration
+
+### Decision
+
+- Remove the retired `运行中调整` card from the operator rail. Range replacement
+  remains available through the chart's draft-and-confirm interaction.
+- Let the AI decision and strategy configuration cards take their natural
+  content height so no controls or analysis are clipped inside equal grid rows.
+- Make only the production runtime detail body a fixed-height scroll region.
+  The document owns navigation between cards; the runtime card owns navigation
+  through its long diagnostic list.
+
+### Gotchas
+
+- The previous `height: 0` plus `min-height: 100%` rail made CSS Grid distribute
+  four equal-height rows. Because cards hide overflow, this looked compact but
+  silently clipped most AI and strategy content.
+- Removing the retired DOM also requires removing direct JavaScript references;
+  otherwise initial rendering fails before the user can operate the Dashboard.
+- Backend `extend_range` and `reset_statistics` capabilities remain unchanged;
+  this is a presentation-only retirement of their old card.
+
+### Verification
+
+- Dashboard static layout and interaction-contract tests.
+- Browser geometry check at the annotated desktop viewport: AI and strategy
+  cards have natural height and no clipped scroll content; only runtime details
+  have `overflow-y: auto`.

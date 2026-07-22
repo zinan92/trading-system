@@ -113,11 +113,16 @@ def test_gridmind_mobile_layout_prevents_global_horizontal_overflow() -> None:
     assert ".console-wrap{max-width:100%;padding:7px}" in html
 
 
-def test_gridmind_desktop_columns_align_at_the_bottom() -> None:
+def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
     html = _html()
 
-    assert ".control-rail{position:sticky;top:57px;height:0;min-height:100%;max-height:none;overflow:auto" in html
     assert ".control-rail{position:static;height:auto;min-height:0;max-height:none;overflow:visible" in html
+    assert "grid-auto-rows:max-content" in html
+    assert ".market-card,.strategy-card{height:auto}" in html
+    assert ".live-card .card-body{height:295px;max-height:295px;overflow-y:auto" in html
+    assert "运行中调整" not in html
+    for retired_id in ("adjustLow", "adjustHigh", "applyAdjustment", "resetStats", "actionStatus"):
+        assert f'id="{retired_id}"' not in html
     assert ".chart{height:450px;min-height:320px}" in html
     assert "StandardKlineChart(host,{height:450,minHeight:320" in html
     assert ".chart{height:420px}" in html
@@ -164,10 +169,6 @@ def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> 
         "previewSummary",
         "startRobot",
         "stopRobot",
-        "adjustLow",
-        "adjustHigh",
-        "applyAdjustment",
-        "resetStats",
         "showEma",
         "showMacd",
         "aiReceiptDialog",
@@ -199,16 +200,12 @@ def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> 
         "prepare_start",
         "start",
         "stop",
-        "extend_range",
-        "reset_statistics",
     ):
         assert f"control('{action}'" in html or f'control("{action}"' in html
 
     assert "prepared_start_id:state.preparedStartId" in html
     assert "prepared_start_market_moved" in html
     assert "机器人已启动" in html
-    assert "expected_strategy_plan_id:plan.strategy_plan_id" in html
-    assert "间距、每格金额和已有持仓 TP/SL 保持不变" in html
     assert "await requestPreview({useInputs:true});const result=await control('adjust_plan'" not in html
 
 
