@@ -9644,3 +9644,53 @@ auditable datafeed port; broker execution remains a separate port.
   cancellation of remaining entries, and long/short symmetry.
 - The new runtime modules compile under macOS `/usr/bin/python3` (Python 3.9);
   staged secret scanning remains required before merge.
+
+## 2026-07-23 - Route attended Paper controls by explicit strategy type
+
+### Decision
+
+- Keep the existing `preview`, `prepare_start`, `start`, and `stop` control
+  actions, but dispatch planning and execution by an explicit
+  `strategy_type`. An omitted value remains `grid` for backward compatibility;
+  DCA is never inferred from direction or market trend.
+- Freeze DCA previews with the same prepared-start identity, expiry, adapter,
+  market provenance, and active-plan guards as Grid. DCA does not inherit the
+  Grid-only rule that the current mark must occupy the same grid cell.
+- Require explicit Paper consent for the accumulation specification and the
+  full-depth maximum-loss scenario. If full-depth capacity exceeds the
+  configured recommendation, expose a third critical acknowledgement instead
+  of silently resizing the order ladder.
+- Activate a clean, versioned DCA StrategyPlan rather than copying Grid fields.
+  Runtime state records `strategy_type=dca`, the lifecycle status/path, and the
+  risk decision identity.
+- Route every completed trusted Paper market event through
+  `DcaPaperLifecycle`. A fixed target closes the whole reconciled round and,
+  because looping is disabled in v1, moves runtime to `stopped`.
+- Project DCA as DCA in the provider-neutral read model: direction, additions,
+  per-addition notional, target, stop, full-depth exposure, leverage, and
+  maximum loss are first-class facts rather than fake grid geometry.
+
+### Gotchas
+
+- A DCA target lifecycle row is a Paper conditional obligation until a trusted
+  event reaches the target. The Dashboard must not label it as an already
+  broker-native accepted order.
+- Prepared DCA market movement is not a Grid range blocker. Venue identity and
+  fresh trusted provenance are still mandatory, while actual marketability is
+  resolved by the execution adapter on the next event.
+- The scheduler may replay multiple completed bars. Once a non-looping DCA
+  round closes, the runner must stop consuming later bars for that strategy;
+  otherwise old events could leak into a completed round.
+- `tests/test_strategy_cycle_rollover.py::test_protective_execution_sweep_holds_production_mutation_lock`
+  already fails on `main@dd7647f`: its fake market returns zero bars while the
+  assertion expects one processed event. This milestone records but does not
+  alter that unrelated baseline test.
+
+### Verification
+
+- Focused DCA control tests cover read-only prepare, exact consent binding,
+  Paper start, two additions, target replacement, aggregate close, scheduler
+  routing, automatic terminal runtime, and operator stop/flatten.
+- DCA plan, aggregate lifecycle, control plane, and provider-neutral read-model
+  regressions pass; Python 3.9 compilation and staged secret scanning remain
+  merge gates.

@@ -227,6 +227,8 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     assert model["contract"]["read_only"] is True
     assert model["strategy"]["summary"] == {
         "strategy_id": "production_grid",
+        "strategy_type": "grid",
+        "strategy_type_label": "Grid",
         "plan_id": "plan-7",
         "plan_version": 7,
         "status": "active",
@@ -279,6 +281,57 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     assert model["execution"]["trades"][0]["close_reason"] == "tp"
     assert model["execution"]["trades"][0]["close_reason_label"] == "TP"
     assert source == before
+
+
+def test_read_model_projects_dca_round_summary_without_grid_geometry_warning() -> None:
+    source = _source()
+    source["production_plan"] = {
+        "schema_version": "strategy-plan-v1",
+        "strategy_type": "dca",
+        "strategy_plan_id": "plan-dca-1",
+        "cycle_id": "2026-07-18_DAY",
+        "version": 8,
+        "status": "active",
+        "direction": "long",
+        "dca": {
+            "max_additions": 3,
+            "notional_per_addition": 2_000.0,
+            "target_price": 4_050.0,
+            "stop_price": 3_970.0,
+            "loop_enabled": False,
+            "total_possible_notional": 6_000.0,
+            "entries": [
+                {"preview_entry_id": "dca-entry-01", "price": 4_004.0},
+                {"preview_entry_id": "dca-entry-02", "price": 3_996.0},
+                {"preview_entry_id": "dca-entry-03", "price": 3_988.0},
+            ],
+        },
+        "risk_budget": {
+            "selected_leverage": 10.0,
+            "actual_leverage_at_full_depth": 0.6,
+            "maximum_loss_at_full_depth": 47.0,
+        },
+    }
+    source["runtime"].update({
+        "strategy_plan_id": "plan-dca-1",
+        "strategy_plan_version": 8,
+        "strategy_type": "dca",
+    })
+
+    model = project_trading_system_read_model(
+        source,
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    summary = model["strategy"]["summary"]
+    assert summary["strategy_type"] == "dca"
+    assert summary["display_label"] == (
+        "做多 · DCA · 最多 3 次 · 每次 2000 USD · 目标 4050"
+    )
+    assert summary["dca_entry_levels"] == [4_004.0, 3_996.0, 3_988.0]
+    assert summary["max_loss"] == 47.0
+    assert "strategy_geometry_incomplete" not in model["completeness"]["issues"]
 
 
 def test_read_model_projects_only_authoritative_order_rows_without_fill_inference() -> None:

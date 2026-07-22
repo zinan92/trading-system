@@ -21,6 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
+from services.dca_execution_lifecycle import DcaPaperLifecycle
+from services.dca_plan import (
+    build_dca_entry_commands,
+    build_dca_preview,
+    build_dca_strategy_plan,
+    dca_preview_id,
+)
 from services.dualtrack_clock import parse_utc
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_store import DualTrackPlanStore
@@ -69,6 +76,7 @@ _PROCESS_LOCK_STATE = threading.local()
 MANUAL_RANGE_RISK_ACK_SCHEMA = "grid-range-risk-ack-v1"
 PREPARED_START_SCHEMA = "strategy-prepared-start-v1"
 PREPARED_START_TTL_SECONDS = 300
+DCA_RISK_ACK_SCHEMA = "dca-risk-ack-v1"
 MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS = {
     "candidate_grid_count_out_of_bounds",
     "grid_profit_target_not_met",
@@ -572,6 +580,7 @@ class StrategyControlPlane:
                 "statistics_baseline_at": None,
                 "strategy_plan_id": None,
                 "strategy_plan_version": None,
+                "strategy_type": None,
                 "preview_id": None,
                 "risk_decision_id": None,
                 "risk_policy_id": None,
@@ -593,6 +602,7 @@ class StrategyControlPlane:
             "statistics_baseline_at": row.get("statistics_baseline_at"),
             "strategy_plan_id": row.get("strategy_plan_id"),
             "strategy_plan_version": row.get("strategy_plan_version"),
+            "strategy_type": row.get("strategy_type"),
             "preview_id": row.get("preview_id"),
             "risk_decision_id": row.get("risk_decision_id"),
             "risk_policy_id": row.get("risk_policy_id"),
@@ -601,6 +611,8 @@ class StrategyControlPlane:
             "transition_owner": row.get("transition_owner"),
             "last_action": row.get("last_action"),
             "last_error": row.get("last_error"),
+            "dca_lifecycle_status": row.get("dca_lifecycle_status"),
+            "dca_lifecycle_path": row.get("dca_lifecycle_path"),
             "stale_cycle": False,
             "previous_cycle_id": None,
             "previous_actual_state": None,
@@ -661,6 +673,16 @@ class StrategyControlPlane:
         market: dict[str, Any],
         account: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if str((payload or {}).get("strategy_type") or "grid").lower() == "dca":
+            preview = build_dca_preview(
+                cycle_id,
+                payload,
+                market=market,
+                account=account,
+                config=self.config,
+            )
+            preview["manual_confirmation"] = _dca_confirmation_contract(preview)
+            return preview
         # Geometry and capital sizing stay pure and shared in grid_sizing;
         # the control plane owns only locking, persistence and runtime state.
         return build_grid_preview(cycle_id, payload, market=market, account=account, config=self.config)
@@ -677,6 +699,8 @@ class StrategyControlPlane:
         """Attach exact Paper-only consent facts without writing plan or risk state."""
 
         preview = self.preview(cycle_id, payload, market=market, account=account)
+        if preview.get("strategy_type") == "dca":
+            return preview
         solver = dict(preview.get("solver") or {})
         if solver.get("mode") != "manual_adaptive":
             return preview
@@ -817,7 +841,8 @@ class StrategyControlPlane:
         """Freeze one server-built Paper candidate without creating a plan/order."""
 
         current = self.active_plan(cycle_id)
-        if not current:
+        strategy_type = str(payload.get("strategy_type") or "grid").lower()
+        if not current and strategy_type != "dca":
             raise ValueError("cannot prepare start without an active StrategyPlan")
         runtime = self.runtime_state(cycle_id)
         if runtime.get("desired_state") == "running":
@@ -858,9 +883,9 @@ class StrategyControlPlane:
                 + timedelta(seconds=PREPARED_START_TTL_SECONDS)
             ).isoformat(),
             "expected_strategy_plan_id": str(
-                current.get("strategy_plan_id") or ""
+                (current or {}).get("strategy_plan_id") or ""
             ),
-            "expected_strategy_plan_version": int(current.get("version") or 0),
+            "expected_strategy_plan_version": int((current or {}).get("version") or 0),
             "execution_adapter_name": str(getattr(adapter, "name", "")),
             "market_snapshot": canonical_market_risk_state(market),
             "preview": preview,
@@ -916,6 +941,17 @@ class StrategyControlPlane:
         now: str | None,
     ) -> dict[str, Any]:
         preview = dict(prepared.get("preview") or {})
+        if preview.get("strategy_type") == "dca":
+            return self._validate_prepared_dca_start(
+                cycle_id,
+                prepared,
+                preview=preview,
+                expected_preview_id=expected_preview_id,
+                current=current,
+                market=market,
+                adapter_name=adapter_name,
+                now=now,
+            )
         try:
             content_id = self._prepared_start_content_id(prepared)
             canonical_preview_id = _grid_preview_id(preview)
@@ -1015,6 +1051,61 @@ class StrategyControlPlane:
             raise ValueError("prepared_start_changed")
         if marketable:
             raise ValueError("prepared_start_market_moved")
+        return preview
+
+    def _validate_prepared_dca_start(
+        self,
+        cycle_id: str,
+        prepared: dict[str, Any],
+        *,
+        preview: dict[str, Any],
+        expected_preview_id: str,
+        current: dict[str, Any],
+        market: dict[str, Any],
+        adapter_name: str,
+        now: str | None,
+    ) -> dict[str, Any]:
+        """Validate frozen DCA facts without imposing Grid range geometry."""
+
+        try:
+            content_id = self._prepared_start_content_id(prepared)
+            prepared_plan_version = int(
+                prepared.get("expected_strategy_plan_version") or 0
+            )
+            checked_at = parse_utc(_timestamp(now))
+            prepared_at = parse_utc(str(prepared.get("prepared_at") or ""))
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("prepared_start_changed")
+        prepared_plan_matches = (
+            str(prepared.get("expected_strategy_plan_id") or "")
+            == str(current.get("strategy_plan_id") or "")
+            and prepared_plan_version == int(current.get("version") or 0)
+        ) or (
+            current.get("strategy_type") == "dca"
+            and str(current.get("preview_id") or "")
+            == str(preview.get("preview_id") or "")
+        )
+        if (
+            str(prepared.get("prepared_start_id") or "") != content_id
+            or str(prepared.get("cycle_id") or "") != cycle_id
+            or not prepared_plan_matches
+            or str(prepared.get("execution_adapter_name") or "") != adapter_name
+            or not expected_preview_id
+            or expected_preview_id != str(preview.get("preview_id") or "")
+            or dca_preview_id(preview) != expected_preview_id
+        ):
+            raise ValueError("prepared_start_changed")
+        age_seconds = (checked_at - prepared_at).total_seconds()
+        if age_seconds < -1 or age_seconds > PREPARED_START_TTL_SECONDS:
+            raise ValueError("prepared_start_expired")
+        _validate_market(market)
+        prepared_market = dict(prepared.get("market_snapshot") or {})
+        current_market = canonical_market_risk_state(market)
+        for identity_field in ("provider", "source_mode", "symbol", "timeframe"):
+            if str(prepared_market.get(identity_field) or "") != str(
+                current_market.get(identity_field) or ""
+            ):
+                raise ValueError("prepared_start_market_moved")
         return preview
 
     @staticmethod
@@ -1693,6 +1784,15 @@ class StrategyControlPlane:
         account: dict[str, Any],
         now: str | None,
     ) -> dict[str, Any]:
+        strategy_type = str(body.get("strategy_type") or "grid").lower()
+        if strategy_type == "dca":
+            return self._start_dca(
+                cycle_id,
+                body,
+                market=market,
+                account=account,
+                now=now,
+            )
         current = self.active_plan(cycle_id)
         if not current:
             raise ValueError("cannot start without an already selected active StrategyPlan")
@@ -1967,6 +2067,236 @@ class StrategyControlPlane:
             "accepted_orders": len(accepted),
             "filled_orders": filled_count,
             "risk_decision": risk_decision,
+            "idempotent": False,
+        }
+
+    def _start_dca(
+        self,
+        cycle_id: str,
+        body: dict[str, Any],
+        *,
+        market: dict[str, Any],
+        account: dict[str, Any],
+        now: str | None,
+    ) -> dict[str, Any]:
+        """Start one finite Paper DCA round from an immutable preview."""
+
+        current = self.active_plan(cycle_id) or {}
+        expected_preview_id = str(body.get("expected_preview_id") or "")
+        prepared_start_id = str(body.get("prepared_start_id") or "")
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        adapter_name = str(getattr(adapter, "name", ""))
+        if "paper" not in adapter_name:
+            raise ValueError("DCA start is Paper-only")
+        prepared: dict[str, Any] | None = None
+        if prepared_start_id:
+            prepared = self._load_prepared_start(cycle_id, prepared_start_id)
+            preview = self._validate_prepared_start(
+                cycle_id,
+                prepared,
+                expected_preview_id=expected_preview_id,
+                current=current,
+                market=market,
+                adapter_name=adapter_name,
+                now=now,
+            )
+        else:
+            preview = self._adaptive_start_preview(
+                cycle_id,
+                body,
+                market=market,
+                account=account,
+                now=now,
+            )
+        if preview.get("strategy_type") != "dca":
+            raise ValueError("DCA start requires a DCA preview")
+        if (
+            not expected_preview_id
+            or expected_preview_id != str(preview.get("preview_id") or "")
+            or dca_preview_id(preview) != expected_preview_id
+        ):
+            raise ValueError("strategy_preview_changed")
+        acknowledgement = _validated_dca_acknowledgement(preview, body, now=now)
+
+        runtime = self.runtime_state(cycle_id)
+        if (
+            runtime.get("desired_state") == "running"
+            and runtime.get("strategy_type") == "dca"
+            and runtime.get("preview_id") == preview["preview_id"]
+            and current.get("strategy_type") == "dca"
+        ):
+            lifecycle = DcaPaperLifecycle(self.output_root, adapter)
+            state = lifecycle.reconcile(current, timestamp=_timestamp(now))
+            snapshot = adapter.snapshot(cycle_id)
+            accepted = [
+                row
+                for row in snapshot.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+            ]
+            return {
+                "action": "start",
+                "runtime": runtime,
+                "plan": current,
+                "preview": preview,
+                "dca_lifecycle": state,
+                "created_orders": 0,
+                "accepted_orders": len(accepted),
+                "idempotent": True,
+            }
+        snapshot = adapter.snapshot(cycle_id)
+        pending = [
+            row
+            for row in snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
+        open_positions = [
+            row
+            for row in snapshot.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+        ]
+        if runtime.get("desired_state") == "running":
+            raise ValueError("robot is already running; stop it before changing strategy")
+        if pending or open_positions:
+            raise ValueError(
+                "new DCA start requires zero accepted orders and zero open positions"
+            )
+
+        timestamp = _timestamp(now)
+        version = self._next_plan_version(cycle_id)
+        plan_id = _plan_id(cycle_id, version, preview["preview_id"])
+        adjusted = build_dca_strategy_plan(
+            preview,
+            strategy_plan_id=plan_id,
+            version=version,
+            locked_at=timestamp,
+        )
+        risk_payload = {
+            "schema_version": "dca-risk-decision-v1",
+            "cycle_id": cycle_id,
+            "strategy_plan_id": plan_id,
+            "preview_id": preview["preview_id"],
+            "outcome": "acknowledged" if preview["risk"]["risk_flags"] else "approved",
+            "scope": "paper_only",
+            "risk": dict(preview["risk"]),
+            "acknowledgement": acknowledgement,
+            "evaluated_at": timestamp,
+        }
+        risk_payload["decision_id"] = _content_id("dca-risk", risk_payload)
+        adjusted["risk_decision_id"] = risk_payload["decision_id"]
+        adjusted["risk_acknowledgement"] = acknowledgement
+        self._write_dca_risk_decision(cycle_id, risk_payload)
+        self._assert_rollover_start_guard(body)
+        self._activate_plan(adjusted)
+        starting = {
+            **runtime,
+            "cycle_id": cycle_id,
+            "desired_state": "running",
+            "actual_state": "starting",
+            "updated_at": timestamp,
+            "last_action": "start",
+            "last_error": None,
+            "strategy_type": "dca",
+            "strategy_plan_id": adjusted["strategy_plan_id"],
+            "strategy_plan_version": adjusted["version"],
+            "preview_id": preview["preview_id"],
+            "prepared_start_id": prepared_start_id or None,
+            "risk_decision_id": risk_payload["decision_id"],
+            "risk_policy_id": "paper-dca-explicit-consent-v1",
+            "accepted_order_count": 0,
+            "accepted_order_count_known": True,
+        }
+        self._write_runtime(starting)
+        lifecycle = DcaPaperLifecycle(self.output_root, adapter)
+        try:
+            started = lifecycle.start(adjusted, timestamp=timestamp)
+            event = self._market_event(
+                cycle_id,
+                market=market,
+                now=now,
+                identity="strategy-dca-start",
+            )
+            advanced = lifecycle.process_market_event(adjusted, event)
+            terminal = adapter.snapshot(cycle_id)
+            reconciliation = adapter.reconcile(cycle_id)
+            if reconciliation.get("status") != "ok":
+                raise ValueError("paper ledger reconciliation failed")
+        except Exception as exc:
+            cleanup_error = ""
+            try:
+                cleanup_now = (
+                    parse_utc(timestamp) + timedelta(seconds=1)
+                ).isoformat()
+                self._stop(
+                    cycle_id,
+                    market=market,
+                    now=cleanup_now,
+                )
+            except Exception as cleanup_exc:
+                cleanup_error = str(cleanup_exc)
+            adjusted["status"] = "failed"
+            self._write_plan(adjusted)
+            if current:
+                current["status"] = "active"
+                self._write_plan(current)
+            failure_detail = str(exc)
+            if cleanup_error:
+                failure_detail += f"; DCA start cleanup failed: {cleanup_error}"
+            accepted_after_cleanup = 0
+            accepted_order_count_known = True
+            try:
+                accepted_after_cleanup = len(
+                    self._accepted_orders(cycle_id, adapter=adapter)
+                )
+            except Exception as snapshot_exc:
+                accepted_order_count_known = False
+                failure_detail += f"; final_snapshot: {snapshot_exc}"
+            self._write_runtime({
+                **starting,
+                "desired_state": "stopped",
+                "actual_state": "error",
+                "updated_at": _timestamp(now),
+                "last_error": failure_detail,
+                "accepted_order_count": accepted_after_cleanup,
+                "accepted_order_count_known": accepted_order_count_known,
+            })
+            raise
+        accepted = [
+            row
+            for row in terminal.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
+        filled = [
+            row
+            for row in terminal.get("orders") or []
+            if str(row.get("state") or "").lower() == "filled"
+            and str(row.get("strategy_plan_id") or "") == plan_id
+        ]
+        lifecycle_state = dict(advanced.get("state") or {})
+        running = {
+            **starting,
+            "actual_state": "running",
+            "updated_at": _timestamp(now),
+            "accepted_order_count": len(accepted),
+            "dca_lifecycle_status": lifecycle_state.get("status"),
+            "dca_lifecycle_path": str(lifecycle._path(cycle_id)),
+        }
+        self._write_runtime(running)
+        return {
+            "action": "start",
+            "runtime": running,
+            "plan": adjusted,
+            "preview": preview,
+            "orders": started["receipts"],
+            "execution_event": advanced.get("engine_result"),
+            "dca_lifecycle": lifecycle_state,
+            "reconciliation": reconciliation,
+            "created_orders": len(started["receipts"]),
+            "accepted_orders": len(accepted),
+            "filled_orders": len(filled),
+            "risk_decision": risk_payload,
             "idempotent": False,
         }
 
@@ -4055,8 +4385,16 @@ class StrategyControlPlane:
             "accepted_order_count": 0,
             "accepted_order_count_known": True,
         }
+        dca_lifecycle = None
+        active = self.active_plan(cycle_id)
+        if previous.get("strategy_type") == "dca" and active and active.get("strategy_type") == "dca":
+            dca_lifecycle = DcaPaperLifecycle(
+                self.output_root,
+                adapter,
+            ).reconcile(active, timestamp=_timestamp(now))
+            stopped["dca_lifecycle_status"] = dca_lifecycle.get("status")
         self._write_runtime(stopped)
-        return {
+        result = {
             "action": "stop",
             "runtime": stopped,
             "cancelled_orders": cancelled,
@@ -4066,6 +4404,9 @@ class StrategyControlPlane:
             "historical_records_preserved": True,
             "safe_action_market_gates": safe_action_market_gates,
         }
+        if dca_lifecycle is not None:
+            result["dca_lifecycle"] = dca_lifecycle
+        return result
 
     @staticmethod
     def _settle_safe_action_commands(adapter, cycle_id: str) -> dict[str, Any] | None:
@@ -4135,26 +4476,99 @@ class StrategyControlPlane:
 
         if str(getattr(adapter, "name", "")) != "nautilus_paper":
             return None
-        _validate_market(market or {})
-        price = _positive_number((market or {}).get("latest_close"), "market latest_close")
+        return adapter.process_market_event(
+            self._market_event(
+                cycle_id,
+                market=market or {},
+                now=now,
+                identity=identity,
+            )
+        )
+
+    def advance_dca_market_event(
+        self,
+        cycle_id: str,
+        event: dict[str, Any],
+        *,
+        adapter=None,
+    ) -> dict[str, Any]:
+        """Advance the active Paper DCA round and publish its runtime state."""
+
+        with production_mutation_lock(self.output_root):
+            plan = self.active_plan(cycle_id)
+            runtime = self.runtime_state(cycle_id)
+            if (
+                not plan
+                or plan.get("strategy_type") != "dca"
+                or runtime.get("strategy_type") != "dca"
+                or runtime.get("actual_state") != "running"
+            ):
+                raise ValueError("active running DCA StrategyPlan is required")
+            execution = adapter or build_configured_execution_engine_adapter(
+                self.output_root,
+                config=self.config,
+            )
+            if "paper" not in str(getattr(execution, "name", "")):
+                raise ValueError("DCA market advancement is Paper-only")
+            result = DcaPaperLifecycle(
+                self.output_root,
+                execution,
+            ).process_market_event(plan, event)
+            state = dict(result.get("state") or {})
+            snapshot = execution.snapshot(cycle_id)
+            accepted = [
+                row
+                for row in snapshot.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+            ]
+            terminal = str(state.get("status") or "") in {
+                "target_closed",
+                "stop_closed",
+                "flattened",
+                "closed",
+            }
+            published = {
+                **runtime,
+                "desired_state": "stopped" if terminal else "running",
+                "actual_state": "stopped" if terminal else "running",
+                "updated_at": str(event.get("ts_event") or _timestamp(None)),
+                "last_action": "dca_round_closed" if terminal else "dca_market_event",
+                "last_error": None,
+                "accepted_order_count": len(accepted),
+                "accepted_order_count_known": True,
+                "dca_lifecycle_status": state.get("status"),
+            }
+            self._write_runtime(published)
+            return {**result, "runtime": published}
+
+    def _market_event(
+        self,
+        cycle_id: str,
+        *,
+        market: dict[str, Any],
+        now: str | None,
+        identity: str,
+    ) -> dict[str, Any]:
+        _validate_market(market)
+        price = _positive_number(market.get("latest_close"), "market latest_close")
         timestamp = _timestamp(now)
-        return adapter.process_market_event({
+        return {
             "schema_version": "dualtrack-market-event-v1",
             "event_id": f"{identity}:{cycle_id}:{timestamp}",
             "cycle_id": cycle_id,
             "ts_event": timestamp,
-            "event_started_at": (market or {}).get("latest_timestamp"),
-            "source": str((market or {}).get("provider") or (market or {}).get("source_mode") or ""),
-            "provider": str((market or {}).get("provider") or ""),
+            "event_started_at": market.get("latest_timestamp"),
+            "source": str(market.get("provider") or market.get("source_mode") or ""),
+            "provider": str(market.get("provider") or ""),
             "instrument_id": str(
                 ((self.config.get("execution_shadow") or {}).get("nautilus") or {}).get(
                     "execution_instrument_id"
                 )
-                or (market or {}).get("symbol")
+                or market.get("symbol")
                 or ""
             ),
-            "symbol": str((market or {}).get("symbol") or "GOLD"),
-            "timeframe": str((market or {}).get("timeframe") or "1m"),
+            "symbol": str(market.get("symbol") or "GOLD"),
+            "timeframe": str(market.get("timeframe") or "1m"),
             "open": price,
             "high": price,
             "low": price,
@@ -4162,7 +4576,7 @@ class StrategyControlPlane:
             "price": price,
             "fresh": True,
             "is_synthetic": False,
-        })
+        }
 
     @staticmethod
     def _settle_selected_execution_mutations(adapter, cycle_id: str) -> dict[str, Any] | None:
@@ -4263,6 +4677,21 @@ class StrategyControlPlane:
 
     def _prepared_starts_path(self, cycle_id: str) -> Path:
         return self.root / "prepared_starts" / f"{cycle_id}.json"
+
+    def _write_dca_risk_decision(
+        self,
+        cycle_id: str,
+        decision: dict[str, Any],
+    ) -> None:
+        path = self.root / "dca_risk_decisions" / f"{cycle_id}.json"
+        decision_id = str(decision.get("decision_id") or "")
+        rows = [
+            row
+            for row in load_json(path)
+            if str(row.get("decision_id") or "") != decision_id
+        ]
+        rows.append(decision)
+        write_json(path, rows)
 
     def _write_prepared_start(self, record: dict[str, Any]) -> None:
         path = self._prepared_starts_path(str(record["cycle_id"]))
@@ -5203,6 +5632,122 @@ def _matching_staged_range_adjustment(
     if len(matches) > 1:
         raise RuntimeError("multiple staged range adjustments match one request")
     return matches[0] if matches else {}
+
+
+def _content_id(prefix: str, payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return f"{prefix}-{hashlib.sha256(raw.encode()).hexdigest()[:16]}"
+
+
+def _dca_confirmation_contract(preview: dict[str, Any]) -> dict[str, Any]:
+    dca = dict(preview.get("dca") or {})
+    risk = dict(preview.get("risk") or {})
+    rows = [
+        {
+            "code": "dca_accumulation_specification",
+            "severity": "warning",
+            "title": "我确认 DCA 补仓与整轮止盈规格",
+            "summary": (
+                f"最多 {dca.get('max_additions')} 次、每次名义 "
+                f"{dca.get('notional_per_addition')} USD；全部筹码在 "
+                f"{dca.get('target_price')} 统一退出。"
+            ),
+            "facts": {
+                "direction": preview.get("direction"),
+                "entry_levels": list(dca.get("entry_levels") or []),
+                "max_additions": dca.get("max_additions"),
+                "notional_per_addition": dca.get("notional_per_addition"),
+                "target_price": dca.get("target_price"),
+                "loop_enabled": dca.get("loop_enabled"),
+            },
+        },
+        {
+            "code": "dca_maximum_loss",
+            "severity": "critical",
+            "title": "我确认满仓与最大损失情景",
+            "summary": (
+                f"全部补仓成交时总名义 {dca.get('total_possible_notional')} USD；"
+                f"触及 {dca.get('stop_price')} 的预计最大损失为 "
+                f"{risk.get('maximum_loss_at_full_depth')} USD。"
+            ),
+            "facts": {
+                "total_possible_notional": dca.get("total_possible_notional"),
+                "stop_price": dca.get("stop_price"),
+                "maximum_loss_at_full_depth": risk.get("maximum_loss_at_full_depth"),
+                "estimated_margin_at_full_depth": risk.get("estimated_margin_at_full_depth"),
+                "actual_leverage_at_full_depth": risk.get("actual_leverage_at_full_depth"),
+            },
+        },
+    ]
+    if risk.get("capacity_exceeded") is True:
+        rows.append({
+            "code": "dca_capacity_exceeded",
+            "severity": "critical",
+            "title": "我确认 DCA 满仓容量超过建议值",
+            "summary": (
+                f"满仓实际杠杆 {risk.get('actual_leverage_at_full_depth')}x，"
+                f"高于建议上限 {risk.get('leverage_limit')}x；仅 Paper 可确认继续。"
+            ),
+            "facts": {
+                "actual_leverage_at_full_depth": risk.get("actual_leverage_at_full_depth"),
+                "leverage_limit": risk.get("leverage_limit"),
+            },
+        })
+    digest_payload = {
+        "schema_version": DCA_RISK_ACK_SCHEMA,
+        "preview_id": preview.get("preview_id"),
+        "dca": dca,
+        "risk": risk,
+        "required_acknowledgements": rows,
+    }
+    return {
+        "schema_version": DCA_RISK_ACK_SCHEMA,
+        "scope": "paper_only",
+        "required": True,
+        "available": True,
+        "preview_id": preview.get("preview_id"),
+        "facts_digest": _content_id("dca-risk-facts", digest_payload),
+        "required_acknowledgements": rows,
+    }
+
+
+def _validated_dca_acknowledgement(
+    preview: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    now: str | None,
+) -> dict[str, Any]:
+    contract = dict(preview.get("manual_confirmation") or {})
+    supplied = (
+        dict(payload.get("risk_acknowledgements") or {})
+        if isinstance(payload.get("risk_acknowledgements"), dict)
+        else {}
+    )
+    required = {
+        str(row.get("code") or "")
+        for row in contract.get("required_acknowledgements") or []
+        if isinstance(row, dict) and row.get("code")
+    }
+    provided = {str(code) for code in supplied.get("codes") or [] if str(code)}
+    if (
+        contract.get("schema_version") != DCA_RISK_ACK_SCHEMA
+        or contract.get("scope") != "paper_only"
+        or supplied.get("schema_version") != DCA_RISK_ACK_SCHEMA
+        or str(supplied.get("preview_id") or "")
+        != str(preview.get("preview_id") or "")
+        or str(supplied.get("facts_digest") or "")
+        != str(contract.get("facts_digest") or "")
+        or provided != required
+    ):
+        raise ValueError("dca_risk_acknowledgements_incomplete")
+    return {
+        "schema_version": DCA_RISK_ACK_SCHEMA,
+        "scope": "paper_only",
+        "preview_id": preview.get("preview_id"),
+        "facts_digest": contract.get("facts_digest"),
+        "acknowledgement_codes": sorted(provided),
+        "confirmed_at": _timestamp(now),
+    }
 
 
 def normalize_proposal(payload: dict[str, Any], *, now: str | None = None, legacy: bool = False) -> dict[str, Any]:
