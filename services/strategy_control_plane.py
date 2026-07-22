@@ -61,10 +61,13 @@ _CONTROL_LOCK = threading.RLock()
 _PROCESS_LOCK_STATE = threading.local()
 MANUAL_RANGE_RISK_ACK_SCHEMA = "grid-range-risk-ack-v1"
 MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS = {
+    "candidate_grid_count_out_of_bounds",
     "grid_profit_target_not_met",
+    "leverage_limit_exceeded",
     "market_price_outside_range",
     "projected_leverage_exceeded",
     "projected_margin_exceeded",
+    "required_leverage_mismatch",
 }
 
 
@@ -637,6 +640,100 @@ class StrategyControlPlane:
         # the control plane owns only locking, persistence and runtime state.
         return build_grid_preview(cycle_id, payload, market=market, account=account, config=self.config)
 
+    def _adaptive_start_preview(
+        self,
+        cycle_id: str,
+        payload: dict[str, Any],
+        *,
+        market: dict[str, Any],
+        account: dict[str, Any],
+        now: str | None,
+    ) -> dict[str, Any]:
+        """Attach exact Paper-only consent facts without writing plan or risk state."""
+
+        preview = self.preview(cycle_id, payload, market=market, account=account)
+        solver = dict(preview.get("solver") or {})
+        if solver.get("mode") != "manual_adaptive":
+            return preview
+        current = self.active_plan(cycle_id)
+        if not current:
+            raise ValueError("cannot preview start without an active StrategyPlan")
+        candidate_plan = self._plan_from_preview(current, preview, now=now)
+        timestamp = _timestamp(now)
+        commands = build_plan_grid_entry_commands(candidate_plan, timestamp=timestamp)
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        decision = self.risk_port.evaluate(
+            self._grid_risk_request(
+                cycle_id,
+                action_class="increase_exposure",
+                intent="preview_start_grid",
+                plan=candidate_plan,
+                commands=commands,
+                account=account,
+                market=market,
+                adapter=adapter,
+                timestamp=timestamp,
+                replaced_order_ids=None,
+                retained_order_ids=None,
+            )
+        ).to_dict()
+        blocker_codes = {
+            str(row.get("code") or "risk_blocked")
+            for row in decision.get("blockers") or []
+            if isinstance(row, dict)
+        }
+        non_overridable = sorted(
+            blocker_codes - MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS
+        )
+        if any(
+            str(row.get("code") or "") == "manual_leverage_capacity_exceeded"
+            for row in solver.get("risk_flags") or []
+            if isinstance(row, dict)
+        ):
+            non_overridable.append("manual_leverage_capacity_exceeded")
+            non_overridable = sorted(set(non_overridable))
+        old_specification = _range_preview_specification(current)
+        new_specification = _range_preview_specification(
+            preview,
+            canonical_metrics=decision.get("metrics"),
+        )
+        acknowledgements = _manual_range_acknowledgement_contract(
+            preview_id=str(preview["preview_id"]),
+            old=old_specification,
+            new=new_specification,
+            blocker_codes=blocker_codes,
+            local_profit_target_not_met=(
+                preview.get("grid", {}).get("profit_target_met") is not True
+            ),
+            limits=dict(decision.get("limits") or {}),
+        )
+        facts_digest = _manual_range_acknowledgement_facts_digest(
+            old=old_specification,
+            new=new_specification,
+            limits=dict(decision.get("limits") or {}),
+            acknowledgements=acknowledgements,
+        )
+        preview["manual_confirmation"] = {
+            "schema_version": MANUAL_RANGE_RISK_ACK_SCHEMA,
+            "preview_id": preview["preview_id"],
+            "scope": "paper_only",
+            "required": bool(blocker_codes or solver.get("risk_flags")),
+            "available": not non_overridable,
+            "facts_digest": facts_digest,
+            "risk_snapshot_digest": _manual_range_risk_snapshot_digest(decision),
+            "required_acknowledgements": acknowledgements,
+            "overridable_blocker_codes": sorted(
+                blocker_codes & MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS
+            ),
+            "non_overridable_blocker_codes": non_overridable,
+            "old": old_specification,
+            "new": new_specification,
+        }
+        return preview
+
     def preview_range_adjustment(
         self,
         cycle_id: str,
@@ -1100,7 +1197,16 @@ class StrategyControlPlane:
         body = dict(payload or {})
         action = str(action or "").lower()
         if action == "preview":
-            return {"action": action, "preview": self.preview(cycle_id, body, market=market or {}, account=account)}
+            return {
+                "action": action,
+                "preview": self._adaptive_start_preview(
+                    cycle_id,
+                    body,
+                    market=market or {},
+                    account=account or {},
+                    now=now,
+                ),
+            }
         if action == "preview_range":
             return {
                 "action": action,
@@ -1217,10 +1323,32 @@ class StrategyControlPlane:
         current = self.active_plan(cycle_id)
         if not current:
             raise ValueError("cannot start without an already selected active StrategyPlan")
-        preview = self.preview(cycle_id, body, market=market, account=account)
+        preview = self._adaptive_start_preview(
+            cycle_id,
+            body,
+            market=market,
+            account=account,
+            now=now,
+        )
+        if (preview.get("solver") or {}).get("mode") == "manual_adaptive":
+            expected_preview_id = str(body.get("expected_preview_id") or "")
+            if not expected_preview_id or expected_preview_id != str(
+                preview.get("preview_id") or ""
+            ):
+                raise ValueError("strategy_preview_changed")
         runtime = self.runtime_state(cycle_id)
         adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
-        pending = self._accepted_orders(cycle_id, adapter=adapter)
+        execution_snapshot = adapter.snapshot(cycle_id)
+        pending = [
+            row
+            for row in execution_snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
+        open_positions = [
+            row
+            for row in execution_snapshot.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+        ]
         same_running_plan = (
             runtime["desired_state"] == "running"
             and runtime.get("preview_id") == preview["preview_id"]
@@ -1238,10 +1366,20 @@ class StrategyControlPlane:
             }
         if runtime["desired_state"] == "running":
             raise ValueError("robot is already running; stop it before changing the grid")
+        if pending or open_positions:
+            raise ValueError("new grid start requires zero accepted orders and zero open positions")
 
         adjusted = self._plan_from_preview(current, preview, now=now)
         timestamp = _timestamp(now)
         commands = build_plan_grid_entry_commands(adjusted, timestamp=timestamp)
+        manual_override = None
+        confirmation = dict(preview.get("manual_confirmation") or {})
+        if confirmation.get("required") is True:
+            manual_override = _validated_manual_range_acknowledgement(
+                preview,
+                body,
+                now=now,
+            )
         risk_decision = self._authorize_grid_mutation(
             cycle_id,
             action_class="increase_exposure",
@@ -1252,6 +1390,7 @@ class StrategyControlPlane:
             market=market,
             adapter=adapter,
             timestamp=timestamp,
+            manual_override=manual_override,
         )
         self._assert_rollover_start_guard(body)
         # From this point through the first submit the shared control lock owns
@@ -3907,6 +4046,25 @@ def _manual_range_acknowledgement_contract(
             },
         },
     ]
+    if "candidate_grid_count_out_of_bounds" in blocker_codes:
+        rows.append(
+            {
+                "code": "grid_count_outside_preferred_band",
+                "severity": "warning",
+                "title": "我确认网格数量超出建议区间",
+                "summary": (
+                    f"网格数量 {old.get('grid_count')} → {new.get('grid_count')} 格；"
+                    f"自动建议区间为 {limits.get('min_grid_count')}–"
+                    f"{limits.get('max_grid_count')} 格。"
+                ),
+                "facts": {
+                    "old_grid_count": old.get("grid_count"),
+                    "new_grid_count": new.get("grid_count"),
+                    "minimum": limits.get("min_grid_count"),
+                    "maximum": limits.get("max_grid_count"),
+                },
+            }
+        )
     if (
         "grid_profit_target_not_met" in blocker_codes
         or local_profit_target_not_met
@@ -4002,6 +4160,11 @@ def _manual_range_risk_snapshot_digest(decision: dict[str, Any]) -> str:
         if isinstance(request.get("candidate"), dict)
         else {}
     )
+    market = (
+        dict(request.get("market") or {})
+        if isinstance(request.get("market"), dict)
+        else {}
+    )
     metrics = (
         dict(decision.get("metrics") or {})
         if isinstance(decision.get("metrics"), dict)
@@ -4055,6 +4218,17 @@ def _manual_range_risk_snapshot_digest(decision: dict[str, Any]) -> str:
             )
         },
         "economic_commands": economic_commands,
+        "market": {
+            key: market.get(key)
+            for key in (
+                "price",
+                "timestamp",
+                "provider",
+                "source_mode",
+                "fresh",
+                "is_synthetic",
+            )
+        },
         "equity": metrics.get("equity"),
         "candidate_notional_by_side": metrics.get("candidate_notional_by_side"),
         "candidate_loss_by_side": metrics.get("candidate_loss_by_side"),
@@ -4227,7 +4401,14 @@ def _require_acknowledged_paper_grid_risk(
         acknowledgement.get("preview_id") or ""
     ):
         raise ValueError("manual range risk override preview changed")
-    blocker_codes = _manual_range_effective_blocker_codes(decision)
+    if str(candidate.get("intent") or "") == "start_grid":
+        blocker_codes = {
+            str(row.get("code") or "risk_blocked")
+            for row in decision.get("blockers") or []
+            if isinstance(row, dict)
+        }
+    else:
+        blocker_codes = _manual_range_effective_blocker_codes(decision)
     non_overridable = blocker_codes - MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS
     if non_overridable:
         raise ValueError(

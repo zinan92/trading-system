@@ -117,6 +117,167 @@ def operating_grid(direction: str = "long", style: str = "steady") -> dict:
     return {**safe_grid(direction, style), "grid": {"count": 60}}
 
 
+def adaptive_grid_payload() -> dict:
+    return {
+        "direction": "neutral",
+        "style": "steady",
+        "range": {"low": 4_040.0, "high": 4_200.0},
+        "grid": {
+            "mode": "arithmetic",
+            "target_net_profit_per_grid_usd": 10.0,
+        },
+        "solver": {"mode": "manual_adaptive", "locked": ["range"]},
+    }
+
+
+def test_adaptive_start_requires_exact_risk_consent_and_then_starts_paper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    real = build_execution_engine_adapter(output)
+
+    class NautilusPaperFacade:
+        name = "nautilus_paper"
+
+        def submit_order(self, command: dict) -> dict:
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return real.snapshot(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            return real.reconcile(requested_cycle)
+
+        def process_market_event(self, event: dict) -> dict:
+            return real.process_market_event(event)
+
+        def flush(self, requested_cycle: str) -> dict:
+            return {"cycle_id": requested_cycle, "status": "flushed"}
+
+        def flush_commands(self, requested_cycle: str) -> dict:
+            return {"cycle_id": requested_cycle, "status": "flushed"}
+
+    adapter = NautilusPaperFacade()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    active = plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    payload = adaptive_grid_payload()
+    preview = plane.control(
+        cycle_id,
+        "preview",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )["preview"]
+
+    assert preview["grid"]["count"] < 30
+    assert preview["manual_confirmation"]["required"] is True
+    assert preview["manual_confirmation"]["available"] is True
+    assert "candidate_grid_count_out_of_bounds" in preview[
+        "manual_confirmation"
+    ]["overridable_blocker_codes"]
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
+    assert adapter.snapshot(cycle_id)["orders"] == []
+
+    with pytest.raises(ValueError, match="strategy_preview_changed"):
+        plane.control(
+            cycle_id,
+            "start",
+            payload,
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    with pytest.raises(ValueError, match="range_risk_acknowledgements_incomplete"):
+        plane.control(
+            cycle_id,
+            "start",
+            {**payload, "expected_preview_id": preview["preview_id"]},
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    manual = preview["manual_confirmation"]
+    result = plane.control(
+        cycle_id,
+        "start",
+        {
+            **payload,
+            "expected_preview_id": preview["preview_id"],
+            "risk_acknowledgements": {
+                "schema_version": "grid-range-risk-ack-v1",
+                "preview_id": preview["preview_id"],
+                "facts_digest": manual["facts_digest"],
+                "risk_snapshot_digest": manual["risk_snapshot_digest"],
+                "codes": sorted(
+                    row["code"] for row in manual["required_acknowledgements"]
+                ),
+            },
+        },
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+
+    assert result["runtime"]["actual_state"] == "running"
+    assert result["accepted_orders"] > 0
+    assert result["risk_decision"]["operator_override"][
+        "overridden_blocker_codes"
+    ] == ["candidate_grid_count_out_of_bounds"]
+
+
+def test_adaptive_preview_cannot_override_untrusted_market_or_account_reconciliation(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    with pytest.raises(ValueError, match="market data is stale"):
+        plane.control(
+            cycle_id,
+            "preview",
+            adaptive_grid_payload(),
+            market=market(close=4_137.44, fresh=False),
+            account=account_context(),
+        )
+
+    broken_account = account_context()
+    broken_account["accounting_snapshot"]["reconciliation"]["status"] = "fail"
+    broken_account["accounting_snapshot"]["reconciliation"]["issues"] = [
+        "test_drift"
+    ]
+    preview = plane.control(
+        cycle_id,
+        "preview",
+        adaptive_grid_payload(),
+        market=market(close=4_137.44),
+        account=broken_account,
+    )["preview"]
+
+    assert preview["manual_confirmation"]["available"] is False
+    assert "account_snapshot_unavailable" in preview["manual_confirmation"][
+        "non_overridable_blocker_codes"
+    ]
+
+
 def test_plan_proposals_share_schema_and_active_plan_has_field_sources(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     cycle_id = "2026-07-05_DAY"

@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from copy import deepcopy
 from decimal import Decimal, ROUND_FLOOR
 from typing import Any
 
@@ -27,6 +28,16 @@ GRID_STYLES = {"steady", "aggressive"}
 GRID_MODES = {"arithmetic", "geometric"}
 MIN_GRID_COUNT = 30
 MAX_GRID_COUNT = 70
+ADAPTIVE_MIN_GRID_COUNT = 2
+ADAPTIVE_MAX_GRID_COUNT = 200
+ADAPTIVE_MANUAL_LEVERAGE_LIMIT = 20.0
+ADAPTIVE_LOCKS = {
+    "range",
+    "grid_count",
+    "profit_target",
+    "notional_per_grid",
+    "leverage",
+}
 
 
 def _floor_quantity(value: float, config: dict[str, Any]) -> float:
@@ -198,6 +209,7 @@ def non_negative_number(value: Any, label: str) -> float:
 
 
 def preview_id(preview: dict[str, Any]) -> str:
+    solver = preview.get("solver") if isinstance(preview.get("solver"), dict) else {}
     raw = json.dumps({
         "cycle_id": preview.get("cycle_id"),
         "direction": preview.get("direction"),
@@ -205,6 +217,11 @@ def preview_id(preview: dict[str, Any]) -> str:
         "range": preview.get("range"),
         "grid": preview.get("grid"),
         "orders": preview.get("orders"),
+        "solver": {
+            "mode": solver.get("mode"),
+            "locked": solver.get("locked"),
+            "locked_inputs": solver.get("locked_inputs"),
+        } if solver else None,
     }, sort_keys=True, separators=(",", ":"))
     return f"grid-preview-{hashlib.sha256(raw.encode()).hexdigest()[:12]}"
 
@@ -219,6 +236,15 @@ def build_grid_preview(
     allow_unsafe_manual_preview: bool = False,
 ) -> dict[str, Any]:
     body = dict(payload or {})
+    solver = body.get("solver") if isinstance(body.get("solver"), dict) else {}
+    if str(solver.get("mode") or "") == "manual_adaptive":
+        return build_adaptive_grid_preview(
+            cycle_id,
+            body,
+            market=market,
+            account=account,
+            config=config,
+        )
     validate_market(market)
     direction = str(body.get("direction") or "neutral").lower()
     style = str(body.get("style") or "steady").lower()
@@ -480,3 +506,485 @@ def build_grid_preview(
     }
     preview["preview_id"] = preview_id(preview)
     return preview
+
+
+def _adaptive_config(
+    config: dict[str, Any],
+    *,
+    leverage: float,
+    target_profit: float,
+) -> dict[str, Any]:
+    adapted = deepcopy(config)
+    strategy = dict(adapted.get("strategy_grid") or {})
+    strategy.update({
+        "min_grid_count": ADAPTIVE_MIN_GRID_COUNT,
+        "max_grid_count": ADAPTIVE_MAX_GRID_COUNT,
+        "required_leverage": leverage,
+        "min_net_profit_per_grid_usd": target_profit,
+    })
+    adapted["strategy_grid"] = strategy
+    adapted["max_leverage"] = leverage
+    return adapted
+
+
+def _adaptive_candidate(
+    cycle_id: str,
+    body: dict[str, Any],
+    *,
+    market: dict[str, Any],
+    account: dict[str, Any],
+    config: dict[str, Any],
+    count: int,
+    leverage: float,
+    target_profit: float,
+    notional: float | None,
+) -> dict[str, Any]:
+    candidate_body = {
+        key: value
+        for key, value in body.items()
+        if key != "solver"
+    }
+    grid = dict(candidate_body.get("grid") or {})
+    grid["count"] = count
+    if notional is None:
+        grid.pop("notional_per_grid", None)
+        grid["notional_mode"] = "auto"
+    else:
+        grid["notional_per_grid"] = notional
+        grid["notional_mode"] = "manual"
+    candidate_body["grid"] = grid
+    candidate_body["risk_budget"] = {"leverage": leverage}
+    return build_grid_preview(
+        cycle_id,
+        candidate_body,
+        market=market,
+        account=account,
+        config=_adaptive_config(
+            config,
+            leverage=leverage,
+            target_profit=target_profit,
+        ),
+        allow_unsafe_manual_preview=True,
+    )
+
+
+def _required_notional_for_profit(
+    cycle_id: str,
+    body: dict[str, Any],
+    *,
+    market: dict[str, Any],
+    account: dict[str, Any],
+    config: dict[str, Any],
+    count: int,
+    leverage: float,
+    target_profit: float,
+) -> float | None:
+    """Estimate the venue-rounded notional required for the requested profit."""
+
+    equity = account_equity(account)
+    upper = max(equity * ADAPTIVE_MANUAL_LEVERAGE_LIMIT, 1_000.0)
+    try:
+        upper_preview = _adaptive_candidate(
+            cycle_id,
+            body,
+            market=market,
+            account=account,
+            config=config,
+            count=count,
+            leverage=leverage,
+            target_profit=target_profit,
+            notional=upper,
+        )
+    except ValueError as error:
+        if str(error) == "execution quantity rounds to zero at venue precision":
+            return None
+        raise
+    reference_profit = min(
+        float(order["planned_net_profit_usd"])
+        for order in upper_preview["orders"]
+    )
+    if reference_profit <= 0 or reference_profit + 1e-8 < target_profit:
+        return None
+    notional = upper * target_profit / reference_profit
+    for _ in range(8):
+        # One venue quantity step can move the minimum order after scaling.
+        # A deterministic cushion prevents a displayed 10.00 from being
+        # internally classified as 9.999999 after the final normalization.
+        notional = math.ceil(notional * 1.001 * 100.0) / 100.0
+        try:
+            preview = _adaptive_candidate(
+                cycle_id,
+                body,
+                market=market,
+                account=account,
+                config=config,
+                count=count,
+                leverage=leverage,
+                target_profit=target_profit,
+                notional=notional,
+            )
+        except ValueError as error:
+            if str(error) != "execution quantity rounds to zero at venue precision":
+                raise
+            notional *= 2.0
+            continue
+        achieved = min(
+            float(order["planned_net_profit_usd"])
+            for order in preview["orders"]
+        )
+        if achieved + 1e-8 >= target_profit:
+            return notional
+        if achieved <= 0:
+            return None
+        notional *= target_profit / achieved
+    return notional
+
+
+def build_adaptive_grid_preview(
+    cycle_id: str,
+    payload: dict[str, Any],
+    *,
+    market: dict[str, Any],
+    account: dict[str, Any] | None,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Solve unlocked Paper-grid variables and expose policy deviations as flags.
+
+    This is intentionally a preview-only policy layer over the existing geometry,
+    venue rounding and economics implementation. It never weakens malformed range,
+    stale market, synthetic data, or venue-precision validation.
+    """
+
+    body = dict(payload or {})
+    solver = dict(body.get("solver") or {})
+    locks = {
+        str(value)
+        for value in solver.get("locked") or []
+        if str(value) in ADAPTIVE_LOCKS
+    }
+    grid = dict(body.get("grid") or {})
+    risk_budget = dict(body.get("risk_budget") or {})
+    strategy = dict(config.get("strategy_grid") or {})
+    preferred_min = max(2, int(strategy.get("min_grid_count") or MIN_GRID_COUNT))
+    preferred_max = max(preferred_min, int(strategy.get("max_grid_count") or MAX_GRID_COUNT))
+    recommended_leverage = positive_number(
+        strategy.get("required_leverage", config.get("max_leverage") or 10.0),
+        "recommended leverage",
+    )
+    target_profit = positive_number(
+        (
+            grid.get("target_net_profit_per_grid_usd")
+            if "profit_target" in locks
+            else strategy.get("min_net_profit_per_grid_usd")
+        )
+        or 10.0,
+        "minimum net profit per grid",
+    )
+    requested_count_value = number_or(grid.get("count"), math.nan)
+    requested_count = int(requested_count_value) if math.isfinite(requested_count_value) else 0
+    if "grid_count" in locks:
+        if not math.isfinite(requested_count_value) or not requested_count_value.is_integer():
+            raise ValueError("locked grid count must be an integer")
+        if not ADAPTIVE_MIN_GRID_COUNT <= requested_count <= ADAPTIVE_MAX_GRID_COUNT:
+            raise ValueError(
+                f"grid count must be between {ADAPTIVE_MIN_GRID_COUNT} and {ADAPTIVE_MAX_GRID_COUNT}"
+            )
+    requested_notional = number_or(grid.get("notional_per_grid"), 0.0)
+    if "notional_per_grid" in locks and requested_notional <= 0:
+        raise ValueError("notional per grid must be positive")
+    requested_leverage = number_or(risk_budget.get("leverage", body.get("leverage")), recommended_leverage)
+    if "leverage" in locks and not (1.0 <= requested_leverage <= ADAPTIVE_MANUAL_LEVERAGE_LIMIT):
+        raise ValueError(
+            f"manual Paper leverage must be between 1x and {ADAPTIVE_MANUAL_LEVERAGE_LIMIT:g}x"
+        )
+    sizing_leverage = requested_leverage if "leverage" in locks else recommended_leverage
+    account_body = dict(account or {})
+    if "range" not in locks:
+        body.pop("range", None)
+
+    if "grid_count" in locks:
+        counts = [requested_count]
+    else:
+        counts = list(range(preferred_max, ADAPTIVE_MIN_GRID_COUNT - 1, -1))
+
+    evaluated: list[dict[str, Any]] = []
+    precision_error: ValueError | None = None
+    for count in counts:
+        try:
+            cap_preview = _adaptive_candidate(
+                cycle_id,
+                body,
+                market=market,
+                account=account_body,
+                config=config,
+                count=count,
+                leverage=sizing_leverage,
+                target_profit=target_profit,
+                notional=None,
+            )
+        except ValueError as error:
+            if (
+                "grid_count" not in locks
+                and str(error) == "grid spacing is smaller than venue price precision"
+            ):
+                precision_error = error
+                continue
+            raise
+        safe_notional = float(cap_preview["risk"]["safe_notional_cap_per_grid"])
+        try:
+            required_notional = _required_notional_for_profit(
+                cycle_id,
+                body,
+                market=market,
+                account=account_body,
+                config=config,
+                count=count,
+                leverage=sizing_leverage,
+                target_profit=target_profit,
+            )
+        except ValueError as error:
+            if (
+                "grid_count" not in locks
+                and str(error) == "grid spacing is smaller than venue price precision"
+            ):
+                precision_error = error
+                continue
+            raise
+        if "notional_per_grid" in locks:
+            chosen_notional = requested_notional
+        elif "leverage" in locks:
+            chosen_notional = min(required_notional or safe_notional, safe_notional)
+        else:
+            manual_cap_preview = _adaptive_candidate(
+                cycle_id,
+                body,
+                market=market,
+                account=account_body,
+                config=config,
+                count=count,
+                leverage=ADAPTIVE_MANUAL_LEVERAGE_LIMIT,
+                target_profit=target_profit,
+                notional=None,
+            )
+            manual_notional_cap = float(
+                manual_cap_preview["risk"]["safe_notional_cap_per_grid"]
+            )
+            chosen_notional = min(
+                required_notional or manual_notional_cap,
+                manual_notional_cap,
+            )
+        try:
+            preview = _adaptive_candidate(
+                cycle_id,
+                body,
+                market=market,
+                account=account_body,
+                config=config,
+                count=count,
+                leverage=sizing_leverage,
+                target_profit=target_profit,
+                notional=chosen_notional,
+            )
+        except ValueError as error:
+            if (
+                "grid_count" not in locks
+                and str(error) == "grid spacing is smaller than venue price precision"
+            ):
+                precision_error = error
+                continue
+            raise
+        actual_leverage = float(preview["risk"]["actual_leverage"] or 0.0)
+        if "leverage" not in locks:
+            selected_leverage = min(
+                ADAPTIVE_MANUAL_LEVERAGE_LIMIT,
+                max(recommended_leverage, math.ceil(actual_leverage * 100.0) / 100.0),
+            )
+            preview = _adaptive_candidate(
+                cycle_id,
+                body,
+                market=market,
+                account=account_body,
+                config=config,
+                count=count,
+                leverage=selected_leverage,
+                target_profit=target_profit,
+                notional=chosen_notional,
+            )
+        evaluated.append(preview)
+
+    if not evaluated:
+        if precision_error is not None:
+            raise precision_error
+        raise ValueError("no executable grid candidate could be generated")
+
+    current_count = int(number_or(solver.get("current_grid_count"), preferred_max))
+    current_count = max(ADAPTIVE_MIN_GRID_COUNT, current_count)
+
+    def candidate_score(row: dict[str, Any]) -> tuple[float, ...]:
+        row_count = int(row["grid"]["count"])
+        row_actual_leverage = float(row["risk"]["actual_leverage"] or math.inf)
+        row_margin = float(row["risk"]["estimated_margin"] or math.inf)
+        row_equity = float(row["risk"]["equity"] or 0.0)
+        row_profit = float(row["grid"]["min_net_profit_per_grid_usd"] or 0.0)
+        band_distance = (
+            preferred_min - row_count
+            if row_count < preferred_min
+            else row_count - preferred_max
+            if row_count > preferred_max
+            else 0
+        )
+        return (
+            max(0.0, row_actual_leverage - ADAPTIVE_MANUAL_LEVERAGE_LIMIT),
+            max(0.0, row_margin - row_equity),
+            max(0.0, row_actual_leverage - recommended_leverage),
+            max(0.0, target_profit - row_profit),
+            float(band_distance),
+            float(abs(row_count - current_count)),
+            float(-row_count),
+        )
+
+    selected = evaluated[0] if "grid_count" in locks else min(evaluated, key=candidate_score)
+
+    count = int(selected["grid"]["count"])
+    actual_leverage = float(selected["risk"]["actual_leverage"] or 0.0)
+    selected_leverage = float(selected["grid"]["leverage"])
+    latest = positive_number(market.get("latest_close"), "market latest_close")
+    low = float(selected["range"]["low"])
+    high = float(selected["range"]["high"])
+    flags: list[dict[str, Any]] = []
+
+    def flag(code: str, severity: str, message: str) -> None:
+        flags.append({"code": code, "severity": severity, "message": message})
+
+    if not preferred_min <= count <= preferred_max:
+        flag(
+            "grid_count_outside_preferred_band",
+            "warning",
+            f"{count} 格不在建议的 {preferred_min}–{preferred_max} 格内。",
+        )
+    if selected["grid"]["profit_target_met"] is not True:
+        flag(
+            "grid_profit_target_not_met",
+            "critical",
+            f"每格计划净利 {selected['grid']['min_net_profit_per_grid_usd']:.2f} USD，低于目标 {target_profit:.2f} USD。",
+        )
+    if actual_leverage > recommended_leverage + 1e-8 or selected_leverage > recommended_leverage + 1e-8:
+        flag(
+            "recommended_leverage_exceeded",
+            "critical",
+            f"实际杠杆 {actual_leverage:.2f}x，超过建议 {recommended_leverage:g}x。",
+        )
+    if float(selected["risk"]["estimated_margin"] or 0.0) > (
+        float(selected["risk"]["equity"] or 0.0) + 1e-8
+    ):
+        flag(
+            "margin_budget_exceeded",
+            "critical",
+            f"预计保证金 {selected['risk']['estimated_margin']:.2f} USD，"
+            f"超过账户权益 {selected['risk']['equity']:.2f} USD。",
+        )
+    if actual_leverage > ADAPTIVE_MANUAL_LEVERAGE_LIMIT + 1e-8:
+        flag(
+            "manual_leverage_capacity_exceeded",
+            "critical",
+            f"实际杠杆 {actual_leverage:.2f}x，超过 Paper 手动容量 {ADAPTIVE_MANUAL_LEVERAGE_LIMIT:g}x。",
+        )
+    if not low <= latest <= high:
+        flag(
+            "market_price_outside_range",
+            "critical",
+            f"当前价 {latest:.2f} 位于新 Range 外。",
+        )
+
+    def alternative(identifier: str, label: str, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": identifier,
+            "label": label,
+            "selected": row is selected,
+            "grid_count": int(row["grid"]["count"]),
+            "notional_per_grid": row["grid"]["notional_per_grid"],
+            "planned_profit_per_grid": row["grid"]["min_net_profit_per_grid_usd"],
+            "actual_leverage": row["risk"]["actual_leverage"],
+            "estimated_margin": row["risk"]["estimated_margin"],
+            "max_loss": row["risk"]["max_loss"],
+        }
+
+    preserve_count = min(
+        evaluated,
+        key=lambda row: (
+            abs(int(row["grid"]["count"]) - current_count),
+            candidate_score(row),
+        ),
+    )
+    profitable = [row for row in evaluated if row["grid"]["profit_target_met"] is True]
+    preserve_profit = min(profitable or evaluated, key=candidate_score)
+    within_recommended_leverage = [
+        row
+        for row in evaluated
+        if float(row["risk"]["actual_leverage"] or math.inf)
+        <= recommended_leverage + 1e-8
+    ]
+    preserve_leverage = min(
+        within_recommended_leverage or evaluated,
+        key=candidate_score,
+    )
+
+    selected["solver"] = {
+        "schema_version": "grid-parameter-solver-v1",
+        "mode": "manual_adaptive",
+        "locked": sorted(locks),
+        "locked_inputs": {
+            key: value
+            for key, value in {
+                "range": (
+                    {
+                        "low": number_or(
+                            (
+                                body.get("range")
+                                if isinstance(body.get("range"), dict)
+                                else {}
+                            ).get("low"),
+                            0.0,
+                        ),
+                        "high": number_or(
+                            (
+                                body.get("range")
+                                if isinstance(body.get("range"), dict)
+                                else {}
+                            ).get("high"),
+                            0.0,
+                        ),
+                    }
+                    if "range" in locks
+                    else None
+                ),
+                "grid_count": requested_count if "grid_count" in locks else None,
+                "profit_target": target_profit if "profit_target" in locks else None,
+                "notional_per_grid": (
+                    requested_notional if "notional_per_grid" in locks else None
+                ),
+                "leverage": requested_leverage if "leverage" in locks else None,
+            }.items()
+            if value is not None
+        },
+        "preferred": {
+            "min_grid_count": preferred_min,
+            "max_grid_count": preferred_max,
+            "target_net_profit_per_grid_usd": round(target_profit, 2),
+            "recommended_leverage": round(recommended_leverage, 2),
+            "manual_paper_leverage_limit": ADAPTIVE_MANUAL_LEVERAGE_LIMIT,
+        },
+        "risk_flags": flags,
+        "selection": (
+            "lowest_risk_then_profit_then_grid_band_then_current_plan_distance"
+            if "grid_count" not in locks
+            else "respect_locked_grid_count"
+        ),
+        "alternatives": [
+            alternative("preserve_grid_count", "保格数", preserve_count),
+            alternative("preserve_profit_target", "保收益", preserve_profit),
+            alternative("preserve_recommended_leverage", "保杠杆", preserve_leverage),
+        ],
+    }
+    selected["preview_id"] = preview_id(selected)
+    return selected

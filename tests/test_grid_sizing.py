@@ -280,6 +280,240 @@ def test_auto_density_skips_counts_below_venue_price_precision(
     assert preview["grid"]["profit_target_met"] is True
 
 
+def adaptive_payload(*, locks: list[str], **grid: float) -> dict:
+    return {
+        "direction": "neutral",
+        "style": "steady",
+        "range": {"low": 4_040.0, "high": 4_200.0},
+        "grid": {
+            "mode": "arithmetic",
+            "target_net_profit_per_grid_usd": 10.0,
+            **grid,
+        },
+        "solver": {"mode": "manual_adaptive", "locked": locks},
+    }
+
+
+def test_adaptive_solver_narrow_range_returns_a_flagged_preview_instead_of_error(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        adaptive_payload(locks=["range"]),
+        market=market(close=4_137.44),
+        account=account(),
+        config=plane.config,
+    )
+
+    assert 2 <= preview["grid"]["count"] < 30
+    assert preview["grid"]["profit_target_met"] is True
+    assert preview["risk"]["actual_leverage"] <= 10.0
+    assert preview["solver"]["locked"] == ["range"]
+    assert {row["code"] for row in preview["solver"]["risk_flags"]} == {
+        "grid_count_outside_preferred_band"
+    }
+
+
+def test_adaptive_solver_preserves_locked_count_and_adapts_leverage(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        adaptive_payload(locks=["range", "grid_count"], count=30),
+        market=market(close=4_137.44),
+        account=account(),
+        config=plane.config,
+    )
+
+    assert preview["grid"]["count"] == 30
+    assert preview["grid"]["profit_target_met"] is True
+    assert 10.0 < preview["grid"]["leverage"] <= 20.0
+    assert preview["risk"]["actual_leverage"] > 10.0
+    assert "recommended_leverage_exceeded" in {
+        row["code"] for row in preview["solver"]["risk_flags"]
+    }
+
+
+def test_adaptive_solver_preserves_locked_count_and_leverage_then_flags_profit(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    payload = adaptive_payload(
+        locks=["range", "grid_count", "leverage"],
+        count=30,
+    )
+    payload["risk_budget"] = {"leverage": 10.0}
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        payload,
+        market=market(close=4_137.44),
+        account=account(),
+        config=plane.config,
+    )
+
+    assert preview["grid"]["count"] == 30
+    assert preview["grid"]["leverage"] == 10.0
+    assert preview["risk"]["actual_leverage"] <= 10.0
+    assert preview["grid"]["profit_target_met"] is False
+    assert "grid_profit_target_not_met" in {
+        row["code"] for row in preview["solver"]["risk_flags"]
+    }
+
+
+def test_adaptive_solver_keeps_invalid_geometry_as_a_hard_stop(tmp_path: Path) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    payload = adaptive_payload(locks=["range"])
+    payload["range"] = {"low": 4_200.0, "high": 4_040.0}
+    with pytest.raises(ValueError, match="positive low below high"):
+        grid_sizing.build_grid_preview(
+            "2026-07-05_DAY",
+            payload,
+            market=market(close=4_137.44),
+            account=account(),
+            config=plane.config,
+        )
+
+
+def test_adaptive_solver_ignores_unlocked_range_and_profit_values(tmp_path: Path) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    payload = adaptive_payload(locks=[])
+    payload["grid"]["target_net_profit_per_grid_usd"] = 99.0
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        payload,
+        market=market(close=4_137.44),
+        account=account(),
+        config=plane.config,
+    )
+
+    assert (preview["range"]["low"], preview["range"]["high"]) != (
+        4_040.0,
+        4_200.0,
+    )
+    assert preview["grid"]["target_net_profit_per_grid_usd"] == 10.0
+
+
+def test_adaptive_solver_preserves_locked_notional_and_adapts_density(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        adaptive_payload(
+            locks=["range", "notional_per_grid"],
+            notional_per_grid=5_000.0,
+        ),
+        market=market(close=4_137.44),
+        account=account(),
+        config=plane.config,
+    )
+
+    assert preview["grid"]["notional_per_grid"] == 5_000.0
+    assert preview["grid"]["profit_target_met"] is True
+    assert preview["risk"]["actual_leverage"] <= 10.0
+
+
+def test_adaptive_solver_skips_unexecutable_high_density_and_returns_alternatives(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    payload = adaptive_payload(locks=["range"])
+    payload["range"] = {"low": 109.65, "high": 110.34}
+    payload["solver"]["current_grid_count"] = 40
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        payload,
+        market=market(close=110.0),
+        account={"equity": 2_000_000.0},
+        config=plane.config,
+    )
+
+    assert 2 <= preview["grid"]["count"] < 70
+    assert {row["id"] for row in preview["solver"]["alternatives"]} == {
+        "preserve_grid_count",
+        "preserve_profit_target",
+        "preserve_recommended_leverage",
+    }
+    assert {row["label"] for row in preview["solver"]["alternatives"]} == {
+        "保格数",
+        "保收益",
+        "保杠杆",
+    }
+
+
+def test_adaptive_solver_caps_auto_sizing_at_manual_paper_leverage_capacity(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    payload = adaptive_payload(
+        locks=["range", "grid_count", "profit_target"],
+        count=70,
+        target_net_profit_per_grid_usd=10.0,
+    )
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        payload,
+        market=market(close=4_137.44),
+        account=account(),
+        config=plane.config,
+    )
+
+    assert preview["grid"]["count"] == 70
+    assert preview["risk"]["actual_leverage"] <= 20.0
+    assert preview["grid"]["profit_target_met"] is False
+    assert "grid_profit_target_not_met" in {
+        row["code"] for row in preview["solver"]["risk_flags"]
+    }
+
+
+def test_adaptive_solver_rejects_fractional_locked_count_at_backend(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    with pytest.raises(ValueError, match="locked grid count must be an integer"):
+        grid_sizing.build_grid_preview(
+            "2026-07-05_DAY",
+            adaptive_payload(
+                locks=["range", "grid_count"],
+                count=30.4,
+            ),
+            market=market(close=4_137.44),
+            account=account(),
+            config=plane.config,
+        )
+
+
+def test_preview_identity_binds_solver_locks_and_locked_values() -> None:
+    economic = {
+        "cycle_id": "cycle",
+        "direction": "neutral",
+        "style": "steady",
+        "range": {"low": 100.0, "high": 120.0},
+        "grid": {"count": 30, "notional_per_grid": 5_000.0},
+        "orders": [{"side": "buy", "price": 100.0, "quantity": 1.0}],
+    }
+    automatic = {
+        **economic,
+        "solver": {
+            "mode": "manual_adaptive",
+            "locked": [],
+            "locked_inputs": {},
+        },
+    }
+    locked = {
+        **economic,
+        "solver": {
+            "mode": "manual_adaptive",
+            "locked": ["grid_count"],
+            "locked_inputs": {"grid_count": 30},
+        },
+    }
+
+    assert grid_sizing.preview_id(automatic) != grid_sizing.preview_id(locked)
+
+
 def test_manual_grid_below_ten_dollar_target_is_rejected(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     with pytest.raises(ValueError, match="planned net profit of 10.00 USD"):
