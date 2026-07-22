@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from pipelines.dualtrack_cycle_runner import DualTrackCycleRunner
+from schemas.accounting import build_accounting_snapshot
 from schemas.market_data import Bar
 from services.dualtrack_config import DEFAULT_DUALTRACK_CONFIG
 from services.execution_plugin_composition import (
@@ -429,3 +430,232 @@ def test_dca_start_failure_cancels_and_flattens_partial_paper_state(
     assert not [row for row in snapshot["orders"] if row.get("state") == "accepted"]
     assert not [row for row in snapshot["positions"] if row.get("status") == "open"]
     assert plane.runtime_state(CYCLE_ID)["actual_state"] == "error"
+
+
+def _grid_market(*, close: float = 110.0) -> dict:
+    bars = []
+    for index in range(40):
+        bar_close = close - 2.0 + index * 0.05
+        bars.append(
+            {
+                "timestamp": f"2026-07-22T15:{index:02d}:00+00:00",
+                "open": round(bar_close - 0.1, 4),
+                "high": round(bar_close + 0.4, 4),
+                "low": round(bar_close - 0.4, 4),
+                "close": round(bar_close, 4),
+            }
+        )
+
+    def context_bars(timeframe: str, span: float) -> list[dict]:
+        rows = []
+        for index in range(20):
+            bar_close = close - 1.0 + index * 0.05
+            rows.append(
+                {
+                    "timestamp": (
+                        f"2026-06-{index + 1:02d}T00:00:00+00:00"
+                        if timeframe == "1d"
+                        else f"2026-07-19T{(index % 6) * 4:02d}:00:00+00:00"
+                    ),
+                    "open": round(bar_close - 0.1, 4),
+                    "high": round(bar_close + span / 2.0, 4),
+                    "low": round(bar_close - span / 2.0, 4),
+                    "close": round(bar_close, 4),
+                }
+            )
+        return rows
+
+    return {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "binance_usdm_futures",
+        "source_mode": "binance_usdm_futures",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "latest_close": close,
+        "latest_timestamp": "2026-07-22T15:39:00+00:00",
+        "bars": bars,
+        "strategy_timeframes": {
+            "1d": {
+                "timeframe": "1d",
+                "provider": "derived:binance_usdm",
+                "is_synthetic": False,
+                "bars": context_bars("1d", 10.0),
+            },
+            "4h": {
+                "timeframe": "4h",
+                "provider": "derived:binance_usdm",
+                "is_synthetic": False,
+                "bars": context_bars("4h", 4.0),
+            },
+        },
+    }
+
+
+def _grid_proposal() -> dict:
+    return {
+        "cycle_id": CYCLE_ID,
+        "source": "ai",
+        "direction": "long",
+        "range": {"low": 100.0, "high": 120.0},
+        "key_levels": [100.0, 110.0, 120.0],
+        "grid": {"count": 4, "notional_per_grid": 250.0, "spacing": 5.0},
+        "signal": {"name": "ema_trend", "confidence": 7},
+        "tp_sl": {"tp": 118.0, "sl": 96.0, "r_multiple": 2.0},
+        "risk_budget": {"max_loss": 100.0, "max_leverage": 3.0},
+        "intraday_rules": [{"if": "range_break", "then": "stand_down"}],
+    }
+
+
+def _grid_account(equity: float = 10_000.0) -> dict:
+    snapshot = build_accounting_snapshot(
+        source_type="production_history",
+        source_name="production_history",
+        source_schema_version="dualtrack-execution-v1",
+        scope={"strategy_plan_scope": "test"},
+        currency="USDT",
+        orders=[],
+        fills=[],
+        positions=[],
+        trades=[],
+        counts={},
+        pnl={"net_realized_pnl": 0.0, "unrealized_pnl": 0.0},
+        account={"starting_balance": equity, "ending_cash": equity, "equity": equity},
+        completeness={"status": "complete", "limitations": []},
+        reconciliation={"status": "pass", "issues": []},
+    ).to_dict()
+    return {"equity": equity, "ending_cash": equity, "accounting_snapshot": snapshot}
+
+
+def _start_running_grid(plane: StrategyControlPlane, tmp_path: Path) -> dict:
+    saved = plane.upsert_proposal(_grid_proposal())
+    plane.lock_production_plan(CYCLE_ID, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        CYCLE_ID,
+        "start",
+        {"direction": "neutral", "style": "steady"},
+        market=_grid_market(),
+        account=_grid_account(),
+        now="2026-07-22T15:40:00+00:00",
+    )
+    assert started["runtime"]["actual_state"] == "running"
+    assert started["created_orders"] > 0
+    return started
+
+
+def test_dca_start_is_rejected_while_a_grid_is_running_and_grid_orders_stay_untouched(
+    tmp_path: Path,
+) -> None:
+    plane = _plane(tmp_path)
+    _start_running_grid(plane, tmp_path)
+    adapter = build_configured_execution_engine_adapter(
+        tmp_path / "outputs",
+        config=plane.config,
+    )
+    before = adapter.snapshot(CYCLE_ID)
+    before_orders = [
+        (row.get("order_id"), row.get("state"), row.get("price"))
+        for row in before["orders"]
+    ]
+    assert [row for row in before["orders"] if row.get("state") == "accepted"]
+    grid_plan = plane.active_plan(CYCLE_ID)
+    assert grid_plan is not None
+    assert grid_plan.get("strategy_type") != "dca"
+
+    # Even the side-effect-free prepare step is rejected while the grid runs,
+    # so a DCA start can never obtain a prepared candidate against it.
+    with pytest.raises(ValueError, match="robot is already running"):
+        plane.control(
+            CYCLE_ID,
+            "prepare_start",
+            _payload(),
+            market=_market(),
+            account={"equity": 10_000.0},
+            now="2026-07-22T16:00:00+00:00",
+        )
+    # Without a prepared candidate the start contract itself fails closed
+    # before any mutation, so no path can slip past the running-grid guard.
+    with pytest.raises(ValueError, match="strategy_preview_changed"):
+        plane.control(
+            CYCLE_ID,
+            "start",
+            {**_payload(), "expected_preview_id": ""},
+            market=_market(),
+            account={"equity": 10_000.0},
+            now="2026-07-22T16:01:00+00:00",
+        )
+
+    after = adapter.snapshot(CYCLE_ID)
+    after_orders = [
+        (row.get("order_id"), row.get("state"), row.get("price"))
+        for row in after["orders"]
+    ]
+    assert after_orders == before_orders
+    assert after["positions"] == before["positions"]
+    runtime = plane.runtime_state(CYCLE_ID)
+    assert runtime["actual_state"] == "running"
+    assert runtime.get("strategy_type") != "dca"
+    assert plane.active_plan(CYCLE_ID)["strategy_plan_id"] == grid_plan["strategy_plan_id"]
+    lifecycle_dir = tmp_path / "outputs" / "dualtrack" / "dca_lifecycle"
+    assert not lifecycle_dir.exists()
+
+
+def test_cycle_runner_keeps_grid_bars_on_the_grid_path_without_dca_lifecycle(
+    tmp_path: Path,
+) -> None:
+    plane = _plane(tmp_path)
+    _start_running_grid(plane, tmp_path)
+    adapter = build_configured_execution_engine_adapter(
+        tmp_path / "outputs",
+        config=plane.config,
+    )
+    bars = [
+        Bar(
+            symbol="GOLD",
+            timeframe="1m",
+            timestamp=f"2026-07-22T16:0{index}:00+00:00",
+            open=price,
+            high=price,
+            low=price,
+            close=price,
+            volume=1.0,
+            provider="binance_usdm_futures",
+        )
+        for index, price in enumerate((109.0, 110.0, 111.0), start=1)
+    ]
+
+    class Market:
+        def load_bars_between(self, *_args):
+            return bars
+
+    runner = object.__new__(DualTrackCycleRunner)
+    runner.output_root = tmp_path / "outputs"
+    runner.execution = adapter
+    runner.market = Market()
+    runner.symbol = "GOLD"
+    runner.timeframe = "1m"
+    runner.config = plane.config
+    runner._latest_market_record = lambda: {
+        "provider": "binance_usdm_futures",
+        "timestamp": "2026-07-22T16:03:00+00:00",
+        "close": 111.0,
+        "quality_flags": ["execution_venue"],
+    }
+    runner._market_max_age_seconds = lambda: 120
+    runner._filter_market_session_bars = lambda rows: rows
+
+    result = runner._sweep_human_protective_exits(
+        CYCLE_ID,
+        now=datetime.fromisoformat("2026-07-22T16:04:00+00:00"),
+    )
+
+    assert result["processed_events"] == 3
+    assert "dca_lifecycle" not in result
+    assert result["last_event_ts"] == "2026-07-22T16:03:00+00:00"
+    assert result["source"] == "market_db:binance_usdm_futures"
+    lifecycle_dir = tmp_path / "outputs" / "dualtrack" / "dca_lifecycle"
+    assert not lifecycle_dir.exists()
+    runtime = plane.runtime_state(CYCLE_ID)
+    assert runtime["actual_state"] == "running"
+    assert runtime.get("strategy_type") != "dca"
