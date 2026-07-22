@@ -57,7 +57,7 @@ def build_production_accounting_history(
     projected = project_execution_accounting(
         {
             "schema_version": "dualtrack-execution-v1",
-            "engine": "production_history",
+            "engine": engine,
             "cycle_id": "strategy-plan-history",
             "orders": [],
             "fills": production_fills,

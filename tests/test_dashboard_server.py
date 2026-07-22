@@ -1457,6 +1457,80 @@ def test_strategy_console_history_combines_legacy_archive_with_authoritative_nau
     assert result["history_contract"]["nautilus_shadow_excluded"] is True
 
 
+def test_strategy_console_history_repairs_uniquely_matched_legacy_nautilus_flatten(tmp_path: Path):
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    entry_trade_id = "nautilus-command-entry"
+    flatten_command_id = "nautilus-command-flatten"
+    write_json(
+        output / "dualtrack" / "nautilus_authoritative" / "snapshots" / f"{cycle_id}.json",
+        [{
+            "engine": "nautilus_paper",
+            "cycle_id": cycle_id,
+            "fills": [
+                {
+                    "fill_id": "nautilus-entry",
+                    "order_id": entry_trade_id,
+                    "trade_id": entry_trade_id,
+                    "event": "entry",
+                    "side": "buy",
+                    "ts": "2026-07-05T01:00:00+00:00",
+                    "price": 100.0,
+                    "quantity": 2.0,
+                    "strategy_plan_id": "nautilus-plan",
+                    "strategy_plan_version": 2,
+                },
+                {
+                    "fill_id": "nautilus-flatten",
+                    "order_id": flatten_command_id,
+                    "trade_id": flatten_command_id,
+                    "event": "flatten",
+                    "side": "sell",
+                    "ts": "2026-07-05T02:00:00+00:00",
+                    "price": 105.0,
+                    "quantity": 2.0,
+                    "gross_pnl": 10.0,
+                    "cost": 0.2,
+                    "realized_pnl": 9.8,
+                    "strategy_plan_id": "nautilus-plan",
+                    "strategy_plan_version": 2,
+                },
+            ],
+            "positions": [{
+                "trade_id": entry_trade_id,
+                "position_id": f"POS-{entry_trade_id}",
+                "status": "closed",
+                "side": "long",
+                "quantity": 2.0,
+                "remaining_units": 0.0,
+                "entry_price": 100.0,
+                "exit_price": 105.0,
+                "entry_ts": "2026-07-05T01:00:00+00:00",
+                "exit_ts": "2026-07-05T02:00:00+00:00",
+                "realized_pnl": 9.8,
+                "strategy_plan_id": "nautilus-plan",
+                "strategy_plan_version": 2,
+            }],
+        }],
+    )
+
+    result = dashboard_server.build_strategy_console_production_history(
+        output_root=output,
+        mark_price=105.0,
+        mark_fresh=True,
+        authoritative_engine="nautilus_paper",
+    )
+
+    accounting = result["accounting_snapshot"]
+    assert accounting["source_name"] == "nautilus_paper"
+    assert accounting["reconciliation"]["status"] == "pass"
+    assert accounting["reconciliation"]["issues"] == []
+    flatten = next(row for row in accounting["fills"] if row["event"] == "flatten")
+    assert flatten["trade_id"] == entry_trade_id
+    assert flatten["source_trade_id"] == flatten_command_id
+    assert flatten["identity_resolution"] == "legacy_flatten_unique_closed_position"
+
+
 def test_strategy_console_production_accounting_keeps_partial_close_open_and_unknown_mark_unknown(tmp_path: Path):
     output = tmp_path / "outputs"
     cycle_id = "2026-07-04_NIGHT"
