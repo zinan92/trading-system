@@ -2442,6 +2442,9 @@ class StrategyControlPlane:
             market=market,
             accepted_entries=accepted_entries,
             positions=positions_before,
+            cost_per_side_rate=float(self.config.get("cost_per_side_bp") or 0.5)
+            / 10_000.0,
+            execution_config=self.config,
         )
 
         effective_low = float(adjustment["effective_range"]["low"])
@@ -2450,7 +2453,7 @@ class StrategyControlPlane:
             row
             for row in accepted_entries
             if effective_low - 1e-8
-            <= _positive_number(row.get("price"), "accepted entry price")
+            <= _entry_geometry_price(row)
             <= effective_high + 1e-8
         ]
         outside_entries = [
@@ -2458,7 +2461,7 @@ class StrategyControlPlane:
             for row in accepted_entries
             if not (
                 effective_low - 1e-8
-                <= _positive_number(row.get("price"), "accepted entry price")
+                <= _entry_geometry_price(row)
                 <= effective_high + 1e-8
             )
         ]
@@ -2588,11 +2591,17 @@ class StrategyControlPlane:
             retained_order_ids=retained_ids,
         )
         risk_metrics = dict(risk_decision.get("metrics") or {})
+        actual_leverage = risk_metrics.get("projected_actual_leverage")
+        adjusted["grid"] = {
+            **dict(adjusted.get("grid") or {}),
+            "actual_leverage": actual_leverage,
+        }
         adjusted["risk_budget"] = {
             **dict(current.get("risk_budget") or {}),
             "leverage": adjusted["grid"].get("leverage"),
             "max_loss": risk_metrics.get("projected_max_loss"),
             "estimated_margin": risk_metrics.get("projected_margin"),
+            "actual_leverage": actual_leverage,
         }
         adjusted["risk_request_id"] = risk_decision.get("request_id")
         adjusted["risk_decision_id"] = risk_decision.get("decision_id")
@@ -3776,6 +3785,14 @@ def _entry_core(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
             str(row.get("strategy_plan_version") or ""),
         )
         for row in rows
+    )
+
+
+def _entry_geometry_price(row: dict[str, Any]) -> float:
+    requested = row.get("requested_price")
+    return _positive_number(
+        requested if requested not in (None, "") else row.get("price"),
+        "accepted entry geometry price",
     )
 
 

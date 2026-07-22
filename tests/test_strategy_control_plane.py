@@ -113,6 +113,10 @@ def safe_grid(direction: str = "neutral", style: str = "steady") -> dict:
     }
 
 
+def operating_grid(direction: str = "long", style: str = "steady") -> dict:
+    return {**safe_grid(direction, style), "grid": {"count": 60}}
+
+
 def test_plan_proposals_share_schema_and_active_plan_has_field_sources(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     cycle_id = "2026-07-05_DAY"
@@ -265,20 +269,20 @@ def test_auto_notional_revalidates_against_start_market_while_manual_notional_re
 
     earlier = plane.preview(
         cycle_id,
-        {"direction": "neutral", "style": "steady", "range": geometry, "grid": {"count": 24}},
+        {"direction": "neutral", "style": "steady", "range": geometry, "grid": {"count": 30}},
         market=market(close=110.0),
         account=account,
     )
     stale_notional = earlier["grid"]["notional_per_grid"]
 
-    with pytest.raises(ValueError, match="exceeds safe cap"):
+    with pytest.raises(ValueError, match="planned net profit of 10.00 USD.*within 10x capacity"):
         plane.preview(
             cycle_id,
             {
                 "direction": "neutral",
                 "style": "steady",
                 "range": geometry,
-                "grid": {"count": 24, "notional_per_grid": stale_notional, "notional_mode": "manual"},
+                "grid": {"count": 30, "notional_per_grid": stale_notional, "notional_mode": "manual"},
             },
             market=market(close=120.0),
             account=account,
@@ -288,46 +292,29 @@ def test_auto_notional_revalidates_against_start_market_while_manual_notional_re
         "direction": "neutral",
         "style": "steady",
         "range": geometry,
-        "grid": {"count": 24, "notional_per_grid": stale_notional, "notional_mode": "auto"},
+        "grid": {"count": 30, "notional_per_grid": stale_notional, "notional_mode": "auto"},
         "risk_budget": {"leverage": 10.0},
     }
     recalculated = plane.preview(cycle_id, auto_payload, market=market(close=120.0), account=account)
 
-    with pytest.raises(ValueError, match="plan_loss_budget_exceeded"):
-        plane.control(
-            cycle_id,
-            "start",
-            auto_payload,
-            market=market(close=120.0),
-            account=account,
-            now="2026-07-05T01:40:00+00:00",
-        )
-
-    blocked = load_json(output / "dualtrack" / "risk_decisions" / "current.json")[-1]
-    recommended = blocked["recommendation"]["recommended_notional_per_grid"]
-    assert plane.runtime_state(cycle_id)["desired_state"] == "stopped"
-    assert plane.active_plan(cycle_id)["version"] == 1
     assert recalculated["grid"]["notional_mode"] == "auto"
     assert recalculated["grid"]["notional_per_grid"] < stale_notional
     assert recalculated["grid"]["notional_per_grid"] == recalculated["risk"]["capital_notional_cap_per_grid"]
-    assert blocked["recommendation"]["applied_automatically"] is False
-    assert recommended < recalculated["grid"]["notional_per_grid"]
 
     started = plane.control(
         cycle_id,
         "start",
-        {
-            **auto_payload,
-            "grid": {"count": 24, "notional_per_grid": recommended, "notional_mode": "manual"},
-        },
+        auto_payload,
         market=market(close=120.0),
         account=account,
-        now="2026-07-05T01:40:01+00:00",
+        now="2026-07-05T01:40:00+00:00",
     )
 
-    assert started["preview"]["grid"]["notional_mode"] == "manual"
-    assert started["preview"]["grid"]["notional_per_grid"] == recommended
+    assert started["preview"]["grid"]["notional_mode"] == "auto"
+    assert started["preview"]["grid"]["notional_per_grid"] == recalculated["grid"]["notional_per_grid"]
     assert started["plan"]["grid"]["notional_per_grid"] == started["preview"]["grid"]["notional_per_grid"]
+    assert started["plan"]["grid"]["min_net_profit_per_grid_usd"] >= 10.0
+    assert started["plan"]["grid"]["actual_leverage"] <= 10.0
     assert started["accepted_orders"] > 0
 
 
@@ -387,42 +374,27 @@ def test_start_is_fail_closed_for_stale_market(tmp_path: Path) -> None:
     assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
 
 
-def test_risk_block_precedes_candidate_plan_runtime_and_order_mutation(tmp_path: Path) -> None:
+def test_max_loss_is_advisory_and_does_not_block_a_valid_profit_grid(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     plane = StrategyControlPlane(output)
     cycle_id = "2026-07-05_DAY"
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     active = plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
-    before_runtime = plane.runtime_state(cycle_id)
+    started = plane.control(
+        cycle_id,
+        "start",
+        {"direction": "neutral", "style": "steady"},
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
 
-    with pytest.raises(ValueError, match="plan_loss_budget_exceeded"):
-        plane.control(
-            cycle_id,
-            "start",
-            {"direction": "neutral", "style": "steady"},
-            market=market(),
-            account=account_context(),
-            now="2026-07-05T01:40:00+00:00",
-        )
-
-    assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
-    after_runtime = plane.runtime_state(cycle_id)
-    for field in (
-        "desired_state",
-        "actual_state",
-        "strategy_plan_id",
-        "strategy_plan_version",
-        "preview_id",
-        "accepted_order_count",
-        "risk_decision_id",
-        "risk_policy_id",
-    ):
-        assert after_runtime[field] == before_runtime[field]
-    assert after_runtime["last_control_event"]["result"] == "rejected"
-    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] != active["strategy_plan_id"]
+    assert started["runtime"]["actual_state"] == "running"
+    assert started["plan"]["grid"]["min_net_profit_per_grid_usd"] >= 10.0
     decision = load_json(output / "dualtrack" / "risk_decisions" / "current.json")[-1]
-    assert decision["outcome"] == "block"
-    assert decision["recommendation"]["applied_automatically"] is False
+    assert decision["outcome"] == "allow"
+    assert decision["metrics"]["projected_max_loss"] > 0
 
 
 def test_unknown_account_blocks_before_mutation_even_when_preview_used_fallback(tmp_path: Path) -> None:
@@ -1396,9 +1368,7 @@ def test_running_adjustment_replaces_pending_grid_without_stopping_runtime(tmp_p
         {
             "direction": "short",
             "style": "aggressive",
-            "range": {"low": 108.0, "high": 116.0},
-            "grid": {"count": 12, "notional_per_grid": 50.0},
-            "risk_budget": {"leverage": 2.0},
+            "range": {"low": 90.0, "high": 130.0},
         },
         market=market(),
         account=account_context(),
@@ -1476,9 +1446,7 @@ def test_regrid_stages_every_replacement_before_cancel_and_advances_market_only_
         {
             "direction": "short",
             "style": "aggressive",
-            "range": {"low": 108.0, "high": 116.0},
-            "grid": {"count": 12, "notional_per_grid": 50.0, "notional_mode": "manual"},
-            "risk_budget": {"leverage": 2.0},
+            "range": {"low": 90.0, "high": 130.0},
         },
         market=market(),
         account=account_context(),
@@ -1504,7 +1472,7 @@ def test_edge_adjustment_preserves_internal_orders_positions_and_fixed_sizing(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        operating_grid("neutral", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -1555,7 +1523,7 @@ def test_edge_adjustment_preserves_internal_orders_positions_and_fixed_sizing(
         "extend_range",
         requested,
         market=market(),
-        account=account_context(),
+        account=account_context(1_000_000.0),
         now="2026-07-05T01:42:00+00:00",
     )
     terminal = adapter.snapshot(cycle_id)
@@ -1588,6 +1556,13 @@ def test_edge_adjustment_preserves_internal_orders_positions_and_fixed_sizing(
     assert adjusted["plan"]["grid"]["spacing"] == original_plan["grid"]["spacing"]
     assert adjusted["plan"]["grid"]["notional_per_grid"] == original_plan["grid"]["notional_per_grid"]
     assert adjusted["plan"]["grid"]["notional_mode"] == original_plan["grid"]["notional_mode"]
+    projected_leverage = adjusted["risk_decision"]["metrics"]["projected_actual_leverage"]
+    assert adjusted["plan"]["grid"]["actual_leverage"] == projected_leverage
+    assert adjusted["plan"]["risk_budget"]["actual_leverage"] == projected_leverage
+    assert all(
+        row["planned_net_profit_usd"] >= 10.0
+        for row in adjusted["plan"]["grid"]["orders"]
+    )
     assert adjusted["risk_decision"]["outcome"] == "allow"
     assert adjusted["risk_decision"]["request"]["candidate"]["retained_order_ids"] == sorted(
         row["order_id"] for row in retained_before
@@ -2124,7 +2099,7 @@ def test_replace_grid_stages_before_stop_then_activates_once(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        safe_grid("long", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2190,7 +2165,7 @@ def test_replace_grid_rejects_execution_drift_before_staging_or_stop(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        safe_grid("long", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2236,7 +2211,7 @@ def test_replace_grid_persists_request_before_stop_attempt(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        safe_grid("long", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2287,7 +2262,7 @@ def test_replace_grid_rechecks_risk_and_range_before_any_execution_change(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        safe_grid("long", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2296,7 +2271,7 @@ def test_replace_grid_rechecks_risk_and_range_before_any_execution_change(
     _preview, request = _range_replacement_request(plane, cycle_id, plan)
     before = build_execution_engine_adapter(output).snapshot(cycle_id)
 
-    with pytest.raises(ValueError, match="strategy_preview_changed|range_replacement_blocked"):
+    with pytest.raises(ValueError, match="strategy_preview_changed|range_replacement_blocked|selected direction has no executable"):
         plane.control(
             cycle_id,
             "replace_grid",
@@ -2325,7 +2300,7 @@ def test_replace_grid_retry_repairs_final_runtime_write_without_duplicate_orders
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        safe_grid("long", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2392,7 +2367,7 @@ def test_replace_grid_failure_cleans_only_staged_plan_state(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        safe_grid("long", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2471,7 +2446,7 @@ def test_replace_grid_second_preflight_failure_after_stop_is_durable_error(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        safe_grid("long", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2604,7 +2579,7 @@ def test_replace_grid_same_fingerprint_recovers_after_process_crash(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        safe_grid("long", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2677,7 +2652,7 @@ def test_edge_adjustment_risk_rejects_before_submit_or_cancel(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        operating_grid("neutral", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2714,7 +2689,7 @@ def test_edge_adjustment_risk_rejects_before_submit_or_cancel(
     )
     spacing = float(original["grid"]["spacing"])
 
-    with pytest.raises(ValueError, match="plan_loss_budget_exceeded|projected_margin_exceeded"):
+    with pytest.raises(ValueError, match="projected_leverage_exceeded|projected_margin_exceeded"):
         plane.control(
             cycle_id,
             "extend_range",
@@ -2800,7 +2775,7 @@ def test_edge_adjustment_stage_failure_removes_only_new_plan_orders(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        operating_grid("neutral", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -2884,7 +2859,7 @@ def test_edge_adjustment_resumes_same_staged_plan_after_process_crash(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        operating_grid("neutral", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -3002,7 +2977,7 @@ def test_edge_adjustment_repairs_runtime_after_activation_process_crash(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        operating_grid("neutral", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -3033,7 +3008,7 @@ def test_edge_adjustment_repairs_runtime_after_activation_process_crash(
             "extend_range",
             request,
             market=market(),
-            account=account_context(),
+            account=account_context(1_000_000.0),
             now="2026-07-05T01:42:00+00:00",
         )
 
@@ -3048,7 +3023,7 @@ def test_edge_adjustment_repairs_runtime_after_activation_process_crash(
         "extend_range",
         request,
         market=market(),
-        account=account_context(),
+        account=account_context(1_000_000.0),
         now="2026-07-05T01:43:00+00:00",
     )
 
@@ -3074,7 +3049,7 @@ def test_edge_adjustment_rearms_completed_staged_edge_after_process_crash(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        operating_grid("neutral", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -3259,7 +3234,7 @@ def test_edge_adjustment_post_cancel_failure_keeps_staged_edges_for_recovery(
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        operating_grid("neutral", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -3308,7 +3283,7 @@ def test_edge_adjustment_post_cancel_failure_keeps_staged_edges_for_recovery(
                 },
             },
             market=market(),
-            account=account_context(),
+            account=account_context(1_000_000.0),
             now="2026-07-05T01:42:00+00:00",
         )
 
@@ -3338,7 +3313,7 @@ def test_nautilus_edge_adjustment_flushes_commands_without_injecting_market_even
     started = plane.control(
         cycle_id,
         "start",
-        safe_grid("neutral", "steady"),
+        operating_grid("neutral", "steady"),
         market=market(),
         account=account_context(),
         now="2026-07-05T01:40:00+00:00",
@@ -3392,7 +3367,7 @@ def test_nautilus_edge_adjustment_flushes_commands_without_injecting_market_even
             },
         },
         market=market(),
-        account=account_context(),
+        account=account_context(1_000_000.0),
         now="2026-07-05T01:42:00+00:00",
     )
 

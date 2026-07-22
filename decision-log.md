@@ -8741,3 +8741,74 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Six focused control-plane identity/readback tests passed.
 - The exact validation path passed under `/usr/bin/python3` 3.9.6.
+
+## 2026-07-22 - User-view paper acceptance and read-model repair
+
+### Decision
+
+- Validate the real local paper dashboard by operating it as Park would: start,
+  refresh trend, draft and confirm a Range move, zoom, inspect every data tab,
+  then stop/cancel/flatten. Backend receipts and screenshots accompany visual
+  observations; neither one substitutes for the other.
+- Keep the browser a projection of canonical evidence. Orders expose the exact
+  matching plan's TP, SL, and planned net profit; positions expose normalized
+  remaining quantity plus protection; plan versions stay in audit data but are
+  removed from primary operator tables and the strategy summary.
+- Fix older-history discovery at the fitted left edge. A deliberate right drag
+  now requests the previous trusted page even when the chart cannot report a
+  smaller logical `from` value because all 240 initial bars are already fitted.
+- Build daily production P&L and Paper NAV from the actual machine ledger and
+  starting balance instead of fields that do not exist in the read model.
+
+### Gotchas
+
+- A successful HTTP response is not button acceptance. The start and
+  replacement checks wait for authoritative runtime, accepted-order count,
+  exact plan identity, completeness, and reconciliation.
+- The first Range translation was correctly rejected at 10.5x. A second move
+  that preserved 40 grids and per-grid notional passed at 9.5x; the UI must not
+  silently resize exposure during a drag.
+- The previous history trigger required `range.from` to decrease. At a fitted
+  oldest edge, the chart clamps that value even though the user's right-drag is
+  unambiguous and emits no view-change event. Pointer direction plus the edge
+  threshold is the minimal safe intent signal, checked again on pointer release.
+- Strategy Shadows truthfully reports no comparable same-cycle scenarios. The
+  requested 4-5 generated what-if variants are a separate product capability,
+  not something this acceptance milestone may fabricate from production P&L.
+
+### Verification
+
+- Focused control-plane, sizing, edge-adjustment, read-model, and static
+  dashboard tests: 141 passed.
+- Dashboard JavaScript market/history and Range tests: 12 passed.
+- Focused Playwright profit-control and Range acceptance: 2 passed.
+- Real-browser acceptance evidence is recorded under
+  `docs/evidence/issue-88/` with action latency and backend truth checks.
+
+### Adversarial review corrections
+
+- The auto-density solver now treats a venue precision failure as a rejected
+  candidate, not the end of the 70-to-30 search. An explicit operator count
+  remains strict and returns its exact precision error.
+- Fixed-spacing edge orders now use the same modeled round-trip fee formula as
+  initial sizing, persist `planned_net_profit_usd`, and fail closed if a new
+  plan's 10 USD target would be violated.
+- Range edge activation persists canonical projected actual leverage in both
+  grid and risk budget; the dashboard no longer keeps the pre-adjustment value.
+- Eighteen legacy control-plane assertions were brought onto the 30–70 grid,
+  10x, profit-first contract. Lifecycle failure/recovery coverage remains and
+  the focused module now passes all 69 tests.
+
+### Gotchas
+
+- A 70-grid candidate can be unrepresentable at venue price precision while a
+  lower count is executable and profitable. Auto search must continue, but an
+  explicit 70-grid request must not silently become a different strategy.
+- Edge-only adjustment retains the existing notional. It cannot repair a
+  profit shortfall by resizing; it rejects before staging any order.
+- Edge prices, TP/SL, and downward-rounded quantities must pass through the
+  same execution contract before profit, risk, dedupe, or submission. Raw
+  geometry is retained as `requested_price` only for Range membership.
+- Lifecycle tests need account headroom when intentionally adding edges. That
+  is test setup for post-risk failure paths, not permission for production to
+  bypass the 10x gate.

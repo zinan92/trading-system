@@ -15,6 +15,8 @@ from services.grid_sizing import (
     MAX_GRID_COUNT,
     MIN_GRID_COUNT,
     number_or,
+    order_at_notional,
+    planned_net_profit_usd,
     positive_number,
     preview_id,
     validate_market,
@@ -118,6 +120,8 @@ def build_range_extension(
     market: dict[str, Any],
     accepted_entries: list[dict[str, Any]],
     positions: list[dict[str, Any]],
+    cost_per_side_rate: float = 0.5 / 10_000.0,
+    execution_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a fixed-spacing edge adjustment without mutating the active plan."""
 
@@ -229,7 +233,7 @@ def build_range_extension(
             if side == "sell" and index > 0
             else _next_level(price, mode, spacing, spacing_ratio, up=side == "buy")
         )
-        planned = {
+        planned = order_at_notional({
             "preview_order_id": f"edge-{side}-{_price_id(price)}",
             "level": index,
             "state": "preview",
@@ -239,11 +243,26 @@ def build_range_extension(
             "price": _round_price(price),
             "tp": _round_price(float(tp)),
             "sl": lower_stop if side == "buy" else upper_stop,
-            "quantity": round(notional / price, 8),
-            "notional": round(notional, 2),
-        }
+        }, notional, execution_config or {})
+        planned["planned_net_profit_usd"] = round(
+            planned_net_profit_usd(planned, cost_per_side_rate),
+            8,
+        )
+        target_profit_value = current_grid.get("target_net_profit_per_grid_usd")
+        if target_profit_value is not None:
+            target_profit = positive_number(
+                target_profit_value,
+                "target net profit per grid",
+            )
+            if planned["planned_net_profit_usd"] + 1e-8 < target_profit:
+                raise ValueError("edge_order_profit_target_not_met")
         planned_edge_orders.append(planned)
-        if not _entry_already_exists(side, price, accepted_entries, positions):
+        if not _entry_already_exists(
+            side,
+            float(planned["price"]),
+            accepted_entries,
+            positions,
+        ):
             edge_orders.append(dict(planned))
 
     internal_orders = [
@@ -254,6 +273,11 @@ def build_range_extension(
         <= levels[-1] + 1e-8
     ]
     combined_orders = [*internal_orders, *planned_edge_orders]
+    planned_profits = [
+        float(order["planned_net_profit_usd"])
+        for order in combined_orders
+        if order.get("planned_net_profit_usd") is not None
+    ]
     level_spacings = [right - left for left, right in zip(levels, levels[1:])]
     grid = {
         **current_grid,
@@ -265,6 +289,11 @@ def build_range_extension(
         "max_spacing": round(max(level_spacings), 4),
         "notional_per_grid": current_grid.get("notional_per_grid"),
         "notional_mode": current_grid.get("notional_mode"),
+        "min_net_profit_per_grid_usd": (
+            round(min(planned_profits), 2)
+            if planned_profits
+            else current_grid.get("min_net_profit_per_grid_usd")
+        ),
         "orders": combined_orders,
     }
     effective_range = {"low": levels[0], "high": levels[-1]}

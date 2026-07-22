@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from services.grid_range_adjustment import build_dragged_range, build_range_extension
+from services.grid_sizing import planned_net_profit_usd
 
 
 def market(price: float = 110.0) -> dict:
@@ -197,6 +198,102 @@ def test_arithmetic_contraction_removes_only_outer_geometry() -> None:
     assert [row["preview_order_id"] for row in result["grid"]["orders"]] == [
         f"old-{index}" for index in range(1, 32) if index != 16
     ]
+
+
+def test_new_edge_persists_modeled_profit_and_enforces_the_active_target() -> None:
+    plan = arithmetic_operating_plan()
+    plan["grid"]["notional_per_grid"] = 2_000.0
+    plan["grid"]["target_net_profit_per_grid_usd"] = 10.0
+
+    result = build_range_extension(
+        plan["cycle_id"],
+        plan,
+        {"low": 99.0, "high": 132.0},
+        market=market(116.0),
+        accepted_entries=[],
+        positions=[],
+    )
+
+    edge = result["edge_orders"][0]
+    assert edge["planned_net_profit_usd"] >= 10.0
+    assert result["grid"]["min_net_profit_per_grid_usd"] >= 10.0
+
+    plan["grid"]["notional_per_grid"] = 50.0
+    with pytest.raises(ValueError, match="edge_order_profit_target_not_met"):
+        build_range_extension(
+            plan["cycle_id"],
+            plan,
+            {"low": 99.0, "high": 132.0},
+            market=market(116.0),
+            accepted_entries=[],
+            positions=[],
+        )
+
+
+def test_edge_profit_is_computed_after_venue_price_and_quantity_normalization() -> None:
+    plan = arithmetic_operating_plan()
+    spacing = 0.0149
+    levels = [round(100.0 + spacing * index, 8) for index in range(31)]
+    notional = 205_000.0
+    plan["range"] = {"low": levels[0], "high": levels[-1]}
+    plan["grid"].update(
+        {
+            "count": 30,
+            "levels": levels,
+            "spacing": spacing,
+            "notional_per_grid": notional,
+            "target_net_profit_per_grid_usd": 10.0,
+            "orders": [],
+        }
+    )
+    execution_config = {
+        "execution_contract": {
+            "execution_instrument_id": "XAUUSDT",
+            "price_increment": "0.01",
+            "quantity_increment": "0.001",
+        },
+        "capital_per_track_usd": 10_000.0,
+        "max_leverage": 10.0,
+        "paper_fee_model": {"cost_per_side_bp": 0.5},
+    }
+    raw_edge = {
+        "price": levels[0] - spacing,
+        "tp": levels[0],
+        "quantity": notional / (levels[0] - spacing),
+    }
+    assert planned_net_profit_usd(raw_edge, 0.5 / 10_000.0) > 10.0
+
+    request = {"low": levels[0] - spacing, "high": levels[-1]}
+    with pytest.raises(ValueError, match="edge_order_profit_target_not_met"):
+        build_range_extension(
+            plan["cycle_id"],
+            plan,
+            request,
+            market=market(levels[15]),
+            accepted_entries=[],
+            positions=[],
+            execution_config=execution_config,
+        )
+
+    del plan["grid"]["target_net_profit_per_grid_usd"]
+    result = build_range_extension(
+        plan["cycle_id"],
+        plan,
+        request,
+        market=market(levels[15]),
+        accepted_entries=[],
+        positions=[],
+        execution_config=execution_config,
+    )
+    edge = result["edge_orders"][0]
+    assert edge["price"] == 99.99
+    assert edge["tp"] == 100.0
+    assert edge["quantity"] * 1_000 == pytest.approx(round(edge["quantity"] * 1_000))
+    assert edge["planned_net_profit_usd"] == round(
+        planned_net_profit_usd(edge, 0.5 / 10_000.0),
+        8,
+    )
+    assert edge["planned_net_profit_usd"] < 10.0
 
 
 def test_geometric_edges_preserve_ratio_for_expansion_and_contraction() -> None:
