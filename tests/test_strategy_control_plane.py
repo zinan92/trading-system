@@ -232,6 +232,31 @@ def test_adaptive_preview_handles_user_parameter_combinations_without_starting(
         assert all(order["price"] > 4_137.44 for order in preview["orders"])
 
 
+def test_adaptive_preview_smart_fills_a_new_cycle_without_writing_a_plan(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    plane.upsert_proposal(proposal(cycle_id, "ai"))
+
+    preview = plane.control(
+        cycle_id,
+        "preview",
+        adaptive_grid_payload(),
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )["preview"]
+
+    assert preview["schema_version"] == "strategy-grid-preview-v1"
+    assert preview["range"]["low"] < 4_137.44 < preview["range"]["high"]
+    assert preview["grid"]["count"] > 0
+    assert preview["grid"]["notional_per_grid"] > 0
+    assert plane.active_plan(cycle_id) is None
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+
+
 def test_adaptive_start_requires_exact_risk_consent_and_then_starts_paper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

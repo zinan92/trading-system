@@ -175,6 +175,78 @@ def _leverage_blocked_preview(*, mixed: bool) -> dict:
     return response
 
 
+def test_gridmind_smart_fill_replaces_manual_range_with_one_read_only_preview() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_000.0)
+    model["strategy"]["plan"] = None
+    model["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "can_start_when_authorized": True,
+        "can_stop_when_authorized": False,
+    })
+    model["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+    requests: list[dict] = []
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        requests.append(body)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_preview(), ensure_ascii=False),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model, ensure_ascii=False),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+
+        page.locator("#rangeLow").fill("3950")
+        page.locator("#rangeHigh").fill("4050")
+        page.wait_for_timeout(400)
+        requests.clear()
+
+        page.locator("#smartFill").click()
+        page.locator("#rangeLow").wait_for()
+        page.wait_for_function(
+            "document.querySelector('#rangeLow').value === '3900'"
+        )
+
+        assert [row["action"] for row in requests] == ["preview"]
+        assert requests[0]["solver"]["locked"] == []
+        assert "range" not in requests[0]
+        assert page.locator("#rangeLow").input_value() == "3900"
+        assert page.locator("#rangeHigh").input_value() == "4100"
+        assert page.locator("#gridCount").input_value() == "30"
+        assert page.locator("#gridNotional").input_value() == "6666.67"
+        assert page.locator('[data-param-lock="range"]').first.inner_text() == "AUTO"
+        browser.close()
+
+
 def test_gridmind_explains_reconciliation_start_blocker_in_plain_language(
     tmp_path: Path,
 ) -> None:
