@@ -9554,3 +9554,44 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Import of `pipelines.dashboard_server` under `/usr/bin/python3` (3.9.6)
   after the fix; context recorded in `docs/handoff-2026-07-21-wendy.md`.
+
+## 2026-07-23 - Model DCA as an aggregate-exit round, not a Grid variant
+
+### Decision
+
+- Give DCA an explicit `strategy_type=dca` contract. It may share market,
+  precision, fee, accounting, and risk ports with Grid, but it does not reuse
+  Grid's one-entry/one-TP lifecycle state.
+- In v1, long and short DCA use a finite ordered entry ladder, equal notional
+  per addition, an explicit maximum addition count, and one fixed target price
+  for the round. Neutral DCA is invalid.
+- The aggregate TP quantity comes from reconciled open DCA-round quantity. Each
+  later entry fill must eventually replace that one reduce-only exit; the pure
+  plan describes this obligation but does not submit or replace orders.
+- Keep looping explicit and disabled by default. Closing the round at TP does
+  not silently start another accumulation cycle.
+- Make preview and replay deterministic and side-effect free. Every fill depth
+  exposes accumulated quantity, weighted average entry, modeled entry/exit
+  fees, target net P&L, stop loss, margin, and full-depth leverage.
+
+### Gotchas
+
+- A fixed target price does not mean fixed profit. As lower long entries or
+  higher short entries fill, weighted average cost and full-round profit both
+  change while the target price remains unchanged.
+- Replacing an aggregate TP is execution state, not planning state. Partial
+  fills, cancel/replace races, reconnects, and duplicate fills must be solved
+  idempotently by a later Paper lifecycle milestone before DCA can be started.
+- The preview includes modeled entry and exit fees after venue rounding but
+  excludes funding and realized slippage. A target reached on the chart is not
+  proof of the displayed net profit.
+- DCA concentrates exposure as price moves against the initial entry. Finite
+  additions and a stop scenario are mandatory even though v1 remains Paper-only.
+
+### Verification
+
+- Focused DCA tests cover fixed-target quantity growth, versioned plan
+  projection, deterministic one/two-entry replay, long/short symmetry,
+  venue-rounded duplicate rejection, invalid geometry, and zero I/O effects.
+- Existing Grid sizing and StrategyPlan command projection tests remain green;
+  no Paper runtime or order adapter is called by this milestone.
