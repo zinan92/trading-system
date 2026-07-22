@@ -97,6 +97,25 @@ def test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars(
         browser = runtime.chromium.launch(headless=True, channel="chrome")
         page = browser.new_page(viewport={"width": 1450, "height": 1000})
         page.set_default_timeout(8_000)
+        page.add_init_script("""
+            (() => {
+              const originalFetch = window.fetch.bind(window);
+              window.__releaseHistoryFetch = null;
+              window.fetch = (input, init) => {
+                const raw = typeof input === "string" ? input : input.url;
+                const url = new URL(raw, window.location.href);
+                if (url.pathname === "/api/dualtrack/market/bars" && url.searchParams.has("end")) {
+                  return new Promise((resolve, reject) => {
+                    window.__releaseHistoryFetch = () => {
+                      window.__releaseHistoryFetch = null;
+                      originalFetch(input, init).then(resolve, reject);
+                    };
+                  });
+                }
+                return originalFetch(input, init);
+              };
+            })();
+        """)
         page.route(
             "**/api/trading-system/read-model",
             lambda route: route.fulfill(
@@ -128,11 +147,25 @@ def test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars(
         # A real wheel/trackpad movement toward older candles arms exactly one
         # trusted historical page and preserves the fresh live snapshot fields.
         page.mouse.wheel(*older_delta)
+        page.wait_for_function("typeof window.__releaseHistoryFetch === 'function'")
+
+        # Complete the same live refresh used by the five-second poll while the
+        # historical fetch is still pending, then let the older page finish.
+        # Neither completion order may erase accumulated bars or grant history
+        # execution freshness.
+        page.evaluate("() => load({withMarket: true})")
+        assert history_requests == 0
+        assert "240 bars" in source.inner_text()
+        page.evaluate("window.__releaseHistoryFetch()")
         page.locator("#chartHistoryNotice").filter(has_text="已向前加载 320 根").wait_for()
 
         assert history_requests == 1
         assert "560 bars" in source.inner_text()
         assert "行情 blocked" not in page.locator("#gate").inner_text()
+        if input_name == "mouse-wheel":
+            page.wait_for_timeout(5_300)
+            assert "560 bars" in source.inner_text()
+            assert "行情 blocked" not in page.locator("#gate").inner_text()
         artifact_dir = os.environ.get("GRID_HISTORY_SCREENSHOT_DIR")
         if artifact_dir and input_name == "mouse-wheel":
             path = Path(artifact_dir)

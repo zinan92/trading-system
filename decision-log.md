@@ -8973,7 +8973,10 @@ auditable datafeed port; broker execution remains a separate port.
 - Static dashboard plus real-browser wheel/trackpad tests: 27 passed.
 - The browser starts at 240 bars, rejects reverse-direction input without a
   request, then loads 320 trusted older bars and renders 560 total bars while
-  retaining the live market gate.
+  retaining the live market gate. It also completes a live refresh while the
+  history request is pending and crosses the real five-second polling interval;
+  both paths retain all 560 bars without treating history as fresh execution
+  data.
 - Browser evidence:
   `docs/evidence/issue-99/issue-99-history-beyond-240.png`.
 - `git diff --check` passed.
