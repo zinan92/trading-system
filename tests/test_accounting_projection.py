@@ -269,6 +269,125 @@ def test_orphan_exit_and_account_identity_drift_are_explicit() -> None:
     assert "account_equity_mismatch" in codes
 
 
+def test_legacy_flatten_command_trade_id_is_rebound_by_unique_closed_position_evidence() -> None:
+    flatten = {
+        "fill_id": "flatten-fill",
+        "order_id": "flatten-command",
+        "trade_id": "flatten-command",
+        "event": "flatten",
+        "side": "sell",
+        "price": 99.0,
+        "quantity": 1.0,
+        "cost": 0.0,
+        "ts": "2026-07-18T01:05:00+00:00",
+        "strategy_plan_id": "plan-1",
+        "strategy_plan_version": 1,
+    }
+    source = _snapshot(
+        fills=[_entry(), flatten],
+        positions=[_position(status="closed", remaining=0.0, realized=-2.0, exit_price=99.0)],
+        realized=-2.0,
+        unrealized=0.0,
+        fees=1.0,
+    )
+    source["engine"] = "nautilus_paper"
+
+    result = project_execution_accounting(source).to_dict()
+    projected = next(row for row in result["fills"] if row["fill_id"] == "flatten-fill")
+
+    assert result["reconciliation"]["status"] == "pass"
+    assert projected["trade_id"] == "trade-1"
+    assert projected["source_trade_id"] == "flatten-command"
+    assert projected["identity_resolution"] == "legacy_flatten_unique_closed_position"
+    assert result["trades"][0]["exit_fill_ids"] == ["flatten-fill"]
+
+
+def test_legacy_flatten_trade_id_remains_drift_when_closed_position_match_is_ambiguous() -> None:
+    entry_two = {**_entry("entry-2"), "trade_id": "trade-2"}
+    position_two = {
+        **_position(status="closed", remaining=0.0, realized=-2.0, exit_price=99.0),
+        "position_id": "position-2",
+        "trade_id": "trade-2",
+    }
+    flatten = {
+        "fill_id": "flatten-fill",
+        "order_id": "flatten-command",
+        "trade_id": "flatten-command",
+        "event": "flatten",
+        "side": "sell",
+        "price": 99.0,
+        "quantity": 1.0,
+        "cost": 0.0,
+        "ts": "2026-07-18T01:05:00+00:00",
+        "strategy_plan_id": "plan-1",
+        "strategy_plan_version": 1,
+    }
+    source = _snapshot(
+        fills=[_entry(), entry_two, flatten],
+        positions=[
+            _position(status="closed", remaining=0.0, realized=-2.0, exit_price=99.0),
+            position_two,
+        ],
+        realized=-4.0,
+        unrealized=0.0,
+        fees=2.0,
+    )
+    source["engine"] = "nautilus_paper"
+
+    result = project_execution_accounting(source).to_dict()
+    projected = next(row for row in result["fills"] if row["fill_id"] == "flatten-fill")
+    codes = {row["code"] for row in result["reconciliation"]["issues"]}
+
+    assert result["reconciliation"]["status"] == "drift"
+    assert projected["trade_id"] == "flatten-command"
+    assert "source_trade_id" not in projected
+    assert "orphan_exit_fill" in codes
+
+
+@pytest.mark.parametrize(
+    ("engine", "order_id"),
+    [
+        ("legacy_paper", "flatten-command"),
+        ("nautilus_paper", "different-order-id"),
+    ],
+)
+def test_legacy_flatten_repair_rejects_other_engines_and_non_command_identity(
+    engine: str,
+    order_id: str,
+) -> None:
+    flatten = {
+        "fill_id": "flatten-fill",
+        "order_id": order_id,
+        "trade_id": "flatten-command",
+        "event": "flatten",
+        "side": "sell",
+        "price": 99.0,
+        "quantity": 1.0,
+        "cost": 0.0,
+        "ts": "2026-07-18T01:05:00+00:00",
+        "strategy_plan_id": "plan-1",
+        "strategy_plan_version": 1,
+    }
+    source = _snapshot(
+        fills=[_entry(), flatten],
+        positions=[_position(status="closed", remaining=0.0, realized=-2.0, exit_price=99.0)],
+        realized=-2.0,
+        unrealized=0.0,
+        fees=1.0,
+    )
+    source["engine"] = engine
+
+    result = project_execution_accounting(source).to_dict()
+    projected = next(row for row in result["fills"] if row["fill_id"] == "flatten-fill")
+
+    assert result["reconciliation"]["status"] == "drift"
+    assert projected["trade_id"] == "flatten-command"
+    assert "source_trade_id" not in projected
+    assert "orphan_exit_fill" in {
+        row["code"] for row in result["reconciliation"]["issues"]
+    }
+
+
 def test_negative_remaining_quantity_is_never_silently_normalized_to_zero() -> None:
     source = _snapshot(
         fills=[_entry()],
@@ -313,8 +432,9 @@ def test_market_order_non_finite_price_is_omitted_without_hiding_accounting() ->
 
     assert "price" not in result["orders"][0]
     assert result["orders"][0]["requested_price"] == 100.0
-    assert result["reconciliation"]["status"] == "drift"
-    assert {row["code"] for row in result["reconciliation"]["issues"]} == {
+    assert result["reconciliation"]["status"] == "pass"
+    assert result["reconciliation"]["issues"] == []
+    assert {row["code"] for row in result["reconciliation"]["warnings"]} == {
         "market_order_non_finite_price_omitted"
     }
     json.dumps(result, allow_nan=False)

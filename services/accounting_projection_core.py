@@ -43,8 +43,10 @@ def project_execution_accounting(
     raw_positions = _required_rows(source, "positions")
 
     issues: list[dict[str, Any]] = []
-    orders = _canonical_orders(raw_orders, issues)
+    warnings: list[dict[str, Any]] = []
+    orders = _canonical_orders(raw_orders, issues, warnings)
     fills = _canonical_fills(raw_fills, issues)
+    fills = _repair_legacy_flatten_trade_ids(fills, raw_positions, engine=engine)
     positions = _canonical_positions(raw_positions, fills, issues)
     trades = _canonical_trades(positions, fills, issues)
     counts = _counts(orders, fills, positions, trades)
@@ -59,6 +61,7 @@ def project_execution_accounting(
     reconciliation = {
         "status": "pass" if not issues else "drift",
         "issues": _sorted_issues(issues),
+        "warnings": _sorted_issues(warnings),
         "identity_policy": "dedupe_exact_reject_conflict",
         "accounting_identity": (
             "net_realized_pnl = gross_realized_pnl - fees + funding; "
@@ -86,7 +89,11 @@ def project_execution_accounting(
     )
 
 
-def _canonical_orders(rows: list[Mapping[str, Any]], issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _canonical_orders(
+    rows: list[Mapping[str, Any]],
+    issues: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     for row in rows:
         order_id = _required_text(row.get("order_id"), "order_id")
@@ -102,7 +109,7 @@ def _canonical_orders(rows: list[Mapping[str, Any]], issues: list[dict[str, Any]
                 row.get("price"),
                 order_id=order_id,
                 order_type=order_type,
-                issues=issues,
+                warnings=warnings,
             ),
             "requested_price": _optional_number(
                 row.get("requested_price"),
@@ -123,7 +130,7 @@ def _canonical_order_price(
     *,
     order_id: str,
     order_type: str,
-    issues: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
 ) -> float | None:
     if value in (None, ""):
         return None
@@ -134,7 +141,7 @@ def _canonical_order_price(
     if not math.isfinite(parsed):
         if order_type != "market":
             raise AccountingContractError("order price must be finite")
-        issues.append({
+        warnings.append({
             "code": "market_order_non_finite_price_omitted",
             "order_id": order_id,
         })
@@ -174,6 +181,8 @@ def _canonical_fills(rows: list[Mapping[str, Any]], issues: list[dict[str, Any]]
             "order_id": _optional_text(row.get("order_id") or row.get("external_order_id")),
             "source_fill_id": _optional_text(row.get("source_fill_id")),
             "trade_id": trade_id,
+            "source_trade_id": _optional_text(row.get("source_trade_id")),
+            "identity_resolution": _optional_text(row.get("identity_resolution")),
             "event": event,
             "side": _side(row.get("side"), allow_blank=False),
             "price": price,
@@ -195,6 +204,85 @@ def _canonical_fills(rows: list[Mapping[str, Any]], issues: list[dict[str, Any]]
     return sorted(
         by_id.values(),
         key=lambda row: (str(row.get("ts") or ""), priority.get(str(row.get("event")), 9), row["fill_id"]),
+    )
+
+
+def _repair_legacy_flatten_trade_ids(
+    fills: list[dict[str, Any]],
+    position_rows: list[Mapping[str, Any]],
+    *,
+    engine: str,
+) -> list[dict[str, Any]]:
+    """Rebind the one known legacy flatten identity only with unique evidence.
+
+    Older Nautilus replay rows used the flatten command ID as ``trade_id`` even
+    though the immutable command explicitly targeted the original entry trade.
+    The command is not part of the accounting envelope, so the read side may
+    repair that row only when the closed position and entry fill provide one
+    exact match. Zero or multiple matches remain untouched and fail closed in
+    the normal orphan-fill reconciliation.
+    """
+
+    if engine != "nautilus_paper":
+        return fills
+
+    position_trade_ids = {
+        str(row.get("trade_id") or row.get("position_id") or "").strip()
+        for row in position_rows
+        if str(row.get("trade_id") or row.get("position_id") or "").strip()
+    }
+    entry_fills: dict[str, list[dict[str, Any]]] = {}
+    for fill in fills:
+        if fill.get("event") == "entry" and fill.get("trade_id"):
+            entry_fills.setdefault(str(fill["trade_id"]), []).append(fill)
+
+    repaired: list[dict[str, Any]] = []
+    for fill in fills:
+        source_trade_id = str(fill.get("trade_id") or "")
+        if (
+            fill.get("event") != "flatten"
+            or not source_trade_id
+            or source_trade_id != str(fill.get("order_id") or "")
+            or source_trade_id in position_trade_ids
+        ):
+            repaired.append(fill)
+            continue
+        candidates = [
+            str(row.get("trade_id") or row.get("position_id") or "").strip()
+            for row in position_rows
+            if _legacy_flatten_matches_closed_position(fill, row, entry_fills)
+        ]
+        candidates = sorted({candidate for candidate in candidates if candidate})
+        if len(candidates) != 1:
+            repaired.append(fill)
+            continue
+        rebound = dict(fill)
+        rebound["source_trade_id"] = source_trade_id
+        rebound["trade_id"] = candidates[0]
+        rebound["identity_resolution"] = "legacy_flatten_unique_closed_position"
+        repaired.append(rebound)
+    return repaired
+
+
+def _legacy_flatten_matches_closed_position(
+    fill: Mapping[str, Any],
+    position: Mapping[str, Any],
+    entry_fills: Mapping[str, list[dict[str, Any]]],
+) -> bool:
+    trade_id = str(position.get("trade_id") or position.get("position_id") or "").strip()
+    entries = entry_fills.get(trade_id, [])
+    if str(position.get("status") or "").strip().lower() != "closed" or not trade_id or not entries:
+        return False
+    expected_exit_side = "sell" if _position_side(position.get("side")) == "long" else "buy"
+    entry_quantity = _quantity(sum(float(row.get("quantity") or 0.0) for row in entries))
+    return (
+        fill.get("side") == expected_exit_side
+        and fill.get("quantity") == entry_quantity
+        and fill.get("price") == _optional_number(position.get("exit_price"), "position exit_price", decimals=_MONEY_DECIMALS)
+        and str(fill.get("ts") or "") == str(position.get("exit_ts") or "")
+        and fill.get("strategy_plan_id") == _optional_text(position.get("strategy_plan_id"))
+        and fill.get("strategy_plan_version")
+        == _optional_int(position.get("strategy_plan_version"), "strategy_plan_version")
     )
 
 

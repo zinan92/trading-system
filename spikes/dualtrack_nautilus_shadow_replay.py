@@ -673,7 +673,7 @@ def _fills_from_reports(
             # completed fill stable across deterministic rebuilds.
             "fill_id": f"nautilus-{order_id}",
             "order_id": order_id,
-            "trade_id": command_id,
+            "trade_id": str(command.get("trade_id") or command_id),
             "cycle_id": str(command.get("cycle_id") or ""),
             "ts": _timestamp_text(row.get("ts_event") or row.get("ts_last")),
             "side": str(row.get("order_side") or row.get("side") or "").lower(),
