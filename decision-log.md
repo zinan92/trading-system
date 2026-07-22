@@ -9694,3 +9694,52 @@ auditable datafeed port; broker execution remains a separate port.
 - DCA plan, aggregate lifecycle, control plane, and provider-neutral read-model
   regressions pass; Python 3.9 compilation and staged secret scanning remain
   merge gates.
+
+## 2026-07-23 - Expose DCA as a distinct GridMind V5 Paper strategy
+
+### Decision
+
+- Put `Grid` and `DCA` behind one explicit strategy-type selector. Grid keeps
+  its existing solver, range dragging, and per-grid profit controls; DCA uses
+  its own accumulation inputs and cannot be inferred from the AI trend label.
+- Restrict DCA to long or short. The UI generates an ordered arithmetic entry
+  ladder from the accumulation range, addition count, and direction, then
+  sends the backend's versioned `strategy-dca-preview-v1` contract unchanged.
+- Make smart fill a transparent Paper seed: six additions below the trusted
+  mark for long or above it for short, 2,000 USD per addition, a 1% aggregate
+  target, a 3% stop, and 10x selected leverage. Every value remains editable
+  and is recalculated by the backend before start.
+- Show one-entry and full-depth target economics, total possible notional,
+  full-depth margin/leverage, and maximum loss. The start dialog forwards the
+  backend-provided `dca-risk-ack-v1` schema and exact acknowledgement codes;
+  the browser never invents or relaxes the consent contract.
+- Draw DCA additions in direction color, the aggregate target in green, the
+  stop in red, and the reconciled position average in blue. Range dragging is
+  deliberately disabled for DCA because it is a Grid replacement workflow.
+- Resolve the active risk receipt by strategy type in the dashboard read
+  model. A running DCA must use its matching DCA risk decision, not a stale
+  Grid risk record, when reporting production health.
+
+### Gotchas
+
+- Smart-fill percentages are defaults, not an AI recommendation and not an
+  execution decision. A trusted market price is required, and start still
+  passes through prepared-preview identity, Paper risk consent, reconciliation,
+  and execution-adapter guards.
+- A fixed DCA target may be above the currently visible chart window. The line
+  renderer clips out-of-window overlays rather than distorting candle scaling.
+- Switching direction invalidates the previous target/stop geometry, so DCA
+  smart fill is regenerated before requesting the new preview.
+- Existing Grid UI tests exposed a pre-existing missing `actionStatus` element:
+  `setNotice` updated no visible node. The status line is now present so failed
+  Grid replacement and DCA control feedback remain visible in the strategy card.
+
+### Verification
+
+- Issue-contract suites: 8 passed, including DCA API risk selection and a real
+  Chromium flow from strategy selection through smart fill, three manual input
+  changes, preview, risk acknowledgements, and Paper start request.
+- Adjacent Grid and dashboard suites: 75 passed. The 14 Grid parameter/range
+  browser cases passed after restoring the visible action status line.
+- Python compilation and diff whitespace checks passed; staged gitleaks remains
+  the final merge gate.

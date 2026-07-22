@@ -779,6 +779,25 @@ def build_strategy_console_current_response(*, output_root: Path | None = None, 
     return _assemble_strategy_console_snapshot(output_root=output_root, as_of=as_of)
 
 
+def _current_strategy_risk_decision(output: Path, source: dict) -> dict | None:
+    plan = source.get("production_plan") if isinstance(source.get("production_plan"), dict) else {}
+    runtime = source.get("runtime") if isinstance(source.get("runtime"), dict) else {}
+    if str(plan.get("strategy_type") or "grid").lower() == "dca":
+        cycle = source.get("cycle") if isinstance(source.get("cycle"), dict) else {}
+        cycle_id = str(cycle.get("cycle_id") or plan.get("cycle_id") or "")
+        risk_rows = load_json(output / "dca_risk_decisions" / f"{cycle_id}.json")
+    else:
+        risk_rows = load_json(output / "dualtrack" / "risk_decisions" / "current.json")
+    expected_risk_id = str(runtime.get("risk_decision_id") or "")
+    matching = [
+        row
+        for row in risk_rows
+        if isinstance(row, dict)
+        and (not expected_risk_id or str(row.get("decision_id") or "") == expected_risk_id)
+    ]
+    return matching[-1] if matching else None
+
+
 def build_trading_system_read_model_response(
     *,
     output_root: Path | None = None,
@@ -788,8 +807,7 @@ def build_trading_system_read_model_response(
 
     output = _dualtrack_output_root(output_root)
     source = _assemble_strategy_console_snapshot(output_root=output, as_of=as_of)
-    risk_rows = load_json(output / "dualtrack" / "risk_decisions" / "current.json")
-    risk = risk_rows[-1] if risk_rows and isinstance(risk_rows[-1], dict) else None
+    risk = _current_strategy_risk_decision(output, source)
     broker_adapter = PaperBrokerAdapter(output)
     broker = project_broker_read_model(
         broker_adapter,
