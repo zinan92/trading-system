@@ -45,7 +45,6 @@ from services.risk_port import (
     RiskDecisionPort,
     RiskDecisionStorePort,
     action_class_for_command,
-    assert_matching_risk_decision,
     build_paper_safe_action_market_gate,
     build_grid_risk_request,
     normalize_manual_order_command,
@@ -60,6 +59,13 @@ PLAN_FIELDS = ("direction", "style", "range", "key_levels", "grid", "signal", "t
 FIELD_SOURCES = {"human", "ai", "confirmed"}
 _CONTROL_LOCK = threading.RLock()
 _PROCESS_LOCK_STATE = threading.local()
+MANUAL_RANGE_RISK_ACK_SCHEMA = "grid-range-risk-ack-v1"
+MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS = {
+    "grid_profit_target_not_met",
+    "market_price_outside_range",
+    "projected_leverage_exceeded",
+    "projected_margin_exceeded",
+}
 
 
 def paper_safe_action_market_mark_is_trusted(
@@ -794,9 +800,14 @@ class StrategyControlPlane:
 
         commands, risk_decision = evaluate_candidate(candidate)
         local_risk = dict(candidate.get("risk") or {})
-        local_budget_blocked = bool(
+        local_profit_target_not_met = (
             local_risk.get("profit_target_met") is not True
-            or local_risk.get("capital_budget_exceeded")
+        )
+        local_capital_budget_exceeded = bool(
+            local_risk.get("capital_budget_exceeded")
+        )
+        local_budget_blocked = bool(
+            local_profit_target_not_met or local_capital_budget_exceeded
         )
         blockers = list(risk_decision.get("blockers") or [])
         budget_blocker_codes = {
@@ -879,12 +890,50 @@ class StrategyControlPlane:
             commands = list(trial_commands or [])
             risk_decision = dict(trial_decision or {})
             local_risk = dict(candidate.get("risk") or {})
-            local_budget_blocked = bool(
+            local_profit_target_not_met = (
                 local_risk.get("profit_target_met") is not True
-                or local_risk.get("capital_budget_exceeded")
+            )
+            local_capital_budget_exceeded = bool(
+                local_risk.get("capital_budget_exceeded")
+            )
+            local_budget_blocked = bool(
+                local_profit_target_not_met or local_capital_budget_exceeded
             )
             blockers = list(risk_decision.get("blockers") or [])
         can_apply = bool(risk_decision.get("allow_exposure_increase")) and not local_budget_blocked
+        old_specification = _range_preview_specification(
+            current,
+            canonical_metrics=current_risk_decision.get("metrics"),
+        )
+        new_specification = _range_preview_specification(
+            candidate,
+            canonical_metrics=risk_decision.get("metrics"),
+            post_flatten_candidate_only=True,
+        )
+        raw_blocker_codes = {
+            str(row.get("code") or "risk_blocked")
+            for row in blockers
+            if isinstance(row, dict)
+        }
+        blocker_codes = _manual_range_effective_blocker_codes(risk_decision)
+        non_overridable = sorted(
+            raw_blocker_codes - MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS
+        )
+        acknowledgement_contract = _manual_range_acknowledgement_contract(
+            preview_id=str(candidate["preview_id"]),
+            old=old_specification,
+            new=new_specification,
+            blocker_codes=blocker_codes,
+            local_profit_target_not_met=local_profit_target_not_met,
+            limits=dict(risk_decision.get("limits") or {}),
+        )
+        acknowledgement_facts_digest = _manual_range_acknowledgement_facts_digest(
+            old=old_specification,
+            new=new_specification,
+            limits=dict(risk_decision.get("limits") or {}),
+            acknowledgements=acknowledgement_contract,
+        )
+        risk_snapshot_digest = _manual_range_risk_snapshot_digest(risk_decision)
         return {
             "schema_version": "grid-range-drag-preview-v1",
             "cycle_id": cycle_id,
@@ -892,14 +941,8 @@ class StrategyControlPlane:
             "expected_strategy_plan_version": expected_plan_version,
             "preview_id": candidate["preview_id"],
             "geometry": geometry,
-            "old": _range_preview_specification(
-                current,
-                canonical_metrics=current_risk_decision.get("metrics"),
-            ),
-            "new": _range_preview_specification(
-                candidate,
-                canonical_metrics=risk_decision.get("metrics"),
-            ),
+            "old": old_specification,
+            "new": new_specification,
             "candidate": candidate,
             "canonical_risk": {
                 "basis": "exact_commands_plus_current_canonical_accounting",
@@ -908,6 +951,7 @@ class StrategyControlPlane:
             },
             "risk_decision": risk_decision,
             "can_apply": can_apply,
+            "can_apply_with_acknowledgements": not non_overridable,
             "confirm_disabled_reasons": [
                 str(row.get("code") or "risk_blocked")
                 for row in blockers
@@ -918,6 +962,20 @@ class StrategyControlPlane:
                 if local_budget_blocked
                 else []
             ),
+            "manual_confirmation": {
+                "schema_version": MANUAL_RANGE_RISK_ACK_SCHEMA,
+                "preview_id": candidate["preview_id"],
+                "scope": "paper_only",
+                "required": True,
+                "available": not non_overridable,
+                "facts_digest": acknowledgement_facts_digest,
+                "risk_snapshot_digest": risk_snapshot_digest,
+                "required_acknowledgements": acknowledgement_contract,
+                "overridable_blocker_codes": sorted(
+                    blocker_codes & MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS
+                ),
+                "non_overridable_blocker_codes": non_overridable,
+            },
             "risk_recalculation": {
                 "available": recalculation_available and not recalculated,
                 "reason": (
@@ -1409,6 +1467,24 @@ class StrategyControlPlane:
             raise ValueError("strategy_plan_changed")
         if not expected_preview_id:
             raise ValueError("strategy_preview_changed")
+        supplied_acknowledgement = (
+            dict(body.get("risk_acknowledgements") or {})
+            if isinstance(body.get("risk_acknowledgements"), dict)
+            else {}
+        )
+        supplied_acknowledgement_codes = sorted(
+            {
+                str(code)
+                for code in supplied_acknowledgement.get("codes") or []
+                if str(code)
+            }
+        )
+        supplied_facts_digest = str(
+            supplied_acknowledgement.get("facts_digest") or ""
+        )
+        supplied_risk_snapshot_digest = str(
+            supplied_acknowledgement.get("risk_snapshot_digest") or ""
+        )
         request_fingerprint = _range_replacement_request_fingerprint(
             expected_plan_id,
             expected_plan_version,
@@ -1417,8 +1493,13 @@ class StrategyControlPlane:
             requested_range=requested_range,
             recalculate_notional=recalculate,
             expected_execution=expected_execution,
+            acknowledgement_codes=supplied_acknowledgement_codes,
+            acknowledgement_facts_digest=supplied_facts_digest,
+            risk_snapshot_digest=supplied_risk_snapshot_digest,
         )
         prior = self._replacement_plan(cycle_id, request_fingerprint)
+        runtime = self.runtime_state(cycle_id)
+        current = self.active_plan(cycle_id)
         if prior and str(prior.get("status") or "") == "active":
             return self._reconcile_completed_replacement(
                 cycle_id,
@@ -1426,9 +1507,6 @@ class StrategyControlPlane:
                 market=market,
                 now=now,
             )
-
-        runtime = self.runtime_state(cycle_id)
-        current = self.active_plan(cycle_id)
         if (
             prior
             and str(prior.get("status") or "") == "staging"
@@ -1478,9 +1556,19 @@ class StrategyControlPlane:
         )
         if str(latest.get("preview_id") or "") != expected_preview_id:
             raise ValueError("strategy_preview_changed")
-        if latest.get("can_apply") is not True:
+        acknowledgement = _validated_manual_range_acknowledgement(
+            latest,
+            body,
+            now=now,
+        )
+        if (
+            latest.get("can_apply") is not True
+            and latest.get("can_apply_with_acknowledgements") is not True
+        ):
             reasons = ",".join(latest.get("confirm_disabled_reasons") or [])
             raise ValueError(f"range_replacement_blocked:{reasons or 'risk_blocked'}")
+        if acknowledgement["acknowledgement_codes"] != supplied_acknowledgement_codes:
+            raise ValueError("range_risk_acknowledgements_incomplete")
 
         staged = prior
         if staged is None:
@@ -1516,6 +1604,7 @@ class StrategyControlPlane:
                     "accepted_order_ids": sorted(expected_execution[0]),
                     "open_position_ids": sorted(expected_execution[1]),
                 },
+                "risk_acknowledgement": acknowledgement,
                 "phase": "prepared",
                 "prepared_at": _timestamp(now),
             }
@@ -1554,6 +1643,7 @@ class StrategyControlPlane:
                 "grid replacement entry",
             ),
             retained_order_ids=[],
+            manual_override=acknowledgement,
         )
         self._assert_expected_execution(
             cycle_id,
@@ -1656,19 +1746,34 @@ class StrategyControlPlane:
         """Converge a same-fingerprint retry after a process-level interruption."""
 
         timestamp = _timestamp(now)
+        manual_override = _staged_manual_range_override(staged)
         latest_price = _positive_number(market.get("latest_close"), "market latest_close")
         candidate_range = dict(staged.get("range") or {})
         if not (
             _positive_number(candidate_range.get("low"), "replacement range low")
             <= latest_price
             <= _positive_number(candidate_range.get("high"), "replacement range high")
+        ) and not _manual_override_allows(
+            manual_override,
+            "market_price_outside_range",
         ):
             raise ValueError("market_outside_requested_range")
-        rebuilt = self.preview(
-            cycle_id,
-            _grid_preview_payload_from_plan(staged),
-            market=market,
-            account=account,
+        rebuilt = (
+            build_grid_preview(
+                cycle_id,
+                _grid_preview_payload_from_plan(staged),
+                market=market,
+                account=account,
+                config=self.config,
+                allow_unsafe_manual_preview=True,
+            )
+            if manual_override and manual_override.get("overridden_blocker_codes")
+            else self.preview(
+                cycle_id,
+                _grid_preview_payload_from_plan(staged),
+                market=market,
+                account=account,
+            )
         )
         if str(rebuilt.get("preview_id") or "") != str(staged.get("preview_id") or ""):
             raise ValueError("strategy_preview_changed")
@@ -1719,6 +1824,7 @@ class StrategyControlPlane:
             timestamp=timestamp,
             replaced_order_ids=replaced_ids,
             retained_order_ids=[],
+            manual_override=manual_override,
         )
         staged["replacement_request"] = {
             **dict(staged.get("replacement_request") or {}),
@@ -1861,19 +1967,34 @@ class StrategyControlPlane:
         now: str | None,
     ) -> dict[str, Any]:
         timestamp = _timestamp(now)
+        manual_override = _staged_manual_range_override(staged)
         latest_price = _positive_number(market.get("latest_close"), "market latest_close")
         candidate_range = dict(staged.get("range") or {})
         if not (
             _positive_number(candidate_range.get("low"), "replacement range low")
             <= latest_price
             <= _positive_number(candidate_range.get("high"), "replacement range high")
+        ) and not _manual_override_allows(
+            manual_override,
+            "market_price_outside_range",
         ):
             raise ValueError("market_outside_requested_range")
-        rebuilt = self.preview(
-            cycle_id,
-            _grid_preview_payload_from_plan(staged),
-            market=market,
-            account=account,
+        rebuilt = (
+            build_grid_preview(
+                cycle_id,
+                _grid_preview_payload_from_plan(staged),
+                market=market,
+                account=account,
+                config=self.config,
+                allow_unsafe_manual_preview=True,
+            )
+            if manual_override and manual_override.get("overridden_blocker_codes")
+            else self.preview(
+                cycle_id,
+                _grid_preview_payload_from_plan(staged),
+                market=market,
+                account=account,
+            )
         )
         if str(rebuilt.get("preview_id") or "") != str(staged.get("preview_id") or ""):
             raise ValueError("strategy_preview_changed")
@@ -1904,6 +2025,7 @@ class StrategyControlPlane:
             market=market,
             adapter=adapter,
             timestamp=timestamp,
+            manual_override=manual_override,
         )
         staged["replacement_request"] = {
             **dict(staged.get("replacement_request") or {}),
@@ -3115,6 +3237,7 @@ class StrategyControlPlane:
         timestamp: str,
         replaced_order_ids: list[str] | None = None,
         retained_order_ids: list[str] | None = None,
+        manual_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         request = self._grid_risk_request(
             cycle_id,
@@ -3131,7 +3254,14 @@ class StrategyControlPlane:
         )
         decision = self.risk_port.evaluate(request)
         self.risk_store.persist(decision)
-        require_exposure_permission(decision)
+        if manual_override:
+            _require_acknowledged_paper_grid_risk(
+                decision.to_dict(),
+                manual_override,
+                adapter_name=str(getattr(adapter, "name", "")),
+            )
+        else:
+            require_exposure_permission(decision)
         # Re-read the same authoritative adapter and re-evaluate. Any order,
         # position, account, market, policy, or evaluator drift rejects before
         # candidate plan/runtime/order mutation.
@@ -3148,7 +3278,23 @@ class StrategyControlPlane:
             replaced_order_ids=replaced_order_ids,
             retained_order_ids=retained_order_ids,
         )
-        return assert_matching_risk_decision(self.risk_port, decision, current_request).to_dict()
+        current_decision = self.risk_port.evaluate(current_request)
+        if (
+            current_decision.request_id != decision.request_id
+            or current_decision.decision_id != decision.decision_id
+        ):
+            raise ValueError("risk decision stale: current evaluation changed")
+        if manual_override:
+            _require_acknowledged_paper_grid_risk(
+                current_decision.to_dict(),
+                manual_override,
+                adapter_name=str(getattr(adapter, "name", "")),
+            )
+            return {
+                **current_decision.to_dict(),
+                "operator_override": dict(manual_override),
+            }
+        return require_exposure_permission(current_decision).to_dict()
 
     def _grid_risk_request(
         self,
@@ -3602,6 +3748,7 @@ def _range_preview_specification(
     source: dict[str, Any],
     *,
     canonical_metrics: Any = None,
+    post_flatten_candidate_only: bool = False,
 ) -> dict[str, Any]:
     current_range = dict(source.get("range") or {})
     grid = dict(source.get("grid") or {})
@@ -3638,6 +3785,43 @@ def _range_preview_specification(
                 0.0,
             )
         notional_by_side[side] += max(0.0, order_notional)
+    if post_flatten_candidate_only:
+        candidate_notional_by_side = dict(
+            metrics.get("candidate_notional_by_side") or {}
+        )
+        candidate_loss_by_side = dict(metrics.get("candidate_loss_by_side") or {})
+        candidate_max_notional = max(
+            (_number_or(value, 0.0) for value in candidate_notional_by_side.values()),
+            default=0.0,
+        )
+        candidate_max_loss = max(
+            (_number_or(value, 0.0) for value in candidate_loss_by_side.values()),
+            default=0.0,
+        )
+        equity = _number_or(metrics.get("equity"), 0.0)
+        requested_leverage = _number_or(grid.get("leverage"), 0.0)
+        estimated_margin = (
+            candidate_max_notional / requested_leverage
+            if requested_leverage > 0
+            else None
+        )
+        actual_leverage = (
+            candidate_max_notional / equity if equity > 0 else None
+        )
+        max_loss = candidate_max_loss
+    else:
+        estimated_margin = metrics.get(
+            "projected_margin",
+            risk.get("estimated_margin"),
+        )
+        actual_leverage = metrics.get(
+            "projected_actual_leverage",
+            risk.get("actual_leverage"),
+        )
+        max_loss = metrics.get(
+            "projected_max_loss",
+            risk.get("max_loss"),
+        )
     return {
         "range_low": low,
         "range_high": high,
@@ -3652,18 +3836,9 @@ def _range_preview_specification(
         "order_count": len(orders),
         "total_order_notional": round(sum(notional_by_side.values()), 2),
         "max_side_order_notional": round(max(notional_by_side.values()), 2),
-        "estimated_margin": metrics.get(
-            "projected_margin",
-            risk.get("estimated_margin"),
-        ),
-        "actual_leverage": metrics.get(
-            "projected_actual_leverage",
-            risk.get("actual_leverage"),
-        ),
-        "max_loss": metrics.get(
-            "projected_max_loss",
-            risk.get("max_loss"),
-        ),
+        "estimated_margin": estimated_margin,
+        "actual_leverage": actual_leverage,
+        "max_loss": max_loss,
         "min_net_profit_per_grid_usd": metrics.get(
             "minimum_planned_net_profit_per_grid_usd",
             grid.get("min_net_profit_per_grid_usd"),
@@ -3671,10 +3846,401 @@ def _range_preview_specification(
         "target_net_profit_per_grid_usd": grid.get(
             "target_net_profit_per_grid_usd"
         ),
-        "canonical_max_side_notional": metrics.get("projected_max_side_notional"),
+        "canonical_max_side_notional": (
+            candidate_max_notional
+            if post_flatten_candidate_only
+            else metrics.get("projected_max_side_notional")
+        ),
         "canonical_equity": metrics.get("equity"),
         "leverage": grid.get("leverage"),
     }
+
+
+def _manual_range_acknowledgement_contract(
+    *,
+    preview_id: str,
+    old: dict[str, Any],
+    new: dict[str, Any],
+    blocker_codes: set[str],
+    local_profit_target_not_met: bool,
+    limits: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build explicit operator acknowledgements from server-calculated facts."""
+
+    rows: list[dict[str, Any]] = [
+        {
+            "code": "specification_change",
+            "severity": "warning",
+            "title": "我确认网格规格变化",
+            "summary": (
+                f"Range 宽度 {old.get('range_width'):.2f} → "
+                f"{new.get('range_width'):.2f} USD；单格间距/比例与计划净利会随之变化。"
+            ),
+            "facts": {
+                "old_range_width": old.get("range_width"),
+                "new_range_width": new.get("range_width"),
+                "old_spacing": old.get("spacing"),
+                "new_spacing": new.get("spacing"),
+                "old_spacing_ratio": old.get("spacing_ratio"),
+                "new_spacing_ratio": new.get("spacing_ratio"),
+                "old_profit_per_grid": old.get("min_net_profit_per_grid_usd"),
+                "new_profit_per_grid": new.get("min_net_profit_per_grid_usd"),
+            },
+        },
+        {
+            "code": "maximum_loss_scenario",
+            "severity": "critical",
+            "title": "我确认预计最大损失",
+            "summary": (
+                f"预计最大损失 {old.get('max_loss')} → {new.get('max_loss')} USD。"
+                "新值按旧持仓先平仓、同侧新网格订单全部成交并触及计划 SL 计算；"
+                "计划 SL 位于 Range 边界外一格/一档，不包含极端滑点和资金费。"
+            ),
+            "facts": {
+                "old_max_loss": old.get("max_loss"),
+                "new_max_loss": new.get("max_loss"),
+                "assumption": (
+                    "old_positions_flatten_then_all_candidate_same_side_entries_fill_"
+                    "then_planned_stop_beyond_range"
+                ),
+                "excluded": ["extreme_slippage", "funding"],
+            },
+        },
+    ]
+    if (
+        "grid_profit_target_not_met" in blocker_codes
+        or local_profit_target_not_met
+    ):
+        rows.append(
+            {
+                "code": "profit_target_shortfall",
+                "severity": "critical",
+                "title": "我确认每格计划净利低于自动目标",
+                "summary": (
+                    f"每格计划净利 {old.get('min_net_profit_per_grid_usd')} → "
+                    f"{new.get('min_net_profit_per_grid_usd')} USD；自动目标为至少 "
+                    f"{limits.get('min_net_profit_per_grid_usd')} USD。"
+                ),
+                "facts": {
+                    "old_profit_per_grid": old.get("min_net_profit_per_grid_usd"),
+                    "new_profit_per_grid": new.get("min_net_profit_per_grid_usd"),
+                    "target": limits.get("min_net_profit_per_grid_usd"),
+                },
+            }
+        )
+    leverage_limit = _number_or(limits.get("max_leverage"), 0.0)
+    margin_budget = _number_or(limits.get("margin_budget"), 0.0)
+    new_actual_leverage = _number_or(new.get("actual_leverage"), 0.0)
+    new_estimated_margin = _number_or(new.get("estimated_margin"), 0.0)
+    if (
+        (leverage_limit > 0 and new_actual_leverage > leverage_limit + 1e-8)
+        or (margin_budget > 0 and new_estimated_margin > margin_budget + 1e-8)
+    ):
+        rows.append(
+            {
+                "code": "leverage_and_margin_risk",
+                "severity": "critical",
+                "title": "我确认杠杆与保证金风险",
+                "summary": (
+                    f"实际杠杆 {old.get('actual_leverage')}x → {new.get('actual_leverage')}x"
+                    f"（自动上限 {limits.get('max_leverage')}x）；预计保证金 "
+                    f"{old.get('estimated_margin')} → {new.get('estimated_margin')} USD。"
+                ),
+                "facts": {
+                    "old_actual_leverage": old.get("actual_leverage"),
+                    "new_actual_leverage": new.get("actual_leverage"),
+                    "leverage_limit": limits.get("max_leverage"),
+                    "old_estimated_margin": old.get("estimated_margin"),
+                    "new_estimated_margin": new.get("estimated_margin"),
+                    "margin_budget": limits.get("margin_budget"),
+                },
+            }
+        )
+    if "market_price_outside_range" in blocker_codes:
+        rows.append(
+            {
+                "code": "market_outside_range",
+                "severity": "critical",
+                "title": "我确认当前价位于新 Range 外",
+                "summary": "新网格启动时当前价不在区间内，可能立即形成单边暴露或长期没有预期成交。",
+                "facts": {"preview_id": preview_id},
+            }
+        )
+    return rows
+
+
+def _manual_range_acknowledgement_facts_digest(
+    *,
+    old: dict[str, Any],
+    new: dict[str, Any],
+    limits: dict[str, Any],
+    acknowledgements: list[dict[str, Any]],
+) -> str:
+    """Bind the operator click to every numeric fact rendered in the card."""
+
+    payload = {
+        "schema_version": MANUAL_RANGE_RISK_ACK_SCHEMA,
+        "old": old,
+        "new": new,
+        "limits": limits,
+        "acknowledgements": acknowledgements,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return f"grid-range-facts-{hashlib.sha256(raw.encode()).hexdigest()}"
+
+
+def _manual_range_risk_snapshot_digest(decision: dict[str, Any]) -> str:
+    """Hash candidate-only risk facts so recovery cannot reuse stale consent."""
+
+    request = (
+        dict(decision.get("request") or {})
+        if isinstance(decision.get("request"), dict)
+        else {}
+    )
+    candidate = (
+        dict(request.get("candidate") or {})
+        if isinstance(request.get("candidate"), dict)
+        else {}
+    )
+    metrics = (
+        dict(decision.get("metrics") or {})
+        if isinstance(decision.get("metrics"), dict)
+        else {}
+    )
+    limits = (
+        dict(decision.get("limits") or {})
+        if isinstance(decision.get("limits"), dict)
+        else {}
+    )
+    economic_commands = []
+    for row in candidate.get("commands") or []:
+        if not isinstance(row, dict):
+            continue
+        economic_commands.append(
+            {
+                key: row.get(key)
+                for key in (
+                    "side",
+                    "event",
+                    "order_type",
+                    "price",
+                    "quantity",
+                    "notional",
+                    "sl",
+                    "tp",
+                    "symbol",
+                )
+            }
+        )
+    economic_commands.sort(
+        key=lambda row: (
+            str(row.get("side") or ""),
+            _number_or(row.get("price"), 0.0),
+            _number_or(row.get("quantity"), 0.0),
+        )
+    )
+    payload = {
+        "schema_version": MANUAL_RANGE_RISK_ACK_SCHEMA,
+        "candidate": {
+            key: candidate.get(key)
+            for key in (
+                "preview_id",
+                "direction",
+                "range_low",
+                "range_high",
+                "grid_mode",
+                "grid_count",
+                "notional_per_grid",
+                "leverage",
+            )
+        },
+        "economic_commands": economic_commands,
+        "equity": metrics.get("equity"),
+        "candidate_notional_by_side": metrics.get("candidate_notional_by_side"),
+        "candidate_loss_by_side": metrics.get("candidate_loss_by_side"),
+        "minimum_planned_net_profit_per_grid_usd": metrics.get(
+            "minimum_planned_net_profit_per_grid_usd"
+        ),
+        "limits": limits,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return f"grid-range-risk-{hashlib.sha256(raw.encode()).hexdigest()}"
+
+
+def _manual_range_effective_blocker_codes(decision: dict[str, Any]) -> set[str]:
+    """Remove exposure that the replacement transaction flattens before launch."""
+
+    blocker_codes = {
+        str(row.get("code") or "risk_blocked")
+        for row in decision.get("blockers") or []
+        if isinstance(row, dict)
+    }
+    request = (
+        dict(decision.get("request") or {})
+        if isinstance(decision.get("request"), dict)
+        else {}
+    )
+    candidate = (
+        dict(request.get("candidate") or {})
+        if isinstance(request.get("candidate"), dict)
+        else {}
+    )
+    metrics = (
+        dict(decision.get("metrics") or {})
+        if isinstance(decision.get("metrics"), dict)
+        else {}
+    )
+    limits = (
+        dict(decision.get("limits") or {})
+        if isinstance(decision.get("limits"), dict)
+        else {}
+    )
+    candidate_notional = max(
+        (
+            _number_or(value, 0.0)
+            for value in dict(metrics.get("candidate_notional_by_side") or {}).values()
+        ),
+        default=0.0,
+    )
+    equity = _number_or(metrics.get("equity"), 0.0)
+    leverage = _number_or(candidate.get("leverage"), 0.0)
+    max_leverage = _number_or(limits.get("max_leverage"), 0.0)
+    margin_budget = _number_or(limits.get("margin_budget"), 0.0)
+    candidate_actual_leverage = candidate_notional / equity if equity > 0 else math.inf
+    candidate_margin = candidate_notional / leverage if leverage > 0 else math.inf
+    if max_leverage > 0 and candidate_actual_leverage <= max_leverage + 1e-8:
+        blocker_codes.discard("projected_leverage_exceeded")
+    if margin_budget > 0 and candidate_margin <= margin_budget + 1e-8:
+        blocker_codes.discard("projected_margin_exceeded")
+    return blocker_codes
+
+
+def _validated_manual_range_acknowledgement(
+    preview: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    now: str | None,
+) -> dict[str, Any]:
+    contract = (
+        dict(preview.get("manual_confirmation") or {})
+        if isinstance(preview.get("manual_confirmation"), dict)
+        else {}
+    )
+    if contract.get("available") is not True:
+        reasons = ",".join(contract.get("non_overridable_blocker_codes") or [])
+        raise ValueError(f"range_replacement_non_overridable:{reasons or 'risk_blocked'}")
+    acknowledgement = (
+        dict(payload.get("risk_acknowledgements") or {})
+        if isinstance(payload.get("risk_acknowledgements"), dict)
+        else {}
+    )
+    required_codes = {
+        str(row.get("code") or "")
+        for row in contract.get("required_acknowledgements") or []
+        if isinstance(row, dict) and str(row.get("code") or "")
+    }
+    provided_codes = {
+        str(code)
+        for code in acknowledgement.get("codes") or []
+        if str(code)
+    }
+    if (
+        acknowledgement.get("schema_version") != MANUAL_RANGE_RISK_ACK_SCHEMA
+        or str(acknowledgement.get("preview_id") or "")
+        != str(preview.get("preview_id") or "")
+        or str(acknowledgement.get("facts_digest") or "")
+        != str(contract.get("facts_digest") or "")
+        or str(acknowledgement.get("risk_snapshot_digest") or "")
+        != str(contract.get("risk_snapshot_digest") or "")
+        or provided_codes != required_codes
+    ):
+        raise ValueError("range_risk_acknowledgements_incomplete")
+    overridden = sorted(contract.get("overridable_blocker_codes") or [])
+    return {
+        "schema_version": MANUAL_RANGE_RISK_ACK_SCHEMA,
+        "scope": "paper_only",
+        "preview_id": preview.get("preview_id"),
+        "facts_digest": contract.get("facts_digest"),
+        "risk_snapshot_digest": contract.get("risk_snapshot_digest"),
+        "acknowledgement_codes": sorted(provided_codes),
+        "overridden_blocker_codes": overridden,
+        "confirmed_at": _timestamp(now),
+    }
+
+
+def _staged_manual_range_override(plan: dict[str, Any]) -> dict[str, Any] | None:
+    request = (
+        dict(plan.get("replacement_request") or {})
+        if isinstance(plan.get("replacement_request"), dict)
+        else {}
+    )
+    acknowledgement = request.get("risk_acknowledgement")
+    if not isinstance(acknowledgement, dict):
+        return None
+    return dict(acknowledgement)
+
+
+def _manual_override_allows(
+    acknowledgement: dict[str, Any] | None,
+    blocker_code: str,
+) -> bool:
+    return bool(
+        acknowledgement
+        and acknowledgement.get("schema_version") == MANUAL_RANGE_RISK_ACK_SCHEMA
+        and acknowledgement.get("scope") == "paper_only"
+        and blocker_code
+        in set(acknowledgement.get("overridden_blocker_codes") or [])
+    )
+
+
+def _require_acknowledged_paper_grid_risk(
+    decision: dict[str, Any],
+    acknowledgement: dict[str, Any],
+    *,
+    adapter_name: str,
+) -> None:
+    if (
+        acknowledgement.get("overridden_blocker_codes")
+        and adapter_name != "nautilus_paper"
+    ):
+        raise ValueError("manual range risk override is paper-only")
+    if (
+        acknowledgement.get("schema_version") != MANUAL_RANGE_RISK_ACK_SCHEMA
+        or acknowledgement.get("scope") != "paper_only"
+    ):
+        raise ValueError("manual range risk override acknowledgement is invalid")
+    if str(acknowledgement.get("risk_snapshot_digest") or "") != (
+        _manual_range_risk_snapshot_digest(decision)
+    ):
+        raise ValueError("manual range risk facts changed")
+    request = (
+        dict(decision.get("request") or {})
+        if isinstance(decision.get("request"), dict)
+        else {}
+    )
+    candidate = (
+        dict(request.get("candidate") or {})
+        if isinstance(request.get("candidate"), dict)
+        else {}
+    )
+    if str(candidate.get("preview_id") or "") != str(
+        acknowledgement.get("preview_id") or ""
+    ):
+        raise ValueError("manual range risk override preview changed")
+    blocker_codes = _manual_range_effective_blocker_codes(decision)
+    non_overridable = blocker_codes - MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS
+    if non_overridable:
+        raise ValueError(
+            "range replacement has non-overridable blockers:"
+            + ",".join(sorted(non_overridable))
+        )
+    acknowledged = set(acknowledgement.get("overridden_blocker_codes") or [])
+    missing = blocker_codes - acknowledged
+    if missing:
+        raise ValueError(
+            "range replacement risk acknowledgement missing:"
+            + ",".join(sorted(missing))
+        )
 
 
 def _retained_entry_risk_commands(
@@ -3879,6 +4445,9 @@ def _range_replacement_request_fingerprint(
     requested_range: dict[str, Any],
     recalculate_notional: bool,
     expected_execution: tuple[set[str], set[str]],
+    acknowledgement_codes: list[str],
+    acknowledgement_facts_digest: str,
+    risk_snapshot_digest: str,
 ) -> str:
     low = _positive_number(requested_range.get("low"), "replacement range low")
     high = _positive_number(requested_range.get("high"), "replacement range high")
@@ -3899,6 +4468,9 @@ def _range_replacement_request_fingerprint(
                 "accepted_order_ids": sorted(expected_execution[0]),
                 "open_position_ids": sorted(expected_execution[1]),
             },
+            "acknowledgement_codes": sorted(set(acknowledgement_codes)),
+            "acknowledgement_facts_digest": str(acknowledgement_facts_digest),
+            "risk_snapshot_digest": str(risk_snapshot_digest),
         },
         sort_keys=True,
         separators=(",", ":"),
