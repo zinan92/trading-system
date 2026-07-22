@@ -17,6 +17,7 @@ def _header_model(
     trusted: bool = True,
     provider: str = "binance_usdm_futures",
     risk_blocked: bool = False,
+    risk_acknowledged: bool = False,
 ) -> dict:
     model = deepcopy(_read_model("accepted"))
     model["market"].update({
@@ -36,8 +37,35 @@ def _header_model(
     })
     model["completeness"] = {"status": "complete", "issues": []}
     if risk_blocked:
-        model["risk"]["outcome"] = "deny"
+        model["risk"]["outcome"] = "block"
         model["risk"]["blockers"] = ["max_plan_loss_exceeded"]
+    if risk_acknowledged:
+        decision_id = "risk-decision-acknowledged-running"
+        preview_id = "grid-preview-acknowledged-running"
+        model["risk"].update({
+            "displayed_decision_id": decision_id,
+            "expected_decision_id": decision_id,
+        })
+        model["runtime"].update({
+            "preview_id": preview_id,
+            "risk_decision_id": decision_id,
+            "last_control_event": {
+                "action": "start",
+                "result": "accepted",
+                "request": {
+                    "risk_acknowledgements": {
+                        "schema_version": "grid-range-risk-ack-v1",
+                        "preview_id": preview_id,
+                        "codes": [
+                            "leverage_and_margin_risk",
+                            "maximum_loss_scenario",
+                            "specification_change",
+                        ],
+                    },
+                },
+                "runtime_after": {"actual_state": "running"},
+            },
+        })
     return model
 
 
@@ -49,6 +77,12 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
         _header_model(4001.0),
         _header_model(3999.0),
         _header_model(5000.0, provider="backup_venue"),
+        _header_model(
+            5001.0,
+            provider="backup_venue",
+            risk_blocked=True,
+            risk_acknowledged=True,
+        ),
         _header_model(5001.0, provider="backup_venue", risk_blocked=True),
         _header_model(5002.0, provider="backup_venue", trusted=False),
     ]
@@ -133,6 +167,9 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
 
         page.evaluate("() => load({withMarket:false})")
         assert page.locator("#headerPrice").get_attribute("class") == ""
+        assert page.locator("#marketBadge").inner_text() == "运行中"
+
+        page.evaluate("() => load({withMarket:false})")
         assert page.locator("#marketBadge").inner_text() == "运行中"
 
         page.evaluate("() => load({withMarket:false})")

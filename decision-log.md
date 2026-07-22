@@ -9743,3 +9743,36 @@ auditable datafeed port; broker execution remains a separate port.
   browser cases passed after restoring the visible action status line.
 - Python compilation and diff whitespace checks passed; staged gitleaks remains
   the final merge gate.
+
+## 2026-07-23 - Separate acknowledged Paper risk from runtime failure
+
+### Decision
+
+- Treat the header badge as current execution health, not as a second rendering
+  of the start-time risk verdict. A running Paper strategy with accepted orders
+  may remain healthy after the operator explicitly acknowledges advisory
+  leverage, margin, and maximum-loss risks.
+- Accept that distinction only when the latest accepted `start` or `replan`
+  control event binds non-empty risk acknowledgements to the runtime's exact
+  preview ID and current displayed risk-decision ID. Risk detail continues to
+  show the original blockers and metrics.
+- Keep every operational gate fail-closed: stale or degraded runtime,
+  incomplete read model, untrusted market, missing plan, missing accepted
+  orders, stale acknowledgement, or mismatched receipt still renders
+  `运行异常`.
+
+### Gotchas
+
+- `risk.outcome=block` can describe an operator-confirmed Paper specification;
+  it does not prove that an already accepted runtime has failed.
+- Runtime process liveness is also insufficient on its own. The header needs
+  accepted-order, market, completeness, plan, and exact acknowledgement
+  bindings before it can display `运行中`.
+- Never reuse a prior acknowledgement solely because the codes look the same;
+  both preview and risk-decision identities must match the active runtime.
+
+### Verification
+
+- The focused Chromium header regression covers the observed 14.18x-style
+  acknowledged risk, the same blocked risk without acknowledgement, and an
+  untrusted market. Only the exactly acknowledged running case stays green.
