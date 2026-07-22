@@ -100,7 +100,9 @@ def _source(*, open_trade: bool = False) -> dict:
                 "count": 50,
                 "notional_per_grid": 2800.0,
                 "notional_mode": "auto",
-                "leverage": 3.0,
+                "leverage": 10.0,
+                "min_net_profit_per_grid_usd": 10.35,
+                "target_net_profit_per_grid_usd": 10.0,
                 "orders": [
                     {
                         "preview_order_id": f"preview-{index}",
@@ -112,7 +114,7 @@ def _source(*, open_trade: bool = False) -> dict:
                     for index in range(25)
                 ],
             },
-            "risk_budget": {"max_loss": 77.0, "leverage": 3.0},
+            "risk_budget": {"max_loss": 77.0, "leverage": 10.0, "actual_leverage": 9.8},
         },
         "proposals": [{"proposal_id": "ai-1", "source": "ai"}],
         "runtime": {
@@ -241,9 +243,12 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
         "spacing_ratio": None,
         "notional_per_grid": 2800.0,
         "notional_mode": "auto",
-        "notional_mode_label": "自动风控",
+        "notional_mode_label": "自动利润目标",
         "max_loss": 77.0,
-        "leverage": 3.0,
+        "leverage": 10.0,
+        "actual_leverage": 9.8,
+        "min_net_profit_per_grid_usd": 10.35,
+        "target_net_profit_per_grid_usd": 10.0,
         "display_label": "中性 · 稳健 · 等价差 · 3900–4100 · 50 格 · 每格 2800 USD",
     }
     assert model["execution"]["counts"] == {

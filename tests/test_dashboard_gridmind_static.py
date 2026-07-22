@@ -126,7 +126,7 @@ def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> No
     assert 'status:"error",fresh:false,trusted:false' in html
 
 
-def test_gridmind_restores_all_production_controls() -> None:
+def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> None:
     html = _html()
 
     required_ids = {
@@ -136,10 +136,6 @@ def test_gridmind_restores_all_production_controls() -> None:
         "smartFill",
         "rangeLow",
         "rangeHigh",
-        "gridCount",
-        "gridNotional",
-        "leverage",
-        "outOfRange",
         "previewSummary",
         "startRobot",
         "stopRobot",
@@ -160,6 +156,13 @@ def test_gridmind_restores_all_production_controls() -> None:
     }
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
+
+    for derived_control in ("gridCount", "gridNotional", "leverage", "outOfRange"):
+        assert f'id="{derived_control}"' not in html
+    assert 'payload.grid={mode:state.gridMode,notional_mode:"auto"' in html
+    assert 'payload.risk_budget={leverage:10}' in html
+    assert "30–70 格" in html
+    assert "每格计划净利至少 10 USD" in html
 
     for action in ("preview", "start", "stop", "extend_range", "reset_statistics"):
         assert f"control('{action}'" in html or f'control("{action}"' in html
@@ -190,9 +193,9 @@ def test_gridmind_always_shows_the_locked_production_strategy_summary() -> None:
     assert "function productionStrategySummaryModel(summary,runtime)" in html
     assert "当前生产计划未运行" in html
     assert "directionScope" in html
-    assert "notional_mode_label" in html
-    assert "最大风险" in html
-    assert "杠杆" in html
+    assert "计划净利 ≥" in html
+    assert "上限 10x" in html
+    assert 'v===null||v===undefined||v===""?"--"' in html
     assert "renderProductionStrategySummary(strategySummary,runtime)" in html
     assert html.index('id="productionStrategySummary"') < html.index('id="gridSummary"')
     assert "accepted_buy_order_count" in html
@@ -201,6 +204,7 @@ def test_gridmind_always_shows_the_locked_production_strategy_summary() -> None:
     assert "state.preview" not in summary_body
     assert "formDirty" not in summary_body
     assert "#gridNotional" not in summary_body
+    assert "summary.actual_leverage??summary.leverage" not in summary_body
 
 
 def test_gridmind_review_is_a_same_cycle_evidence_ledger() -> None:
@@ -363,17 +367,17 @@ def test_gridmind_range_review_card_shows_required_old_to_new_fields() -> None:
         "总名义仓位",
         "预计保证金",
         "实际杠杆",
-        "最大风险",
+        "每格计划净利",
+        "参考最大止损",
         "撤单 / 新单",
         "当前持仓",
         "TP / SL",
     ):
         assert label in html
-    assert 'id="recalculateGridRangeRisk"' in html
-    assert "recalculate_notional_by_risk_budget:recalculate" in html
+    assert 'id="recalculateGridRangeRisk"' not in html
     assert "尚未交易新网格" not in html
     assert "停止+平仓+撤单+交易新网格" in html
-    assert "再次核对计划版本、行情、风险、挂单和持仓" in html
+    assert "再次核对计划版本、行情、利润目标、挂单和持仓" in html
 
 
 def test_uncertain_start_requires_persisted_complete_start_evidence() -> None:

@@ -451,12 +451,17 @@ def _project_strategy_summary(
     notional = _finite_or_none(grid.get("notional_per_grid"))
     notional_mode = str(grid.get("notional_mode") or "").lower()
     notional_mode_label = {
-        "auto": "自动风控",
+        "auto": "自动利润目标",
         "manual": "手动设定",
     }.get(notional_mode, "来源未知")
     leverage = _finite_or_none(grid.get("leverage"))
     if leverage is None:
         leverage = _finite_or_none(risk_budget.get("leverage"))
+    actual_leverage = _finite_or_none(risk_budget.get("actual_leverage"))
+    min_net_profit = _finite_or_none(grid.get("min_net_profit_per_grid_usd"))
+    target_net_profit = _finite_or_none(
+        grid.get("target_net_profit_per_grid_usd")
+    )
     range_label = f"{_format_number(low)}–{_format_number(high)}"
     display_label = (
         f"{direction_label} · {style_label} · {mode_label} · {range_label} · "
@@ -484,6 +489,9 @@ def _project_strategy_summary(
         "notional_mode_label": notional_mode_label,
         "max_loss": _finite_or_none(risk_budget.get("max_loss")),
         "leverage": leverage,
+        "actual_leverage": actual_leverage,
+        "min_net_profit_per_grid_usd": min_net_profit,
+        "target_net_profit_per_grid_usd": target_net_profit,
         "display_label": display_label,
     }
 

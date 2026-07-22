@@ -62,6 +62,8 @@ def _preview(request: dict) -> dict:
         "estimated_margin": 14000.0,
         "actual_leverage": 1.4,
         "max_loss": 1000.0,
+        "min_net_profit_per_grid_usd": 10.35,
+        "target_net_profit_per_grid_usd": 10.0,
     }
     new = deepcopy(old)
     new.update({
@@ -235,7 +237,7 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         page.locator("#gridRangeReviewDialog[open]").wait_for(state="visible")
         assert len(control_requests) == 1
         assert control_requests[0]["action"] == "preview_range"
-        assert page.locator("#gridRangeGate").inner_text().startswith("风险核对通过")
+        assert page.locator("#gridRangeGate").inner_text().startswith("利润与容量核对通过")
         assert page.locator("#gridRangeComparison").inner_text().count("→") >= 10
         if artifact_dir:
             page.screenshot(
