@@ -3009,7 +3009,10 @@ class StrategyControlPlane:
             or len(set(order_ids)) != len(order_ids)
         ):
             raise ValueError("replacement recovery snapshot requires unique order IDs")
-        by_id = dict(zip(order_ids, rows, strict=True))
+        # launchd intentionally uses macOS system Python 3.9.  The row IDs are
+        # derived one-for-one above, so ``strict=True`` adds no safety here and
+        # is not available until Python 3.10.
+        by_id = dict(zip(order_ids, rows))
         missing = sorted(submitted_ids - set(by_id))
         invalid = sorted(
             order_id
@@ -3065,7 +3068,7 @@ class StrategyControlPlane:
                 f"; empty_count={empty_snapshot_count}"
                 f"; duplicate_ids={duplicate_snapshot_ids}"
             )
-        orders_by_id = dict(zip(order_ids, rows, strict=True))
+        orders_by_id = dict(zip(order_ids, rows))
         missing_ids = sorted(submitted_ids - set(orders_by_id))
         invalid_states = sorted(
             order_id
@@ -3078,6 +3081,7 @@ class StrategyControlPlane:
             for order_id, row in orders_by_id.items()
             if order_id not in submitted_ids
             and str(row.get("state") or "").lower() == "accepted"
+            and str(row.get("event") or "entry").lower() == "entry"
         )
         if missing_ids or invalid_states or unexpected_accepted:
             raise ValueError(

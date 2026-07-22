@@ -8712,3 +8712,32 @@ auditable datafeed port; broker execution remains a separate port.
   19 passed.
 - Playwright operator-surface acceptance: 1 passed with screenshot saved at
   `docs/evidence/issue-84-profit-target-controls.png`.
+
+## 2026-07-22 - Python 3.9 paper-control compatibility
+
+### Decision
+
+- Keep the installed paper LaunchAgents on the macOS system Python 3.9 runtime
+  and remove the Python 3.10-only `zip(..., strict=True)` calls from the two
+  exact-snapshot validation paths.
+- Preserve the identity safety contract explicitly: the order-id list is
+  derived one-for-one from the validated snapshot rows, then empty and
+  duplicate IDs are rejected before the mapping is built.
+
+### Gotchas
+
+- Import-only Python 3.9 checks do not execute snapshot validation, so they did
+  not expose this failure. The regression test replaces `zip` with a Python
+  3.9-compatible signature and executes both start and replacement validators.
+- The failed start briefly wrote terminal paper-order rows before cleanup, but
+  the authoritative read model confirmed zero accepted orders and zero open
+  positions. No live process or exchange credential was involved.
+- A Nautilus cancel command can be visible briefly as an accepted command
+  receipt before replay settles it. Start validation still rejects every
+  unexpected accepted entry order, but does not misclassify a non-exposure
+  `event=cancel` receipt as a second grid.
+
+### Verification
+
+- Six focused control-plane identity/readback tests passed.
+- The exact validation path passed under `/usr/bin/python3` 3.9.6.

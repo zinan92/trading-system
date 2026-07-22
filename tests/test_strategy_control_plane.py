@@ -925,6 +925,64 @@ def test_start_rejects_empty_or_duplicate_submission_ids(
     assert not [row for row in adapter.orders if row["state"] == "accepted"]
 
 
+def test_grid_snapshot_validation_remains_python39_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_zip = zip
+
+    def python39_zip(*iterables):
+        return original_zip(*iterables)
+
+    monkeypatch.setattr("builtins.zip", python39_zip)
+
+    class SnapshotAdapter:
+        def snapshot(self, _cycle_id: str) -> dict:
+            return {
+                "orders": [{
+                    "order_id": "paper-order-1",
+                    "state": "accepted",
+                    "event": "entry",
+                    "strategy_plan_id": "strategy-plan-1",
+                }],
+                "positions": [],
+            }
+
+    adapter = SnapshotAdapter()
+    submitted_ids = {"paper-order-1"}
+
+    assert StrategyControlPlane._validate_start_grid_snapshot(
+        adapter,
+        "2026-07-05_DAY",
+        submitted_ids=submitted_ids,
+    )["paper-order-1"]["state"] == "accepted"
+    assert StrategyControlPlane._validate_replacement_recovery_snapshot(
+        adapter,
+        "2026-07-05_DAY",
+        submitted_ids=submitted_ids,
+        strategy_plan_id="strategy-plan-1",
+    )["paper-order-1"]["state"] == "accepted"
+
+
+def test_start_snapshot_ignores_pending_safe_action_command_receipts() -> None:
+    class SnapshotAdapter:
+        def snapshot(self, _cycle_id: str) -> dict:
+            return {
+                "orders": [
+                    {"order_id": "entry-1", "state": "accepted", "event": "entry"},
+                    {"order_id": "cancel-1", "state": "accepted", "event": "cancel"},
+                ],
+                "positions": [],
+            }
+
+    rows = StrategyControlPlane._validate_start_grid_snapshot(
+        SnapshotAdapter(),
+        "2026-07-05_DAY",
+        submitted_ids={"entry-1"},
+    )
+
+    assert set(rows) == {"entry-1", "cancel-1"}
+
+
 def test_start_rejects_unexpected_active_order_on_terminal_readback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
