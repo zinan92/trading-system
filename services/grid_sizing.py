@@ -95,20 +95,26 @@ def _grid_geometry(
     return levels, spacing_ratio, lower_stop, upper_stop, provisional
 
 
-def _orders_at_notional(
+def order_at_notional(
+    order: dict[str, Any],
+    notional: float,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = normalize_execution_command(order, config)
+    price = positive_number(normalized.get("price"), "executable grid price")
+    quantity = _floor_quantity(notional / price, config)
+    return normalize_execution_command({**normalized, "quantity": quantity}, config)
+
+
+def orders_at_notional(
     provisional: list[dict[str, Any]],
     notional: float,
     config: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    orders = []
-    for order in provisional:
-        price = positive_number(order.get("price"), "executable grid price")
-        quantity = _floor_quantity(notional / price, config)
-        orders.append(normalize_execution_command({**order, "quantity": quantity}, config))
-    return orders
+    return [order_at_notional(order, notional, config) for order in provisional]
 
 
-def _net_profit_usd(order: dict[str, Any], cost_per_side_rate: float) -> float:
+def planned_net_profit_usd(order: dict[str, Any], cost_per_side_rate: float) -> float:
     price = positive_number(order.get("price"), "grid price")
     tp = positive_number(order.get("tp"), "grid take profit")
     quantity = positive_number(order.get("quantity"), "grid quantity")
@@ -309,15 +315,23 @@ def build_grid_preview(
     selected: dict[str, Any] | None = None
     first_candidate: dict[str, Any] | None = None
     for candidate_count in candidates:
-        levels, spacing_ratio, lower_stop, upper_stop, provisional_orders = _grid_geometry(
-            low=low,
-            high=high,
-            count=candidate_count,
-            mode=mode,
-            latest=latest,
-            direction=direction,
-            config=config,
-        )
+        try:
+            levels, spacing_ratio, lower_stop, upper_stop, provisional_orders = _grid_geometry(
+                low=low,
+                high=high,
+                count=candidate_count,
+                mode=mode,
+                latest=latest,
+                direction=direction,
+                config=config,
+            )
+        except ValueError as error:
+            if (
+                requested_count > 0
+                or str(error) != "grid spacing is smaller than venue price precision"
+            ):
+                raise
+            continue
         side_counts = {
             side: sum(1 for order in provisional_orders if order["side"] == side)
             for side in ("buy", "sell")
@@ -325,8 +339,16 @@ def build_grid_preview(
         max_simultaneous_levels = max(side_counts.values())
         capital_notional_cap = capital_budget / max_simultaneous_levels
         notional = requested_notional if notional_mode == "manual" else capital_notional_cap
-        orders = _orders_at_notional(provisional_orders, notional, config)
-        net_profits = [_net_profit_usd(order, cost_per_side_rate) for order in orders]
+        try:
+            orders = orders_at_notional(provisional_orders, notional, config)
+        except ValueError as error:
+            if (
+                requested_count > 0
+                or str(error) != "execution quantity rounds to zero at venue precision"
+            ):
+                raise
+            continue
+        net_profits = [planned_net_profit_usd(order, cost_per_side_rate) for order in orders]
         for order, net_profit in zip(orders, net_profits):
             order["planned_net_profit_usd"] = round(net_profit, 8)
         side_notionals = {

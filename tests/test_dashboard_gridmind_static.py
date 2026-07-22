@@ -123,6 +123,10 @@ def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> No
     assert "getVisibleLogicalRange" in html
     assert "restoreVisibleLogicalRange" in html
     assert "standard-kline:viewchange" in html
+    assert "shouldLoadOlderHistory" in html
+    assert "alreadyAtOldestEdge" in html
+    assert "event=>finish(event,true)" in html
+    assert "event=>finish(event,false)" in html
     assert 'status:"error",fresh:false,trusted:false' in html
 
 
@@ -205,6 +209,7 @@ def test_gridmind_always_shows_the_locked_production_strategy_summary() -> None:
     assert "formDirty" not in summary_body
     assert "#gridNotional" not in summary_body
     assert "summary.actual_leverage??summary.leverage" not in summary_body
+    assert "Plan v${summary.plan_version" not in summary_body
 
 
 def test_gridmind_review_is_a_same_cycle_evidence_ledger() -> None:
@@ -227,12 +232,12 @@ def test_gridmind_review_is_a_same_cycle_evidence_ledger() -> None:
 def test_gridmind_positions_show_lifecycle_times_and_keeps_immutable_fill_trace() -> None:
     html = _html()
 
-    assert 'table("#positions",["状态","方向","数量","开仓时间（北京）","平仓时间（北京）"' in html
+    assert 'table("#positions",["状态","方向","数量","开仓时间（北京）","开仓价","止盈","止损","未实现","操作"]' in html
     assert 'fills=execution.fills||[]' in html
     assert 'fillAction(fill)' in html
     assert 'beijingDateTime(order.updated_at??order.ts)' in html
     assert 'trades.slice().reverse().map(trade=>' in html
-    assert 'trade.entry_quantity??trade.quantity' in html
+    assert 'trade.entry_quantity??trade.quantity??trade.units' in html
     assert 'trade.close_reason_label||"未知"' in html
     assert 'trade.realized_pnl' in html
 
@@ -309,6 +314,26 @@ def test_gridmind_order_protection_never_guesses_across_plans() -> None:
     assert 'protection.status==="known"?num(protection[key]):"未知"' in html
     assert 'protectionText(order,"tp")' in html
     assert 'protectionText(order,"sl")' in html
+    assert 'protectionText(trade,"tp")' in html
+    assert 'protectionText(trade,"sl")' in html
+    assert "plannedProfitText(order)" in html
+    assert "planned_net_profit_usd" in html
+    assert "remaining_quantity??trade.remaining_units??trade.quantity" in html
+    table_body = html.split("function renderTables", 1)[1].split("function reviewNumber", 1)[0]
+    assert '"计划版本"' not in table_body
+    assert '"版本"' not in table_body
+
+
+def test_gridmind_history_uses_real_machine_ledger_and_paper_nav_fields() -> None:
+    html = _html()
+
+    assert "function historyLedgerRows(data)" in html
+    assert "row?.tracks?.machine?.realized_pnl??row?.total_pnl" in html
+    assert "data?.execution?.account?.starting_balance" in html
+    assert "累计生产 P&amp;L" in html
+    assert "Paper NAV" in html
+    assert "row.total_realized_pnl" not in html
+    assert "row.cumulative_realized_pnl" not in html
 
 
 def test_gridmind_lifecycle_retention_cannot_change_controls_or_chart_truth() -> None:
