@@ -181,6 +181,10 @@ def test_dca_replay_accumulates_two_entries_then_closes_the_full_quantity(
             ),
             "collapse to duplicates",
         ),
+        (
+            lambda body: body["dca"].update(loop_enabled=True),
+            "loop_enabled=true is not supported in v1",
+        ),
     ],
 )
 def test_dca_preview_rejects_ambiguous_or_unsafe_geometry(mutator, message: str) -> None:
