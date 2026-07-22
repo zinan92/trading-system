@@ -521,6 +521,11 @@ def test_gridmind_risky_range_requires_every_human_confirmation() -> None:
         assert page.locator(".trade-toast").filter(
             has_text="新参数已确认"
         ).count() == 0
+        failure_toast = page.locator(".trade-toast").filter(
+            has_text="新网格未应用"
+        )
+        failure_toast.wait_for(state="visible")
+        assert "原参数与草稿仍保留" in failure_toast.inner_text()
         assert control_requests[-1]["action"] == "replace_grid"
         assert control_requests[-1]["risk_acknowledgements"]["codes"] == [
             "leverage_and_margin_risk",
