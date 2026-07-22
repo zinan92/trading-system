@@ -183,9 +183,19 @@ def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> 
     assert 'id="startRiskDialog"' in html
     assert "确认风险并启动机器人" in html
 
-    for action in ("preview", "start", "stop", "extend_range", "reset_statistics"):
+    for action in (
+        "preview",
+        "prepare_start",
+        "start",
+        "stop",
+        "extend_range",
+        "reset_statistics",
+    ):
         assert f"control('{action}'" in html or f'control("{action}"' in html
 
+    assert "prepared_start_id:state.preparedStartId" in html
+    assert "prepared_start_market_moved" in html
+    assert "机器人已启动" in html
     assert "expected_strategy_plan_id:plan.strategy_plan_id" in html
     assert "间距、每格金额和已有持仓 TP/SL 保持不变" in html
     assert "await requestPreview({useInputs:true});const result=await control('adjust_plan'" not in html

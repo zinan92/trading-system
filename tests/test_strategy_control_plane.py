@@ -242,6 +242,276 @@ def test_adaptive_start_requires_exact_risk_consent_and_then_starts_paper(
     ] == ["candidate_grid_count_out_of_bounds"]
 
 
+def test_prepared_start_survives_tick_drift_without_weakening_market_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    real = build_execution_engine_adapter(output)
+
+    class NautilusPaperFacade:
+        name = "nautilus_paper"
+
+        def __getattr__(self, name: str):
+            return getattr(real, name)
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: NautilusPaperFacade(),
+    )
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    active = plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    payload = {
+        "direction": "long",
+        "style": "steady",
+        "grid": {"mode": "arithmetic", "notional_mode": "auto"},
+        "solver": {
+            "mode": "manual_adaptive",
+            "locked": [],
+            "current_grid_count": 40,
+        },
+    }
+    prepared = plane.control(
+        cycle_id,
+        "prepare_start",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    preview = prepared["preview"]
+
+    assert prepared["side_effects"] == {
+        "strategy_plan_written": False,
+        "orders_created": 0,
+        "positions_changed": 0,
+        "risk_decision_persisted": False,
+    }
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == active[
+        "strategy_plan_id"
+    ]
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+    receipts = load_json(plane._prepared_starts_path(cycle_id))
+    assert receipts[-1]["prepared_start_id"] == prepared["prepared_start_id"]
+
+    # An auto-range preview rebuilt from the next tick has a different ID, but
+    # the server-prepared candidate remains valid while price stays in the same
+    # grid cell and every entry remains non-marketable.
+    rebuilt = plane.control(
+        cycle_id,
+        "preview",
+        payload,
+        market=market(close=4_137.45),
+        account=account_context(),
+        now="2026-07-05T01:40:01+00:00",
+    )["preview"]
+    assert rebuilt["preview_id"] != preview["preview_id"]
+    manual = preview["manual_confirmation"]
+    assert manual["required"] is True
+
+    started = plane.control(
+        cycle_id,
+        "start",
+        {
+            **payload,
+            "expected_preview_id": preview["preview_id"],
+            "prepared_start_id": prepared["prepared_start_id"],
+            "risk_acknowledgements": {
+                "schema_version": "grid-range-risk-ack-v1",
+                "preview_id": preview["preview_id"],
+                "facts_digest": manual["facts_digest"],
+                "risk_snapshot_digest": manual["risk_snapshot_digest"],
+                "codes": sorted(
+                    row["code"]
+                    for row in manual["required_acknowledgements"]
+                ),
+            },
+        },
+        market=market(close=4_137.45),
+        account=account_context(),
+        now="2026-07-05T01:40:01+00:00",
+    )
+
+    assert started["runtime"]["actual_state"] == "running"
+    assert started["runtime"]["prepared_start_id"] == prepared[
+        "prepared_start_id"
+    ]
+    assert started["accepted_orders"] > 0
+
+
+def test_prepared_start_rejects_price_that_crossed_a_grid_line(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    payload = adaptive_grid_payload()
+    prepared = plane.control(
+        cycle_id,
+        "prepare_start",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    preview = prepared["preview"]
+    sell_prices = [
+        float(row["price"])
+        for row in preview["orders"]
+        if row["side"] == "sell"
+    ]
+    assert sell_prices
+    manual = preview["manual_confirmation"]
+
+    with pytest.raises(ValueError, match="prepared_start_market_moved"):
+        plane.control(
+            cycle_id,
+            "start",
+            {
+                **payload,
+                "expected_preview_id": preview["preview_id"],
+                "prepared_start_id": prepared["prepared_start_id"],
+                "risk_acknowledgements": {
+                    "schema_version": "grid-range-risk-ack-v1",
+                    "preview_id": preview["preview_id"],
+                    "facts_digest": manual["facts_digest"],
+                    "risk_snapshot_digest": manual["risk_snapshot_digest"],
+                    "codes": sorted(
+                        row["code"]
+                        for row in manual["required_acknowledgements"]
+                    ),
+                },
+            },
+            market=market(close=min(sell_prices) + 0.01),
+            account=account_context(),
+            now="2026-07-05T01:40:01+00:00",
+        )
+
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+    assert plane.runtime_state(cycle_id)["actual_state"] == "stopped"
+
+
+@pytest.mark.parametrize(
+    ("direction", "moved_close"),
+    [("long", 4_150.0), ("short", 4_125.0)],
+)
+def test_prepared_start_rejects_crossed_levels_filtered_from_one_side_orders(
+    tmp_path: Path,
+    direction: str,
+    moved_close: float,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    payload = {
+        "direction": direction,
+        "style": "steady",
+        "grid": {"mode": "arithmetic", "notional_mode": "auto"},
+        "solver": {
+            "mode": "manual_adaptive",
+            "locked": [],
+            "current_grid_count": 40,
+        },
+    }
+    prepared = plane.control(
+        cycle_id,
+        "prepare_start",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    preview = prepared["preview"]
+    assert preview["range"]["low"] < moved_close < preview["range"]["high"]
+
+    with pytest.raises(ValueError, match="prepared_start_market_moved"):
+        plane.control(
+            cycle_id,
+            "start",
+            {
+                **payload,
+                "expected_preview_id": preview["preview_id"],
+                "prepared_start_id": prepared["prepared_start_id"],
+            },
+            market=market(close=moved_close),
+            account=account_context(),
+            now="2026-07-05T01:40:01+00:00",
+        )
+
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+
+
+def test_prepared_start_rejects_a_tampered_candidate_receipt(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    payload = adaptive_grid_payload()
+    prepared = plane.control(
+        cycle_id,
+        "prepare_start",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    path = plane._prepared_starts_path(cycle_id)
+    rows = load_json(path)
+    rows[-1]["preview"]["orders"][0]["price"] += 1.0
+    write_json(path, rows)
+
+    with pytest.raises(ValueError, match="prepared_start_changed"):
+        plane.control(
+            cycle_id,
+            "start",
+            {
+                **payload,
+                "expected_preview_id": prepared["preview"]["preview_id"],
+                "prepared_start_id": prepared["prepared_start_id"],
+            },
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:01+00:00",
+        )
+
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+
+    path.write_text("{", encoding="utf-8")
+    with pytest.raises(ValueError, match="prepared_start_changed"):
+        plane.control(
+            cycle_id,
+            "start",
+            {
+                **payload,
+                "expected_preview_id": prepared["preview"]["preview_id"],
+                "prepared_start_id": prepared["prepared_start_id"],
+            },
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:02+00:00",
+        )
+
+
 def test_adaptive_preview_cannot_override_untrusted_market_or_account_reconciliation(
     tmp_path: Path,
 ) -> None:

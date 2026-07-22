@@ -13,9 +13,10 @@ import json
 import math
 import os
 import threading
+from bisect import bisect_right
 from collections import Counter
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from services.grid_sizing import (
     GRID_STYLES,
     build_grid_preview,
     number_or as _number_or,
+    preview_id as _grid_preview_id,
     validate_market as _validate_market,
     positive_number as _positive_number,
 )
@@ -47,6 +49,7 @@ from services.risk_port import (
     action_class_for_command,
     build_paper_safe_action_market_gate,
     build_grid_risk_request,
+    canonical_market_risk_state,
     normalize_manual_order_command,
     require_exposure_permission,
 )
@@ -60,6 +63,8 @@ FIELD_SOURCES = {"human", "ai", "confirmed"}
 _CONTROL_LOCK = threading.RLock()
 _PROCESS_LOCK_STATE = threading.local()
 MANUAL_RANGE_RISK_ACK_SCHEMA = "grid-range-risk-ack-v1"
+PREPARED_START_SCHEMA = "strategy-prepared-start-v1"
+PREPARED_START_TTL_SECONDS = 300
 MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS = {
     "candidate_grid_count_out_of_bounds",
     "grid_profit_target_not_met",
@@ -734,6 +739,237 @@ class StrategyControlPlane:
         }
         return preview
 
+    def _prepare_start(
+        self,
+        cycle_id: str,
+        payload: dict[str, Any],
+        *,
+        market: dict[str, Any],
+        account: dict[str, Any],
+        now: str | None,
+    ) -> dict[str, Any]:
+        """Freeze one server-built Paper candidate without creating a plan/order."""
+
+        current = self.active_plan(cycle_id)
+        if not current:
+            raise ValueError("cannot prepare start without an active StrategyPlan")
+        runtime = self.runtime_state(cycle_id)
+        if runtime.get("desired_state") == "running":
+            raise ValueError("robot is already running; stop it before changing the grid")
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
+        )
+        snapshot = adapter.snapshot(cycle_id)
+        pending = [
+            row
+            for row in snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
+        open_positions = [
+            row
+            for row in snapshot.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+        ]
+        if pending or open_positions:
+            raise ValueError(
+                "new grid start requires zero accepted orders and zero open positions"
+            )
+        preview = self._adaptive_start_preview(
+            cycle_id,
+            payload,
+            market=market,
+            account=account,
+            now=now,
+        )
+        prepared_at = _timestamp(now)
+        record = {
+            "schema_version": PREPARED_START_SCHEMA,
+            "cycle_id": cycle_id,
+            "prepared_at": prepared_at,
+            "expires_at": (
+                parse_utc(prepared_at)
+                + timedelta(seconds=PREPARED_START_TTL_SECONDS)
+            ).isoformat(),
+            "expected_strategy_plan_id": str(
+                current.get("strategy_plan_id") or ""
+            ),
+            "expected_strategy_plan_version": int(current.get("version") or 0),
+            "execution_adapter_name": str(getattr(adapter, "name", "")),
+            "market_snapshot": canonical_market_risk_state(market),
+            "preview": preview,
+        }
+        prepared_start_id = self._prepared_start_content_id(record)
+        record["prepared_start_id"] = prepared_start_id
+        self._write_prepared_start(record)
+        return {
+            "action": "prepare_start",
+            "prepared_start_id": prepared_start_id,
+            "expires_at": record["expires_at"],
+            "preview": preview,
+            "side_effects": {
+                "strategy_plan_written": False,
+                "orders_created": 0,
+                "positions_changed": 0,
+                "risk_decision_persisted": False,
+            },
+        }
+
+    def _load_prepared_start(
+        self,
+        cycle_id: str,
+        prepared_start_id: str,
+    ) -> dict[str, Any]:
+        try:
+            rows = load_json(self._prepared_starts_path(cycle_id))
+        except (OSError, TypeError, ValueError):
+            raise ValueError("prepared_start_changed")
+        row = next(
+            (
+                dict(candidate)
+                for candidate in reversed(rows)
+                if isinstance(candidate, dict)
+                and str(candidate.get("prepared_start_id") or "")
+                == prepared_start_id
+            ),
+            None,
+        )
+        if not row or row.get("schema_version") != PREPARED_START_SCHEMA:
+            raise ValueError("prepared_start_changed")
+        return row
+
+    def _validate_prepared_start(
+        self,
+        cycle_id: str,
+        prepared: dict[str, Any],
+        *,
+        expected_preview_id: str,
+        current: dict[str, Any],
+        market: dict[str, Any],
+        adapter_name: str,
+        now: str | None,
+    ) -> dict[str, Any]:
+        preview = dict(prepared.get("preview") or {})
+        try:
+            content_id = self._prepared_start_content_id(prepared)
+            canonical_preview_id = _grid_preview_id(preview)
+            prepared_plan_version = int(
+                prepared.get("expected_strategy_plan_version") or 0
+            )
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("prepared_start_changed")
+        if (
+            str(prepared.get("prepared_start_id") or "") != content_id
+            or str(prepared.get("cycle_id") or "") != cycle_id
+            or str(prepared.get("expected_strategy_plan_id") or "")
+            != str(current.get("strategy_plan_id") or "")
+            or prepared_plan_version != int(current.get("version") or 0)
+            or str(prepared.get("execution_adapter_name") or "") != adapter_name
+            or not expected_preview_id
+            or expected_preview_id != str(preview.get("preview_id") or "")
+            or canonical_preview_id != expected_preview_id
+        ):
+            raise ValueError("prepared_start_changed")
+        try:
+            checked_at = parse_utc(_timestamp(now))
+            prepared_at = parse_utc(str(prepared.get("prepared_at") or ""))
+        except (TypeError, ValueError):
+            raise ValueError("prepared_start_changed")
+        age_seconds = (checked_at - prepared_at).total_seconds()
+        if age_seconds < -1 or age_seconds > PREPARED_START_TTL_SECONDS:
+            raise ValueError("prepared_start_expired")
+        _validate_market(market)
+        prepared_market = dict(prepared.get("market_snapshot") or {})
+        current_market = canonical_market_risk_state(market)
+        for identity_field in ("provider", "source_mode", "symbol", "timeframe"):
+            if str(prepared_market.get(identity_field) or "") != str(
+                current_market.get(identity_field) or ""
+            ):
+                raise ValueError("prepared_start_market_moved")
+        latest = _positive_number(market.get("latest_close"), "market latest_close")
+        candidate_range = dict(preview.get("range") or {})
+        low = _positive_number(candidate_range.get("low"), "prepared range low")
+        high = _positive_number(candidate_range.get("high"), "prepared range high")
+        if not low <= latest <= high:
+            raise ValueError("prepared_start_market_moved")
+        try:
+            levels = sorted(
+                _positive_number(level, "prepared grid level")
+                for level in dict(preview.get("grid") or {}).get("levels") or []
+            )
+            prepared_price = _positive_number(
+                prepared_market.get("price"),
+                "prepared market price",
+            )
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("prepared_start_changed")
+        if not levels or bisect_right(levels, prepared_price) != bisect_right(
+            levels,
+            latest,
+        ):
+            raise ValueError("prepared_start_market_moved")
+        orders = [dict(row) for row in preview.get("orders") or [] if isinstance(row, dict)]
+        if not orders:
+            raise ValueError("prepared_start_changed")
+        try:
+            marketable = [
+                row
+                for row in orders
+                if (
+                    str(row.get("side") or "").lower() == "buy"
+                    and _positive_number(row.get("price"), "prepared order price")
+                    >= latest
+                )
+                or (
+                    str(row.get("side") or "").lower() == "sell"
+                    and _positive_number(row.get("price"), "prepared order price")
+                    <= latest
+                )
+            ]
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("prepared_start_changed")
+        if marketable:
+            raise ValueError("prepared_start_market_moved")
+        return preview
+
+    @staticmethod
+    def _prepared_start_risk_market(prepared: dict[str, Any]) -> dict[str, Any]:
+        """Rebuild the exact consented mark after live executability validation."""
+
+        snapshot = dict(prepared.get("market_snapshot") or {})
+        return {
+            "status": snapshot.get("status"),
+            "fresh": snapshot.get("fresh") is True,
+            "is_synthetic": snapshot.get("is_synthetic"),
+            "provider": snapshot.get("provider"),
+            "source_mode": snapshot.get("source_mode"),
+            "symbol": snapshot.get("symbol"),
+            "timeframe": snapshot.get("timeframe"),
+            "latest_close": snapshot.get("price"),
+            "latest_timestamp": snapshot.get("latest_timestamp"),
+            "batch_id": snapshot.get("batch_id"),
+            "trust": {"status": snapshot.get("trust_status")},
+        }
+
+    @staticmethod
+    def _prepared_start_content_id(record: dict[str, Any]) -> str:
+        payload = {
+            key: record.get(key)
+            for key in (
+                "schema_version",
+                "cycle_id",
+                "prepared_at",
+                "expires_at",
+                "expected_strategy_plan_id",
+                "expected_strategy_plan_version",
+                "execution_adapter_name",
+                "market_snapshot",
+                "preview",
+            )
+        }
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return f"prepared-start-{hashlib.sha256(raw.encode()).hexdigest()[:16]}"
+
     def preview_range_adjustment(
         self,
         cycle_id: str,
@@ -1207,6 +1443,14 @@ class StrategyControlPlane:
                     now=now,
                 ),
             }
+        if action == "prepare_start":
+            return self._prepare_start(
+                cycle_id,
+                body,
+                market=market or {},
+                account=account or {},
+                now=now,
+            )
         if action == "preview_range":
             return {
                 "action": action,
@@ -1323,21 +1567,38 @@ class StrategyControlPlane:
         current = self.active_plan(cycle_id)
         if not current:
             raise ValueError("cannot start without an already selected active StrategyPlan")
-        preview = self._adaptive_start_preview(
-            cycle_id,
-            body,
-            market=market,
-            account=account,
-            now=now,
+        expected_preview_id = str(body.get("expected_preview_id") or "")
+        prepared_start_id = str(body.get("prepared_start_id") or "")
+        adapter = build_configured_execution_engine_adapter(
+            self.output_root,
+            config=self.config,
         )
+        prepared: dict[str, Any] | None = None
+        if prepared_start_id:
+            prepared = self._load_prepared_start(cycle_id, prepared_start_id)
+            preview = self._validate_prepared_start(
+                cycle_id,
+                prepared,
+                expected_preview_id=expected_preview_id,
+                current=current,
+                market=market,
+                adapter_name=str(getattr(adapter, "name", "")),
+                now=now,
+            )
+        else:
+            preview = self._adaptive_start_preview(
+                cycle_id,
+                body,
+                market=market,
+                account=account,
+                now=now,
+            )
         if (preview.get("solver") or {}).get("mode") == "manual_adaptive":
-            expected_preview_id = str(body.get("expected_preview_id") or "")
             if not expected_preview_id or expected_preview_id != str(
                 preview.get("preview_id") or ""
             ):
                 raise ValueError("strategy_preview_changed")
         runtime = self.runtime_state(cycle_id)
-        adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
         execution_snapshot = adapter.snapshot(cycle_id)
         pending = [
             row
@@ -1374,12 +1635,18 @@ class StrategyControlPlane:
         commands = build_plan_grid_entry_commands(adjusted, timestamp=timestamp)
         manual_override = None
         confirmation = dict(preview.get("manual_confirmation") or {})
+        risk_market = market
         if confirmation.get("required") is True:
             manual_override = _validated_manual_range_acknowledgement(
                 preview,
                 body,
                 now=now,
             )
+            if prepared is not None:
+                # The operator confirmed the prepared mark. Current market
+                # trust, venue identity and order marketability were checked
+                # immediately above; account/execution/policy remain current.
+                risk_market = self._prepared_start_risk_market(prepared)
         risk_decision = self._authorize_grid_mutation(
             cycle_id,
             action_class="increase_exposure",
@@ -1387,7 +1654,7 @@ class StrategyControlPlane:
             plan=adjusted,
             commands=commands,
             account=account,
-            market=market,
+            market=risk_market,
             adapter=adapter,
             timestamp=timestamp,
             manual_override=manual_override,
@@ -1408,6 +1675,7 @@ class StrategyControlPlane:
             "strategy_plan_id": adjusted["strategy_plan_id"],
             "strategy_plan_version": adjusted["version"],
             "preview_id": preview["preview_id"],
+            "prepared_start_id": prepared_start_id or None,
             "risk_decision_id": risk_decision["decision_id"],
             "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
             "accepted_order_count": 0,
@@ -3853,6 +4121,21 @@ class StrategyControlPlane:
 
     def _plans_path(self, cycle_id: str) -> Path:
         return self.root / "plans" / f"{cycle_id}.json"
+
+    def _prepared_starts_path(self, cycle_id: str) -> Path:
+        return self.root / "prepared_starts" / f"{cycle_id}.json"
+
+    def _write_prepared_start(self, record: dict[str, Any]) -> None:
+        path = self._prepared_starts_path(str(record["cycle_id"]))
+        prepared_start_id = str(record.get("prepared_start_id") or "")
+        rows = [
+            row
+            for row in load_json(path)
+            if isinstance(row, dict)
+            and str(row.get("prepared_start_id") or "") != prepared_start_id
+        ]
+        rows.append(record)
+        write_json(path, rows[-20:])
 
     def _next_plan_version(self, cycle_id: str) -> int:
         versions = [

@@ -9013,3 +9013,56 @@ auditable datafeed port; broker execution remains a separate port.
 - Browser evidence:
   `docs/evidence/issue-100/issue-100-crosshair-time-axis.png`.
 - `git diff --check` passed.
+
+## 2026-07-22 - Paper start candidate handshake
+
+### Decision
+
+- Treat one click on `启动机器人` as one explicit server-side preparation plus
+  one commit of that exact candidate. The preparation receipt binds the active
+  plan version, preview ID, grid orders, and a five-minute lifetime without
+  creating a plan, order, position, or persisted risk decision.
+- Permit ordinary trusted price ticks while the prepared candidate remains
+  economically executable. The final start still rechecks current market
+  trust, zero existing exposure, current plan identity, and the full risk
+  policy before submitting any Paper order.
+- Surface both success and failure in the existing top-right notification
+  region. A failed start now states that production was not changed instead of
+  leaving the only explanation below the fold.
+
+### Gotchas
+
+- Refreshing the preview immediately before start is insufficient: auto-range
+  geometry can change again between two requests. Freezing browser inputs is
+  also insufficient because a live tick can change which side owns a grid
+  level. The server therefore prepares and later validates one exact candidate.
+- A tick that crosses any prepared entry level makes an order marketable. That
+  candidate is rejected fail-closed and the next click prepares a fresh one;
+  the receipt never turns stale geometry into a market order.
+- `preview` remains read-only and unaudited. `prepare_start` persists only a
+  bounded staging receipt and is audited as an explicit operator start intent.
+- Manual risk acknowledgement remains bound to its exact risk snapshot. This
+  fix does not bypass confirmations, live/real-money eligibility, or exchange
+  credential boundaries.
+
+### Adversarial review corrections
+
+- The final market check now compares the prepared and current grid-cell index,
+  not only whether emitted orders became marketable. This closes the one-sided
+  long-up/short-down case where crossed levels were filtered from the order
+  list.
+- Preparing a start cancels the debounce timer and invalidates any in-flight
+  parameter preview, so a late response cannot overwrite the prepared
+  candidate or its confirmation card.
+- The receipt token binds the complete candidate, canonical market snapshot,
+  active plan, lifetime, and execution adapter. Start also recomputes the
+  canonical preview ID and normalizes damaged receipt data to a fail-closed
+  `prepared_start_changed` response.
+- Provider, source mode, symbol, timeframe, and Paper execution-adapter identity
+  must remain unchanged between prepare and start.
+
+### Verification
+
+- Control-plane, audit, read-model API, static dashboard, and Playwright
+  start-flow tests: 125 passed.
+- Python compilation and `git diff --check` passed.

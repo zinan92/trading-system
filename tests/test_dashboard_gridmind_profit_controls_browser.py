@@ -252,11 +252,28 @@ def test_gridmind_risky_preview_requires_every_ack_before_start() -> None:
     requests: list[dict] = []
 
     def fulfill_control(route) -> None:
-        requests.append(route.request.post_data_json)
+        body = route.request.post_data_json
+        requests.append(body)
+        response = _risky_preview()
+        if body["action"] == "prepare_start":
+            response = {
+                **response,
+                "action": "prepare_start",
+                "prepared_start_id": "prepared-browser-1",
+            }
+        elif body["action"] == "start":
+            response = {
+                "action": "start",
+                "plan": {"version": 3},
+                "preview": response["preview"],
+                "created_orders": 24,
+                "accepted_orders": 24,
+                "filled_orders": 0,
+            }
         route.fulfill(
             status=200,
             content_type="application/json",
-            body=json.dumps(_risky_preview(), ensure_ascii=False),
+            body=json.dumps(response, ensure_ascii=False),
         )
 
     with _static_server() as origin, playwright.sync_playwright() as runtime:
@@ -286,7 +303,10 @@ def test_gridmind_risky_preview_requires_every_ack_before_start() -> None:
         page.locator("#startRobot").click()
         page.locator("#startRiskDialog").wait_for(state="visible")
 
-        assert [row["action"] for row in requests] == ["preview"]
+        assert [row["action"] for row in requests] == [
+            "preview",
+            "prepare_start",
+        ]
         assert page.locator("#confirmStartRisk").is_disabled()
         checks = page.locator("[data-start-risk-ack]")
         assert checks.count() == 3
@@ -296,6 +316,20 @@ def test_gridmind_risky_preview_requires_every_ack_before_start() -> None:
         assert "1,000 USD" in page.locator("#startRiskDialog").inner_text()
         assert "24 格" in page.locator("#startRiskDialog").inner_text()
         assert "可比方案：保格数" in page.locator("#previewSummary").inner_text()
+        page.locator("#confirmStartRisk").click()
+        page.locator(".trade-toast").filter(has_text="机器人已启动").wait_for()
+        assert [row["action"] for row in requests] == [
+            "preview",
+            "prepare_start",
+            "start",
+        ]
+        assert requests[-1]["prepared_start_id"] == "prepared-browser-1"
+        assert requests[-1]["expected_preview_id"] == "profit-preview-browser-1"
+        assert requests[-1]["risk_acknowledgements"]["codes"] == [
+            "grid_count_outside_preferred_band",
+            "maximum_loss_scenario",
+            "specification_change",
+        ]
         artifact_dir = os.environ.get("GRID_PROFIT_SCREENSHOT_DIR")
         if artifact_dir:
             path = Path(artifact_dir)
@@ -304,4 +338,178 @@ def test_gridmind_risky_preview_requires_every_ack_before_start() -> None:
                 path=str(path / "issue-97-adaptive-risk-confirmation.png"),
                 full_page=True,
             )
+        browser.close()
+
+
+def test_gridmind_start_click_uses_prepared_candidate_and_shows_success() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_000.0)
+    model["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "can_start_when_authorized": True,
+        "can_stop_when_authorized": False,
+    })
+    model["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+    requests: list[dict] = []
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        requests.append(body)
+        preview = _preview()
+        if body["action"] == "prepare_start":
+            response = {
+                **preview,
+                "action": "prepare_start",
+                "prepared_start_id": "prepared-safe-browser-1",
+            }
+        else:
+            response = {
+                "action": "start",
+                "plan": {"version": 4},
+                "preview": preview["preview"],
+                "created_orders": 30,
+                "accepted_orders": 30,
+                "filled_orders": 0,
+            }
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(response, ensure_ascii=False),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model, ensure_ascii=False),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+
+        page.locator("#startRobot").click()
+        page.locator(".trade-toast").filter(has_text="机器人已启动").wait_for()
+
+        assert [row["action"] for row in requests] == ["prepare_start", "start"]
+        assert requests[-1]["prepared_start_id"] == "prepared-safe-browser-1"
+        assert requests[-1]["expected_preview_id"] == "profit-preview-browser-1"
+        assert "当前接受 30 笔委托" in page.locator(".trade-toast").inner_text()
+        browser.close()
+
+
+def test_gridmind_start_invalidates_a_deferred_parameter_preview() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_000.0)
+    model["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "can_start_when_authorized": True,
+        "can_stop_when_authorized": False,
+    })
+    model["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+    requests: list[dict] = []
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        requests.append(body)
+        preview = _preview()
+        if body["action"] == "prepare_start":
+            response = {
+                **preview,
+                "action": "prepare_start",
+                "prepared_start_id": "prepared-after-deferred-preview",
+            }
+        else:
+            response = {
+                "action": "start",
+                "plan": {"version": 5},
+                "preview": preview["preview"],
+                "created_orders": 30,
+                "accepted_orders": 30,
+                "filled_orders": 0,
+            }
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(response, ensure_ascii=False),
+        )
+
+    stale = _preview()
+    stale["preview"]["preview_id"] = "stale-deferred-preview"
+    deferred_script = f"""
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = (input, init = {{}}) => {{
+          let body = null;
+          try {{ body = JSON.parse(init.body || "null"); }} catch (_error) {{}}
+          if (String(input).includes('/api/strategy-console/control') && body?.action === 'preview') {{
+            window.__deferredPreviewRequested = true;
+            return new Promise(resolve => {{
+              window.__releaseDeferredPreview = () => resolve(new Response(
+                {json.dumps(json.dumps(stale, ensure_ascii=False))},
+                {{status: 200, headers: {{'Content-Type': 'application/json'}}}}
+              ));
+            }});
+          }}
+          return nativeFetch(input, init);
+        }};
+    """
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.add_init_script(deferred_script)
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model, ensure_ascii=False),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+
+        page.locator("#rangeLow").fill("3910")
+        page.wait_for_function("window.__deferredPreviewRequested === true")
+        page.locator("#startRobot").click()
+        page.locator(".trade-toast").filter(has_text="机器人已启动").wait_for()
+        page.evaluate("window.__releaseDeferredPreview()")
+        page.wait_for_timeout(50)
+
+        assert [row["action"] for row in requests] == ["prepare_start", "start"]
+        assert requests[-1]["expected_preview_id"] == "profit-preview-browser-1"
+        assert page.evaluate("state.preview") is None
         browser.close()
