@@ -408,6 +408,25 @@ def test_gridmind_range_adjustment_is_an_explicit_read_only_draft_mode() -> None
     assert "点击最终按钮前仍是只读草稿" in html
     assert "orders_created: 0" not in html
     assert "Object.entries(requiredEffects).some" in html
+    assert "function createStartupGridRangeDraft()" in html
+    assert 'scope:"startup"' in html
+    assert 'draft.scope==="startup"?"应用参数":"确认"' in html
+    assert "async function applyStartupGridRangeDraft()" in html
+    assert 'lockParameter("range")' in html
+
+
+def test_gridmind_start_failures_use_a_centered_dialog_not_trade_toasts() -> None:
+    html = _html()
+
+    assert 'id="startFailureDialog"' in html
+    assert 'id="startFailureReason"' in html
+    assert 'aria-describedby="startFailureReason"' in html
+    assert 'id="startFailureReason" role="alert"' in html
+    assert "启动未完成" in html
+    assert "生产状态没有改变" in html
+    assert 'failureSurface="toast"' in html
+    assert 'failureSurface==="dialog"' in html
+    assert html.count('{failureSurface:"dialog"}') == 2
 
 
 def test_gridmind_range_review_card_shows_required_old_to_new_fields() -> None:

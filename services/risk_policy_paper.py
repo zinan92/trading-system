@@ -24,6 +24,7 @@ from services.risk_policy_core import (
     rounded_mapping,
     safe_action_identity_blockers,
 )
+from services.grid_marketability import market_outside_range_requires_blocker
 
 
 GRID_RISK_POLICY_SCHEMA = "strategy-grid-risk-policy-v2"
@@ -217,7 +218,12 @@ class PaperGridRiskDecisionPort:
                         },
                     )
                 )
-            elif price is not None and not (low <= price <= high):
+            elif price is not None and market_outside_range_requires_blocker(
+                direction,
+                price,
+                low,
+                high,
+            ):
                 blockers.append(
                     blocker(
                         "market_price_outside_range",

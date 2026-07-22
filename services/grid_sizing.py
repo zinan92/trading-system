@@ -22,6 +22,7 @@ from decimal import Decimal, ROUND_FLOOR
 from typing import Any
 
 from services.dualtrack_execution_contract import normalize_execution_command
+from services.grid_marketability import market_outside_range_requires_blocker
 
 GRID_DIRECTIONS = {"neutral", "long", "short"}
 GRID_STYLES = {"steady", "aggressive"}
@@ -999,7 +1000,7 @@ def build_adaptive_grid_preview(
             "critical",
             f"实际杠杆 {actual_leverage:.2f}x，超过 Paper 手动容量 {ADAPTIVE_MANUAL_LEVERAGE_LIMIT:g}x。",
         )
-    if not low <= latest <= high:
+    if market_outside_range_requires_blocker(direction, latest, low, high):
         flag(
             "market_price_outside_range",
             "critical",

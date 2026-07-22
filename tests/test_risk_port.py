@@ -321,6 +321,41 @@ def test_market_range_and_execution_reconciliation_fail_closed() -> None:
     assert any(row["code"] == "execution_reconciliation_drift" for row in drifted.to_dict()["blockers"])
 
 
+@pytest.mark.parametrize(
+    ("direction", "price", "blocked"),
+    [
+        ("long", 120.0, False),
+        ("long", 80.0, True),
+        ("short", 80.0, False),
+        ("short", 120.0, True),
+        ("neutral", 120.0, True),
+    ],
+)
+def test_market_range_gate_is_direction_and_marketability_aware(
+    direction: str,
+    price: float,
+    blocked: bool,
+) -> None:
+    candidate = plan()
+    candidate["direction"] = direction
+    command_rows = commands()
+    if direction == "long":
+        command_rows = [row for row in command_rows if row["side"] == "buy"]
+    elif direction == "short":
+        command_rows = [row for row in command_rows if row["side"] == "sell"]
+
+    decision = PaperGridRiskDecisionPort().evaluate(
+        request(
+            plan_value=candidate,
+            command_rows=command_rows,
+            market_value=market(price=price),
+        )
+    )
+    blocker_codes = {row["code"] for row in decision.to_dict()["blockers"]}
+
+    assert ("market_price_outside_range" in blocker_codes) is blocked
+
+
 @pytest.mark.parametrize("grid_count", [29, 71])
 def test_grid_count_outside_operating_band_fails_closed(grid_count: int) -> None:
     candidate = plan()
