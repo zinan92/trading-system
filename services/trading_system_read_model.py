@@ -434,6 +434,51 @@ def _project_strategy_summary(
 ) -> dict[str, Any]:
     if not plan:
         return {}
+    strategy_type = str(plan.get("strategy_type") or "grid").lower()
+    if strategy_type == "dca":
+        dca = _mapping(plan.get("dca"))
+        risk = _mapping(plan.get("risk_budget"))
+        entries = [_mapping(row) for row in _list(dca.get("entries"))]
+        direction = str(plan.get("direction") or "").lower()
+        direction_label = _DIRECTION_LABELS.get(direction, direction or "未知")
+        target = _finite_or_none(dca.get("target_price"))
+        stop = _finite_or_none(dca.get("stop_price"))
+        notional = _finite_or_none(dca.get("notional_per_addition"))
+        count = _integer_or_none(dca.get("max_additions"))
+        if not entries or target is None or stop is None or count is None:
+            completeness_issues.append("strategy_dca_specification_incomplete")
+        return {
+            "strategy_id": str(plan.get("strategy_id") or "production_dca"),
+            "strategy_type": "dca",
+            "strategy_type_label": "DCA",
+            "plan_id": plan.get("strategy_plan_id"),
+            "plan_version": plan.get("version"),
+            "status": plan.get("status"),
+            "direction": direction or None,
+            "direction_label": direction_label,
+            "dca_entry_count": count,
+            "dca_entry_levels": [
+                _finite_or_none(row.get("price")) for row in entries
+            ],
+            "notional_per_addition": notional,
+            "target_price": target,
+            "stop_price": stop,
+            "loop_enabled": dca.get("loop_enabled") is True,
+            "total_possible_notional": _finite_or_none(
+                dca.get("total_possible_notional")
+            ),
+            "max_loss": _finite_or_none(
+                risk.get("maximum_loss_at_full_depth")
+            ),
+            "leverage": _finite_or_none(risk.get("selected_leverage")),
+            "actual_leverage": _finite_or_none(
+                risk.get("actual_leverage_at_full_depth")
+            ),
+            "display_label": (
+                f"{direction_label} · DCA · 最多 {count if count is not None else '—'} 次 · "
+                f"每次 {_format_number(notional)} USD · 目标 {_format_number(target)}"
+            ),
+        }
     range_value = _mapping(plan.get("range"))
     grid = _mapping(plan.get("grid"))
     risk_budget = _mapping(plan.get("risk_budget"))
@@ -477,6 +522,8 @@ def _project_strategy_summary(
     )
     return {
         "strategy_id": str(plan.get("strategy_id") or "production_grid"),
+        "strategy_type": "grid",
+        "strategy_type_label": "Grid",
         "plan_id": plan.get("strategy_plan_id"),
         "plan_version": plan.get("version"),
         "status": plan.get("status"),
@@ -592,6 +639,12 @@ def _project_order_protection(
             tp = tp if tp is not None else _positive_finite_or_none(match.get("tp"))
             sl = sl if sl is not None else _positive_finite_or_none(match.get("sl"))
             source = "strategy_plan" if source is None else "execution_snapshot+strategy_plan"
+    if str(source_plan.get("strategy_type") or "grid").lower() == "dca":
+        dca = _mapping(source_plan.get("dca"))
+        tp = tp if tp is not None else _positive_finite_or_none(dca.get("target_price"))
+        sl = sl if sl is not None else _positive_finite_or_none(dca.get("stop_price"))
+        if tp is not None and sl is not None and source is None:
+            source = "strategy_plan_aggregate_dca"
     if tp is None or sl is None:
         return {**unknown, "reason": "strategy_plan_protection_incomplete"}
     return {"status": "known", "tp": tp, "sl": sl, "source": source, "reason": None}
@@ -671,12 +724,21 @@ def _matching_plan_order(
     *,
     plan: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:
-    candidates = [_mapping(item) for item in _list(_mapping(plan.get("grid")).get("orders"))]
+    is_dca = str(plan.get("strategy_type") or "grid").lower() == "dca"
+    candidates = [
+        _mapping(item)
+        for item in _list(
+            _mapping(plan.get("dca")).get("entries")
+            if is_dca
+            else _mapping(plan.get("grid")).get("orders")
+        )
+    ]
     identity_valid, preview_id = _plan_order_identity(row, plan=plan)
     if not identity_valid:
         return None
     if preview_id:
-        identified = [item for item in candidates if str(item.get("preview_order_id") or "") == preview_id]
+        identity_field = "preview_entry_id" if is_dca else "preview_order_id"
+        identified = [item for item in candidates if str(item.get(identity_field) or "") == preview_id]
         return identified[0] if len(identified) == 1 else None
 
     side = str(row.get("side") or "").strip().lower()
@@ -697,14 +759,22 @@ def _plan_order_identity(
     *,
     plan: Mapping[str, Any],
 ) -> tuple[bool, str]:
-    explicit_preview_id = str(row.get("preview_order_id") or "").strip()
+    is_dca = str(plan.get("strategy_type") or "grid").lower() == "dca"
+    explicit_preview_id = str(
+        (
+            row.get("preview_entry_id")
+            if is_dca
+            else row.get("preview_order_id")
+        )
+        or ""
+    ).strip()
     source_fill_id = str(row.get("source_fill_id") or "").strip()
     source_preview_id = ""
     if source_fill_id:
         identity = source_fill_id.split(":")
         identity_valid = (
             len(identity) == 3
-            and identity[0] == "strategy-grid"
+            and identity[0] == ("strategy-dca" if is_dca else "strategy-grid")
             and identity[1] == str(plan.get("strategy_plan_id") or "")
             and bool(identity[2])
         )
@@ -715,11 +785,16 @@ def _plan_order_identity(
         return False, ""
     preview_id = explicit_preview_id or source_preview_id
     if preview_id:
-        candidates = _list(_mapping(plan.get("grid")).get("orders"))
+        candidates = _list(
+            _mapping(plan.get("dca")).get("entries")
+            if is_dca
+            else _mapping(plan.get("grid")).get("orders")
+        )
+        identity_field = "preview_entry_id" if is_dca else "preview_order_id"
         matches = [
             item
             for item in candidates
-            if str(_mapping(item).get("preview_order_id") or "") == preview_id
+            if str(_mapping(item).get(identity_field) or "") == preview_id
         ]
         if len(matches) != 1:
             return False, ""

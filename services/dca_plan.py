@@ -198,7 +198,7 @@ def build_dca_preview(
             "risk_flags": risk_flags,
         },
     }
-    preview["preview_id"] = _preview_id(preview)
+    preview["preview_id"] = dca_preview_id(preview)
     return preview
 
 
@@ -290,6 +290,7 @@ def build_dca_entry_commands(
             "sl": _positive_number(dca.get("stop_price"), "DCA stop price"),
             "source": "strategy_dca_paper",
             "source_fill_id": f"strategy-dca:{plan_id}:{entry_id}",
+            "preview_entry_id": entry_id,
             "trade_id": round_id,
             "position_id": round_id,
             "dca_round_id": round_id,
@@ -417,8 +418,13 @@ def _normalized_price(value: Any, label: str, config: dict[str, Any]) -> float:
     return _positive_number(normalized.get("price"), label)
 
 
-def _preview_id(preview: dict[str, Any]) -> str:
-    encoded = json.dumps(preview, sort_keys=True, separators=(",", ":"))
+def dca_preview_id(preview: dict[str, Any]) -> str:
+    """Return the content identity for a DCA preview envelope."""
+
+    canonical = dict(preview)
+    canonical.pop("preview_id", None)
+    canonical.pop("manual_confirmation", None)
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return f"dca-preview-{hashlib.sha256(encoded.encode()).hexdigest()[:12]}"
 
 

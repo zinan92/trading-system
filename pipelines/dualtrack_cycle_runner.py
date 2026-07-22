@@ -1251,10 +1251,38 @@ class DualTrackCycleRunner:
         triggered: list[dict[str, Any]] = []
         accepted_limit_fills: list[dict[str, Any]] = []
         last_sweep: dict[str, Any] = {"status": "ok", "triggered": []}
+        control = StrategyControlPlane(self.output_root)
+        active_plan = control.active_plan(cycle_id)
+        runtime = control.runtime_state(cycle_id)
+        dca_active = bool(
+            active_plan
+            and active_plan.get("strategy_type") == "dca"
+            and runtime.get("strategy_type") == "dca"
+            and runtime.get("actual_state") == "running"
+        )
+        processed_events = 0
         for event in events:
-            last_sweep = self.execution.process_market_event(event)
+            processed_events += 1
+            dca_terminal = False
+            if dca_active:
+                dca_result = control.advance_dca_market_event(
+                    cycle_id,
+                    event,
+                    adapter=self.execution,
+                )
+                last_sweep = {
+                    **dict(dca_result.get("engine_result") or {}),
+                    "dca_lifecycle": dict(dca_result.get("state") or {}),
+                    "target_submission": dca_result.get("target_submission"),
+                }
+                if str((dca_result.get("runtime") or {}).get("actual_state") or "") == "stopped":
+                    dca_terminal = True
+            else:
+                last_sweep = self.execution.process_market_event(event)
             triggered.extend(last_sweep.get("triggered") or [])
             accepted_limit_fills.extend(last_sweep.get("accepted_limit_fills") or [])
+            if dca_terminal:
+                break
         flush_shadow = getattr(self.execution, "flush_shadow", None)
         shadow_flush = flush_shadow(cycle_id) if callable(flush_shadow) else None
         return {
@@ -1263,10 +1291,10 @@ class DualTrackCycleRunner:
             "triggered": triggered,
             "accepted_limit_fills": accepted_limit_fills,
             "accepted_limit_fill_count": len(accepted_limit_fills),
-            "processed_events": len(events),
+            "processed_events": processed_events,
             "first_event_ts": events[0].get("event_started_at") or events[0].get("ts_event"),
-            "last_event_ts": events[-1].get("event_started_at") or events[-1].get("ts_event"),
-            "source": events[-1]["source"],
+            "last_event_ts": events[processed_events - 1].get("event_started_at") or events[processed_events - 1].get("ts_event"),
+            "source": events[processed_events - 1]["source"],
             "shadow_flush": shadow_flush,
         }
 
