@@ -9317,3 +9317,31 @@ auditable datafeed port; broker execution remains a separate port.
   `pass`, one auditable legacy identity repair, and the market-price warning.
 - Focused accounting, replay, and read-model tests cover the unique repair,
   ambiguous fail-closed path, and future producer identity.
+
+## 2026-07-22 - Explain every non-overridable start blocker in the confirmation card
+
+### Decision
+
+- Carry the complete server-owned blocker rows into the Paper start consent
+  contract instead of exposing only their machine codes.
+- Render a plain-language title, cause, concrete reconciliation differences,
+  and operator next action for known blockers. Preserve the raw code as audit
+  detail and preserve unknown codes for diagnosis.
+- Keep accounting and execution identity failures non-overridable. Parameter
+  preferences remain separately acknowledgeable and do not share this copy.
+
+### Gotchas
+
+- The browser never invents blocker evidence; exact issue IDs come from the
+  signed server preview contract.
+- Human-readable copy must not turn a hard accounting integrity failure into a
+  checkbox or imply that clicking again can bypass it.
+- A missing details array still renders the machine code and safe next action,
+  so older prepared previews remain understandable.
+
+### Verification
+
+- Strategy-control tests prove the non-overridable blocker evidence survives
+  into the start confirmation contract.
+- Browser acceptance proves the disabled button is accompanied by Chinese
+  cause, both concrete reconciliation differences, next action, and raw code.

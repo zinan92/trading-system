@@ -575,6 +575,45 @@ def test_adaptive_preview_cannot_override_untrusted_market_or_account_reconcilia
     assert "account_snapshot_unavailable" in preview["manual_confirmation"][
         "non_overridable_blocker_codes"
     ]
+    blocker = preview["manual_confirmation"]["non_overridable_blockers"][0]
+    assert blocker["code"] == "account_snapshot_unavailable"
+    assert blocker["source"] == "canonical_account"
+    assert blocker["evidence"]["status"] == "drift"
+
+
+def test_adaptive_preview_carries_solver_only_leverage_capacity_evidence(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    payload = adaptive_grid_payload()
+    payload["grid"].update({"count": 50, "notional_per_grid": 10_000.0})
+    payload["solver"]["locked"] = ["range", "grid_count", "notional_per_grid"]
+
+    preview = plane.control(
+        cycle_id,
+        "preview",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+    )["preview"]
+    manual = preview["manual_confirmation"]
+    blocker = next(
+        row
+        for row in manual["non_overridable_blockers"]
+        if row["code"] == "manual_leverage_capacity_exceeded"
+    )
+
+    assert manual["available"] is False
+    assert "manual_leverage_capacity_exceeded" in manual[
+        "non_overridable_blocker_codes"
+    ]
+    assert blocker["source"] == "adaptive_grid_solver"
+    assert blocker["evidence"]["actual_leverage"] > 20.0
+    assert blocker["evidence"]["manual_paper_leverage_limit"] == 20.0
+    assert "超过 Paper 手动容量 20x" in blocker["message"]
 
 
 def test_plan_proposals_share_schema_and_active_plan_has_field_sources(tmp_path: Path) -> None:
