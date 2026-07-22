@@ -904,8 +904,8 @@ class StrategyControlPlane:
                 raise ValueError("prepared_start_market_moved")
         latest = _positive_number(market.get("latest_close"), "market latest_close")
         candidate_range = dict(preview.get("range") or {})
-        _positive_number(candidate_range.get("low"), "prepared range low")
-        _positive_number(candidate_range.get("high"), "prepared range high")
+        low = _positive_number(candidate_range.get("low"), "prepared range low")
+        high = _positive_number(candidate_range.get("high"), "prepared range high")
         if not _market_inside_source_envelope(
             candidate_range,
             latest,
@@ -922,10 +922,21 @@ class StrategyControlPlane:
             )
         except (TypeError, ValueError, OverflowError):
             raise ValueError("prepared_start_changed")
-        if not levels or bisect_right(levels, prepared_price) != bisect_right(
+        direction = str(preview.get("direction") or "neutral").lower()
+        same_grid_cell = bool(levels) and bisect_right(
             levels,
-            latest,
-        ):
+            prepared_price,
+        ) == bisect_right(levels, latest)
+        remained_on_non_entry_side = (
+            direction == "long"
+            and prepared_price >= high
+            and latest >= high
+        ) or (
+            direction == "short"
+            and prepared_price <= low
+            and latest <= low
+        )
+        if not same_grid_cell and not remained_on_non_entry_side:
             raise ValueError("prepared_start_market_moved")
         orders = [dict(row) for row in preview.get("orders") or [] if isinstance(row, dict)]
         if not orders:

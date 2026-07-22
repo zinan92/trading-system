@@ -8959,6 +8959,20 @@ auditable datafeed port; broker execution remains a separate port.
 - The neutral color split follows the current trusted market price because that
   is also what the backend uses to choose buy versus sell orders. It is a visual
   separator, not a third draggable strategy parameter.
+
+### Adversarial review corrections
+
+- Apply the same direction-aware 15–35 executable band in the canonical Paper
+  risk policy. A 20-order single-side plan must not be rejected by the old
+  neutral 30–70 rule after sizing has already accepted it.
+- When the operator changes direction, preserve the mapped current density as
+  an implicit geometric choice (39 neutral becomes 20 single-side). Profit,
+  leverage and margin shortfalls remain visible acknowledgement flags instead
+  of silently changing 20 into a different count.
+- Permit a prepared single-side candidate to remain valid when a trusted tick
+  moves farther onto its non-entry side without crossing any executable order.
+  The original ATR source envelope and marketability checks still bound the
+  candidate and reject entry-side crossings.
 - Browser evidence:
   `docs/evidence/issue-97/issue-97-parameter-controls.png` and
   `docs/evidence/issue-97/issue-97-adaptive-risk-confirmation.png`.

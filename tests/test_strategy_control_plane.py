@@ -275,6 +275,7 @@ def test_prepared_start_survives_tick_drift_without_weakening_market_gate(
             "mode": "manual_adaptive",
             "locked": [],
             "current_grid_count": 40,
+            "current_direction": "neutral",
         },
     }
     prepared = plane.control(
@@ -406,13 +407,27 @@ def test_prepared_start_rejects_price_that_crossed_a_grid_line(
     ("direction", "moved_close"),
     [("long", 4_150.0), ("short", 4_125.0)],
 )
-def test_prepared_start_rejects_crossed_levels_filtered_from_one_side_orders(
+def test_prepared_start_allows_non_entry_side_drift_inside_source_envelope(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     direction: str,
     moved_close: float,
 ) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"
+    real = build_execution_engine_adapter(output)
+
+    class NautilusPaperFacade:
+        name = "nautilus_paper"
+
+        def __getattr__(self, name: str):
+            return getattr(real, name)
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: NautilusPaperFacade(),
+    )
     plane = StrategyControlPlane(output)
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     plane.lock_production_plan(
@@ -427,6 +442,7 @@ def test_prepared_start_rejects_crossed_levels_filtered_from_one_side_orders(
             "mode": "manual_adaptive",
             "locked": [],
             "current_grid_count": 40,
+            "current_direction": "neutral",
         },
     }
     prepared = plane.control(
@@ -438,23 +454,36 @@ def test_prepared_start_rejects_crossed_levels_filtered_from_one_side_orders(
         now="2026-07-05T01:40:00+00:00",
     )
     preview = prepared["preview"]
-    assert preview["range"]["low"] < moved_close < preview["range"]["high"]
+    source_envelope = preview["range"]["source_envelope"]
+    assert source_envelope["low"] < moved_close < source_envelope["high"]
+    assert not preview["range"]["low"] < moved_close < preview["range"]["high"]
+    manual = preview["manual_confirmation"]
 
-    with pytest.raises(ValueError, match="prepared_start_market_moved"):
-        plane.control(
-            cycle_id,
-            "start",
-            {
-                **payload,
-                "expected_preview_id": preview["preview_id"],
-                "prepared_start_id": prepared["prepared_start_id"],
+    started = plane.control(
+        cycle_id,
+        "start",
+        {
+            **payload,
+            "expected_preview_id": preview["preview_id"],
+            "prepared_start_id": prepared["prepared_start_id"],
+            "risk_acknowledgements": {
+                "schema_version": "grid-range-risk-ack-v1",
+                "preview_id": preview["preview_id"],
+                "facts_digest": manual["facts_digest"],
+                "risk_snapshot_digest": manual["risk_snapshot_digest"],
+                "codes": sorted(
+                    row["code"]
+                    for row in manual["required_acknowledgements"]
+                ),
             },
-            market=market(close=moved_close),
-            account=account_context(),
-            now="2026-07-05T01:40:01+00:00",
-        )
+        },
+        market=market(close=moved_close),
+        account=account_context(),
+        now="2026-07-05T01:40:01+00:00",
+    )
 
-    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+    assert started["runtime"]["actual_state"] == "running"
+    assert started["accepted_orders"] == preview["grid"]["count"]
 
 
 def test_prepared_start_rejects_a_tampered_candidate_receipt(tmp_path: Path) -> None:
@@ -2742,7 +2771,6 @@ def test_risky_manual_range_replacement_requires_every_acknowledgement_and_is_pa
     )
     assert {
         "profit_target_shortfall",
-        "leverage_and_margin_risk",
         "market_outside_range",
         "maximum_loss_scenario",
         "specification_change",

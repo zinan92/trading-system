@@ -783,8 +783,30 @@ def build_adaptive_grid_preview(
     if "range" not in locks:
         body.pop("range", None)
 
+    current_count = int(number_or(solver.get("current_grid_count"), preferred_max))
+    current_direction = str(solver.get("current_direction") or direction).lower()
+    direction_changed = (
+        current_direction in GRID_DIRECTIONS
+        and direction in GRID_DIRECTIONS
+        and current_direction != direction
+    )
+    if current_direction == "neutral" and direction in {"long", "short"}:
+        current_count = math.ceil(current_count / 2)
+    elif current_direction in {"long", "short"} and direction == "neutral":
+        current_count *= 2
+    current_count = max(
+        ADAPTIVE_MIN_GRID_COUNT,
+        min(ADAPTIVE_MAX_GRID_COUNT, current_count),
+    )
+
     if "grid_count" in locks:
         counts = [requested_count]
+    elif direction_changed:
+        # A direction click has an explicit geometric meaning: preserve the
+        # current density, mapping neutral to one executable side (and back).
+        # Capital/profit deviations are surfaced as flags rather than silently
+        # changing the user's 39 -> 20 expectation into another grid count.
+        counts = [current_count]
     else:
         counts = list(range(preferred_max, ADAPTIVE_MIN_GRID_COUNT - 1, -1))
 
@@ -897,14 +919,6 @@ def build_adaptive_grid_preview(
         if precision_error is not None:
             raise precision_error
         raise ValueError("no executable grid candidate could be generated")
-
-    current_count = int(number_or(solver.get("current_grid_count"), preferred_max))
-    current_direction = str(solver.get("current_direction") or direction).lower()
-    if current_direction == "neutral" and direction in {"long", "short"}:
-        current_count = math.ceil(current_count / 2)
-    elif current_direction in {"long", "short"} and direction == "neutral":
-        current_count *= 2
-    current_count = max(ADAPTIVE_MIN_GRID_COUNT, current_count)
 
     def candidate_score(row: dict[str, Any]) -> tuple[float, ...]:
         row_count = int(row["grid"]["count"])

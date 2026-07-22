@@ -334,6 +334,49 @@ def test_grid_count_outside_operating_band_fails_closed(grid_count: int) -> None
     )
 
 
+@pytest.mark.parametrize("direction", ["long", "short"])
+@pytest.mark.parametrize("grid_count", [15, 20, 35])
+def test_single_side_grid_count_uses_executable_half_band(
+    direction: str,
+    grid_count: int,
+) -> None:
+    candidate = plan()
+    candidate["direction"] = direction
+    candidate["grid"]["count"] = grid_count
+
+    decision = PaperGridRiskDecisionPort().evaluate(request(plan_value=candidate))
+
+    assert not any(
+        row["code"] == "candidate_grid_count_out_of_bounds"
+        for row in decision.to_dict()["blockers"]
+    )
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+@pytest.mark.parametrize("grid_count", [14, 36])
+def test_single_side_grid_count_outside_half_band_still_fails_closed(
+    direction: str,
+    grid_count: int,
+) -> None:
+    candidate = plan()
+    candidate["direction"] = direction
+    candidate["grid"]["count"] = grid_count
+
+    decision = PaperGridRiskDecisionPort().evaluate(request(plan_value=candidate))
+
+    blocker_row = next(
+        row
+        for row in decision.to_dict()["blockers"]
+        if row["code"] == "candidate_grid_count_out_of_bounds"
+    )
+    assert blocker_row["evidence"] == {
+        "count": grid_count,
+        "direction": direction,
+        "minimum": 15,
+        "maximum": 35,
+    }
+
+
 def test_missing_policy_limit_blocks_instead_of_disabling_the_rule() -> None:
     invalid_config = config()
     invalid_config["strategy_grid"]["min_net_profit_per_grid_usd"] = -1

@@ -170,6 +170,18 @@ class PaperGridRiskDecisionPort:
         min_grid_count = _positive_integer(policy.get("min_grid_count"))
         max_grid_count = _positive_integer(policy.get("max_grid_count"))
         if candidate_kind == "strategy_plan_grid":
+            direction = str(candidate.get("direction") or "neutral").lower()
+            if direction in {"long", "short"}:
+                min_grid_count = (
+                    max(2, math.ceil(min_grid_count / 2))
+                    if min_grid_count is not None
+                    else None
+                )
+                max_grid_count = (
+                    max(2, math.ceil(max_grid_count / 2))
+                    if max_grid_count is not None
+                    else None
+                )
             raw_grid_count = candidate.get("grid_count")
             grid_count = _positive_integer(raw_grid_count)
             if (
@@ -185,6 +197,7 @@ class PaperGridRiskDecisionPort:
                         "candidate grid count is outside the configured operating band",
                         {
                             "count": raw_grid_count,
+                            "direction": direction,
                             "minimum": min_grid_count,
                             "maximum": max_grid_count,
                         },
