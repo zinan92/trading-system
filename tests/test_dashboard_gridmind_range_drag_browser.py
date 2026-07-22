@@ -379,11 +379,24 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
                 path=str(Path(artifact_dir) / "issue-66-replacement-card.png"),
                 full_page=True,
             )
-        assert page.locator("#executeGridRangeReplacement").inner_text() == (
-            "停止+平仓+撤单+交易新网格"
-        )
+        assert page.locator("#executeGridRangeReplacement").inner_text() == "确认"
+        assert page.locator("#executeGridRangeReplacement").evaluate(
+            "button => button.classList.contains('confirmed')"
+        ) is True
+        assert "rgb(47, 191, 113)" in page.locator(
+            "#executeGridRangeReplacement"
+        ).evaluate("button => getComputedStyle(button).backgroundColor")
         page.locator("#executeGridRangeReplacement").click()
         page.wait_for_function("() => state.gridAdjustMode === false")
+        assert page.locator("#gridRangeReviewDialog").evaluate(
+            "dialog => dialog.open"
+        ) is False
+        page.locator(".trade-toast").filter(has_text="新参数已确认").wait_for(
+            state="visible"
+        )
+        assert "机器人正在运行" in page.locator(".trade-toast").filter(
+            has_text="新参数已确认"
+        ).inner_text()
         assert len(control_requests) == 2
         assert control_requests[1]["action"] == "replace_grid"
         assert control_requests[1]["expected_preview_id"] == (
@@ -440,6 +453,13 @@ def test_gridmind_risky_range_requires_every_human_confirmation() -> None:
     def fulfill_control(route) -> None:
         body = route.request.post_data_json
         control_requests.append(body)
+        if body.get("action") == "replace_grid":
+            route.fulfill(
+                status=409,
+                content_type="application/json",
+                body=json.dumps({"error": "strategy_plan_changed"}),
+            )
+            return
         route.fulfill(
             status=200,
             content_type="application/json",
@@ -479,6 +499,7 @@ def test_gridmind_risky_range_requires_every_human_confirmation() -> None:
         for checkbox in page.locator("[data-grid-risk-ack]").all():
             checkbox.check()
         assert page.locator("#executeGridRangeReplacement").is_enabled()
+        assert page.locator("#executeGridRangeReplacement").inner_text() == "确认"
         assert page.locator("#gridRangeGate").inner_text().startswith(
             "高风险参数已逐项确认"
         )
@@ -491,7 +512,15 @@ def test_gridmind_risky_range_requires_every_human_confirmation() -> None:
                 full_page=True,
             )
         page.locator("#executeGridRangeReplacement").click()
-        page.wait_for_function("() => state.gridAdjustMode === false")
+        page.wait_for_function("() => state.gridReplacementPending === false")
+        assert page.evaluate("() => state.gridAdjustMode") is True
+        assert page.locator("#gridRangeReviewDialog").evaluate(
+            "dialog => dialog.open"
+        ) is True
+        assert "替换网格未完成" in page.locator("#actionStatus").inner_text()
+        assert page.locator(".trade-toast").filter(
+            has_text="新参数已确认"
+        ).count() == 0
         assert control_requests[-1]["action"] == "replace_grid"
         assert control_requests[-1]["risk_acknowledgements"]["codes"] == [
             "leverage_and_margin_risk",

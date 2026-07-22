@@ -9110,3 +9110,27 @@ auditable datafeed port; broker execution remains a separate port.
 - Control-plane, audit, read-model API, static dashboard, and Playwright
   start-flow tests: 125 passed.
 - Python compilation and `git diff --check` passed.
+
+## 2026-07-22 - Explicit final commit after risk acknowledgement
+
+### Decision
+
+- Keep the last checkbox as acknowledgement only. The destructive Paper
+  replacement still requires one deliberate final click.
+- Once every required acknowledgement is checked, change the final CTA to a
+  positive green `确认` button. Before that point it remains disabled and names
+  the destructive operation it is protecting.
+- On confirmed success, close the review dialog and show the existing top-right
+  notification with `新参数已确认` and `机器人正在运行`. On failure, keep the
+  review available and never render a success notification.
+
+### Gotchas
+
+- Automatically executing when the last checkbox changes would turn a review
+  control into an order action and make accidental clicks irreversible.
+- Dialog closure is proof only of a successful server response (or reconciled
+  success), not of button activation. A 4xx response must leave the draft and
+  review context recoverable.
+- This changes presentation and completion feedback only. The existing atomic
+  stop, flatten, cancel, plan-version and risk revalidation contract remains the
+  execution authority.
