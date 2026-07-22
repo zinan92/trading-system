@@ -681,9 +681,18 @@ class StrategyControlPlane:
         if solver.get("mode") != "manual_adaptive":
             return preview
         current = self.active_plan(cycle_id)
-        if not current:
-            raise ValueError("cannot preview start without an active StrategyPlan")
-        candidate_plan = self._plan_from_preview(current, preview, now=now)
+        # A new cycle has no active plan until the operator confirms a start.
+        # Previewing must remain read-only, so use an in-memory seed rather than
+        # auto-locking a StrategyPlan merely because the operator clicked the
+        # smart-fill button.
+        preview_seed = current or {
+            "schema_version": PLAN_SCHEMA,
+            "cycle_id": cycle_id,
+            "version": 0,
+            "risk_budget": {},
+            "field_sources": {},
+        }
+        candidate_plan = self._plan_from_preview(preview_seed, preview, now=now)
         timestamp = _timestamp(now)
         commands = build_plan_grid_entry_commands(candidate_plan, timestamp=timestamp)
         adapter = build_configured_execution_engine_adapter(
@@ -756,7 +765,7 @@ class StrategyControlPlane:
                 },
             })
             detailed_codes.add(code)
-        old_specification = _range_preview_specification(current)
+        old_specification = _range_preview_specification(current or preview)
         new_specification = _range_preview_specification(
             preview,
             canonical_metrics=decision.get("metrics"),
