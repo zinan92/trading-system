@@ -46,7 +46,18 @@ def _market_page(*, count: int, start: datetime, historical: bool) -> dict:
     }
 
 
-def test_gridmind_pan_control_loads_beyond_initial_240_bars() -> None:
+@pytest.mark.parametrize(
+    ("input_name", "newer_delta", "older_delta"),
+    [
+        ("mouse-wheel", (0, -120), (0, 120)),
+        ("horizontal-trackpad", (120, 0), (-120, 0)),
+    ],
+)
+def test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars(
+    input_name: str,
+    newer_delta: tuple[int, int],
+    older_delta: tuple[int, int],
+) -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     live = _market_page(
         count=240,
@@ -101,12 +112,29 @@ def test_gridmind_pan_control_loads_beyond_initial_240_bars() -> None:
         assert "240 bars" in source.inner_text()
         for _ in range(12):
             page.locator('[data-action="pan-left"]').click()
+
+        chart = page.locator("#productionChart")
+        box = chart.bounding_box()
+        assert box is not None
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+        # Moving back toward newer candles at the oldest edge must not spend a
+        # historical request merely because a wheel event occurred.
+        page.mouse.wheel(*newer_delta)
+        page.wait_for_timeout(300)
+        assert history_requests == 0
+        assert "240 bars" in source.inner_text()
+
+        # A real wheel/trackpad movement toward older candles arms exactly one
+        # trusted historical page and preserves the fresh live snapshot fields.
+        page.mouse.wheel(*older_delta)
         page.locator("#chartHistoryNotice").filter(has_text="已向前加载 320 根").wait_for()
 
         assert history_requests == 1
         assert "560 bars" in source.inner_text()
+        assert "行情 blocked" not in page.locator("#gate").inner_text()
         artifact_dir = os.environ.get("GRID_HISTORY_SCREENSHOT_DIR")
-        if artifact_dir:
+        if artifact_dir and input_name == "mouse-wheel":
             path = Path(artifact_dir)
             path.mkdir(parents=True, exist_ok=True)
             page.screenshot(

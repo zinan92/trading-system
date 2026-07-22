@@ -8956,3 +8956,24 @@ auditable datafeed port; broker execution remains a separate port.
   drag could trigger it, while Park uses wheel/trackpad scrolling.
 - History remains display-only. A trusted historical page never becomes a
   fresh execution event and cannot reopen the new-entry gate.
+
+### Adversarial review correction
+
+- A wheel event alone is not sufficient proof of older-history intent. The
+  token now records the pre-input logical range and is consumed only when the
+  viewport actually moves toward older candles; reverse wheel/trackpad input
+  cannot spend a history request.
+- Browser coverage uses real vertical wheel and horizontal trackpad deltas in
+  both directions. Toolbar clicks are no longer an accidental proxy for wheel
+  intent.
+
+### Verification
+
+- Market/history JavaScript tests: 5 passed.
+- Static dashboard plus real-browser wheel/trackpad tests: 27 passed.
+- The browser starts at 240 bars, rejects reverse-direction input without a
+  request, then loads 320 trusted older bars and renders 560 total bars while
+  retaining the live market gate.
+- Browser evidence:
+  `docs/evidence/issue-99/issue-99-history-beyond-240.png`.
+- `git diff --check` passed.

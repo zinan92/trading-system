@@ -140,8 +140,10 @@ test("history loads when a right drag starts at the oldest fitted edge", () => {
 });
 
 test("wheel or trackpad input loads history only at the oldest edge", () => {
-  assert.equal(historyInputCanLoad({from: 24}, 2500, 2000), true);
-  assert.equal(historyInputCanLoad({from: -1}, 2500, 2000), true);
-  assert.equal(historyInputCanLoad({from: 25}, 2500, 2000), false);
-  assert.equal(historyInputCanLoad({from: 24}, 1500, 2000), false);
+  assert.equal(historyInputCanLoad({from: 20}, 2500, {from: 24}, 2000), true);
+  assert.equal(historyInputCanLoad({from: -2}, 2500, {from: -1}, 2000), true);
+  assert.equal(historyInputCanLoad({from: 25}, 2500, {from: 30}, 2000), false);
+  assert.equal(historyInputCanLoad({from: 24}, 2500, {from: 20}, 2000), false);
+  assert.equal(historyInputCanLoad({from: 24}, 2500, {from: 24}, 2000), false);
+  assert.equal(historyInputCanLoad({from: 20}, 1500, {from: 24}, 2000), false);
 });
