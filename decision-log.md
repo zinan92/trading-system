@@ -9776,3 +9776,32 @@ auditable datafeed port; broker execution remains a separate port.
 - The focused Chromium header regression covers the observed 14.18x-style
   acknowledged risk, the same blocked risk without acknowledgement, and an
   untrusted market. Only the exactly acknowledged running case stays green.
+
+## 2026-07-23 - Reject the DCA loop flag v1 cannot honor
+
+### Decision
+
+- `loop_enabled=true` is rejected at DCA validation instead of being accepted
+  as inert metadata. No v1 engine path ever starts another accumulation round,
+  so accepting the flag would advertise behavior that never executes. The
+  strategy summary now always reads 完成后停止 for DCA.
+- The read-model field is kept (always false) so a future looping milestone
+  can ship without a schema break.
+
+### Gotchas
+
+- The flag was previously accepted-and-ignored; a stored payload template
+  carrying `true` now fails preview with an explicit message instead of
+  silently running a non-looping round. That is the intended fail-closed
+  trade-off.
+- UI copy and engine behavior must change together when looping ships; the
+  validation error is the single gate that authorizes lifting this.
+
+### Verification
+
+- `test_dca_preview_rejects_ambiguous_or_unsafe_geometry` gained the
+  `loop_enabled=True` rejection case.
+- Focused DCA plan/lifecycle/control-plane/read-model suites green
+  (71 passed); the one static-dashboard failure is a pre-existing red test on
+  main (stale `actionStatus` assertion vs the control line deliberately
+  restored in #154) and is tracked separately.

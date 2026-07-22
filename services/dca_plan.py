@@ -69,6 +69,13 @@ def build_dca_preview(
     loop_enabled = settings.get("loop_enabled", False)
     if not isinstance(loop_enabled, bool):
         raise ValueError("DCA loop_enabled must be boolean")
+    if loop_enabled:
+        # No engine path starts another accumulation round in v1; accepting the
+        # flag would advertise behavior that never executes.
+        raise ValueError(
+            "DCA loop_enabled=true is not supported in v1; "
+            "the round stops after its aggregate TP/SL"
+        )
 
     entries: list[dict[str, Any]] = []
     for index, raw_price in enumerate(raw_levels[:max_additions], start=1):
