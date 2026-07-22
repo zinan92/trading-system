@@ -8812,3 +8812,46 @@ auditable datafeed port; broker execution remains a separate port.
 - Lifecycle tests need account headroom when intentionally adding edges. That
   is test setup for post-risk failure paths, not permission for production to
   bypass the 10x gate.
+
+## 2026-07-22 - Paper manual Range risk acknowledgement
+
+### Decision
+
+- Treat a deliberate Paper Range replacement as an operator decision, not an
+  automatic sizing decision. The final card shows every material old-to-new
+  specification, projected leverage and margin, planned profit per grid, and a
+  conservative maximum-loss scenario before execution.
+- Require a separate explicit acknowledgement for the specification change,
+  maximum loss, profit-target shortfall, leverage or margin excess, and market
+  outside Range whenever each condition applies. The backend validates the
+  exact acknowledgement set against the exact preview before staging orders.
+- Permit acknowledged overrides only through the `nautilus_paper` adapter.
+  Untrusted market data, reconciliation drift, and plan/order identity drift
+  remain non-overridable fail-closed conditions.
+
+### Gotchas
+
+- A checkbox is not proof by itself. Preview identity and every required code
+  are validated server-side. A digest binds the click to the displayed facts,
+  and a candidate-risk digest is rechecked during launch and crash recovery so
+  unchanged geometry cannot reuse consent after equity or policy facts move.
+- The maximum-loss estimate is a bounded grid scenario: all same-side entries
+  fill and exit at the planned stop one grid step outside the Range. New-plan
+  loss excludes positions that the replacement transaction flattens first; it
+  also excludes extreme gap slippage and funding, which the UI states.
+- Leverage and margin confirmations use the same post-flatten candidate basis
+  as the displayed new values. Pre-flatten exposure remains part of canonical
+  reconciliation, but cannot create a checkbox that contradicts the card.
+- Capital excess and profit shortfall are separate facts. A grid that still
+  earns at least the target cannot be shown a profit-shortfall acknowledgement
+  merely because its leverage or margin exceeds the automatic budget.
+- The central risk decision remains truthfully `blocked`; a distinct Paper-only
+  operator override authorizes execution. This avoids teaching other adapters
+  that an exceeded limit is globally safe.
+
+### Verification
+
+- Focused control-plane, static dashboard, and Playwright tests: 99 passed.
+- Dashboard Range JavaScript contract tests: 8 passed.
+- Python 3.9 compilation and `git diff --check` passed.
+- Browser evidence: `docs/evidence/issue-92/issue-92-risk-confirmation.png`.
