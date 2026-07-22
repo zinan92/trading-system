@@ -9198,3 +9198,28 @@ auditable datafeed port; broker execution remains a separate port.
 - At a 1614×900 browser viewport, the second-row start delta changed from
   57.5px to 0.5px while retaining all right-rail content.
 - Focused dashboard static tests: 26 passed; gitleaks found no leaks.
+
+## 2026-07-22 - Correct dashboard alignment target to column bottoms
+
+### Decision
+
+- Revert the desktop K-line height from 508px to its original 450px.
+- Make the desktop control rail use the left market column as its grid-track
+  height, with internal overflow for control content that exceeds that height.
+- Reset the rail height rules in the existing tablet breakpoint, where the
+  dashboard becomes a single-column layout.
+
+### Gotchas
+
+- The requested alignment was the bottom edge of the two complete columns,
+  not the boundary between their first and second cards.
+- A normal `height:100%` lets the control rail's intrinsic content define the
+  grid row and makes both columns unnecessarily tall. The `height:0` plus
+  `min-height:100%` grid pattern removes that intrinsic contribution while
+  retaining a scrollable rail exactly as tall as the left column.
+
+### Verification
+
+- Browser geometry with a 304px data panel measured identical 975.05px bottom
+  coordinates for both columns; responsive height overrides remain intact.
+- Focused dashboard static tests: 26 passed; gitleaks found no leaks.

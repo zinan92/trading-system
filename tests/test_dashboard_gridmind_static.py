@@ -113,11 +113,13 @@ def test_gridmind_mobile_layout_prevents_global_horizontal_overflow() -> None:
     assert ".console-wrap{max-width:100%;padding:7px}" in html
 
 
-def test_gridmind_desktop_chart_height_aligns_the_first_card_row() -> None:
+def test_gridmind_desktop_columns_align_at_the_bottom() -> None:
     html = _html()
 
-    assert ".chart{height:508px;min-height:320px}" in html
-    assert "StandardKlineChart(host,{height:508,minHeight:320" in html
+    assert ".control-rail{position:sticky;top:57px;height:0;min-height:100%;max-height:none;overflow:auto" in html
+    assert ".control-rail{position:static;height:auto;min-height:0;max-height:none;overflow:visible" in html
+    assert ".chart{height:450px;min-height:320px}" in html
+    assert "StandardKlineChart(host,{height:450,minHeight:320" in html
     assert ".chart{height:420px}" in html
     assert ".chart{height:340px}" in html
 
