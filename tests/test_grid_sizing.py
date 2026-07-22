@@ -79,7 +79,7 @@ def test_build_grid_preview_matches_control_plane_preview(tmp_path: Path) -> Non
     assert via_plane["preview_id"] == via_module["preview_id"]
 
 
-def test_direction_arms_sides_without_moving_range(tmp_path: Path) -> None:
+def test_direction_uses_only_its_executable_half_range_and_count(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     previews = {
         direction: grid_sizing.build_grid_preview(
@@ -88,11 +88,49 @@ def test_direction_arms_sides_without_moving_range(tmp_path: Path) -> None:
         )
         for direction in ("neutral", "long", "short")
     }
-    ranges = {d: (p["range"]["low"], p["range"]["high"]) for d, p in previews.items()}
-    assert len(set(ranges.values())) == 1, "direction must not move the market range"
+    neutral = previews["neutral"]
+    long = previews["long"]
+    short = previews["short"]
+    assert long["range"]["low"] == neutral["range"]["low"]
+    assert long["range"]["high"] == pytest.approx(market()["latest_close"])
+    assert short["range"]["low"] == pytest.approx(market()["latest_close"])
+    assert short["range"]["high"] == neutral["range"]["high"]
+    assert long["grid"]["count"] == (neutral["grid"]["count"] + 1) // 2
+    assert short["grid"]["count"] == (neutral["grid"]["count"] + 1) // 2
+    assert len(long["orders"]) == long["grid"]["count"]
+    assert len(short["orders"]) == short["grid"]["count"]
     assert {o["side"] for o in previews["long"]["orders"]} == {"buy"}
     assert {o["side"] for o in previews["short"]["orders"]} == {"sell"}
     assert {o["side"] for o in previews["neutral"]["orders"]} == {"buy", "sell"}
+
+
+def test_directional_odd_current_count_maps_39_to_20_in_adaptive_preview(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    payload = {
+        "direction": "long",
+        "style": "steady",
+        "grid": {"mode": "arithmetic"},
+        "solver": {
+            "mode": "manual_adaptive",
+            "locked": [],
+            "current_grid_count": 39,
+            "current_direction": "neutral",
+        },
+    }
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        payload,
+        market=market(),
+        account=account(),
+        config=plane.config,
+    )
+
+    assert preview["grid"]["count"] == 20
+    assert len(preview["orders"]) == 20
+    assert preview["range"]["high"] == pytest.approx(market()["latest_close"])
+    assert {order["side"] for order in preview["orders"]} == {"buy"}
 
 
 def test_auto_notional_uses_the_full_leverage_capacity_on_the_worst_side(tmp_path: Path) -> None:

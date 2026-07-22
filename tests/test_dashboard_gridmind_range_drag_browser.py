@@ -320,6 +320,40 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         assert third["high"] == second["high"]
         assert page.evaluate("() => state.gridDrag") is None
         assert control_requests == []
+        assert set(
+            page.locator(".grid-ghost-line").evaluate_all(
+                "lines => lines.map(line => line.dataset.gridSide)"
+            )
+        ) == {"buy", "sell"}
+        assert page.locator(".grid-ghost-line.split").count() == 1
+        page.evaluate(
+            """() => {
+              state.gridDraft.direction = "long";
+              renderGridAdjustOverlay();
+            }"""
+        )
+        assert set(
+            page.locator(".grid-ghost-line").evaluate_all(
+                "lines => lines.map(line => line.dataset.gridSide)"
+            )
+        ) == {"buy"}
+        page.evaluate(
+            """() => {
+              state.gridDraft.direction = "short";
+              renderGridAdjustOverlay();
+            }"""
+        )
+        assert set(
+            page.locator(".grid-ghost-line").evaluate_all(
+                "lines => lines.map(line => line.dataset.gridSide)"
+            )
+        ) == {"sell"}
+        page.evaluate(
+            """() => {
+              state.gridDraft.direction = "neutral";
+              renderGridAdjustOverlay();
+            }"""
+        )
         assert page.locator(".grid-draft-actions").is_visible()
         assert page.locator("#gridRangeReviewDialog").evaluate("dialog => dialog.open") is False
 

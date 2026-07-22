@@ -76,6 +76,22 @@ MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS = {
 }
 
 
+def _market_inside_source_envelope(
+    grid_range: dict[str, Any],
+    price: float,
+) -> bool:
+    """Validate ticks against the source envelope behind an executable Range."""
+
+    source = (
+        grid_range.get("source_envelope")
+        if isinstance(grid_range.get("source_envelope"), dict)
+        else grid_range
+    )
+    low = _positive_number(source.get("low"), "grid envelope low")
+    high = _positive_number(source.get("high"), "grid envelope high")
+    return low <= price <= high
+
+
 def paper_safe_action_market_mark_is_trusted(
     market: dict[str, Any] | None,
     *,
@@ -888,9 +904,12 @@ class StrategyControlPlane:
                 raise ValueError("prepared_start_market_moved")
         latest = _positive_number(market.get("latest_close"), "market latest_close")
         candidate_range = dict(preview.get("range") or {})
-        low = _positive_number(candidate_range.get("low"), "prepared range low")
-        high = _positive_number(candidate_range.get("high"), "prepared range high")
-        if not low <= latest <= high:
+        _positive_number(candidate_range.get("low"), "prepared range low")
+        _positive_number(candidate_range.get("high"), "prepared range high")
+        if not _market_inside_source_envelope(
+            candidate_range,
+            latest,
+        ):
             raise ValueError("prepared_start_market_moved")
         try:
             levels = sorted(

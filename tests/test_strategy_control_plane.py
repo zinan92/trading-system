@@ -653,10 +653,17 @@ def test_preview_direction_and_style_change_grid_geometry_and_order_sides(tmp_pa
     short = plane.preview(cycle_id, {"direction": "short", "style": "steady"}, market=market(), account=account)
     aggressive = plane.preview(cycle_id, {"direction": "neutral", "style": "aggressive"}, market=market(), account=account)
 
-    assert neutral["grid"]["count"] == long["grid"]["count"] == short["grid"]["count"] >= 24
+    assert long["grid"]["count"] == short["grid"]["count"] == (
+        neutral["grid"]["count"] + 1
+    ) // 2
     assert aggressive["grid"]["count"] >= 24
     assert neutral["range"]["high"] - neutral["range"]["low"] > aggressive["range"]["high"] - aggressive["range"]["low"]
-    assert neutral["range"] == long["range"] == short["range"]
+    assert long["range"]["low"] == neutral["range"]["low"]
+    assert long["range"]["high"] == market()["latest_close"]
+    assert short["range"]["low"] == market()["latest_close"]
+    assert short["range"]["high"] == neutral["range"]["high"]
+    assert len(long["orders"]) == long["grid"]["count"]
+    assert len(short["orders"]) == short["grid"]["count"]
     assert neutral["range"]["source_timeframe"] == "1d"
     assert neutral["grid"]["spacing_source_timeframe"] == "4h"
     assert {order["side"] for order in neutral["orders"]} == {"buy", "sell"}
