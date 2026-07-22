@@ -559,6 +559,9 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     raise ValueError("cannot scale a trade with the opposite entry side")
                 prior_units = float(existing.get("units", 0.0) or 0.0)
                 added_units = float(fill.get("pnl_units", 0.0) or 0.0)
+                added_remaining = float(
+                    fill.get("remaining_units", added_units) or 0.0
+                )
                 total_units = prior_units + added_units
                 if total_units <= _EPSILON:
                     raise ValueError("scaled entry units must be positive")
@@ -567,7 +570,11 @@ def _build_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     10,
                 )
                 existing["units"] = round(total_units, 10)
-                existing["remaining_units"] = round(float(existing.get("remaining_units", 0.0) or 0.0) + added_units, 10)
+                existing["remaining_units"] = round(
+                    float(existing.get("remaining_units", 0.0) or 0.0)
+                    + added_remaining,
+                    10,
+                )
                 existing["entry_cost"] = round(float(existing.get("entry_cost", 0.0) or 0.0) + float(fill.get("cost", 0.0) or 0.0), 8)
                 existing["realized_pnl"] = round(float(existing.get("realized_pnl", 0.0) or 0.0) + float(fill.get("realized_pnl", 0.0) or 0.0), 8)
                 existing.setdefault("entry_fills", []).append({
