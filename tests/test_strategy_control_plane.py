@@ -506,14 +506,20 @@ def test_prepared_start_rejects_price_that_crossed_a_grid_line(
 
 
 @pytest.mark.parametrize(
-    ("direction", "moved_close"),
-    [("long", 4_150.0), ("short", 4_125.0)],
+    ("direction", "moved_close", "inside_source_envelope"),
+    [
+        ("long", 4_150.0, True),
+        ("short", 4_125.0, True),
+        ("long", 4_500.0, False),
+        ("short", 3_800.0, False),
+    ],
 )
-def test_prepared_start_allows_non_entry_side_drift_inside_source_envelope(
+def test_prepared_start_allows_non_entry_side_drift_even_beyond_source_envelope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     direction: str,
     moved_close: float,
+    inside_source_envelope: bool,
 ) -> None:
     output = tmp_path / "outputs"
     cycle_id = "2026-07-05_DAY"
@@ -557,7 +563,9 @@ def test_prepared_start_allows_non_entry_side_drift_inside_source_envelope(
     )
     preview = prepared["preview"]
     source_envelope = preview["range"]["source_envelope"]
-    assert source_envelope["low"] < moved_close < source_envelope["high"]
+    assert (
+        source_envelope["low"] < moved_close < source_envelope["high"]
+    ) is inside_source_envelope
     assert not preview["range"]["low"] < moved_close < preview["range"]["high"]
     manual = preview["manual_confirmation"]
 
@@ -924,6 +932,54 @@ def test_auto_notional_revalidates_against_start_market_while_manual_notional_re
     assert started["plan"]["grid"]["min_net_profit_per_grid_usd"] >= 10.0
     assert started["plan"]["grid"]["actual_leverage"] <= 10.0
     assert started["accepted_orders"] > 0
+
+
+@pytest.mark.parametrize(
+    ("direction", "range_low", "range_high", "expected_side"),
+    [
+        ("long", 3_900.0, 4_000.0, "buy"),
+        ("short", 4_200.0, 4_300.0, "sell"),
+    ],
+)
+def test_directional_preview_outside_range_on_non_entry_side_is_not_a_blocker(
+    tmp_path: Path,
+    direction: str,
+    range_low: float,
+    range_high: float,
+    expected_side: str,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    payload = {
+        "direction": direction,
+        "style": "steady",
+        "range": {"low": range_low, "high": range_high},
+        "grid": {"mode": "arithmetic", "count": 30},
+        "solver": {
+            "mode": "manual_adaptive",
+            "locked": ["range", "grid_count"],
+        },
+    }
+
+    preview = plane.control(
+        cycle_id,
+        "preview",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+    )["preview"]
+
+    assert preview["range"]["low"] == range_low
+    assert preview["range"]["high"] == range_high
+    assert {row["side"] for row in preview["orders"]} == {expected_side}
+    assert "market_price_outside_range" not in {
+        row["code"] for row in preview["solver"]["risk_flags"]
+    }
+    assert "market_price_outside_range" not in preview[
+        "manual_confirmation"
+    ]["overridable_blocker_codes"]
 
 
 def test_preview_fails_closed_without_fixed_strategy_timeframes(tmp_path: Path) -> None:
@@ -3030,10 +3086,10 @@ def test_risky_manual_range_replacement_requires_every_acknowledgement_and_is_pa
     )
     assert {
         "profit_target_shortfall",
-        "market_outside_range",
         "maximum_loss_scenario",
         "specification_change",
     } <= set(required_codes)
+    assert "market_outside_range" not in required_codes
     with pytest.raises(ValueError, match="paper-only"):
         strategy_control_plane_module._require_acknowledged_paper_grid_risk(
             preview["canonical_risk"]["new"],
@@ -3123,7 +3179,7 @@ def test_risky_manual_range_replacement_requires_every_acknowledgement_and_is_pa
     assert replaced["plan"]["range"]["high"] == 99.0
     override = replaced["risk_decision"]["operator_override"]
     assert override["scope"] == "paper_only"
-    assert "market_price_outside_range" in override["overridden_blocker_codes"]
+    assert "market_price_outside_range" not in override["overridden_blocker_codes"]
     persisted = replaced["plan"]["replacement_request"]["risk_acknowledgement"]
     assert persisted["acknowledgement_codes"] == required_codes
 

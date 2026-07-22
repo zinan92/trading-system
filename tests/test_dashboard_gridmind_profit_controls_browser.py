@@ -728,17 +728,18 @@ def test_gridmind_start_surfaces_audited_stale_market_after_safe_prepare_retry()
         page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
 
         page.locator("#startRobot").click()
-        toast = page.locator(".trade-toast").filter(
+        dialog = page.locator("#startFailureDialog[open]").filter(
             has_text="启动瞬间实时行情暂时过期"
         )
-        toast.wait_for()
+        dialog.wait_for()
 
         assert [row["action"] for row in requests] == [
             "prepare_start",
             "prepare_start",
         ]
-        assert "HTTP 502" not in toast.inner_text()
-        assert "生产状态没有改变" in toast.inner_text()
+        assert "HTTP 502" not in dialog.inner_text()
+        assert "生产状态没有改变" in dialog.inner_text()
+        assert page.locator(".trade-toast").filter(has_text="操作未完成").count() == 0
         assert page.evaluate("state.preparedStartId") is None
         assert model["runtime"]["actual_state"] == "stopped"
         browser.close()
@@ -814,11 +815,15 @@ def test_gridmind_start_does_not_retry_orders_and_surfaces_audited_market_move()
         page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
 
         page.locator("#startRobot").click()
-        toast = page.locator(".trade-toast").filter(has_text="行情已跨越网格线")
-        toast.wait_for()
+        dialog = page.locator("#startFailureDialog[open]").filter(
+            has_text="行情已跨越网格线"
+        )
+        dialog.wait_for()
 
         assert [row["action"] for row in requests] == ["prepare_start", "start"]
-        assert "HTTP 502" not in toast.inner_text()
+        assert "HTTP 502" not in dialog.inner_text()
+        assert "生产状态没有改变" in dialog.inner_text()
+        assert page.locator(".trade-toast").filter(has_text="操作未完成").count() == 0
         assert page.evaluate("state.preparedStartId") is None
         assert model["runtime"]["actual_state"] == "stopped"
         browser.close()

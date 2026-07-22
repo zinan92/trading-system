@@ -33,6 +33,10 @@ from services.grid_sizing import (
     validate_market as _validate_market,
     positive_number as _positive_number,
 )
+from services.grid_marketability import (
+    market_is_on_non_entry_side,
+    market_outside_range_requires_blocker,
+)
 from services.grid_range_adjustment import (
     build_dragged_range,
     build_range_extension,
@@ -943,9 +947,15 @@ class StrategyControlPlane:
         candidate_range = dict(preview.get("range") or {})
         low = _positive_number(candidate_range.get("low"), "prepared range low")
         high = _positive_number(candidate_range.get("high"), "prepared range high")
-        if not _market_inside_source_envelope(
-            candidate_range,
-            latest,
+        direction = str(preview.get("direction") or "neutral").lower()
+        if market_outside_range_requires_blocker(
+            direction=direction,
+            market_price=latest,
+            range_low=low,
+            range_high=high,
+        ) or (
+            not _market_inside_source_envelope(candidate_range, latest)
+            and not market_is_on_non_entry_side(direction, latest, low, high)
         ):
             raise ValueError("prepared_start_market_moved")
         try:
@@ -959,7 +969,6 @@ class StrategyControlPlane:
             )
         except (TypeError, ValueError, OverflowError):
             raise ValueError("prepared_start_changed")
-        direction = str(preview.get("direction") or "neutral").lower()
         same_grid_cell = bool(levels) and bisect_right(
             levels,
             prepared_price,
@@ -2267,10 +2276,15 @@ class StrategyControlPlane:
         manual_override = _staged_manual_range_override(staged)
         latest_price = _positive_number(market.get("latest_close"), "market latest_close")
         candidate_range = dict(staged.get("range") or {})
-        if not (
-            _positive_number(candidate_range.get("low"), "replacement range low")
-            <= latest_price
-            <= _positive_number(candidate_range.get("high"), "replacement range high")
+        if market_outside_range_requires_blocker(
+            direction=str(staged.get("direction") or "neutral"),
+            market_price=latest_price,
+            range_low=_positive_number(
+                candidate_range.get("low"), "replacement range low"
+            ),
+            range_high=_positive_number(
+                candidate_range.get("high"), "replacement range high"
+            ),
         ) and not _manual_override_allows(
             manual_override,
             "market_price_outside_range",
@@ -2488,10 +2502,15 @@ class StrategyControlPlane:
         manual_override = _staged_manual_range_override(staged)
         latest_price = _positive_number(market.get("latest_close"), "market latest_close")
         candidate_range = dict(staged.get("range") or {})
-        if not (
-            _positive_number(candidate_range.get("low"), "replacement range low")
-            <= latest_price
-            <= _positive_number(candidate_range.get("high"), "replacement range high")
+        if market_outside_range_requires_blocker(
+            direction=str(staged.get("direction") or "neutral"),
+            market_price=latest_price,
+            range_low=_positive_number(
+                candidate_range.get("low"), "replacement range low"
+            ),
+            range_high=_positive_number(
+                candidate_range.get("high"), "replacement range high"
+            ),
         ) and not _manual_override_allows(
             manual_override,
             "market_price_outside_range",

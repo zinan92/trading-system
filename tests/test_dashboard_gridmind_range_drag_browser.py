@@ -10,6 +10,9 @@ import pytest
 
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
+from tests.test_dashboard_gridmind_profit_controls_browser import (
+    _preview as _startup_preview,
+)
 
 
 def _bars(timeframe: str) -> dict:
@@ -575,6 +578,105 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         assert page.evaluate("() => state.gridDraft") is None
         assert len(control_requests) == before_pan_requests
         assert browser_errors == []
+        browser.close()
+
+
+def test_gridmind_stopped_robot_can_apply_or_cancel_chart_range_before_start() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_124.0)
+    model["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "can_start_when_authorized": True,
+        "can_stop_when_authorized": False,
+    })
+    model["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+    control_requests: list[dict] = []
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        control_requests.append(body)
+        assert body["action"] == "preview"
+        response = _startup_preview()
+        response["preview"]["direction"] = body["direction"]
+        response["preview"]["range"] = deepcopy(body["range"])
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(response, ensure_ascii=False),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - local browser dependency
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model, ensure_ascii=False),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(_bars("30m")),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+
+        toggle = page.locator("#gridAdjustToggle")
+        assert toggle.is_enabled()
+        original = page.evaluate(
+            "() => ({low:Number(rangeLow.value),high:Number(rangeHigh.value)})"
+        )
+        toggle.click()
+        assert page.evaluate("() => state.gridDraft.scope") == "startup"
+        page.evaluate(
+            """() => {
+              state.gridDraft.low = 4_000;
+              state.gridDraft.high = 4_118;
+              state.gridDraft.dirty = true;
+              renderGridAdjustOverlay();
+            }"""
+        )
+        page.locator('[data-grid-action="cancel"]').click()
+        assert page.evaluate(
+            "() => ({low:Number(rangeLow.value),high:Number(rangeHigh.value)})"
+        ) == original
+        assert control_requests == []
+
+        toggle.click()
+        page.evaluate(
+            """() => {
+              state.gridDraft.low = 4_000;
+              state.gridDraft.high = 4_118;
+              state.gridDraft.dirty = true;
+              renderGridAdjustOverlay();
+            }"""
+        )
+        assert page.locator('[data-grid-action="confirm"]').inner_text() == "应用参数"
+        page.locator('[data-grid-action="confirm"]').click()
+        page.wait_for_function(
+            "() => state.gridAdjustMode === false && Number(rangeLow.value) === 4000"
+        )
+        assert [row["action"] for row in control_requests] == ["preview"]
+        assert control_requests[0]["range"] == {"low": 4_000, "high": 4_118}
+        assert "range" in control_requests[0]["solver"]["locked"]
+        assert model["execution"]["counts"]["open_order_count"] == 0
+        assert model["execution"]["counts"]["open_position_count"] == 0
         browser.close()
 
 
