@@ -153,7 +153,12 @@ test("chart wrapper surfaces TradingView-style OHLC and scale controls", () => {
 
   assert.match(source, /data-ohlc/);
   assert.match(source, /O \$\{formatPrice\(candle\.open,2\)\} H \$\{formatPrice\(candle\.high,2\)\} L \$\{formatPrice\(candle\.low,2\)\} C \$\{formatPrice\(candle\.close,2\)\}/);
-  assert.match(source, /\.standard-kline-crosshair:empty\{display:none\}/);
+  assert.match(source, /data-crosshair-time-axis/);
+  assert.match(source, /standard-kline-time-axis-label/);
+  assert.doesNotMatch(source, /data-crosshair-time><\/span>/);
+  assert.match(source, /subscribeCrosshairMove\?\.\(param => this\._setCrosshairTime\(param\)\)/);
+  assert.match(source, /target\.style\.left/);
+  assert.match(source, /target\.hidden = false/);
   assert.match(source, /@container \(max-width:720px\)\{\.standard-kline-source\{display:none\}\}/);
   assert.match(source, /data-action="auto-fit"/);
   assert.doesNotMatch(source, /data-action="toggle-log"/);

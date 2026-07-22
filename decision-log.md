@@ -8980,3 +8980,36 @@ auditable datafeed port; broker execution remains a separate port.
 - Browser evidence:
   `docs/evidence/issue-99/issue-99-history-beyond-240.png`.
 - `git diff --check` passed.
+
+## 2026-07-22 - Crosshair date-time on the bottom time axis
+
+### Decision
+
+- Remove the duplicate date-time text from the top toolbar and render one
+  TradingView-style label at the bottom of the chart, aligned to the vertical
+  crosshair's X coordinate.
+- The label uses the chart's configured timezone and locale, includes year,
+  date, hour, and minute, and leaves the top toolbar dedicated to OHLC/source.
+- Keep this behavior in the provider-neutral `standard-kline` package so every
+  consuming K-line view gets the same coordinate-axis interaction.
+
+### Gotchas
+
+- Lightweight Charts reports crosshair X in chart-container coordinates, not
+  page coordinates. The label must live inside the chart canvas and use that
+  local X value directly.
+- Near either edge, an exactly centered label would be clipped. Its center is
+  clamped inside a 72px safe inset while remaining visually attached to the
+  crosshair.
+- When the pointer leaves a valid time point, both the label and its stale
+  text must be cleared; OHLC safely returns to the latest candle.
+
+### Verification
+
+- `standard-kline` focused unit tests: 21 passed.
+- Browser interaction test: 1 passed; the full date-time label follows the
+  crosshair on the bottom axis, the top duplicate is absent, and the label
+  clears after pointer exit.
+- Browser evidence:
+  `docs/evidence/issue-100/issue-100-crosshair-time-axis.png`.
+- `git diff --check` passed.
