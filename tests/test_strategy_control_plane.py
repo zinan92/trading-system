@@ -110,8 +110,6 @@ def safe_grid(direction: str = "neutral", style: str = "steady") -> dict:
     return {
         "direction": direction,
         "style": style,
-        "grid": {"notional_per_grid": 400.0, "notional_mode": "manual"},
-        "risk_budget": {"leverage": 2.0},
     }
 
 
@@ -358,6 +356,10 @@ def test_start_commits_plan_and_real_versioned_paper_orders_idempotently(tmp_pat
     assert started["created_orders"] == len(orders) > 0
     assert started["plan"]["direction"] == "short"
     assert started["plan"]["version"] == 2
+    assert started["plan"]["grid"]["min_net_profit_per_grid_usd"] >= 10.0
+    assert started["plan"]["grid"]["target_net_profit_per_grid_usd"] == 10.0
+    assert started["plan"]["grid"]["actual_leverage"] == started["preview"]["risk"]["actual_leverage"]
+    assert started["plan"]["risk_budget"]["actual_leverage"] == started["preview"]["risk"]["actual_leverage"]
     assert all(order["state"] == "accepted" for order in orders)
     assert all(order["side"] == "sell" for order in orders)
     assert all(order["strategy_plan_id"] == started["plan"]["strategy_plan_id"] for order in orders)
@@ -1616,7 +1618,7 @@ def test_range_boundary_preview_recomputes_spacing_without_resizing_orders(
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
     payload = safe_grid("neutral", "steady")
-    payload["grid"]["mode"] = "geometric"
+    payload["grid"] = {"mode": "geometric"}
     started = plane.control(
         cycle_id,
         "start",
@@ -1690,33 +1692,29 @@ def test_range_preview_blocks_over_budget_without_silent_notional_recalculation(
     assert result["new"]["notional_per_grid"] == plan["grid"]["notional_per_grid"]
     assert result["can_apply"] is False
     assert result["confirm_disabled_reasons"]
-    assert result["risk_recalculation"]["available"] is True
+    assert result["risk_recalculation"]["available"] is False
+    assert result["risk_recalculation"]["reason"] == "profit_target_requires_grid_geometry_or_capital_change"
     assert result["risk_recalculation"]["applied_automatically"] is False
     assert 0 < result["risk_recalculation"]["notional_per_grid"] < result["new"]["notional_per_grid"]
 
-    recalculated = plane.control(
-        cycle_id,
-        "preview_range",
-        {
-            "expected_strategy_plan_id": plan["strategy_plan_id"],
-            "expected_strategy_plan_version": plan["version"],
-            "handle": "upper",
-            "range": {
-                "low": plan["range"]["low"],
-                "high": float(plan["range"]["high"]) + 25.0,
+    with pytest.raises(ValueError, match="risk notional recalculation is unavailable"):
+        plane.control(
+            cycle_id,
+            "preview_range",
+            {
+                "expected_strategy_plan_id": plan["strategy_plan_id"],
+                "expected_strategy_plan_version": plan["version"],
+                "handle": "upper",
+                "range": {
+                    "low": plan["range"]["low"],
+                    "high": float(plan["range"]["high"]) + 25.0,
+                },
+                "recalculate_notional_by_risk_budget": True,
             },
-            "recalculate_notional_by_risk_budget": True,
-        },
-        market=market(),
-        account=account_context(1_000.0),
-        now="2026-07-05T01:42:01+00:00",
-    )["preview"]
-    assert recalculated["risk_recalculation"]["applied_to_preview"] is True
-    assert recalculated["new"]["notional_per_grid"] == pytest.approx(
-        result["risk_recalculation"]["notional_per_grid"],
-        abs=0.01,
-    )
-    assert recalculated["side_effects"]["orders_created"] == 0
+            market=market(),
+            account=account_context(1_000.0),
+            now="2026-07-05T01:42:01+00:00",
+        )
 
 
 def test_range_preview_fails_closed_for_stale_identity_or_market_outside_range(
@@ -1880,7 +1878,7 @@ def test_range_preview_old_and_new_risk_share_current_canonical_accounting(
     assert result["new"]["actual_leverage"] == new_metrics["projected_actual_leverage"]
 
 
-def test_range_risk_recalculation_clears_projected_margin_and_leverage_blockers(
+def test_range_risk_recalculation_cannot_silently_reduce_profit_target_grid(
     tmp_path: Path,
 ) -> None:
     output = tmp_path / "outputs"
@@ -1889,7 +1887,6 @@ def test_range_risk_recalculation_clears_projected_margin_and_leverage_blockers(
     saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
     plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
     payload = safe_grid("neutral", "steady")
-    payload["risk_budget"]["leverage"] = 10.0
     started = plane.control(
         cycle_id,
         "start",
@@ -1937,21 +1934,17 @@ def test_range_risk_recalculation_clears_projected_margin_and_leverage_blockers(
         row["code"] for row in blocked["canonical_risk"]["new"]["blockers"]
     }
     assert {"projected_margin_exceeded", "projected_leverage_exceeded"} <= blocker_codes
-    assert blocked["risk_recalculation"]["available"] is True
+    assert blocked["risk_recalculation"]["available"] is False
 
-    recalculated = plane.control(
-        cycle_id,
-        "preview_range",
-        {**request, "recalculate_notional_by_risk_budget": True},
-        market=market(),
-        account=account_context(800.0),
-        now="2026-07-05T01:42:01+00:00",
-    )["preview"]
-    assert recalculated["risk_recalculation"]["applied_to_preview"] is True
-    assert recalculated["can_apply"] is True
-    assert not {
-        row["code"] for row in recalculated["canonical_risk"]["new"]["blockers"]
-    } & {"projected_margin_exceeded", "projected_leverage_exceeded"}
+    with pytest.raises(ValueError, match="risk notional recalculation is unavailable"):
+        plane.control(
+            cycle_id,
+            "preview_range",
+            {**request, "recalculate_notional_by_risk_budget": True},
+            market=market(),
+            account=account_context(800.0),
+            now="2026-07-05T01:42:01+00:00",
+        )
 
 
 def test_range_risk_recalculation_is_unavailable_when_open_loss_uses_budget(

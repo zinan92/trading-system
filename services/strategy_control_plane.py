@@ -795,12 +795,13 @@ class StrategyControlPlane:
         commands, risk_decision = evaluate_candidate(candidate)
         local_risk = dict(candidate.get("risk") or {})
         local_budget_blocked = bool(
-            local_risk.get("risk_budget_exceeded")
+            local_risk.get("profit_target_met") is not True
             or local_risk.get("capital_budget_exceeded")
         )
         blockers = list(risk_decision.get("blockers") or [])
         budget_blocker_codes = {
-            "plan_loss_budget_exceeded",
+            "grid_profit_target_not_met",
+            "required_leverage_mismatch",
             "leverage_limit_exceeded",
             "projected_leverage_exceeded",
             "projected_margin_exceeded",
@@ -862,7 +863,7 @@ class StrategyControlPlane:
             )
             trial_local_risk = dict(trial_candidate.get("risk") or {})
             trial_local_blocked = bool(
-                trial_local_risk.get("risk_budget_exceeded")
+                trial_local_risk.get("profit_target_met") is not True
                 or trial_local_risk.get("capital_budget_exceeded")
             )
         recalculation_available = bool(
@@ -879,7 +880,7 @@ class StrategyControlPlane:
             risk_decision = dict(trial_decision or {})
             local_risk = dict(candidate.get("risk") or {})
             local_budget_blocked = bool(
-                local_risk.get("risk_budget_exceeded")
+                local_risk.get("profit_target_met") is not True
                 or local_risk.get("capital_budget_exceeded")
             )
             blockers = list(risk_decision.get("blockers") or [])
@@ -913,12 +914,17 @@ class StrategyControlPlane:
                 if isinstance(row, dict)
             ]
             + (
-                ["preview_risk_budget_exceeded"]
+                ["preview_profit_or_capital_target_not_met"]
                 if local_budget_blocked
                 else []
             ),
             "risk_recalculation": {
                 "available": recalculation_available and not recalculated,
+                "reason": (
+                    None
+                    if recalculation_available
+                    else "profit_target_requires_grid_geometry_or_capital_change"
+                ),
                 "applied_automatically": False,
                 "applied_to_preview": recalculated,
                 "original_notional_per_grid": notional,
@@ -3371,7 +3377,11 @@ class StrategyControlPlane:
             "direction": preview["direction"],
             "style": preview["style"],
             "range": dict(preview["range"]),
-            "grid": {**preview["grid"], "orders": [dict(order) for order in preview["orders"]]},
+            "grid": {
+                **preview["grid"],
+                "actual_leverage": preview["risk"]["actual_leverage"],
+                "orders": [dict(order) for order in preview["orders"]],
+            },
             "execution_context": {"market": dict(preview["market"])},
             "tp_sl": {
                 "mode": "per_grid",
@@ -3382,6 +3392,7 @@ class StrategyControlPlane:
             "risk_budget": {
                 **dict(current.get("risk_budget") or {}),
                 "leverage": preview["grid"]["leverage"],
+                "actual_leverage": preview["risk"]["actual_leverage"],
                 "max_loss": preview["risk"]["max_loss"],
                 "estimated_margin": preview["risk"]["estimated_margin"],
             },

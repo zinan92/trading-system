@@ -11,7 +11,14 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from services.grid_sizing import number_or, positive_number, preview_id, validate_market
+from services.grid_sizing import (
+    MAX_GRID_COUNT,
+    MIN_GRID_COUNT,
+    number_or,
+    positive_number,
+    preview_id,
+    validate_market,
+)
 
 
 DRAG_HANDLES = frozenset({"range", "lower", "upper", "draft"})
@@ -124,7 +131,11 @@ def build_range_extension(
 
     old_count = int(current_grid.get("count") or 0)
     old_levels = [float(value) for value in current_grid.get("levels") or []]
-    if old_count < 2 or old_count > 80 or len(old_levels) != old_count + 1:
+    if (
+        old_count < MIN_GRID_COUNT
+        or old_count > MAX_GRID_COUNT
+        or len(old_levels) != old_count + 1
+    ):
         raise ValueError("active grid geometry is invalid")
     if any(right <= left for left, right in zip(old_levels, old_levels[1:])):
         raise ValueError("active grid levels are not strictly increasing")
@@ -172,8 +183,10 @@ def build_range_extension(
     retained_levels = old_levels[lower_in:retained_stop]
     levels = [*lower_levels, *retained_levels, *upper_levels]
     count = len(levels) - 1
-    if count < 2 or count > 80:
-        raise ValueError("grid count must be between 2 and 80")
+    if count < MIN_GRID_COUNT or count > MAX_GRID_COUNT:
+        raise ValueError(
+            f"grid count must be between {MIN_GRID_COUNT} and {MAX_GRID_COUNT}"
+        )
     if any(right <= left for left, right in zip(levels, levels[1:])):
         raise ValueError("adjusted grid levels are not strictly increasing")
 

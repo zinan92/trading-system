@@ -29,12 +29,16 @@ CYCLE_ID = "2026-07-18_DAY"
 CHECKED_AT = "2026-07-18T01:00:00+00:00"
 
 
-def config(*, max_loss_pct: float = 0.10, max_leverage: float = 10.0) -> dict:
+def config(*, max_leverage: float = 10.0) -> dict:
     return {
         "capital_per_track_usd": 10_000.0,
         "max_leverage": max_leverage,
+        "cost_per_side_bp": 0.5,
         "strategy_grid": {
-            "max_plan_loss_pct": max_loss_pct,
+            "required_leverage": 10.0,
+            "min_net_profit_per_grid_usd": 10.0,
+            "min_grid_count": 30,
+            "max_grid_count": 70,
             "capital_utilization_cap": 1.0,
         },
     }
@@ -160,7 +164,7 @@ def reconciliation(*, status: str = "ok") -> dict:
     return {"status": status, "issues": [] if status == "ok" else [{"code": "drift"}]}
 
 
-def plan(*, notional: float = 1_000.0, leverage: float = 2.0, low: float = 90.0, high: float = 110.0) -> dict:
+def plan(*, notional: float = 1_000.0, leverage: float = 10.0, low: float = 90.0, high: float = 110.0) -> dict:
     return {
         "schema_version": "strategy-plan-v1",
         "strategy_plan_id": "plan-risk-1",
@@ -169,7 +173,7 @@ def plan(*, notional: float = 1_000.0, leverage: float = 2.0, low: float = 90.0,
         "preview_id": "preview-risk-1",
         "direction": "neutral",
         "range": {"low": low, "high": high},
-        "grid": {"mode": "arithmetic", "count": 2, "notional_per_grid": notional, "leverage": leverage},
+        "grid": {"mode": "arithmetic", "count": 30, "notional_per_grid": notional, "leverage": leverage},
         # These are deliberately not trusted by the risk adapter.
         "risk_budget": {"max_loss": 0.01, "estimated_margin": 0.01},
     }
@@ -290,8 +294,8 @@ def test_unknown_or_tampered_account_blocks_even_if_preview_top_level_equity_exi
     assert canonical_account_risk_state({"equity": 10_000.0})["status"] == "unknown"
 
 
-def test_plan_loss_is_recomputed_and_blocks_without_mutating_requested_notional() -> None:
-    candidate_plan = plan(notional=10_000.0, leverage=2.0, low=50.0, high=110.0)
+def test_plan_loss_is_recomputed_as_advisory_without_mutating_requested_notional() -> None:
+    candidate_plan = plan(notional=10_000.0, leverage=10.0, low=50.0, high=110.0)
     candidate_commands = commands(notional=10_000.0, low=50.0, high=110.0)
     before_plan = deepcopy(candidate_plan)
     before_commands = deepcopy(candidate_commands)
@@ -299,10 +303,10 @@ def test_plan_loss_is_recomputed_and_blocks_without_mutating_requested_notional(
     decision = PaperGridRiskDecisionPort().evaluate(request(plan_value=candidate_plan, command_rows=candidate_commands))
     payload = decision.to_dict()
 
-    assert decision.allow_exposure_increase is False
-    assert any(row["code"] == "plan_loss_budget_exceeded" for row in payload["blockers"])
-    assert payload["recommendation"]["requested_notional_per_grid"] == 10_000.0
-    assert payload["recommendation"]["recommended_notional_per_grid"] < 10_000.0
+    assert decision.allow_exposure_increase is True
+    assert not any(row["code"] == "plan_loss_budget_exceeded" for row in payload["blockers"])
+    assert any(row["code"] == "plan_max_loss_advisory" for row in payload["warnings"])
+    assert payload["metrics"]["projected_max_loss"] > 1_000.0
     assert payload["recommendation"]["applied_automatically"] is False
     assert candidate_plan == before_plan
     assert candidate_commands == before_commands
@@ -317,9 +321,22 @@ def test_market_range_and_execution_reconciliation_fail_closed() -> None:
     assert any(row["code"] == "execution_reconciliation_drift" for row in drifted.to_dict()["blockers"])
 
 
+@pytest.mark.parametrize("grid_count", [29, 71])
+def test_grid_count_outside_operating_band_fails_closed(grid_count: int) -> None:
+    candidate = plan()
+    candidate["grid"]["count"] = grid_count
+
+    decision = PaperGridRiskDecisionPort().evaluate(request(plan_value=candidate))
+
+    assert any(
+        row["code"] == "candidate_grid_count_out_of_bounds"
+        for row in decision.to_dict()["blockers"]
+    )
+
+
 def test_missing_policy_limit_blocks_instead_of_disabling_the_rule() -> None:
     invalid_config = config()
-    invalid_config["strategy_grid"].pop("max_plan_loss_pct")
+    invalid_config["strategy_grid"]["min_net_profit_per_grid_usd"] = -1
 
     decision = PaperGridRiskDecisionPort().evaluate(request(config_value=invalid_config))
 
@@ -517,10 +534,10 @@ def test_decision_recheck_rebuilds_state_and_rejects_stale_or_blocked_inputs() -
     changed = request(market_value=market(price=101.0))
     with pytest.raises(ValueError, match="stale"):
         assert_matching_risk_decision(port, original, changed)
-    with pytest.raises(ValueError, match="plan_loss_budget_exceeded"):
+    with pytest.raises(ValueError, match="projected_leverage_exceeded"):
         require_exposure_permission(port.evaluate(request(
-            plan_value=plan(notional=10_000.0, low=50.0),
-            command_rows=commands(notional=10_000.0, low=50.0),
+            plan_value=plan(notional=110_000.0, low=50.0),
+            command_rows=commands(notional=110_000.0, low=50.0),
         )))
 
 
@@ -621,7 +638,7 @@ def test_manual_entry_uses_exact_quantity_and_cannot_bypass_risk_with_source() -
 
 
 def test_manual_entry_blocks_budget_breach_and_existing_pending_entry() -> None:
-    expensive = PaperGridRiskDecisionPort().evaluate(manual_request(manual_command(notional=50_000.0))).to_dict()
+    expensive = PaperGridRiskDecisionPort().evaluate(manual_request(manual_command(notional=150_000.0))).to_dict()
     existing_order = {
         "order_id": "working-grid-order",
         "state": "accepted",
@@ -636,7 +653,7 @@ def test_manual_entry_blocks_budget_breach_and_existing_pending_entry() -> None:
         snapshot=execution_snapshot(orders=[existing_order]),
     )).to_dict()
 
-    assert "plan_loss_budget_exceeded" in {row["code"] for row in expensive["blockers"]}
+    assert "projected_leverage_exceeded" in {row["code"] for row in expensive["blockers"]}
     assert "existing_entry_orders_present" in {row["code"] for row in layered["blockers"]}
     assert expensive["recommendation"]["applied_automatically"] is False
 

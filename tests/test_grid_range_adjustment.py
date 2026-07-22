@@ -94,89 +94,153 @@ def geometric_plan() -> dict:
     }
 
 
-def test_arithmetic_edges_snap_to_whole_steps_without_changing_internal_orders() -> None:
+def arithmetic_operating_plan() -> dict:
     plan = arithmetic_plan()
+    levels = [float(price) for price in range(100, 133)]
+    current = 116.0
+    plan["range"] = {"low": levels[0], "high": levels[-1]}
+    plan["grid"].update(
+        {
+            "count": len(levels) - 1,
+            "levels": levels,
+            "spacing": 1.0,
+            "orders": [
+                {
+                    "preview_order_id": f"old-{index}",
+                    "side": "buy" if price < current else "sell",
+                    "event": "entry",
+                    "order_type": "limit",
+                    "price": price,
+                    "quantity": round(50.0 / price, 8),
+                    "notional": 50.0,
+                    "sl": 99.0 if price < current else 133.0,
+                    "tp": price + 1.0 if price < current else price - 1.0,
+                }
+                for index, price in enumerate(levels)
+                if price != current
+            ],
+        }
+    )
+    return plan
+
+
+def geometric_operating_plan() -> dict:
+    plan = geometric_plan()
+    ratio = 1.01
+    levels = [round(100.0 * ratio**index, 8) for index in range(33)]
+    current = levels[16]
+    plan["range"] = {"low": levels[0], "high": levels[-1]}
+    plan["grid"].update(
+        {
+            "count": len(levels) - 1,
+            "levels": levels,
+            "spacing": round((levels[-1] - levels[0]) / 32, 8),
+            "spacing_ratio": ratio,
+            "orders": [
+                {
+                    "preview_order_id": f"old-g-{index}",
+                    "side": "buy" if price < current else "sell",
+                    "event": "entry",
+                    "order_type": "limit",
+                    "price": price,
+                    "quantity": round(50.0 / price, 8),
+                    "notional": 50.0,
+                    "sl": round(levels[0] / ratio, 8) if price < current else round(levels[-1] * ratio, 8),
+                    "tp": levels[index + 1] if price < current else levels[index - 1],
+                }
+                for index, price in enumerate(levels)
+                if price != current
+            ],
+        }
+    )
+    return plan
+
+
+def test_arithmetic_edges_snap_to_whole_steps_without_changing_internal_orders() -> None:
+    plan = arithmetic_operating_plan()
     original_levels = deepcopy(plan["grid"]["levels"])
     original_orders = deepcopy(plan["grid"]["orders"])
 
     result = build_range_extension(
         plan["cycle_id"],
         plan,
-        {"low": 92.0, "high": 127.0},
-        market=market(),
+        {"low": 98.2, "high": 133.4},
+        market=market(116.0),
         accepted_entries=[],
         positions=[],
     )
 
     assert result["steps"] == {"low": 2, "high": 1}
-    assert result["effective_range"] == {"low": 90.0, "high": 125.0}
-    assert result["grid"]["levels"][2:7] == original_levels
-    assert result["grid"]["orders"][:4] == original_orders
-    assert result["grid"]["spacing"] == 5.0
+    assert result["effective_range"] == {"low": 98.0, "high": 133.0}
+    assert result["grid"]["levels"][2:35] == original_levels
+    assert result["grid"]["orders"][: len(original_orders)] == original_orders
+    assert result["grid"]["spacing"] == 1.0
     assert result["grid"]["notional_per_grid"] == 50.0
     assert result["grid"]["notional_mode"] == "auto"
-    assert {row["price"] for row in result["edge_orders"]} == {90.0, 95.0, 125.0}
+    assert {row["price"] for row in result["edge_orders"]} == {98.0, 99.0, 133.0}
 
 
 def test_arithmetic_contraction_removes_only_outer_geometry() -> None:
     result = build_range_extension(
         "2026-07-05_DAY",
-        arithmetic_plan(),
-        {"low": 104.0, "high": 116.0},
-        market=market(),
+        arithmetic_operating_plan(),
+        {"low": 101.0, "high": 131.0},
+        market=market(116.0),
         accepted_entries=[],
         positions=[],
     )
 
     assert result["steps"] == {"low": -1, "high": -1}
-    assert result["grid"]["levels"] == [105.0, 110.0, 115.0]
-    assert result["grid"]["count"] == 2
+    assert result["grid"]["levels"] == [float(price) for price in range(101, 132)]
+    assert result["grid"]["count"] == 30
     assert result["edge_orders"] == []
     assert [row["preview_order_id"] for row in result["grid"]["orders"]] == [
-        "old-1",
-        "old-2",
+        f"old-{index}" for index in range(1, 32) if index != 16
     ]
 
 
 def test_geometric_edges_preserve_ratio_for_expansion_and_contraction() -> None:
-    plan = geometric_plan()
+    plan = geometric_operating_plan()
     old_levels = deepcopy(plan["grid"]["levels"])
     expanded = build_range_extension(
         plan["cycle_id"],
         plan,
-        {"low": 82.0, "high": 177.0},
-        market=market(121.0),
+        {"low": old_levels[0] / 1.01**2, "high": old_levels[-1] * 1.01**2},
+        market=market(old_levels[16]),
         accepted_entries=[],
         positions=[],
     )
     contracted = build_range_extension(
         plan["cycle_id"],
         plan,
-        {"low": 109.0, "high": 135.0},
-        market=market(121.0),
+        {"low": old_levels[1], "high": old_levels[-2]},
+        market=market(old_levels[16]),
         accepted_entries=[],
         positions=[],
     )
 
     assert expanded["steps"] == {"low": 2, "high": 2}
-    assert expanded["grid"]["levels"][2:7] == old_levels
-    assert expanded["grid"]["spacing_ratio"] == 1.1
-    assert expanded["effective_range"] == {"low": 82.6446281, "high": 177.1561}
-    assert contracted["grid"]["levels"] == [110.0, 121.0, 133.1]
+    assert expanded["grid"]["levels"][2:35] == old_levels
+    assert expanded["grid"]["spacing_ratio"] == 1.01
+    assert expanded["effective_range"] == {
+        "low": round(old_levels[0] / 1.01**2, 8),
+        "high": round(old_levels[-1] * 1.01**2, 8),
+    }
+    assert contracted["grid"]["levels"] == old_levels[1:-1]
 
 
 def test_new_edge_dedupes_live_exposure_but_rearms_after_completed_fill() -> None:
-    plan = arithmetic_plan()
+    plan = arithmetic_operating_plan()
     cases = (
-        ({"accepted_entries": [{"side": "buy", "price": 95.0}]}, "accepted"),
-        ({"positions": [{"side": "long", "entry_price": 95.0}]}, "position"),
+        ({"accepted_entries": [{"side": "buy", "price": 99.0}]}, "accepted"),
+        ({"positions": [{"side": "long", "entry_price": 99.0}]}, "position"),
     )
     for extra, label in cases:
         result = build_range_extension(
             plan["cycle_id"],
             plan,
-            {"low": 95.0, "high": 120.0},
-            market=market(),
+            {"low": 99.0, "high": 132.0},
+            market=market(116.0),
             accepted_entries=extra.get("accepted_entries", []),
             positions=extra.get("positions", []),
         )
@@ -185,21 +249,21 @@ def test_new_edge_dedupes_live_exposure_but_rearms_after_completed_fill() -> Non
     completed = build_range_extension(
         plan["cycle_id"],
         plan,
-        {"low": 95.0, "high": 120.0},
-        market=market(),
+        {"low": 99.0, "high": 132.0},
+        market=market(116.0),
         accepted_entries=[],
         positions=[],
     )
-    assert [row["price"] for row in completed["edge_orders"]] == [95.0]
+    assert [row["price"] for row in completed["edge_orders"]] == [99.0]
 
 
 def test_adjustment_rejects_range_that_excludes_current_market() -> None:
     with pytest.raises(ValueError, match="market_outside_requested_range"):
         build_range_extension(
             "2026-07-05_DAY",
-            arithmetic_plan(),
-            {"low": 100.0, "high": 116.0},
-            market=market(119.0),
+            arithmetic_operating_plan(),
+            {"low": 100.0, "high": 131.0},
+            market=market(131.5),
             accepted_entries=[],
             positions=[],
         )
