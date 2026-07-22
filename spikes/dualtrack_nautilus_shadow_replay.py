@@ -8,6 +8,7 @@ or writes an authoritative legacy ledger.
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -71,7 +72,7 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
             taker_fee_rate=float(fee.get("taker_fee_rate") or 0.0),
         )
     )
-    return {
+    result = {
         "schema_version": "dualtrack-execution-v1",
         "engine": "nautilus_shadow",
         "cycle_id": bundle["cycle_id"],
@@ -114,6 +115,8 @@ def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, 
             "qualifies_for_cutover": command_count > 0,
         },
     }
+    _require_strict_json(result)
+    return result
 
 
 def _nautilus_version() -> str:
@@ -740,8 +743,14 @@ def _normalized_order(
     event = _report_event(row, fallback=str(command.get("event") or "entry"))
     order_id = str(row.get("client_order_id") or command_id)
     order_type = "market" if "MARKET" in str(row.get("type") or "").upper() else "limit"
-    price = row.get("trigger_price") if event == "stop" else row.get("price")
-    quantity = row.get("quantity")
+    raw_price = row.get("trigger_price") if event == "stop" else row.get("price")
+    reported_price = _finite_float(raw_price)
+    requested_price = _finite_float(command.get("price"))
+    if reported_price is None and order_type != "market":
+        raise ValueError("Nautilus order report price must be finite")
+    quantity = _finite_float(row.get("quantity"))
+    if quantity is None:
+        raise ValueError("Nautilus order report quantity must be finite")
     status = str(row.get("status") or "").lower()
     state = {"submitted": "accepted", "accepted": "accepted"}.get(status, status)
     result = {
@@ -750,18 +759,36 @@ def _normalized_order(
         "side": str(row.get("side") or command.get("side") or "").lower(),
         "event": event,
         "order_type": order_type,
-        "price": float(price or 0.0),
-        "quantity": float(quantity or 0.0),
+        "quantity": quantity,
         "strategy_plan_id": command.get("strategy_plan_id"),
         "strategy_plan_version": command.get("strategy_plan_version"),
     }
     timestamp = _timestamp_text(row.get("ts_last") or row.get("ts_init"))
     if timestamp:
         result["ts"] = timestamp
+    if reported_price is not None:
+        result["price"] = reported_price
     if not child:
-        result["requested_price"] = float(command.get("price") or result["price"])
-        result["requested_quantity"] = float(command.get("quantity") or result["quantity"])
+        if requested_price is not None:
+            result["requested_price"] = requested_price
+        requested_quantity = _finite_float(command.get("quantity"))
+        result["requested_quantity"] = requested_quantity if requested_quantity is not None else quantity
     return result
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _require_strict_json(value: Any) -> None:
+    try:
+        json.dumps(value, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Nautilus replay result must contain only strict JSON values") from exc
 
 
 def _report_event(row: dict[str, Any], *, fallback: str) -> str:

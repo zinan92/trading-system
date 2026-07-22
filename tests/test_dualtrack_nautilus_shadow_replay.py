@@ -13,6 +13,7 @@ from spikes.dualtrack_nautilus_shadow_replay import (
     _latest,
     _native_replay_commands,
     _orders_from_reports,
+    _require_strict_json,
     run_replay,
 )
 
@@ -350,6 +351,49 @@ def test_order_reports_keep_pending_entries_and_only_materialized_protection() -
             "strategy_plan_version": 3,
         },
     ]
+
+
+def test_market_order_report_keeps_requested_price_separate_when_nautilus_price_is_nan() -> None:
+    commands = [{
+        "command_id": "flatten-1",
+        "cycle_id": "2026-07-22_DAY",
+        "command": {
+            "cycle_id": "2026-07-22_DAY",
+            "side": "sell",
+            "event": "flatten",
+            "order_type": "market",
+            "price": 4121.57,
+            "quantity": 1.182,
+        },
+    }]
+    reports = [{
+        "client_order_id": "flatten-1",
+        "status": "FILLED",
+        "type": "MARKET",
+        "side": "SELL",
+        "price": float("nan"),
+        "quantity": 1.182,
+    }]
+
+    orders = _orders_from_reports(reports, commands)
+
+    assert orders == [{
+        "order_id": "flatten-1",
+        "state": "filled",
+        "side": "sell",
+        "event": "flatten",
+        "order_type": "market",
+        "quantity": 1.182,
+        "requested_price": 4121.57,
+        "requested_quantity": 1.182,
+        "strategy_plan_id": None,
+        "strategy_plan_version": None,
+    }]
+
+
+def test_replay_result_rejects_non_finite_values_before_persistence() -> None:
+    with pytest.raises(ValueError, match="strict JSON values"):
+        _require_strict_json({"orders": [{"price": 100.0}], "pnl": {"realized": float("nan")}})
 
 
 def test_fill_reports_map_client_order_identity_back_to_plan_and_event() -> None:

@@ -91,13 +91,24 @@ def _canonical_orders(rows: list[Mapping[str, Any]], issues: list[dict[str, Any]
     for row in rows:
         order_id = _required_text(row.get("order_id"), "order_id")
         state = _order_state(row.get("state", row.get("status")))
+        order_type = str(row.get("order_type") or row.get("type") or "").strip().lower()
         canonical = _drop_none({
             "order_id": order_id,
             "state": state,
             "side": _side(row.get("side"), allow_blank=True),
             "event": _event(row.get("event"), allow_unknown=True),
-            "order_type": str(row.get("order_type") or row.get("type") or "").strip().lower(),
-            "price": _optional_number(row.get("price"), "order price", decimals=_MONEY_DECIMALS),
+            "order_type": order_type,
+            "price": _canonical_order_price(
+                row.get("price"),
+                order_id=order_id,
+                order_type=order_type,
+                issues=issues,
+            ),
+            "requested_price": _optional_number(
+                row.get("requested_price"),
+                "order requested_price",
+                decimals=_MONEY_DECIMALS,
+            ),
             "quantity": _optional_number(row.get("quantity"), "order quantity", decimals=_QUANTITY_DECIMALS),
             "ts": _optional_text(row.get("ts")),
             "strategy_plan_id": _optional_text(row.get("strategy_plan_id")),
@@ -105,6 +116,30 @@ def _canonical_orders(rows: list[Mapping[str, Any]], issues: list[dict[str, Any]
         })
         _insert_identity(by_id, order_id, canonical, "order", issues)
     return sorted(by_id.values(), key=lambda row: (str(row.get("ts") or ""), row["order_id"]))
+
+
+def _canonical_order_price(
+    value: Any,
+    *,
+    order_id: str,
+    order_type: str,
+    issues: list[dict[str, Any]],
+) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise AccountingContractError("order price must be numeric") from exc
+    if not math.isfinite(parsed):
+        if order_type != "market":
+            raise AccountingContractError("order price must be finite")
+        issues.append({
+            "code": "market_order_non_finite_price_omitted",
+            "order_id": order_id,
+        })
+        return None
+    return round(parsed, _MONEY_DECIMALS)
 
 
 def _canonical_fills(rows: list[Mapping[str, Any]], issues: list[dict[str, Any]]) -> list[dict[str, Any]]:

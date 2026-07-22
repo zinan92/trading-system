@@ -613,6 +613,33 @@ def test_snapshot_identity_is_deterministic_and_json_safe() -> None:
     json.dumps(first, allow_nan=False)
 
 
+def test_market_order_non_finite_price_does_not_hide_the_operator_read_model() -> None:
+    source = _source()
+    order = source["production_execution"]["orders"][0]
+    order.update({
+        "state": "filled",
+        "event": "flatten",
+        "order_type": "market",
+        "price": float("nan"),
+        "requested_price": 4121.57,
+    })
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+    projected = next(
+        row for row in model["execution"]["orders"] if row["order_id"] == order["order_id"]
+    )
+
+    assert projected["price"] is None
+    assert projected["requested_price"] == 4121.57
+    assert projected["price_status"] == "missing_market_order_execution_price"
+    json.dumps(model, allow_nan=False)
+
+
 def test_review_packages_and_shadows_remain_separate_read_only_evidence() -> None:
     source = _source()
     package = {

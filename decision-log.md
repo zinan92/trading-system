@@ -9199,6 +9199,41 @@ auditable datafeed port; broker execution remains a separate port.
   57.5px to 0.5px while retaining all right-rail content.
 - Focused dashboard static tests: 26 passed; gitleaks found no leaks.
 
+## 2026-07-22 - Keep market-order NaN out of the operator read model
+
+### Decision
+
+- Treat a non-finite execution-report price as an unavailable optional field
+  only for market orders. Canonical accounting omits it, preserves the finite
+  requested price, and records reconciliation drift instead of hiding the
+  entire Dashboard.
+- Keep limit-order price validation fail-closed.
+- Normalize future Nautilus market-order reports at the replay boundary: when
+  Nautilus exposes `NaN` for a market order's non-applicable limit price, omit
+  the unknown execution price and preserve the requested mark separately.
+- Reject any future replay result containing a non-finite value before it can
+  be persisted.
+- Make the operator read model JSON-safe for legacy snapshots by converting
+  any remaining non-finite float to `null`; the projected order explicitly
+  reports `missing_market_order_execution_price`.
+
+### Gotchas
+
+- The requested mark is not an actual fill. It remains `requested_price`; fills
+  and positions remain the authority for actual execution price and P&L.
+- Persisted Paper artifacts are immutable. The existing `NaN` row is not
+  rewritten or replayed; the read side must remain compatible with it.
+- Relaxing `_optional_number` globally would weaken fill, limit-order, and
+  accounting validation, so the exception is scoped to market-order price only.
+
+### Verification
+
+- Current immutable `2026-07-22_DAY` Nautilus snapshot projects successfully:
+  40 orders, one closed position, finite requested price 4121.57, and explicit
+  `market_order_non_finite_price_omitted` drift evidence.
+- Focused accounting, read-model, replay, and Dashboard tests pass; no full
+  suite is required for this scoped compatibility fix.
+
 ## 2026-07-22 - Correct dashboard alignment target to column bottoms
 
 ### Decision
