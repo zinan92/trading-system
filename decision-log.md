@@ -9345,3 +9345,212 @@ auditable datafeed port; broker execution remains a separate port.
   into the start confirmation contract.
 - Browser acceptance proves the disabled button is accompanied by Chinese
   cause, both concrete reconciliation differences, next action, and raw code.
+
+## 2026-07-22 - Direction-aware out-of-range Paper grid starts (#134, backfilled 2026-07-23)
+
+### Decision
+
+- The out-of-range start gate keys on entry-order marketability, not on
+  "price inside Range": a long grid with the mark above the Range high and a
+  short grid with the mark below the Range low may start and wait, because
+  every entry limit rests away from the market. The opposite (immediately
+  exposed) sides and all neutral grids stay fail-closed with
+  `market_price_outside_range`.
+- The rule is one shared geometric side predicate
+  (`services/grid_marketability.py`) documented as equivalent to "no entry
+  order is immediately marketable"; it does not scan individual order rows.
+  The same predicate is enforced in the adaptive preview, the canonical Paper
+  risk policy, the prepared-start drift gate, and both manual replacement
+  paths.
+- "Waiting" means the full set of non-marketable entry limits is placed
+  immediately and rests until price re-enters the Range. There is no deferred
+  placement scheduler; allowing a start never implies imminent fills.
+- While the robot is stopped, the operator may shape the startup Range on the
+  chart. Confirm only rewrites the startup inputs and requests a fresh
+  read-only preview; Cancel restores the prior inputs. No plan write, no
+  orders.
+- Start and prepare failures moved to a centered blocking dialog
+  (`startFailureDialog`) with explicit "未下单/生产状态未改变" copy; trade
+  lifecycle notifications remain top-right toasts.
+- Paper-only: only `PaperGridRiskDecisionPort` consumes this gate. The live
+  adapter has no Range gate and was not touched. Nothing here is evidence of
+  live approval.
+
+### Gotchas
+
+- Two near-identical codes coexist: `market_price_outside_range` (risk
+  blocker, in the overridable set) and `market_outside_range` (a manual
+  acknowledgement code). Non-entry-side replacements no longer require the
+  latter; conflating the two reintroduces a false acknowledgement.
+- Neutral grids are always blocked outside the Range because the side
+  predicate recognizes only `long`/`short`; any other direction fails closed
+  by construction.
+- A prepared start invalidated by market movement raises
+  `prepared_start_market_moved`, not `market_price_outside_range`; the two
+  must stay distinguishable in audits.
+
+### Verification
+
+- `tests/test_risk_port.py::test_market_range_gate_is_direction_and_marketability_aware`
+  (5 direction/side cases), `test_directional_preview_outside_range_on_non_entry_side_is_not_a_blocker`,
+  `test_prepared_start_allows_non_entry_side_drift_even_beyond_source_envelope`,
+  and browser
+  `test_gridmind_stopped_robot_can_apply_or_cancel_chart_range_before_start`
+  (orders and positions stay 0).
+- PR validation recorded 187 focused tests passed; the gate test was re-run
+  during the 2026-07-23 documentation audit and passed (Python 3.13.7).
+
+## 2026-07-22 - Read-only smart Range fill before the first plan (#138, backfilled 2026-07-23)
+
+### Decision
+
+- The adaptive preview no longer requires an active StrategyPlan. When a new
+  cycle has none, preview builds an in-memory plan seed (version 0, empty
+  risk budget) and scores it read-only. Clicking 智能填充 can never write a
+  StrategyPlan, start the robot, replace a grid, or create an order; only the
+  final confirmed start enters the production plan and execution flow.
+- The frontend smart-fill click clears the manual Range lock, restores AUTO,
+  and refills lower/upper bounds, grid count, per-grid notional, profit
+  target and leverage from the fresh preview (the lock-clearing behavior
+  shipped with the adaptive solver in #98/d8482ef; #138 fixed the backend
+  guard).
+
+### Gotchas
+
+- The seed is deliberately never persisted: auto-locking a StrategyPlan just
+  because the operator clicked a preview button would silently convert a
+  read-only affordance into state mutation.
+- Only the Range lock is cleared. Other manual locks (grid count, leverage,
+  notional) still constrain the fill — an intentional respect-the-operator
+  choice, but it can surprise a user expecting a full AUTO refill.
+- A failed preview shows `参数预览不可用：<reason>` and retains the previous
+  values; the click handler's empty catch is unhandled-rejection hygiene, not
+  error swallowing.
+- The PR body's `Closes #137` did not auto-close the issue; #137 was still
+  open when this entry was backfilled.
+
+### Verification
+
+- `test_adaptive_preview_smart_fills_a_new_cycle_without_writing_a_plan`
+  asserts `active_plan(cycle_id) is None` and an empty engine order snapshot
+  after a successful preview; re-run 2026-07-23, passed.
+- Browser
+  `test_gridmind_smart_fill_replaces_manual_range_with_one_read_only_preview`
+  asserts exactly one `preview` request, no `start`/`replace_grid`/order
+  request, and the Range lock reading AUTO.
+
+## 2026-07-22 - Audited rejection recovery across gateway 502 (#130, backfilled 2026-07-23)
+
+### Decision
+
+- An HTTP 502 (or timeout / status 0) on a control request is an unknown
+  outcome, never proof the action failed — and a data-path failure is never
+  evidence of an execution failure. The client reconciles against the
+  authoritative read model and the control audit: it fingerprints
+  `last_control_event` (ts|action|result|error) before the request and, when
+  a newer rejected event for the same action appears, surfaces the real
+  backend reason as `audited_control_rejection` instead of a generic 502.
+- Side-effect-free `prepare_start` may be retried exactly once. Order-creating
+  `start` is never re-POSTed; uncertainty after `start` resolves only by
+  reading state (12 read-model polls, then an explicit unknown-outcome
+  message).
+- Stale-market and crossed-grid-line rejections carry dedicated Chinese
+  operator copy and never report success.
+
+### Gotchas
+
+- Two failure states are still not first-class in the UI: "request never
+  reached the backend" collapses into the same outcome-unknown bucket as
+  "response lost", and "partial grid accepted" is converted by the backend
+  complete-grid guard into rollback plus rejection rather than shown as its
+  own state.
+- Historical operator-visible strings moved: "paper start did not accept the
+  complete grid" became "did not observe the complete grid" in fb59719
+  (issue 40), and "自动续跑失败" does not exist anywhere in this repository's
+  history — error-copy archaeology must not assume today's main emits
+  yesterday's strings.
+- The audit-recovery only fires for an event newer than the pre-request
+  fingerprint; replaying an old rejection as if it answered the current click
+  is deliberately impossible.
+
+### Verification
+
+- Browser tests assert the exact request sequences:
+  `test_gridmind_start_surfaces_audited_stale_market_after_safe_prepare_retry`
+  → `["prepare_start", "prepare_start"]` (one safe retry) and
+  `test_gridmind_start_does_not_retry_orders_and_surfaces_audited_market_move`
+  → `["prepare_start", "start"]` (start never retried).
+- PR validation recorded 24 focused tests passed; no live/real-money path
+  changed.
+
+## 2026-07-22 - Production history reconciles with the authoritative engine identity (#126, backfilled 2026-07-23)
+
+### Decision
+
+- `build_production_accounting_history` now projects with the caller's
+  authoritative engine identity instead of the hardcoded string
+  `"production_history"`. History and current-cycle reconciliation therefore
+  compare in one identity space, and uniquely matched legacy Nautilus flatten
+  fills stop raising false `execution_reconciliation_drift` start blockers.
+  Genuinely ambiguous identities still fail closed.
+
+### Gotchas
+
+- The drift blocker itself remains non-overridable; this fix removed a false
+  positive, not the gate.
+- Engine identity strings are part of the reconciliation contract, not
+  cosmetic labels — a one-line identity mismatch is enough to lock out every
+  future start.
+
+### Verification
+
+- `tests/test_dashboard_server.py::test_strategy_console_history_repairs_uniquely_matched_legacy_nautilus_flatten`;
+  re-run 2026-07-23, passed.
+
+## 2026-07-22 - Trade notification trust relaxed to fact-level observation (#96, backfilled 2026-07-23)
+
+### Decision
+
+- Amends one clause of "2026-07-21 - Authoritative trade activity
+  notifications" (kept above unchanged, per append-only policy). Historical
+  accounting no longer needs `completeness == complete` to authorize a toast:
+  the historical side now requires reconciliation pass plus
+  `fills_observed`/`trades_observed`/`positions_observed` all true, while the
+  current accounting snapshot still requires the full complete-and-reconciled
+  standard.
+
+### Gotchas
+
+- Unrelated historical completeness gaps were suppressing genuinely
+  authoritative new fills. Completeness of old history is not evidence about
+  the freshness or truth of a new fill; the two trust questions are separate.
+- Missing trade facts still fail silent — the relaxation never invents a
+  notification from partial evidence.
+
+### Verification
+
+- Node tests added with the change:
+  "unrelated historical accounting gaps do not suppress new authoritative
+  fills" and "missing historical trade facts still fail silent"
+  (`tests/test_dashboard_gridmind_trade_activity.mjs`).
+
+## 2026-07-21 - Python 3.9 runtime import compatibility (#82, backfilled 2026-07-23)
+
+### Decision
+
+- Runtime-evaluated type aliases in service modules must stay Python
+  3.9-compatible (`typing.Optional`/`typing.Dict`, not PEP 604 unions),
+  because the launchd-managed production services run the macOS system
+  Python 3.9 while the test suite runs Python 3.13.
+
+### Gotchas
+
+- A fully green 3.13 test run proves nothing about 3.9 import safety: the
+  #81 integration passed 2,029 tests and still crashed
+  `dashboard_server` on import under launchd. Deployment validation must pin
+  the interpreter explicitly (`/usr/bin/python3`).
+
+### Verification
+
+- Import of `pipelines.dashboard_server` under `/usr/bin/python3` (3.9.6)
+  after the fix; context recorded in `docs/handoff-2026-07-21-wendy.md`.
