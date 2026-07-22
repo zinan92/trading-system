@@ -305,3 +305,73 @@ def test_dca_lifecycle_is_symmetric_for_long_and_short(
     closed = lifecycle.process_market_event(plan, _event(2, target_price))["state"]
     assert closed["status"] == "target_closed"
     assert adapter.reconcile(CYCLE_ID)["status"] == "ok"
+
+
+class FailingTargetSubmitAdapter:
+    """Delegate to the real Paper adapter but fail the first target submit."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.target_submit_attempts = 0
+
+    @property
+    def name(self) -> str:
+        return self._inner.name
+
+    def submit_order(self, command: dict) -> dict:
+        if str(command.get("event") or "") == "target":
+            self.target_submit_attempts += 1
+            if self.target_submit_attempts == 1:
+                raise RuntimeError("paper engine submit transport failed")
+        return self._inner.submit_order(command)
+
+    def __getattr__(self, item):
+        return getattr(self._inner, item)
+
+
+def test_dca_target_submit_failure_stays_fail_closed_and_retries_exactly_once(
+    tmp_path: Path,
+) -> None:
+    inner = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=_config())
+    adapter = FailingTargetSubmitAdapter(inner)
+    lifecycle = DcaPaperLifecycle(tmp_path / "outputs", adapter)
+    plan = _plan()
+    lifecycle.start(plan, timestamp="2026-07-22T16:00:00+00:00")
+    lifecycle.process_market_event(plan, _event(1, 4_004.0))
+    accumulated = lifecycle.process_market_event(plan, _event(2, 3_996.0))["state"]
+    expected_quantity = accumulated["open_quantity"]
+    generations_before = len(accumulated["target_generations"])
+
+    with pytest.raises(RuntimeError, match="submit transport failed"):
+        lifecycle.process_market_event(plan, _event(3, 4_050.0))
+
+    # Reload from disk exactly as a restarted process would.
+    recovered = DcaPaperLifecycle(tmp_path / "outputs", adapter).reconcile(
+        plan,
+        timestamp="2026-07-22T16:04:00+00:00",
+    )
+    active = recovered["active_target"]
+    assert recovered["status"] != "target_triggered"
+    assert active is not None
+    assert active["status"] == "accepted"
+    assert not active.get("triggered_at")
+    assert not active.get("execution_order_id")
+    assert len(recovered["target_generations"]) == generations_before
+    assert recovered["open_quantity"] == pytest.approx(expected_quantity)
+    snapshot = adapter.snapshot(CYCLE_ID)
+    assert [row for row in snapshot["fills"] if row.get("event") == "target"] == []
+    assert adapter.target_submit_attempts == 1
+
+    retry = lifecycle.process_market_event(plan, _event(4, 4_050.0))
+    state = retry["state"]
+    snapshot = adapter.snapshot(CYCLE_ID)
+    target_fills = [row for row in snapshot["fills"] if row.get("event") == "target"]
+
+    assert adapter.target_submit_attempts == 2
+    assert retry["target_submission"] is not None
+    assert state["status"] == "target_closed"
+    assert state["open_quantity"] == 0
+    assert state["active_target"] is None
+    assert len(target_fills) == 1
+    assert target_fills[0]["pnl_units"] == pytest.approx(expected_quantity)
+    assert not [row for row in snapshot["orders"] if row.get("state") == "accepted"]
