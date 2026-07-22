@@ -238,6 +238,68 @@ def build_dca_strategy_plan(
     }
 
 
+def build_dca_entry_commands(
+    plan: dict[str, Any],
+    *,
+    timestamp: str,
+) -> list[dict[str, Any]]:
+    """Project a DCA StrategyPlan into idempotent accumulation entries."""
+
+    if (
+        not isinstance(plan, dict)
+        or plan.get("schema_version") != DCA_PLAN_SCHEMA
+        or plan.get("strategy_type") != "dca"
+    ):
+        raise ValueError("DCA execution requires a versioned DCA StrategyPlan")
+    plan_id = _required_text(plan.get("strategy_plan_id"), "strategy_plan_id")
+    cycle_id = _required_text(plan.get("cycle_id"), "cycle_id")
+    version = _positive_integer(plan.get("version"), "strategy plan version")
+    submitted_at = _required_text(timestamp, "submission timestamp")
+    direction = str(plan.get("direction") or "").lower()
+    if direction not in DCA_DIRECTIONS:
+        raise ValueError("DCA direction must be long or short")
+    dca = plan.get("dca") if isinstance(plan.get("dca"), dict) else {}
+    entries = dca.get("entries") if isinstance(dca.get("entries"), list) else []
+    if not entries:
+        raise ValueError("DCA StrategyPlan has no executable entries")
+    context = plan.get("execution_context") if isinstance(plan.get("execution_context"), dict) else {}
+    market = context.get("market") if isinstance(context.get("market"), dict) else {}
+    market_price = _positive_number(market.get("price"), "execution market context price")
+    symbol = _required_text(market.get("symbol"), "execution market context symbol")
+    round_id = f"dca-round:{plan_id}"
+    commands: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("DCA StrategyPlan entry must be an object")
+        entry_id = _required_text(entry.get("preview_entry_id"), "DCA preview_entry_id")
+        if entry_id in seen_ids:
+            raise ValueError("DCA StrategyPlan contains duplicate entry identity")
+        seen_ids.add(entry_id)
+        commands.append({
+            "cycle_id": cycle_id,
+            "ts": submitted_at,
+            "symbol": symbol,
+            "side": "buy" if direction == "long" else "sell",
+            "event": "entry",
+            "order_type": "limit",
+            "price": _positive_number(entry.get("price"), "DCA entry price"),
+            "market_price": market_price,
+            "quantity": _positive_number(entry.get("quantity"), "DCA entry quantity"),
+            "notional": _positive_number(entry.get("notional"), "DCA entry notional"),
+            "sl": _positive_number(dca.get("stop_price"), "DCA stop price"),
+            "source": "strategy_dca_paper",
+            "source_fill_id": f"strategy-dca:{plan_id}:{entry_id}",
+            "trade_id": round_id,
+            "position_id": round_id,
+            "dca_round_id": round_id,
+            "strategy_type": "dca",
+            "strategy_plan_id": plan_id,
+            "strategy_plan_version": version,
+        })
+    return commands
+
+
 def replay_dca_marks(preview: dict[str, Any], marks: Iterable[float]) -> dict[str, Any]:
     """Replay complete marks against one preview for pure model verification."""
 

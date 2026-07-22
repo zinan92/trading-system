@@ -9595,3 +9595,52 @@ auditable datafeed port; broker execution remains a separate port.
   venue-rounded duplicate rejection, invalid geometry, and zero I/O effects.
 - Existing Grid sizing and StrategyPlan command projection tests remain green;
   no Paper runtime or order adapter is called by this milestone.
+
+## 2026-07-23 - Resize DCA take profit from reconciled open quantity
+
+### Decision
+
+- Submit all DCA additions with one shared round/trade identity and no
+  per-entry TP. The Paper lifecycle coordinator, not the Grid bracket logic,
+  owns one aggregate reduce-only target for the round.
+- Derive target quantity and weighted average entry from the authoritative
+  execution-adapter snapshot. Request receipts and locally expected fills are
+  never sufficient sizing evidence.
+- Persist target generations. A quantity change retires the previous accepted
+  generation before publishing its replacement; repeated reconciliation,
+  duplicate events, restart, and multiple partial fills for one entry order are
+  idempotent.
+- Treat the accepted aggregate target as a Paper conditional obligation. When
+  a later trusted mark reaches the fixed target, cancel remaining additions,
+  then submit one reduce-only close command for the reconciled quantity.
+- Before a stop or other terminal close, cancel both remaining additions and
+  any already-triggered target order. Round close retires the target and keeps
+  every generation as lifecycle evidence.
+- Correct Legacy Paper trade projection so a scaled trade uses each persisted
+  entry lot's remaining quantity. One aggregate exit can therefore close every
+  matched lot without leaving a phantom open remainder.
+
+### Gotchas
+
+- An accepted DCA target lifecycle row is not a claim that a broker-native
+  order already exists. The actual execution command is emitted only after the
+  trusted trigger mark; later read-model work must label these states clearly.
+- Trigger decisions use the observed mark, not an unordered OHLC high/low. A
+  bar that contains both an addition and the target cannot prove which happened
+  first and must not create an instant round trip.
+- Partial fills from one order may produce multiple fill IDs. Addition count is
+  keyed by order/source identity, while aggregate quantity still follows the
+  open-position snapshot.
+- This milestone proves the execution-port contract with Legacy Paper and an
+  engine-neutral partial-fill adapter. Production start wiring and Nautilus
+  runtime acceptance remain separate gates.
+
+### Verification
+
+- Focused lifecycle, DCA plan, Legacy scaling, human-track, and execution-port
+  tests: 48 passed.
+- Coverage includes two additions and TP replacement, duplicate event,
+  restart, partial-fill growth, one aggregate target close, stop close,
+  cancellation of remaining entries, and long/short symmetry.
+- The new runtime modules compile under macOS `/usr/bin/python3` (Python 3.9);
+  staged secret scanning remains required before merge.
