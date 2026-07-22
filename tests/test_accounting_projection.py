@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from services.accounting_projection import (
@@ -294,6 +296,42 @@ def test_same_execution_facts_reproject_to_same_snapshot_id() -> None:
     )
 
     assert project_execution_accounting(source).snapshot_id == project_execution_accounting(source).snapshot_id
+
+
+def test_market_order_non_finite_price_is_omitted_without_hiding_accounting() -> None:
+    source = _snapshot(
+        fills=[_entry()],
+        positions=[_position(status="open", remaining=1.0, realized=-1.0)],
+        realized=-1.0,
+        unrealized=5.0,
+        fees=1.0,
+    )
+    source["orders"][0]["price"] = float("nan")
+    source["orders"][0]["requested_price"] = 100.0
+
+    result = project_execution_accounting(source).to_dict()
+
+    assert "price" not in result["orders"][0]
+    assert result["orders"][0]["requested_price"] == 100.0
+    assert result["reconciliation"]["status"] == "drift"
+    assert {row["code"] for row in result["reconciliation"]["issues"]} == {
+        "market_order_non_finite_price_omitted"
+    }
+    json.dumps(result, allow_nan=False)
+
+
+def test_limit_order_non_finite_price_still_fails_closed() -> None:
+    source = _snapshot(
+        fills=[_entry()],
+        positions=[_position(status="open", remaining=1.0, realized=-1.0)],
+        realized=-1.0,
+        unrealized=5.0,
+        fees=1.0,
+    )
+    source["orders"][0].update({"order_type": "limit", "price": float("nan")})
+
+    with pytest.raises(AccountingContractError, match="order price must be finite"):
+        project_execution_accounting(source)
 
 
 def test_unobserved_slippage_remains_unknown_instead_of_becoming_zero() -> None:

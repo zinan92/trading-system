@@ -524,6 +524,9 @@ def _project_order(
 ) -> dict[str, Any]:
     state = _normalize_order_state(row.get("state") or row.get("status"))
     rank, label = _ORDER_STATE_PRESENTATION.get(state, (0, "未知状态"))
+    order_type = str(row.get("order_type") or row.get("type") or "").strip().lower()
+    price = _finite_or_none(row.get("price"))
+    requested_price = _finite_or_none(row.get("requested_price"))
     source_plan, _source_issue = _source_plan_for_order(
         row,
         plan=plan,
@@ -536,6 +539,15 @@ def _project_order(
     )
     return {
         **_json_copy(row),
+        "price": price,
+        "requested_price": requested_price,
+        "price_status": (
+            "known"
+            if price is not None
+            else "missing_market_order_execution_price"
+            if order_type == "market"
+            else "missing"
+        ),
         "state": state or "unknown",
         "state_label": label,
         "state_rank": rank,
@@ -844,7 +856,9 @@ def _json_copy(value: Any) -> Any:
         return {str(key): _json_copy(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_copy(item) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if value is None or isinstance(value, (str, int, bool)):
         return value
     return str(value)
 
