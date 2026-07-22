@@ -435,6 +435,7 @@ def test_gridmind_sizing_controls_lock_manual_input_and_keep_other_values_auto()
             "mode": "manual_adaptive",
             "locked": [],
             "current_grid_count": 50,
+            "current_direction": "neutral",
         }
 
         request_count = len(preview_payloads)
@@ -665,6 +666,161 @@ def test_gridmind_start_click_uses_prepared_candidate_and_shows_success() -> Non
         assert requests[-1]["prepared_start_id"] == "prepared-safe-browser-1"
         assert requests[-1]["expected_preview_id"] == "profit-preview-browser-1"
         assert "当前接受 30 笔委托" in page.locator(".trade-toast").inner_text()
+        browser.close()
+
+
+def test_gridmind_start_surfaces_audited_stale_market_after_safe_prepare_retry() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_000.0)
+    model["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "can_start_when_authorized": True,
+        "can_stop_when_authorized": False,
+        "last_control_event": {
+            "ts": "2026-07-22T10:59:00+00:00",
+            "action": "stop",
+            "result": "accepted",
+            "error": None,
+        },
+    })
+    model["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+    requests: list[dict] = []
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        requests.append(body)
+        assert body["action"] == "prepare_start"
+        model["runtime"]["last_control_event"] = {
+            "ts": f"2026-07-22T11:00:0{len(requests)}+00:00",
+            "action": "prepare_start",
+            "result": "rejected",
+            "error": "market data is stale",
+        }
+        route.fulfill(status=502, content_type="application/json", body="{}")
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model, ensure_ascii=False),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+
+        page.locator("#startRobot").click()
+        toast = page.locator(".trade-toast").filter(
+            has_text="启动瞬间实时行情暂时过期"
+        )
+        toast.wait_for()
+
+        assert [row["action"] for row in requests] == [
+            "prepare_start",
+            "prepare_start",
+        ]
+        assert "HTTP 502" not in toast.inner_text()
+        assert "生产状态没有改变" in toast.inner_text()
+        assert page.evaluate("state.preparedStartId") is None
+        assert model["runtime"]["actual_state"] == "stopped"
+        browser.close()
+
+
+def test_gridmind_start_does_not_retry_orders_and_surfaces_audited_market_move() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_000.0)
+    model["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "can_start_when_authorized": True,
+        "can_stop_when_authorized": False,
+        "last_control_event": {
+            "ts": "2026-07-22T10:59:00+00:00",
+            "action": "stop",
+            "result": "accepted",
+            "error": None,
+        },
+    })
+    model["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+    requests: list[dict] = []
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        requests.append(body)
+        if body["action"] == "prepare_start":
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({
+                    **_preview(),
+                    "action": "prepare_start",
+                    "prepared_start_id": "prepared-before-market-move",
+                }, ensure_ascii=False),
+            )
+            return
+        assert body["action"] == "start"
+        model["runtime"]["last_control_event"] = {
+            "ts": "2026-07-22T11:00:01+00:00",
+            "action": "start",
+            "result": "rejected",
+            "error": "prepared_start_market_moved",
+        }
+        route.fulfill(status=502, content_type="application/json", body="{}")
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model, ensure_ascii=False),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+
+        page.locator("#startRobot").click()
+        toast = page.locator(".trade-toast").filter(has_text="行情已跨越网格线")
+        toast.wait_for()
+
+        assert [row["action"] for row in requests] == ["prepare_start", "start"]
+        assert "HTTP 502" not in toast.inner_text()
+        assert page.evaluate("state.preparedStartId") is None
+        assert model["runtime"]["actual_state"] == "stopped"
         browser.close()
 
 

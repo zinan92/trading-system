@@ -130,6 +130,108 @@ def adaptive_grid_payload() -> dict:
     }
 
 
+@pytest.mark.parametrize(
+    (
+        "direction",
+        "mode",
+        "low",
+        "high",
+        "grid_count",
+        "profit_target",
+        "notional_per_grid",
+        "leverage",
+        "expected_count",
+        "expects_profit_warning",
+    ),
+    [
+        ("neutral", "arithmetic", 4_000.0, 4_200.0, None, 10.0, None, None, 25, False),
+        ("neutral", "arithmetic", 4_000.0, 4_200.0, 30, 10.0, None, None, 30, False),
+        ("neutral", "arithmetic", 3_900.0, 4_300.0, 70, 10.0, None, None, 70, True),
+        ("neutral", "geometric", 3_900.0, 4_300.0, 40, 10.0, None, None, 40, False),
+        ("long", "arithmetic", 4_040.0, 4_200.0, 30, 10.0, None, None, 30, True),
+        ("short", "geometric", 4_000.0, 4_145.0, 30, 10.0, None, None, 30, True),
+        ("neutral", "arithmetic", 4_000.0, 4_200.0, 40, 5.0, None, None, 40, False),
+        ("neutral", "arithmetic", 3_900.0, 4_300.0, 40, 15.0, None, None, 40, False),
+        ("neutral", "arithmetic", 4_000.0, 4_200.0, 30, 10.0, 4_000.0, None, 30, True),
+        ("neutral", "arithmetic", 4_000.0, 4_200.0, 30, 10.0, None, 8.0, 30, True),
+    ],
+)
+def test_adaptive_preview_handles_user_parameter_combinations_without_starting(
+    tmp_path: Path,
+    direction: str,
+    mode: str,
+    low: float,
+    high: float,
+    grid_count: int | None,
+    profit_target: float,
+    notional_per_grid: float | None,
+    leverage: float | None,
+    expected_count: int,
+    expects_profit_warning: bool,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    cycle_id = "2026-07-05_DAY"
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    locked = ["range", "profit_target"]
+    payload = {
+        "direction": direction,
+        "style": "steady",
+        "range": {"low": low, "high": high},
+        "grid": {
+            "mode": mode,
+            "target_net_profit_per_grid_usd": profit_target,
+        },
+        "solver": {"mode": "manual_adaptive", "locked": locked},
+    }
+    if grid_count is not None:
+        payload["grid"]["count"] = grid_count
+        locked.append("grid_count")
+    if notional_per_grid is not None:
+        payload["grid"].update({
+            "notional_per_grid": notional_per_grid,
+            "notional_mode": "manual",
+        })
+        locked.append("notional_per_grid")
+    if leverage is not None:
+        payload["risk_budget"] = {"leverage": leverage}
+        locked.append("leverage")
+
+    preview = plane.control(
+        cycle_id,
+        "preview",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+    )["preview"]
+
+    assert preview["direction"] == direction
+    assert preview["grid"]["mode"] == mode
+    assert preview["grid"]["count"] == expected_count
+    assert len(preview["orders"]) == expected_count
+    assert preview["grid"]["target_net_profit_per_grid_usd"] == profit_target
+    warning_codes = {row["code"] for row in preview["solver"]["risk_flags"]}
+    assert ("grid_profit_target_not_met" in warning_codes) is expects_profit_warning
+    assert preview["manual_confirmation"]["available"] is True
+    if notional_per_grid is not None:
+        assert preview["grid"]["notional_per_grid"] == notional_per_grid
+    if leverage is not None:
+        assert preview["risk"]["actual_leverage"] <= leverage + 0.01
+    assert build_execution_engine_adapter(tmp_path / "outputs").snapshot(cycle_id)[
+        "orders"
+    ] == []
+    if direction == "long":
+        assert preview["range"]["low"] == low
+        assert preview["range"]["high"] == 4_137.44
+        assert all(order["side"] == "buy" for order in preview["orders"])
+        assert all(order["price"] < 4_137.44 for order in preview["orders"])
+    elif direction == "short":
+        assert preview["range"]["low"] == 4_137.44
+        assert preview["range"]["high"] == high
+        assert all(order["side"] == "sell" for order in preview["orders"])
+        assert all(order["price"] > 4_137.44 for order in preview["orders"])
+
+
 def test_adaptive_start_requires_exact_risk_consent_and_then_starts_paper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
