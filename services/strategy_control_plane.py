@@ -1031,12 +1031,43 @@ class StrategyControlPlane:
         ):
             raise ValueError("strategy_plan_changed")
         requested = payload.get("range") if isinstance(payload.get("range"), dict) else {}
+        legacy_migration = _legacy_single_side_range_migration(current)
+        geometry_plan = current
+        if legacy_migration:
+            geometry_plan = {
+                **current,
+                "range": dict(legacy_migration["executable_range"]),
+                "grid": {
+                    **dict(current.get("grid") or {}),
+                    "count": legacy_migration["executable_grid_count"],
+                },
+            }
         geometry = build_dragged_range(
-            current,
+            geometry_plan,
             requested,
             handle=str(payload.get("handle") or ""),
         )
         grid = dict(current.get("grid") or {})
+        candidate_grid_count = (
+            legacy_migration["executable_grid_count"]
+            if legacy_migration
+            else grid.get("count")
+        )
+        current_range = dict(current.get("range") or {})
+        current_plan_market = dict(
+            (current.get("execution_context") or {}).get("market") or {}
+        )
+        candidate_split_price = (
+            legacy_migration["split_price"]
+            if legacy_migration
+            else _number_or(
+                current_range.get("split_price"),
+                _number_or(
+                    current_plan_market.get("price"),
+                    _positive_number(market.get("latest_close"), "market latest_close"),
+                ),
+            )
+        )
         notional = _positive_number(
             grid.get("notional_per_grid"),
             "current notional_per_grid",
@@ -1048,9 +1079,21 @@ class StrategyControlPlane:
                 "direction": current.get("direction"),
                 "style": current.get("style"),
                 "out_of_range": grid.get("out_of_range"),
-                "range": geometry["new_range"],
+                "range": {
+                    **geometry["new_range"],
+                    "scope": (
+                        f"{current.get('direction')}_side"
+                        if str(current.get("direction") or "") in {"long", "short"}
+                        else "full"
+                    ),
+                    "split_price": candidate_split_price,
+                    "source_envelope": dict(
+                        current_range.get("source_envelope")
+                        or geometry["new_range"]
+                    ),
+                },
                 "grid": {
-                    "count": grid.get("count"),
+                    "count": candidate_grid_count,
                     "mode": grid.get("mode"),
                     "notional_per_grid": fixed_notional,
                     "notional_mode": "manual",
@@ -1306,6 +1349,7 @@ class StrategyControlPlane:
             "geometry": geometry,
             "old": old_specification,
             "new": new_specification,
+            "migration": legacy_migration,
             "candidate": candidate,
             "canonical_risk": {
                 "basis": "exact_commands_plus_current_canonical_accounting",
@@ -4196,6 +4240,51 @@ def _required_order_ids(rows: list[dict[str, Any]], label: str) -> list[str]:
     return order_ids
 
 
+def _legacy_single_side_range_migration(
+    plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Describe the explicit next-edit migration for pre-scope one-sided plans."""
+
+    direction = str(plan.get("direction") or "").lower()
+    current_range = dict(plan.get("range") or {})
+    if direction not in {"long", "short"} or str(current_range.get("scope") or ""):
+        return None
+    low = _positive_number(current_range.get("low"), "legacy grid low")
+    high = _positive_number(current_range.get("high"), "legacy grid high")
+    if high <= low:
+        raise ValueError("legacy grid range must have positive low below high")
+    old_count = int((plan.get("grid") or {}).get("count") or 0)
+    if old_count < 2:
+        raise ValueError("legacy grid count must be at least two")
+    plan_market = dict((plan.get("execution_context") or {}).get("market") or {})
+    split_price = _number_or(
+        current_range.get("split_price"),
+        _number_or(plan_market.get("price"), math.nan),
+    )
+    if not math.isfinite(split_price) or split_price <= 0:
+        split_price = (low + high) / 2.0
+    executable_low, executable_high = low, high
+    if low < split_price < high:
+        if direction == "long":
+            executable_high = split_price
+        else:
+            executable_low = split_price
+    return {
+        "schema_version": "legacy-single-side-grid-migration-v1",
+        "reason": "pre_scope_single_side_plan",
+        "direction": direction,
+        "legacy_grid_count": old_count,
+        "executable_grid_count": math.ceil(old_count / 2),
+        "split_price": split_price,
+        "legacy_range": {"low": low, "high": high},
+        "executable_range": {
+            "low": executable_low,
+            "high": executable_high,
+        },
+        "applies_on_final_confirmation_only": True,
+    }
+
+
 def _range_preview_specification(
     source: dict[str, Any],
     *,
@@ -4461,7 +4550,7 @@ def _manual_range_acknowledgement_facts_digest(
 
 
 def _manual_range_risk_snapshot_digest(decision: dict[str, Any]) -> str:
-    """Hash candidate-only risk facts so recovery cannot reuse stale consent."""
+    """Hash economic risk facts without invalidating consent on harmless ticks."""
 
     request = (
         dict(decision.get("request") or {})
@@ -4534,8 +4623,6 @@ def _manual_range_risk_snapshot_digest(decision: dict[str, Any]) -> str:
         "market": {
             key: market.get(key)
             for key in (
-                "price",
-                "timestamp",
                 "provider",
                 "source_mode",
                 "fresh",
