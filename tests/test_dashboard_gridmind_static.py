@@ -393,16 +393,20 @@ def test_gridmind_range_review_card_shows_required_old_to_new_fields() -> None:
         "预计保证金",
         "实际杠杆",
         "每格计划净利",
-        "参考最大止损",
+        "预计最大损失",
         "撤单 / 新单",
         "当前持仓",
         "TP / SL",
     ):
         assert label in html
+    assert 'id="gridRiskAcknowledgements"' in html
+    assert "grid-range-risk-ack-v1" in html
+    assert "请逐项勾选上方全部规格和风险确认" in html
+    assert "仅 Paper 可人工覆盖" in html
     assert 'id="recalculateGridRangeRisk"' not in html
     assert "尚未交易新网格" not in html
     assert "停止+平仓+撤单+交易新网格" in html
-    assert "再次核对计划版本、行情、利润目标、挂单和持仓" in html
+    assert "再次核对计划版本、行情、风险确认、挂单和持仓" in html
 
 
 def test_uncertain_start_requires_persisted_complete_start_evidence() -> None:

@@ -1800,6 +1800,124 @@ def test_range_preview_fails_closed_for_stale_identity_or_market_outside_range(
     )["preview"]
     assert blocked["can_apply"] is False
     assert "market_price_outside_range" in blocked["confirm_disabled_reasons"]
+    assert blocked["can_apply_with_acknowledgements"] is True
+    confirmation = blocked["manual_confirmation"]
+    assert confirmation["scope"] == "paper_only"
+    assert confirmation["non_overridable_blocker_codes"] == []
+    acknowledgement_codes = {
+        row["code"] for row in confirmation["required_acknowledgements"]
+    }
+    assert {
+        "specification_change",
+        "maximum_loss_scenario",
+        "market_outside_range",
+    } <= acknowledgement_codes
+    max_loss = next(
+        row
+        for row in confirmation["required_acknowledgements"]
+        if row["code"] == "maximum_loss_scenario"
+    )
+    assert max_loss["facts"]["assumption"] == (
+        "old_positions_flatten_then_all_candidate_same_side_entries_fill_"
+        "then_planned_stop_beyond_range"
+    )
+
+
+def test_replacement_spec_reports_post_flatten_candidate_max_loss() -> None:
+    source = {
+        "range": {"low": 100.0, "high": 120.0},
+        "grid": {
+            "count": 40,
+            "mode": "arithmetic",
+            "spacing": 0.5,
+            "notional_per_grid": 2_500.0,
+            "leverage": 10.0,
+            "min_net_profit_per_grid_usd": 10.0,
+            "orders": [],
+        },
+        "risk": {"max_loss": 999.0},
+    }
+    specification = strategy_control_plane_module._range_preview_specification(
+        source,
+        canonical_metrics={
+            "equity": 10_000.0,
+            "candidate_notional_by_side": {"buy": 40_000.0, "sell": 30_000.0},
+            "candidate_loss_by_side": {"buy": 420.0, "sell": 315.0},
+            "existing_stop_loss_by_side": {"buy": 900.0, "sell": 0.0},
+            "projected_max_loss": 1_320.0,
+            "projected_actual_leverage": 13.0,
+            "projected_margin": 13_000.0,
+        },
+        post_flatten_candidate_only=True,
+    )
+
+    assert specification["max_loss"] == 420.0
+    assert specification["actual_leverage"] == 4.0
+    assert specification["estimated_margin"] == 4_000.0
+
+
+def test_pre_flatten_position_risk_does_not_create_contradictory_leverage_ack() -> None:
+    decision = {
+        "request": {"candidate": {"leverage": 10.0}},
+        "metrics": {
+            "equity": 10_000.0,
+            "candidate_notional_by_side": {"buy": 50_000.0, "sell": 40_000.0},
+            "existing_notional_by_side": {"buy": 70_000.0, "sell": 0.0},
+        },
+        "limits": {"max_leverage": 10.0, "margin_budget": 8_000.0},
+        "blockers": [
+            {"code": "projected_leverage_exceeded"},
+            {"code": "projected_margin_exceeded"},
+        ],
+    }
+    effective = strategy_control_plane_module._manual_range_effective_blocker_codes(
+        decision
+    )
+    assert "projected_leverage_exceeded" not in effective
+    assert "projected_margin_exceeded" not in effective
+    rows = strategy_control_plane_module._manual_range_acknowledgement_contract(
+        preview_id="preview-post-flatten",
+        old={"range_width": 200.0, "max_loss": 1_000.0},
+        new={
+            "range_width": 150.0,
+            "max_loss": 900.0,
+            "actual_leverage": 5.0,
+            "estimated_margin": 5_000.0,
+        },
+        blocker_codes=effective,
+        local_profit_target_not_met=False,
+        limits=decision["limits"],
+    )
+    assert "leverage_and_margin_risk" not in {row["code"] for row in rows}
+
+    capital_only_rows = (
+        strategy_control_plane_module._manual_range_acknowledgement_contract(
+            preview_id="preview-capital-only",
+            old={
+                "range_width": 200.0,
+                "max_loss": 1_000.0,
+                "min_net_profit_per_grid_usd": 10.0,
+                "actual_leverage": 5.0,
+                "estimated_margin": 5_000.0,
+            },
+            new={
+                "range_width": 150.0,
+                "max_loss": 900.0,
+                "min_net_profit_per_grid_usd": 12.0,
+                "actual_leverage": 12.0,
+                "estimated_margin": 12_000.0,
+            },
+            blocker_codes={
+                "projected_leverage_exceeded",
+                "projected_margin_exceeded",
+            },
+            local_profit_target_not_met=False,
+            limits=decision["limits"],
+        )
+    )
+    capital_codes = {row["code"] for row in capital_only_rows}
+    assert "leverage_and_margin_risk" in capital_codes
+    assert "profit_target_shortfall" not in capital_codes
 
 
 @pytest.mark.parametrize("runtime_change", ("id", "version"))
@@ -1906,9 +2024,18 @@ def test_range_preview_old_and_new_risk_share_current_canonical_accounting(
     assert result["old"]["max_loss"] == old_metrics["projected_max_loss"]
     assert result["old"]["estimated_margin"] == old_metrics["projected_margin"]
     assert result["old"]["actual_leverage"] == old_metrics["projected_actual_leverage"]
-    assert result["new"]["max_loss"] == new_metrics["projected_max_loss"]
-    assert result["new"]["estimated_margin"] == new_metrics["projected_margin"]
-    assert result["new"]["actual_leverage"] == new_metrics["projected_actual_leverage"]
+    candidate_max_loss = max(new_metrics["candidate_loss_by_side"].values())
+    candidate_max_notional = max(
+        new_metrics["candidate_notional_by_side"].values()
+    )
+    assert result["new"]["max_loss"] == candidate_max_loss
+    assert result["new"]["estimated_margin"] == pytest.approx(
+        candidate_max_notional / float(result["new"]["leverage"])
+    )
+    assert result["new"]["actual_leverage"] == pytest.approx(
+        candidate_max_notional / float(new_metrics["equity"])
+    )
+    assert result["new"]["max_loss"] <= new_metrics["projected_max_loss"]
 
 
 def test_range_risk_recalculation_cannot_silently_reduce_profit_target_grid(
@@ -2085,7 +2212,195 @@ def _range_replacement_request(
         **geometry,
         "expected_preview_id": preview["preview_id"],
         "expected_execution": execution,
+        "risk_acknowledgements": {
+            "schema_version": "grid-range-risk-ack-v1",
+            "preview_id": preview["preview_id"],
+            "facts_digest": preview["manual_confirmation"]["facts_digest"],
+            "risk_snapshot_digest": preview["manual_confirmation"][
+                "risk_snapshot_digest"
+            ],
+            "codes": sorted(
+                row["code"]
+                for row in preview["manual_confirmation"][
+                    "required_acknowledgements"
+                ]
+            ),
+        },
     }
+
+
+def test_risky_manual_range_replacement_requires_every_acknowledgement_and_is_paper_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    real = build_execution_engine_adapter(output)
+
+    class NautilusPaperFacade:
+        name = "nautilus_paper"
+
+        def __init__(self) -> None:
+            self.authoritative = self
+
+        def submit_order(self, command: dict) -> dict:
+            return real.submit_order(command)
+
+        def cancel_orders(self, requested_cycle: str, **kwargs) -> dict:
+            return real.cancel_orders(requested_cycle, **kwargs)
+
+        def snapshot(self, requested_cycle: str, **kwargs) -> dict:
+            return real.snapshot(requested_cycle, **kwargs)
+
+        def reconcile(self, requested_cycle: str) -> dict:
+            return real.reconcile(requested_cycle)
+
+        def process_market_event(self, event: dict) -> dict:
+            return real.process_market_event(event)
+
+        def flush(self, requested_cycle: str) -> dict:
+            return {"cycle_id": requested_cycle, "status": "flushed"}
+
+        def flush_commands(self, requested_cycle: str) -> dict:
+            return {"cycle_id": requested_cycle, "status": "flushed"}
+
+    adapter = NautilusPaperFacade()
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: adapter,
+    )
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("long", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    plan = started["plan"]
+    geometry = {
+        "expected_strategy_plan_id": plan["strategy_plan_id"],
+        "expected_strategy_plan_version": plan["version"],
+        "handle": "draft",
+        "range": {"low": 95.0, "high": 99.0},
+    }
+    preview = plane.control(
+        cycle_id,
+        "preview_range",
+        geometry,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+    assert preview["can_apply"] is False
+    assert preview["can_apply_with_acknowledgements"] is True
+    required_codes = sorted(
+        row["code"]
+        for row in preview["manual_confirmation"]["required_acknowledgements"]
+    )
+    assert {
+        "profit_target_shortfall",
+        "leverage_and_margin_risk",
+        "market_outside_range",
+        "maximum_loss_scenario",
+        "specification_change",
+    } <= set(required_codes)
+    with pytest.raises(ValueError, match="paper-only"):
+        strategy_control_plane_module._require_acknowledged_paper_grid_risk(
+            preview["canonical_risk"]["new"],
+            {
+                "schema_version": "grid-range-risk-ack-v1",
+                "scope": "paper_only",
+                "preview_id": preview["preview_id"],
+                "overridden_blocker_codes": preview["manual_confirmation"][
+                    "overridable_blocker_codes"
+                ],
+            },
+            adapter_name="live",
+        )
+    snapshot = adapter.snapshot(cycle_id)
+    request = {
+        **geometry,
+        "expected_preview_id": preview["preview_id"],
+        "expected_execution": {
+            "accepted_order_ids": sorted(
+                row["order_id"]
+                for row in snapshot["orders"]
+                if row.get("state") == "accepted"
+            ),
+            "open_position_ids": [],
+        },
+        "risk_acknowledgements": {
+            "schema_version": "grid-range-risk-ack-v1",
+            "preview_id": preview["preview_id"],
+            "facts_digest": preview["manual_confirmation"]["facts_digest"],
+            "risk_snapshot_digest": preview["manual_confirmation"][
+                "risk_snapshot_digest"
+            ],
+            "codes": required_codes[:-1],
+        },
+    }
+    with pytest.raises(ValueError, match="range_risk_acknowledgements_incomplete"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:43:00+00:00",
+        )
+    assert plane.runtime_state(cycle_id)["actual_state"] == "running"
+    assert len(plane._accepted_orders(cycle_id, adapter=adapter)) == len(
+        request["expected_execution"]["accepted_order_ids"]
+    )
+
+    request["risk_acknowledgements"]["codes"] = required_codes
+    changed_facts_preview = plane.control(
+        cycle_id,
+        "preview_range",
+        geometry,
+        market=market(),
+        account=account_context(equity=10_001.0),
+        now="2026-07-05T01:43:01+00:00",
+    )["preview"]
+    assert changed_facts_preview["preview_id"] == preview["preview_id"]
+    assert {
+        row["code"] for row in changed_facts_preview["risk_decision"]["blockers"]
+    } == {row["code"] for row in preview["risk_decision"]["blockers"]}
+    assert changed_facts_preview["manual_confirmation"]["facts_digest"] != (
+        preview["manual_confirmation"]["facts_digest"]
+    )
+    with pytest.raises(ValueError, match="range_risk_acknowledgements_incomplete"):
+        plane.control(
+            cycle_id,
+            "replace_grid",
+            request,
+            market=market(),
+            account=account_context(equity=10_001.0),
+            now="2026-07-05T01:43:01+00:00",
+        )
+    assert plane.runtime_state(cycle_id)["actual_state"] == "running"
+
+    replaced = plane.control(
+        cycle_id,
+        "replace_grid",
+        request,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:43:01+00:00",
+    )
+    assert replaced["runtime"]["actual_state"] == "running"
+    assert replaced["plan"]["range"]["low"] == 95.0
+    assert replaced["plan"]["range"]["high"] == 99.0
+    override = replaced["risk_decision"]["operator_override"]
+    assert override["scope"] == "paper_only"
+    assert "market_price_outside_range" in override["overridden_blocker_codes"]
+    persisted = replaced["plan"]["replacement_request"]["risk_acknowledgement"]
+    assert persisted["acknowledgement_codes"] == required_codes
 
 
 def test_replace_grid_stages_before_stop_then_activates_once(
