@@ -121,8 +121,12 @@ def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
     assert ".market-card,.strategy-card{height:auto}" in html
     assert ".live-card .card-body{height:295px;max-height:295px;overflow-y:auto" in html
     assert "运行中调整" not in html
-    for retired_id in ("adjustLow", "adjustHigh", "applyAdjustment", "resetStats", "actionStatus"):
+    # actionStatus was deliberately restored as the visible control status
+    # line by the DCA V5 controls change (#154); only the old adjust card
+    # controls must stay retired.
+    for retired_id in ("adjustLow", "adjustHigh", "applyAdjustment", "resetStats"):
         assert f'id="{retired_id}"' not in html
+    assert 'id="actionStatus"' in html
     assert ".chart{height:450px;min-height:320px}" in html
     assert "StandardKlineChart(host,{height:450,minHeight:320" in html
     assert ".chart{height:420px}" in html
