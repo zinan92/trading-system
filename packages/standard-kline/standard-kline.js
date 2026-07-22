@@ -218,7 +218,7 @@
     }
     if(!date || Number.isNaN(date.getTime())) return "";
     const options = includeDate
-      ? {timeZone:zone, month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false}
+      ? {timeZone:zone, year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false}
       : {timeZone:zone, hour:"2-digit", minute:"2-digit", hour12:false};
     return new Intl.DateTimeFormat(lang, options).format(date);
   }
@@ -296,7 +296,7 @@
     const zoomButtons = showZoom
       ? `<button type="button" data-action="zoom-in" title="Zoom in">+</button><button type="button" data-action="zoom-out" title="Zoom out">-</button><button type="button" data-action="pan-left" title="Pan left">&lt;</button><button type="button" data-action="pan-right" title="Pan right">&gt;</button>`
       : "";
-    return `${zoomButtons}<button type="button" data-action="fit" title="Fit">fit</button><span class="standard-kline-crosshair" data-crosshair-time></span><span class="standard-kline-ohlc" data-ohlc></span><span class="standard-kline-source" data-source></span>`;
+    return `${zoomButtons}<button type="button" data-action="fit" title="Fit">fit</button><span class="standard-kline-ohlc" data-ohlc></span><span class="standard-kline-source" data-source></span>`;
   }
 
   function injectStyles(){
@@ -309,14 +309,13 @@
 .standard-kline-toolbar{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;min-height:30px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.08);font:11px/1.2 var(--mono,"SFMono-Regular",ui-monospace,monospace);color:${COLORS.faint};background:rgba(255,255,255,.018)}
 .standard-kline-toolbar button{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:${COLORS.text};border-radius:5px;padding:3px 8px;cursor:pointer;font:inherit}
 .standard-kline-toolbar button:hover{border-color:rgba(216,170,63,.45);color:${COLORS.gold}}
-.standard-kline-crosshair{flex:0 0 auto;color:${COLORS.text};min-width:92px}
-.standard-kline-crosshair:empty{display:none}
 .standard-kline-ohlc{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${COLORS.text}}
 .standard-kline-ohlc.up{color:${COLORS.up}}
 .standard-kline-ohlc.down{color:${COLORS.down}}
 .standard-kline-source{margin-left:auto;min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${COLORS.faint};text-align:right}
 @container (max-width:720px){.standard-kline-source{display:none}}
 .standard-kline-canvas{position:relative;min-width:0;min-height:0;height:100%}
+.standard-kline-time-axis-label{position:absolute;bottom:1px;z-index:6;transform:translateX(-50%);padding:3px 7px;border:1px solid rgba(255,255,255,.16);border-radius:3px;background:rgba(16,20,30,.96);box-shadow:0 1px 5px rgba(0,0,0,.35);color:${COLORS.text};font:10px/1.25 var(--mono,"SFMono-Regular",ui-monospace,monospace);white-space:nowrap;pointer-events:none}
 .standard-kline-scale-controls{position:absolute;right:8px;bottom:8px;z-index:5;display:flex;gap:4px}
 .standard-kline-scale-controls button{width:24px;height:22px;border:1px solid rgba(255,255,255,.2);border-radius:4px;background:rgba(10,11,12,.82);color:${COLORS.text};font:700 11px/1 var(--mono,"SFMono-Regular",ui-monospace,monospace);cursor:pointer}
 .standard-kline-scale-controls button.is-active{border-color:${COLORS.gold};color:${COLORS.gold}}
@@ -356,6 +355,7 @@
       this._timeScale = null;
       this._nativeSetVisibleLogicalRange = null;
       this._nativeGetVisibleLogicalRange = null;
+      this.timeAxisCrosshairEl = null;
       injectStyles();
       this._buildDom();
       this._initChart();
@@ -372,6 +372,10 @@
       this.toolbarEl.innerHTML = toolbarHtml(this.options);
       this.chartEl = root.document.createElement("div");
       this.chartEl.className = "standard-kline-canvas";
+      this.timeAxisCrosshairEl = root.document.createElement("div");
+      this.timeAxisCrosshairEl.className = "standard-kline-time-axis-label";
+      this.timeAxisCrosshairEl.setAttribute("data-crosshair-time-axis", "true");
+      this.timeAxisCrosshairEl.hidden = true;
       this.scaleControlsEl = root.document.createElement("div");
       this.scaleControlsEl.className = "standard-kline-scale-controls";
       this.scaleControlsEl.innerHTML = `<button type="button" data-action="auto-fit" title="Auto fit visible data">A</button>`;
@@ -381,6 +385,7 @@
       this.overlayEl.innerHTML = `<div class="standard-kline-message"><b></b><span></span></div>`;
       this.rootEl.appendChild(this.toolbarEl);
       this.rootEl.appendChild(this.chartEl);
+      this.chartEl.appendChild(this.timeAxisCrosshairEl);
       this.rootEl.appendChild(this.scaleControlsEl);
       this.rootEl.appendChild(this.overlayEl);
       this.container.appendChild(this.rootEl);
@@ -420,7 +425,7 @@
         handleScale:{axisPressedMouseMove:true, mouseWheel:true, pinch:true},
         localization:{priceFormatter:price => formatPrice(price,2), timeFormatter:time => formatChartTime(time, timeZone, true, locale)},
       });
-      this.chart.subscribeCrosshairMove?.(param => this._setCrosshairTime(param?.time));
+      this.chart.subscribeCrosshairMove?.(param => this._setCrosshairTime(param));
       this._patchTimeScale();
       this._timeScale?.subscribeVisibleLogicalRangeChange?.(range => this._emitViewChange("visible-logical-range", range));
       this.candleSeries = this.chart.addSeries(lwc.CandlestickSeries, {
@@ -645,15 +650,21 @@
       source.title = fullText;
     }
 
-    _setCrosshairTime(time){
-      const target = this.toolbarEl.querySelector("[data-crosshair-time]");
+    _setCrosshairTime(param){
+      const target = this.timeAxisCrosshairEl;
       if(!target) return;
-      if(time == null){
+      const time = param?.time;
+      const x = numberOrNull(param?.point?.x);
+      if(time == null || x == null){
         target.textContent = "";
+        target.hidden = true;
         this._setOhlcText();
         return;
       }
+      const width = Math.max(1, Number(this.chartEl?.clientWidth || this._size().width || 1));
+      target.style.left = `${clampNumber(x, 72, Math.max(72, width - 72))}px`;
       target.textContent = formatChartTime(time, this.options.timeZone || "UTC", true, this.options.locale || "en-US");
+      target.hidden = false;
       this._setOhlcText(time);
     }
 
