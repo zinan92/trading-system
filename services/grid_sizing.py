@@ -208,6 +208,40 @@ def non_negative_number(value: Any, label: str) -> float:
     return parsed
 
 
+def _directional_count_bounds(
+    minimum: int,
+    maximum: int,
+    direction: str,
+) -> tuple[int, int]:
+    """Return user-visible executable-count bounds for the armed side(s)."""
+
+    if direction == "neutral":
+        return minimum, maximum
+    return max(2, math.ceil(minimum / 2)), max(2, math.ceil(maximum / 2))
+
+
+def _executable_range(
+    low: float,
+    high: float,
+    latest: float,
+    direction: str,
+) -> tuple[float, float]:
+    """Trim a two-sided envelope to the side which can actually be armed.
+
+    A previously returned one-sided range is stable on the next preview because
+    its market-side boundary already equals ``latest``.  Ranges wholly on the
+    executable side are also preserved; the existing geometry validator rejects
+    ranges which cannot contain an order for the selected direction.
+    """
+
+    if low < latest < high:
+        if direction == "long":
+            return low, latest
+        if direction == "short":
+            return latest, high
+    return low, high
+
+
 def preview_id(preview: dict[str, Any]) -> str:
     solver = preview.get("solver") if isinstance(preview.get("solver"), dict) else {}
     raw = json.dumps({
@@ -282,14 +316,35 @@ def build_grid_preview(
         "cost per side bp",
     ) / 10_000.0
 
-    # Direction controls which side is armed. It does not secretly move the
-    # market range; identical market evidence must produce identical geometry.
+    # The ATR envelope is analysis input.  The public Range is the executable
+    # price region: long uses its lower half, short its upper half, while neutral
+    # keeps the complete envelope.  This keeps displayed geometry identical to
+    # the orders which can actually be submitted.
     half_span = range_atr * range_multiple
-    suggested_low, suggested_high = latest - half_span, latest + half_span
+    envelope_low, envelope_high = latest - half_span, latest + half_span
 
     range_input = body.get("range") if isinstance(body.get("range"), dict) else {}
-    low = number_or(range_input.get("low"), suggested_low)
-    high = number_or(range_input.get("high"), suggested_high)
+    requested_low = number_or(range_input.get("low"), envelope_low)
+    requested_high = number_or(range_input.get("high"), envelope_high)
+    source_envelope_input = (
+        range_input.get("source_envelope")
+        if isinstance(range_input.get("source_envelope"), dict)
+        else {}
+    )
+    source_envelope_low = number_or(
+        source_envelope_input.get("low"),
+        requested_low,
+    )
+    source_envelope_high = number_or(
+        source_envelope_input.get("high"),
+        requested_high,
+    )
+    low, high = _executable_range(
+        requested_low,
+        requested_high,
+        latest,
+        direction,
+    )
     if low <= 0 or high <= low:
         raise ValueError("grid range must have positive low below high")
     grid_input = body.get("grid") if isinstance(body.get("grid"), dict) else {}
@@ -302,8 +357,16 @@ def build_grid_preview(
         * float(strategy_cfg.get("cost_spacing_multiple") or 1.0) / 10_000.0,
         0.0001,
     )
-    min_count = max(2, int(strategy_cfg.get("min_grid_count") or MIN_GRID_COUNT))
-    max_count = max(min_count, int(strategy_cfg.get("max_grid_count") or MAX_GRID_COUNT))
+    configured_min_count = max(2, int(strategy_cfg.get("min_grid_count") or MIN_GRID_COUNT))
+    configured_max_count = max(
+        configured_min_count,
+        int(strategy_cfg.get("max_grid_count") or MAX_GRID_COUNT),
+    )
+    min_count, max_count = _directional_count_bounds(
+        configured_min_count,
+        configured_max_count,
+        direction,
+    )
     requested_count = number_or(grid_input.get("count"), 0.0)
     initial_count = int(requested_count) if requested_count > 0 else max(
         min_count,
@@ -450,6 +513,12 @@ def build_grid_preview(
             "low": round(low, 4),
             "high": round(high, 4),
             "method": f"D1 ATR{range_period} × {range_multiple:g}",
+            "scope": "full" if direction == "neutral" else f"{direction}_side",
+            "split_price": round(latest, 4),
+            "source_envelope": {
+                "low": round(source_envelope_low, 4),
+                "high": round(source_envelope_high, 4),
+            },
             "source_timeframe": range_timeframe,
             "atr_period": range_period,
             "atr": round(range_atr, 4),
@@ -665,8 +734,20 @@ def build_adaptive_grid_preview(
     grid = dict(body.get("grid") or {})
     risk_budget = dict(body.get("risk_budget") or {})
     strategy = dict(config.get("strategy_grid") or {})
-    preferred_min = max(2, int(strategy.get("min_grid_count") or MIN_GRID_COUNT))
-    preferred_max = max(preferred_min, int(strategy.get("max_grid_count") or MAX_GRID_COUNT))
+    direction = str(body.get("direction") or "neutral").lower()
+    configured_preferred_min = max(
+        2,
+        int(strategy.get("min_grid_count") or MIN_GRID_COUNT),
+    )
+    configured_preferred_max = max(
+        configured_preferred_min,
+        int(strategy.get("max_grid_count") or MAX_GRID_COUNT),
+    )
+    preferred_min, preferred_max = _directional_count_bounds(
+        configured_preferred_min,
+        configured_preferred_max,
+        direction,
+    )
     recommended_leverage = positive_number(
         strategy.get("required_leverage", config.get("max_leverage") or 10.0),
         "recommended leverage",
@@ -702,8 +783,30 @@ def build_adaptive_grid_preview(
     if "range" not in locks:
         body.pop("range", None)
 
+    current_count = int(number_or(solver.get("current_grid_count"), preferred_max))
+    current_direction = str(solver.get("current_direction") or direction).lower()
+    direction_changed = (
+        current_direction in GRID_DIRECTIONS
+        and direction in GRID_DIRECTIONS
+        and current_direction != direction
+    )
+    if current_direction == "neutral" and direction in {"long", "short"}:
+        current_count = math.ceil(current_count / 2)
+    elif current_direction in {"long", "short"} and direction == "neutral":
+        current_count *= 2
+    current_count = max(
+        ADAPTIVE_MIN_GRID_COUNT,
+        min(ADAPTIVE_MAX_GRID_COUNT, current_count),
+    )
+
     if "grid_count" in locks:
         counts = [requested_count]
+    elif direction_changed:
+        # A direction click has an explicit geometric meaning: preserve the
+        # current density, mapping neutral to one executable side (and back).
+        # Capital/profit deviations are surfaced as flags rather than silently
+        # changing the user's 39 -> 20 expectation into another grid count.
+        counts = [current_count]
     else:
         counts = list(range(preferred_max, ADAPTIVE_MIN_GRID_COUNT - 1, -1))
 
@@ -816,9 +919,6 @@ def build_adaptive_grid_preview(
         if precision_error is not None:
             raise precision_error
         raise ValueError("no executable grid candidate could be generated")
-
-    current_count = int(number_or(solver.get("current_grid_count"), preferred_max))
-    current_count = max(ADAPTIVE_MIN_GRID_COUNT, current_count)
 
     def candidate_score(row: dict[str, Any]) -> tuple[float, ...]:
         row_count = int(row["grid"]["count"])

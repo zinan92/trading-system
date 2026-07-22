@@ -8929,6 +8929,50 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused sizing, control-plane, static dashboard, and Playwright tests:
   127 passed.
 - Python compilation and `git diff --check` passed.
+
+## 2026-07-22 - Executable semantics for single-side grids
+
+### Decision
+
+- Treat the public Range and grid count as executable specifications, not as a
+  two-sided analysis envelope which is later filtered. An automatic long grid
+  uses the lower half through the frozen market split; an automatic short grid
+  uses the upper half; neutral keeps the complete envelope.
+- Keep an explicitly returned one-sided Range stable on later previews. A
+  manually entered Range wholly on the executable side is preserved, while a
+  Range crossing the market split is trimmed to the selected side.
+- For automatic sizing, single-side preferred counts are the rounded-up half of
+  the neutral band. A direction change from neutral maps the current odd count
+  with `ceil(count / 2)`, so 39 visible neutral grids become 20 visible and
+  executable long or short grids.
+- Color adjustment-draft lines by the order side they represent: buy green,
+  sell red, and mark the neutral market split in amber.
+
+### Gotchas
+
+- `grid.count` must equal the number of executable entry orders. Reusing a
+  two-sided count and filtering orders afterward recreates the original 39 vs
+  19 mismatch and corrupts per-grid capital sizing.
+- A user-locked count is already an executable count and must not be halved
+  again on every preview. Only an unlocked direction transition maps the prior
+  plan count between neutral and single-side semantics.
+- The neutral color split follows the current trusted market price because that
+  is also what the backend uses to choose buy versus sell orders. It is a visual
+  separator, not a third draggable strategy parameter.
+
+### Adversarial review corrections
+
+- Apply the same direction-aware 15–35 executable band in the canonical Paper
+  risk policy. A 20-order single-side plan must not be rejected by the old
+  neutral 30–70 rule after sizing has already accepted it.
+- When the operator changes direction, preserve the mapped current density as
+  an implicit geometric choice (39 neutral becomes 20 single-side). Profit,
+  leverage and margin shortfalls remain visible acknowledgement flags instead
+  of silently changing 20 into a different count.
+- Permit a prepared single-side candidate to remain valid when a trusted tick
+  moves farther onto its non-entry side without crossing any executable order.
+  The original ATR source envelope and marketability checks still bound the
+  candidate and reject entry-side crossings.
 - Browser evidence:
   `docs/evidence/issue-97/issue-97-parameter-controls.png` and
   `docs/evidence/issue-97/issue-97-adaptive-risk-confirmation.png`.
