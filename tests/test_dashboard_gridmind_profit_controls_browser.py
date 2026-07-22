@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from services.dualtrack_execution_adapter import LegacyPaperExecutionAdapter
+from services.journal_store import load_json, write_json
 from tests.test_dashboard_gridmind_header_browser import _header_model
+from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
 
 
@@ -112,6 +115,255 @@ def _risky_preview() -> dict:
         ],
     }
     return response
+
+
+def _reconciliation_blocked_preview(extra_issues: list[dict] | None = None) -> dict:
+    response = _risky_preview()
+    manual = response["preview"]["manual_confirmation"]
+    manual.update({
+        "available": False,
+        "non_overridable_blocker_codes": ["execution_reconciliation_drift"],
+        "non_overridable_blockers": [{
+            "code": "execution_reconciliation_drift",
+            "source": "canonical_execution.reconciliation",
+            "message": "execution reconciliation is not clean",
+            "evidence": {
+                "accounting_status": "drift",
+                "engine_status": "ok",
+                "issues": [
+                    {
+                        "code": "closed_trade_exit_fill_missing",
+                        "trade_id": "entry-trade-1",
+                    },
+                    {
+                        "code": "orphan_exit_fill",
+                        "fill_id": "flatten-fill-1",
+                        "trade_id": "flatten-command-1",
+                    },
+                    *(extra_issues or []),
+                ],
+            },
+        }],
+    })
+    return response
+
+
+def _leverage_blocked_preview(*, mixed: bool) -> dict:
+    response = _reconciliation_blocked_preview() if mixed else _risky_preview()
+    manual = response["preview"]["manual_confirmation"]
+    leverage = {
+        "code": "manual_leverage_capacity_exceeded",
+        "source": "adaptive_grid_solver",
+        "message": "实际杠杆 29.99x，超过 Paper 手动容量 20x。",
+        "evidence": {
+            "actual_leverage": 29.99,
+            "selected_leverage": 20.0,
+            "manual_paper_leverage_limit": 20.0,
+            "estimated_margin": 14_997.0,
+            "equity": 10_000.0,
+        },
+    }
+    manual["available"] = False
+    manual["non_overridable_blocker_codes"] = [
+        *manual.get("non_overridable_blocker_codes", []),
+        "manual_leverage_capacity_exceeded",
+    ]
+    manual["non_overridable_blockers"] = [
+        *manual.get("non_overridable_blockers", []),
+        leverage,
+    ]
+    return response
+
+
+def test_gridmind_explains_reconciliation_start_blocker_in_plain_language(
+    tmp_path: Path,
+) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_000.0)
+    model["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "can_start_when_authorized": True,
+        "can_stop_when_authorized": False,
+    })
+    model["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+    requests: list[dict] = []
+    adapter = LegacyPaperExecutionAdapter(tmp_path / "outputs", config=TEST_CONFIG)
+    adapter.submit_order({
+        "cycle_id": "2026-07-05_DAY",
+        "ts": "2026-07-05T01:02:00+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "market",
+        "price": 100.0,
+        "notional": 1_000.0,
+        "sl": 95.0,
+        "tp": 110.0,
+        "source": "start_blocker_browser_test",
+    })
+    fills_path = (
+        tmp_path
+        / "outputs"
+        / "dualtrack"
+        / "fills"
+        / "2026-07-05_DAY_human.json"
+    )
+    persisted_fills = load_json(fills_path)
+    write_json(fills_path, [*persisted_fills, dict(persisted_fills[0])])
+    actual_duplicate_issue = next(
+        row
+        for row in adapter.reconcile("2026-07-05_DAY")["issues"]
+        if row["code"] == "duplicate_fill_id"
+    )
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        requests.append(body)
+        response = _risky_preview()
+        if body["action"] == "prepare_start":
+            response = {
+                **_reconciliation_blocked_preview([
+                    actual_duplicate_issue,
+                    {
+                        "code": "persisted_orders_mismatch",
+                        "snapshot_count": 40,
+                        "persisted_count": 39,
+                    },
+                ]),
+                "action": "prepare_start",
+                "prepared_start_id": "prepared-blocked-1",
+            }
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(response, ensure_ascii=False),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model, ensure_ascii=False),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator("#smartFill").click()
+        page.locator("#previewSummary").wait_for(state="visible")
+        page.locator("#startRobot").click()
+        page.locator("#startRiskDialog").wait_for(state="visible")
+
+        text = page.locator("#startRiskDialog").inner_text()
+        assert "账本对账未通过" in text
+        assert "已关闭交易缺少对应平仓成交" in text
+        assert "存在无法归属到原交易的平仓成交" in text
+        assert "成交记录 ID 重复" in text
+        assert f"成交 ID：{actual_duplicate_issue['fill_ids'][0]}" in text
+        assert "快照数量：40" in text
+        assert "持久化数量：39" in text
+        assert "先修复下方账本差异并重新核对" in text
+        assert "机器码：execution_reconciliation_drift" in text
+        assert page.locator("#confirmStartRisk").is_disabled()
+        assert [row["action"] for row in requests] == ["preview", "prepare_start"]
+        artifact_dir = os.environ.get("GRID_PROFIT_SCREENSHOT_DIR")
+        if artifact_dir:
+            path = Path(artifact_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            page.locator("#startRiskDialog").screenshot(
+                path=str(path / "issue-122-start-blocker-explanation.png")
+            )
+        browser.close()
+
+
+@pytest.mark.parametrize(("mixed", "expected_cards"), [(False, 1), (True, 2)])
+def test_gridmind_keeps_leverage_capacity_details_alone_and_with_ledger_blocker(
+    mixed: bool,
+    expected_cards: int,
+) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_000.0)
+    model["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "can_start_when_authorized": True,
+        "can_stop_when_authorized": False,
+    })
+    model["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        response = _risky_preview()
+        if body["action"] == "prepare_start":
+            response = {
+                **_leverage_blocked_preview(mixed=mixed),
+                "action": "prepare_start",
+                "prepared_start_id": "prepared-leverage-blocked",
+            }
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(response, ensure_ascii=False),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model, ensure_ascii=False),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator("#smartFill").click()
+        page.locator("#previewSummary").wait_for(state="visible")
+        page.locator("#startRobot").click()
+        page.locator("#startRiskDialog").wait_for(state="visible")
+
+        text = page.locator("#startRiskDialog").inner_text()
+        assert page.locator(".start-blocker").count() == expected_cards
+        assert "杠杆超过 Paper 手动容量" in text
+        assert "实际杠杆：29.99" in text
+        assert "Paper 手动上限：20" in text
+        assert "机器码：manual_leverage_capacity_exceeded" in text
+        assert ("账本对账未通过" in text) is mixed
+        assert page.locator("#confirmStartRisk").is_disabled()
+        browser.close()
 
 
 def test_gridmind_sizing_controls_lock_manual_input_and_keep_other_values_auto() -> None:

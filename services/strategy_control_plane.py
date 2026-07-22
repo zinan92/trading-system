@@ -716,6 +716,42 @@ class StrategyControlPlane:
         ):
             non_overridable.append("manual_leverage_capacity_exceeded")
             non_overridable = sorted(set(non_overridable))
+        non_overridable_details = [
+            dict(row)
+            for row in decision.get("blockers") or []
+            if isinstance(row, dict)
+            and str(row.get("code") or "risk_blocked") in non_overridable
+        ]
+        detailed_codes = {
+            str(row.get("code") or "") for row in non_overridable_details
+        }
+        for row in solver.get("risk_flags") or []:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("code") or "")
+            if code not in non_overridable or code in detailed_codes:
+                continue
+            non_overridable_details.append({
+                "code": code,
+                "source": "adaptive_grid_solver",
+                "message": str(row.get("message") or ""),
+                "evidence": {
+                    "actual_leverage": preview.get("risk", {}).get(
+                        "actual_leverage"
+                    ),
+                    "selected_leverage": preview.get("grid", {}).get(
+                        "leverage"
+                    ),
+                    "manual_paper_leverage_limit": solver.get(
+                        "preferred", {}
+                    ).get("manual_paper_leverage_limit"),
+                    "estimated_margin": preview.get("risk", {}).get(
+                        "estimated_margin"
+                    ),
+                    "equity": preview.get("risk", {}).get("equity"),
+                },
+            })
+            detailed_codes.add(code)
         old_specification = _range_preview_specification(current)
         new_specification = _range_preview_specification(
             preview,
@@ -750,6 +786,7 @@ class StrategyControlPlane:
                 blocker_codes & MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS
             ),
             "non_overridable_blocker_codes": non_overridable,
+            "non_overridable_blockers": non_overridable_details,
             "old": old_specification,
             "new": new_specification,
         }
