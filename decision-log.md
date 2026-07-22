@@ -9177,3 +9177,24 @@ auditable datafeed port; broker execution remains a separate port.
   replacement to a scoped 20-level long plan.
 - Added Playwright coverage for the normalized draft, legacy-aware start
   solver payload, and the visible `39 格 → 20 格（旧口径迁移）` confirmation.
+
+## 2026-07-22 - Desktop control-column row alignment
+
+### Decision
+
+- Increase only the desktop K-line viewport from 450px to 508px so the left
+  chart card and right AI decision card finish on the same horizontal line.
+- Keep the existing 420px tablet and 340px mobile overrides unchanged.
+
+### Gotchas
+
+- Shortening the AI decision card would hide its recommendation and introduce
+  a second nested scrollbar inside the already scrollable control rail.
+- Rebuilding the workspace as cross-column CSS subgrid would be disproportionate
+  for a 58px desktop-only mismatch and could disturb the established sticky rail.
+
+### Verification
+
+- At a 1614×900 browser viewport, the second-row start delta changed from
+  57.5px to 0.5px while retaining all right-rail content.
+- Focused dashboard static tests: 26 passed; gitleaks found no leaks.
