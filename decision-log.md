@@ -9286,3 +9286,34 @@ auditable datafeed port; broker execution remains a separate port.
 - Browser geometry check at the annotated desktop viewport: AI and strategy
   cards have natural height and no clipped scroll content; only runtime details
   have `overflow-y: auto`.
+
+## 2026-07-22 - Preserve the original trade identity on Paper flatten fills
+
+### Decision
+
+- Future Nautilus flatten fills use the explicitly targeted entry `trade_id`
+  instead of the flatten command ID.
+- Existing immutable Nautilus Paper rows are rebound only when the flatten
+  `trade_id` equals its own command/order ID and one closed position
+  matches the flatten fill exactly by side, quantity, exit price, timestamp,
+  and plan identity. The source ID and resolution rule remain visible in the
+  accounting projection.
+- A non-finite price on a market-order row is a compatibility warning, not an
+  accounting drift. Market orders have no applicable limit price; the actual
+  execution price remains authoritative in the finite fill row.
+
+### Gotchas
+
+- No command, order, fill, position, or snapshot artifact is rewritten.
+- Zero or multiple closed-position matches remain unresolved and fail closed.
+- The market-order exception does not apply to limit orders or fill prices;
+  those continue to reject non-finite values.
+- A warning remains in reconciliation evidence even though it does not block
+  new Paper exposure.
+
+### Verification
+
+- The immutable `2026-07-22_DAY` Paper snapshot projects with reconciliation
+  `pass`, one auditable legacy identity repair, and the market-price warning.
+- Focused accounting, replay, and read-model tests cover the unique repair,
+  ambiguous fail-closed path, and future producer identity.

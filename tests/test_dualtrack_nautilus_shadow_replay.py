@@ -439,3 +439,33 @@ def test_fill_reports_map_client_order_identity_back_to_plan_and_event() -> None
         "strategy_plan_id": "plan-1",
         "strategy_plan_version": 3,
     }]
+
+
+def test_flatten_fill_uses_target_trade_identity_from_command() -> None:
+    commands = [{
+        "command_id": "flatten-command",
+        "command": {
+            "cycle_id": "2026-07-22_DAY",
+            "event": "flatten",
+            "side": "sell",
+            "price": 4121.57,
+            "quantity": 1.182,
+            "trade_id": "entry-command",
+            "strategy_plan_id": "plan-1",
+            "strategy_plan_version": 3,
+        },
+    }]
+    reports = [{
+        "client_order_id": "flatten-command",
+        "order_side": "SELL",
+        "order_type": "MARKET",
+        "avg_px": 4117.57,
+        "filled_qty": 1.182,
+        "ts_last": "2026-07-22T08:35:19+00:00",
+    }]
+
+    fills = _fills_from_reports(reports, commands)
+
+    assert fills[0]["order_id"] == "flatten-command"
+    assert fills[0]["trade_id"] == "entry-command"
+    assert fills[0]["event"] == "flatten"
