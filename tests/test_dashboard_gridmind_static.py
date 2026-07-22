@@ -121,6 +121,10 @@ def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> No
     assert "retained_last_trusted" in html
     assert "loadOlderMarketBars" in html
     assert "page.historical_page!==true||page.trusted_history!==true" in html
+    assert 'host.addEventListener("wheel",()=>{' in html
+    assert "state.historyInputStartRange=state.chart?.getVisibleLogicalRange?.()||null" in html
+    assert "historyInputCanLoad(range,state.historyInputUntil,state.historyInputStartRange)" in html
+    assert 'reason==="visible-logical-range"||reason==="set-visible-logical-range"' in html
     assert "pagination?.has_more===false" in html
     assert "getVisibleLogicalRange" in html
     assert "restoreVisibleLogicalRange" in html

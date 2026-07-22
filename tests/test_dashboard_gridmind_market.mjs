@@ -19,7 +19,10 @@ const mergeMarketBars = vm.runInNewContext(
   `(${sourceBetween("mergeMarketBars", "marketDatasetKey")})`,
 );
 const shouldLoadOlderHistory = vm.runInNewContext(
-  `(${sourceBetween("shouldLoadOlderHistory", "setupHistoryGesture")})`,
+  `(${sourceBetween("shouldLoadOlderHistory", "historyInputCanLoad")})`,
+);
+const historyInputCanLoad = vm.runInNewContext(
+  `(${sourceBetween("historyInputCanLoad", "setupHistoryGesture")})`,
 );
 const retainLastTrustedMarket = vm.runInNewContext(
   `(${sourceBetween("retainLastTrustedMarket", "acceptMarketSnapshot")})`,
@@ -134,4 +137,13 @@ test("history loads when a right drag starts at the oldest fitted edge", () => {
   assert.equal(shouldLoadOlderHistory({startX: 100, lastX: 108, startRange: {from: -1}}, {from: -1}), false);
   assert.equal(shouldLoadOlderHistory({startX: 100, lastX: 120, startRange: {from: 100}}, {from: 100}), false);
   assert.equal(shouldLoadOlderHistory({startX: 100, lastX: 120, startRange: {from: 20}}, {from: 10}), true);
+});
+
+test("wheel or trackpad input loads history only at the oldest edge", () => {
+  assert.equal(historyInputCanLoad({from: 20}, 2500, {from: 24}, 2000), true);
+  assert.equal(historyInputCanLoad({from: -2}, 2500, {from: -1}, 2000), true);
+  assert.equal(historyInputCanLoad({from: 25}, 2500, {from: 30}, 2000), false);
+  assert.equal(historyInputCanLoad({from: 24}, 2500, {from: 20}, 2000), false);
+  assert.equal(historyInputCanLoad({from: 24}, 2500, {from: 24}, 2000), false);
+  assert.equal(historyInputCanLoad({from: 20}, 1500, {from: 24}, 2000), false);
 });

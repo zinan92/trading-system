@@ -8932,3 +8932,51 @@ auditable datafeed port; broker execution remains a separate port.
 - Browser evidence:
   `docs/evidence/issue-97/issue-97-parameter-controls.png` and
   `docs/evidence/issue-97/issue-97-adaptive-risk-confirmation.png`.
+
+## 2026-07-22 - V5 history pagination input parity
+
+### Decision
+
+- Keep the fast 240-bar first paint. Historical depth remains an explicit,
+  read-only pagination flow using the existing exclusive `end` cursor.
+- Treat mouse-wheel and trackpad navigation as first-class history intent,
+  alongside the existing right-drag gesture. A short-lived input token binds
+  pagination to a real user gesture instead of chart initialization events.
+- Continue merging fresh 240-bar snapshots into the accumulated dataset so
+  five-second polling updates the live edge without deleting loaded history.
+
+### Gotchas
+
+- `subscribeVisibleLogicalRangeChange` also fires during render, resize, and
+  viewport restoration. Loading solely from `range.from <= 24` can create an
+  automatic page-fetch loop; the input token and `chartProgrammatic` guard are
+  both required.
+- The existing backend and deduplicating prepend path were still present on
+  main. The regression was input-modality coverage: only a captured pointer
+  drag could trigger it, while Park uses wheel/trackpad scrolling.
+- History remains display-only. A trusted historical page never becomes a
+  fresh execution event and cannot reopen the new-entry gate.
+
+### Adversarial review correction
+
+- A wheel event alone is not sufficient proof of older-history intent. The
+  token now records the pre-input logical range and is consumed only when the
+  viewport actually moves toward older candles; reverse wheel/trackpad input
+  cannot spend a history request.
+- Browser coverage uses real vertical wheel and horizontal trackpad deltas in
+  both directions. Toolbar clicks are no longer an accidental proxy for wheel
+  intent.
+
+### Verification
+
+- Market/history JavaScript tests: 5 passed.
+- Static dashboard plus real-browser wheel/trackpad tests: 27 passed.
+- The browser starts at 240 bars, rejects reverse-direction input without a
+  request, then loads 320 trusted older bars and renders 560 total bars while
+  retaining the live market gate. It also completes a live refresh while the
+  history request is pending and crosses the real five-second polling interval;
+  both paths retain all 560 bars without treating history as fresh execution
+  data.
+- Browser evidence:
+  `docs/evidence/issue-99/issue-99-history-beyond-240.png`.
+- `git diff --check` passed.
