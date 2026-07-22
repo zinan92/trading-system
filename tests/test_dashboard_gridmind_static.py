@@ -142,6 +142,10 @@ def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> 
         "smartFill",
         "rangeLow",
         "rangeHigh",
+        "gridCount",
+        "gridProfitTarget",
+        "gridNotional",
+        "leverage",
         "previewSummary",
         "startRobot",
         "stopRobot",
@@ -163,12 +167,17 @@ def test_gridmind_exposes_only_operator_strategy_inputs_and_derives_sizing() -> 
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
 
-    for derived_control in ("gridCount", "gridNotional", "leverage", "outOfRange"):
-        assert f'id="{derived_control}"' not in html
-    assert 'payload.grid={mode:state.gridMode,notional_mode:"auto"' in html
-    assert 'payload.risk_budget={leverage:10}' in html
+    assert 'id="outOfRange"' not in html
+    assert 'mode:"manual_adaptive"' in html
+    assert 'const locked=[...state.parameterLocks].sort()' in html
+    assert 'data-param-lock="grid_count"' in html
+    assert 'data-param-lock="profit_target"' in html
+    assert 'data-param-lock="notional_per_grid"' in html
+    assert 'data-param-lock="leverage"' in html
     assert "30–70 格" in html
-    assert "每格计划净利至少 10 USD" in html
+    assert "10x 杠杆是建议值" in html
+    assert 'id="startRiskDialog"' in html
+    assert "确认风险并启动机器人" in html
 
     for action in ("preview", "start", "stop", "extend_range", "reset_statistics"):
         assert f"control('{action}'" in html or f'control("{action}"' in html

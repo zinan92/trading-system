@@ -8855,3 +8855,80 @@ auditable datafeed port; broker execution remains a separate port.
 - Dashboard Range JavaScript contract tests: 8 passed.
 - Python 3.9 compilation and `git diff --check` passed.
 - Browser evidence: `docs/evidence/issue-92/issue-92-risk-confirmation.png`.
+
+## 2026-07-22 - Adaptive Paper grid parameter solver
+
+### Decision
+
+- Manual inputs are constraints, not suggestions. Editing Range, grid count,
+  per-grid profit target, per-grid notional, or leverage locks that value; the
+  solver changes only unlocked values.
+- The default solution ranks all executable candidates by risk, profit-target
+  shortfall, grid-band deviation, and distance from the current plan. A narrow
+  Range may therefore produce fewer than 30 grids instead of an unusable
+  preview.
+- The 30–70 grid band, 10 USD target, and 10x leverage remain policy
+  preferences for Paper. Deviations are rendered as explicit warnings and are
+  executable only after exact server-bound acknowledgements.
+- Invalid geometry, stale or synthetic market data, venue precision failures,
+  account/execution reconciliation drift, and execution identity conflicts
+  remain non-overridable hard stops.
+
+### Formula
+
+- Arithmetic spacing: `(high - low) / grid_count`; geometric spacing ratio:
+  `(high / low) ** (1 / grid_count)`.
+- Per-grid net profit uses venue-rounded quantity and modeled round-trip fees:
+  `quantity * (abs(tp - entry) - fee_rate * (entry + tp))`.
+- For every candidate count, the solver scales notional from a venue-rounded
+  reference candidate until it meets the locked profit target, compares
+  same-side exposure with locked/recommended leverage capacity, and selects the
+  highest-density feasible candidate.
+- When count and leverage are both locked, notional is capped by that leverage
+  and any resulting profit shortfall is shown instead of silently changing a
+  locked value.
+- The preview exposes labeled `保格数` / `保收益` / `保杠杆` alternatives using
+  the same venue-rounded economics so the selected trade-off is inspectable.
+
+### Gotchas
+
+- A displayed `10.00` can be internally below target after venue quantity
+  flooring. The solver applies a deterministic 0.1% sizing cushion after each
+  proportional solve so display rounding cannot invert the risk classification.
+- The backend does not trust browser checkboxes alone. Consent binds the exact
+  preview, displayed facts, canonical risk snapshot, and complete code set;
+  start re-evaluates all of them before any plan or order mutation.
+- Manual policy overrides are accepted only through the Nautilus Paper adapter.
+  This change does not weaken live/real-money eligibility or exchange-key
+  boundaries.
+- Adaptive start requires the exact preview ID and zero accepted orders/open
+  positions. Its confirmation uses full projected exposure; only replacement
+  flows may use post-flatten candidate risk.
+- Preview evaluates canonical state but does not persist a risk decision,
+  activate a plan, submit an order, cancel an order, or alter a position.
+
+### Adversarial review corrections
+
+- Unlocked density now skips an unrepresentable high-count precision candidate
+  and continues to lower executable counts; a locked count remains strict.
+- Auto-sized notional is capped at the 20x Paper manual capacity. If locked
+  values imply more than 20x actual leverage, preview remains explanatory but
+  final confirmation is unavailable because that is the configured hard
+  manual capacity, not a preference checkbox.
+- Start no longer reuses replacement-only post-flatten risk logic and rejects
+  an omitted/stale preview ID before plan or order mutation.
+- Fractional grid counts are rejected instead of silently rounded.
+- Preview identity now binds the normalized lock set and locked input values;
+  Auto and Locked cannot share consent merely because their current economics
+  happen to match.
+- Start derives the zero-order/zero-position gate from one execution snapshot,
+  preserving the existing independent pre-submit drift recheck.
+
+### Verification
+
+- Focused sizing, control-plane, static dashboard, and Playwright tests:
+  127 passed.
+- Python compilation and `git diff --check` passed.
+- Browser evidence:
+  `docs/evidence/issue-97/issue-97-parameter-controls.png` and
+  `docs/evidence/issue-97/issue-97-adaptive-risk-confirmation.png`.
