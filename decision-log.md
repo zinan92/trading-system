@@ -9134,3 +9134,46 @@ auditable datafeed port; broker execution remains a separate port.
 - This changes presentation and completion feedback only. The existing atomic
   stop, flatten, cancel, plan-version and risk revalidation contract remains the
   execution authority.
+
+## 2026-07-22 - Legacy one-sided plan migration on the next confirmed edit
+
+### Decision
+
+- Treat a `long` or `short` production plan without `range.scope` as the old
+  two-sided count/envelope contract. Do not alter it while it is running.
+- When the operator next adjusts that plan, build the draft from its executable
+  side and show the migration explicitly in the final card: 39 legacy total
+  levels become 20 real one-sided levels.
+- Persist the new count and `long_side` / `short_side` Range only after the same
+  final Paper confirmation used by normal Range replacement.
+- When a stopped legacy plan seeds a fresh start, identify its current count as
+  neutral density so the adaptive solver maps 39 to 20 for a one-sided start.
+
+### Gotchas
+
+- The live v3 plan has 39 in `grid.count` but only 19 planned one-sided entry
+  orders. Reusing 39 as an executable count would silently double exposure on
+  the next edit.
+- The legacy Range is the full envelope. Its one-sided boundary must use the
+  immutable plan-time market split, not a moving live tick; otherwise frontend
+  and backend can disagree before the confirmation card opens.
+- A scoped running Range is operator geometry. Later live ticks affect which
+  entry levels are executable and the risk snapshot, but must not silently
+  trim the requested boundary.
+- The final acknowledgement stays bound to orders, risk metrics, limits,
+  provider trust, and rendered card facts. Raw tick price/time are excluded
+  from that digest so an economically identical tick cannot make the green
+  confirmation impossible; any changed order, blocker, loss, leverage, or
+  margin still invalidates the prior consent.
+- Compatibility is narrow and self-retiring: once the replacement plan has a
+  `range.scope`, ordinary fixed-count drag rules apply and no migration is
+  offered again.
+- Preview remains read-only. Deployment does not cancel orders, flatten the
+  existing position, or mutate the currently running legacy plan.
+
+### Verification
+
+- Added backend coverage for read-only 39-to-20 preview and confirmed atomic
+  replacement to a scoped 20-level long plan.
+- Added Playwright coverage for the normalized draft, legacy-aware start
+  solver payload, and the visible `39 格 → 20 格（旧口径迁移）` confirmation.

@@ -339,12 +339,17 @@ def build_grid_preview(
         source_envelope_input.get("high"),
         requested_high,
     )
-    low, high = _executable_range(
-        requested_low,
-        requested_high,
-        latest,
-        direction,
-    )
+    requested_scope = str(range_input.get("scope") or "")
+    requested_split_price = number_or(range_input.get("split_price"), latest)
+    if requested_scope == f"{direction}_side":
+        low, high = requested_low, requested_high
+    else:
+        low, high = _executable_range(
+            requested_low,
+            requested_high,
+            latest,
+            direction,
+        )
     if low <= 0 or high <= low:
         raise ValueError("grid range must have positive low below high")
     grid_input = body.get("grid") if isinstance(body.get("grid"), dict) else {}
@@ -514,7 +519,12 @@ def build_grid_preview(
             "high": round(high, 4),
             "method": f"D1 ATR{range_period} × {range_multiple:g}",
             "scope": "full" if direction == "neutral" else f"{direction}_side",
-            "split_price": round(latest, 4),
+            "split_price": round(
+                requested_split_price
+                if requested_scope == f"{direction}_side"
+                else latest,
+                4,
+            ),
             "source_envelope": {
                 "low": round(source_envelope_low, 4),
                 "high": round(source_envelope_high, 4),

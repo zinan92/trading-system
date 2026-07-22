@@ -2155,6 +2155,124 @@ def test_range_boundary_preview_recomputes_spacing_without_resizing_orders(
     assert result["tp_sl"]["existing_orders_affected_by_preview"] is False
 
 
+def test_legacy_single_side_range_migrates_39_total_levels_to_20_only_on_replace(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+    started = plane.control(
+        cycle_id,
+        "start",
+        safe_grid("long", "steady"),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    current = deepcopy(started["plan"])
+    envelope = dict(current["range"]["source_envelope"])
+    current["range"] = {
+        **current["range"],
+        "low": envelope["low"],
+        "high": envelope["high"],
+    }
+    for key in ("scope", "split_price", "source_envelope"):
+        current["range"].pop(key, None)
+    current["grid"]["count"] = 39
+    plans = load_json(plane._plans_path(cycle_id))
+    write_json(
+        plane._plans_path(cycle_id),
+        [
+            current
+            if row.get("strategy_plan_id") == current["strategy_plan_id"]
+            else row
+            for row in plans
+        ],
+    )
+
+    drifted_market = market(close=109.5)
+    request = {
+        "expected_strategy_plan_id": current["strategy_plan_id"],
+        "expected_strategy_plan_version": current["version"],
+        "handle": "lower",
+        "range": {
+            "low": float(envelope["low"]) + 1.0,
+            "high": current["execution_context"]["market"]["price"],
+        },
+    }
+    preview = plane.control(
+        cycle_id,
+        "preview_range",
+        request,
+        market=drifted_market,
+        account=account_context(),
+        now="2026-07-05T01:42:00+00:00",
+    )["preview"]
+
+    assert preview["migration"] == {
+        "schema_version": "legacy-single-side-grid-migration-v1",
+        "reason": "pre_scope_single_side_plan",
+        "direction": "long",
+        "legacy_grid_count": 39,
+        "executable_grid_count": 20,
+        "split_price": 110.0,
+        "legacy_range": envelope,
+        "executable_range": {
+            "low": envelope["low"],
+            "high": 110.0,
+        },
+        "applies_on_final_confirmation_only": True,
+    }
+    assert preview["old"]["grid_count"] == 39
+    assert preview["old"]["range_high"] == envelope["high"]
+    assert preview["new"]["grid_count"] == 20
+    assert preview["new"]["range_high"] == 110.0
+    assert {row["side"] for row in preview["candidate"]["orders"]} == {"buy"}
+    assert plane.active_plan(cycle_id)["grid"]["count"] == 39
+
+    snapshot = build_execution_engine_adapter(output).snapshot(cycle_id)
+    replacement = {
+        **request,
+        "expected_preview_id": preview["preview_id"],
+        "expected_execution": {
+            "accepted_order_ids": sorted(
+                row["order_id"]
+                for row in snapshot["orders"]
+                if row.get("state") == "accepted"
+            ),
+            "open_position_ids": [],
+        },
+        "risk_acknowledgements": {
+            "schema_version": "grid-range-risk-ack-v1",
+            "preview_id": preview["preview_id"],
+            "facts_digest": preview["manual_confirmation"]["facts_digest"],
+            "risk_snapshot_digest": preview["manual_confirmation"][
+                "risk_snapshot_digest"
+            ],
+            "codes": sorted(
+                row["code"]
+                for row in preview["manual_confirmation"][
+                    "required_acknowledgements"
+                ]
+            ),
+        },
+    }
+    replaced = plane.control(
+        cycle_id,
+        "replace_grid",
+        replacement,
+        market=market(close=109.4),
+        account=account_context(),
+        now="2026-07-05T01:43:00+00:00",
+    )
+
+    assert replaced["plan"]["grid"]["count"] == 20
+    assert replaced["plan"]["range"]["scope"] == "long_side"
+    assert replaced["plan"]["range"]["high"] == 110.0
+
+
 def test_range_preview_blocks_over_budget_without_silent_notional_recalculation(
     tmp_path: Path,
 ) -> None:

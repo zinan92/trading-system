@@ -133,6 +133,43 @@ def test_directional_odd_current_count_maps_39_to_20_in_adaptive_preview(
     assert {order["side"] for order in preview["orders"]} == {"buy"}
 
 
+def test_scoped_running_range_is_not_retrimmed_by_a_later_market_tick(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    preview = grid_sizing.build_grid_preview(
+        "2026-07-05_DAY",
+        {
+            "direction": "long",
+            "style": "steady",
+            "range": {
+                "low": 100.0,
+                "high": 110.0,
+                "scope": "long_side",
+                "split_price": 110.0,
+                "source_envelope": {"low": 100.0, "high": 120.0},
+            },
+            "grid": {
+                "count": 20,
+                "mode": "arithmetic",
+                "notional_per_grid": 2_000.0,
+                "notional_mode": "manual",
+            },
+        },
+        market=market(close=109.5),
+        account=account(),
+        config=plane.config,
+        allow_unsafe_manual_preview=True,
+    )
+
+    assert preview["range"]["low"] == 100.0
+    assert preview["range"]["high"] == 110.0
+    assert preview["range"]["scope"] == "long_side"
+    assert preview["range"]["split_price"] == 110.0
+    assert preview["grid"]["count"] == 20
+    assert {order["side"] for order in preview["orders"]} == {"buy"}
+
+
 def test_auto_notional_uses_the_full_leverage_capacity_on_the_worst_side(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path / "outputs")
     preview = grid_sizing.build_grid_preview(

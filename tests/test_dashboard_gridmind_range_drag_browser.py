@@ -207,6 +207,154 @@ def _risky_preview(request: dict) -> dict:
     return response
 
 
+def _legacy_single_side_preview(request: dict) -> dict:
+    response = _preview(request)
+    preview = response["preview"]
+    preview["old"].update(
+        {
+            "grid_count": 39,
+            "spacing": 200 / 39,
+            "total_grid_notional": 39 * 2800,
+            "estimated_margin": 39 * 2800 / 10,
+            "actual_leverage": 39 * 2800 / 100000,
+        }
+    )
+    preview["new"].update(
+        {
+            "grid_count": 20,
+            "spacing": (
+                float(request["range"]["high"])
+                - float(request["range"]["low"])
+            )
+            / 20,
+            "total_grid_notional": 20 * 2800,
+            "estimated_margin": 20 * 2800 / 10,
+            "actual_leverage": 20 * 2800 / 100000,
+        }
+    )
+    preview["order_delta"]["submit_new_entries"] = 20
+    preview["migration"] = {
+        "schema_version": "legacy-single-side-grid-migration-v1",
+        "reason": "pre_scope_single_side_plan",
+        "direction": "long",
+        "legacy_grid_count": 39,
+        "executable_grid_count": 20,
+        "split_price": 4000.0,
+        "legacy_range": {"low": 3900.0, "high": 4100.0},
+        "executable_range": {"low": 3900.0, "high": 4000.0},
+        "applies_on_final_confirmation_only": True,
+    }
+    return response
+
+
+def test_gridmind_legacy_single_side_card_explicitly_migrates_39_to_20() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(3998.0)
+    model["strategy"]["plan"]["direction"] = "long"
+    model["strategy"]["plan"]["grid"]["count"] = 39
+    model["strategy"]["plan"]["range"].pop("scope", None)
+    model["strategy"]["plan"]["execution_context"] = {
+        "market": {"price": 4000.0}
+    }
+    control_requests: list[dict] = []
+    browser_errors: list[str] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(model, ensure_ascii=False),
+        )
+
+    def fulfill_bars(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_bars(timeframe)),
+        )
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        control_requests.append(body)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_legacy_single_side_preview(body), ensure_ascii=False),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - local browser dependency
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.on(
+            "console",
+            lambda message: browser_errors.append(message.text)
+            if message.type == "error"
+            else None,
+        )
+        page.on("pageerror", lambda error: browser_errors.append(str(error)))
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator("#gridAdjustToggle").click()
+
+        assert page.evaluate(
+            "() => ({original:state.gridDraft.original,legacy:state.gridDraft.legacy})"
+        ) == {
+            "original": {
+                "range": {"low": 3900, "high": 4000},
+                "grid": {
+                    "count": 20,
+                    "mode": "arithmetic",
+                    "notionalPerGrid": 2800,
+                },
+            },
+            "legacy": {
+                "range": {"low": 3900, "high": 4100},
+                "grid": {
+                    "count": 39,
+                    "mode": "arithmetic",
+                    "notionalPerGrid": 2800,
+                },
+            },
+        }
+        assert page.evaluate("() => strategyPayload().solver") == {
+            "mode": "manual_adaptive",
+            "locked": [],
+            "current_grid_count": 39,
+            "current_direction": "neutral",
+        }
+        page.evaluate(
+            """() => {
+              state.gridDraft.low = 3910;
+              state.gridDraft.dirty = true;
+              renderGridAdjustOverlay();
+            }"""
+        )
+        page.locator('[data-grid-action="confirm"]').click()
+        page.locator("#gridRangeReviewDialog[open]").wait_for(state="visible")
+
+        card = page.locator("#gridRangeComparison").inner_text()
+        assert "39 格" in card
+        assert "20 格（旧口径迁移）" in card
+        assert control_requests[0]["range"] == {"low": 3910, "high": 4000}
+        artifact_dir = os.environ.get("GRID_RANGE_SCREENSHOT_DIR")
+        if artifact_dir:
+            path = Path(artifact_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            page.screenshot(
+                path=str(path / "issue-109-legacy-single-side-migration.png"),
+                full_page=True,
+            )
+        assert browser_errors == []
+        browser.close()
+
+
 def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     model = _header_model(4000.0)
