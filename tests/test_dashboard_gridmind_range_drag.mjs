@@ -143,7 +143,23 @@ function validPreview() {
       notional_per_grid: 2000,
     },
     can_apply: true,
+    can_apply_with_acknowledgements: true,
     confirm_disabled_reasons: [],
+    manual_confirmation: {
+      schema_version: "grid-range-risk-ack-v1",
+      preview_id: "preview-1",
+      scope: "paper_only",
+      required: true,
+      available: true,
+      facts_digest: "facts-1",
+      risk_snapshot_digest: "risk-1",
+      required_acknowledgements: [
+        {code: "specification_change"},
+        {code: "maximum_loss_scenario"},
+      ],
+      overridable_blocker_codes: [],
+      non_overridable_blocker_codes: [],
+    },
     risk_recalculation: {applied_to_preview: false},
     order_delta: {cancel_pending_entries: 25, submit_new_entries: 50},
     positions: {preview_effect: "none"},
@@ -201,6 +217,7 @@ test("replacement confirmation has the exact destructive label and sends stable 
     open_position_ids: ["position-2", "trade-1"],
   });
   assert.match(html, /expected_preview_id:preview\.preview_id/);
+  assert.match(html, /risk_acknowledgements:gridRiskAcknowledgementPayload\(preview\)/);
   assert.match(html, /control\("replace_grid",payload/);
 });
 
@@ -209,7 +226,7 @@ test("replacement confirmation fails closed on ambiguous execution identity", ()
     () => executionIdentity({execution: {open_orders: [{order_id: "same"}, {order_id: "same"}], open_positions: []}}),
     /缺少唯一身份/,
   );
-  assert.match(html, /再次核对计划版本、行情、利润目标、挂单和持仓/);
+  assert.match(html, /再次核对计划版本、行情、风险确认、挂单和持仓/);
   assert.match(html, /确认后全部平仓/);
   assert.match(html, /随旧持仓撤销；新网格重建/);
 });

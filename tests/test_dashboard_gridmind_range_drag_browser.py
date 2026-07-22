@@ -86,7 +86,33 @@ def _preview(request: dict) -> dict:
             "old": old,
             "new": new,
             "can_apply": True,
+            "can_apply_with_acknowledgements": True,
             "confirm_disabled_reasons": [],
+            "manual_confirmation": {
+                "schema_version": "grid-range-risk-ack-v1",
+                "preview_id": "range-preview-browser-1",
+                "scope": "paper_only",
+                "required": True,
+                "available": True,
+                "facts_digest": "browser-safe-facts",
+                "risk_snapshot_digest": "browser-safe-risk",
+                "required_acknowledgements": [
+                    {
+                        "code": "specification_change",
+                        "severity": "warning",
+                        "title": "我确认网格规格变化",
+                        "summary": "Range、间距和每格计划净利将按新规格变化。",
+                    },
+                    {
+                        "code": "maximum_loss_scenario",
+                        "severity": "critical",
+                        "title": "我确认预计最大损失",
+                        "summary": "预计最大损失 1000 → 1000 USD。",
+                    },
+                ],
+                "overridable_blocker_codes": [],
+                "non_overridable_blocker_codes": [],
+            },
             "risk_recalculation": {
                 "available": False,
                 "applied_to_preview": False,
@@ -109,6 +135,76 @@ def _preview(request: dict) -> dict:
             },
         },
     }
+
+
+def _risky_preview(request: dict) -> dict:
+    response = _preview(request)
+    preview = response["preview"]
+    preview["can_apply"] = False
+    preview["confirm_disabled_reasons"] = [
+        "market_price_outside_range",
+        "grid_profit_target_not_met",
+        "projected_leverage_exceeded",
+        "projected_margin_exceeded",
+        "preview_profit_or_capital_target_not_met",
+    ]
+    preview["new"].update(
+        {
+            "min_net_profit_per_grid_usd": 2.0,
+            "estimated_margin": 20002.71,
+            "actual_leverage": 19.99,
+            "max_loss": 2890.4,
+        }
+    )
+    preview["manual_confirmation"] = {
+        "schema_version": "grid-range-risk-ack-v1",
+        "preview_id": preview["preview_id"],
+        "scope": "paper_only",
+        "required": True,
+        "available": True,
+        "facts_digest": "browser-risky-facts",
+        "risk_snapshot_digest": "browser-risky-risk",
+        "required_acknowledgements": [
+            {
+                "code": "specification_change",
+                "severity": "warning",
+                "title": "我确认网格规格变化",
+                "summary": "Range 宽度 200 → 115 USD；单格间距与计划净利会变化。",
+            },
+            {
+                "code": "maximum_loss_scenario",
+                "severity": "critical",
+                "title": "我确认预计最大损失",
+                "summary": "预计最大损失 1000 → 2890.4 USD；不包含极端滑点和资金费。",
+            },
+            {
+                "code": "profit_target_shortfall",
+                "severity": "critical",
+                "title": "我确认每格计划净利低于自动目标",
+                "summary": "每格计划净利 10.35 → 2 USD；自动目标至少 10 USD。",
+            },
+            {
+                "code": "leverage_and_margin_risk",
+                "severity": "critical",
+                "title": "我确认杠杆与保证金风险",
+                "summary": "实际杠杆 1.4x → 19.99x；预计保证金升至 20002.71 USD。",
+            },
+            {
+                "code": "market_outside_range",
+                "severity": "critical",
+                "title": "我确认当前价位于新 Range 外",
+                "summary": "新网格可能立即形成单边暴露或长期没有预期成交。",
+            },
+        ],
+        "overridable_blocker_codes": [
+            "grid_profit_target_not_met",
+            "market_price_outside_range",
+            "projected_leverage_exceeded",
+            "projected_margin_exceeded",
+        ],
+        "non_overridable_blocker_codes": [],
+    }
+    return response
 
 
 def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
@@ -237,8 +333,13 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         page.locator("#gridRangeReviewDialog[open]").wait_for(state="visible")
         assert len(control_requests) == 1
         assert control_requests[0]["action"] == "preview_range"
-        assert page.locator("#gridRangeGate").inner_text().startswith("利润与容量核对通过")
+        assert page.locator("#gridRangeGate").inner_text().startswith("请逐项勾选")
         assert page.locator("#gridRangeComparison").inner_text().count("→") >= 10
+        assert page.locator("[data-grid-risk-ack]").count() == 2
+        assert page.locator("#executeGridRangeReplacement").is_disabled()
+        page.locator("[data-grid-risk-ack]").all()[0].check()
+        page.locator("[data-grid-risk-ack]").all()[1].check()
+        assert page.locator("#gridRangeGate").inner_text().startswith("全部规格已确认")
         if artifact_dir:
             page.screenshot(
                 path=str(Path(artifact_dir) / "issue-66-replacement-card.png"),
@@ -260,6 +361,13 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
             "accepted_order_ids": ["order-lifecycle-browser-1"],
             "open_position_ids": [],
         }
+        assert control_requests[1]["risk_acknowledgements"] == {
+            "schema_version": "grid-range-risk-ack-v1",
+            "preview_id": "range-preview-browser-1",
+            "facts_digest": "browser-safe-facts",
+            "risk_snapshot_digest": "browser-safe-risk",
+            "codes": ["maximum_loss_scenario", "specification_change"],
+        }
         assert page.evaluate("() => [state.gridAdjustMode,state.gridDraft]") == [False, None]
         assert page.locator(".grid-adjust-overlay.on").count() == 0
         before_pan_requests = len(control_requests)
@@ -272,4 +380,93 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         assert page.evaluate("() => state.gridDraft") is None
         assert len(control_requests) == before_pan_requests
         assert browser_errors == []
+        browser.close()
+
+
+def test_gridmind_risky_range_requires_every_human_confirmation() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4000.0)
+    control_requests: list[dict] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(model, ensure_ascii=False),
+        )
+
+    def fulfill_bars(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_bars(timeframe)),
+        )
+
+    def fulfill_control(route) -> None:
+        body = route.request.post_data_json
+        control_requests.append(body)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_risky_preview(body), ensure_ascii=False),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - local browser dependency
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_bars)
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator("#gridAdjustToggle").click()
+        page.evaluate(
+            """() => {
+              state.gridDraft.low = 3990;
+              state.gridDraft.high = 4105;
+              state.gridDraft.dirty = true;
+              renderGridAdjustOverlay();
+            }"""
+        )
+        page.locator('[data-grid-action="confirm"]').click()
+        page.locator("#gridRangeReviewDialog[open]").wait_for(state="visible")
+        assert page.locator("[data-grid-risk-ack]").count() == 5
+        assert page.locator("#gridRangeGate").inner_text().startswith("请逐项勾选")
+        assert page.locator("#executeGridRangeReplacement").is_disabled()
+        card_text = page.locator("#gridRangeReviewDialog").inner_text()
+        assert "每格计划净利 10.35 → 2 USD" in card_text
+        assert "实际杠杆 1.4x → 19.99x" in card_text
+        assert "预计最大损失 1000 → 2890.4 USD" in card_text
+        assert "market_price_outside_range" not in card_text
+        for checkbox in page.locator("[data-grid-risk-ack]").all():
+            checkbox.check()
+        assert page.locator("#executeGridRangeReplacement").is_enabled()
+        assert page.locator("#gridRangeGate").inner_text().startswith(
+            "高风险参数已逐项确认"
+        )
+        artifact_dir = os.environ.get("GRID_RANGE_SCREENSHOT_DIR")
+        if artifact_dir:
+            path = Path(artifact_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            page.screenshot(
+                path=str(path / "issue-92-risk-confirmation.png"),
+                full_page=True,
+            )
+        page.locator("#executeGridRangeReplacement").click()
+        page.wait_for_function("() => state.gridAdjustMode === false")
+        assert control_requests[-1]["action"] == "replace_grid"
+        assert control_requests[-1]["risk_acknowledgements"]["codes"] == [
+            "leverage_and_margin_risk",
+            "market_outside_range",
+            "maximum_loss_scenario",
+            "profit_target_shortfall",
+            "specification_change",
+        ]
+        assert control_requests[-1]["risk_acknowledgements"]["facts_digest"] == (
+            "browser-risky-facts"
+        )
         browser.close()
