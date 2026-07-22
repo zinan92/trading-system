@@ -8932,3 +8932,27 @@ auditable datafeed port; broker execution remains a separate port.
 - Browser evidence:
   `docs/evidence/issue-97/issue-97-parameter-controls.png` and
   `docs/evidence/issue-97/issue-97-adaptive-risk-confirmation.png`.
+
+## 2026-07-22 - V5 history pagination input parity
+
+### Decision
+
+- Keep the fast 240-bar first paint. Historical depth remains an explicit,
+  read-only pagination flow using the existing exclusive `end` cursor.
+- Treat mouse-wheel and trackpad navigation as first-class history intent,
+  alongside the existing right-drag gesture. A short-lived input token binds
+  pagination to a real user gesture instead of chart initialization events.
+- Continue merging fresh 240-bar snapshots into the accumulated dataset so
+  five-second polling updates the live edge without deleting loaded history.
+
+### Gotchas
+
+- `subscribeVisibleLogicalRangeChange` also fires during render, resize, and
+  viewport restoration. Loading solely from `range.from <= 24` can create an
+  automatic page-fetch loop; the input token and `chartProgrammatic` guard are
+  both required.
+- The existing backend and deduplicating prepend path were still present on
+  main. The regression was input-modality coverage: only a captured pointer
+  drag could trigger it, while Park uses wheel/trackpad scrolling.
+- History remains display-only. A trusted historical page never becomes a
+  fresh execution event and cannot reopen the new-entry gate.
