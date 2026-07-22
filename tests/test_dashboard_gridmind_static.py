@@ -72,7 +72,9 @@ def test_gridmind_trade_activity_toasts_are_read_only_and_fail_silent() -> None:
     assert 'id="tradeToasts"' in html
     assert 'aria-live="polite"' in html
     assert "function tradeActivitySnapshotTrusted(data)" in html
+    assert "function tradeActivityFactsTrusted(accounting)" in html
     assert 'accounting?.completeness?.status==="complete"' in html
+    assert "tradeActivityFactsTrusted(execution.accounting)" in html
     assert "accountingSnapshotTrusted(execution.current_accounting)" in html
     assert 'const CLOSE_FILL_EVENTS=new Set(["exit","stop","target"' in html
     assert "function fillStableKey(fill,trade=null)" in html

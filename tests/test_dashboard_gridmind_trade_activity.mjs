@@ -61,7 +61,14 @@ function snapshot({
       trades,
       positions,
       accounting: {
-        completeness: {status: trusted ? "complete" : "degraded"},
+        completeness: {
+          status: trusted ? "complete" : "degraded",
+          observed: {
+            fills_observed: trusted,
+            trades_observed: trusted,
+            positions_observed: trusted,
+          },
+        },
         reconciliation: {status: trusted ? "pass" : "fail"},
       },
       current_accounting: {
@@ -107,6 +114,44 @@ test("only the first authoritative snapshot establishes the silent baseline", ()
   assert.equal(context.state.tradeActivity.initialized, true);
   assert.equal(context.observeTradeActivity(history).length, 0);
   assert.equal(shown.length, 0);
+});
+
+test("unrelated historical accounting gaps do not suppress new authoritative fills", () => {
+  const {context, shown} = activityHarness();
+  const history = snapshot({fills: [entry], trades: [openTrade]});
+  history.execution.accounting.completeness.status = "partial";
+
+  assert.equal(context.observeTradeActivity(history).length, 0);
+  assert.equal(context.state.tradeActivity.initialized, true);
+
+  const nextEntry = {
+    ...entry,
+    fill_id: "entry-2",
+    order_id: "order-2",
+    trade_id: "trade-2",
+    price: 3980,
+  };
+  const nextTrade = {...openTrade, trade_id: "trade-2", entry_price: 3980};
+  const updated = snapshot({
+    fills: [entry, nextEntry],
+    trades: [openTrade, nextTrade],
+  });
+  updated.execution.accounting.completeness.status = "partial";
+
+  const models = context.observeTradeActivity(updated);
+  assert.equal(models.length, 1);
+  assert.equal(models[0].title, "网格成交 · 买入");
+  assert.equal(shown.length, 1);
+});
+
+test("missing historical trade facts still fail silent", () => {
+  const {context} = activityHarness();
+  const incomplete = snapshot({fills: [entry], trades: [openTrade]});
+  incomplete.execution.accounting.completeness.status = "partial";
+  incomplete.execution.accounting.completeness.observed.positions_observed = false;
+
+  assert.equal(context.observeTradeActivity(incomplete).length, 0);
+  assert.equal(context.state.tradeActivity.initialized, false);
 });
 
 test("cycle plus fill identity dedupes history but preserves partial fills", () => {
