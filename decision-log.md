@@ -9999,3 +9999,30 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused accounting/read-model tests cover offset-normalized inversion,
   same-second timestamps, normal completed trades, diagnostic retention, and
   the Dashboard-facing quarantine fields.
+
+## 2026-07-23 - DCA aggregate TP is lifecycle evidence, not an entry order
+
+### Decision
+
+- Persisted Paper DCA lifecycle state is projected read-only only when its
+  StrategyPlan identity matches the active DCA plan. It exposes every target
+  generation, the active aggregate target, accumulated quantity, and the
+  terminal round state.
+- The Dashboard labels this protection as an event-driven aggregate target.
+  It must never infer a missing TP merely because the accepted-entry list has
+  no independent target order.
+
+### Gotchas
+
+- A DCA target is resized after each addition. Generation 1 being cancelled
+  and generation 2 being accepted is the expected safety path, not a failed
+  protective order.
+- The lifecycle JSON is Paper evidence. A static browser fixture proves the
+  presentation contract, not that a market has completed a real DCA round.
+
+### Verification
+
+- Focused Paper lifecycle/control-plane tests cover two additions, target
+  replacement, target/stop closure, restart idempotence, and no accepted
+  residual orders. The read model and Playwright test verify the active
+  generation and exact aggregate quantity are visible to an operator.

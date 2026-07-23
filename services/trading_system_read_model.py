@@ -116,6 +116,8 @@ def project_trading_system_read_model(
         current_accounting=current_accounting,
         plan=plan,
         plan_history=plan_history,
+        completeness_issues=completeness_issues,
+        dca_lifecycle_source=source.get("dca_lifecycle"),
     )
     unknown_order_count = execution["counts"]["unknown_order_count"]
     if unknown_order_count:
@@ -222,6 +224,8 @@ def _project_execution(
     current_accounting: Mapping[str, Any],
     plan: Mapping[str, Any],
     plan_history: list[Any],
+    completeness_issues: list[str],
+    dca_lifecycle_source: Any,
 ) -> dict[str, Any]:
     orders = _project_orders(source.get("orders"), plan=plan, plan_history=plan_history)
     open_orders = [row for row in orders if row["is_open"]]
@@ -256,6 +260,11 @@ def _project_execution(
     canonical_pnl = _json_copy(_mapping(history_accounting.get("pnl")))
     canonical_account = _json_copy(_mapping(history_accounting.get("account")))
     current_account = _json_copy(_mapping(source.get("account")))
+    dca_lifecycle = _project_dca_lifecycle(
+        dca_lifecycle_source,
+        plan=plan,
+        completeness_issues=completeness_issues,
+    )
     total_pnl = _finite_or_none(canonical_pnl.get("total_pnl"))
     starting_balance = _finite_or_none(canonical_account.get("starting_balance"))
     return_pct = None
@@ -304,6 +313,7 @@ def _project_execution(
         "open_positions": open_positions,
         "trades": canonical_trades,
         "fills": canonical_fills,
+        "dca_lifecycle": dca_lifecycle,
         "counts": counts,
         "scopes": {
             "orders_and_positions": {
@@ -339,6 +349,76 @@ def _project_execution(
         "accounting": _json_copy(history_accounting),
         "current_accounting": _json_copy(current_accounting),
         "reconciliation": _json_copy(_mapping(source.get("reconciliation"))),
+    }
+
+
+def _project_dca_lifecycle(
+    value: Any,
+    *,
+    plan: Mapping[str, Any],
+    completeness_issues: list[str],
+) -> dict[str, Any] | None:
+    if str(plan.get("strategy_type") or "grid").lower() != "dca":
+        return None
+    lifecycle = _mapping(value)
+    if not lifecycle:
+        return {
+            "status": "not_started",
+            "status_label": "尚未建立 DCA 生命周期",
+            "active_target": None,
+            "target_generations": [],
+            "additions_filled": 0,
+            "open_quantity": 0.0,
+        }
+    plan_id = str(plan.get("strategy_plan_id") or "")
+    if str(lifecycle.get("strategy_plan_id") or "") != plan_id:
+        completeness_issues.append("dca_lifecycle_plan_identity_mismatch")
+        return {
+            "status": "identity_mismatch",
+            "status_label": "DCA 生命周期计划不匹配",
+            "active_target": None,
+            "target_generations": [],
+            "additions_filled": 0,
+            "open_quantity": None,
+        }
+
+    def target(row: Any) -> dict[str, Any]:
+        item = _mapping(row)
+        return {
+            "target_id": item.get("target_id"),
+            "generation": _integer_or_none(item.get("generation")),
+            "status": item.get("status"),
+            "side": item.get("side"),
+            "price": _positive_finite_or_none(item.get("price")),
+            "quantity": _positive_finite_or_none(item.get("quantity")),
+            "average_entry_price": _positive_finite_or_none(item.get("average_entry_price")),
+            "created_at": item.get("created_at"),
+            "retired_at": item.get("retired_at"),
+            "retire_reason": item.get("retire_reason"),
+            "triggered_at": item.get("triggered_at"),
+        }
+
+    active = _mapping(lifecycle.get("active_target"))
+    status = str(lifecycle.get("status") or "unknown")
+    labels = {
+        "waiting_entry": "等待加仓成交",
+        "open": "聚合止盈已保护",
+        "target_triggered": "整轮止盈执行中",
+        "target_closed": "整轮止盈已完成",
+        "stop_closed": "整轮止损已完成",
+        "flattened": "已手动平仓",
+    }
+    return {
+        "status": status,
+        "status_label": labels.get(status, "DCA 生命周期状态未知"),
+        "round_id": lifecycle.get("round_id"),
+        "additions_filled": _integer_or_none(lifecycle.get("additions_filled")) or 0,
+        "open_quantity": _finite_or_none(lifecycle.get("open_quantity")),
+        "average_entry_price": _positive_finite_or_none(lifecycle.get("average_entry_price")),
+        "active_target": target(active) if active else None,
+        "target_generations": [target(row) for row in _list(lifecycle.get("target_generations"))],
+        "updated_at": lifecycle.get("updated_at"),
+        "protection_semantics": "event_driven_aggregate_target_not_entry_order",
     }
 
 

@@ -58,6 +58,12 @@ class DcaPaperLifecycle:
         reconciled = self.reconcile(plan, timestamp=timestamp)
         return {"state": reconciled, "receipts": receipts}
 
+    def read_state(self, plan: dict[str, Any]) -> dict[str, Any] | None:
+        """Read the persisted Paper lifecycle without reconciling or mutating it."""
+
+        identity = _plan_identity(plan)
+        return self._load(identity["cycle_id"], identity["plan_id"])
+
     def reconcile(self, plan: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
         identity = _plan_identity(plan)
         state = self._load(identity["cycle_id"], identity["plan_id"])

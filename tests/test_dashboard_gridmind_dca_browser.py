@@ -187,5 +187,21 @@ def test_gridmind_dca_smart_fill_preview_risk_ack_and_start() -> None:
             "facts_digest": "dca-facts-1",
             "codes": ["dca_accumulation_specification", "dca_maximum_loss"],
         }
+        model["strategy"]["summary"] = {
+            "strategy_type": "dca",
+            "dca_entry_levels": [4004, 3996, 3988],
+            "dca_entry_count": 3,
+            "notional_per_addition": 2000,
+            "target_price": 4050,
+            "stop_price": 3970,
+        }
+        model["execution"]["dca_lifecycle"] = {
+            "status": "open",
+            "status_label": "聚合止盈已保护",
+            "protection_semantics": "event_driven_aggregate_target_not_entry_order",
+            "active_target": {"generation": 2, "quantity": 1.001, "price": 4050},
+        }
+        page.reload(wait_until="load")
+        assert "聚合 TP #2：1.001 @ 4,050（行情触发）" in page.locator("#gridSummary").inner_text()
         assert browser_errors == []
         browser.close()
