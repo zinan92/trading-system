@@ -2204,6 +2204,11 @@ class StrategyControlPlane:
         adapter_name = str(getattr(adapter, "name", ""))
         if "paper" not in adapter_name:
             raise ValueError("DCA start is Paper-only")
+        self._require_paper_execution_tick(
+            cycle_id,
+            adapter=adapter,
+            now=now,
+        )
         self._assert_no_unresolved_prior_cycle_runtime(cycle_id)
         prepared: dict[str, Any] | None = None
         if prepared_start_id:
