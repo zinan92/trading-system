@@ -77,6 +77,7 @@ MANUAL_RANGE_RISK_ACK_SCHEMA = "grid-range-risk-ack-v1"
 PREPARED_START_SCHEMA = "strategy-prepared-start-v1"
 PREPARED_START_TTL_SECONDS = 300
 DCA_RISK_ACK_SCHEMA = "dca-risk-ack-v1"
+PAPER_EXECUTION_TICK_MAX_AGE_SECONDS = 180
 MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS = {
     "candidate_grid_count_out_of_bounds",
     "grid_profit_target_not_met",
@@ -628,6 +629,78 @@ class StrategyControlPlane:
     def runtime_configured(self) -> bool:
         return (self.root / "runtime.json").exists()
 
+    def paper_execution_tick_health(
+        self,
+        cycle_id: str,
+        *,
+        now: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Return the fresh-heartbeat contract for Nautilus Paper execution.
+
+        A submitted Paper order is not executable merely because it was written
+        to the ledger.  The live-tick process must have recently observed the
+        current cycle before the console can create new exposure.
+        """
+
+        checked_at = parse_utc(now)
+        rows = load_json(
+            self.output_root / "dualtrack" / "runner" / f"{cycle_id}.json"
+        )
+        latest = next(
+            (dict(row) for row in reversed(rows) if isinstance(row, dict)),
+            {},
+        )
+        timestamp = _optional_utc(latest.get("ts"))
+        if timestamp is None:
+            return {
+                "status": "blocked",
+                "code": "paper_execution_tick_unavailable",
+                "reason": "heartbeat_missing",
+                "latest_ts": latest.get("ts"),
+                "max_age_seconds": PAPER_EXECUTION_TICK_MAX_AGE_SECONDS,
+            }
+        age_seconds = (checked_at - timestamp).total_seconds()
+        if age_seconds < 0 or age_seconds > PAPER_EXECUTION_TICK_MAX_AGE_SECONDS:
+            return {
+                "status": "blocked",
+                "code": "paper_execution_tick_unavailable",
+                "reason": "heartbeat_stale" if age_seconds >= 0 else "heartbeat_in_future",
+                "latest_ts": timestamp.isoformat(),
+                "age_seconds": round(age_seconds, 3),
+                "max_age_seconds": PAPER_EXECUTION_TICK_MAX_AGE_SECONDS,
+                "event": latest.get("event"),
+            }
+        return {
+            "status": "ready",
+            "code": "",
+            "reason": "heartbeat_fresh",
+            "latest_ts": timestamp.isoformat(),
+            "age_seconds": round(age_seconds, 3),
+            "max_age_seconds": PAPER_EXECUTION_TICK_MAX_AGE_SECONDS,
+            "event": latest.get("event"),
+        }
+
+    def _require_paper_execution_tick(
+        self,
+        cycle_id: str,
+        *,
+        adapter,
+        now: str | datetime | None,
+    ) -> None:
+        execution_engine = self.config.get("execution_engine") or {}
+        if (
+            str(execution_engine.get("authoritative") or "")
+            != "nautilus_paper"
+            or str(getattr(adapter, "name", "")) != "nautilus_paper"
+        ):
+            return
+        health = self.paper_execution_tick_health(cycle_id, now=now)
+        if health["status"] != "ready":
+            raise ValueError(
+                "paper_execution_tick_unavailable"
+                f":{health.get('reason') or 'unknown'}"
+            )
+
     def persisted_runtime_state(self) -> dict[str, Any]:
         """Return the stored runtime row without current-cycle masking.
 
@@ -850,6 +923,11 @@ class StrategyControlPlane:
         adapter = build_configured_execution_engine_adapter(
             self.output_root,
             config=self.config,
+        )
+        self._require_paper_execution_tick(
+            cycle_id,
+            adapter=adapter,
+            now=now,
         )
         snapshot = adapter.snapshot(cycle_id)
         pending = [
@@ -1801,6 +1879,11 @@ class StrategyControlPlane:
         adapter = build_configured_execution_engine_adapter(
             self.output_root,
             config=self.config,
+        )
+        self._require_paper_execution_tick(
+            cycle_id,
+            adapter=adapter,
+            now=now,
         )
         prepared: dict[str, Any] | None = None
         if prepared_start_id:

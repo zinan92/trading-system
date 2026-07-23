@@ -530,6 +530,69 @@ def test_prepared_start_rejects_price_that_crossed_a_grid_line(
     assert plane.runtime_state(cycle_id)["actual_state"] == "stopped"
 
 
+def test_nautilus_paper_start_requires_a_fresh_execution_tick_heartbeat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    real = build_execution_engine_adapter(output)
+
+    class NautilusPaperFacade:
+        name = "nautilus_paper"
+
+        def __getattr__(self, name: str):
+            return getattr(real, name)
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: NautilusPaperFacade(),
+    )
+    plane = StrategyControlPlane(output)
+    plane.config["execution_engine"] = {
+        "authoritative": "nautilus_paper",
+        "shadow": "none",
+        "real_money_eligible": False,
+    }
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    with pytest.raises(ValueError, match="paper_execution_tick_unavailable:heartbeat_missing"):
+        plane.control(
+            cycle_id,
+            "prepare_start",
+            safe_grid(),
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    write_json(
+        output / "dualtrack" / "runner" / f"{cycle_id}.json",
+        [{
+            "ts": "2026-07-05T01:39:00+00:00",
+            "cycle_id": cycle_id,
+            "event": "live_tick_heartbeat",
+            "detail": {"runner": "dualtrack-live-tick"},
+        }],
+    )
+    prepared = plane.control(
+        cycle_id,
+        "prepare_start",
+        safe_grid(),
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+
+    assert prepared["action"] == "prepare_start"
+    assert plane.paper_execution_tick_health(
+        cycle_id,
+        now="2026-07-05T01:43:01+00:00",
+    )["status"] == "blocked"
+
+
 @pytest.mark.parametrize(
     ("direction", "moved_close", "inside_source_envelope"),
     [
