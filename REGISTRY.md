@@ -28,9 +28,10 @@
 - #178: 24 小时报表已成为受控 launchd 任务，直接执行本仓 pipeline；不再依赖已移动的外部 wrapper。调度状态会给出受限 stderr 摘要、失败分类、下一步以及报表产物是否存在。
 - #179: `/usr/bin/python3`（launchd 实际使用的 Python 3.9）现有独立的 import 兼容性闸和可读回执；Paper 服务重启前必须通过，不能用开发环境 Python 3.13 的测试结果替代。
 - #180: GridMind 的 Paper 操作者主路径现在有一条连续 Playwright 验收：趋势刷新、智能填充、启动前调整、启动、停止，以及复盘/Shadows/NAV 入口均验证可见结果和控制请求；详细图表、拖动、历史加载仍由各自的聚焦浏览器测试覆盖。
+- #181: `codex/recovery-stash-20260721` 的四个 handoff 指定文件已逐项三方审计；均不应直接恢复，恢复分支仍完整保留为只读证据，结论见 `docs/audits/recovery-stash-20260721.md`。
 
 ## 下一步
-- 完成 #181：对 recovery stash 做三方审计，确认没有遗漏的产品代码或仅保留可追溯恢复证据。
+- 完成 #182：修复仓库文档中缺失或失效的操作说明引用，使部署与验收入口可追溯。
 - 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。

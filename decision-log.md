@@ -10104,3 +10104,28 @@ auditable datafeed port; broker execution remains a separate port.
 - The focused operator-journey Playwright test passes with no browser console
   errors, and existing focused browser suites retain chart history and range
   draft coverage.
+
+## 2026-07-23 - Recovery stash stays evidence until a current contract asks for it
+
+### Decision
+
+- Audit the four handoff-named files in
+  `codex/recovery-stash-20260721` against both the snapshot parent and current
+  main. Keep the recovery branch untouched and record a disposition for every
+  delta rather than copying historical code into Paper.
+- Retire all four from direct recovery: their behavior is either legacy,
+  read-only, already superseded by mainline market contracts, or an unversioned
+  reporting-schema change without a consumer.
+
+### Gotchas
+
+- A recovery branch is provenance, not an implicit feature branch. A diff
+  existing in a stash does not prove it belongs in the current execution
+  contract.
+- Reintroducing a catch that lets a legacy bot continue after a datafeed outage
+  would conflict with the active Paper fail-closed market boundary.
+
+### Verification
+
+- `git show` and per-file parent/snapshot/main comparisons are recorded in
+  `docs/audits/recovery-stash-20260721.md`; no recovered file was deployed.
