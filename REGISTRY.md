@@ -5,6 +5,21 @@
 
 ## 现在在哪里(2026-07-23)
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
+- 部署:Goldbot V5 = `main@5cdff93`;Paper stopped、0 委托、0 持仓;`dualtrack-live-tick` 每分钟心跳连续健康,Dashboard 页面与 read-model 均 200。
+- Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动;rollover 只停止/撤单/封包,下一周期必须操作者显式启动;运行中 tick 失联显示「运行降级」。
+- DCA v1 就绪:做多/做空加仓、单张整轮 TP 世代随累计持仓更新(由行情事件触发,不是 entry 挂单,页面已标注)、独立整轮止损、风险确认、read-model 可见;TP/SL 后停止,v1 显式拒绝 `loop_enabled=true`。**首轮真实生命周期尚未验收,UI/自动化测试不算成交证据。**
+- 可观测性:请求未达后端/Cloudflare 530/Dashboard 5xx/Binance 上游/网格回滚五类故障链分立文案各带下一步;硬输入 blocker 结构化解释;历史 NAV 仅计 machine 生产已实现 P&L,缺失即显示不可用;终态周期自动尝试 production+notional-half What-if Shadow,缺失原因显式留档。
+- 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);open issue 仅 #38(Portfolio 锚点);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
+
+## 下一步
+- 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
+- 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
+- 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
+- 实绩达标后再定义 live 准入标准;任何真钱动作仍需 Park 本人 `park-approved`。
+
+## Appendix — 历史记录(只追加,原文搬运,不删除)
+
+### 2026-07-22/23 逐票记录(蒸馏于 2026-07-23,原正文条目原样保留)
 - Goldbot V5 已部署代码提交 `main@890aa89`(DCA 基线 `1b5fcd9`);部署与浏览器验收期间保留原 Paper Grid 运行态,15 张已接受挂单、0 活跃持仓,未执行启动、停止、撤单或平仓。
 - 网格生命周期、循环重挂、图表 Range 草稿确认、手动风险确认和自适应参数预览均已进入 main。
 - Dashboard 已修复市价单 `NaN` 导致的整页读取失败;AI 决策与策略配置完整展开,生产运行状态独立滚动,旧“运行中调整”卡片已下线。
@@ -14,8 +29,8 @@
 - 新周期尚未建立 StrategyPlan 时也可根据可信行情智能填充 Range;该步骤保持只读,不会写计划、启动机器人或创建订单。
 - GridMind 已区分“启动前风险提醒”和“运行故障”:当前 14.18x Paper Grid 的确认回执、预览 ID 与风险决策 ID 精确匹配且后台已接受,因此顶部正确显示绿色运行中;14.18x 超过 10x 的风险详情仍保留。浏览器复验为实时可信行情、15 张已接受委托、0 控制台错误。
 - Paper DCA 已具备做多/做空加仓计划、累计仓位后单张整轮 TP 数量更新、整轮止损、风险确认、控制面与 V5 参数预览;浏览器已验收做多 7 参数联动重算及做空智能填充。首轮真实 DCA 生命周期尚未启动观察,不能把 UI/自动化测试当作成交证据。
-- #192/#193 已部署：Paper tick 已连续两次成功，Grid 与 DCA 的最终启动均要求 180 秒内完整 tick。#194 正在把运行中的 tick 失联投影为 Dashboard 明确可见的降级状态。
-- #175 正在统一历史 NAV 的展示口径：仅机器生产已实现 P&L 可进入累计和 NAV；recovery replay 与缺失值均不能伪装为生产收益或 0。
+- #192/#193 已部署：Paper tick 已连续两次成功，Grid 与 DCA 的最终启动均要求 180 秒内完整 tick。#194 正在把运行中的 tick 失联投影为 Dashboard 明确可见的降级状态。(注:#194 已于当日完成)
+- #175 正在统一历史 NAV 的展示口径：仅机器生产已实现 P&L 可进入累计和 NAV；recovery replay 与缺失值均不能伪装为生产收益或 0。(注:#175 已于当日完成)
 - decision-log 已与 main 对账补齐(2026-07-23):#96/#82/#126/#130/#134/#138 的设计决策、失败模式与验证证据已入档。
 - DCA 审计后续已合并并部署(#164/#165/#166/#168):DCA×Grid 互斥与 TP 提交失败 fail-closed 均有回归测试;`loop_enabled=true` 在 v1 被显式拒绝,概要恒显示「完成后停止」;静态套件在修正 #154 遗留的 `actionStatus` 断言后恢复全绿。重启 Dashboard 后 Grid 运行态不变(running、15 挂单、0 持仓),页面 0 控制台错误。
 - #171/#185: Nautilus Paper 启动/预启动现要求当前周期 `dualtrack-live-tick` 的 180 秒内成功心跳；仅完整完成行情、生命周期与账本刷新后才落盘，避免反复崩溃制造假绿。
@@ -34,9 +49,3 @@
 - #147: 根 `AGENTS.md` 已由失效的外部符号链接替换为仓内可读的 Paper 安全、交付和证据规则；#137 已按已合并的 #138 与浏览器回归证据关闭。
 - #146: 自适应求解器的硬输入边界仍不可绕过，但不再将 2–200 格、整数格数或 1–20x 杠杆错误以裸 `ValueError` 交给操作者；控制面返回不可执行的结构化 blocker，Dashboard 显示原因和下一步。候选 Range/策略类型的不可覆盖 blocker 同样有专属说明。
 - #145: GridMind 已把「请求未到后端」「Cloudflare 隧道 530/1033」「Dashboard 5xx」「Binance USD-M 行情上游」和「完整网格未被接受后安全回滚」分开说明，每种状态都包含下一步；展示没有放宽任何行情或执行 fail-closed 门禁。
-
-## 下一步
-- 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
-- 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
-- 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
-- 实绩达标后再定义 live 准入标准;任何真钱动作仍需 Park 本人 `park-approved`。
