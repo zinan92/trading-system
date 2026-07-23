@@ -257,6 +257,58 @@ def test_adaptive_preview_smart_fills_a_new_cycle_without_writing_a_plan(
     assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
 
 
+@pytest.mark.parametrize(
+    ("payload_patch", "expected_code", "expected_evidence"),
+    [
+        (
+            {"grid": {"count": 201}, "solver": {"mode": "manual_adaptive", "locked": ["grid_count"]}},
+            "adaptive_grid_count_out_of_bounds",
+            {"requested": 201, "minimum": 2, "maximum": 200},
+        ),
+        (
+            {"grid": {"count": 2.5}, "solver": {"mode": "manual_adaptive", "locked": ["grid_count"]}},
+            "adaptive_grid_count_invalid",
+            {"requested": 2.5, "minimum": 2, "maximum": 200},
+        ),
+        (
+            {"risk_budget": {"leverage": 21}, "solver": {"mode": "manual_adaptive", "locked": ["leverage"]}},
+            "adaptive_manual_leverage_out_of_bounds",
+            {"requested": 21, "minimum": 1.0, "maximum": 20.0},
+        ),
+    ],
+)
+def test_adaptive_hard_input_errors_return_a_non_overridable_preview_card(
+    tmp_path: Path,
+    payload_patch: dict,
+    expected_code: str,
+    expected_evidence: dict,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(cycle_id, selected_proposal_id=saved["proposal_id"])
+
+    preview = plane.control(
+        cycle_id,
+        "prepare_start",
+        {"direction": "neutral", "style": "steady", **payload_patch},
+        market=market(close=4_137.44),
+        account=account_context(),
+    )["preview"]
+
+    manual = preview["manual_confirmation"]
+    assert manual["available"] is False
+    assert manual["non_overridable_blocker_codes"] == [expected_code]
+    blocker = manual["non_overridable_blockers"]
+    assert len(blocker) == 1
+    assert blocker[0]["code"] == expected_code
+    assert blocker[0]["source"] == "adaptive_grid_solver"
+    assert blocker[0]["message"]
+    assert blocker[0]["evidence"] == expected_evidence
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+
+
 def test_adaptive_start_requires_exact_risk_consent_and_then_starts_paper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

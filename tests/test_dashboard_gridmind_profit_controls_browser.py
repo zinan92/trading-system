@@ -438,6 +438,46 @@ def test_gridmind_keeps_leverage_capacity_details_alone_and_with_ledger_blocker(
         browser.close()
 
 
+@pytest.mark.parametrize(
+    ("code", "title", "action"),
+    [
+        ("candidate_range_invalid", "网格区间无效", "确认下边界小于上边界"),
+        ("candidate_kind_invalid", "候选策略参数无效", "重新选择策略方向和网格模式"),
+        ("adaptive_grid_count_invalid", "网格数量不是整数", "输入 2–200 之间的整数"),
+        ("adaptive_grid_count_out_of_bounds", "网格数量超出硬边界", "调整到 2–200 格"),
+        ("adaptive_manual_leverage_out_of_bounds", "杠杆超出硬边界", "调整到 1–20x"),
+    ],
+)
+def test_gridmind_explains_every_hard_solver_or_candidate_blocker(
+    code: str,
+    title: str,
+    action: str,
+) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.evaluate(
+            """code => renderStartBlockers({
+                non_overridable_blocker_codes: [code],
+                non_overridable_blockers: [{
+                    code,
+                    source: "test",
+                    message: "test hard blocker",
+                    evidence: {requested: 201, minimum: 2, maximum: 200}
+                }]
+            })""",
+            code,
+        )
+        text = page.locator("#startRiskBlockers").inner_text()
+        assert title in text
+        assert action in text
+        assert f"机器码：{code}" in text
+        browser.close()
+
+
 def test_gridmind_sizing_controls_lock_manual_input_and_keep_other_values_auto() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     model = _header_model(4_000.0)

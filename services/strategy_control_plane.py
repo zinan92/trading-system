@@ -33,6 +33,7 @@ from services.dualtrack_config import dualtrack_config
 from services.dualtrack_store import DualTrackPlanStore
 from services.control_audit import append_control_event, build_control_event, read_last_control_event
 from services.grid_sizing import (
+    AdaptiveGridInputError,
     GRID_STYLES,
     build_grid_preview,
     number_or as _number_or,
@@ -823,7 +824,16 @@ class StrategyControlPlane:
     ) -> dict[str, Any]:
         """Attach exact Paper-only consent facts without writing plan or risk state."""
 
-        preview = self.preview(cycle_id, payload, market=market, account=account)
+        try:
+            preview = self.preview(cycle_id, payload, market=market, account=account)
+        except AdaptiveGridInputError as error:
+            return self._adaptive_input_error_preview(
+                cycle_id,
+                payload,
+                market=market,
+                account=account,
+                error=error,
+            )
         if preview.get("strategy_type") == "dca":
             return preview
         solver = dict(preview.get("solver") or {})
@@ -949,6 +959,85 @@ class StrategyControlPlane:
             ),
             "non_overridable_blocker_codes": non_overridable,
             "non_overridable_blockers": non_overridable_details,
+            "old": old_specification,
+            "new": new_specification,
+        }
+        return preview
+
+    def _adaptive_input_error_preview(
+        self,
+        cycle_id: str,
+        payload: dict[str, Any],
+        *,
+        market: dict[str, Any],
+        account: dict[str, Any],
+        error: AdaptiveGridInputError,
+    ) -> dict[str, Any]:
+        """Return a display-only fallback preview for a hard solver input error.
+
+        The fallback removes only the invalid lock.  It is not executable:
+        ``manual_confirmation.available`` remains false and records the exact
+        rejected input, so the browser can render a concrete remedy without
+        silently clamping or applying a different grid.
+        """
+
+        fallback_payload = dict(payload)
+        solver = dict(fallback_payload.get("solver") or {})
+        invalid_lock = (
+            "grid_count"
+            if error.code.startswith("adaptive_grid_count_")
+            else "leverage"
+        )
+        solver["locked"] = [
+            str(value)
+            for value in solver.get("locked") or []
+            if str(value) != invalid_lock
+        ]
+        fallback_payload["solver"] = solver
+        preview = self.preview(
+            cycle_id,
+            fallback_payload,
+            market=market,
+            account=account,
+        )
+        current = self.active_plan(cycle_id)
+        old_specification = _range_preview_specification(current or preview)
+        new_specification = _range_preview_specification(preview)
+        error_row = {
+            "code": error.code,
+            "source": "adaptive_grid_solver",
+            "message": str(error),
+            "evidence": dict(error.evidence),
+        }
+        acknowledgements = _manual_range_acknowledgement_contract(
+            preview_id=str(preview["preview_id"]),
+            old=old_specification,
+            new=new_specification,
+            blocker_codes=set(),
+            local_profit_target_not_met=False,
+            limits={},
+        )
+        preview["solver"] = {
+            **dict(preview.get("solver") or {}),
+            "input_error": error_row,
+        }
+        preview["manual_confirmation"] = {
+            "schema_version": MANUAL_RANGE_RISK_ACK_SCHEMA,
+            "preview_id": preview["preview_id"],
+            "scope": "paper_only",
+            "required": True,
+            "available": False,
+            "facts_digest": _manual_range_acknowledgement_facts_digest(
+                old=old_specification,
+                new=new_specification,
+                limits={},
+                acknowledgements=acknowledgements,
+            ),
+            "risk_snapshot_digest": "adaptive-solver-input-error",
+            "required_acknowledgements": acknowledgements,
+            "overridable_blocker_codes": [],
+            "non_overridable_blocker_codes": [error.code],
+            "non_overridable_blockers": [error_row],
             "old": old_specification,
             "new": new_specification,
         }
