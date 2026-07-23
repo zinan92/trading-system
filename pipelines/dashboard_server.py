@@ -1166,6 +1166,8 @@ def build_strategy_console_control_response(
             "rationale": recommendation["rationale"],
             "evidence_used": recommendation["evidence_used"],
             "analysis": recommendation["analysis"],
+            "strategy_type": recommendation["strategy_type"],
+            "framework": recommendation["framework"],
             "prompt_contract": recommendation["prompt_contract"],
             "evaluation_receipt": recommendation["evaluation_receipt"],
             "preview_id": preview["preview_id"],
@@ -1212,7 +1214,9 @@ def build_strategy_timeframes_response(
     """Build fixed, completed strategy bars; never follows the chart timeframe."""
     checked_at = parse_utc(as_of)
     feed = DualTrackMarketFeed(market_db=market_db, config=config)
-    specs = {"1d": 32, "4h": 64, "1h": 96, "15m": 160}
+    # D1 position is a first-class strategy input. Request up to 300 raw bars
+    # so the separate completed-calendar position window can retain 200 bars.
+    specs = {"1d": 300, "4h": 64, "1h": 96, "15m": 160}
     seconds = {"1d": 86_400, "4h": 14_400, "1h": 3_600, "15m": 900}
     minimum = {"1d": 15, "4h": 15, "1h": 15, "15m": 50}
     result: dict[str, dict[str, Any]] = {}
@@ -1234,10 +1238,17 @@ def build_strategy_timeframes_response(
             detail = f": {issues[0]}" if issues else ""
             raise ValueError(f"strategy timeframe {timeframe} is unavailable or untrusted{detail}")
         completed: list[dict[str, Any]] = []
+        completed_daily_calendar: list[dict[str, Any]] = []
         for bar in snapshot.get("bars") or []:
             started = parse_utc(str(bar.get("timestamp") or ""))
             if started + timedelta(seconds=seconds[timeframe]) > checked_at:
                 continue
+            if timeframe == "1d":
+                # Position is measured from the exchange's completed calendar
+                # daily bars. The Grid D1 ATR keeps its established
+                # weekday-only contract below, so a position-window extension
+                # cannot alter existing Range geometry.
+                completed_daily_calendar.append(dict(bar))
             if timeframe == "1d" and started.weekday() >= 5:
                 continue
             completed.append(dict(bar))
@@ -1254,6 +1265,9 @@ def build_strategy_timeframes_response(
             "latest_timestamp": completed[-1].get("timestamp"),
             "completed_only": True,
             "weekends_excluded": timeframe == "1d",
+            "long_term_position_bars": completed_daily_calendar if timeframe == "1d" else [],
+            "long_term_position_completed_only": timeframe == "1d",
+            "long_term_position_weekends_excluded": False if timeframe == "1d" else None,
         }
     return result
 

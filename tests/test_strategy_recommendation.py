@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from services.strategy_recommendation import StrategyRecommendationService
+from services.strategy_recommendation import LONG_TERM_D1_BARS, StrategyRecommendationService, build_position_first_framework
 
 
 def _bars(timeframe: str, count: int, close: float, span: float) -> list[dict]:
@@ -39,7 +39,7 @@ def test_strategy_recommendation_uses_fixed_multitimeframe_input_and_rule_score(
     result = service.recommend(
         "2026-07-05_DAY",
         strategy_timeframes={
-            "1d": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1d", 20, 4100, 20)},
+            "1d": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1d", LONG_TERM_D1_BARS + 20, 4100, 20)},
             "4h": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("4h", 60, 4070, 8)},
             "1h": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1h", 60, 4050, 4)},
             "15m": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("15m", 80, 4045, 2)},
@@ -58,13 +58,18 @@ def test_strategy_recommendation_uses_fixed_multitimeframe_input_and_rule_score(
     assert result["analysis"]["timeframes"] == ["1d", "4h", "1h", "15m"]
     assert result["analysis"]["contexts"]["15m"]["indicators"]["ema20"] is not None
     assert result["analysis"]["contexts"]["15m"]["indicators"]["macd"]["histogram"] is not None
-    assert result["prompt_contract"]["version"] == "strategy-recommendation-prompt-v2"
+    assert result["prompt_contract"]["version"] == "strategy-recommendation-prompt-v3"
+    assert result["framework"]["position"]["lookback_bars"] == LONG_TERM_D1_BARS
+    assert result["framework"]["position"]["label"] == "high"
+    assert result["strategy_type"] == "grid"
     assert "完整 D1、4H、1H、15m" in prompts[0]
     assert "不得输出概率或胜率" in prompts[0]
     receipt = result["evaluation_receipt"]
-    assert receipt["schema_version"] == "strategy-ai-evaluation-v1"
+    assert receipt["schema_version"] == "strategy-ai-evaluation-v2"
     assert receipt["status"] == "success"
     assert receipt["input"]["contexts"]["15m"]["indicators"]["ema20"] is not None
+    assert receipt["input"]["position_first_framework"]["strategy"]["recommended_strategy_type"] == "grid"
+    assert receipt["input"]["source_manifests"]["1d"]["long_term_position_bar_count"] == LONG_TERM_D1_BARS + 20
     assert receipt["input"]["prompt"] == prompts[0]
     assert '"direction": "short"' in receipt["output"]["raw_model_response"]
     assert receipt["output"]["parsed_decision"]["style"] == "steady"
@@ -96,7 +101,7 @@ def test_strategy_recommendation_archives_provider_failure(tmp_path: Path) -> No
 
     service = StrategyRecommendationService(tmp_path / "outputs", decision_provider=unavailable)
     contexts = {
-        "1d": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1d", 20, 4100, 20)},
+        "1d": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1d", LONG_TERM_D1_BARS + 20, 4100, 20)},
         "4h": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("4h", 60, 4070, 8)},
         "1h": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1h", 60, 4050, 4)},
         "15m": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("15m", 80, 4045, 2)},
@@ -113,3 +118,29 @@ def test_strategy_recommendation_archives_provider_failure(tmp_path: Path) -> No
     receipt = json.loads(archives[0].read_text(encoding="utf-8"))[0]
     assert receipt["status"] == "failed"
     assert receipt["output"]["error"] == "provider unavailable"
+
+
+def test_position_first_framework_classifies_position_before_trend_archetype() -> None:
+    def contexts(rank: float, d1_trend: str, h4_trend: str, d1_efficiency: float, h4_efficiency: float) -> dict:
+        return {
+            "1d": {
+                "trend": d1_trend,
+                "recent_directional_efficiency": d1_efficiency,
+                "long_term_position": {"lookback_bars": LONG_TERM_D1_BARS, "window_low": 3900, "window_high": 4300, "rank": rank},
+            },
+            "4h": {"trend": h4_trend, "recent_directional_efficiency": h4_efficiency},
+        }
+
+    low_established = build_position_first_framework(contexts(0.2, "up", "up", 0.6, 0.5))
+    assert low_established["position"]["directional_prior"] == "long"
+    assert low_established["trend"]["stage"] == "established"
+    assert low_established["strategy"]["recommended_strategy_type"] == "dca"
+
+    high_conflict = build_position_first_framework(contexts(0.8, "up", "up", 0.6, 0.5))
+    assert high_conflict["position"]["directional_prior"] == "short"
+    assert high_conflict["trend"]["position_conflicts_with_trend"] is True
+    assert high_conflict["strategy"]["recommended_strategy_type"] == "grid"
+
+    forming = build_position_first_framework(contexts(0.5, "up", "up", 0.25, 0.2))
+    assert forming["trend"]["stage"] == "forming"
+    assert forming["strategy"]["recommended_strategy_type"] == "grid"

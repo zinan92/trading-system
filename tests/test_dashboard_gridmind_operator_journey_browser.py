@@ -23,7 +23,14 @@ def _recommendation() -> dict:
         "style": "steady",
         "rationale": "可信行情显示上行结构。",
         "signal": {"calibration_status": "uncalibrated", "rule_score": 76},
-        "analysis": {"contexts": {"1d": {"atr14": 42}, "15m": {"indicators": {"ema20": 4_100}}}},
+        "analysis": {
+            "contexts": {"1d": {"atr14": 42}, "15m": {"indicators": {"ema20": 4_100}}},
+            "framework": {
+                "position": {"lookback_bars": 200, "rank": 0.2, "label": "low", "directional_prior": "long"},
+                "trend": {"stage": "forming", "direction": "up", "d1_recent_efficiency": 0.3, "h4_recent_efficiency": 0.28},
+                "strategy": {"recommended_strategy_type": "grid", "reason": "trend_not_established"},
+            },
+        },
     }
 
 
@@ -109,6 +116,9 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
 
         page.locator("#refreshTrend").click()
         page.locator("#trendBox").filter(has_text="做多 · 稳健").wait_for()
+        assert "① 长期位置" in page.locator("#trendBox").inner_text()
+        assert "② 趋势阶段" in page.locator("#trendBox").inner_text()
+        assert "③ 策略与参数" in page.locator("#trendBox").inner_text()
         assert requests[-1] == {"action": "refresh_recommendation", "cycle_id": "2026-07-18_DAY"}
         assert "生产计划未改变" in page.locator("#actionStatus").inner_text()
 

@@ -24,9 +24,10 @@ from services.dualtrack_config import dualtrack_config
 from services.journal_store import write_json
 
 
-PROMPT_VERSION = "strategy-recommendation-prompt-v2"
-EVALUATION_SCHEMA = "strategy-ai-evaluation-v1"
+PROMPT_VERSION = "strategy-recommendation-prompt-v3"
+EVALUATION_SCHEMA = "strategy-ai-evaluation-v2"
 TIMEFRAMES = ("1d", "4h", "1h", "15m")
+LONG_TERM_D1_BARS = 200
 
 
 class StrategyRecommendationService:
@@ -69,6 +70,7 @@ class StrategyRecommendationService:
                         "provider": (strategy_timeframes.get(timeframe) or {}).get("provider"),
                         "is_synthetic": (strategy_timeframes.get(timeframe) or {}).get("is_synthetic"),
                         "bar_count": len((strategy_timeframes.get(timeframe) or {}).get("bars") or []),
+                        "long_term_position_bar_count": len((strategy_timeframes.get(timeframe) or {}).get("long_term_position_bars") or (strategy_timeframes.get(timeframe) or {}).get("bars") or []),
                         "latest_timestamp": (((strategy_timeframes.get(timeframe) or {}).get("bars") or [{}])[-1]).get("timestamp"),
                     }
                     for timeframe in TIMEFRAMES
@@ -90,9 +92,11 @@ class StrategyRecommendationService:
                 timeframe: self._context_summary(strategy_timeframes, timeframe)
                 for timeframe in TIMEFRAMES
             }
+            framework = build_position_first_framework(contexts)
             prompt = self._prompt(
                 cycle_id,
                 contexts=contexts,
+                framework=framework,
                 current_plan=current_plan or {},
                 account=account or {},
                 review=review or {},
@@ -104,7 +108,7 @@ class StrategyRecommendationService:
                 "system_prompt_note": "No hidden repository system prompt; the complete task prompt is stored with this proposal.",
                 "prompt": prompt,
             }
-            receipt["input"].update({"contexts": contexts, "prompt": prompt, "prompt_contract": prompt_contract})
+            receipt["input"].update({"contexts": contexts, "position_first_framework": framework, "prompt": prompt, "prompt_contract": prompt_contract})
             self._last_raw_model_response = None
             decision = self.decision_provider(prompt)
             raw_model_response = self._last_raw_model_response or json.dumps(
@@ -140,6 +144,7 @@ class StrategyRecommendationService:
                     "rule_score": rule_score,
                     "rule_score_components": components,
                     "calibration_status": "uncalibrated",
+                    "position_first_framework": framework,
                 },
                 "final_recommendation": {
                     "direction": direction,
@@ -150,7 +155,7 @@ class StrategyRecommendationService:
             }
             receipt = self.persist_receipt(receipt)
             return {
-                "schema_version": "strategy-recommendation-v1",
+                "schema_version": "strategy-recommendation-v2",
                 "cycle_id": cycle_id,
                 "created_at": created_at,
                 "direction": direction,
@@ -159,9 +164,12 @@ class StrategyRecommendationService:
                 "key_levels": [float(value) for value in decision.get("key_levels") or []],
                 "evidence_used": [str(value) for value in decision.get("evidence_used") or []],
                 "signal": signal,
+                "strategy_type": framework["strategy"]["recommended_strategy_type"],
+                "framework": framework,
                 "analysis": {
                     "timeframes": list(TIMEFRAMES),
                     "contexts": contexts,
+                    "framework": framework,
                     "chart_timeframe_used": False,
                 },
                 "prompt_contract": prompt_contract,
@@ -218,7 +226,10 @@ class StrategyRecommendationService:
         if not provider:
             raise ValueError(f"strategy timeframe {timeframe} provider is missing")
         bars = list(context.get("bars") or [])
-        if len(bars) < 15:
+        long_term_bars = list(context.get("long_term_position_bars") or bars)
+        minimum = LONG_TERM_D1_BARS if timeframe == "1d" else 15
+        available = len(long_term_bars) if timeframe == "1d" else len(bars)
+        if available < minimum:
             raise ValueError(f"strategy timeframe {timeframe} history is insufficient")
         closes = [_positive(bar.get("close"), f"{timeframe} close") for bar in bars]
         atr = _atr(bars)
@@ -228,6 +239,20 @@ class StrategyRecommendationService:
         net_move = abs(closes[-1] - closes[0])
         path = sum(abs(right - left) for left, right in zip(closes, closes[1:]))
         efficiency = net_move / path if path else 0.0
+        recent = bars[-20:]
+        recent_closes = closes[-20:]
+        recent_move = abs(recent_closes[-1] - recent_closes[0])
+        recent_path = sum(abs(right - left) for left, right in zip(recent_closes, recent_closes[1:]))
+        recent_efficiency = recent_move / recent_path if recent_path else 0.0
+        long_term = long_term_bars[-LONG_TERM_D1_BARS:] if timeframe == "1d" else []
+        long_low = min((_positive(bar.get("low"), f"{timeframe} low") for bar in long_term), default=None)
+        long_high = max((_positive(bar.get("high"), f"{timeframe} high") for bar in long_term), default=None)
+        position_close = _positive(long_term[-1].get("close"), f"{timeframe} position close") if long_term else closes[-1]
+        position_rank = (
+            (position_close - long_low) / (long_high - long_low)
+            if long_low is not None and long_high is not None and long_high > long_low
+            else None
+        )
         return {
             "timeframe": timeframe,
             "provider": provider,
@@ -247,7 +272,16 @@ class StrategyRecommendationService:
             },
             "trend": "up" if ema_fast > ema_slow else "down" if ema_fast < ema_slow else "flat",
             "directional_efficiency": round(efficiency, 4),
-            "recent_closes": [round(value, 6) for value in closes[-20:]],
+            "recent_directional_efficiency": round(recent_efficiency, 4),
+            "recent_change_pct": round((recent_closes[-1] / recent_closes[0] - 1.0) * 100.0, 4) if recent_closes[0] else 0.0,
+            "recent_closes": [round(value, 6) for value in recent_closes],
+            "long_term_position": {
+                "lookback_bars": len(long_term),
+                "window_low": round(long_low, 6) if long_low is not None else None,
+                "window_high": round(long_high, 6) if long_high is not None else None,
+                "close": round(position_close, 6),
+                "rank": round(position_rank, 4) if position_rank is not None else None,
+            } if timeframe == "1d" else None,
             "last_completed_bar": {
                 key: bars[-1].get(key) for key in ("timestamp", "open", "high", "low", "close", "volume")
             },
@@ -258,6 +292,7 @@ class StrategyRecommendationService:
         cycle_id: str,
         *,
         contexts: dict[str, Any],
+        framework: dict[str, Any],
         current_plan: dict[str, Any],
         account: dict[str, Any],
         review: dict[str, Any],
@@ -266,6 +301,7 @@ class StrategyRecommendationService:
 
 周期: {cycle_id}
 完整 D1、4H、1H、15m 可信行情与指标: {json.dumps(contexts, ensure_ascii=False, sort_keys=True)}
+确定性评估框架（必须按此顺序解释，不可绕过）: {json.dumps(framework, ensure_ascii=False, sort_keys=True)}
 当前生产计划: {json.dumps(current_plan, ensure_ascii=False, sort_keys=True)}
 账户状态: {json.dumps(account, ensure_ascii=False, sort_keys=True)}
 上一周期复盘: {json.dumps(review, ensure_ascii=False, sort_keys=True)}
@@ -273,7 +309,7 @@ class StrategyRecommendationService:
 只输出 JSON 对象，字段必须为：
 - direction: neutral、long 或 short
 - style: steady 或 aggressive
-- rationale: 直白中文，分别说明 D1、4H、1H 给出的证据以及为何选择该方向和风格
+- rationale: 直白中文，严格按「长期位置 → 趋势阶段 → Grid/DCA 与参数职责」说明 D1、4H、1H 证据和建议。若方向与长期位置倾向冲突，必须明确说明冲突。
 - key_levels: number[]，只列从输入行情中可解释的关键位
 - ai_self_assessment: 1-10，只代表你认为本次推理材料是否充分，不是置信概率
 - evidence_used: string[]，列出实际使用的输入，例如 D1、4H、1H、current_plan、review
@@ -284,6 +320,7 @@ class StrategyRecommendationService:
 3. 图表展示周期不是策略输入。只使用上面固定的 D1、4H、1H、15m 数据；15m 只用于短周期确认，不得改变 D1 Range 与 4H spacing 合同。
 4. 材料冲突时必须写明冲突；信息不足时必须明确说明，禁止静默补全。
 5. 只输出 JSON，不要 markdown。
+6. 长期位置是默认方向倾向；趋势阶段只决定更适合 Grid 还是 DCA。不得把 DCA 写成自动启用，也不得绕过确定性 Range、格子、杠杆和风险计算。
 """
 
     def _rule_score(self, contexts: dict[str, Any], *, direction: str, style: str) -> dict[str, float]:
@@ -343,6 +380,105 @@ class StrategyRecommendationService:
             return _parse_json_object(self._last_raw_model_response)
         finally:
             result_path.unlink(missing_ok=True)
+
+
+def build_position_first_framework(contexts: dict[str, Any]) -> dict[str, Any]:
+    """Classify long-term position before choosing a Grid or DCA archetype.
+
+    This is an auditable advisory frame, not a risk override or execution
+    decision. The D1 position supplies the directional prior. D1/4H structure
+    then determines whether a trend is established enough to *recommend* DCA;
+    every resulting range, spacing, size and order still comes from the
+    deterministic preview/control plane.
+    """
+    d1 = dict(contexts.get("1d") or {})
+    h4 = dict(contexts.get("4h") or {})
+    long_term = dict(d1.get("long_term_position") or {})
+    rank = long_term.get("rank")
+    if not isinstance(rank, (int, float)) or not 0.0 <= float(rank) <= 1.0:
+        raise ValueError("D1 long-term position is unavailable")
+    lookback = int(long_term.get("lookback_bars") or 0)
+    if lookback < LONG_TERM_D1_BARS:
+        raise ValueError("D1 long-term position history is insufficient")
+
+    if rank <= 1.0 / 3.0:
+        position_label, directional_prior = "low", "long"
+    elif rank >= 2.0 / 3.0:
+        position_label, directional_prior = "high", "short"
+    else:
+        position_label, directional_prior = "middle", "neutral"
+
+    d1_trend = str(d1.get("trend") or "flat")
+    h4_trend = str(h4.get("trend") or "flat")
+    d1_efficiency = _unit_interval(d1.get("recent_directional_efficiency"))
+    h4_efficiency = _unit_interval(h4.get("recent_directional_efficiency"))
+    aligned_direction = d1_trend if d1_trend in {"up", "down"} and d1_trend == h4_trend else "flat"
+    if aligned_direction != "flat" and d1_efficiency >= 0.35 and h4_efficiency >= 0.35:
+        trend_stage = "established"
+        trend_direction = aligned_direction
+    elif aligned_direction != "flat" or (
+        d1_trend in {"up", "down"} and (d1_efficiency >= 0.2 or h4_efficiency >= 0.25)
+    ):
+        trend_stage = "forming"
+        trend_direction = aligned_direction if aligned_direction != "flat" else d1_trend
+    else:
+        trend_stage = "range"
+        trend_direction = "flat"
+
+    position_conflicts_with_trend = (
+        directional_prior != "neutral"
+        and trend_direction in {"up", "down"}
+        and {directional_prior, trend_direction} in ({"long", "down"}, {"short", "up"})
+    )
+    dca_eligible = trend_stage == "established" and not position_conflicts_with_trend
+    strategy_type = "dca" if dca_eligible else "grid"
+    strategy_reason = (
+        "established_trend_aligned_with_position"
+        if dca_eligible
+        else "position_trend_conflict"
+        if position_conflicts_with_trend
+        else "trend_not_established"
+    )
+    return {
+        "schema_version": "position-first-market-framework-v1",
+        "decision_order": ["long_term_position", "trend_stage", "strategy_and_parameters"],
+        "position": {
+            "timeframe": "1d",
+            "lookback_bars": lookback,
+            "window_low": long_term.get("window_low"),
+            "window_high": long_term.get("window_high"),
+            "rank": round(float(rank), 4),
+            "label": position_label,
+            "directional_prior": directional_prior,
+        },
+        "trend": {
+            "timeframes": ["1d", "4h"],
+            "stage": trend_stage,
+            "direction": trend_direction,
+            "d1_trend": d1_trend,
+            "h4_trend": h4_trend,
+            "d1_recent_efficiency": round(d1_efficiency, 4),
+            "h4_recent_efficiency": round(h4_efficiency, 4),
+            "position_conflicts_with_trend": position_conflicts_with_trend,
+        },
+        "strategy": {
+            "recommended_strategy_type": strategy_type,
+            "reason": strategy_reason,
+            "parameter_owner": "deterministic_preview",
+            "range_input_timeframe": "1d",
+            "spacing_input_timeframe": "4h",
+            "sizing_inputs": ["leverage", "profit_target", "risk_confirmation"],
+            "automatic_execution": False,
+        },
+    }
+
+
+def _unit_interval(value: Any) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, numeric))
 
 
 def _atr(bars: list[dict[str, Any]], period: int = 14) -> float:

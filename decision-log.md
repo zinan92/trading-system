@@ -10338,3 +10338,44 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused Playwright failure-chain coverage asserts that the new wording says
   the Paper outcome is unconfirmed and that the error enters the control
   reconciliation classification. No Paper control request is submitted.
+
+## 2026-07-23 - Position-first AI market assessment
+
+### Decision
+
+- Make the AI recommendation sequence explicit and deterministic before the
+  model writes any rationale: (1) D1 long-term position over the last 200
+  completed calendar bars produces a low/middle/high classification and a
+  long/neutral/short directional prior; (2) D1/4H recent directional
+  efficiency and alignment classify the market as range, forming, or
+  established trend; (3) only an established trend that does not conflict
+  with the position prior recommends DCA. Every other state recommends Grid.
+- Keep the pre-existing weekday-only D1 series for Grid ATR/Range geometry.
+  The new position window is a separate 200-bar completed-calendar series, so
+  a longer history request cannot silently alter existing Range or spacing.
+- The framework, source window, prompt, and rule validation are persisted in
+  the AI evaluation receipt. The Dashboard shows the three steps in that
+  order. Loading the recommendation may switch only the local Grid/DCA
+  preview; it cannot create an order, start Paper, or mutate the production
+  plan.
+
+### Gotchas
+
+- "Long-term low/high" is a deterministic percentile inside the available
+  exchange D1 high-low window, not a claim about fundamental fair value or a
+  calibrated return forecast. It must be shown with the window size and rank.
+- D1/4H disagreement or weak efficiency is a forming/range signal, not a
+  license to force DCA. When trend direction conflicts with the position
+  prior, Grid remains the recommendation until the conflict resolves.
+- The provider currently supplies enough completed calendar D1 bars for the
+  200-bar position window but only 160 weekday-only D1 bars. Keeping these
+  ports separate is intentional: the former is market location; the latter is
+  legacy Grid geometry.
+
+### Verification
+
+- Real read-only feed check returned 224 completed calendar D1 bars and 160
+  weekday-only planning bars from the trusted Binance USD-M adapter.
+- Focused recommendation/API/Dashboard tests cover low/high position,
+  established/forming trend, Grid/DCA recommendation, persisted proposal-only
+  effects, and visible three-step UI order. No Paper control action is sent.
