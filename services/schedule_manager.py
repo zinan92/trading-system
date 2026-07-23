@@ -48,6 +48,7 @@ class ScheduleManager:
             "com.wendy.trading-orchestrator.trading-plan": self._trading_plan_job(log_dir, plan_hour, plan_minute),
             "com.wendy.trading-orchestrator.evening-review": self._evening_review_job(log_dir, evening_review_hour, evening_review_minute),
             "com.wendy.trading-orchestrator.daily-review": self._daily_review_job(log_dir, review_hour, review_minute),
+            "com.wendy.trading-orchestrator.daily-24h-report": self._daily_24h_report_job(log_dir),
             "com.wendy.trading-orchestrator.dashboard": self._dashboard_job(log_dir, dashboard_port),
             "com.wendy.trading-orchestrator.strategies": self._strategies_job(log_dir),
             "com.wendy.trading-orchestrator.dualtrack-cycle": self._dualtrack_cycle_job(log_dir),
@@ -133,6 +134,22 @@ class ScheduleManager:
             [self.python, "-m", "pipelines.daily_review"],
             log_dir,
             extra={"StartCalendarInterval": {"Hour": hour, "Minute": minute}},
+        )
+
+    def _daily_24h_report_job(self, log_dir: Path) -> dict:
+        """Build the prior Beijing day after its final overlapping cycle closes.
+
+        This deliberately calls the repository pipeline directly.  The former
+        hand-written plist depended on a moved helper under another workspace,
+        causing launchd to fail before report code could write any evidence.
+        """
+
+        label = "com.wendy.trading-orchestrator.daily-24h-report"
+        return self._base_job(
+            label,
+            [self.python, "-m", "pipelines.trading_daily_24h_report", "--send", "--verify"],
+            log_dir,
+            extra={"StartCalendarInterval": {"Hour": 1, "Minute": 3}},
         )
 
     def _strategies_job(self, log_dir: Path) -> dict:

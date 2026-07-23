@@ -10026,3 +10026,29 @@ auditable datafeed port; broker execution remains a separate port.
   replacement, target/stop closure, restart idempotence, and no accepted
   residual orders. The read model and Playwright test verify the active
   generation and exact aggregate quantity are visible to an operator.
+
+## 2026-07-23 - Daily report scheduling is repository-owned and diagnosable
+
+### Decision
+
+- The `daily-24h-report` launchd job runs the repository pipeline directly at
+  01:03 UTC (09:03 Beijing), after the prior Beijing day is terminal. It no
+  longer calls a wrapper located in another workspace.
+- Schedule status retains a bounded stderr tail only for a failed job, maps it
+  to an operator action, and records whether the expected daily report
+  artifact is present. These diagnostics are read-only.
+
+### Gotchas
+
+- A loaded launchd job with exit 2 is not a report-generation failure until
+  its command was reached. The old failure happened before the pipeline
+  started because the wrapper path had moved.
+- A present markdown file is insufficient evidence: the JSON report and its
+  terminal cycle-package provenance remain the verifiable report artifact.
+
+### Verification
+
+- Focused schedule tests cover generated direct command, failed command
+  classification, missing artifact state, and full scheduler lifecycle.
+  Daily-report tests validate successful hash/provenance-backed output; the
+  repository also compiles under the launchd `/usr/bin/python3` interpreter.
