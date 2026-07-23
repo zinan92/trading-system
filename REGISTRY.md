@@ -30,9 +30,10 @@
 - #180: GridMind 的 Paper 操作者主路径现在有一条连续 Playwright 验收：趋势刷新、智能填充、启动前调整、启动、停止，以及复盘/Shadows/NAV 入口均验证可见结果和控制请求；详细图表、拖动、历史加载仍由各自的聚焦浏览器测试覆盖。
 - #181: `codex/recovery-stash-20260721` 的四个 handoff 指定文件已逐项三方审计；均不应直接恢复，恢复分支仍完整保留为只读证据，结论见 `docs/audits/recovery-stash-20260721.md`。
 - #182: GitHub 404 的历史 #52–#128 已有不可伪造的本仓 provenance 索引；只记录可复验 commit/decision-log 证据，绝不伪造原 Issue，见 `docs/audits/missing-issue-provenance-52-128.md`。
+- #183: 四项历史 pre-live 风险已重新复验：日损 NaN/时区/陈旧证据 fail-closed、测试网保护单回收、百分比仓位口径一致、Obsidian 可选；mainnet 仍被独立 activation/canary 门禁阻断，见 `docs/audits/pre-live-risk-invariants-2026-07-23.md`。
 
 ## 下一步
-- 完成 #183：逐项复验上真钱前的四类风险不变量，只报告或建立明确的 fail-closed 证据。
+- 处理 #145/#146：把 Dashboard 的上游/控制面失败和不可覆盖启动 blocker 变成具体、人可执行的错误卡片。
 - 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
