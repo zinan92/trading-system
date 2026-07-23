@@ -13,6 +13,7 @@ from services.dualtrack_config import DEFAULT_DUALTRACK_CONFIG
 from services.execution_plugin_composition import (
     build_configured_execution_engine_adapter,
 )
+from services.journal_store import write_json
 from services.strategy_control_plane import StrategyControlPlane
 import services.strategy_control_plane as control_plane_module
 
@@ -180,6 +181,76 @@ def test_dca_prepare_is_read_only_and_start_requires_exact_risk_acknowledgement(
     )
     assert repeated["idempotent"] is True
     assert repeated["created_orders"] == 0
+
+
+def test_nautilus_paper_dca_start_requires_a_fresh_execution_tick(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    real = build_configured_execution_engine_adapter(output, config=_config())
+
+    class NautilusPaperFacade:
+        name = "nautilus_paper"
+
+        def __getattr__(self, name: str):
+            return getattr(real, name)
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: NautilusPaperFacade(),
+    )
+    plane = StrategyControlPlane(output)
+    plane.config["execution_engine"] = {
+        "authoritative": "nautilus_paper",
+        "shadow": "none",
+        "real_money_eligible": False,
+    }
+
+    with pytest.raises(ValueError, match="paper_execution_tick_unavailable:heartbeat_missing"):
+        plane.control(
+            CYCLE_ID,
+            "start",
+            _payload(),
+            market=_market(),
+            account={"equity": 10_000.0},
+            now="2026-07-22T16:00:00+00:00",
+        )
+
+    write_json(
+        output / "dualtrack" / "runner" / f"{CYCLE_ID}.json",
+        [{
+            "ts": "2026-07-22T15:59:00+00:00",
+            "cycle_id": CYCLE_ID,
+            "event": "live_tick_heartbeat",
+            "detail": {"runner": "dualtrack-live-tick", "ledger_refreshed": True},
+        }],
+    )
+    prepared = plane.control(
+        CYCLE_ID,
+        "prepare_start",
+        _payload(),
+        market=_market(),
+        account={"equity": 10_000.0},
+        now="2026-07-22T16:00:00+00:00",
+    )
+    started = plane.control(
+        CYCLE_ID,
+        "start",
+        {
+            **_payload(),
+            "prepared_start_id": prepared["prepared_start_id"],
+            "expected_preview_id": prepared["preview"]["preview_id"],
+            "risk_acknowledgements": _ack(prepared["preview"]),
+        },
+        market=_market(),
+        account={"equity": 10_000.0},
+        now="2026-07-22T16:00:01+00:00",
+    )
+
+    assert started["runtime"]["strategy_type"] == "dca"
+    assert started["accepted_orders"] == 3
 
 
 def test_running_dca_accumulates_then_stops_after_one_aggregate_target(

@@ -1,5 +1,19 @@
 # Decision Log
 
+## DCA Paper Start Liveness
+
+Date: 2026-07-23
+
+### Decision
+
+- Require the same fresh `dualtrack-live-tick` receipt immediately before the final Nautilus Paper DCA start that Grid uses.
+  - Rationale: DCA's aggregate target and stop are advanced by the tick runner; allowing the final start after that runner has gone stale can leave additions without a progressing lifecycle.
+  - Evidence: `StrategyControlPlane._start_dca`, `test_nautilus_paper_dca_start_requires_a_fresh_execution_tick`.
+
+### Gotcha
+
+- `prepare_start` already had the liveness gate. The final DCA `start` is a separate mutation path and must re-check it because the prepared candidate can age between preview and acceptance.
+
 ## Paper Tick Scheduler Runtime Persistence
 
 Date: 2026-07-23
