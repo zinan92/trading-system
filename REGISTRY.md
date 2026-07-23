@@ -26,9 +26,10 @@
 - #176: canonical accounting 会保留任何“平仓早于开仓”的历史原始记录并写入明确 reconciliation 诊断；Dashboard 将其隔离为“时间异常”，不再计为正常已完成交易。
 - #177: DCA lifecycle 的聚合止盈世代、累计数量和退出状态已从 Paper JSON 接入 read model；页面明确说明整轮 TP 由行情事件触发、不是 entry 挂单。
 - #178: 24 小时报表已成为受控 launchd 任务，直接执行本仓 pipeline；不再依赖已移动的外部 wrapper。调度状态会给出受限 stderr 摘要、失败分类、下一步以及报表产物是否存在。
+- #179: `/usr/bin/python3`（launchd 实际使用的 Python 3.9）现有独立的 import 兼容性闸和可读回执；Paper 服务重启前必须通过，不能用开发环境 Python 3.13 的测试结果替代。
 
 ## 下一步
-- 完成 #179：把 launchd 的 Python 3.9 兼容性检查固化到测试与部署前验证，避免“本地新解释器全绿、服务启动即崩”。
+- 完成 #180：补齐 Dashboard 的浏览器端端到端实操验收，覆盖拖动、复盘、Shadows 和图表视图行为。
 - 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
