@@ -600,9 +600,35 @@ def test_live_tick_syncs_obsidian_plan_and_runs_intraday(tmp_path: Path) -> None
     assert not (output / "dualtrack" / "plans" / "2026-07-05_NIGHT_human.json").exists()
     assert result["intraday"]["status"] == "ran"
     runner_rows = load_json(output / "dualtrack" / "runner" / "2026-07-05_DAY.json")
-    assert runner_rows[-1]["event"] == "intraday"
-    assert runner_rows[0]["event"] == "live_tick_heartbeat"
+    assert runner_rows[-1]["event"] == "live_tick_heartbeat"
+    assert runner_rows[-1]["detail"]["ledger_refreshed"] is True
     assert [row["event"] for row in runner_rows].count("intraday") == 1
+
+
+def test_live_tick_does_not_refresh_heartbeat_when_ledger_rebuild_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    runner = DualTrackCycleRunner(
+        output_root=output,
+        market_db=tmp_path / "market_data.db",
+        config=TEST_CONFIG,
+    )
+    runner._lifecycle_results = lambda _now: []
+    runner._sweep_active_human_protective_exits = lambda *_args, **_kwargs: {}
+    runner.sync_obsidian_human_plans = lambda **_kwargs: {}
+    runner.intraday_tick = lambda **_kwargs: {}
+    monkeypatch.setattr(
+        runner.scorer,
+        "rebuild_ledgers",
+        lambda: (_ for _ in ()).throw(RuntimeError("weekly_ledger_failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="weekly_ledger_failed"):
+        runner.live_tick(as_of="2026-07-05T02:30:00+00:00")
+
+    assert load_json(output / "dualtrack" / "runner" / "2026-07-05_DAY.json") == []
 
 
 def test_midnight_cutover_closes_legacy_night_and_opens_daily_cycle(tmp_path: Path) -> None:
