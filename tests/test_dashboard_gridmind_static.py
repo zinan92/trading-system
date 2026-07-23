@@ -374,12 +374,14 @@ def test_gridmind_history_uses_real_machine_ledger_and_paper_nav_fields() -> Non
     html = _html()
 
     assert "function historyLedgerRows(data)" in html
-    assert "row?.tracks?.machine?.realized_pnl??row?.total_pnl" in html
+    assert "row?.tracks?.machine?.realized_pnl" in html
+    assert "??row?.total_pnl" not in html
     assert "data?.execution?.account?.starting_balance" in html
     assert "累计生产 P&amp;L" in html
     assert "Paper NAV" in html
     assert "row.total_realized_pnl" not in html
     assert "row.cumulative_realized_pnl" not in html
+    assert "recovery replay 不计入 Paper P&amp;L" in html
 
 
 def test_gridmind_lifecycle_retention_cannot_change_controls_or_chart_truth() -> None:

@@ -1,5 +1,18 @@
 # Decision Log
 
+## Paper NAV Display Scope
+
+Date: 2026-07-23
+
+### Decision
+
+- Build Dashboard historical cumulative P&L and NAV only from each day's explicit machine production realized P&L; do not fall back to `total_pnl`, and invalidate subsequent cumulative values after a missing day.
+  - Rationale: a mixed or missing ledger value must be displayed as unavailable rather than silently represented as Paper production performance.
+
+### Gotcha
+
+- Recovery replay remains an audit aid and is excluded from Paper P&L; it must never enter historical NAV through a generic total fallback.
+
 ## Running Paper Tick Liveness Projection
 
 Date: 2026-07-23
