@@ -547,6 +547,11 @@ class StrategyControlPlane:
     def read_model(self, cycle_id: str, *, as_of: str | None = None) -> dict[str, Any]:
         proposals = self.proposals(cycle_id)
         plan = self.active_plan(cycle_id)
+        dca_lifecycle = (
+            DcaPaperLifecycle(self.output_root, None).read_state(plan)
+            if isinstance(plan, dict) and plan.get("strategy_type") == "dca"
+            else None
+        )
         return {
             "schema_version": "strategy-production-console-v1",
             "cycle_id": cycle_id,
@@ -565,6 +570,7 @@ class StrategyControlPlane:
                 "legacy_execution_shadow_separate": True,
             },
             "runtime": self.runtime_state(cycle_id, now=as_of),
+            "dca_lifecycle": dca_lifecycle,
         }
 
     def runtime_state(

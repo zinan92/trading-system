@@ -300,6 +300,10 @@ def test_running_dca_accumulates_then_stops_after_one_aggregate_target(
     assert second["state"]["active_target"]["quantity"] > first["state"][
         "active_target"
     ]["quantity"]
+    observed = plane.read_model(CYCLE_ID)
+    assert observed["dca_lifecycle"]["strategy_plan_id"] == started["plan"]["strategy_plan_id"]
+    assert observed["dca_lifecycle"]["active_target"]["generation"] == 2
+    assert observed["dca_lifecycle"]["active_target"]["quantity"] == second["state"]["open_quantity"]
 
     closed = plane.advance_dca_market_event(
         CYCLE_ID,

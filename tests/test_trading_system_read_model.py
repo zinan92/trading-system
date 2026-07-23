@@ -361,6 +361,47 @@ def test_read_model_projects_dca_round_summary_without_grid_geometry_warning() -
     assert "strategy_geometry_incomplete" not in model["completeness"]["issues"]
 
 
+def test_read_model_projects_dca_aggregate_target_as_event_driven_protection() -> None:
+    source = _source()
+    source["production_plan"] = {
+        "schema_version": "strategy-plan-v1",
+        "strategy_type": "dca",
+        "strategy_plan_id": "plan-dca-1",
+        "version": 8,
+        "status": "active",
+        "direction": "long",
+        "dca": {
+            "max_additions": 3,
+            "notional_per_addition": 2_000.0,
+            "target_price": 4_050.0,
+            "stop_price": 3_970.0,
+            "entries": [{"price": 4_004.0}],
+        },
+    }
+    source["dca_lifecycle"] = {
+        "strategy_plan_id": "plan-dca-1",
+        "round_id": "round-dca-1",
+        "status": "open",
+        "additions_filled": 2,
+        "open_quantity": 1.001,
+        "average_entry_price": 4_000.0,
+        "target_generations": [
+            {"target_id": "old", "generation": 1, "status": "cancelled", "price": 4_050.0, "quantity": 0.5},
+            {"target_id": "active", "generation": 2, "status": "accepted", "price": 4_050.0, "quantity": 1.001},
+        ],
+        "active_target": {"target_id": "active", "generation": 2, "status": "accepted", "side": "sell", "price": 4_050.0, "quantity": 1.001},
+    }
+
+    model = project_trading_system_read_model(source).to_dict()
+
+    lifecycle = model["execution"]["dca_lifecycle"]
+    assert lifecycle["status"] == "open"
+    assert lifecycle["protection_semantics"] == "event_driven_aggregate_target_not_entry_order"
+    assert lifecycle["active_target"]["generation"] == 2
+    assert lifecycle["active_target"]["quantity"] == 1.001
+    assert len(lifecycle["target_generations"]) == 2
+
+
 def test_read_model_projects_only_authoritative_order_rows_without_fill_inference() -> None:
     source = _source()
     source["production_execution"]["orders"] = []
