@@ -113,6 +113,21 @@ def test_gridmind_mobile_layout_prevents_global_horizontal_overflow() -> None:
     assert ".console-wrap{max-width:100%;padding:7px}" in html
 
 
+def test_gridmind_invalid_manual_draft_is_visible_and_cannot_start() -> None:
+    html = _html()
+
+    assert "draftProblem:null" in html
+    assert "function invalidStrategyDraft()" in html
+    assert 'title:"每格名义缺失"' in html
+    assert 'button.textContent=locked?"手动":"AUTO"' in html
+    assert "function renderParameterValidity()" in html
+    assert 'input.classList.toggle("is-invalid",invalid)' in html
+    assert 'box.className="preview-summary invalid"' in html
+    assert 'start.textContent=!controlled?"登录后可启动机器人":invalidDraft?"请先修复参数"' in html
+    assert "!invalidDraft&&fresh" in html
+    assert "state.preview=null;const inputProblem=invalidStrategyDraft()" in html
+
+
 def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
     html = _html()
 

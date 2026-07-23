@@ -10379,3 +10379,33 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused recommendation/API/Dashboard tests cover low/high position,
   established/forming trend, Grid/DCA recommendation, persisted proposal-only
   effects, and visible three-step UI order. No Paper control action is sent.
+
+## 2026-07-24 - Invalid manual drafts are not startable plans
+
+### Decision
+
+- Separate a locally invalid parameter draft from a valid server preview. When
+  a manually fixed Grid field is blank or malformed, discard any older preview,
+  mark the affected input, and replace the preview panel with the exact repair
+  action. The start button is disabled before any control request is sent.
+- Name manually fixed fields `手动` rather than `LOCKED`. The same control still
+  returns that field to `AUTO` solving; it does not erase the operator's ability
+  to specify a value.
+- Keep this client preflight deliberately narrow: it catches incomplete or
+  non-numeric inputs only. Risky but well-formed choices remain visible to the
+  existing server preview and Paper risk-confirmation flow.
+
+### Gotchas
+
+- Never retain a previous successful preview after an input changes: it may
+  describe a different range, notional, or leverage from the draft on screen.
+- A disabled start button needs a visible explanation near the fields, not only
+  a tooltip, because an operator must be able to recover without guessing.
+- This is presentation validation, not a replacement for backend validation;
+  `prepare_start` and `start` retain their authoritative checks.
+
+### Verification
+
+- Focused static and Playwright coverage verifies: clear manual notional →
+  no control request → marked field, clear repair copy, disabled start → press
+  `手动` → `AUTO` solver preview returns.
