@@ -10,7 +10,7 @@ from services.dualtrack_human import DualTrackHumanEngine
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
-from services.journal_store import load_json
+from services.journal_store import load_json, write_json
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
@@ -111,6 +111,31 @@ def test_acceptance_6_ledger_arithmetic_sums_fills_cycles_daily_and_weekly(tmp_p
     assert daily["cycles"][cycle_id]["human"] == cycle["human_realized_pnl"]
     assert daily["total_pnl"] == round(cycle["machine_realized_pnl"] + cycle["human_realized_pnl"], 8)
     assert weekly["total_pnl"] == daily["total_pnl"]
+
+
+def test_rebuild_ledgers_skips_malformed_legacy_cycle_dates_and_records_diagnostic(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    scorer = DualTrackScorer(output, config=TEST_CONFIG)
+    write_json(output / "dualtrack" / "fills" / "2026-07-05_DAY_machine.json", [])
+    write_json(
+        output / "dualtrack" / "fills" / "deploy-canary-635260f-20260721T0310Z_machine.json",
+        [],
+    )
+
+    scorer.rebuild_ledgers()
+
+    assert (output / "dualtrack" / "ledger" / "weekly" / "2026-W27.json").exists()
+    diagnostics = load_json(
+        output / "dualtrack" / "ledger" / "diagnostics" / "invalid_dates.json"
+    )
+    assert diagnostics == [{
+        "value": "deploy-canary-635260f-20260721T0310Z",
+        "source": "rebuild_ledgers.cycle_id",
+        "reason": "non_iso_date",
+        "recorded_at": diagnostics[0]["recorded_at"],
+    }]
 
 
 def test_recovery_replay_is_preserved_but_excluded_from_paper_pnl(tmp_path: Path) -> None:
