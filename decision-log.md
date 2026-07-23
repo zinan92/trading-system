@@ -10151,3 +10151,25 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `docs/audits/missing-issue-provenance-52-128.md` lists the exact commands and
   retained hashes required to re-check every positive provenance statement.
+
+## 2026-07-23 - Revalidate pre-live risks without treating tests as activation
+
+### Decision
+
+- Re-run bounded guardrail, risk-contract, daily-pipeline, sizing, and testnet
+  protective-order tests against current mainline contracts.
+- Record daily-loss integrity, protective recovery, sizing semantics, and
+  optional Obsidian behavior separately. A testnet protection pass is not a
+  mainnet canary.
+
+### Gotchas
+
+- A stale, malformed, missing, non-finite, or wrong-UTC-day reconciliation
+  must be `daily_loss_unknown` and block the order; it must never become zero.
+- Both sizing boundaries divide `position_size_pct` by 100. Changing either
+  one independently would reintroduce the historical exposure mismatch.
+
+### Verification
+
+- Focused local suite: 30 passed. Dispositions and remaining mainnet blockers
+  are in `docs/audits/pre-live-risk-invariants-2026-07-23.md`.
