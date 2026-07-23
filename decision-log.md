@@ -1,5 +1,23 @@
 # Decision Log
 
+## Paper Tick Scheduler Runtime Persistence
+
+Date: 2026-07-23
+
+### Decisions
+
+- Render the approved Nautilus Paper runtime and its attended gate state into regenerated LaunchAgent plists whenever `execution_engine.authoritative` is `nautilus_paper`.
+  - Rationale: a schedule reinstall must not silently erase the isolated interpreter that the attended Paper cutover already established.
+  - Evidence: `ScheduleManager._paper_execution_environment`, `test_schedule_manager_generates_schedule_artifacts`.
+- Record a bounded, credential-free `live_tick_failure.json` before a live-tick exception escapes; never write a success heartbeat from that failure path.
+  - Rationale: launchd exit 78 alone cannot tell an operator whether the runner reached trusted market, lifecycle, or execution work.
+  - Evidence: `pipelines.dualtrack_cycle_runner._write_live_tick_failure_diagnostic`, `test_live_tick_cli_writes_bounded_failure_diagnostic_without_a_heartbeat`.
+
+### Gotchas
+
+- The generated schedule must match the Paper runtime approved during cutover. A stale generated plist can appear installable yet lose the Nautilus environment on the next restart.
+- A failure diagnostic is evidence of a failed runner, not a liveness signal. Only a completed tick may refresh `paper_execution_tick_health.json`.
+
 ## Paper Execution Tick Liveness
 
 Date: 2026-07-23

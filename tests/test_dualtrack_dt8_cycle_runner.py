@@ -1342,6 +1342,27 @@ def test_d8_3_auto_event_replaces_machine_fills_for_same_bar_set(tmp_path: Path,
     assert second == first
 
 
+def test_live_tick_cli_writes_bounded_failure_diagnostic_without_a_heartbeat(tmp_path: Path, monkeypatch) -> None:
+    output = tmp_path / "outputs"
+
+    class FailingRunner:
+        def __init__(self, **_kwargs) -> None:
+            raise RuntimeError("upstream datafeed unavailable")
+
+    monkeypatch.setattr(cycle_runner_module, "DualTrackCycleRunner", FailingRunner)
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON", "/isolated/nautilus/bin/python")
+
+    with pytest.raises(RuntimeError, match="upstream datafeed unavailable"):
+        cycle_runner_module.main(["--event", "live-tick", "--output-root", str(output)])
+
+    diagnostic = load_json(output / "dualtrack" / "strategy_control" / "live_tick_failure.json")[-1]
+    assert diagnostic["status"] == "failed"
+    assert diagnostic["heartbeat_written"] is False
+    assert diagnostic["runtime"]["nautilus_runtime_configured"] is True
+    assert diagnostic["error"] == {"type": "RuntimeError", "message": "upstream datafeed unavailable"}
+    assert not (output / "dualtrack" / "strategy_control" / "paper_execution_tick_health.json").exists()
+
+
 def test_d8_3_run_close_run_keeps_frozen_trend_gate_and_fills(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)

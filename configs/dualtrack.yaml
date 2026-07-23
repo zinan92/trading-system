@@ -21,6 +21,7 @@
     "authoritative": "nautilus_paper",
     "shadow": "nautilus_paper",
     "shadow_runtime_path": "/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python",
+    "paper_gate_override_approved": true,
     "real_money_eligible": false,
     "switch_requires_attended_approval": true
   },

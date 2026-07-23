@@ -5,7 +5,7 @@ import plistlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.config_loader import ROOT, load_pipeline_config
+from services.config_loader import ROOT, load_dualtrack_config, load_pipeline_config
 from services.journal_store import write_json
 from services.live_env import apply_live_env
 from services.schedule_profiles import labels_for_profile, profile_from_config, normalize_schedule_profile, PROJECT_LABEL_PREFIX
@@ -17,6 +17,7 @@ class ScheduleManager:
         self.repo_root = repo_root or ROOT
         self.output_root = output_root or ROOT / config.get("output_root", "outputs")
         self.profile = normalize_schedule_profile(profile) if profile else profile_from_config(config)
+        self.dualtrack_config = load_dualtrack_config()
         self.python = os.getenv("TRADING_ORCHESTRATOR_PYTHON", "python3")
         # The chan strategy needs Python >= 3.11 + pandas, so the strategies job
         # runs on a dedicated interpreter. The other jobs (runner/daily-review/
@@ -205,6 +206,7 @@ class ScheduleManager:
             value = os.getenv(key)
             if value:
                 env[key] = value
+        env.update(self._paper_execution_environment())
         return {
             "Label": label,
             "ProgramArguments": args,
@@ -214,6 +216,31 @@ class ScheduleManager:
             "EnvironmentVariables": env,
             **extra,
         }
+
+    def _paper_execution_environment(self) -> dict[str, str]:
+        """Persist the attended Paper runtime in regenerated LaunchAgents.
+
+        The cutover controller writes these values to installed plists.  Schedule
+        regeneration must render the same Paper-only runtime, otherwise a normal
+        reinstall silently drops the isolated Nautilus interpreter and leaves the
+        tick runner unable to start.
+        """
+
+        settings = self.dualtrack_config.get("execution_engine") or {}
+        if str(settings.get("authoritative") or "").strip().lower() != "nautilus_paper":
+            return {}
+        runtime = str(settings.get("shadow_runtime_path") or "").strip()
+        if not runtime:
+            return {}
+        environment = {
+            "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED": "1",
+            "TRADING_ORCHESTRATOR_NAUTILUS_PYTHON": runtime,
+        }
+        if settings.get("paper_gate_override_approved") is True:
+            environment["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE"] = (
+                "I_UNDERSTAND_NAUTILUS_PAPER_CUTOVER_BYPASSES_7_CYCLE_SHADOW_GATE"
+            )
+        return environment
 
     def _write_readme(self, root: Path, payload: dict) -> None:
         lines = [

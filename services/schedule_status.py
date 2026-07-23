@@ -51,7 +51,7 @@ class ScheduleStatus:
         runtime_failed_jobs = sorted(
             str(job.get("label") or "")
             for job in jobs
-            if job.get("installed") and job.get("matches_generated") and job.get("loaded") and not job.get("runtime_healthy")
+            if job.get("installed") and job.get("loaded") and not job.get("runtime_healthy")
         )
         if not schedule:
             status = "missing"
@@ -61,7 +61,7 @@ class ScheduleStatus:
             message = "generated schedule is missing required jobs"
         elif runtime_failed_jobs:
             status = "runtime_failed"
-            message = "launchd jobs are loaded but at least one last execution failed"
+            message = "launchd jobs are loaded but at least one last execution failed; inspect its durable runner diagnostic"
         elif healthy_current_count == len(required) and not orphan_jobs:
             status = "active"
             message = "all launchd jobs match the generated schedule, are loaded, and have no failed last execution"
