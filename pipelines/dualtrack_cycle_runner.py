@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
@@ -34,6 +35,7 @@ from services.market_store import MarketStore
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
+from pipelines.strategy_shadow_replay import run_strategy_shadow_replay
 
 
 def _parse_execution_time(value: Any) -> datetime | None:
@@ -54,6 +56,24 @@ def _parse_execution_time(value: Any) -> datetime | None:
         return parse_utc(text)
     except (OverflowError, OSError, TypeError, ValueError):
         return None
+
+
+def _half_notional_shadow_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Return a deliberately bounded sizing what-if without touching production."""
+
+    candidate = deepcopy(plan)
+    grid = candidate.get("grid") if isinstance(candidate.get("grid"), dict) else {}
+    if grid.get("notional_per_grid") is not None:
+        grid["notional_per_grid"] = float(grid["notional_per_grid"]) / 2.0
+    orders = grid.get("orders") if isinstance(grid.get("orders"), list) else []
+    for order in orders:
+        if not isinstance(order, dict):
+            continue
+        for key in ("quantity", "notional", "planned_net_profit_usd"):
+            if order.get(key) is not None:
+                order[key] = float(order[key]) / 2.0
+    candidate["grid"] = grid
+    return candidate
 
 
 class DualTrackCycleRunner:
@@ -505,6 +525,52 @@ class DualTrackCycleRunner:
             return None
         return flush_shadow(cycle_id, cycle_complete=True)
 
+    def _build_strategy_shadow_evidence(
+        self,
+        cycle_id: str,
+        plan: dict[str, Any] | None,
+        _proposals: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Produce Base and bounded what-if evidence for a terminal cycle."""
+
+        if not isinstance(plan, dict) or not plan.get("strategy_plan_id"):
+            return {"status": "missing", "reason": "strategy_plan_missing", "variants": []}
+        rows = load_json(
+            self.output_root / "dualtrack" / "nautilus_authoritative" / "events" / f"{cycle_id}.json"
+        )
+        market_events = [dict(row) for row in rows if isinstance(row, dict)]
+        if not market_events:
+            return {"status": "missing", "reason": "market_events_missing", "variants": []}
+        runtime = str(os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or "").strip()
+        if not runtime or not Path(runtime).exists():
+            return {"status": "missing", "reason": "nautilus_runtime_missing", "variants": []}
+        preflight_path = self.output_root / "dualtrack" / "nautilus" / "instrument_preflight.json"
+        if not preflight_path.exists():
+            return {"status": "missing", "reason": "nautilus_preflight_missing", "variants": []}
+
+        variants = [("production", deepcopy(plan)), ("notional-half", _half_notional_shadow_plan(plan))]
+        results: list[dict[str, Any]] = []
+        for variant_id, candidate in variants:
+            try:
+                result = run_strategy_shadow_replay(
+                    output_root=self.output_root,
+                    cycle_id=cycle_id,
+                    variant_id=variant_id,
+                    plan=candidate,
+                    market_events=market_events,
+                    nautilus_python=runtime,
+                    preflight_path=preflight_path,
+                    config=self.config,
+                )
+                results.append({"variant_id": variant_id, "status": result.get("status"), "scenario_id": result.get("scenario_id")})
+            except Exception as exc:
+                results.append({"variant_id": variant_id, "status": "blocked", "reason": f"{type(exc).__name__}: {exc}"})
+        return {
+            "status": "complete" if all(row.get("status") == "pass" for row in results) else "partial",
+            "variants": results,
+            "market_event_count": len(market_events),
+        }
+
     def fast_forward_day(self, date: str) -> dict[str, Any]:
         results = []
         for kind in ("DAY", "NIGHT"):
@@ -900,6 +966,7 @@ class DualTrackCycleRunner:
                 self.output_root,
                 config=self.config,
                 adapter=self.execution,
+                shadow_evidence_builder=self._build_strategy_shadow_evidence,
             ).package(previous_cycle_id, now=now.isoformat())
             if package.get("status") != "closed":
                 raise ValueError("previous production cycle package is not terminal")

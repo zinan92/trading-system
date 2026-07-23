@@ -705,6 +705,54 @@ def test_lifecycle_skips_planning_when_prior_paper_rollover_is_blocked(tmp_path:
     }
 
 
+def test_terminal_cycle_shadow_builder_runs_base_and_bounded_what_if(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    write_json(output / "dualtrack" / "nautilus_authoritative" / "events" / f"{cycle_id}.json", [{
+        "cycle_id": cycle_id,
+        "event_id": "event-1",
+        "ts_event": "2026-07-05T01:01:00+00:00",
+        "event_started_at": "2026-07-05T01:00:00+00:00",
+        "provider": "test",
+        "instrument_id": "XAUUSDT",
+        "price": 100.0,
+        "open": 100.0,
+        "high": 101.0,
+        "low": 99.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "test",
+    }])
+    write_json(output / "dualtrack" / "nautilus" / "instrument_preflight.json", [{"ready": True}])
+    calls: list[tuple[str, dict]] = []
+
+    def fake_replay(**kwargs):
+        calls.append((kwargs["variant_id"], kwargs["plan"]))
+        return {"status": "pass", "scenario_id": f"scenario-{kwargs['variant_id']}"}
+
+    monkeypatch.setattr(cycle_runner_module, "run_strategy_shadow_replay", fake_replay)
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON", "/bin/sh")
+    runner = object.__new__(DualTrackCycleRunner)
+    runner.output_root = output
+    runner.config = TEST_CONFIG
+    plan = {
+        "cycle_id": cycle_id,
+        "strategy_plan_id": "plan-1",
+        "version": 1,
+        "grid": {"notional_per_grid": 100.0, "orders": [{"quantity": 2.0, "notional": 100.0}]},
+    }
+
+    result = runner._build_strategy_shadow_evidence(cycle_id, plan, [])
+
+    assert result["status"] == "complete"
+    assert [variant for variant, _plan in calls] == ["production", "notional-half"]
+    assert calls[1][1]["grid"]["notional_per_grid"] == 50.0
+    assert calls[1][1]["grid"]["orders"][0]["quantity"] == 1.0
+
+
 def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     output = tmp_path / "outputs"
