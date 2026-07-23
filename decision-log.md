@@ -10129,3 +10129,25 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `git show` and per-file parent/snapshot/main comparisons are recorded in
   `docs/audits/recovery-stash-20260721.md`; no recovered file was deployed.
+
+## 2026-07-23 - Preserve missing GitHub numbers as bounded provenance
+
+### Decision
+
+- Treat the historical #52–#128 gap as a provenance limitation, not permission
+  to recreate or guess GitHub records. Record only commits and decision-log
+  entries that remain locally verifiable.
+- Link the index from the Registry so later work can distinguish a missing
+  GitHub artifact from absent implementation evidence.
+
+### Gotchas
+
+- A nearby commit number is not proof of an unresolved historical issue. The
+  index explicitly marks gaps that cannot be reconstructed.
+- Do not close a current Issue simply because a missing historical number has a
+  similar title; current acceptance criteria remain authoritative.
+
+### Verification
+
+- `docs/audits/missing-issue-provenance-52-128.md` lists the exact commands and
+  retained hashes required to re-check every positive provenance statement.
