@@ -545,7 +545,6 @@ class StrategyControlPlane:
         )
 
     def read_model(self, cycle_id: str, *, as_of: str | None = None) -> dict[str, Any]:
-        del as_of
         proposals = self.proposals(cycle_id)
         plan = self.active_plan(cycle_id)
         return {
@@ -565,10 +564,15 @@ class StrategyControlPlane:
                 "legacy_records_preserved": True,
                 "legacy_execution_shadow_separate": True,
             },
-            "runtime": self.runtime_state(cycle_id),
+            "runtime": self.runtime_state(cycle_id, now=as_of),
         }
 
-    def runtime_state(self, cycle_id: str) -> dict[str, Any]:
+    def runtime_state(
+        self,
+        cycle_id: str,
+        *,
+        now: str | datetime | None = None,
+    ) -> dict[str, Any]:
         rows = load_json(self.root / "runtime.json")
         row = rows[-1] if rows else {}
         stored_cycle_id = str(row.get("cycle_id") or "")
@@ -604,8 +608,9 @@ class StrategyControlPlane:
                 "previous_strategy_plan_version": row.get("strategy_plan_version"),
                 "previous_runtime_unresolved": previous_runtime_unresolved,
                 "last_control_event": self._last_control_event(),
+                "execution_tick_health": {"status": "not_applicable"},
             }
-        return {
+        state = {
             "desired_state": str(row.get("desired_state") or "stopped"),
             "actual_state": str(row.get("actual_state") or row.get("desired_state") or "stopped"),
             "cycle_id": str(row.get("cycle_id") or cycle_id),
@@ -633,6 +638,18 @@ class StrategyControlPlane:
             "previous_runtime_unresolved": False,
             "last_control_event": self._last_control_event(),
         }
+        execution_engine = self.config.get("execution_engine") or {}
+        if (
+            state["actual_state"] == "running"
+            and str(execution_engine.get("authoritative") or "") == "nautilus_paper"
+        ):
+            state["execution_tick_health"] = self.paper_execution_tick_health(
+                cycle_id,
+                now=now,
+            )
+        else:
+            state["execution_tick_health"] = {"status": "not_applicable"}
+        return state
 
     def _last_control_event(self) -> dict[str, Any] | None:
         try:

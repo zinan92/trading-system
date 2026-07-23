@@ -387,6 +387,7 @@ def _project_runtime(
     plan_id = str(plan.get("strategy_plan_id") or "")
     runtime_plan_id = str(source.get("strategy_plan_id") or "")
     inconsistent = unknown_order_count > 0
+    execution_tick_health = _json_copy(_mapping(source.get("execution_tick_health")))
     if desired != actual:
         inconsistent = True
         completeness_issues.append("runtime_desired_actual_mismatch")
@@ -399,6 +400,9 @@ def _project_runtime(
     if actual == "running" and market.get("trusted") is not True:
         inconsistent = True
         completeness_issues.append("running_with_untrusted_market")
+    if actual == "running" and execution_tick_health.get("status") == "blocked":
+        inconsistent = True
+        completeness_issues.append("running_with_execution_tick_unavailable")
     del risk_status
     known_statuses = {
         "starting": "启动中",
@@ -415,6 +419,8 @@ def _project_runtime(
         "status_label": "异常" if status == "degraded" else known_statuses[status],
         "open_order_count": open_order_count,
         "unknown_order_count": unknown_order_count,
+        "execution_tick_health": execution_tick_health,
+        "liveness_degraded": actual == "running" and execution_tick_health.get("status") == "blocked",
         "can_start_when_authorized": (
             actual in {"stopped", "error"}
             and bool(plan_id)

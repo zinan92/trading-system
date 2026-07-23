@@ -1,5 +1,19 @@
 # Decision Log
 
+## Running Paper Tick Liveness Projection
+
+Date: 2026-07-23
+
+### Decision
+
+- When a Nautilus Paper strategy is already running, project a missing, stale, or future `dualtrack-live-tick` heartbeat as runtime `degraded` without mutating orders or positions.
+  - Rationale: liveness loss is an operator-visible safety condition, not an instruction to make an unreviewed trading mutation.
+  - Evidence: `StrategyControlPlane.runtime_state`, `project_trading_system_read_model`, `dashboard-gridmind.html`.
+
+### Gotcha
+
+- The Dashboard must distinguish this from a normal stop: show “运行降级” and the heartbeat reason while preserving the stop control for the operator.
+
 ## DCA Paper Start Liveness
 
 Date: 2026-07-23

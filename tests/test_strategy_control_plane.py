@@ -593,6 +593,42 @@ def test_nautilus_paper_start_requires_a_fresh_execution_tick_heartbeat(
     )["status"] == "blocked"
 
 
+def test_running_nautilus_runtime_exposes_stale_execution_tick_health(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    plane.config["execution_engine"] = {
+        "authoritative": "nautilus_paper",
+        "shadow": "none",
+        "real_money_eligible": False,
+    }
+    plane._write_runtime({
+        "cycle_id": cycle_id,
+        "desired_state": "running",
+        "actual_state": "running",
+        "accepted_order_count": 1,
+    })
+
+    stale = plane.runtime_state(cycle_id, now="2026-07-05T01:40:00+00:00")
+
+    assert stale["execution_tick_health"]["status"] == "blocked"
+    assert stale["execution_tick_health"]["reason"] == "heartbeat_missing"
+
+    write_json(
+        output / "dualtrack" / "runner" / f"{cycle_id}.json",
+        [{
+            "ts": "2026-07-05T01:39:00+00:00",
+            "cycle_id": cycle_id,
+            "event": "live_tick_heartbeat",
+            "detail": {"runner": "dualtrack-live-tick", "ledger_refreshed": True},
+        }],
+    )
+
+    fresh = plane.runtime_state(cycle_id, now="2026-07-05T01:40:00+00:00")
+
+    assert fresh["execution_tick_health"]["status"] == "ready"
+
+
 @pytest.mark.parametrize(
     ("direction", "moved_close", "inside_source_envelope"),
     [
