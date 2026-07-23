@@ -10312,3 +10312,29 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused Playwright verifies initial Grid selection, DCA selection, and a
   return to Grid: exactly one button is `.on` and `aria-pressed="true"` each
   time. Static markup coverage verifies initial accessible state and badge.
+
+## 2026-07-23 - A lost browser response is an unknown control outcome
+
+### Decision
+
+- Treat a browser `fetch()` failure as evidence only that the browser did not
+  receive a Dashboard response. It is not evidence that the request never
+  reached the server, nor that the Paper runtime remained unchanged.
+- Name this state `dashboard_response_unconfirmed`. Paper control paths retain
+  the existing authoritative read-model reconciliation loop and tell the
+  operator not to repeat-click while it checks. A read-only refresh remains a
+  retryable display failure, not a trading result.
+
+### Gotchas
+
+- A HTTP status of zero can occur after a request has crossed the browser
+  boundary (for example during a local Dashboard reload). UI copy must never
+  manufacture a zero-order/zero-position conclusion from that transport fact.
+- `request_not_reached_backend` remains accepted as a legacy code for older
+  responses, but renders with the same unknown-outcome wording.
+
+### Verification
+
+- Focused Playwright failure-chain coverage asserts that the new wording says
+  the Paper outcome is unconfirmed and that the error enters the control
+  reconciliation classification. No Paper control request is submitted.

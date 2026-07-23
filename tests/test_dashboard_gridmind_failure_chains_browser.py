@@ -54,13 +54,16 @@ def test_gridmind_names_binance_upstream_and_unreached_backend() -> None:
                     status: "blocked",
                     access_issues: ["datafeed HTTP 502: upstream_error: Binance USD-M Futures request failed"]
                 })).text,
-                network: tradingFailure(apiFailure("network down", 0, "request_not_reached_backend")).text
+                network: tradingFailure(apiFailure("network down", 0, "dashboard_response_unconfirmed")).text,
+                networkIsUncertain: isUncertainControlError(apiFailure("network down", 0, "dashboard_response_unconfirmed"))
             })"""
         )
         assert "Binance USD-M 行情上游不可用" in failures["binance"]
         assert "禁止新开仓" in failures["binance"]
-        assert "请求未到达 Dashboard 后端" in failures["network"]
-        assert "本次请求没有改变 Paper 状态" in failures["network"]
+        assert "Dashboard 响应未收到" in failures["network"]
+        assert "当前无法确认" in failures["network"]
+        assert "不要重复点击控制按钮" in failures["network"]
+        assert failures["networkIsUncertain"] is True
         browser.close()
 
 
