@@ -4,9 +4,9 @@ import os
 import plistlib
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
@@ -30,7 +30,7 @@ class ScheduleStatus:
         schedule_rows = load_json(self.output_root / "schedules" / "current.json")
         schedule = schedule_rows[-1] if schedule_rows else {}
         profile = profile_from_schedule(schedule, self.config)
-        jobs = [self._inspect_job(job) for job in schedule.get("jobs", [])]
+        jobs = [self._inspect_job(job, run_date=run_date) for job in schedule.get("jobs", [])]
         required = set(labels_for_profile(profile))
         present = {job.get("label") for job in jobs}
         generated = {str(job.get("label") or "") for job in jobs}
@@ -109,7 +109,7 @@ class ScheduleStatus:
         write_json(self.output_root / "schedules" / f"status_{run_date}.json", [payload])
         return payload
 
-    def _inspect_job(self, job: dict) -> dict:
+    def _inspect_job(self, job: dict, *, run_date: str) -> dict:
         label = str(job.get("label", ""))
         generated = Path(str(job.get("plist", "")))
         installed = self.launch_agents_dir / f"{label}.plist"
@@ -130,6 +130,60 @@ class ScheduleStatus:
             "start_interval": job.get("start_interval"),
             "start_calendar_interval": job.get("start_calendar_interval"),
             "keep_alive": job.get("keep_alive", False),
+            "stderr_summary": self._stderr_summary(label, launchd["last_exit_code"]),
+            "report_artifact": self._daily_report_artifact(label, run_date=run_date),
+        }
+
+    def _daily_report_artifact(self, label: str, *, run_date: str) -> Optional[dict]:
+        if label != "com.wendy.trading-orchestrator.daily-24h-report":
+            return None
+        try:
+            report_date = date.fromisoformat(run_date)
+        except ValueError:
+            return {"status": "unknown", "reason": "run_date_invalid"}
+        path = self.output_root / "dualtrack" / "daily_reports" / f"{report_date.isoformat()}.json"
+        rows = load_json(path)
+        latest = rows[-1] if rows and isinstance(rows[-1], dict) else {}
+        if latest.get("schema_version") == "trading-daily-24h-v1" and latest.get("status") == "complete":
+            return {"status": "present", "path": str(path), "report_hash": latest.get("report_hash")}
+        return {
+            "status": "missing",
+            "path": str(path),
+            "next_action": "run the daily report pipeline after all overlapping terminal cycle packages are available",
+        }
+
+    def _stderr_summary(self, label: str, last_exit_code: Optional[int]) -> Optional[dict]:
+        """Expose a bounded, actionable failure reason without replaying logs."""
+
+        if last_exit_code in (None, 0):
+            return None
+        path = self.output_root / "schedules" / "logs" / f"{label}.err.log"
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")[-1200:].strip()
+        except OSError:
+            text = ""
+        lowered = text.lower()
+        if "can't open file" in lowered or "no such file or directory" in lowered:
+            failure_class = "scheduled_command_missing"
+            next_action = "reinstall the generated scheduler plist; the configured command is unavailable"
+        elif "natural day is not terminal" in lowered:
+            failure_class = "daily_report_not_terminal"
+            next_action = "wait for the final Beijing-day cycle to close, then let the next schedule run"
+        elif "cycle package" in lowered:
+            failure_class = "daily_report_cycle_evidence_missing"
+            next_action = "repair or close the missing terminal cycle package before retrying the report"
+        elif "delivery failed" in lowered or "delivered=false" in lowered:
+            failure_class = "daily_report_delivery_failed"
+            next_action = "inspect the report delivery receipt and retry only after the channel is healthy"
+        else:
+            failure_class = "scheduled_command_failed"
+            next_action = "inspect the bounded scheduler stderr summary and rerun the repository pipeline manually"
+        return {
+            "path": str(path),
+            "exit_code": last_exit_code,
+            "failure_class": failure_class,
+            "next_action": next_action,
+            "stderr_tail": text[-600:] if text else "stderr artifact unavailable",
         }
 
     def _plist_matches(self, generated: Path, installed: Path) -> bool:

@@ -25,9 +25,10 @@
 - #174: 每个 terminal Paper package 现在会在隔离 Nautilus Shadow 中尝试生成 production 基准与 `notional-half` What-if；缺少事件、runtime 或 preflight 会作为明确原因留在 package/页面，Shadow 失败不会重开或阻塞生产周期收口。
 - #176: canonical accounting 会保留任何“平仓早于开仓”的历史原始记录并写入明确 reconciliation 诊断；Dashboard 将其隔离为“时间异常”，不再计为正常已完成交易。
 - #177: DCA lifecycle 的聚合止盈世代、累计数量和退出状态已从 Paper JSON 接入 read model；页面明确说明整轮 TP 由行情事件触发、不是 entry 挂单。
+- #178: 24 小时报表已成为受控 launchd 任务，直接执行本仓 pipeline；不再依赖已移动的外部 wrapper。调度状态会给出受限 stderr 摘要、失败分类、下一步以及报表产物是否存在。
 
 ## 下一步
-- 排查 #178 的 daily 24-hour report launchd 失败，并将可恢复诊断落到运行状态与 GitHub。
+- 完成 #179：把 launchd 的 Python 3.9 兼容性检查固化到测试与部署前验证，避免“本地新解释器全绿、服务启动即崩”。
 - 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
