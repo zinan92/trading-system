@@ -164,6 +164,64 @@ def test_entry_and_exit_remain_one_trade_and_become_one_completed_trade() -> Non
     assert result["pnl"]["net_realized_pnl"] == 8.0
 
 
+def test_closed_trade_with_inverted_timestamps_is_retained_as_a_diagnostic() -> None:
+    entry = _entry()
+    exit_fill = {
+        **_entry("exit-1", realized=9.0),
+        "event": "target",
+        "side": "sell",
+        "price": 110.0,
+        "gross_pnl": 10.0,
+        "ts": "2026-07-18T00:55:00-00:00",
+    }
+    position = _position(status="closed", remaining=0.0, realized=8.0, exit_price=110.0)
+    position["exit_ts"] = "2026-07-18T08:55:00+08:00"
+    source = _snapshot(
+        fills=[entry, exit_fill],
+        positions=[position],
+        realized=8.0,
+        unrealized=0.0,
+        fees=2.0,
+    )
+
+    result = project_execution_accounting(source).to_dict()
+
+    assert result["reconciliation"]["status"] == "drift"
+    assert result["reconciliation"]["issues"] == [{
+        "code": "closed_trade_exit_before_entry",
+        "trade_id": "trade-1",
+        "entry_ts": "2026-07-18T01:00:00+00:00",
+        "exit_ts": "2026-07-18T08:55:00+08:00",
+    }]
+
+
+def test_closed_trade_with_same_second_timestamp_is_not_marked_inverted() -> None:
+    entry = _entry()
+    entry["ts"] = "2026-07-18T09:00:00+08:00"
+    exit_fill = {
+        **_entry("exit-1", realized=9.0),
+        "event": "target",
+        "side": "sell",
+        "price": 110.0,
+        "gross_pnl": 10.0,
+        "ts": "2026-07-18T01:00:00Z",
+    }
+    position = _position(status="closed", remaining=0.0, realized=8.0, exit_price=110.0)
+    position["entry_ts"] = "2026-07-18T09:00:00+08:00"
+    position["exit_ts"] = "2026-07-18T01:00:00Z"
+    source = _snapshot(
+        fills=[entry, exit_fill],
+        positions=[position],
+        realized=8.0,
+        unrealized=0.0,
+        fees=2.0,
+    )
+
+    result = project_execution_accounting(source).to_dict()
+
+    assert result["reconciliation"]["status"] == "pass"
+
+
 def test_scale_in_and_partial_close_stay_one_open_trade() -> None:
     first = _entry("entry-1", quantity=1.0, realized=-1.0)
     second = {

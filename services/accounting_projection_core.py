@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any
 
 from schemas.accounting import AccountingSnapshot, build_accounting_snapshot
@@ -356,8 +357,47 @@ def _canonical_positions(
             "strategy_plan_id": _optional_text(row.get("strategy_plan_id")),
             "strategy_plan_version": _optional_int(row.get("strategy_plan_version"), "strategy_plan_version"),
         })
+        chronology_issue = _closed_trade_chronology_issue(canonical)
+        if chronology_issue is not None:
+            issues.append(chronology_issue)
         _insert_identity(by_trade, trade_id, canonical, "position", issues)
     return sorted(by_trade.values(), key=lambda row: (str(row.get("entry_ts") or ""), row["trade_id"]))
+
+
+def _closed_trade_chronology_issue(position: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return a diagnostic instead of presenting an inverted close as a trade.
+
+    Accounting is an immutable observation layer: an old malformed record must
+    remain inspectable, not be rewritten or silently discarded.  The read
+    model uses this stable issue identity to quarantine it from the normal
+    completed-trade display and count.
+    """
+
+    if str(position.get("status") or "").lower() != "closed":
+        return None
+    entry_ts = _utc_timestamp(position.get("entry_ts"))
+    exit_ts = _utc_timestamp(position.get("exit_ts"))
+    if entry_ts is None or exit_ts is None or exit_ts >= entry_ts:
+        return None
+    return {
+        "code": "closed_trade_exit_before_entry",
+        "trade_id": str(position.get("trade_id") or ""),
+        "entry_ts": str(position.get("entry_ts") or ""),
+        "exit_ts": str(position.get("exit_ts") or ""),
+    }
+
+
+def _utc_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
 
 
 def _canonical_trades(

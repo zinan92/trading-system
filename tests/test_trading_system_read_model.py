@@ -264,6 +264,7 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
         "open_trade_count": 0,
         "completed_trade_count": 1,
         "completed_round_trip_count": 1,
+        "chronology_invalid_trade_count": 0,
         "fill_count": 2,
         "entry_fill_count": 1,
         "exit_fill_count": 1,
@@ -281,6 +282,32 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     assert model["execution"]["trades"][0]["close_reason"] == "tp"
     assert model["execution"]["trades"][0]["close_reason_label"] == "TP"
     assert source == before
+
+
+def test_read_model_quarantines_an_inverted_completed_trade_from_normal_counts() -> None:
+    source = _source()
+    accounting = source["production_execution"]["accounting_snapshot"]
+    accounting["trades"][0].update({
+        "entry_ts": "2026-07-18T01:00:00+00:00",
+        "exit_ts": "2026-07-18T00:55:00+00:00",
+    })
+    accounting["reconciliation"] = {
+        "status": "drift",
+        "issues": [{
+            "code": "closed_trade_exit_before_entry",
+            "trade_id": "trade-1",
+            "entry_ts": "2026-07-18T01:00:00+00:00",
+            "exit_ts": "2026-07-18T00:55:00+00:00",
+        }],
+    }
+
+    model = project_trading_system_read_model(source).to_dict()
+
+    trade = model["execution"]["trades"][0]
+    assert trade["status"] == "chronology_invalid"
+    assert trade["close_reason_label"] == "时间异常"
+    assert model["execution"]["counts"]["completed_trade_count"] == 0
+    assert model["execution"]["counts"]["chronology_invalid_trade_count"] == 1
 
 
 def test_read_model_projects_dca_round_summary_without_grid_geometry_warning() -> None:

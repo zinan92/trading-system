@@ -9976,3 +9976,26 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused package, runner, shadow, review, dashboard-static, and read-model
   suites cover terminal evidence, Base/What-if generation, missing evidence,
   and strict same-cycle comparison.
+
+## 2026-07-23 - Inverted historical trades are quarantined, never normalized
+
+### Decision
+
+- A closed accounting position whose timezone-normalized `exit_ts` precedes
+  `entry_ts` remains in the immutable accounting artifact with a
+  `closed_trade_exit_before_entry` reconciliation issue.
+- The read model projects that record as `chronology_invalid` with the visible
+  label `时间异常`; it is excluded from completed-trade and round-trip counts.
+
+### Gotchas
+
+- Do not sort or stringify timestamps to infer chronology: timestamps with
+  different offsets can have opposite lexical and chronological order.
+- Same-second entry and exit is legal. The guard rejects only a strictly
+  earlier exit and never rewrites old accounting evidence.
+
+### Verification
+
+- Focused accounting/read-model tests cover offset-normalized inversion,
+  same-second timestamps, normal completed trades, diagnostic retention, and
+  the Dashboard-facing quarantine fields.
