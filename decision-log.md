@@ -10079,3 +10079,28 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused compatibility tests cover a passing receipt, unavailable interpreter,
   and named import failure. The production command is run with the macOS
   `/usr/bin/python3` interpreter before the Paper Dashboard restart.
+
+## 2026-07-23 - Keep Paper UI acceptance as an operator journey
+
+### Decision
+
+- Add one continuous Playwright journey that uses only mock Paper responses and
+  asserts the visible outcomes plus exact requests for trend refresh, smart
+  fill, pre-start range adjustment, start, and stop. It also opens the 12-hour
+  review, Strategy Shadows, and NAV tabs.
+- Keep detailed chart history, zoom/pan, range-drag, blocker, and lifecycle
+  cases in focused browser tests rather than weakening them into one fragile
+  end-to-end fixture.
+
+### Gotchas
+
+- A browser test that merely clicks buttons is not an execution contract. Each
+  control click must assert its action payload and a user-visible result.
+- These are Paper fixture tests; they never call a live endpoint and cannot be
+  treated as evidence of a market order or a completed DCA lifecycle.
+
+### Verification
+
+- The focused operator-journey Playwright test passes with no browser console
+  errors, and existing focused browser suites retain chart history and range
+  draft coverage.
