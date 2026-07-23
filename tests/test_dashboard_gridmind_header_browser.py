@@ -18,6 +18,7 @@ def _header_model(
     provider: str = "binance_usdm_futures",
     risk_blocked: bool = False,
     risk_acknowledged: bool = False,
+    execution_tick_health: dict | None = None,
 ) -> dict:
     model = deepcopy(_read_model("accepted"))
     model["market"].update({
@@ -36,6 +37,8 @@ def _header_model(
         "stale_cycle": False,
     })
     model["completeness"] = {"status": "complete", "issues": []}
+    if execution_tick_health is not None:
+        model["runtime"]["execution_tick_health"] = execution_tick_health
     if risk_blocked:
         model["risk"]["outcome"] = "block"
         model["risk"]["blockers"] = ["max_plan_loss_exceeded"]
@@ -85,6 +88,15 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
         ),
         _header_model(5001.0, provider="backup_venue", risk_blocked=True),
         _header_model(5002.0, provider="backup_venue", trusted=False),
+        _header_model(
+            5003.0,
+            execution_tick_health={
+                "status": "blocked",
+                "reason": "heartbeat_stale",
+                "age_seconds": 181,
+                "max_age_seconds": 180,
+            },
+        ),
     ]
     response_index = 0
     browser_errors: list[str] = []
@@ -180,5 +192,8 @@ def test_gridmind_header_tracks_trusted_ticks_daily_change_and_run_gate() -> Non
             page.locator("#marketBadge").get_attribute("class") or ""
         ).split()
         assert page.locator("#marketBadge").inner_text() == "运行异常"
+
+        page.evaluate("() => load({withMarket:false})")
+        assert page.locator("#marketBadge").inner_text() == "运行降级"
         assert browser_errors == []
         browser.close()

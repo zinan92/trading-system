@@ -490,6 +490,32 @@ def test_unknown_order_state_uses_text_only_fallback_label() -> None:
     assert model["runtime"]["status_label"] == "异常"
 
 
+def test_running_nautilus_runtime_degrades_when_execution_tick_is_stale() -> None:
+    source = _source(open_trade=True)
+    source["runtime"].update({
+        "desired_state": "running",
+        "actual_state": "running",
+        "execution_tick_health": {
+            "status": "blocked",
+            "reason": "heartbeat_stale",
+            "age_seconds": 181.0,
+            "max_age_seconds": 180,
+        },
+    })
+
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    assert model["runtime"]["status"] == "degraded"
+    assert model["runtime"]["liveness_degraded"] is True
+    assert model["runtime"]["execution_tick_health"]["reason"] == "heartbeat_stale"
+    assert "running_with_execution_tick_unavailable" in model["completeness"]["issues"]
+
+
 def test_one_open_and_one_open_then_close_are_each_one_trade() -> None:
     open_model = project_trading_system_read_model(
         _source(open_trade=True),

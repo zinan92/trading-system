@@ -133,6 +133,15 @@ def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
     assert ".chart{height:340px}" in html
 
 
+def test_gridmind_labels_a_running_strategy_with_a_stale_execution_tick_as_degraded() -> None:
+    html = _html()
+
+    assert "execution_tick_health?.status===\"blocked\"" in html
+    assert 'tickLost?"运行降级"' in html
+    assert "function executionTickText(runtime)" in html
+    assert "live tick 心跳已过期" in html
+
+
 def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> None:
     html = _html()
 
