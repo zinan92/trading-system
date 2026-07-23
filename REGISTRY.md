@@ -21,6 +21,7 @@
 - #173: weekly ledger 对 deploy-canary 等非 ISO 历史 cycle/date 记录诊断并跳过，不能再中断 Paper tick；有效日期账本仍按原周归属计算。
 - #172: 跨周期 Paper runtime 不再被当前周期静默投影成“0 委托”。上一周期仍在运行或仍有已接受委托时，Dashboard 显示具体周期与数量，任何新 Grid/DCA 启动一律拒绝；rollover 只负责停止、撤单/平仓与封包，下一周期必须由操作者明确启动，绝不从旧几何自动生成计划。
 - #189: tick 的生命周期顺序已改为“关闭旧周期 → 收口旧 Paper runtime → 规划当前周期”。历史行情下载超时不能再阻止旧周期的安全收口；若 rollover 本身阻塞，当前周期规划明确跳过。
+- #174: 每个 terminal Paper package 现在会在隔离 Nautilus Shadow 中尝试生成 production 基准与 `notional-half` What-if；缺少事件、runtime 或 preflight 会作为明确原因留在 package/页面，Shadow 失败不会重开或阻塞生产周期收口。
 
 ## 下一步
 - 部署 #189 后 attended 重启 `dualtrack-live-tick`，核验上一周期 15 张 Paper 委托均进入终态、周期封包落盘；只有完整 tick 随后成功，才会有新鲜 heartbeat 并允许新 Grid 或 DCA 启动。

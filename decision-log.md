@@ -9891,3 +9891,29 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused lifecycle tests prove rollover occurs before a simulated datafeed
   timeout and that a blocked rollover prevents any planning call.
+
+## 2026-07-23 - Cycle closeout owns Base plus bounded Strategy Shadow evidence
+
+### Decision
+
+- A terminal Paper package attempts two isolated Nautilus replays: the locked
+  production plan as the Base, and a `notional-half` sizing What-if. Both use
+  the same stored market-event stream and execution contract.
+- Missing event data, isolated runtime, or instrument preflight is retained as
+  an explicit package reason. Shadow analysis is descriptive only and can
+  never reopen a closed production cycle or block its terminal package.
+
+### Gotchas
+
+- A visible Strategy Shadows tab is not evidence that a same-cycle replay
+  exists. The package must expose either Base/What-if artifacts or a concrete
+  reason for their absence.
+- What-if replay plan identity deliberately remains the locked plan identity;
+  `variant_id` captures the counterfactual. This lets the UI require a strict
+  production Base while still comparing identical market and execution inputs.
+
+### Verification
+
+- Focused package, runner, shadow, review, dashboard-static, and read-model
+  suites cover terminal evidence, Base/What-if generation, missing evidence,
+  and strict same-cycle comparison.
