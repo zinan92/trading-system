@@ -241,9 +241,16 @@ def _project_execution(
         if str(_mapping(row).get("status") or "") == "open"
     ]
     canonical_fills = _json_copy(_list(history_accounting.get("fills")))
+    chronology_invalid_trade_ids = {
+        str(issue.get("trade_id") or "")
+        for issue in _list(_mapping(history_accounting.get("reconciliation")).get("issues"))
+        if str(_mapping(issue).get("code") or "") == "closed_trade_exit_before_entry"
+        and str(_mapping(issue).get("trade_id") or "")
+    }
     canonical_trades = _project_trade_lifecycles(
         history_accounting.get("trades"),
         fills=canonical_fills,
+        chronology_invalid_trade_ids=chronology_invalid_trade_ids,
     )
     canonical_counts = _mapping(history_accounting.get("counts"))
     canonical_pnl = _json_copy(_mapping(history_accounting.get("pnl")))
@@ -263,8 +270,9 @@ def _project_execution(
         "open_position_count": len(open_positions),
         "trade_count": _integer_or_none(canonical_counts.get("trade_count")),
         "open_trade_count": _integer_or_none(canonical_counts.get("open_trade_count")),
-        "completed_trade_count": _integer_or_none(canonical_counts.get("completed_trade_count")),
-        "completed_round_trip_count": _integer_or_none(canonical_counts.get("completed_trade_count")),
+        "completed_trade_count": sum(1 for row in canonical_trades if row.get("status") == "closed"),
+        "completed_round_trip_count": sum(1 for row in canonical_trades if row.get("status") == "closed"),
+        "chronology_invalid_trade_count": len(chronology_invalid_trade_ids),
         "fill_count": _integer_or_none(canonical_counts.get("fill_count")),
         "entry_fill_count": _integer_or_none(canonical_counts.get("entry_fill_count")),
         "exit_fill_count": _integer_or_none(canonical_counts.get("exit_fill_count")),
@@ -812,7 +820,12 @@ def _same_price(left: float, right: Any) -> bool:
     return parsed is not None and abs(left - parsed) <= max(0.00000001, abs(left) * 0.000000001)
 
 
-def _project_trade_lifecycles(value: Any, *, fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _project_trade_lifecycles(
+    value: Any,
+    *,
+    fills: list[dict[str, Any]],
+    chronology_invalid_trade_ids: set[str],
+) -> list[dict[str, Any]]:
     fills_by_id = {
         str(row.get("fill_id") or ""): row
         for row in fills
@@ -821,6 +834,16 @@ def _project_trade_lifecycles(value: Any, *, fills: list[dict[str, Any]]) -> lis
     projected: list[dict[str, Any]] = []
     for raw in _list(value):
         trade = _json_copy(_mapping(raw))
+        if str(trade.get("trade_id") or "") in chronology_invalid_trade_ids:
+            projected.append({
+                **trade,
+                "status": "chronology_invalid",
+                "chronology_status": "invalid",
+                "chronology_issue": "closed_trade_exit_before_entry",
+                "close_reason": None,
+                "close_reason_label": "时间异常",
+            })
+            continue
         exit_ids = _list(trade.get("exit_fill_ids"))
         if exit_ids:
             matching_fills = [_mapping(fills_by_id.get(str(fill_id))) for fill_id in exit_ids]
