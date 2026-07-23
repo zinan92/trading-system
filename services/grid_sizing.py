@@ -41,6 +41,20 @@ ADAPTIVE_LOCKS = {
 }
 
 
+class AdaptiveGridInputError(ValueError):
+    """A hard, operator-supplied adaptive-solver input error.
+
+    The solver remains pure and raises for an impossible requested input.  The
+    control plane can use the stable code and evidence to render a fail-closed
+    operator card instead of exposing a bare Python sentence.
+    """
+
+    def __init__(self, code: str, message: str, evidence: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.code = code
+        self.evidence = dict(evidence)
+
+
 def _floor_quantity(value: float, config: dict[str, Any]) -> float:
     settings = dict(config.get("execution_contract") or {})
     increment = Decimal(str(settings.get("quantity_increment") or "0.00000001"))
@@ -776,18 +790,26 @@ def build_adaptive_grid_preview(
     requested_count = int(requested_count_value) if math.isfinite(requested_count_value) else 0
     if "grid_count" in locks:
         if not math.isfinite(requested_count_value) or not requested_count_value.is_integer():
-            raise ValueError("locked grid count must be an integer")
+            raise AdaptiveGridInputError(
+                "adaptive_grid_count_invalid",
+                "locked grid count must be an integer",
+                {"requested": grid.get("count"), "minimum": ADAPTIVE_MIN_GRID_COUNT, "maximum": ADAPTIVE_MAX_GRID_COUNT},
+            )
         if not ADAPTIVE_MIN_GRID_COUNT <= requested_count <= ADAPTIVE_MAX_GRID_COUNT:
-            raise ValueError(
-                f"grid count must be between {ADAPTIVE_MIN_GRID_COUNT} and {ADAPTIVE_MAX_GRID_COUNT}"
+            raise AdaptiveGridInputError(
+                "adaptive_grid_count_out_of_bounds",
+                f"grid count must be between {ADAPTIVE_MIN_GRID_COUNT} and {ADAPTIVE_MAX_GRID_COUNT}",
+                {"requested": requested_count, "minimum": ADAPTIVE_MIN_GRID_COUNT, "maximum": ADAPTIVE_MAX_GRID_COUNT},
             )
     requested_notional = number_or(grid.get("notional_per_grid"), 0.0)
     if "notional_per_grid" in locks and requested_notional <= 0:
         raise ValueError("notional per grid must be positive")
     requested_leverage = number_or(risk_budget.get("leverage", body.get("leverage")), recommended_leverage)
     if "leverage" in locks and not (1.0 <= requested_leverage <= ADAPTIVE_MANUAL_LEVERAGE_LIMIT):
-        raise ValueError(
-            f"manual Paper leverage must be between 1x and {ADAPTIVE_MANUAL_LEVERAGE_LIMIT:g}x"
+        raise AdaptiveGridInputError(
+            "adaptive_manual_leverage_out_of_bounds",
+            f"manual Paper leverage must be between 1x and {ADAPTIVE_MANUAL_LEVERAGE_LIMIT:g}x",
+            {"requested": requested_leverage, "minimum": 1.0, "maximum": ADAPTIVE_MANUAL_LEVERAGE_LIMIT},
         )
     sizing_leverage = requested_leverage if "leverage" in locks else recommended_leverage
     account_body = dict(account or {})

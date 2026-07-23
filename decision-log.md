@@ -10192,3 +10192,32 @@ auditable datafeed port; broker execution remains a separate port.
 
 - A fresh worktree reads the local `AGENTS.md` directly; it no longer depends
   on the removed park-io path.
+
+## 2026-07-23 - Hard adaptive-solver inputs remain fail-closed but explainable
+
+### Decision
+
+- Keep the existing adaptive solver hard boundaries unchanged: locked grid
+  count must be an integer within 2–200, and locked Paper leverage must be
+  within 1–20x.
+- Convert those exact validation failures into a display-only preview with a
+  structured, non-overridable blocker. The fallback removes only the invalid
+  lock to calculate explanatory geometry; it cannot be acknowledged or
+  started, and it never writes a plan or creates an order.
+- Map candidate Range and candidate kind blockers to dedicated Chinese
+  title/reason/next-step cards in the Dashboard.
+
+### Gotchas
+
+- Never silently clamp a manually locked input and then start the resulting
+  different grid. The displayed fallback is explicitly unavailable and records
+  the rejected value plus the hard bounds.
+- A friendly card is not an override mechanism. These codes remain outside
+  `MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS`.
+
+### Verification
+
+- Focused StrategyControlPlane tests cover non-integer count, count 201, and
+  leverage 21x; each produces one non-overridable structured blocker and zero
+  orders. Focused Playwright coverage asserts all five related cards render a
+  title, actionable next step, and retained machine code.
