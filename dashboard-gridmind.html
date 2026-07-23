@@ -366,6 +366,7 @@ function createStartupGridRangeDraft(){
 }
 function clearGridRangeDraft(){
   state.gridRangePreviewRequest+=1;state.gridAdjustMode=false;state.gridDraft=null;state.gridDrag=null;state.gridRangePreview=null;state.gridRangePreviewPending=false;state.gridReplacementPending=false;state.gridRiskAcknowledgements=new Set();const dialog=$("#gridRangeReviewDialog");if(dialog?.open)dialog.close();redrawChart();renderGridAdjustToggle();
+  renderRobotControls(state.data,isFresh(state.market||state.data?.market),state.data?.execution||{});
 }
 function closeGridRangeReview(){const dialog=$("#gridRangeReviewDialog");if(dialog?.open)dialog.close();renderGridAdjustOverlay()}
 function draftGridLevels(draft){
