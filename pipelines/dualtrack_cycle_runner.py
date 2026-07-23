@@ -608,21 +608,21 @@ class DualTrackCycleRunner:
     def live_tick(self, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         now = parse_utc(as_of)
         window = cycle_window(now)
-        # Persist liveness before lifecycle, market, or ledger work.  A
-        # stopped production strategy still needs a current heartbeat so the
-        # operator can safely start it; a later failure becomes stale within
-        # the bounded freshness window instead of leaving a false green state.
-        self._write_runner_state(
-            window.cycle_id,
-            "live_tick_heartbeat",
-            {"runner": "dualtrack-live-tick"},
-            observed_at=now,
-        )
         lifecycle = self._lifecycle_results(now)
         protective_sweep = self._sweep_active_human_protective_exits(window.cycle_id, now=now)
         sync = self.sync_obsidian_human_plans(as_of=now, include_next=False)
         intraday = self.intraday_tick(as_of=now)
         ledger = self.scorer.rebuild_ledgers()
+        # The start gate consumes this receipt.  Write it only after all work
+        # that makes an accepted Paper order executable has completed: a
+        # process that repeatedly enters and crashes must age stale instead of
+        # producing a misleading green heartbeat.
+        self._write_runner_state(
+            window.cycle_id,
+            "live_tick_heartbeat",
+            {"runner": "dualtrack-live-tick", "ledger_refreshed": True},
+            observed_at=now,
+        )
         return {
             "event": "live_tick",
             "as_of": now.isoformat(),

@@ -10,9 +10,9 @@ Date: 2026-07-23
   - Rationale: an accepted ledger order is not executable when no process is advancing trusted market events.
   - Evidence: `StrategyControlPlane.paper_execution_tick_health`, `test_nautilus_paper_start_requires_a_fresh_execution_tick_heartbeat`.
 
-- Persist a lightweight heartbeat before lifecycle, datafeed, and ledger work on every live-tick invocation.
-  - Rationale: a stopped strategy still needs an observable runner before an operator can safely start it; a later failure ages out within the bounded window.
-  - Evidence: `DualTrackCycleRunner.live_tick`, `test_live_tick_syncs_obsidian_plan_and_runs_intraday`.
+- Persist a lightweight heartbeat only after lifecycle, market, and ledger work completes on every live tick.
+  - Rationale: a stopped strategy still needs an observable runner before an operator can safely start it, but a KeepAlive restart that crashes before completion must age stale rather than create a false green start gate.
+  - Evidence: `DualTrackCycleRunner.live_tick`, `test_live_tick_syncs_obsidian_plan_and_runs_intraday`, `test_live_tick_does_not_refresh_heartbeat_when_ledger_rebuild_fails`.
 
 ### Gotchas
 
