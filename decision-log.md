@@ -1,5 +1,24 @@
 # Decision Log
 
+## Paper Execution Tick Liveness
+
+Date: 2026-07-23
+
+### Decisions
+
+- Treat a fresh `dualtrack-live-tick` heartbeat as a hard precondition for a new Nautilus Paper Grid start or prepared start.
+  - Rationale: an accepted ledger order is not executable when no process is advancing trusted market events.
+  - Evidence: `StrategyControlPlane.paper_execution_tick_health`, `test_nautilus_paper_start_requires_a_fresh_execution_tick_heartbeat`.
+
+- Persist a lightweight heartbeat before lifecycle, datafeed, and ledger work on every live-tick invocation.
+  - Rationale: a stopped strategy still needs an observable runner before an operator can safely start it; a later failure ages out within the bounded window.
+  - Evidence: `DualTrackCycleRunner.live_tick`, `test_live_tick_syncs_obsidian_plan_and_runs_intraday`.
+
+### Gotchas
+
+- The heartbeat proves that the Paper tick process reached the runner. It does not replace market freshness, reconciliation, risk, or order-marketability gates; those remain independent start requirements.
+- Test-only adapters may call themselves `nautilus_paper` while the configured authoritative engine is legacy Paper. The liveness gate therefore requires both the configured authoritative engine and adapter identity to be Nautilus Paper.
+
 ## Paper Grid Range Replacement
 
 Date: 2026-07-21

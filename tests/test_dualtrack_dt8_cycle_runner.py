@@ -601,6 +601,7 @@ def test_live_tick_syncs_obsidian_plan_and_runs_intraday(tmp_path: Path) -> None
     assert result["intraday"]["status"] == "ran"
     runner_rows = load_json(output / "dualtrack" / "runner" / "2026-07-05_DAY.json")
     assert runner_rows[-1]["event"] == "intraday"
+    assert runner_rows[0]["event"] == "live_tick_heartbeat"
     assert [row["event"] for row in runner_rows].count("intraday") == 1
 
 

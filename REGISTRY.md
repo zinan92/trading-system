@@ -17,9 +17,11 @@
 - 当前 Dashboard 行情仍实时可信,但独立 `dualtrack-live-tick` 定时任务保留既有 datafeed timeout / exit 78 告警;开始首轮 attended DCA 前必须先确认 tick runner 已恢复。
 - decision-log 已与 main 对账补齐(2026-07-23):#96/#82/#126/#130/#134/#138 的设计决策、失败模式与验证证据已入档。
 - DCA 审计后续已合并并部署(#164/#165/#166/#168):DCA×Grid 互斥与 TP 提交失败 fail-closed 均有回归测试;`loop_enabled=true` 在 v1 被显式拒绝,概要恒显示「完成后停止」;静态套件在修正 #154 遗留的 `actionStatus` 断言后恢复全绿。重启 Dashboard 后 Grid 运行态不变(running、15 挂单、0 持仓),页面 0 控制台错误。
+- #171: Nautilus Paper 启动/预启动现要求当前周期 `dualtrack-live-tick` 的 180 秒内心跳；tick 每次调用先落独立心跳，避免“订单已接受但无人撮合”被误显示为可运行。
 
 ## 下一步
-- 在 `dualtrack-live-tick` 恢复后,由 Park 选择一个无现有策略冲突的 Paper 窗口,验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
+- 修复并复验 `dualtrack-live-tick` 的运行时/weekly-ledger 异常后，收口上一周期 Paper 订单，再开始任一新 Grid 或首轮 DCA 验收。
+- 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
 - 实绩达标后再定义 live 准入标准;任何真钱动作仍需 Park 本人 `park-approved`。
