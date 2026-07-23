@@ -245,9 +245,13 @@ def _project_execution(
         if str(_mapping(row).get("status") or "") == "open"
     ]
     canonical_fills = _json_copy(_list(history_accounting.get("fills")))
+    history_reconciliation = _mapping(history_accounting.get("reconciliation"))
     chronology_invalid_trade_ids = {
         str(issue.get("trade_id") or "")
-        for issue in _list(_mapping(history_accounting.get("reconciliation")).get("issues"))
+        for issue in (
+            _list(history_reconciliation.get("quarantined"))
+            + _list(history_reconciliation.get("issues"))
+        )
         if str(_mapping(issue).get("code") or "") == "closed_trade_exit_before_entry"
         and str(_mapping(issue).get("trade_id") or "")
     }

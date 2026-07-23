@@ -15,6 +15,10 @@ EXECUTION_SNAPSHOT_SCHEMA = "dualtrack-execution-v1"
 ENTRY_EVENTS = {"entry"}
 EXIT_EVENTS = {"exit", "stop", "target", "flatten"}
 OPEN_ORDER_STATES = {"accepted", "new", "open", "pending", "submitted", "working", "partially_filled"}
+# Identified immutable-history anomalies: kept visible forever in
+# reconciliation["quarantined"], excluded from completed-trade truth, but not
+# allowed to pin the reconciliation status in drift (#212).
+QUARANTINED_ISSUE_CODES = {"closed_trade_exit_before_entry"}
 _MONEY_DECIMALS = 8
 _QUANTITY_DECIMALS = 10
 
@@ -59,9 +63,20 @@ def project_execution_accounting(
         account_observation=account_observation,
         positions=positions,
     )
+    # Quarantined chronology anomalies are identified, immutable history: they
+    # are excluded from completed-trade truth elsewhere, so they must not pin
+    # reconciliation in drift forever and block unrelated new starts (#212).
+    # Every other issue class still fails closed.
+    quarantined = [
+        issue for issue in issues if issue.get("code") in QUARANTINED_ISSUE_CODES
+    ]
+    gating_issues = [
+        issue for issue in issues if issue.get("code") not in QUARANTINED_ISSUE_CODES
+    ]
     reconciliation = {
-        "status": "pass" if not issues else "drift",
-        "issues": _sorted_issues(issues),
+        "status": "pass" if not gating_issues else "drift",
+        "issues": _sorted_issues(gating_issues),
+        "quarantined": _sorted_issues(quarantined),
         "warnings": _sorted_issues(warnings),
         "identity_policy": "dedupe_exact_reject_conflict",
         "accounting_identity": (

@@ -10248,3 +10248,43 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused Playwright covers Cloudflare 1033/530 HTML, Dashboard 502 JSON,
   Binance upstream 502, request-not-reached-backend, and complete-grid rollback
   wording. All tests are fixture-only and submit no Paper orders.
+
+## 2026-07-23 - Quarantined history must not gate unrelated new starts
+
+### Decision
+
+- Reconciliation now carries three buckets: `issues` (gate `status`),
+  `quarantined` (identified immutable-history anomalies, currently only
+  `closed_trade_exit_before_entry`), and `warnings`. Status is `drift` only
+  while gating issues remain; quarantined rows stay permanently visible in
+  every snapshot but no longer pin the account in `drift`.
+- Rationale: #176 correctly preserved two malformed 2026-07-14/15 manual
+  trades as immutable history and excluded them from completed-trade truth,
+  but their diagnostics lived in `issues`, so `account_reconciliation_drift`
+  (non-overridable) blocked every future Grid/DCA start forever. Quarantine
+  means "identified and isolated", not "books are inconsistent".
+- The read model reads chronology quarantine from the new bucket and falls
+  back to legacy `issues` so pre-#212 snapshots keep their 时间异常 isolation.
+- The start card copy table gains a dedicated entry for
+  `closed_trade_exit_before_entry`; it can no longer render as 未识别的对账差异.
+
+### Gotchas
+
+- Only the exact chronology code is quarantined. Identity conflicts, balance
+  or equity mismatches, and every other reconciliation issue still fail
+  closed — a quarantined anomaly coexisting with a genuine mismatch still
+  yields `drift` (covered by
+  `test_quarantined_chronology_anomaly_does_not_mask_a_real_account_mismatch`).
+- Raw historical fills/trades are never rewritten; the fix reclassifies the
+  diagnostic, not the record.
+- Any future "repair" of these trades must be an explicit audited event, not
+  an edit of the original rows.
+
+### Verification
+
+- `tests/test_accounting_projection.py` (19 passed): inverted trade →
+  status pass + quarantined row; inverted trade + equity mismatch → drift.
+- `tests/test_trading_system_read_model.py`: quarantine display works from
+  both the new bucket and legacy issues (backward compatible).
+- Adjacent suites: risk port, dashboard server, control plane, DCA control
+  plane, static dashboard — 257 passed total, no regressions.

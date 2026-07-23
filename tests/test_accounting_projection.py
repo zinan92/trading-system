@@ -186,13 +186,49 @@ def test_closed_trade_with_inverted_timestamps_is_retained_as_a_diagnostic() -> 
 
     result = project_execution_accounting(source).to_dict()
 
-    assert result["reconciliation"]["status"] == "drift"
-    assert result["reconciliation"]["issues"] == [{
+    # #212: the identified anomaly is quarantined, permanently visible, and
+    # excluded from gating issues — immutable history must not pin the
+    # reconciliation status in drift and lock out unrelated new starts.
+    assert result["reconciliation"]["status"] == "pass"
+    assert result["reconciliation"]["issues"] == []
+    assert result["reconciliation"]["quarantined"] == [{
         "code": "closed_trade_exit_before_entry",
         "trade_id": "trade-1",
         "entry_ts": "2026-07-18T01:00:00+00:00",
         "exit_ts": "2026-07-18T08:55:00+08:00",
     }]
+
+
+def test_quarantined_chronology_anomaly_does_not_mask_a_real_account_mismatch() -> None:
+    entry = _entry()
+    exit_fill = {
+        **_entry("exit-1", realized=9.0),
+        "event": "target",
+        "side": "sell",
+        "price": 110.0,
+        "gross_pnl": 10.0,
+        "ts": "2026-07-18T00:55:00-00:00",
+    }
+    position = _position(status="closed", remaining=0.0, realized=8.0, exit_price=110.0)
+    position["exit_ts"] = "2026-07-18T08:55:00+08:00"
+    source = _snapshot(
+        fills=[entry, exit_fill],
+        positions=[position],
+        realized=8.0,
+        unrealized=0.0,
+        fees=2.0,
+    )
+    source["account"]["equity"] = source["account"]["equity"] + 123.45
+
+    result = project_execution_accounting(source).to_dict()
+
+    codes = [issue["code"] for issue in result["reconciliation"]["issues"]]
+    assert result["reconciliation"]["status"] == "drift"
+    assert "closed_trade_exit_before_entry" not in codes
+    assert codes  # the genuine mismatch still gates
+    assert [row["code"] for row in result["reconciliation"]["quarantined"]] == [
+        "closed_trade_exit_before_entry"
+    ]
 
 
 def test_closed_trade_with_same_second_timestamp_is_not_marked_inverted() -> None:
