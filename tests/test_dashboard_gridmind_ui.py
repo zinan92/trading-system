@@ -9,6 +9,9 @@ def test_gridmind_exposes_dca_as_a_distinct_paper_strategy() -> None:
 
     assert 'data-strategy-type="grid"' in html
     assert 'data-strategy-type="dca"' in html
+    assert 'aria-pressed="true"' in html
+    assert 'aria-pressed="false"' in html
+    assert '✓ 当前选择' in html
     assert 'id="dcaTarget"' in html
     assert 'id="dcaStop"' in html
     assert 'loop_enabled:false' in html

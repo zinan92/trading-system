@@ -205,3 +205,60 @@ def test_gridmind_dca_smart_fill_preview_risk_ack_and_start() -> None:
         assert "聚合 TP #2：1.001 @ 4,050（行情触发）" in page.locator("#gridSummary").inner_text()
         assert browser_errors == []
         browser.close()
+
+
+def test_gridmind_strategy_type_selection_is_explicit_and_exclusive() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _header_model(4_000.0)
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route(
+            "**/api/strategy-console/control",
+            lambda route: route.fulfill(
+                status=400,
+                content_type="application/json",
+                body=json.dumps({"error": "preview_fixture_rejected"}),
+            ),
+        )
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        grid = page.locator('#strategyTypeChoices [data-strategy-type="grid"]')
+        dca = page.locator('#strategyTypeChoices [data-strategy-type="dca"]')
+        assert grid.count() == 1
+        assert dca.count() == 1
+        assert grid.get_attribute("aria-pressed") == "true"
+        assert dca.get_attribute("aria-pressed") == "false"
+        assert "on" in (grid.get_attribute("class") or "")
+
+        dca.click()
+        assert dca.get_attribute("aria-pressed") == "true"
+        assert grid.get_attribute("aria-pressed") == "false"
+        assert "on" in (dca.get_attribute("class") or "")
+        assert "on" not in (grid.get_attribute("class") or "")
+        assert page.locator("#strategyCard").get_attribute("data-strategy-type") == "dca"
+
+        grid.click()
+        assert grid.get_attribute("aria-pressed") == "true"
+        assert dca.get_attribute("aria-pressed") == "false"
+        assert "on" in (grid.get_attribute("class") or "")
+        assert "on" not in (dca.get_attribute("class") or "")
+        assert page.locator("#strategyCard").get_attribute("data-strategy-type") == "grid"
+        browser.close()

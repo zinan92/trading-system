@@ -10288,3 +10288,27 @@ auditable datafeed port; broker execution remains a separate port.
   both the new bucket and legacy issues (backward compatible).
 - Adjacent suites: risk port, dashboard server, control plane, DCA control
   plane, static dashboard — 257 passed total, no regressions.
+
+## 2026-07-23 - Make the selected strategy type unambiguous
+
+### Decision
+
+- Treat Grid / DCA as an explicit mutually exclusive primary choice, not a
+  subtle variant of the lower parameter buttons. The selected choice now has
+  a high-contrast blue card, visible `✓ 当前选择` badge, and synchronized
+  `aria-pressed` / accessible label.
+- Keep existing strategy selection, parameter reset, preview, and Paper order
+  semantics intact. This change only makes the already-selected state legible.
+
+### Gotchas
+
+- Selection state must be updated in `setStrategyTypeUi`, not only through a
+  CSS class, because a later preview can reapply the selected strategy type.
+- Scope browser locators to `#strategyTypeChoices`: `#strategyCard` itself
+  also carries `data-strategy-type` as its rendering state.
+
+### Verification
+
+- Focused Playwright verifies initial Grid selection, DCA selection, and a
+  return to Grid: exactly one button is `.on` and `aria-pressed="true"` each
+  time. Static markup coverage verifies initial accessible state and badge.
