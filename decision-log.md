@@ -9867,3 +9867,27 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused rollover and control-plane tests cover visible prior-cycle state,
   new-start rejection, stop/package-only rollover, and idempotent
   `awaiting_operator_start` handling.
+
+## 2026-07-23 - Close old Paper before downloading data for a new plan
+
+### Decision
+
+- Run the production rollover before current-cycle planning in every live tick.
+  Planning requires network historical data; safe cancellation, flattening,
+  reconciliation, and packaging of a prior Paper namespace cannot be held
+  hostage by that unrelated dependency.
+- If rollover is blocked or cancelled, skip planning explicitly. A current
+  plan must not be prepared while the prior Paper state requires attention.
+
+### Gotchas
+
+- A successful process launch is not a successful tick. Planning may still
+  time out after rollover; in that case the old Paper closure receipt is the
+  durable proof, while the heartbeat intentionally remains stale.
+- Do not catch and hide planning failures merely to make the scheduler green.
+  The error must remain observable after the safe old-cycle operation.
+
+### Verification
+
+- Focused lifecycle tests prove rollover occurs before a simulated datafeed
+  timeout and that a blocked rollover prevents any planning call.
