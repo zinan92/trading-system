@@ -10221,3 +10221,30 @@ auditable datafeed port; broker execution remains a separate port.
   leverage 21x; each produces one non-overridable structured blocker and zero
   orders. Focused Playwright coverage asserts all five related cards render a
   title, actionable next step, and retained machine code.
+
+## 2026-07-23 - Name each unavailable trading path without changing its gate
+
+### Decision
+
+- Classify GridMind request failures at the browser boundary into: request did
+  not reach the Dashboard, Cloudflare Tunnel 530/1033, Dashboard 5xx, Binance
+  USD-M/datafeed upstream failure, and incomplete-grid execution rollback.
+- Use the same concise title/reason/next-step text in the console, chart
+  notice, and launch failure dialog. A Binance outage explicitly preserves the
+  view-only/blocked-new-entry semantics rather than pretending it is a generic
+  Dashboard error.
+
+### Gotchas
+
+- HTTP status zero is not proof that the backend received nothing or changed
+  nothing; the UI correctly says the browser request did not reach it and does
+  not claim an execution outcome.
+- A complete-grid guard rejection may follow temporary partial venue receipts.
+  It must be shown as a safe rollback and reconciled from the current read
+  model, never as a successful start.
+
+### Verification
+
+- Focused Playwright covers Cloudflare 1033/530 HTML, Dashboard 502 JSON,
+  Binance upstream 502, request-not-reached-backend, and complete-grid rollback
+  wording. All tests are fixture-only and submit no Paper orders.

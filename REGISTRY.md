@@ -33,9 +33,9 @@
 - #183: 四项历史 pre-live 风险已重新复验：日损 NaN/时区/陈旧证据 fail-closed、测试网保护单回收、百分比仓位口径一致、Obsidian 可选；mainnet 仍被独立 activation/canary 门禁阻断，见 `docs/audits/pre-live-risk-invariants-2026-07-23.md`。
 - #147: 根 `AGENTS.md` 已由失效的外部符号链接替换为仓内可读的 Paper 安全、交付和证据规则；#137 已按已合并的 #138 与浏览器回归证据关闭。
 - #146: 自适应求解器的硬输入边界仍不可绕过，但不再将 2–200 格、整数格数或 1–20x 杠杆错误以裸 `ValueError` 交给操作者；控制面返回不可执行的结构化 blocker，Dashboard 显示原因和下一步。候选 Range/策略类型的不可覆盖 blocker 同样有专属说明。
+- #145: GridMind 已把「请求未到后端」「Cloudflare 隧道 530/1033」「Dashboard 5xx」「Binance USD-M 行情上游」和「完整网格未被接受后安全回滚」分开说明，每种状态都包含下一步；展示没有放宽任何行情或执行 fail-closed 门禁。
 
 ## 下一步
-- 处理 #145：把 Dashboard 的上游/控制面失败区分为具体、人可执行的错误卡片。
 - 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
