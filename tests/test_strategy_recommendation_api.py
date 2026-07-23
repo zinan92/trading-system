@@ -37,7 +37,9 @@ def _market() -> dict:
         "latest_timestamp": execution[-1]["timestamp"],
         "bars": execution,
         "strategy_timeframes": {
-            "1d": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1d", 20, 4050, 20)},
+            # Keep the longer D1 history aligned with the fixed 1m execution
+            # price used by this API fixture.
+            "1d": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1d", 220, 4020, 20)},
             "4h": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("4h", 60, 4050, 8)},
             "1h": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1h", 60, 4050, 3)},
             "15m": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("15m", 80, 4050, 2)},
@@ -63,7 +65,7 @@ def test_refresh_recommendation_saves_ai_proposal_without_mutating_production(tm
         {"cycle_id": cycle_id, "action": "refresh_recommendation", "as_of": "2026-07-05T02:00:00+00:00"},
         output_root=output,
         market=_market(),
-        account={"equity": 10_000},
+        account={"equity": 100_000},
         recommendation_provider=lambda prompt: {
             "direction": "short",
             "style": "aggressive",
@@ -77,6 +79,8 @@ def test_refresh_recommendation_saves_ai_proposal_without_mutating_production(tm
     assert result["production_plan_unchanged"] is True
     assert result["proposal"]["source"] == "ai"
     assert result["proposal"]["signal"]["calibration_status"] == "uncalibrated"
+    assert result["proposal"]["analysis"]["framework"]["strategy"]["recommended_strategy_type"] == "grid"
+    assert result["proposal"]["analysis"]["framework"]["position"]["lookback_bars"] == 200
     assert result["proposal"]["evaluation_receipt"]["status"] == "success"
     assert result["proposal"]["evaluation_receipt"]["input"]["contexts"]["15m"]["indicators"]["ema20"] is not None
     assert (output / result["proposal"]["evaluation_receipt"]["archive"]["relative_path"]).exists()
@@ -104,7 +108,7 @@ def test_grid_preview_requires_only_the_d1_and_4h_planning_timeframes(tmp_path: 
         },
         output_root=tmp_path / "outputs",
         market=market,
-        account={"equity": 10_000},
+        account={"equity": 100_000},
     )
 
     assert requested == [("1d", "4h")]
@@ -129,18 +133,21 @@ def test_strategy_timeframes_retry_one_transient_same_source_failure(monkeypatch
                 "fresh": True,
                 "is_synthetic": False,
                 "provider": "binance_usdm_futures",
-                "bars": _bars(timeframe, 32 if timeframe == "1d" else 64, 4050, 20 if timeframe == "1d" else 8),
+                "bars": _bars(timeframe, 300 if timeframe == "1d" else 64, 4050, 20 if timeframe == "1d" else 8),
             }
 
     monkeypatch.setattr(dashboard_server, "DualTrackMarketFeed", lambda **_kwargs: FlakyFeed())
     result = dashboard_server.build_strategy_timeframes_response(
-        as_of="2026-07-05T12:00:00+00:00",
+        as_of="2027-07-05T12:00:00+00:00",
         timeframes=("1d", "4h"),
     )
 
     assert calls == ["1d", "1d", "4h"]
     assert result["1d"]["provider"] == "binance_usdm_futures"
     assert result["4h"]["provider"] == "binance_usdm_futures"
+    assert len(result["1d"]["long_term_position_bars"]) >= 200
+    assert result["1d"]["weekends_excluded"] is True
+    assert result["1d"]["long_term_position_weekends_excluded"] is False
 
 
 def test_strategy_timeframes_never_retry_or_accept_synthetic_data(monkeypatch) -> None:
