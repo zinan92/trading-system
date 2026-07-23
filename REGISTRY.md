@@ -3,9 +3,9 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(路线图基线:docs/trading-roadmap-2026-07-20.md,70% 评估)
 
-## 现在在哪里(2026-07-23)
+## 现在在哪里(2026-07-24)
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
-- 部署:Goldbot V5 = `main@5cdff93`;Paper stopped、0 委托、0 持仓;`dualtrack-live-tick` 每分钟心跳连续健康,Dashboard 页面与 read-model 均 200。
+- 部署:Goldbot V5 Dashboard = `main@b5c91ae`（#221）；Paper stopped、0 委托、0 持仓;`dualtrack-live-tick` 每分钟心跳连续健康,Dashboard 页面与 read-model 均 200。
 - Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动;rollover 只停止/撤单/封包,下一周期必须操作者显式启动;运行中 tick 失联显示「运行降级」。
 - DCA v1 就绪:做多/做空加仓、单张整轮 TP 世代随累计持仓更新(由行情事件触发,不是 entry 挂单,页面已标注)、独立整轮止损、风险确认、read-model 可见;TP/SL 后停止,v1 显式拒绝 `loop_enabled=true`。**首轮真实生命周期尚未验收,UI/自动化测试不算成交证据。**
 - 可观测性:请求未达后端/Cloudflare 530/Dashboard 5xx/Binance 上游/网格回滚五类故障链分立文案各带下一步;硬输入 blocker 结构化解释;历史 NAV 仅计 machine 生产已实现 P&L,缺失即显示不可用;终态周期自动尝试 production+notional-half What-if Shadow,缺失原因显式留档。
