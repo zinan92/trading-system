@@ -644,13 +644,65 @@ def test_midnight_cutover_closes_legacy_night_and_opens_daily_cycle(tmp_path: Pa
 
     assert results == [
         {"event": "close", "cycle_id": "2026-07-13_NIGHT"},
-        {"event": "pre_cycle", "cycle_id": "2026-07-14_DAY"},
         {
             "event": "production_rollover",
             "status": "skipped",
             "reason": "production_runtime_not_configured",
         },
+        {"event": "pre_cycle", "cycle_id": "2026-07-14_DAY"},
     ]
+
+
+def test_lifecycle_rolls_over_prior_paper_before_current_cycle_planning_failure(tmp_path: Path) -> None:
+    runner = DualTrackCycleRunner(
+        output_root=tmp_path / "outputs",
+        market_db=tmp_path / "market_data.db",
+        config=TEST_CONFIG,
+    )
+    calls: list[str] = []
+    runner.close_cycle = lambda cycle_id, as_of=None: calls.append("close") or {"event": "close", "cycle_id": cycle_id}
+    runner._rollover_production = lambda previous, current, now: calls.append("rollover") or {
+        "event": "production_rollover",
+        "status": "awaiting_operator_start",
+        "previous_cycle_id": previous,
+        "current_cycle_id": current,
+    }
+
+    def fail_planning(*_args, **_kwargs):
+        calls.append("pre_cycle")
+        raise RuntimeError("datafeed unavailable: timed out")
+
+    runner.pre_cycle = fail_planning
+
+    with pytest.raises(RuntimeError, match="datafeed unavailable: timed out"):
+        runner._lifecycle_results(parse_utc("2026-07-13T16:00:00+00:00"))
+
+    assert calls == ["close", "rollover", "pre_cycle"]
+
+
+def test_lifecycle_skips_planning_when_prior_paper_rollover_is_blocked(tmp_path: Path) -> None:
+    runner = DualTrackCycleRunner(
+        output_root=tmp_path / "outputs",
+        market_db=tmp_path / "market_data.db",
+        config=TEST_CONFIG,
+    )
+    runner.close_cycle = lambda cycle_id, as_of=None: {"event": "close", "cycle_id": cycle_id}
+    runner._rollover_production = lambda previous, current, now: {
+        "event": "production_rollover",
+        "status": "blocked",
+        "previous_cycle_id": previous,
+        "current_cycle_id": current,
+    }
+    runner.pre_cycle = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not plan"))
+
+    results = runner._lifecycle_results(parse_utc("2026-07-13T16:00:00+00:00"))
+
+    assert results[-1] == {
+        "event": "pre_cycle",
+        "cycle_id": "2026-07-14_DAY",
+        "status": "skipped",
+        "reason": "previous_paper_cycle_requires_attention",
+    }
 
 
 def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: Path) -> None:

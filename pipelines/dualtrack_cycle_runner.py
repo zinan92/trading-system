@@ -637,10 +637,26 @@ class DualTrackCycleRunner:
     def _lifecycle_results(self, now: datetime) -> list[dict[str, Any]]:
         current = cycle_window(now)
         previous = cycle_window(current.start - timedelta(minutes=1))
+        closed = self.close_cycle(previous.cycle_id, as_of=now)
+        rollover = self._rollover_production(previous.cycle_id, current.cycle_id, now=now)
+        if rollover.get("status") in {"blocked", "cancelled"}:
+            return [
+                closed,
+                rollover,
+                {
+                    "event": "pre_cycle",
+                    "cycle_id": current.cycle_id,
+                    "status": "skipped",
+                    "reason": "previous_paper_cycle_requires_attention",
+                },
+            ]
+        # Rollover must run before planning because planning downloads market
+        # history and can fail transiently. A prior Paper namespace still has
+        # to be terminally stopped and packaged in that situation.
         return [
-            self.close_cycle(previous.cycle_id, as_of=now),
+            closed,
+            rollover,
             self.pre_cycle(current.cycle_id, as_of=now),
-            self._rollover_production(previous.cycle_id, current.cycle_id, now=now),
         ]
 
     def _rollover_production(
