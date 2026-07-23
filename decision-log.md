@@ -19,6 +19,20 @@ Date: 2026-07-23
 - The heartbeat proves that the Paper tick process reached the runner. It does not replace market freshness, reconciliation, risk, or order-marketability gates; those remain independent start requirements.
 - Test-only adapters may call themselves `nautilus_paper` while the configured authoritative engine is legacy Paper. The liveness gate therefore requires both the configured authoritative engine and adapter identity to be Nautilus Paper.
 
+## Weekly Ledger Date Hygiene
+
+Date: 2026-07-23
+
+### Decisions
+
+- Treat non-ISO legacy cycle/date strings as quarantined ledger diagnostics, not as fatal input to weekly aggregation.
+  - Rationale: deployment-canary artifacts are not trading cycles and must not prevent the Paper tick from advancing valid orders and lifecycle state.
+  - Evidence: `DualTrackScorer.rebuild_ledgers`, `DualTrackScorer._record_invalid_ledger_date`, `test_rebuild_ledgers_skips_malformed_legacy_cycle_dates_and_records_diagnostic`.
+
+### Gotchas
+
+- Quarantining malformed data does not alter or delete the source artifact. It records its value and source under `outputs/dualtrack/ledger/diagnostics/invalid_dates.json` and excludes it only from weekly aggregation.
+
 ## Paper Grid Range Replacement
 
 Date: 2026-07-21

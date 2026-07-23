@@ -18,6 +18,7 @@
 - decision-log 已与 main 对账补齐(2026-07-23):#96/#82/#126/#130/#134/#138 的设计决策、失败模式与验证证据已入档。
 - DCA 审计后续已合并并部署(#164/#165/#166/#168):DCA×Grid 互斥与 TP 提交失败 fail-closed 均有回归测试;`loop_enabled=true` 在 v1 被显式拒绝,概要恒显示「完成后停止」;静态套件在修正 #154 遗留的 `actionStatus` 断言后恢复全绿。重启 Dashboard 后 Grid 运行态不变(running、15 挂单、0 持仓),页面 0 控制台错误。
 - #171/#185: Nautilus Paper 启动/预启动现要求当前周期 `dualtrack-live-tick` 的 180 秒内成功心跳；仅完整完成行情、生命周期与账本刷新后才落盘，避免反复崩溃制造假绿。
+- #173: weekly ledger 对 deploy-canary 等非 ISO 历史 cycle/date 记录诊断并跳过，不能再中断 Paper tick；有效日期账本仍按原周归属计算。
 
 ## 下一步
 - 修复并复验 `dualtrack-live-tick` 的运行时/weekly-ledger 异常后，收口上一周期 Paper 订单，再开始任一新 Grid 或首轮 DCA 验收。

@@ -165,6 +165,13 @@ class DualTrackScorer:
                     cycle_ids.update((rows[-1].get("cycles") or {}).keys())
         dates: set[str] = set()
         for cycle_id in sorted(cycle_ids):
+            date = _cycle_date(cycle_id)
+            if date is None:
+                self._record_invalid_ledger_date(
+                    str(cycle_id),
+                    source="rebuild_ledgers.cycle_id",
+                )
+                continue
             machine_all = load_json(self._fills_path(cycle_id, "machine"))
             human_fills = load_json(self._fills_path(cycle_id, "human"))
             self._write_daily_ledger(
@@ -173,7 +180,7 @@ class DualTrackScorer:
                 human_fills,
                 _recovery_replay_fills(machine_all),
             )
-            dates.add(cycle_id.split("_", 1)[0])
+            dates.add(date)
         for date in sorted(dates):
             self._write_weekly_ledger(date)
         return self.ledger_payload()
@@ -268,16 +275,32 @@ class DualTrackScorer:
         return row
 
     def _write_weekly_ledger(self, date: str) -> dict[str, Any]:
-        parsed = datetime.fromisoformat(date)
-        iso = parsed.isocalendar()
-        week = f"{iso.year}-W{iso.week:02d}"
+        week = _iso_week(date)
+        if week is None:
+            self._record_invalid_ledger_date(date, source="write_weekly_ledger.date")
+            return {
+                "status": "skipped_invalid_date",
+                "date": date,
+                "reason": "non_iso_date",
+            }
         daily_rows = []
         daily_dir = self.root / "ledger" / "daily"
         if daily_dir.exists():
             for path in sorted(daily_dir.glob("*.json")):
                 rows = load_json(path)
-                if rows and _iso_week(rows[-1]["date"]) == week:
-                    daily_rows.append(rows[-1])
+                if not rows:
+                    continue
+                row = rows[-1]
+                row_date = str(row.get("date") or "")
+                row_week = _iso_week(row_date)
+                if row_week is None:
+                    self._record_invalid_ledger_date(
+                        row_date,
+                        source=f"write_weekly_ledger.daily:{path.name}",
+                    )
+                    continue
+                if row_week == week:
+                    daily_rows.append(row)
         machine = round(sum(row["tracks"]["machine"]["realized_pnl"] for row in daily_rows), 8)
         machine_live = round(sum(row["tracks"]["machine"].get("live_observed_realized_pnl", row["tracks"]["machine"]["realized_pnl"]) for row in daily_rows), 8)
         machine_recovery = round(sum(row["tracks"]["machine"].get("recovery_replay_realized_pnl", 0.0) for row in daily_rows), 8)
@@ -304,6 +327,26 @@ class DualTrackScorer:
         }
         write_json(self.root / "ledger" / "weekly" / f"{week}.json", [payload])
         return payload
+
+    def _record_invalid_ledger_date(self, value: str, *, source: str) -> None:
+        """Keep malformed legacy rows visible without letting them kill a tick."""
+
+        path = self.root / "ledger" / "diagnostics" / "invalid_dates.json"
+        rows = load_json(path)
+        key = (str(value), str(source))
+        if any(
+            (str(row.get("value") or ""), str(row.get("source") or "")) == key
+            for row in rows
+            if isinstance(row, dict)
+        ):
+            return
+        rows.append({
+            "value": str(value),
+            "source": str(source),
+            "reason": "non_iso_date",
+            "recorded_at": _now(),
+        })
+        write_json(path, rows)
 
     def _attribution(
         self,
@@ -1645,10 +1688,18 @@ def _fill_has_explicit_units(fill: dict[str, Any]) -> bool:
     return any(fill.get(key) not in (None, "") for key in ("pnl_units", "units", "quantity", "contracts"))
 
 
-def _iso_week(date: str) -> str:
-    parsed = datetime.fromisoformat(date)
+def _iso_week(date: str) -> str | None:
+    try:
+        parsed = datetime.fromisoformat(str(date))
+    except (TypeError, ValueError):
+        return None
     iso = parsed.isocalendar()
     return f"{iso.year}-W{iso.week:02d}"
+
+
+def _cycle_date(cycle_id: str) -> str | None:
+    date = str(cycle_id).split("_", 1)[0]
+    return date if _iso_week(date) is not None else None
 
 
 def _now() -> str:
