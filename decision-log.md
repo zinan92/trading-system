@@ -10052,3 +10052,30 @@ auditable datafeed port; broker execution remains a separate port.
   classification, missing artifact state, and full scheduler lifecycle.
   Daily-report tests validate successful hash/provenance-backed output; the
   repository also compiles under the launchd `/usr/bin/python3` interpreter.
+
+## 2026-07-23 - Treat launchd Python as the Paper deployment interpreter
+
+### Decision
+
+- Before restarting a local Paper launchd service, invoke the repository-owned
+  compatibility gate with `/usr/bin/python3`. It verifies the exact Python 3.9
+  version and imports the dashboard, Paper tick, daily report, scheduler, and
+  control plane under that interpreter.
+- Persist its credential-free result to
+  `outputs/runtime_compatibility/launchd_python_current.json`; a non-passing
+  receipt blocks the restart instead of relying on a developer-machine test.
+
+### Gotchas
+
+- A Python 3.13 test suite can be entirely green while a launchd process fails
+  to parse or import the same module under Python 3.9. `from __future__ import
+  annotations` does not make Python 3.10-only syntax parse on Python 3.9.
+- This check proves imports only. It must not create a StrategyPlan, contact an
+  exchange, or mutate Paper orders; lifecycle verification remains a separate
+  attended operation.
+
+### Verification
+
+- Focused compatibility tests cover a passing receipt, unavailable interpreter,
+  and named import failure. The production command is run with the macOS
+  `/usr/bin/python3` interpreter before the Paper Dashboard restart.
