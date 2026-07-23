@@ -31,6 +31,7 @@
 - #181: `codex/recovery-stash-20260721` 的四个 handoff 指定文件已逐项三方审计；均不应直接恢复，恢复分支仍完整保留为只读证据，结论见 `docs/audits/recovery-stash-20260721.md`。
 - #182: GitHub 404 的历史 #52–#128 已有不可伪造的本仓 provenance 索引；只记录可复验 commit/decision-log 证据，绝不伪造原 Issue，见 `docs/audits/missing-issue-provenance-52-128.md`。
 - #183: 四项历史 pre-live 风险已重新复验：日损 NaN/时区/陈旧证据 fail-closed、测试网保护单回收、百分比仓位口径一致、Obsidian 可选；mainnet 仍被独立 activation/canary 门禁阻断，见 `docs/audits/pre-live-risk-invariants-2026-07-23.md`。
+- #147: 根 `AGENTS.md` 已由失效的外部符号链接替换为仓内可读的 Paper 安全、交付和证据规则；#137 已按已合并的 #138 与浏览器回归证据关闭。
 
 ## 下一步
 - 处理 #145/#146：把 Dashboard 的上游/控制面失败和不可覆盖启动 blocker 变成具体、人可执行的错误卡片。

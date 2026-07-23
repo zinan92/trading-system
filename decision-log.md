@@ -10173,3 +10173,22 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused local suite: 30 passed. Dispositions and remaining mainnet blockers
   are in `docs/audits/pre-live-risk-invariants-2026-07-23.md`.
+
+## 2026-07-23 - Keep repository instructions inside the repository
+
+### Decision
+
+- Replace the broken external `AGENTS.md` symlink with a tracked local file.
+  It defines the Paper-only safety boundary, Issue/PR delivery contract, and
+  Registry/decision-log evidence obligation.
+
+### Gotchas
+
+- A symlink into a reorganized personal workspace silently removes repository
+  instructions for every fresh worktree. Repository-scoped rules must be
+  versioned in the repository.
+
+### Verification
+
+- A fresh worktree reads the local `AGENTS.md` directly; it no longer depends
+  on the removed park-io path.
