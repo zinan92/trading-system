@@ -34,7 +34,7 @@ def _probe_process_mutation_lock(output: str, attempting, entered) -> None:
         entered.set()
 
 
-def test_rollover_stops_packages_then_starts_next_cycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rollover_stops_packages_then_requires_explicit_next_cycle_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     output = tmp_path / "outputs"
     calls: list[str] = []
 
@@ -53,7 +53,7 @@ def test_rollover_stops_packages_then_starts_next_cycle(tmp_path: Path, monkeypa
         def persisted_runtime_state(self):
             return dict(self.state)
 
-        def control(self, cycle_id, action, _payload, **kwargs):
+        def control(self, cycle_id, action, _payload, **_kwargs):
             calls.append(f"{action}:{cycle_id}")
             if action == "stop":
                 self.state = {
@@ -68,14 +68,7 @@ def test_rollover_stops_packages_then_starts_next_cycle(tmp_path: Path, monkeypa
                     "reconciliation": {"status": "ok", "issues": []},
                     "runtime": dict(self.state),
                 }
-            assert kwargs["account"]["equity"] == 10_005
-            return {"accepted_orders": 24, "plan": {"strategy_plan_id": "next", "version": 4}}
-
-        def active_plan(self, _cycle_id):
-            return {"strategy_plan_id": "candidate", "version": 3, "direction": "neutral", "grid": {}, "risk_budget": {}}
-
-        def ensure_compatible_active_plan(self, *_args, **_kwargs):
-            raise AssertionError("active plan should be reused")
+            raise AssertionError("rollover must not start the next cycle")
 
     class Packager:
         def __init__(self, *_args, **_kwargs):
@@ -94,7 +87,6 @@ def test_rollover_stops_packages_then_starts_next_cycle(tmp_path: Path, monkeypa
     runner = _runner(output)
     runner.execution = object()
     runner._production_market_snapshot = lambda _now: {"status": "ready"}
-    runner._production_start_market_snapshot = lambda _now, market: market
 
     result = runner._rollover_production(
         "2026-07-04_NIGHT",
@@ -102,18 +94,17 @@ def test_rollover_stops_packages_then_starts_next_cycle(tmp_path: Path, monkeypa
         now=parse_utc("2026-07-05T01:00:00+00:00"),
     )
 
-    assert result["status"] == "completed"
+    assert result["status"] == "awaiting_operator_start"
     assert calls == [
         "stop:2026-07-04_NIGHT",
         "package:2026-07-04_NIGHT",
-        "start:2026-07-05_DAY",
     ]
     path = output / "dualtrack" / "strategy_control" / "rollovers" / "2026-07-04_NIGHT__2026-07-05_DAY.json"
     assert [row["status"] for row in load_json(path)] == [
         "intent_recorded",
         "previous_cycle_stopped",
         "previous_cycle_packaged",
-        "completed",
+        "awaiting_operator_start",
     ]
 
 
@@ -209,9 +200,6 @@ def test_missing_planning_timeframes_do_not_prevent_terminal_old_cycle_package(
     runner = _runner(output)
     runner.execution = object()
     runner._production_market_snapshot = lambda _now: {"status": "blocked", "is_synthetic": False}
-    runner._production_start_market_snapshot = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        ValueError("strategy timeframe 1d is unavailable")
-    )
 
     result = runner._rollover_production(
         "2026-07-04_NIGHT",
@@ -220,14 +208,14 @@ def test_missing_planning_timeframes_do_not_prevent_terminal_old_cycle_package(
     )
 
     assert calls == ["stop:2026-07-04_NIGHT", "package:2026-07-04_NIGHT"]
-    assert result["status"] == "blocked"
-    assert result["stage"] == "starting_current_cycle"
+    assert result["status"] == "awaiting_operator_start"
+    assert result["operator_action"] == "review and start the current cycle from the dashboard"
     rows = load_json(runner._rollover_path("2026-07-04_NIGHT", "2026-07-05_DAY"))
     assert [row["status"] for row in rows] == [
         "intent_recorded",
         "previous_cycle_stopped",
         "previous_cycle_packaged",
-        "blocked",
+        "awaiting_operator_start",
     ]
 
 
@@ -540,6 +528,42 @@ def test_persisted_runtime_state_exposes_previous_cycle_without_masking(tmp_path
     assert state["cycle_id"] == "2026-07-04_NIGHT"
     assert state["desired_state"] == "running"
     assert state["accepted_order_count"] == 25
+
+
+def test_current_cycle_runtime_exposes_unresolved_prior_paper_orders(tmp_path: Path) -> None:
+    from services.strategy_control_plane import StrategyControlPlane
+
+    output = tmp_path / "outputs"
+    write_json(output / "dualtrack" / "strategy_control" / "runtime.json", [{
+        "cycle_id": "2026-07-04_NIGHT",
+        "desired_state": "running",
+        "actual_state": "running",
+        "accepted_order_count": 25,
+        "strategy_plan_id": "prior-plan",
+        "strategy_plan_version": 3,
+    }])
+
+    state = StrategyControlPlane(output).runtime_state("2026-07-05_DAY")
+
+    assert state["stale_cycle"] is True
+    assert state["previous_runtime_unresolved"] is True
+    assert state["previous_accepted_order_count"] == 25
+    assert state["previous_strategy_plan_id"] == "prior-plan"
+
+
+def test_new_cycle_start_is_rejected_while_prior_paper_runtime_is_unresolved(tmp_path: Path) -> None:
+    from services.strategy_control_plane import StrategyControlPlane
+
+    output = tmp_path / "outputs"
+    write_json(output / "dualtrack" / "strategy_control" / "runtime.json", [{
+        "cycle_id": "2026-07-04_NIGHT",
+        "desired_state": "running",
+        "actual_state": "running",
+        "accepted_order_count": 15,
+    }])
+
+    with pytest.raises(ValueError, match="previous_cycle_paper_state_unresolved:2026-07-04_NIGHT:running:15"):
+        StrategyControlPlane(output)._assert_no_unresolved_prior_cycle_runtime("2026-07-05_DAY")
 
 
 def test_stop_runtime_compare_and_swap_rejects_changed_operator_state(tmp_path: Path) -> None:

@@ -782,6 +782,8 @@ class DualTrackCycleRunner:
 
         if latest.get("status") == "cancelled" and latest.get("should_continue") is False:
             return {"event": "production_rollover", **latest}
+        if latest.get("status") == "awaiting_operator_start":
+            return {"event": "production_rollover", **latest}
 
         previous_running = (
             persisted.get("cycle_id") == previous_cycle_id
@@ -896,56 +898,19 @@ class DualTrackCycleRunner:
                 now=now,
             )
 
-            stage = "starting_current_cycle"
-            stopped_receipt = next(
-                (
-                    row
-                    for row in reversed(self._rollover_rows(previous_cycle_id, current_cycle_id))
-                    if row.get("status") == "previous_cycle_stopped"
-                ),
-                None,
-            )
-            market = self._production_start_market_snapshot(now, market=market)
-            plan = control.active_plan(current_cycle_id) or control.ensure_compatible_active_plan(
-                current_cycle_id,
-                as_of=now.isoformat(),
-            )
-            if not plan:
-                raise ValueError("current cycle has no trusted production plan")
-            current_runtime = control.persisted_runtime_state()
-            if not (
-                stopped_receipt
-                and current_runtime.get("cycle_id") == previous_cycle_id
-                and current_runtime.get("desired_state") == "stopped"
-                and current_runtime.get("actual_state") == "stopped"
-                and str(current_runtime.get("updated_at") or "")
-                == str(stopped_receipt.get("runtime_updated_at") or "")
-            ):
-                raise ValueError("paper runtime changed after rollover stop")
-            start_payload = self._rollover_start_payload(plan)
-            start_payload["rollover_guard"] = {
-                "previous_cycle_id": previous_cycle_id,
-                "expected_runtime_updated_at": stopped_receipt.get("runtime_updated_at"),
-            }
-            started = control.control(
-                current_cycle_id,
-                "start",
-                start_payload,
-                market=market,
-                account=dict((package.get("execution") or {}).get("account") or {}),
-                now=now.isoformat(),
-                actor={"transport": "system", "client": "dualtrack-live-tick"},
-            )
+            # A rollover owns one responsibility: terminally close and package
+            # the previous Paper cycle. The next cycle starts only after an
+            # operator has reviewed and explicitly submitted its own plan.
+            # Never synthesize a new plan from old geometry at a cycle edge.
             final = self._record_rollover(
                 previous_cycle_id,
                 current_cycle_id,
                 {
-                    "status": "completed",
-                    "should_continue": True,
+                    "status": "awaiting_operator_start",
+                    "should_continue": False,
                     "package_hash": package.get("package_hash"),
-                    "strategy_plan_id": (started.get("plan") or {}).get("strategy_plan_id"),
-                    "strategy_plan_version": (started.get("plan") or {}).get("version"),
-                    "accepted_orders": int(started.get("accepted_orders") or 0),
+                    "reason": "previous cycle closed; current cycle requires explicit operator start",
+                    "operator_action": "review and start the current cycle from the dashboard",
                 },
                 now=now,
             )

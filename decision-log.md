@@ -9838,3 +9838,32 @@ auditable datafeed port; broker execution remains a separate port.
   (71 passed); the one static-dashboard failure is a pre-existing red test on
   main (stale `actionStatus` assertion vs the control line deliberately
   restored in #154) and is tracked separately.
+
+## 2026-07-23 - A prior Paper cycle must never disappear behind a new-cycle zero
+
+### Decision
+
+- Retain the current-cycle stopped projection for configuration, but expose the
+  persisted previous-cycle state, plan identity, and accepted-order count when
+  it is still economically unresolved.
+- Reject every new Grid or DCA start while that prior runtime is in flight or
+  owns accepted orders. A user must see and resolve the old cycle first.
+- Rollover now has one responsibility: safely stop, settle, reconcile, and
+  package the prior Paper cycle. It records `awaiting_operator_start` instead
+  of silently creating or starting a new StrategyPlan from old geometry.
+
+### Gotchas
+
+- A dashboard that says `0 委托` for the current cycle is not evidence that
+  the authoritative Paper namespace is empty. Always inspect the persisted
+  runtime cycle before authorizing a new start.
+- A scheduler entry or an automatic rollover is not operator consent to reuse
+  an old range, leverage, or notional in a new cycle.
+- `awaiting_operator_start` is terminal for a rollover attempt. Repeated tick
+  runs must not re-package or restart the new cycle.
+
+### Verification
+
+- Focused rollover and control-plane tests cover visible prior-cycle state,
+  new-start rejection, stop/package-only rollover, and idempotent
+  `awaiting_operator_start` handling.

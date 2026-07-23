@@ -573,6 +573,12 @@ class StrategyControlPlane:
         row = rows[-1] if rows else {}
         stored_cycle_id = str(row.get("cycle_id") or "")
         if stored_cycle_id and stored_cycle_id != cycle_id:
+            previous_actual_state = str(row.get("actual_state") or row.get("desired_state") or "stopped")
+            previous_accepted_order_count = int(row.get("accepted_order_count") or 0)
+            previous_runtime_unresolved = (
+                previous_actual_state in {"starting", "running", "replanning", "stopping"}
+                or previous_accepted_order_count > 0
+            )
             return {
                 "desired_state": "stopped",
                 "actual_state": "stopped",
@@ -592,7 +598,11 @@ class StrategyControlPlane:
                 "last_error": None,
                 "stale_cycle": True,
                 "previous_cycle_id": stored_cycle_id,
-                "previous_actual_state": str(row.get("actual_state") or row.get("desired_state") or "stopped"),
+                "previous_actual_state": previous_actual_state,
+                "previous_accepted_order_count": previous_accepted_order_count,
+                "previous_strategy_plan_id": row.get("strategy_plan_id"),
+                "previous_strategy_plan_version": row.get("strategy_plan_version"),
+                "previous_runtime_unresolved": previous_runtime_unresolved,
                 "last_control_event": self._last_control_event(),
             }
         return {
@@ -617,6 +627,10 @@ class StrategyControlPlane:
             "stale_cycle": False,
             "previous_cycle_id": None,
             "previous_actual_state": None,
+            "previous_accepted_order_count": 0,
+            "previous_strategy_plan_id": None,
+            "previous_strategy_plan_version": None,
+            "previous_runtime_unresolved": False,
             "last_control_event": self._last_control_event(),
         }
 
@@ -737,6 +751,21 @@ class StrategyControlPlane:
             or str(persisted.get("updated_at") or "") != expected_updated_at
         ):
             raise ValueError("paper runtime changed before rollover start")
+
+    def _assert_no_unresolved_prior_cycle_runtime(self, cycle_id: str) -> None:
+        """Forbid a new start while a prior-cycle Paper runtime remains active."""
+
+        persisted = self.persisted_runtime_state()
+        persisted_cycle_id = str(persisted.get("cycle_id") or "")
+        if not persisted_cycle_id or persisted_cycle_id == cycle_id:
+            return
+        actual_state = str(persisted.get("actual_state") or persisted.get("desired_state") or "stopped")
+        accepted_order_count = int(persisted.get("accepted_order_count") or 0)
+        if actual_state in {"starting", "running", "replanning", "stopping"} or accepted_order_count > 0:
+            raise ValueError(
+                "previous_cycle_paper_state_unresolved"
+                f":{persisted_cycle_id}:{actual_state}:{accepted_order_count}"
+            )
 
     def preview(
         self,
@@ -1885,6 +1914,7 @@ class StrategyControlPlane:
             adapter=adapter,
             now=now,
         )
+        self._assert_no_unresolved_prior_cycle_runtime(cycle_id)
         prepared: dict[str, Any] | None = None
         if prepared_start_id:
             prepared = self._load_prepared_start(cycle_id, prepared_start_id)
@@ -2174,6 +2204,7 @@ class StrategyControlPlane:
         adapter_name = str(getattr(adapter, "name", ""))
         if "paper" not in adapter_name:
             raise ValueError("DCA start is Paper-only")
+        self._assert_no_unresolved_prior_cycle_runtime(cycle_id)
         prepared: dict[str, Any] | None = None
         if prepared_start_id:
             prepared = self._load_prepared_start(cycle_id, prepared_start_id)
