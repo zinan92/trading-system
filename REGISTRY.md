@@ -14,7 +14,7 @@
 - 新周期尚未建立 StrategyPlan 时也可根据可信行情智能填充 Range;该步骤保持只读,不会写计划、启动机器人或创建订单。
 - GridMind 已区分“启动前风险提醒”和“运行故障”:当前 14.18x Paper Grid 的确认回执、预览 ID 与风险决策 ID 精确匹配且后台已接受,因此顶部正确显示绿色运行中;14.18x 超过 10x 的风险详情仍保留。浏览器复验为实时可信行情、15 张已接受委托、0 控制台错误。
 - Paper DCA 已具备做多/做空加仓计划、累计仓位后单张整轮 TP 数量更新、整轮止损、风险确认、控制面与 V5 参数预览;浏览器已验收做多 7 参数联动重算及做空智能填充。首轮真实 DCA 生命周期尚未启动观察,不能把 UI/自动化测试当作成交证据。
-- 当前 Dashboard 行情仍实时可信,但独立 `dualtrack-live-tick` 定时任务保留既有 datafeed timeout / exit 78 告警;开始首轮 attended DCA 前必须先确认 tick runner 已恢复。
+- #192 正在修复独立 `dualtrack-live-tick` 的 launchd 失败可见性和生成/安装环境漂移；在两次真实调度 tick 均成功、心跳新鲜前，任何新的 Paper Grid 或 DCA 均保持禁止启动。
 - decision-log 已与 main 对账补齐(2026-07-23):#96/#82/#126/#130/#134/#138 的设计决策、失败模式与验证证据已入档。
 - DCA 审计后续已合并并部署(#164/#165/#166/#168):DCA×Grid 互斥与 TP 提交失败 fail-closed 均有回归测试;`loop_enabled=true` 在 v1 被显式拒绝,概要恒显示「完成后停止」;静态套件在修正 #154 遗留的 `actionStatus` 断言后恢复全绿。重启 Dashboard 后 Grid 运行态不变(running、15 挂单、0 持仓),页面 0 控制台错误。
 - #171/#185: Nautilus Paper 启动/预启动现要求当前周期 `dualtrack-live-tick` 的 180 秒内成功心跳；仅完整完成行情、生命周期与账本刷新后才落盘，避免反复崩溃制造假绿。
@@ -24,7 +24,8 @@
 - #174: 每个 terminal Paper package 现在会在隔离 Nautilus Shadow 中尝试生成 production 基准与 `notional-half` What-if；缺少事件、runtime 或 preflight 会作为明确原因留在 package/页面，Shadow 失败不会重开或阻塞生产周期收口。
 
 ## 下一步
-- 部署 #189 后 attended 重启 `dualtrack-live-tick`，核验上一周期 15 张 Paper 委托均进入终态、周期封包落盘；只有完整 tick 随后成功，才会有新鲜 heartbeat 并允许新 Grid 或 DCA 启动。
+- 完成 #192：让生成的 LaunchAgent 持久反映已批准的 Nautilus Paper runtime，部署后观察两次独立 `dualtrack-live-tick` 成功运行、心跳新鲜且不产生新计划或订单。
+- 随后完成 #193/#194：DCA 与 Grid 使用相同心跳启动闸，且运行中的心跳失联在 runtime 和 Dashboard 明确降级。
 - 在 tick 健康且不存在旧策略冲突的 Paper 窗口，验收首轮 DCA:两次加仓成交 → 唯一整轮 TP 数量随累计持仓更新 → 整轮 TP 或 SL 退出 → `outputs/dualtrack/dca_lifecycle/` 审计落盘。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。

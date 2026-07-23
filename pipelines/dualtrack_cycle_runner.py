@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1793,37 +1794,80 @@ def build_parser() -> argparse.ArgumentParser:  # pragma: no cover - thin CLI wr
     return parser
 
 
+def _write_live_tick_failure_diagnostic(output_root: Path | None, exc: Exception) -> None:
+    """Leave one bounded, credential-free receipt when launchd's tick fails.
+
+    launchd's last-exit code alone does not say whether the runner reached the
+    Paper execution path.  This receipt is deliberately overwritten on each
+    failure and is written before the exception propagates, so a failed tick
+    never looks like a fresh heartbeat.
+    """
+
+    root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT") or ROOT / "outputs")
+    configured_runtime = str(os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or "").strip()
+    payload = {
+        "schema_version": "dualtrack-live-tick-failure-v1",
+        "status": "failed",
+        "event": "live-tick",
+        "recorded_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "heartbeat_written": False,
+        "command": ["-m", "pipelines.dualtrack_cycle_runner", "--event", "live-tick"],
+        "runtime": {
+            "python_executable": sys.executable,
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "nautilus_runtime_configured": bool(configured_runtime),
+            "nautilus_runtime_name": Path(configured_runtime).name if configured_runtime else "",
+        },
+        "error": {
+            "type": type(exc).__name__,
+            "message": str(exc)[:500],
+        },
+    }
+    try:
+        write_json(root / "dualtrack" / "strategy_control" / "live_tick_failure.json", [payload])
+    except Exception:
+        # Preserve the original execution failure; a diagnostic must not turn it
+        # into a misleading success or a different failure mode.
+        return
+
+
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin CLI wrapper
     args = build_parser().parse_args(argv)
-    runner = DualTrackCycleRunner(
-        output_root=Path(args.output_root) if args.output_root else None,
-        market_db=Path(args.market_db) if args.market_db else None,
-        symbol=args.symbol,
-        timeframe=args.timeframe,
-    )
-    as_of = args.as_of or None
-    if args.event == "auto":
-        payload = runner.auto(as_of=as_of)
-    elif args.event == "live-tick":
-        payload = runner.live_tick(as_of=as_of)
-    elif args.event == "sync-obsidian-plan":
-        payload = runner.sync_obsidian_human_plans(
-            args.cycle_id or None,
-            as_of=as_of,
-            include_next=bool(args.include_next),
+    output_root = Path(args.output_root) if args.output_root else None
+    try:
+        runner = DualTrackCycleRunner(
+            output_root=output_root,
+            market_db=Path(args.market_db) if args.market_db else None,
+            symbol=args.symbol,
+            timeframe=args.timeframe,
         )
-    elif args.event == "fast-forward-day":
-        if not args.date:
-            raise SystemExit("--date is required for fast-forward-day")
-        payload = runner.fast_forward_day(args.date)
-    else:
-        cycle_id = args.cycle_id or cycle_window(as_of).cycle_id
-        if args.event == "pre-cycle":
-            payload = runner.pre_cycle(cycle_id, as_of=as_of)
-        elif args.event == "intraday":
-            payload = runner.intraday_tick(cycle_id, as_of=as_of)
+        as_of = args.as_of or None
+        if args.event == "auto":
+            payload = runner.auto(as_of=as_of)
+        elif args.event == "live-tick":
+            payload = runner.live_tick(as_of=as_of)
+        elif args.event == "sync-obsidian-plan":
+            payload = runner.sync_obsidian_human_plans(
+                args.cycle_id or None,
+                as_of=as_of,
+                include_next=bool(args.include_next),
+            )
+        elif args.event == "fast-forward-day":
+            if not args.date:
+                raise SystemExit("--date is required for fast-forward-day")
+            payload = runner.fast_forward_day(args.date)
         else:
-            payload = runner.close_cycle(cycle_id, as_of=as_of)
+            cycle_id = args.cycle_id or cycle_window(as_of).cycle_id
+            if args.event == "pre-cycle":
+                payload = runner.pre_cycle(cycle_id, as_of=as_of)
+            elif args.event == "intraday":
+                payload = runner.intraday_tick(cycle_id, as_of=as_of)
+            else:
+                payload = runner.close_cycle(cycle_id, as_of=as_of)
+    except Exception as exc:
+        if args.event == "live-tick":
+            _write_live_tick_failure_diagnostic(output_root, exc)
+        raise
     print(payload)
     return 0
 

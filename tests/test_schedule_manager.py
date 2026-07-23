@@ -151,6 +151,9 @@ def test_schedule_manager_generates_full_launch_agent_artifacts(tmp_path: Path):
     assert dualtrack_live_tick["ProgramArguments"] == ["python3", "-m", "pipelines.dualtrack_cycle_runner", "--event", "live-tick"]
     assert dualtrack_live_tick["EnvironmentVariables"]["TRADING_ORCHESTRATOR_MARKET_DB"].endswith("data/market_data.db")
     assert "/opt/homebrew/bin" in dualtrack_live_tick["EnvironmentVariables"]["PATH"]
+    assert dualtrack_live_tick["EnvironmentVariables"]["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED"] == "1"
+    assert dualtrack_live_tick["EnvironmentVariables"]["TRADING_ORCHESTRATOR_NAUTILUS_PYTHON"].endswith("/bin/python")
+    assert "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE" in dualtrack_live_tick["EnvironmentVariables"]
 
 
 def test_schedule_manager_generates_dualtrack_focus_profile_and_removes_stale_generated_plists(tmp_path: Path):
@@ -704,6 +707,33 @@ def test_schedule_status_rejects_loaded_job_with_failed_last_execution(tmp_path:
     assert failed_job["loaded"] is True
     assert failed_job["runtime_healthy"] is False
     assert failed_job["last_exit_code"] == 78
+
+
+def test_schedule_status_surfaces_a_failed_tick_even_when_the_installed_plist_is_stale(tmp_path: Path):
+    root = tmp_path / "outputs"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    schedule = _full_schedule_manager(root, repo).build()
+    launch_agents = tmp_path / "LaunchAgents"
+    launch_agents.mkdir()
+    for job in schedule["jobs"]:
+        source = Path(job["plist"])
+        (launch_agents / source.name).write_bytes(source.read_bytes())
+
+    failed_label = "com.wendy.trading-orchestrator.dualtrack-live-tick"
+    stale = launch_agents / f"{failed_label}.plist"
+    payload = plistlib.loads(stale.read_bytes())
+    payload["EnvironmentVariables"]["TRADING_ORCHESTRATOR_NAUTILUS_PYTHON"] = "/isolated/nautilus/bin/python"
+    stale.write_bytes(plistlib.dumps(payload))
+
+    def fake_runner(command: list[str]) -> subprocess.CompletedProcess:
+        stdout = "state = not running\nruns = 296\nlast exit code = 78: EX_CONFIG\n" if command[-1].endswith(failed_label) else "state = not running\nruns = 10\nlast exit code = 0\n"
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    result = ScheduleStatus(root, launch_agents_dir=launch_agents, command_runner=fake_runner).run("2026-07-13")
+
+    assert result["status"] == "runtime_failed"
+    assert result["runtime_failed_jobs"] == [failed_label]
 
 
 def test_schedule_installer_copies_plists_and_records_receipt(tmp_path: Path):
