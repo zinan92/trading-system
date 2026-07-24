@@ -13,7 +13,7 @@ In progress     0 / 26
 Remaining       0 / 26
 ```
 
-**As of:** `main@18dca7c` · **Current work:** implementation plan complete ·
+**As of:** `main@d3e41a2` · **Current work:** implementation plan complete ·
 **Next planned story:** none; use the Paper release runbook for future releases.
 
 | Milestone | Done | Active | Remaining | Meaning |
