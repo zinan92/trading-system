@@ -10739,3 +10739,30 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused tests prove compact polling retains trend/review facts and active
   exposure, removes duplicate heavy evidence, and retrieves the complete AI
   receipt only by its current-cycle evaluation ID.
+
+## 2026-07-24 - A terminal DCA plan is not prior Grid geometry
+
+### Decision
+
+- When preparing a Grid preview after a prior DCA plan, derive the Grid
+  comparison baseline from the candidate Grid preview rather than reading
+  nonexistent DCA `range` and `grid` fields.
+- Preserve the former strategy type as explicit preview metadata
+  (`previous_strategy_type`, `strategy_switch`) so the caller can disclose the
+  switch without inventing a historical Grid range.
+
+### Gotchas
+
+- A completed DCA plan can remain the active plan record after its aggregate
+  target has closed. Treating it as a generic previous plan made a harmless,
+  read-only Grid preview fail with `grid low must be positive`, which also
+  broke intelligent fill and blocked any subsequent Grid preparation.
+- This is a preview-only fix. It neither overwrites the DCA StrategyPlan nor
+  creates a Grid plan, risk decision, order, runtime transition, or execution
+  command.
+
+### Verification
+
+- A focused control-plane regression starts from an active terminal DCA plan,
+  produces a valid Grid adaptive preview, exposes the strategy-switch metadata,
+  and proves no execution orders or plan overwrite occur.
