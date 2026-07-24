@@ -1,7 +1,7 @@
 # trading-system
 
 ## 要去哪里
-多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(路线图基线:docs/trading-roadmap-2026-07-20.md,70% 评估)
+多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-24)
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
@@ -17,6 +17,10 @@
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
 - 实绩达标后再定义 live 准入标准;任何真钱动作仍需 Park 本人 `park-approved`。
+
+## 实施规划（已审核）
+
+完整的 expectation、当前 65% 基线、Milestone/Epic/Story 合同和审核顺序见 [`docs/plans/implementation-plan-2026-07-24.md`](docs/plans/implementation-plan-2026-07-24.md)。已批准按文档顺序分阶段执行；attended Paper 和真钱仍需独立人工授权。
 
 ## Appendix — 历史记录(只追加,原文搬运,不删除)
 
