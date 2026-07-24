@@ -289,6 +289,50 @@ def test_dca_target_cancels_remaining_entries_and_closes_accumulated_round(
     assert not [row for row in snapshot["orders"] if row.get("state") == "accepted"]
 
 
+def test_dca_terminal_target_uses_only_latest_aggregate_generation(tmp_path: Path) -> None:
+    lifecycle, adapter = _lifecycle(tmp_path)
+    plan = _plan()
+    lifecycle.start(plan, timestamp="2026-07-22T16:00:00+00:00")
+    first = lifecycle.process_market_event(plan, _event(1, 4_004.0))["state"]
+    second = lifecycle.process_market_event(plan, _event(2, 3_996.0))["state"]
+    retired = first["active_target"]
+    active = second["active_target"]
+
+    closed = lifecycle.process_market_event(plan, _event(3, 4_050.0))
+    target_fills = [
+        row for row in adapter.snapshot(CYCLE_ID)["fills"] if row.get("event") == "target"
+    ]
+
+    assert retired["target_id"] != active["target_id"]
+    assert second["target_generations"][0]["status"] == "cancelled"
+    assert closed["target_hit"] is True
+    assert closed["stop_hit"] is False
+    assert len(target_fills) == 1
+    assert active["target_id"] in target_fills[0]["source_fill_id"]
+    assert retired["target_id"] not in target_fills[0]["source_fill_id"]
+    assert target_fills[0]["pnl_units"] == pytest.approx(second["open_quantity"])
+
+
+def test_dca_valid_geometry_resolves_target_and_stop_as_mutually_exclusive(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    target_lifecycle, _ = _lifecycle(tmp_path / "target")
+    target_lifecycle.start(plan, timestamp="2026-07-22T16:00:00+00:00")
+    target_lifecycle.process_market_event(plan, _event(1, 4_004.0))
+    target = target_lifecycle.process_market_event(plan, _event(2, 4_050.0))
+
+    stop_lifecycle, _ = _lifecycle(tmp_path / "stop")
+    stop_lifecycle.start(plan, timestamp="2026-07-22T16:00:00+00:00")
+    stop_lifecycle.process_market_event(plan, _event(1, 4_004.0))
+    stop = stop_lifecycle.process_market_event(plan, _event(2, 3_970.0))
+
+    assert (target["target_hit"], target["stop_hit"]) == (True, False)
+    assert target["state"]["status"] == "target_closed"
+    assert (stop["target_hit"], stop["stop_hit"]) == (False, True)
+    assert stop["state"]["status"] == "stop_closed"
+
+
 def test_dca_aggregate_target_submits_one_exact_reduce_only_order_per_nautilus_position(
     tmp_path: Path,
 ) -> None:
