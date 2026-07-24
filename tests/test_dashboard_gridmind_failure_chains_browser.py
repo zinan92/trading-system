@@ -83,21 +83,28 @@ def test_gridmind_names_complete_grid_rollback_as_execution_failure() -> None:
         browser.close()
 
 
-def test_gridmind_failure_copy_is_canonical_across_api_dialog_and_runtime_card() -> None:
+def test_gridmind_failure_copy_matrix_is_canonical_across_api_dialog_and_runtime_card() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     with _static_server() as origin, playwright.sync_playwright() as runtime:
         browser = runtime.chromium.launch(headless=True, channel="chrome")
         page = browser.new_page()
         page.add_init_script("window.setInterval = () => 0")
         page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
-        failure = page.evaluate(
+        failures = page.evaluate(
             """() => {
-                const code = 'execution_reconciliation_drift';
-                const canonical = OPERATOR_FAILURE_COPY[code];
+                const matrix = Object.entries(OPERATOR_FAILURE_COPY).map(([code, canonical]) => {
+                    const api = tradingFailure(apiFailure('raw backend detail', 400, code));
+                    const dialog = startBlockerCopy(code, 'raw backend detail');
+                    return {
+                        code,
+                        canonical,
+                        api,
+                        dialog,
+                        runtime: operatorFailure(code).text,
+                    };
+                });
                 return {
-                    canonical,
-                    api: tradingFailure(apiFailure('raw backend detail', 400, code)),
-                    dialog: startBlockerCopy(code, 'raw backend detail'),
+                    matrix,
                     tick: executionTickText({execution_tick_health:{status:'blocked',reason:'heartbeat_stale'}}),
                     tickCanonical: OPERATOR_FAILURE_COPY.paper_execution_tick_unavailable,
                     unknown: tradingFailure(apiFailure('private RuntimeError detail', 400, 'future_code')),
@@ -105,16 +112,23 @@ def test_gridmind_failure_copy_is_canonical_across_api_dialog_and_runtime_card()
             }"""
         )
 
-        assert failure["api"]["title"] == failure["canonical"]["title"]
-        assert failure["api"]["action"] == failure["canonical"]["action"]
-        assert failure["dialog"]["title"] == failure["canonical"]["title"]
-        assert failure["dialog"]["explanation"] == failure["canonical"]["reason"]
-        assert failure["dialog"]["action"] == failure["canonical"]["action"]
-        assert failure["tickCanonical"]["title"] in failure["tick"]
-        assert failure["tickCanonical"]["action"] in failure["tick"]
-        assert failure["unknown"]["title"] == "操作未完成"
-        assert "private RuntimeError detail" not in failure["unknown"]["reason"]
-        assert "private RuntimeError detail" not in failure["unknown"]["action"]
+        assert failures["matrix"]
+        for failure in failures["matrix"]:
+            canonical = failure["canonical"]
+            assert failure["api"]["title"] == canonical["title"]
+            assert failure["api"]["reason"] == canonical["reason"]
+            assert failure["api"]["action"] == canonical["action"]
+            assert failure["dialog"]["title"] == canonical["title"]
+            assert failure["dialog"]["explanation"] == canonical["reason"]
+            assert failure["dialog"]["action"] == canonical["action"]
+            assert canonical["title"] in failure["runtime"]
+            assert canonical["reason"] in failure["runtime"]
+            assert canonical["action"] in failure["runtime"]
+        assert failures["tickCanonical"]["title"] in failures["tick"]
+        assert failures["tickCanonical"]["action"] in failures["tick"]
+        assert failures["unknown"]["title"] == "操作未完成"
+        assert "private RuntimeError detail" not in failures["unknown"]["reason"]
+        assert "private RuntimeError detail" not in failures["unknown"]["action"]
         browser.close()
 
 
