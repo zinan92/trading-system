@@ -5,7 +5,7 @@
 
 ## 现在在哪里(2026-07-24)
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
-- 代码与部署: `main@b79b71e`（#239 已合并）已重启到本地 Paper Dashboard；`com.wendy.trading-orchestrator.dashboard` 运行中、read-model HTTP 200、launchd Python 3.9 import 通过。Paper stopped、0 委托、0 持仓；没有重启行情调度器、live 进程或接触交易所密钥。
+- 代码与部署: `main@f2b4fd8`（#246 已合并）已重启到本地 Paper Dashboard；`com.wendy.trading-orchestrator.dashboard` 运行中、read-model HTTP 200、launchd Python 3.9 import 通过。Paper stopped、0 委托、0 持仓；没有重启行情调度器、live 进程或接触交易所密钥。
 - Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动;rollover 只停止/撤单/封包,下一周期必须操作者显式启动。tick 失败现会明确标记为行情/路由、生命周期、账本写入或调度器启动阶段并给出下一步；失败绝不写心跳，运行中失联显示「运行降级」。
 - DCA v1 就绪:做多/做空加仓、单张整轮 TP 世代随累计持仓更新(由行情事件触发,不是 entry 挂单,页面已标注)、独立整轮止损、风险确认、read-model 可见;聚合 TP 合同已覆盖 1/2/3 次加仓及提交失败 fail-closed。一个逻辑整轮 TP 在 Nautilus 执行层会按精确 `position_id` 拆成多张 reduce-only 子单，绝不再用共享 round ID 模糊平仓；TP/SL 后停止,v1 显式拒绝 `loop_enabled=true`。此前首次 attended 尝试在两笔加仓后暴露该执行缺陷，已安全撤单平仓，**不计作真实生命周期验收**。
 - 可观测性:请求未达后端/Cloudflare 530/Dashboard 5xx/Binance 上游/网格回滚五类故障链分立文案各带下一步;硬输入 blocker 结构化解释;历史 NAV 仅计 machine 生产已实现 P&L,缺失即显示不可用;终态周期自动尝试 production+notional-half What-if Shadow,缺失原因显式留档。
@@ -15,7 +15,7 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);open issue 仅 #38(Portfolio 锚点);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- M1-04：统一 API、toast、dialog 与运行卡片的失败码→中文说明→下一步矩阵，防止现有故障说明再次漂移。
+- M1-05：为可自动恢复的服务/读模型/缓存动作建立权限矩阵与回执；控制类 `start` 的不确定结果只允许核对，绝不盲目重试。
 - #226 仍是唯一未完成的 attended DCA 证据：已自然验证两笔加仓后的整轮 TP 平仓，也验证第一笔后生成 generation-1 TP；尚需“第二笔在后续 tick 成交→generation-2 扩量”的真实 Paper 证据。继续前仍要求干净 Paper 窗口。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
