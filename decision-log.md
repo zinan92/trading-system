@@ -10467,3 +10467,31 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused runner fixtures cover datafeed-route and ledger failures, both with
   no heartbeat. Strategy-control, read-model and Dashboard tests verify phase,
   recovery action, and resolution after a later complete heartbeat.
+
+## 2026-07-24 - Closeout retries keep exact Paper execution identities
+
+### Decision
+
+- Record the accepted order IDs and open position IDs observed immediately
+  before a successful Paper stop. Carry those immutable identifiers into the
+  rollover `previous_cycle_stopped` receipt alongside the existing counts.
+- If terminal packaging fails after the stop, retry packaging from the durable
+  stopped runtime and receipt. Do not issue a second stop, cancellation, or
+  flatten command.
+
+### Gotchas
+
+- Counts are not identity evidence: two retries can both say “2 orders
+  cancelled” while having affected different orders. A closeout receipt must
+  preserve the actual IDs.
+- This evidence is only written after the stop succeeds. A failed stop still
+  fails closed and remains a separate recovery state; it must not advertise a
+  terminal identity set.
+
+### Verification
+
+- A fault-injection rollover fixture raises after the first stop and before
+  package persistence, then retries. It observes one stop, two package
+  attempts, one terminal receipt, and the original cancelled/flattened IDs.
+- Strategy-control coverage confirms a real stop receipt matches the exact
+  accepted orders and open positions seen immediately before that stop.

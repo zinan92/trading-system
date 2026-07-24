@@ -373,6 +373,108 @@ def test_rollover_resumes_its_own_incomplete_previous_cycle_stop(
     assert any(row.get("status") == "previous_cycle_stopped" for row in rows)
 
 
+def test_rollover_retry_after_packaging_failure_preserves_closeout_identities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A package crash must retry packaging, never repeat the prior stop."""
+
+    output = tmp_path / "outputs"
+    owner = "rollover:2026-07-04_NIGHT->2026-07-05_DAY"
+    calls: list[str] = []
+
+    class Control:
+        state = {
+            "cycle_id": "2026-07-04_NIGHT",
+            "desired_state": "running",
+            "actual_state": "running",
+            "updated_at": "2026-07-05T00:59:00+00:00",
+        }
+
+        def __init__(self, _output):
+            pass
+
+        def runtime_configured(self):
+            return True
+
+        def persisted_runtime_state(self):
+            return dict(self.state)
+
+        def control(self, cycle_id, action, payload, **_kwargs):
+            assert cycle_id == "2026-07-04_NIGHT"
+            assert action == "stop"
+            assert payload["transition_owner"] == owner
+            calls.append("stop")
+            self.__class__.state = {
+                "cycle_id": cycle_id,
+                "desired_state": "stopped",
+                "actual_state": "stopped",
+                "updated_at": "2026-07-05T01:00:00+00:00",
+                "transition_owner": owner,
+            }
+            return {
+                "cancelled_orders": 2,
+                "cancelled_order_ids": ["order-entry-1", "order-entry-2"],
+                "flattened_positions": 1,
+                "flattened_position_ids": ["position-1"],
+                "reconciliation": {"status": "ok", "issues": []},
+                "runtime": dict(self.state),
+            }
+
+    class Packager:
+        attempts = 0
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def package(self, cycle_id, *, now):
+            assert cycle_id == "2026-07-04_NIGHT"
+            self.__class__.attempts += 1
+            calls.append("package")
+            if self.__class__.attempts == 1:
+                raise RuntimeError("fault injected after closeout before terminal package")
+            return {
+                "status": "closed",
+                "package_hash": "terminal-package-hash",
+                "execution": {
+                    "orders": [
+                        {"order_id": "order-entry-1", "state": "cancelled"},
+                        {"order_id": "order-entry-2", "state": "cancelled"},
+                    ],
+                    "positions": [{"position_id": "position-1", "status": "closed"}],
+                    "reconciliation": {"status": "ok", "issues": []},
+                },
+            }
+
+    monkeypatch.setattr(runner_module, "StrategyControlPlane", Control)
+    monkeypatch.setattr(runner_module, "StrategyCyclePackager", Packager)
+    runner = _runner(output)
+    runner.execution = object()
+    runner._production_market_snapshot = lambda _now: {"status": "ready"}
+
+    first = runner._rollover_production(
+        "2026-07-04_NIGHT",
+        "2026-07-05_DAY",
+        now=parse_utc("2026-07-05T01:01:00+00:00"),
+    )
+    assert first["status"] == "blocked"
+    assert first["stage"] == "packaging_previous_cycle"
+
+    second = runner._rollover_production(
+        "2026-07-04_NIGHT",
+        "2026-07-05_DAY",
+        now=parse_utc("2026-07-05T01:02:00+00:00"),
+    )
+
+    assert second["status"] == "awaiting_operator_start"
+    assert calls == ["stop", "package", "package"]
+    rows = load_json(runner._rollover_path("2026-07-04_NIGHT", "2026-07-05_DAY"))
+    stopped = next(row for row in rows if row.get("status") == "previous_cycle_stopped")
+    assert stopped["cancelled_order_ids"] == ["order-entry-1", "order-entry-2"]
+    assert stopped["flattened_position_ids"] == ["position-1"]
+    assert sum(row.get("status") == "awaiting_operator_start" for row in rows) == 1
+
+
 def test_rollover_recovers_owned_failed_current_cycle_without_restarting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -1006,6 +1006,8 @@ class DualTrackCycleRunner:
                         "should_continue": True,
                         "cancelled_orders": int(stopped.get("cancelled_orders") or 0),
                         "flattened_positions": int(stopped.get("flattened_positions") or 0),
+                        "cancelled_order_ids": list(stopped.get("cancelled_order_ids") or []),
+                        "flattened_position_ids": list(stopped.get("flattened_position_ids") or []),
                         "reconciliation_status": reconciliation.get("status"),
                         "runtime_updated_at": (stopped.get("runtime") or {}).get("updated_at"),
                     },

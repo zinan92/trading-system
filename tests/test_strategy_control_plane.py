@@ -1984,13 +1984,26 @@ def test_stop_cancels_pending_orders_flattens_position_and_reconciles(tmp_path: 
         "source": "strategy_production_console",
     })
 
+    before_stop = adapter.snapshot(cycle_id)
+    expected_cancelled_ids = sorted(
+        str(order["order_id"])
+        for order in before_stop["orders"]
+        if order.get("state") == "accepted"
+    )
+    expected_flattened_ids = sorted(
+        str(position["position_id"])
+        for position in before_stop["positions"]
+        if position.get("status") == "open"
+    )
     stopped = plane.control(cycle_id, "stop", {}, market=market(close=111.0), now="2026-07-05T01:46:00+00:00")
     snapshot = adapter.snapshot(cycle_id)
 
     assert stopped["runtime"]["desired_state"] == "stopped"
     assert stopped["runtime"]["actual_state"] == "stopped"
     assert stopped["cancelled_orders"] > 0
+    assert stopped["cancelled_order_ids"] == expected_cancelled_ids
     assert stopped["flattened_positions"] == 1
+    assert stopped["flattened_position_ids"] == expected_flattened_ids
     assert stopped["reconciliation"]["status"] == "ok"
     assert not [order for order in snapshot["orders"] if order["state"] == "accepted"]
     assert not [position for position in snapshot["positions"] if position["status"] == "open"]
