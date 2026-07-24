@@ -596,6 +596,12 @@ def test_running_nautilus_runtime_degrades_when_execution_tick_is_stale() -> Non
             "age_seconds": 181.0,
             "max_age_seconds": 180,
         },
+        "execution_tick_failure": {
+            "status": "failed",
+            "failure_phase": "ledger_write",
+            "next_action": "检查本地账本输出是否可写。",
+            "heartbeat_written": False,
+        },
     })
 
     model = project_trading_system_read_model(
@@ -608,6 +614,8 @@ def test_running_nautilus_runtime_degrades_when_execution_tick_is_stale() -> Non
     assert model["runtime"]["status"] == "degraded"
     assert model["runtime"]["liveness_degraded"] is True
     assert model["runtime"]["execution_tick_health"]["reason"] == "heartbeat_stale"
+    assert model["runtime"]["execution_tick_failure"]["failure_phase"] == "ledger_write"
+    assert model["runtime"]["execution_tick_failure"]["next_action"] == "检查本地账本输出是否可写。"
     assert "running_with_execution_tick_unavailable" in model["completeness"]["issues"]
 
 

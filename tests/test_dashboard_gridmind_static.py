@@ -155,6 +155,8 @@ def test_gridmind_labels_a_running_strategy_with_a_stale_execution_tick_as_degra
     assert 'tickLost?"运行降级"' in html
     assert "function executionTickText(runtime)" in html
     assert "live tick 心跳已过期" in html
+    assert "execution_tick_failure?.status===\"failed\"" in html
+    assert "route_datafeed:\"行情/路由\"" in html
 
 
 def test_gridmind_retains_trusted_candles_and_loads_older_history_safely() -> None:
