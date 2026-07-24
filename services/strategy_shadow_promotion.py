@@ -116,6 +116,15 @@ def _evidence_row(cycle_id: str, baseline: dict[str, Any], challenger: dict[str,
             "ended_at": review.get("evaluation_ended_at"),
         },
         "contracts": dict(scenario.get("contracts") or {}),
+        "input_lineage": {
+            "baseline_market_event_hash": str(
+                ((baseline.get("scenario") or {}).get("hashes") or {}).get("market_event_hash")
+                or ""
+            ),
+            "candidate_market_event_hash": str(
+                (scenario.get("hashes") or {}).get("market_event_hash") or ""
+            ),
+        },
         "baseline": {
             "scenario_id": str(baseline.get("scenario_id") or baseline.get("input_hash") or ""),
             "realized_pnl": _metric(baseline, "realized_pnl"),
@@ -141,6 +150,14 @@ def _comparability_failure(baseline: dict[str, Any], challenger: dict[str, Any])
     candidate_contracts = (challenger.get("scenario") or {}).get("contracts") or {}
     if base_contracts != candidate_contracts:
         return "execution_or_fee_contract_mismatch"
+    base_hashes = (baseline.get("scenario") or {}).get("hashes") or {}
+    candidate_hashes = (challenger.get("scenario") or {}).get("hashes") or {}
+    base_market_input = str(base_hashes.get("market_event_hash") or "")
+    candidate_market_input = str(candidate_hashes.get("market_event_hash") or "")
+    if not base_market_input or not candidate_market_input:
+        return "market_input_hash_missing"
+    if base_market_input != candidate_market_input:
+        return "market_input_hash_mismatch"
     return None
 
 

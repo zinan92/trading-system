@@ -11053,3 +11053,24 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Canonical-event tests preserve one three-level-spanning bar as one event,
   reject partial OHLC, and lock the written receipt/precision boundaries.
+
+## 2026-07-24 - Shadow performance deltas require identical market input
+
+### Decision
+
+- Shadow promotion comparison now requires the same non-empty
+  `market_event_hash` as well as the existing evaluation window and
+  execution/fee contracts. Deliberate plan and command differences remain
+  comparable; market-history differences do not.
+
+### Gotchas
+
+- A matching clock window is not proof of the same data. Missing or unequal
+  market input lineage is a `not_comparable` result with no performance delta,
+  never a zero-value or best-effort substitute.
+
+### Verification
+
+- Focused promotion fixtures prove identical inputs retain comparable evidence
+  and two mismatched market streams are rejected despite matching windows and
+  contracts.
