@@ -1555,6 +1555,68 @@ def test_strategy_console_history_repairs_uniquely_matched_legacy_nautilus_flatt
     assert flatten["identity_resolution"] == "legacy_flatten_unique_closed_position"
 
 
+def test_strategy_console_history_reconciles_evidenced_nautilus_dca_aggregate_round(tmp_path: Path):
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-24_DAY"
+    plan_id = "plan-dca-1"
+    round_id = f"dca-round:{plan_id}"
+    entry_a, entry_b = "entry-a", "entry-b"
+    target_a, target_b = "target-a", "target-b"
+    write_json(output / "dualtrack" / "nautilus_authoritative" / "snapshots" / f"{cycle_id}.json", [{
+        "engine": "nautilus_paper", "cycle_id": cycle_id,
+        "fills": [
+            {"fill_id": "fill-entry-a", "order_id": entry_a, "trade_id": round_id, "event": "entry", "side": "buy", "ts": "2026-07-24T01:00:00+00:00", "price": 100.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"fill_id": "fill-entry-b", "order_id": entry_b, "trade_id": round_id, "event": "entry", "side": "buy", "ts": "2026-07-24T01:01:00+00:00", "price": 90.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"fill_id": "fill-target-a", "order_id": target_a, "trade_id": target_a, "event": "target", "side": "sell", "ts": "2026-07-24T01:02:00+00:00", "price": 105.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"fill_id": "fill-target-b", "order_id": target_b, "trade_id": target_b, "event": "target", "side": "sell", "ts": "2026-07-24T01:02:00+00:00", "price": 105.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+        ],
+        "positions": [
+            {"trade_id": entry_a, "position_id": f"POS-{entry_a}", "status": "closed", "side": "long", "quantity": 1.0, "remaining_units": 0.0, "entry_price": 100.0, "realized_pnl": 5.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"trade_id": entry_b, "position_id": f"POS-{entry_b}", "status": "closed", "side": "long", "quantity": 1.0, "remaining_units": 0.0, "entry_price": 90.0, "realized_pnl": 15.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+        ],
+    }])
+    write_json(output / "dualtrack" / "nautilus_authoritative" / "commands" / f"{cycle_id}.json", [
+        {"command_id": target_a, "command": {"strategy_plan_id": plan_id, "position_id": f"POS-{entry_a}"}},
+        {"command_id": target_b, "command": {"strategy_plan_id": plan_id, "position_id": f"POS-{entry_b}"}},
+    ])
+    write_json(output / "dualtrack" / "dca_lifecycle" / f"{cycle_id}.json", [{
+        "strategy_plan_id": plan_id, "strategy_plan_version": 1, "round_id": round_id,
+        "status": "target_closed",
+        "target_generations": [{"status": "filled", "execution_order_ids": [target_a, target_b]}],
+    }])
+
+    result = dashboard_server.build_strategy_console_production_history(output_root=output, mark_price=105.0, mark_fresh=True, authoritative_engine="nautilus_paper")
+
+    accounting = result["accounting_snapshot"]
+    assert accounting["reconciliation"]["status"] == "pass"
+    assert accounting["counts"]["trade_count"] == 1
+    assert accounting["trades"][0]["trade_id"] == round_id
+    exits = [row for row in accounting["fills"] if row["event"] == "target"]
+    assert {row["trade_id"] for row in exits} == {round_id}
+    assert {row["source_trade_id"] for row in exits} == {target_a, target_b}
+
+
+def test_strategy_console_history_keeps_dca_without_exact_child_command_evidence_in_drift(tmp_path: Path):
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-24_DAY"
+    plan_id = "plan-dca-unsafe"
+    round_id = f"dca-round:{plan_id}"
+    write_json(output / "dualtrack" / "nautilus_authoritative" / "snapshots" / f"{cycle_id}.json", [{
+        "engine": "nautilus_paper", "cycle_id": cycle_id,
+        "fills": [
+            {"fill_id": "entry", "order_id": "entry", "trade_id": round_id, "event": "entry", "side": "buy", "ts": "2026-07-24T01:00:00+00:00", "price": 100.0, "quantity": 1.0, "strategy_plan_id": plan_id},
+            {"fill_id": "target", "order_id": "target", "trade_id": "target", "event": "target", "side": "sell", "ts": "2026-07-24T01:01:00+00:00", "price": 105.0, "quantity": 1.0, "strategy_plan_id": plan_id},
+        ],
+        "positions": [{"trade_id": "entry", "position_id": "POS-entry", "status": "closed", "side": "long", "quantity": 1.0, "remaining_units": 0.0, "realized_pnl": 5.0, "strategy_plan_id": plan_id}],
+    }])
+    write_json(output / "dualtrack" / "dca_lifecycle" / f"{cycle_id}.json", [{"strategy_plan_id": plan_id, "round_id": round_id, "status": "target_closed", "target_generations": [{"status": "filled", "execution_order_ids": ["target"]}]}])
+
+    result = dashboard_server.build_strategy_console_production_history(output_root=output, mark_price=105.0, mark_fresh=True, authoritative_engine="nautilus_paper")
+
+    assert result["accounting_snapshot"]["reconciliation"]["status"] == "drift"
+    assert "orphan_exit_fill" in {row["code"] for row in result["accounting_snapshot"]["reconciliation"]["issues"]}
+
+
 def test_strategy_console_production_accounting_keeps_partial_close_open_and_unknown_mark_unknown(tmp_path: Path):
     output = tmp_path / "outputs"
     cycle_id = "2026-07-04_NIGHT"
