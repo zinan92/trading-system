@@ -10992,3 +10992,24 @@ auditable datafeed port; broker execution remains a separate port.
   verification receipts, the permission matrix for every trading-impacting
   domain, read-model purity, and an import-level negative boundary against
   broker/control/risk/process-actuator dependencies.
+
+## 2026-07-24 - Execution-table completeness is a browser contract
+
+### Decision
+
+- The running-strategy strip and the positions, orders, and fills tables are
+  tested together against one authoritative read-model fixture.  The required
+  operator facts are strategy geometry/economics, tab counts, quantity, TP,
+  SL, and realized or unrealized P&L.
+
+### Gotchas
+
+- A static assertion that a column exists is not evidence that a live row
+  renders its value.  Browser coverage must keep a known open position and a
+  known accepted order in the fixture.
+
+### Verification
+
+- The focused Playwright test renders a running Grid plan, 25 accepted
+  orders, and one protected open position, then verifies every operator field
+  in the visible DOM without browser errors.
