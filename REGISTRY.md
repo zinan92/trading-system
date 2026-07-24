@@ -10,13 +10,14 @@
 - DCA v1 就绪:做多/做空加仓、单张整轮 TP 世代随累计持仓更新(由行情事件触发,不是 entry 挂单,页面已标注)、独立整轮止损、风险确认、read-model 可见;聚合 TP 合同已覆盖 1/2/3 次加仓及提交失败 fail-closed。一个逻辑整轮 TP 在 Nautilus 执行层会按精确 `position_id` 拆成多张 reduce-only 子单，绝不再用共享 round ID 模糊平仓；TP/SL 后停止,v1 显式拒绝 `loop_enabled=true`。此前首次 attended 尝试在两笔加仓后暴露该执行缺陷，已安全撤单平仓，**不计作真实生命周期验收**。
 - 可观测性:请求未达后端/Cloudflare 530/Dashboard 5xx/Binance 上游/网格回滚五类故障链分立文案各带下一步;硬输入 blocker 结构化解释;历史 NAV 仅计 machine 生产已实现 P&L,缺失即显示不可用;终态周期自动尝试 production+notional-half What-if Shadow,缺失原因显式留档。
 - M1 安全恢复链路完成:浏览器响应丢失后只读取 append-only 控制审计回执、权威 runtime 与活动计划身份来确认结果；`prepare_start` 和 `replace_grid` 不再自动二次请求。运行状态卡显示最近控制回执；证据不足时保留未确认状态，不猜测、也不重放控制动作。
+- M2-04 聚合 TP 合同完成（#254 / `main@5d5b63b`）:第二次加仓后，终态成交必须引用最新 generation、排除已撤换 generation，并精确平掉累计数量；有效 DCA 几何的目标/止损结果互斥。该证据是纯回放，不替代真实 Paper 成交。
 - 启动前草稿:手动参数若为空或格式无效，页面会标出具体字段、给出修复动作、清除旧预览并禁用启动；`手动` 可一键回到 `AUTO` 求解。该前端提示不放宽任何后端或 Paper 风控门禁。
 - 执行测试:保护性 sweep 只处理已收盘、可信 K 线；形成中的当前 K 线不会送入执行器。#240 已恢复这一合同的锁内正反向回归覆盖。
 - M1-01 运行状态合同已固化为 [`docs/contracts/authoritative-runtime-state-v1.md`](docs/contracts/authoritative-runtime-state-v1.md)：Dashboard 只消费权威 read-model；当前/上一周期、执行快照、tick、对账和不确定计数的字段所有权、降级语义与后续 fixture 矩阵已明确。下一步据此拆实现票，不在设计票中改变执行行为。
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);open issue 仅 #38(Portfolio 锚点);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- M2-04：补齐 DCA 聚合 TP 世代的纯合同测试（每次加仓扩量、旧 generation 撤换、止损/失败 fail-closed）；不发起任何 Paper 控制动作。
+- #226：执行并留档首轮 attended Paper DCA 观察。目标是“第一笔成交后出现 generation-1 → 后续 tick 第二笔成交 → generation-2 扩量 → 整轮 TP/SL 退出”，全过程以 lifecycle JSON、订单/成交身份和 reconciliation 为准；不以页面或模拟测试替代。
 - #226 仍是唯一未完成的 attended DCA 证据：已自然验证两笔加仓后的整轮 TP 平仓，也验证第一笔后生成 generation-1 TP；尚需“第二笔在后续 tick 成交→generation-2 扩量”的真实 Paper 证据。继续前仍要求干净 Paper 窗口。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
