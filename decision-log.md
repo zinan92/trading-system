@@ -10622,3 +10622,27 @@ auditable datafeed port; broker execution remains a separate port.
 - Against the current local immutable Paper archive, the read-side projection
   changes from 13 active diagnostics to `pass` with zero active issues while
   retaining the two pre-existing chronology records in `quarantined`.
+
+## 2026-07-24 - Active DCA risk decisions follow the strategy-control root
+
+### Decision
+
+- Resolve an active DCA risk decision from the same `strategy_control` output
+  root used by the DCA control plane.  Retain a direct-root read only as a
+  backward-compatible fallback for old fixtures and historical artifacts.
+- Never treat fallback data as proof when its decision identity does not match
+  the runtime's expected ID.  A missing or mismatched decision stays degraded
+  and therefore cannot make a running strategy appear healthy.
+
+### Gotchas
+
+- Runtime can be correctly running with a fresh tick, accepted order, and
+  protected DCA position while the read-model still says `risk_decision_missing`
+  if producer and consumer disagree about their output-root convention.  The
+  header then incorrectly renders `运行异常`; that is an observability defect,
+  not proof that the Paper lifecycle failed.
+
+### Verification
+
+- Focused tests cover the writer's current path, the legacy fallback, and the
+  fail-closed missing/mismatched cases.

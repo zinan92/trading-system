@@ -46,6 +46,42 @@ def test_read_model_selects_matching_dca_risk_decision(tmp_path: Path):
     assert selected == {"decision_id": "current-dca-risk", "outcome": "acknowledged"}
 
 
+def test_read_model_prefers_strategy_control_dca_risk_decision_root(tmp_path: Path):
+    output_root = tmp_path / "outputs" / "dualtrack"
+    write_json(
+        output_root / "strategy_control" / "dca_risk_decisions" / "2026-07-24_DAY.json",
+        [{"decision_id": "active-dca-risk", "outcome": "approved"}],
+    )
+    source = {
+        "cycle": {"cycle_id": "2026-07-24_DAY"},
+        "production_plan": {"strategy_type": "dca", "cycle_id": "2026-07-24_DAY"},
+        "runtime": {"risk_decision_id": "active-dca-risk"},
+    }
+
+    selected = dashboard_server._current_strategy_risk_decision(output_root, source)
+
+    assert selected == {"decision_id": "active-dca-risk", "outcome": "approved"}
+
+
+def test_read_model_does_not_fall_back_when_current_dca_decision_mismatches(tmp_path: Path):
+    output_root = tmp_path / "outputs" / "dualtrack"
+    write_json(
+        output_root / "strategy_control" / "dca_risk_decisions" / "2026-07-24_DAY.json",
+        [{"decision_id": "stale-dca-risk", "outcome": "approved"}],
+    )
+    write_json(
+        output_root / "dca_risk_decisions" / "2026-07-24_DAY.json",
+        [{"decision_id": "another-stale-dca-risk", "outcome": "approved"}],
+    )
+    source = {
+        "cycle": {"cycle_id": "2026-07-24_DAY"},
+        "production_plan": {"strategy_type": "dca", "cycle_id": "2026-07-24_DAY"},
+        "runtime": {"risk_decision_id": "active-dca-risk"},
+    }
+
+    assert dashboard_server._current_strategy_risk_decision(output_root, source) is None
+
+
 def test_market_view_intake_api_draft_only_does_not_write_artifacts(tmp_path: Path):
     result = build_market_view_intake_response(
         {"date": "2026-06-26", "raw_text": ORAL_MARKET_VIEW, "draft_only": True},
