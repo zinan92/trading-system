@@ -497,11 +497,24 @@ def test_uncertain_start_requires_persisted_complete_start_evidence() -> None:
     html = _html()
 
     assert "accepted=Number(counts.accepted_order_count)" in html
+    assert "auditedControlAcceptance(runtime,action,afterEvent)" in html
     assert "runtime.last_action==='start'" in html
     assert "runtime.accepted_order_count_known===true" in html
     assert "samePlan" in html
     assert "控制面已确认完整网格启动" in html
     assert "openOrders=Number(counts.open_order_count)" in html
+
+
+def test_response_recovery_reads_audit_receipt_without_repeating_control_actions() -> None:
+    html = _html()
+
+    assert "function controlReceiptText(runtime)" in html
+    assert "控制回执" in html
+    assert "result=await reconcileControlOutcome('prepare_start',error,{afterEvent})" in html
+    assert 'result=await reconcileControlOutcome("replace_grid",error,{afterEvent})' in html
+    assert html.count("await control('prepare_start',payload,{reload:false})") == 1
+    assert html.count('await control("replace_grid",payload,{reload:false})') == 1
+    assert "连接中断后已通过控制回执核对" in html
 
 
 def test_gridmind_order_state_is_always_escaped_as_text() -> None:

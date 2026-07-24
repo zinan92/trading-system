@@ -781,7 +781,7 @@ def test_gridmind_start_click_uses_prepared_candidate_and_shows_success() -> Non
         browser.close()
 
 
-def test_gridmind_start_surfaces_audited_stale_market_after_safe_prepare_retry() -> None:
+def test_gridmind_start_surfaces_audited_stale_market_without_prepare_retry() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     model = _header_model(4_000.0)
     model["runtime"].update({
@@ -845,10 +845,7 @@ def test_gridmind_start_surfaces_audited_stale_market_after_safe_prepare_retry()
         )
         dialog.wait_for()
 
-        assert [row["action"] for row in requests] == [
-            "prepare_start",
-            "prepare_start",
-        ]
+        assert [row["action"] for row in requests] == ["prepare_start"]
         assert "HTTP 502" not in dialog.inner_text()
         assert "生产状态没有改变" in dialog.inner_text()
         assert page.locator(".trade-toast").filter(has_text="操作未完成").count() == 0

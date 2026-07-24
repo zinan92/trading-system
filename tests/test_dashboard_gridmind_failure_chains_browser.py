@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 import pytest
 
-from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
+from tests.test_dashboard_gridmind_order_lifecycle_browser import _read_model, _static_server
 
 
 @pytest.mark.parametrize(
@@ -114,4 +115,75 @@ def test_gridmind_failure_copy_is_canonical_across_api_dialog_and_runtime_card()
         assert failure["unknown"]["title"] == "操作未完成"
         assert "private RuntimeError detail" not in failure["unknown"]["reason"]
         assert "private RuntimeError detail" not in failure["unknown"]["action"]
+        browser.close()
+
+
+def test_gridmind_reconciles_lost_replacement_response_from_audit_without_control_retry() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    initial = _read_model("accepted")
+    initial["runtime"].update({
+        "actual_state": "running",
+        "desired_state": "running",
+        "status": "running",
+        "last_action": "start",
+        "accepted_order_count_known": True,
+        "last_control_event": {
+            "ts": "2026-07-24T01:00:00+00:00",
+            "action": "start",
+            "result": "accepted",
+        },
+    })
+    confirmed = deepcopy(initial)
+    confirmed["runtime"].update({
+        "last_action": "replace_grid",
+        "last_control_event": {
+            "ts": "2026-07-24T01:01:00+00:00",
+            "action": "replace_grid",
+            "result": "accepted",
+        },
+    })
+    confirmed["execution"]["counts"]["accepted_order_count"] = 17
+    use_confirmed = False
+    control_requests: list[dict] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(confirmed if use_confirmed else initial, ensure_ascii=False),
+        )
+
+    def fulfill_control(route) -> None:
+        control_requests.append(route.request.post_data_json)
+        route.abort()
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**initial["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        use_confirmed = True
+
+        result = page.evaluate(
+            """async () => {
+                const responseLost = apiFailure('network interrupted', 0, 'dashboard_response_unconfirmed');
+                const result = await reconcileControlOutcome('replace_grid', responseLost, {afterEvent:'before-request'});
+                return {reconciled:result.reconciled, accepted:result.accepted_orders, receipt:result.receipt?.action};
+            }"""
+        )
+
+        assert result == {"reconciled": True, "accepted": 17, "receipt": "replace_grid"}
+        assert control_requests == []
+        assert "控制回执" in page.locator("#live").inner_text()
+        assert "替换网格 · 已接受" in page.locator("#live").inner_text()
         browser.close()
