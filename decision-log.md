@@ -10869,3 +10869,26 @@ auditable datafeed port; broker execution remains a separate port.
 - Terminal-cycle builder coverage proves the five bounded candidates and their
   declared geometry changes. Shadow replay, Nautilus Shadow, runner, and
   read-model suites pass together.
+
+## 2026-07-24 - Grid Shadow recommendations require durable comparable evidence
+
+### Decision
+
+- A Shadow candidate is only `proposal_ready` after at least 100 valid closed
+  comparable trades across at least two completed periods. It must outperform
+  the production baseline without worsening maximum drawdown or total cost.
+- Comparison requires matching evaluation window and execution/fee contract.
+  Missing, failed, malformed, or mismatched evidence is a visible blocker,
+  never a zero-value substitute.
+
+### Gotchas
+
+- `proposal_ready` is a read-only recommendation state, not permission to
+  promote, alter StrategyPlan, or submit Paper/live orders.
+- Existing generic promotion gates with a 30-trade minimum are not a
+  substitute for this Grid Shadow contract; they remain separate workflows.
+
+### Verification
+
+- Synthetic two-period fixtures prove a 100-trade compatible winner can be
+  proposal-ready; thin and contract-mismatched evidence remains blocked.
