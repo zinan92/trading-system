@@ -48,37 +48,60 @@ def _read_model(
     *,
     cycle_id: str = "2026-07-18_DAY",
     history: list[str] | None = None,
+    full_orders: bool = False,
+    open_trade: bool = False,
 ) -> dict:
-    source = deepcopy(_source())
+    source = deepcopy(_source(open_trade=open_trade))
     source["cycle"]["cycle_id"] = cycle_id
     source["production_execution"]["cycle_id"] = cycle_id
     source["runtime"]["cycle_id"] = cycle_id
-    orders = [{
-        "order_id": "hostile-order",
-        "state": '<img src=x onerror="globalThis.pwned=true">',
-        "side": "sell",
-        "order_type": "limit",
-    }]
-    if state is not None:
-        states = history or ["entry", "submitting", state]
-        orders.append({
-            "order_id": "order-lifecycle-browser-1",
-            "state": state,
-            "transitions": _transitions(states),
-            "side": "buy",
-            "order_type": "limit",
-            "quantity": 1.0,
-            "price": 3999.0,
+    if full_orders:
+        orders = source["production_execution"]["orders"]
+        orders[0].update({
+            "quantity": 1.25,
+            "updated_at": "2026-07-18T01:02:00+00:00",
         })
+    else:
+        orders = [{
+            "order_id": "hostile-order",
+            "state": '<img src=x onerror="globalThis.pwned=true">',
+            "side": "sell",
+            "order_type": "limit",
+        }]
+        if state is not None:
+            states = history or ["entry", "submitting", state]
+            orders.append({
+                "order_id": "order-lifecycle-browser-1",
+                "state": state,
+                "transitions": _transitions(states),
+                "side": "buy",
+                "order_type": "limit",
+                "quantity": 1.0,
+                "price": 3999.0,
+            })
     source["production_execution"]["orders"] = orders
+    if open_trade:
+        position = source["production_execution"]["positions"][0]
+        position.update({
+            "entry_ts": "2026-07-18T01:00:00+00:00",
+            "remaining_units": 1.25,
+            "tp": 4010.0,
+            "sl": 3980.0,
+            "unrealized_pnl": 12.34,
+        })
+        source["production_execution"]["accounting_snapshot"]["positions"][0].update(position)
     model = project_trading_system_read_model(
         source,
         risk_decision=_risk(),
         broker=_broker(),
         generated_at="2026-07-18T01:02:04+00:00",
     ).to_dict()
-    hostile = next(row for row in model["execution"]["orders"] if row["order_id"] == "hostile-order")
-    hostile["state_label"] = '<img src=x onerror="globalThis.pwned=true">'
+    hostile = next(
+        (row for row in model["execution"]["orders"] if row["order_id"] == "hostile-order"),
+        None,
+    )
+    if hostile is not None:
+        hostile["state_label"] = '<img src=x onerror="globalThis.pwned=true">'
     return model
 
 
@@ -186,5 +209,68 @@ def test_gridmind_order_lifecycle_is_monotonic_in_the_real_dom() -> None:
             ["保护异常", 8],
             ["保护已挂", 9],
         ]
+        assert browser_errors == []
+        browser.close()
+
+
+def test_gridmind_running_summary_and_execution_tables_show_authoritative_fields() -> None:
+    """A stopped/partial page must not hide the operator's live execution facts."""
+
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True, open_trade=True)
+    browser_errors: list[str] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(model, ensure_ascii=False),
+        )
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.on("console", lambda message: browser_errors.append(message.text) if message.type == "error" else None)
+        page.on("pageerror", lambda error: browser_errors.append(str(error)))
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator("#positions tbody tr").first.wait_for(state="attached")
+
+        summary = page.locator("#productionStrategySummary").inner_text()
+        assert "运行中" in summary
+        assert "中性（双边）" in summary
+        assert "稳健" in summary
+        assert "等价差 · 50 格" in summary
+        assert "每格 2,800 USD" in summary
+        assert "计划净利 ≥ 10.35 USD / 格" in summary
+        assert "实际杠杆 9.8x（上限 10x）" in summary
+
+        assert page.locator("#positionsCount").inner_text() == "(1)"
+        assert page.locator("#ordersCount").inner_text() == "(25)"
+        assert page.locator("#tradesCount").inner_text() == "(1)"
+        positions = page.locator("#positions").inner_text()
+        assert "数量" in positions and "1.25" in positions
+        assert "止盈" in positions and "4,010" in positions
+        assert "止损" in positions and "3,980" in positions
+        assert "未实现" in positions and "+12.34" in positions
+        orders = page.locator("#orders").inner_text()
+        assert "数量" in orders and "止盈" in orders and "止损" in orders
+        assert "计划净利" in orders and "10.5 USD" in orders
+        fills = page.locator("#fills").inner_text()
+        assert "入场时间（北京）" in fills and "出场时间（北京）" in fills
+        assert "结果" in fills and "已实现" in fills and "持仓中" in fills
         assert browser_errors == []
         browser.close()
