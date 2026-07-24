@@ -10680,3 +10680,31 @@ auditable datafeed port; broker execution remains a separate port.
   accepted matching aggregate target renders `运行中`; removing that target
   immediately returns `运行异常`. Static coverage retains the Grid accepted
   order gate.
+
+## 2026-07-24 - Dashboard market reads have a separate bounded failure budget
+
+### Decision
+
+- Bound only Dashboard read-model and chart-market requests to one datafeed
+  attempt of at most two seconds. A timeout projects the ordinary untrusted or
+  blocked market state so the operator gets an actionable read-only failure
+  instead of an HTTP 200 page stuck at `读取中`.
+- Preserve the live-tick runner's existing datafeed timeout and retry policy.
+  Its heartbeat still writes only after market, lifecycle, and ledger work all
+  complete; this Dashboard budget cannot make a strategy appear executable.
+
+### Gotchas
+
+- A local HTTP 200 status line is not proof that a Dashboard response was
+  delivered: the pre-fix read-model performed two ten-second datafeed attempts
+  before sending any body. Verify first-byte/completion behavior separately.
+- Reusing the shorter UI budget for the execution tick would silently change
+  operational liveness. Keep the budget opt-in through the read-only Dashboard
+  config overlay, never as a global datafeed-client default.
+
+### Verification
+
+- Focused fixtures prove the overlay uses one attempt and a two-second cap,
+  the market-bars handler receives that overlay, and a blocked upstream result
+  returns normally without a second request. Existing Dashboard purity checks
+  remain read-only.

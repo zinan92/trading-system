@@ -301,6 +301,27 @@ def test_default_authority_blocks_upstream_failure_without_legacy_fallback(
     assert client.calls == 2
 
 
+def test_datafeed_live_attempts_can_be_bounded_for_read_only_consumers(tmp_path: Path) -> None:
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "base_url": "http://datafeed.test",
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+        "live_request_attempts": 1,
+    }
+    client = _UnavailableDatafeedClient()
+
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(as_of="2026-07-18T12:00:05+00:00")
+
+    assert payload["status"] == "blocked"
+    assert client.calls == 1
+
+
 def test_datafeed_shadow_reports_drift_but_keeps_legacy_authoritative(tmp_path: Path) -> None:
     raw = _trusted_v2_payload()
     raw["candles"][0]["quality_flags"] = ["execution_venue"]

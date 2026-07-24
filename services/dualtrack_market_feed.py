@@ -46,6 +46,11 @@ class DualTrackMarketFeed:
             base_url=str(datafeed_config.get("base_url") or "http://127.0.0.1:8100"),
             timeout_seconds=float(datafeed_config.get("timeout_seconds", 10)),
         )
+        try:
+            configured_live_attempts = int(datafeed_config.get("live_request_attempts", 2))
+        except (TypeError, ValueError):
+            configured_live_attempts = 2
+        self.live_request_attempts = max(1, min(configured_live_attempts, 2))
         default_db = ROOT / str(self.config.get("local_market_db", "data/market_data.db"))
         self.market_db = self._resolve_market_db(
             market_db
@@ -192,7 +197,7 @@ class DualTrackMarketFeed:
         )
         response: dict | None = None
         request_errors: list[str] = []
-        for _attempt in range(1 if historical else 2):
+        for _attempt in range(1 if historical else self.live_request_attempts):
             try:
                 response = self.datafeed_client.candles(
                     asset_class=self.datafeed_asset_class,

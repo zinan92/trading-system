@@ -80,6 +80,9 @@ _SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9:_=-]+$")
 _TIMEFRAME_PATTERN = re.compile(r"^\d+[mhdMHD]$")
 
 
+_DASHBOARD_DATAFEED_TIMEOUT_SECONDS = 2.0
+
+
 _DASHBOARD_VIEWS = {"full", "trader", "ops"}
 
 
@@ -437,6 +440,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 timeframe=timeframe or None,
                 limit=limit,
                 end=end or None,
+                config=_dashboard_market_read_config(),
             ),
         )
 
@@ -839,6 +843,24 @@ def build_trading_system_read_model_response(
     ).to_dict()
 
 
+def _dashboard_market_read_config() -> dict:
+    """Bound a read-only Dashboard market request without changing tick policy."""
+
+    config = dict(load_pipeline_config())
+    datafeed = dict(config.get("datafeed") or {})
+    try:
+        configured_timeout = float(datafeed.get("timeout_seconds", 10.0))
+    except (TypeError, ValueError):
+        configured_timeout = _DASHBOARD_DATAFEED_TIMEOUT_SECONDS
+    datafeed["timeout_seconds"] = max(
+        0.1,
+        min(configured_timeout, _DASHBOARD_DATAFEED_TIMEOUT_SECONDS),
+    )
+    datafeed["live_request_attempts"] = 1
+    config["datafeed"] = datafeed
+    return config
+
+
 def _assemble_strategy_console_snapshot(
     *,
     output_root: Path | None = None,
@@ -850,7 +872,11 @@ def _assemble_strategy_console_snapshot(
     cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
     cycle_id = str(cycle["cycle_id"])
     control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
-    market = build_dualtrack_market_bars_response(limit=240, as_of=as_of)
+    market = build_dualtrack_market_bars_response(
+        limit=240,
+        as_of=as_of,
+        config=_dashboard_market_read_config(),
+    )
     trades = build_dualtrack_trades_response(
         cycle_id,
         track="human",
