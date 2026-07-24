@@ -8,20 +8,20 @@ counts a story as **verified done** only when its stated evidence exists in
 ## Current bar
 
 ```text
-Verified done  22 / 26  ██████████████████░  85%
+Verified done  23 / 26  ███████████████████  88%
 In progress     0 / 26
-Remaining       4 / 26  ██
+Remaining       3 / 26  ██
 ```
 
-**As of:** `main@d388a50` · **Current work:** no active story · **Next planned
-story:** M4-03 12-hour review interpretation.
+**As of:** `main@5157aec` · **Current work:** no active story · **Next planned
+story:** M6-01 adapter contract suite.
 
 | Milestone | Done | Active | Remaining | Meaning |
 |---|---:|---:|---:|---|
 | M1 Operational truth | 5/5 | 0 | 0 | Runtime, failure and bounded-recovery contracts |
 | M2 Paper lifecycle evidence | 6/6 | 0 | 0 | Grid/DCA lifecycle and multi-level precision evidence complete |
 | M3 Operator product | 6/6 | 0 | 0 | Parameter, control, chart, table, and continuous-journey evidence complete |
-| M4 Strategy Shadows/review | 2/3 | 0 | 1 | Variants and comparability complete; review audit remains |
+| M4 Strategy Shadows/review | 3/3 | 0 | 0 | Variants, comparability, and readable review evidence complete |
 | M5 Evolution/self-repair | 3/3 | 0 | 0 | Evidence threshold, proposal and safe queue complete |
 | M6 Interfaces/release discipline | 0/3 | 0 | 3 | Adapter suite, CI compatibility and runbook remain |
 
@@ -48,7 +48,7 @@ story:** M4-03 12-hour review interpretation.
 | M3-06 Operator journey expansion | Verified done | Paper browser journey verifies start → read-model → summary/table → stop; [PR #341](https://github.com/zinan92/trading-system/pull/341) |
 | M4-01 Shadow comparability | Verified done | Market-input/window/contract fail-closed comparison; [PR #349](https://github.com/zinan92/trading-system/pull/349) |
 | M4-02 5–10 Grid variants | Verified done | Isolated 5-variant Grid Shadow generation; merge `e9f3591` |
-| M4-03 12-hour review interpretation | Remaining | Audit plan-versus-result interpretation and evidence labels |
+| M4-03 12-hour review interpretation | Verified done | Closed-cycle browser review and optional screenshot; [PR #353](https://github.com/zinan92/trading-system/pull/353) |
 | M5-01 Evidence threshold | Verified done | Cross-period sample/persistence gate; merge `a05ba05` |
 | M5-02 Promotion proposal | Verified done | Read-only cross-cycle proposal; merge `db36902` |
 | M5-03 Safe-repair queue | Verified done | Non-actuating diagnostic queue; merge `f90814c` |
