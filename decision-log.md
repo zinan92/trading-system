@@ -10808,3 +10808,38 @@ auditable datafeed port; broker execution remains a separate port.
 - A focused control-plane regression starts from an active terminal DCA plan,
   produces a valid Grid adaptive preview, exposes the strategy-switch metadata,
   and proves no execution orders or plan overwrite occur.
+
+## 2026-07-24 - Strategy switches establish a new execution identity
+
+### Decision
+
+- A Grid start always persists `strategy_type: grid` in both its immutable
+  StrategyPlan and runtime transition, and removes DCA-only fields from the
+  new Grid plan. A terminal DCA plan may seed a preview, but it cannot supply
+  the new execution identity.
+- Paper stop remains fail-safe: cancel, flatten, settle, and reconcile first.
+  If a legacy malformed DCA identity makes lifecycle recording impossible only
+  after those safety actions succeed, persist `stopped` with an explicit
+  lifecycle warning instead of stranding runtime at `stopping`.
+- Read models keep immutable malformed history visible as a labelled
+  `unavailable` lifecycle state; they do not turn a historical contract error
+  into a Dashboard-wide HTTP failure.
+
+### Gotchas
+
+- A successful Grid preview is not sufficient proof of a Grid start: a
+  strategy switch must overwrite the runtime type as well as the saved plan.
+  Spreading a previous terminal runtime can otherwise send a valid Grid order
+  set through DCA stop/read-model branches.
+- A stop receipt must distinguish an unavailable lifecycle audit from an
+  unsafe stop. The latter still fails closed; this fallback is only reached
+  after zero accepted orders, zero open positions, and a passing engine
+  reconciliation have been verified.
+
+### Verification
+
+- Regression coverage starts Grid after a terminal DCA plan and proves the
+  persisted plan/runtime are Grid, then stops through the Grid route. A
+  separate malformed-DCA fixture proves stop reaches `stopped` with a visible
+  warning and the read model stays available. Control-plane, DCA, Dashboard,
+  and trading read-model suites pass together.
