@@ -51,6 +51,7 @@ from services.grid_range_adjustment import (
     range_adjustment_steps,
 )
 from services.journal_store import load_json, write_json
+from services.production_accounting import normalize_nautilus_snapshot_for_accounting
 from services.risk_policy_composition import (
     build_risk_decision_store,
     compose_grid_risk_policy,
@@ -4469,6 +4470,12 @@ class StrategyControlPlane:
         replaced_order_ids: list[str] | None,
         retained_order_ids: list[str] | None,
     ):
+        execution_snapshot = adapter.snapshot(cycle_id)
+        if str(getattr(adapter, "name", "")) == "nautilus_paper":
+            execution_snapshot = normalize_nautilus_snapshot_for_accounting(
+                self.output_root,
+                execution_snapshot,
+            )
         return build_grid_risk_request(
             checked_at=timestamp,
             action_class=action_class,
@@ -4477,7 +4484,7 @@ class StrategyControlPlane:
             commands=commands,
             account_context=account,
             market=market,
-            execution_snapshot=adapter.snapshot(cycle_id),
+            execution_snapshot=execution_snapshot,
             execution_reconciliation=adapter.reconcile(cycle_id),
             policy=self.risk_port.resolve_policy(self.config),
             evaluator=self.risk_port.evaluator_metadata(),

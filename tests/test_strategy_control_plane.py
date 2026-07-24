@@ -297,6 +297,93 @@ def test_adaptive_grid_preview_after_terminal_dca_does_not_require_grid_geometry
     assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
 
 
+def test_nautilus_grid_preflight_uses_evidenced_terminal_dca_projection(
+    tmp_path: Path,
+) -> None:
+    """A terminal DCA round cannot masquerade as reconciliation drift for Grid."""
+
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-24_DAY"
+    plan_id = "terminal-dca-plan"
+    round_id = f"dca-round:{plan_id}"
+    entry_a, entry_b = "entry-a", "entry-b"
+    target_a, target_b = "target-a", "target-b"
+    snapshot = {
+        "schema_version": "dualtrack-execution-v1",
+        "engine": "nautilus_paper",
+        "cycle_id": cycle_id,
+        "orders": [],
+        "fills": [
+            {"fill_id": "fill-entry-a", "order_id": entry_a, "trade_id": round_id, "event": "entry", "side": "buy", "ts": "2026-07-24T01:00:00+00:00", "price": 100.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"fill_id": "fill-entry-b", "order_id": entry_b, "trade_id": round_id, "event": "entry", "side": "buy", "ts": "2026-07-24T01:01:00+00:00", "price": 90.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"fill_id": "fill-target-a", "order_id": target_a, "trade_id": target_a, "event": "target", "side": "sell", "ts": "2026-07-24T01:02:00+00:00", "price": 105.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"fill_id": "fill-target-b", "order_id": target_b, "trade_id": target_b, "event": "target", "side": "sell", "ts": "2026-07-24T01:02:00+00:00", "price": 105.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+        ],
+        "positions": [
+            {"trade_id": entry_a, "position_id": f"POS-{entry_a}", "status": "closed", "side": "long", "quantity": 1.0, "remaining_units": 0.0, "entry_price": 100.0, "realized_pnl": 5.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"trade_id": entry_b, "position_id": f"POS-{entry_b}", "status": "closed", "side": "long", "quantity": 1.0, "remaining_units": 0.0, "entry_price": 90.0, "realized_pnl": 15.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+        ],
+        "account": {"starting_cash": 10_000.0, "realized_pnl": 20.0, "ending_cash": 10_020.0, "equity": 10_020.0, "margin": 0.0, "exposure": 0.0, "slippage": 0.0, "fees": 0.0, "funding": 0.0},
+        "pnl": {"realized": 20.0, "unrealized": 0.0},
+        "mark": {"price": 105.0, "fresh": True, "source": "test"},
+    }
+    write_json(output / "dualtrack" / "nautilus_authoritative" / "commands" / f"{cycle_id}.json", [
+        {"command_id": target_a, "command": {"strategy_plan_id": plan_id, "position_id": f"POS-{entry_a}"}},
+        {"command_id": target_b, "command": {"strategy_plan_id": plan_id, "position_id": f"POS-{entry_b}"}},
+    ])
+    write_json(output / "dualtrack" / "dca_lifecycle" / f"{cycle_id}.json", [{
+        "strategy_plan_id": plan_id,
+        "strategy_plan_version": 1,
+        "round_id": round_id,
+        "status": "target_closed",
+        "target_generations": [{"status": "filled", "execution_order_ids": [target_a, target_b]}],
+    }])
+
+    class TerminalDcaAdapter:
+        name = "nautilus_paper"
+
+        def snapshot(self, _cycle_id: str, **_kwargs) -> dict:
+            return deepcopy(snapshot)
+
+        def reconcile(self, _cycle_id: str) -> dict:
+            return {"status": "ok", "issues": []}
+
+    plane = StrategyControlPlane(output)
+    request = plane._grid_risk_request(
+        cycle_id,
+        action_class="increase_exposure",
+        intent="start_grid",
+        plan={"cycle_id": cycle_id, "strategy_plan_id": "new-grid", "version": 1, "preview_id": "preview", "direction": "neutral", "range": {"low": 90.0, "high": 110.0}, "grid": {"mode": "arithmetic", "count": 20, "notional_per_grid": 1_000.0, "leverage": 10.0}},
+        commands=[],
+        account=account_context(),
+        market=market(),
+        adapter=TerminalDcaAdapter(),
+        timestamp="2026-07-24T01:03:00+00:00",
+        replaced_order_ids=None,
+        retained_order_ids=None,
+    ).to_dict()
+
+    assert request["execution"]["reconciliation_issues"] == []
+    assert request["execution"]["open_positions"] == []
+
+    # Omitting immutable child-target evidence must remain a hard drift.
+    (output / "dualtrack" / "nautilus_authoritative" / "commands" / f"{cycle_id}.json").unlink()
+    unsafe_request = plane._grid_risk_request(
+        cycle_id,
+        action_class="increase_exposure",
+        intent="start_grid",
+        plan={"cycle_id": cycle_id, "strategy_plan_id": "new-grid", "version": 1, "preview_id": "preview", "direction": "neutral", "range": {"low": 90.0, "high": 110.0}, "grid": {"mode": "arithmetic", "count": 20, "notional_per_grid": 1_000.0, "leverage": 10.0}},
+        commands=[],
+        account=account_context(),
+        market=market(),
+        adapter=TerminalDcaAdapter(),
+        timestamp="2026-07-24T01:03:00+00:00",
+        replaced_order_ids=None,
+        retained_order_ids=None,
+    ).to_dict()
+    assert unsafe_request["execution"]["reconciliation_issues"]
+
+
 @pytest.mark.parametrize(
     ("payload_patch", "expected_code", "expected_evidence"),
     [
