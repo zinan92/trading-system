@@ -64,6 +64,29 @@ def test_crosshair_datetime_is_rendered_on_the_bottom_time_axis() -> None:
         assert abs((label_bounds["x"] + label_bounds["width"] / 2) - crosshair_x) < 90
         assert page.locator(".standard-kline-toolbar [data-crosshair-time]").count() == 0
 
+        # Changing the displayed strategy geometry must request a fresh price
+        # autoscale. The revised grid boundary remains in the chart coordinate
+        # system rather than retaining a stale, fixed price scale.
+        scale = page.evaluate(
+            """() => {
+              const plan = state.data.strategy.plan;
+              const revisedHigh = Number(state.market.latest_close) - 5;
+              state.data.strategy.plan = {
+                ...plan,
+                range: {...plan.range, high: revisedHigh},
+              };
+              redrawChart();
+              return {
+                autoScale: state.chart.candleSeries.priceScale().options().autoScale,
+                revisedBoundaryY: Number(state.chart.priceToY(revisedHigh)),
+                visualKey: state.chartVisualKey,
+              };
+            }"""
+        )
+        assert scale["autoScale"] is True
+        assert scale["visualKey"].endswith(":production")
+        assert 0 <= scale["revisedBoundaryY"] <= bounds["height"]
+
         artifact_dir = os.environ.get("KLINE_TIME_AXIS_SCREENSHOT_DIR")
         if artifact_dir:
             path = Path(artifact_dir)

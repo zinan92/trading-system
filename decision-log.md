@@ -1,5 +1,28 @@
 # Decision Log
 
+## Chart Autoscale Protects the Candle View, Not the Entire Grid Range
+
+Date: 2026-07-24
+
+### Decision
+
+- Keep the chart price scale driven by visible candle data while redrawing
+  visible Grid geometry after a plan change. A range boundary inside the
+  candle price window must remain correctly mapped; a distant boundary must
+  not force the whole chart to zoom out.
+  - Rationale: including a wide or stale Grid Range in autoscale makes the
+    live candles unreadably compressed. The operator still has price labels,
+    Range controls, and chart navigation for off-window levels.
+  - Evidence: `test_crosshair_datetime_is_rendered_on_the_bottom_time_axis`,
+    `test_gridmind_wheel_or_trackpad_loads_beyond_initial_240_bars`, and
+    `test_gridmind_drag_release_keeps_draft_until_explicit_confirm`.
+
+### Gotcha
+
+- A test must choose a revised boundary inside the current candle price window
+  when asserting screen coordinates. A distant range boundary is intentionally
+  allowed to map outside the canvas; that is not an autoscale regression.
+
 ## GitHub Provenance and Roadmap Progress Are Separate Evidence Surfaces
 
 Date: 2026-07-24
