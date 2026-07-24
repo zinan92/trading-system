@@ -8,13 +8,13 @@ counts a story as **verified done** only when its stated evidence exists in
 ## Current bar
 
 ```text
-Verified done  24 / 26  ████████████████████  92%
+Verified done  25 / 26  █████████████████████  96%
 In progress     0 / 26
-Remaining       2 / 26  █
+Remaining       1 / 26
 ```
 
-**As of:** `main@685b0ce` · **Current work:** no active story · **Next planned
-story:** M6-02 runtime compatibility.
+**As of:** `main@1b2be9c` · **Current work:** no active story · **Next planned
+story:** M6-03 Paper release/rollback runbook.
 
 | Milestone | Done | Active | Remaining | Meaning |
 |---|---:|---:|---:|---|
@@ -23,7 +23,7 @@ story:** M6-02 runtime compatibility.
 | M3 Operator product | 6/6 | 0 | 0 | Parameter, control, chart, table, and continuous-journey evidence complete |
 | M4 Strategy Shadows/review | 3/3 | 0 | 0 | Variants, comparability, and readable review evidence complete |
 | M5 Evolution/self-repair | 3/3 | 0 | 0 | Evidence threshold, proposal and safe queue complete |
-| M6 Interfaces/release discipline | 1/3 | 0 | 2 | Adapter suite verified; CI compatibility and runbook remain |
+| M6 Interfaces/release discipline | 2/3 | 0 | 1 | Adapter suite and pre-deploy compatibility verified; runbook remains |
 
 ## Story ledger
 
@@ -53,7 +53,7 @@ story:** M6-02 runtime compatibility.
 | M5-02 Promotion proposal | Verified done | Read-only cross-cycle proposal; merge `db36902` |
 | M5-03 Safe-repair queue | Verified done | Non-actuating diagnostic queue; merge `f90814c` |
 | M6-01 Adapter contract suite | Verified done | [Adapter-contract audit](../audits/adapter-contract-suite-2026-07-24.md); [PR #357](https://github.com/zinan92/trading-system/pull/357) |
-| M6-02 Runtime compatibility | Remaining | Promote Python 3.9 receipt to enforceable CI/pre-deploy gate |
+| M6-02 Runtime compatibility | Verified done | Non-actuating Paper pre-deploy receipt with actual launchd Python/API smoke; [PR #361](https://github.com/zinan92/trading-system/pull/361) |
 | M6-03 Paper release/rollback runbook | Remaining | Standard merge/deploy/health/browser/rollback receipt |
 
 ## Update rule
