@@ -6,6 +6,7 @@ import pytest
 
 from services.accounting_projection import project_execution_accounting
 from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+from services.grid_lifecycle_evidence import build_grid_lifecycle_evidence
 from services.journal_store import load_json, write_json
 
 
@@ -352,6 +353,35 @@ def test_authoritative_grid_rearms_same_price_for_two_complete_cycles(tmp_path: 
         "entry_fill_confirmed",
         "close_fill_confirmed_rearm",
     ]
+    evidence = build_grid_lifecycle_evidence(
+        output,
+        cycle_id=CYCLE_ID,
+        execution_snapshot=snapshot,
+        reconciliation=adapter.reconcile(CYCLE_ID),
+    )
+    assert evidence["status"] == "verified"
+    assert evidence["completed_rearmed_count"] == 2
+    first_loop = evidence["lines"][0]
+    assert first_loop["status"] == "completed_rearmed"
+    assert first_loop["strategy_plan_id"] == "plan-grid"
+    assert first_loop["entry"]["trade_id"] == first_loop["entry"]["order_id"]
+    assert first_loop["target"]["fill_ids"]
+    assert first_loop["reorder"]["price"] == first_loop["reorder"]["original_price"] == 4000.0
+
+    # A missing transition cannot be turned into a claimed completed loop.
+    write_json(
+        output / "dualtrack" / "grid_lifecycle" / f"{CYCLE_ID}_nautilus.json",
+        [row for row in lifecycle if row["event"] != "close_fill_confirmed_rearm"],
+    )
+    incomplete = build_grid_lifecycle_evidence(
+        output,
+        cycle_id=CYCLE_ID,
+        execution_snapshot=snapshot,
+        reconciliation=adapter.reconcile(CYCLE_ID),
+    )
+    assert incomplete["status"] == "unverified"
+    assert incomplete["completed_rearmed_count"] == 0
+    assert "target_rearm_transition" in incomplete["lines"][0]["evidence_missing"]
 
     restarted = NautilusExecutionAdapter(
         output,

@@ -69,6 +69,15 @@ def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
     assert "build_strategy_timeframes" not in html
 
 
+def test_gridmind_labels_only_auditable_grid_lifecycle_loops() -> None:
+    html = _html()
+
+    assert "function renderGridLifecycle(execution)" in html
+    assert "已证实 ${num(completed)} 格：开仓 → TP → 原价重挂" in html
+    assert "生命周期证据不完整，未计作完成循环" in html
+    assert "renderGridLifecycle(execution)" in html.split("function render(){", 1)[1].split("function renderRobotControls", 1)[0]
+
+
 def test_gridmind_trade_activity_toasts_are_read_only_and_fail_silent() -> None:
     html = _html()
 
