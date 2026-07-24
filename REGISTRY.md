@@ -5,7 +5,7 @@
 
 ## 现在在哪里(2026-07-24)
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
-- 代码与部署: `main@290f4f2`（#294 / DCA→Grid 身份切换与安全停止）已部署到本地 Paper Dashboard；只重启 Dashboard 服务，未重启行情调度器、Paper 执行引擎或 live 进程，也未接触交易所密钥。当前 Paper runtime=`stopped`、0 已接受委托、0 开放持仓、Nautilus reconciliation=`ok`；旧畸形 DCA 生命周期仅以明确 `unavailable` 告警保留审计，不会阻塞安全停止或让读模型整体失败。
+- 代码与部署: `main@db36902`（#310 / 跨周期 Shadow 推广提案）已部署到本地 Paper Dashboard；只重启 Dashboard 服务，未重启行情调度器、Paper 执行引擎或 live 进程，也未接触交易所密钥。部署后 read-model 显示推广=`collecting_evidence` 且 `read_only=true`、不改计划/不提交订单；当前 Paper runtime=`stopped`、0 已接受委托、0 开放持仓。旧畸形 DCA 生命周期仅以明确 `unavailable` 告警保留审计，不会阻塞安全停止或让读模型整体失败。
 - Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动;rollover 只停止/撤单/封包,下一周期必须操作者显式启动。tick 失败现会明确标记为行情/路由、生命周期、账本写入或调度器启动阶段并给出下一步；失败绝不写心跳，运行中失联显示「运行降级」。
 - DCA v1 就绪:做多/做空加仓、单张整轮 TP 世代随累计持仓更新(由行情事件触发,不是 entry 挂单,页面已标注)、独立整轮止损、风险确认、read-model 可见;聚合 TP 合同已覆盖 1/2/3 次加仓及提交失败 fail-closed。一个逻辑整轮 TP 在 Nautilus 执行层会按精确 `position_id` 拆成多张 reduce-only 子单，绝不再用共享 round ID 模糊平仓；TP/SL 后停止,v1 显式拒绝 `loop_enabled=true`。此前首次 attended 尝试在两笔加仓后暴露该执行缺陷，已安全撤单平仓，**不计作真实生命周期验收**。
 - #226 attended Paper DCA 已自然闭环:做多计划 `strategy-plan-2026-07-24_DAY-5-c3bf366f` 经真实 tick 完成两次加仓；第一笔后 generation-1，第二笔后 generation-2 将聚合 TP 扩至 `0.004 @ 4037.5`。generation-2 于 `2026-07-24T06:20:00Z` 自然成交，lifecycle 为 `target_closed`、0 持仓/0 委托，execution reconciliation=`ok`，canonical accounting=`pass`（两条既有时间异常仍 quarantine）。未注入行情、人工平仓或重启执行器制造证据。
@@ -18,6 +18,7 @@
 - #289 Grid Paper 实证已完成（#297 / `main@5df6046`）:StrategyPlan v7 的一条 Nautilus Paper 网格线已自然完成 `entry → TP → 原价重挂`，证据包为 `completed_rearmed_count=1`、`unverified_count=0`、reconciliation=`ok`；命令、成交、快照与生命周期文件哈希见 `docs/evidence/issue-289-grid-rearm-2026-07-24.md`。之后 tick 未保持新鲜窗口，按 fail-safe 正常停止并撤掉第二代挂单；当前 Paper=`stopped`、0 已接受委托、0 开放持仓。
 - #301 Grid Shadows 已扩展（#302 / `main@e9f3591`）:每个符合条件的终态 Grid 周期会在隔离 Nautilus replay 中生成生产基准、50%/150% 名义、交替偶/奇稀疏网格共 5 个同窗口 What-if；它们共享执行/费用合同与输入哈希规则，永不写生产账本、改 StrategyPlan 或创建真实订单。
 - #305 Shadow 推广证据闸已部署（#306 / `main@a05ba05`）:Grid Shadow 候选只有在至少 100 笔有效可比的已平仓交易、至少两个完整周期、同窗口与执行/费用合同一致、收益优于基准且回撤/成本不恶化时才会标记 `proposal_ready`；该状态只供人工审阅，绝不自动升级主策略或下单。
+- #309 Shadow 推广提案已部署（#310 / `main@db36902`）:Dashboard 现将已封包闭环周期的 Grid Shadow 证据按跨周期门槛投影为只读建议，展示支持/反证、证据 ID、窗口、执行/费用合同及收益/回撤/成本变化；同周期 What-if 不会伪装成推广结论。即便 `proposal_ready`，仍必须人工审阅并另建计划变更，系统没有自动升级或下单路径。
 - 启动前草稿:手动参数若为空或格式无效，页面会标出具体字段、给出修复动作、清除旧预览并禁用启动；`手动` 可一键回到 `AUTO` 求解。该前端提示不放宽任何后端或 Paper 风控门禁。
 - 执行测试:保护性 sweep 只处理已收盘、可信 K 线；形成中的当前 K 线不会送入执行器。#240 已恢复这一合同的锁内正反向回归覆盖。
 - M1-01 运行状态合同已固化为 [`docs/contracts/authoritative-runtime-state-v1.md`](docs/contracts/authoritative-runtime-state-v1.md)：Dashboard 只消费权威 read-model；当前/上一周期、执行快照、tick、对账和不确定计数的字段所有权、降级语义与后续 fixture 矩阵已明确。下一步据此拆实现票，不在设计票中改变执行行为。
@@ -25,7 +26,7 @@
 
 ## 下一步
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
-- M5-02:将已通过证据闸的 Shadow 结果渲染为包含支持/反证、风险变化、证据窗口与人工确认路径的只读推广提案；不允许任何自动策略变更。
+- M5-03:建立安全修复队列，只有服务、缓存和读模型恢复可进入自动候选；任何订单、风险或策略状态变更一律标记为 `requires_human_confirmation`。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
