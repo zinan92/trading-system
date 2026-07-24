@@ -5,6 +5,7 @@ import pytest
 
 import pipelines.dualtrack_cycle_runner as runner_module
 from pipelines.dualtrack_cycle_runner import DualTrackCycleRunner
+from schemas.market_data import Bar
 from services.dualtrack_clock import parse_utc
 from services.journal_store import load_json, write_json
 from services.strategy_market_context import build_strategy_timeframes
@@ -700,7 +701,18 @@ def test_protective_execution_sweep_holds_production_mutation_lock(
     class Market:
         def load_bars_between(self, *_args):
             assert held is True
-            return []
+            return [Bar(
+                symbol="GOLD",
+                timeframe="1m",
+                timestamp="2026-07-05T01:00:00+00:00",
+                open=4000.0,
+                high=4001.0,
+                low=3999.0,
+                close=4000.0,
+                volume=1.0,
+                provider="trusted",
+                quality_flags=["execution_venue"],
+            )]
 
     monkeypatch.setattr(runner_module, "production_mutation_lock", fake_lock)
     runner = _runner(output)
@@ -727,6 +739,69 @@ def test_protective_execution_sweep_holds_production_mutation_lock(
     assert result["status"] == "ok"
     assert result["processed_events"] == 1
     assert held is False
+
+
+def test_protective_execution_sweep_does_not_process_a_forming_bar(
+    tmp_path: Path,
+) -> None:
+    """The current minute is retained until it becomes a completed bar."""
+
+    output = tmp_path / "outputs"
+
+    class Execution:
+        def snapshot(self, _cycle_id):
+            return {
+                "positions": [],
+                "orders": [{
+                    "state": "accepted",
+                    "event": "entry",
+                    "order_type": "limit",
+                    "ts": "2026-07-05T01:00:00+00:00",
+                }],
+            }
+
+        def process_market_event(self, _event):
+            raise AssertionError("a forming bar must not reach execution")
+
+    class Market:
+        def load_bars_between(self, *_args):
+            return [Bar(
+                symbol="GOLD",
+                timeframe="1m",
+                timestamp="2026-07-05T01:01:00+00:00",
+                open=4000.0,
+                high=4001.0,
+                low=3999.0,
+                close=4000.0,
+                volume=1.0,
+                provider="trusted",
+                quality_flags=["execution_venue"],
+            )]
+
+    runner = _runner(output)
+    runner.execution = Execution()
+    runner.market = Market()
+    runner.symbol = "GOLD"
+    runner.timeframe = "1m"
+    runner.config = {"market_data": {"provider": "trusted"}}
+    runner._latest_market_record = lambda: {
+        "provider": "trusted",
+        "timestamp": "2026-07-05T01:01:00+00:00",
+        "close": 4000.0,
+        "quality_flags": ["execution_venue"],
+    }
+    runner._market_max_age_seconds = lambda: 120
+    runner._filter_market_session_bars = lambda bars: bars
+    runner._execution_instrument_id = lambda: "GOLD-PERP"
+
+    result = runner._sweep_human_protective_exits(
+        "2026-07-05_DAY",
+        now=parse_utc("2026-07-05T01:01:00+00:00"),
+    )
+
+    assert result["status"] == "ok"
+    assert result["reason"] == "waiting_for_completed_market_bar"
+    assert result["processed_events"] == 0
 
 
 def test_rollover_preserves_explicit_plan_geometry_and_notional() -> None:
