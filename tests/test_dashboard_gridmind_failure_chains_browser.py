@@ -201,3 +201,89 @@ def test_gridmind_reconciles_lost_replacement_response_from_audit_without_contro
         assert "控制回执" in page.locator("#live").inner_text()
         assert "替换网格 · 已接受" in page.locator("#live").inner_text()
         browser.close()
+
+
+def test_gridmind_reconciles_a_lost_stop_response_without_retrying_the_stop() -> None:
+    """A lost stop response must resolve from the authoritative runtime, not a retry."""
+    playwright = pytest.importorskip("playwright.sync_api")
+    initial = _read_model("accepted")
+    plan = initial["strategy"]["plan"]
+    initial["runtime"].update({
+        "actual_state": "running",
+        "desired_state": "running",
+        "status": "running",
+        "last_action": "start",
+        "can_stop_when_authorized": True,
+        "strategy_plan_id": plan["strategy_plan_id"],
+        "strategy_plan_version": plan["version"],
+        "last_control_event": {
+            "ts": "2026-07-24T01:00:00+00:00",
+            "action": "start",
+            "result": "accepted",
+        },
+    })
+    initial["execution"]["counts"].update({
+        "open_order_count": 1,
+        "accepted_order_count": 1,
+        "open_position_count": 1,
+    })
+    confirmed = deepcopy(initial)
+    confirmed["runtime"].update({
+        "actual_state": "stopped",
+        "desired_state": "stopped",
+        "status": "stopped",
+        "last_action": "stop",
+        "can_stop_when_authorized": False,
+        "last_control_event": {
+            "ts": "2026-07-24T01:01:00+00:00",
+            "action": "stop",
+            "result": "accepted",
+        },
+    })
+    confirmed["execution"]["counts"].update({
+        "open_order_count": 0,
+        "accepted_order_count": 0,
+        "open_position_count": 0,
+    })
+    serve_confirmed = False
+    control_requests: list[dict] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(confirmed if serve_confirmed else initial, ensure_ascii=False),
+        )
+
+    def fulfill_control(route) -> None:
+        control_requests.append(route.request.post_data_json)
+        route.abort()
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**initial["market"], "bars": []}),
+            ),
+        )
+        page.route("**/api/strategy-console/control", fulfill_control)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        serve_confirmed = True
+
+        page.locator("#stopRobot").click()
+        page.locator("#actionStatus").filter(
+            has_text="连接中断后已核对：机器人已停止"
+        ).wait_for()
+
+        assert control_requests == [{"action": "stop", "cycle_id": "2026-07-18_DAY"}]
+        status = page.locator("#actionStatus").inner_text()
+        assert "挂单与持仓均为 0" in status
+        assert "对账通过" in status
+        assert page.locator(".trade-toast").filter(has_text="操作未完成").count() == 0
+        browser.close()
