@@ -4,6 +4,8 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-24)
+- 进度: [实施进度页](docs/plans/implementation-progress-2026-07-24.md) 以 26 个已审核 story 为口径：17 个已验证完成、1 个进行中、8 个待办，当前 **65%**。每个 story 合并后必须更新该页与本节，不能用聊天或分支状态替代。
+- GitHub provenance: `main` 的 #223–#328 merge commits 仍完整，但对应 Issue/PR 元数据对象会返回 404；这是 GitHub 元数据缺口而非代码丢失。可访问的追踪入口为 [#330](https://github.com/zinan92/trading-system/issues/330)，完整 commit 索引与“先 API 读回再报告链接”规则见 [`docs/audits/github-provenance-222-329.md`](docs/audits/github-provenance-222-329.md)。
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
 - 代码与部署: `main@f90814c`（#314 / 安全修复证据队列）已部署到本地 Paper Dashboard；只重启 Dashboard 服务，未重启行情调度器、Paper 执行引擎或 live 进程，也未接触交易所密钥。部署后 read-model 的修复队列为空且 `command_authority=false`、无自动 actuator；当前 Paper runtime=`stopped`、0 已接受委托、0 开放持仓。旧畸形 DCA 生命周期仅以明确 `unavailable` 告警保留审计，不会阻塞安全停止或让读模型整体失败。
 - Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动;rollover 只停止/撤单/封包,下一周期必须操作者显式启动。tick 失败现会明确标记为行情/路由、生命周期、账本写入或调度器启动阶段并给出下一步；失败绝不写心跳，运行中失联显示「运行降级」。

@@ -1,5 +1,28 @@
 # Decision Log
 
+## GitHub Provenance and Roadmap Progress Are Separate Evidence Surfaces
+
+Date: 2026-07-24
+
+### Decision
+
+- Treat a GitHub Issue/PR page, its merge commit, and the implementation
+  roadmap as separate evidence surfaces. When a referenced Issue/PR object is
+  absent but the merge commit remains on `main`, preserve the commit as code
+  evidence and index the metadata gap rather than claiming the page exists.
+  - Rationale: a 404 PR link makes delivery unverifiable even when the code is
+    present. Operators need one visible progress ledger whose counts are based
+    on story evidence, not on a chat summary or branch name.
+  - Evidence: `docs/audits/github-provenance-222-329.md`,
+    `docs/plans/implementation-progress-2026-07-24.md`, and Issue #330.
+
+### Gotcha
+
+- A merge commit message containing `Merge pull request #N` does not prove the
+  GitHub PR object remains reachable. Before reporting a new link, read that
+  exact Issue or PR through the `zinan92` GitHub API; if it is 404, report the
+  commit URL and the reachable tracking Issue instead.
+
 ## Current Nautilus Accounting Uses Canonical DCA Projection
 
 Date: 2026-07-24
