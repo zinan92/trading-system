@@ -8,19 +8,19 @@ counts a story as **verified done** only when its stated evidence exists in
 ## Current bar
 
 ```text
-Verified done  18 / 26  ██████████████░░░░░  69%
+Verified done  19 / 26  ███████████████░░░░  73%
 In progress     0 / 26
-Remaining       8 / 26  ██████
+Remaining       7 / 26  █████
 ```
 
-**As of:** `main@ce67229` · **Current work:** M3-05 production-summary/table
-audit · **Next planned story:** M3-06 operator journey expansion.
+**As of:** `main@a4fe7dd` · **Current work:** no active story · **Next planned
+story:** M3-06 operator journey expansion.
 
 | Milestone | Done | Active | Remaining | Meaning |
 |---|---:|---:|---:|---|
 | M1 Operational truth | 5/5 | 0 | 0 | Runtime, failure and bounded-recovery contracts |
 | M2 Paper lifecycle evidence | 5/6 | 0 | 1 | Grid/DCA evidence; multi-level traversal remains |
-| M3 Operator product | 4/6 | 0 | 2 | Parameter/control and chart evidence complete |
+| M3 Operator product | 5/6 | 0 | 1 | Parameter/control, chart, and execution-table evidence complete |
 | M4 Strategy Shadows/review | 1/3 | 0 | 2 | Variants complete; comparability and review audit remain |
 | M5 Evolution/self-repair | 3/3 | 0 | 0 | Evidence threshold, proposal and safe queue complete |
 | M6 Interfaces/release discipline | 0/3 | 0 | 3 | Adapter suite, CI compatibility and runbook remain |
@@ -44,7 +44,7 @@ audit · **Next planned story:** M3-06 operator journey expansion.
 | M3-02 Range-drag contract | Verified done | Drag/confirm/cancel/zoom tests; merge `874ebad` |
 | M3-03 Start/stop outcomes | Verified done | Success, rejection and response-loss tests; merge `2129b13` |
 | M3-04 Chart regression audit | Verified done | Browser paging/time-axis/autoscale evidence; merge `ce67229` |
-| M3-05 Summary/table completeness | Remaining | Audit strategy summary, TP/SL, quantity, P&L and counts |
+| M3-05 Summary/table completeness | Verified done | Browser summary/positions/orders/fills audit; [PR #337](https://github.com/zinan92/trading-system/pull/337) |
 | M3-06 Operator journey expansion | Remaining | Add the completed M3 states to one continuous browser journey |
 | M4-01 Shadow comparability | Remaining | Audit/lock same-window, fee, execution and hash contract |
 | M4-02 5–10 Grid variants | Verified done | Isolated 5-variant Grid Shadow generation; merge `e9f3591` |
