@@ -549,11 +549,17 @@ class StrategyControlPlane:
     def read_model(self, cycle_id: str, *, as_of: str | None = None) -> dict[str, Any]:
         proposals = self.proposals(cycle_id)
         plan = self.active_plan(cycle_id)
-        dca_lifecycle = (
-            DcaPaperLifecycle(self.output_root, None).read_state(plan)
-            if isinstance(plan, dict) and plan.get("strategy_type") == "dca"
-            else None
-        )
+        dca_lifecycle = None
+        if isinstance(plan, dict) and plan.get("strategy_type") == "dca":
+            try:
+                dca_lifecycle = DcaPaperLifecycle(self.output_root, None).read_state(plan)
+            except ValueError as exc:
+                # Historical plan records stay immutable, but a malformed
+                # legacy DCA identity must not take the dashboard down.
+                dca_lifecycle = {
+                    "status": "unavailable",
+                    "warning": f"dca_lifecycle_read_skipped:{exc}",
+                }
         return {
             "schema_version": "strategy-production-console-v1",
             "cycle_id": cycle_id,
@@ -2173,6 +2179,9 @@ class StrategyControlPlane:
         starting = {
             **runtime,
             "cycle_id": cycle_id,
+            # Do not inherit a terminal DCA runtime's identity when a Grid
+            # preview replaces it in the same cycle.
+            "strategy_type": "grid",
             "desired_state": "running",
             "actual_state": "starting",
             "updated_at": timestamp,
@@ -2326,6 +2335,7 @@ class StrategyControlPlane:
 
         running = {
             **starting,
+            "strategy_type": "grid",
             "actual_state": "running",
             "updated_at": _timestamp(now),
             "accepted_order_count": len(accepted),
@@ -4685,13 +4695,24 @@ class StrategyControlPlane:
             "accepted_order_count_known": True,
         }
         dca_lifecycle = None
+        lifecycle_warning = None
         active = self.active_plan(cycle_id)
         if previous.get("strategy_type") == "dca" and active and active.get("strategy_type") == "dca":
-            dca_lifecycle = DcaPaperLifecycle(
-                self.output_root,
-                adapter,
-            ).reconcile(active, timestamp=_timestamp(now))
-            stopped["dca_lifecycle_status"] = dca_lifecycle.get("status")
+            try:
+                dca_lifecycle = DcaPaperLifecycle(
+                    self.output_root,
+                    adapter,
+                ).reconcile(active, timestamp=_timestamp(now))
+                stopped["dca_lifecycle_status"] = dca_lifecycle.get("status")
+            except ValueError as exc:
+                # Stopping Paper exposure must never be held hostage by an
+                # invalid legacy strategy identity.  The cancellation/flatten
+                # and engine reconciliation above are authoritative; retain a
+                # visible warning for later repair instead of leaving runtime
+                # forever in `stopping`.
+                lifecycle_warning = f"dca_lifecycle_reconciliation_skipped:{exc}"
+                stopped["dca_lifecycle_status"] = "unavailable"
+                stopped["lifecycle_warning"] = lifecycle_warning
         self._write_runtime(stopped)
         result = {
             "action": "stop",
@@ -4711,6 +4732,8 @@ class StrategyControlPlane:
         }
         if dca_lifecycle is not None:
             result["dca_lifecycle"] = dca_lifecycle
+        if lifecycle_warning is not None:
+            result["lifecycle_warning"] = lifecycle_warning
         return result
 
     @staticmethod
@@ -4724,6 +4747,7 @@ class StrategyControlPlane:
             "strategy_plan_id": _plan_id(str(current["cycle_id"]), version, preview["preview_id"]),
             "version": version,
             "status": "active",
+            "strategy_type": "grid",
             "locked_at": _timestamp(now),
             "direction": preview["direction"],
             "style": preview["style"],
@@ -4757,6 +4781,12 @@ class StrategyControlPlane:
             },
             "preview_id": preview["preview_id"],
         }
+        # A Grid plan is a distinct contract from DCA.  In particular, a
+        # terminal DCA plan may be the current version used to seed a Grid
+        # preview, but its aggregate-entry geometry must never leak into the
+        # new Grid's execution routing or stop path.
+        plan.pop("dca", None)
+        plan.pop("dca_lifecycle", None)
         return plan
 
     def _accepted_orders(self, cycle_id: str, *, adapter=None) -> list[dict[str, Any]]:

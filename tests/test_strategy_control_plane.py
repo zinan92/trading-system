@@ -297,6 +297,132 @@ def test_adaptive_grid_preview_after_terminal_dca_does_not_require_grid_geometry
     assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
 
 
+def test_grid_start_after_terminal_dca_persists_grid_identity_and_routes_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    real = build_execution_engine_adapter(output)
+
+    class NautilusPaperFacade:
+        name = "nautilus_paper"
+
+        def __init__(self) -> None:
+            self.authoritative = self
+
+        def __getattr__(self, name: str):
+            return getattr(real, name)
+
+        def flush(self, requested_cycle: str) -> dict:
+            return {"cycle_id": requested_cycle, "status": "flushed"}
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: NautilusPaperFacade(),
+    )
+    plane._write_plan({
+        "schema_version": "strategy-plan-v1",
+        "strategy_plan_id": "terminal-dca-plan",
+        "cycle_id": cycle_id,
+        "version": 1,
+        "status": "active",
+        "strategy_type": "dca",
+        "direction": "long",
+        "style": "steady",
+        "dca": {"entries": [{"price": 4_100.0, "notional": 2_000.0}], "target_price": 4_150.0, "stop_price": 4_000.0},
+    })
+    payload = adaptive_grid_payload()
+    prepared = plane.control(
+        cycle_id,
+        "prepare_start",
+        payload,
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+    preview = prepared["preview"]
+    manual = preview["manual_confirmation"]
+    started = plane.control(
+        cycle_id,
+        "start",
+        {
+            **payload,
+            "expected_preview_id": preview["preview_id"],
+            "prepared_start_id": prepared["prepared_start_id"],
+            "risk_acknowledgements": {
+                "schema_version": manual["schema_version"],
+                "preview_id": preview["preview_id"],
+                "facts_digest": manual["facts_digest"],
+                "risk_snapshot_digest": manual["risk_snapshot_digest"],
+                "codes": sorted(row["code"] for row in manual["required_acknowledgements"]),
+            },
+        },
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:01+00:00",
+    )
+
+    assert started["plan"]["strategy_type"] == "grid"
+    assert "dca" not in started["plan"]
+    assert started["runtime"]["strategy_type"] == "grid"
+
+    stopped = plane.control(
+        cycle_id,
+        "stop",
+        {},
+        market=market(close=4_137.44),
+        now="2026-07-05T01:41:00+00:00",
+    )
+    assert stopped["runtime"]["actual_state"] == "stopped"
+    assert "dca_lifecycle" not in stopped
+
+
+def test_stop_finishes_after_safe_close_when_legacy_dca_identity_is_invalid(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    invalid = {
+        "schema_version": "strategy-plan-v1",
+        "strategy_plan_id": "invalid-dca-plan",
+        "cycle_id": cycle_id,
+        "version": 1,
+        "status": "active",
+        "strategy_type": "dca",
+        "direction": "neutral",
+    }
+    plane._write_plan(invalid)
+    plane._write_runtime({
+        "cycle_id": cycle_id,
+        "desired_state": "running",
+        "actual_state": "running",
+        "strategy_type": "dca",
+        "strategy_plan_id": invalid["strategy_plan_id"],
+        "strategy_plan_version": 1,
+        "accepted_order_count": 0,
+    })
+
+    stopped = plane.control(
+        cycle_id,
+        "stop",
+        {},
+        market=market(close=4_137.44),
+        now="2026-07-05T01:41:00+00:00",
+    )
+
+    assert stopped["runtime"]["actual_state"] == "stopped"
+    assert stopped["runtime"]["dca_lifecycle_status"] == "unavailable"
+    assert stopped["lifecycle_warning"].startswith("dca_lifecycle_reconciliation_skipped:")
+    assert plane.read_model(cycle_id)["dca_lifecycle"] == {
+        "status": "unavailable",
+        "warning": "dca_lifecycle_read_skipped:DCA StrategyPlan identity is incomplete",
+    }
+
+
 def test_nautilus_grid_preflight_uses_evidenced_terminal_dca_projection(
     tmp_path: Path,
 ) -> None:
