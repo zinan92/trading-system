@@ -4,7 +4,7 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-24)
-- 进度: [实施进度页](docs/plans/implementation-progress-2026-07-24.md) 以 26 个已审核 story 为口径：19 个已验证完成、0 个进行中、7 个待办，当前 **73%**。M3-05 已以真实浏览器验证运行中策略摘要与持仓/委托/成交表的数量、TP/SL、P&L 和计数（[PR #337](https://github.com/zinan92/trading-system/pull/337)）；下一项为 M3-06 连续操作旅程扩展。每个 story 合并后必须更新该页与本节，不能用聊天或分支状态替代。
+- 进度: [实施进度页](docs/plans/implementation-progress-2026-07-24.md) 以 26 个已审核 story 为口径：20 个已验证完成、0 个进行中、6 个待办，当前 **77%**。M3 的六项操作者产品证据现已完成：连续 Paper 浏览器旅程已验证 `启动 → 权威 read-model → 运行中策略摘要/30 笔委托表 → 停止`（[PR #341](https://github.com/zinan92/trading-system/pull/341)）；下一项为 M2-02 多网格穿透事件的精度与顺序合同。每个 story 合并后必须更新该页与本节，不能用聊天或分支状态替代。
 - GitHub provenance: `main` 的 #223–#328 merge commits 仍完整，但对应 Issue/PR 元数据对象会返回 404；这是 GitHub 元数据缺口而非代码丢失。可访问的追踪入口为 [#330](https://github.com/zinan92/trading-system/issues/330)，完整 commit 索引与“先 API 读回再报告链接”规则见 [`docs/audits/github-provenance-222-329.md`](docs/audits/github-provenance-222-329.md)。
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
 - 代码与部署: `main@f90814c`（#314 / 安全修复证据队列）已部署到本地 Paper Dashboard；只重启 Dashboard 服务，未重启行情调度器、Paper 执行引擎或 live 进程，也未接触交易所密钥。部署后 read-model 的修复队列为空且 `command_authority=false`、无自动 actuator；当前 Paper runtime=`stopped`、0 已接受委托、0 开放持仓。旧畸形 DCA 生命周期仅以明确 `unavailable` 告警保留审计，不会阻塞安全停止或让读模型整体失败。

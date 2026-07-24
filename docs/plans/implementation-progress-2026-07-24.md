@@ -8,19 +8,19 @@ counts a story as **verified done** only when its stated evidence exists in
 ## Current bar
 
 ```text
-Verified done  19 / 26  ███████████████░░░░  73%
+Verified done  20 / 26  ████████████████░░░  77%
 In progress     0 / 26
-Remaining       7 / 26  █████
+Remaining       6 / 26  ████
 ```
 
-**As of:** `main@a4fe7dd` · **Current work:** no active story · **Next planned
-story:** M3-06 operator journey expansion.
+**As of:** `main@889f292` · **Current work:** no active story · **Next planned
+story:** M2-02 multi-level traversal.
 
 | Milestone | Done | Active | Remaining | Meaning |
 |---|---:|---:|---:|---|
 | M1 Operational truth | 5/5 | 0 | 0 | Runtime, failure and bounded-recovery contracts |
 | M2 Paper lifecycle evidence | 5/6 | 0 | 1 | Grid/DCA evidence; multi-level traversal remains |
-| M3 Operator product | 5/6 | 0 | 1 | Parameter/control, chart, and execution-table evidence complete |
+| M3 Operator product | 6/6 | 0 | 0 | Parameter, control, chart, table, and continuous-journey evidence complete |
 | M4 Strategy Shadows/review | 1/3 | 0 | 2 | Variants complete; comparability and review audit remain |
 | M5 Evolution/self-repair | 3/3 | 0 | 0 | Evidence threshold, proposal and safe queue complete |
 | M6 Interfaces/release discipline | 0/3 | 0 | 3 | Adapter suite, CI compatibility and runbook remain |
@@ -45,7 +45,7 @@ story:** M3-06 operator journey expansion.
 | M3-03 Start/stop outcomes | Verified done | Success, rejection and response-loss tests; merge `2129b13` |
 | M3-04 Chart regression audit | Verified done | Browser paging/time-axis/autoscale evidence; merge `ce67229` |
 | M3-05 Summary/table completeness | Verified done | Browser summary/positions/orders/fills audit; [PR #337](https://github.com/zinan92/trading-system/pull/337) |
-| M3-06 Operator journey expansion | Remaining | Add the completed M3 states to one continuous browser journey |
+| M3-06 Operator journey expansion | Verified done | Paper browser journey verifies start → read-model → summary/table → stop; [PR #341](https://github.com/zinan92/trading-system/pull/341) |
 | M4-01 Shadow comparability | Remaining | Audit/lock same-window, fee, execution and hash contract |
 | M4-02 5–10 Grid variants | Verified done | Isolated 5-variant Grid Shadow generation; merge `e9f3591` |
 | M4-03 12-hour review interpretation | Remaining | Audit plan-versus-result interpretation and evidence labels |
