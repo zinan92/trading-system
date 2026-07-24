@@ -11095,3 +11095,23 @@ auditable datafeed port; broker execution remains a separate port.
 - The focused Playwright fixture renders a closed cycle and an incompatible
   Shadow, checks every review dimension plus reconciliation, and optionally
   emits a desktop screenshot artifact.
+
+## 2026-07-24 - Adapter completeness is a contract matrix, not a provider claim
+
+### Decision
+
+- The supported market, execution, accounting, risk, and strategy-evaluation
+  adapters are now listed with their normalized contract and test gate. Binance
+  and deterministic fixtures are evidence-backed; Yahoo and Tiger remain
+  explicitly future/provider-specific paths.
+
+### Gotchas
+
+- A port conformance suite does not activate a provider or prove exchange
+  connectivity. Unknown, drifted, stale, and synthetic market facts retain
+  their explicit non-executable/error meaning.
+
+### Verification
+
+- Focused provider, execution, accounting, risk, and plugin-registry suites
+  exercise the schema and registry-fingerprint gates named in the audit.
