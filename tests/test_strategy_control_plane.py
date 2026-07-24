@@ -257,6 +257,46 @@ def test_adaptive_preview_smart_fills_a_new_cycle_without_writing_a_plan(
     assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
 
 
+def test_adaptive_grid_preview_after_terminal_dca_does_not_require_grid_geometry(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    dca_plan = {
+        "schema_version": "strategy-plan-v1",
+        "strategy_plan_id": "terminal-dca-plan",
+        "cycle_id": cycle_id,
+        "version": 1,
+        "status": "active",
+        "strategy_type": "dca",
+        "direction": "long",
+        "style": "steady",
+        "dca": {
+            "entries": [{"price": 4_100.0, "notional": 2_000.0}],
+            "target_price": 4_150.0,
+            "stop_price": 4_000.0,
+        },
+    }
+    plane._write_plan(dca_plan)
+
+    preview = plane.control(
+        cycle_id,
+        "preview",
+        adaptive_grid_payload(),
+        market=market(close=4_137.44),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )["preview"]
+
+    assert preview["schema_version"] == "strategy-grid-preview-v1"
+    assert preview["range"]["low"] < 4_137.44 < preview["range"]["high"]
+    assert preview["manual_confirmation"]["previous_strategy_type"] == "dca"
+    assert preview["manual_confirmation"]["strategy_switch"] is True
+    assert plane.active_plan(cycle_id)["strategy_plan_id"] == "terminal-dca-plan"
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+
+
 @pytest.mark.parametrize(
     ("payload_patch", "expected_code", "expected_evidence"),
     [

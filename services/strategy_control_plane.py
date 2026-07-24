@@ -963,7 +963,17 @@ class StrategyControlPlane:
                 },
             })
             detailed_codes.add(code)
-        old_specification = _range_preview_specification(current or preview)
+        previous_strategy_type = str(
+            (current or {}).get("strategy_type") or "grid"
+        ).lower()
+        # A terminal DCA plan has entries/target/stop rather than Grid range
+        # geometry.  It is still useful history, but it cannot be fabricated
+        # into an "old grid" for the Grid-only risk comparison.  Use the
+        # candidate as the neutral Grid baseline and expose the strategy switch
+        # explicitly to the caller instead of leaking a raw `grid low` error.
+        old_specification = _range_preview_specification(
+            current if current and previous_strategy_type == "grid" else preview
+        )
         new_specification = _range_preview_specification(
             preview,
             canonical_metrics=decision.get("metrics"),
@@ -993,6 +1003,8 @@ class StrategyControlPlane:
             "facts_digest": facts_digest,
             "risk_snapshot_digest": _manual_range_risk_snapshot_digest(decision),
             "required_acknowledgements": acknowledgements,
+            "previous_strategy_type": previous_strategy_type if current else None,
+            "strategy_switch": bool(current and previous_strategy_type != "grid"),
             "overridable_blocker_codes": sorted(
                 blocker_codes & MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS
             ),
