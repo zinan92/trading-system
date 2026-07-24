@@ -8,19 +8,19 @@ counts a story as **verified done** only when its stated evidence exists in
 ## Current bar
 
 ```text
-Verified done  17 / 26  █████████████░░░░░░░  65%
-In progress     1 / 26  █
+Verified done  18 / 26  ██████████████░░░░░  69%
+In progress     0 / 26
 Remaining       8 / 26  ██████
 ```
 
-**As of:** `main@f982178` · **Current work:** M3-04 chart-regression audit ·
-**Next planned story:** M3-05 production summary/table completeness.
+**As of:** `main@ce67229` · **Current work:** M3-05 production-summary/table
+audit · **Next planned story:** M3-06 operator journey expansion.
 
 | Milestone | Done | Active | Remaining | Meaning |
 |---|---:|---:|---:|---|
 | M1 Operational truth | 5/5 | 0 | 0 | Runtime, failure and bounded-recovery contracts |
 | M2 Paper lifecycle evidence | 5/6 | 0 | 1 | Grid/DCA evidence; multi-level traversal remains |
-| M3 Operator product | 3/6 | 1 | 2 | Parameter/control complete; chart audit underway |
+| M3 Operator product | 4/6 | 0 | 2 | Parameter/control and chart evidence complete |
 | M4 Strategy Shadows/review | 1/3 | 0 | 2 | Variants complete; comparability and review audit remain |
 | M5 Evolution/self-repair | 3/3 | 0 | 0 | Evidence threshold, proposal and safe queue complete |
 | M6 Interfaces/release discipline | 0/3 | 0 | 3 | Adapter suite, CI compatibility and runbook remain |
@@ -43,7 +43,7 @@ Remaining       8 / 26  ██████
 | M3-01 Parameter draft matrix | Verified done | Browser matrix; merge `84a22f8` |
 | M3-02 Range-drag contract | Verified done | Drag/confirm/cancel/zoom tests; merge `874ebad` |
 | M3-03 Start/stop outcomes | Verified done | Success, rejection and response-loss tests; merge `2129b13` |
-| M3-04 Chart regression audit | In progress | Historical paging, bottom time axis and autoscale evidence audit |
+| M3-04 Chart regression audit | Verified done | Browser paging/time-axis/autoscale evidence; merge `ce67229` |
 | M3-05 Summary/table completeness | Remaining | Audit strategy summary, TP/SL, quantity, P&L and counts |
 | M3-06 Operator journey expansion | Remaining | Add the completed M3 states to one continuous browser journey |
 | M4-01 Shadow comparability | Remaining | Audit/lock same-window, fee, execution and hash contract |
