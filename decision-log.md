@@ -11115,3 +11115,24 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused provider, execution, accounting, risk, and plugin-registry suites
   exercise the schema and registry-fingerprint gates named in the audit.
+
+## 2026-07-24 - Paper releases require a launchd-interpreter receipt
+
+### Decision
+
+- The existing launchd Python 3.9 compatibility checker remains the one import
+  authority. A non-actuating Paper pre-deploy wrapper runs it, includes a
+  dashboard API-surface smoke, and writes one pass-or-blocked release receipt.
+
+### Gotchas
+
+- A green developer-shell test does not prove the interpreter that launchd
+  uses can import the Paper application. A blocked receipt must not be worked
+  around by restarting the service; the gate has no authority to change runtime
+  or trading state.
+
+### Verification
+
+- Focused pass and deliberately incompatible-import fixtures prove the wrapper
+  records the nested receipt, exits blocked on failure, and advertises no
+  service, order, credential, cancellation, or position operation.

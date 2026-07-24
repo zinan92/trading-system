@@ -5,6 +5,7 @@ from pathlib import Path
 from services.python_runtime_compatibility import (
     EXPECTED_LAUNCHD_VERSION,
     LAUNCHD_IMPORT_TARGETS,
+    LAUNCHD_API_SURFACE,
     LaunchdPythonCompatibility,
 )
 
@@ -13,6 +14,7 @@ def _complete_probe(*, imports=None, version=None, returncode=0, stderr=""):
     payload = {
         "version": list(version or EXPECTED_LAUNCHD_VERSION),
         "imports": imports or {name: "ok" for name in LAUNCHD_IMPORT_TARGETS},
+        "api_surface": {name: "ok" for name in LAUNCHD_API_SURFACE},
     }
     return subprocess.CompletedProcess(
         ["/usr/bin/python3", "-c", "probe"],
@@ -34,6 +36,7 @@ def test_launchd_python_compatibility_writes_a_visible_passing_receipt(tmp_path:
     assert result["status"] == "pass"
     assert result["observed_version"] == [3, 9]
     assert result["import_results"] == {name: "ok" for name in LAUNCHD_IMPORT_TARGETS}
+    assert result["api_surface_results"] == {name: "ok" for name in LAUNCHD_API_SURFACE}
     assert commands[0][0][:2] == ["/usr/bin/python3", "-c"]
     receipt = json.loads((tmp_path / "runtime_compatibility" / "launchd_python_current.json").read_text())[-1]
     assert receipt["status"] == "pass"
