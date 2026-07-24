@@ -216,6 +216,27 @@ def test_dca_second_fill_atomically_replaces_one_aggregate_target(tmp_path: Path
     ) == 1
 
 
+def test_dca_third_fill_keeps_exactly_one_aggregate_target(tmp_path: Path) -> None:
+    lifecycle, adapter = _lifecycle(tmp_path)
+    plan = _plan()
+    lifecycle.start(plan, timestamp="2026-07-22T16:00:00+00:00")
+
+    first = lifecycle.process_market_event(plan, _event(1, 4_004.0))["state"]
+    second = lifecycle.process_market_event(plan, _event(2, 3_996.0))["state"]
+    third = lifecycle.process_market_event(plan, _event(3, 3_988.0))["state"]
+
+    assert [first["additions_filled"], second["additions_filled"], third["additions_filled"]] == [1, 2, 3]
+    assert len(third["target_generations"]) == 3
+    assert third["active_target"]["generation"] == 3
+    assert third["active_target"]["quantity"] == pytest.approx(third["open_quantity"])
+    assert third["active_target"]["quantity"] > second["active_target"]["quantity"]
+    assert sum(row["status"] == "accepted" for row in third["target_generations"]) == 1
+    assert all(
+        row["status"] == "cancelled" and row["retire_reason"] == "replaced_after_quantity_change"
+        for row in third["target_generations"][:-1]
+    )
+
+
 def test_dca_duplicate_event_and_restart_do_not_duplicate_target(tmp_path: Path) -> None:
     lifecycle, adapter = _lifecycle(tmp_path)
     plan = _plan()
