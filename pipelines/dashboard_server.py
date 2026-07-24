@@ -26,6 +26,7 @@ from services.dashboard_state import DashboardState
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
+from services.grid_lifecycle_evidence import build_grid_lifecycle_evidence
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_scoring import (
@@ -2085,6 +2086,7 @@ def build_dualtrack_execution_response(
         mark_source=mark["source"],
     )
     accounting_snapshot = project_execution_accounting(snapshot).to_dict()
+    reconciliation = adapter.reconcile(cycle_id)
     reconciliation_rows = load_json(output / "dualtrack" / "reconciliation" / f"{cycle_id}.json")
     latest_reconciliation = reconciliation_rows[-1] if reconciliation_rows else {
         "status": "missing",
@@ -2098,7 +2100,13 @@ def build_dualtrack_execution_response(
     return {
         **snapshot,
         "accounting_snapshot": accounting_snapshot,
-        "reconciliation": adapter.reconcile(cycle_id),
+        "reconciliation": reconciliation,
+        "grid_lifecycle": build_grid_lifecycle_evidence(
+            output,
+            cycle_id=cycle_id,
+            execution_snapshot=snapshot,
+            reconciliation=reconciliation,
+        ),
         "execution_shadow_reconciliation": latest_reconciliation,
         "shadow_cutover": latest_cutover,
         "safety": {

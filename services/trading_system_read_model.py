@@ -118,6 +118,7 @@ def project_trading_system_read_model(
         plan_history=plan_history,
         completeness_issues=completeness_issues,
         dca_lifecycle_source=source.get("dca_lifecycle"),
+        grid_lifecycle_source=execution_source.get("grid_lifecycle"),
     )
     unknown_order_count = execution["counts"]["unknown_order_count"]
     if unknown_order_count:
@@ -226,6 +227,7 @@ def _project_execution(
     plan_history: list[Any],
     completeness_issues: list[str],
     dca_lifecycle_source: Any,
+    grid_lifecycle_source: Any,
 ) -> dict[str, Any]:
     orders = _project_orders(source.get("orders"), plan=plan, plan_history=plan_history)
     open_orders = [row for row in orders if row["is_open"]]
@@ -269,6 +271,7 @@ def _project_execution(
         plan=plan,
         completeness_issues=completeness_issues,
     )
+    grid_lifecycle = _project_grid_lifecycle(grid_lifecycle_source)
     total_pnl = _finite_or_none(canonical_pnl.get("total_pnl"))
     starting_balance = _finite_or_none(canonical_account.get("starting_balance"))
     return_pct = None
@@ -318,6 +321,7 @@ def _project_execution(
         "trades": canonical_trades,
         "fills": canonical_fills,
         "dca_lifecycle": dca_lifecycle,
+        "grid_lifecycle": grid_lifecycle,
         "counts": counts,
         "scopes": {
             "orders_and_positions": {
@@ -353,6 +357,26 @@ def _project_execution(
         "accounting": _json_copy(history_accounting),
         "current_accounting": _json_copy(current_accounting),
         "reconciliation": _json_copy(_mapping(source.get("reconciliation"))),
+    }
+
+
+def _project_grid_lifecycle(value: Any) -> dict[str, Any]:
+    """Expose only audit-backed Grid lifecycle claims to the operator read model."""
+
+    source = _mapping(value)
+    lines = [
+        _json_copy(_mapping(row))
+        for row in _list(source.get("lines"))
+        if _mapping(row)
+    ]
+    return {
+        "schema_version": str(source.get("schema_version") or ""),
+        "status": str(source.get("status") or "unavailable"),
+        "completed_rearmed_count": _integer_or_none(source.get("completed_rearmed_count")) or 0,
+        "unverified_count": _integer_or_none(source.get("unverified_count")) or 0,
+        "reconciliation_status": str(source.get("reconciliation_status") or "unknown"),
+        "lines": lines,
+        "synthetic_candle_fill_inference": False,
     }
 
 

@@ -1,5 +1,19 @@
 # Decision Log
 
+## Grid Lifecycle Evidence Package
+
+Date: 2026-07-24
+
+### Decision
+
+- Treat a Grid level as a completed, rearmed loop only when immutable command, fill, lifecycle-transition, original-price replacement, StrategyPlan and reconciliation facts all link.
+  - Rationale: an accepted order or a candle crossing a line is not evidence of an execution round trip. The operator needs to distinguish an audited entry → TP → original-price reorder from a pending or partially evidenced line.
+  - Evidence: `build_grid_lifecycle_evidence`, `NautilusExecutionAdapter._persist_grid_lifecycle`, `test_authoritative_grid_rearms_same_price_for_two_complete_cycles`.
+
+### Gotcha
+
+- The package is read-only and intentionally refuses synthetic-candle fill inference. A missing target transition, child identity, replacement order, or reconciliation pass is surfaced as `unverified`, never counted as a completed loop.
+
 ## Canonical Nautilus DCA Reconciliation for Grid Preflight
 
 Date: 2026-07-24

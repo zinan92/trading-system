@@ -175,6 +175,29 @@ def _source(*, open_trade: bool = False) -> dict:
     }
 
 
+def test_read_model_exposes_only_auditable_grid_lifecycle_claims() -> None:
+    source = _source()
+    source["production_execution"]["grid_lifecycle"] = {
+        "schema_version": "grid-line-lifecycle-evidence-v1",
+        "status": "verified",
+        "completed_rearmed_count": 1,
+        "unverified_count": 1,
+        "reconciliation_status": "ok",
+        "lines": [
+            {"line_id": "line-a", "generation": 1, "status": "completed_rearmed"},
+            {"line_id": "line-b", "generation": 1, "status": "unverified", "evidence_missing": ["target_fill"]},
+        ],
+    }
+
+    lifecycle = project_trading_system_read_model(source).to_dict()["execution"]["grid_lifecycle"]
+
+    assert lifecycle["status"] == "verified"
+    assert lifecycle["completed_rearmed_count"] == 1
+    assert lifecycle["unverified_count"] == 1
+    assert lifecycle["synthetic_candle_fill_inference"] is False
+    assert lifecycle["lines"][1]["evidence_missing"] == ["target_fill"]
+
+
 def _risk(decision_id: str = "risk-7") -> dict:
     return {
         "schema_version": "risk-decision-v1",
