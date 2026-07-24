@@ -47,9 +47,9 @@ def test_read_model_selects_matching_dca_risk_decision(tmp_path: Path):
 
 
 def test_read_model_prefers_strategy_control_dca_risk_decision_root(tmp_path: Path):
-    output_root = tmp_path / "outputs" / "dualtrack"
+    output_root = tmp_path / "outputs"
     write_json(
-        output_root / "strategy_control" / "dca_risk_decisions" / "2026-07-24_DAY.json",
+        output_root / "dualtrack" / "strategy_control" / "dca_risk_decisions" / "2026-07-24_DAY.json",
         [{"decision_id": "active-dca-risk", "outcome": "approved"}],
     )
     source = {
@@ -64,9 +64,9 @@ def test_read_model_prefers_strategy_control_dca_risk_decision_root(tmp_path: Pa
 
 
 def test_read_model_does_not_fall_back_when_current_dca_decision_mismatches(tmp_path: Path):
-    output_root = tmp_path / "outputs" / "dualtrack"
+    output_root = tmp_path / "outputs"
     write_json(
-        output_root / "strategy_control" / "dca_risk_decisions" / "2026-07-24_DAY.json",
+        output_root / "dualtrack" / "strategy_control" / "dca_risk_decisions" / "2026-07-24_DAY.json",
         [{"decision_id": "stale-dca-risk", "outcome": "approved"}],
     )
     write_json(
