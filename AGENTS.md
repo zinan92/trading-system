@@ -13,6 +13,10 @@
 
 - Start every implementation from a GitHub Issue. Use one issue, branch, and
   PR; include focused validation and `Closes #N` in the PR body.
+- Before reporting a new Issue or PR link, switch the active `gh` account to
+  `zinan92` and read that exact object back through the GitHub API. If the API
+  returns 404, report the reachable commit and tracking Issue instead of a
+  non-existent link.
 - Small UI or adapter changes use focused tests. Run the complete suite only
   for an explicitly broad integration change.
 - After non-live code merges, deploy only the exact main commit to Goldbot V5
