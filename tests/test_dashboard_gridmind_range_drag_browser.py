@@ -508,6 +508,32 @@ def test_gridmind_drag_release_keeps_draft_until_explicit_confirm() -> None:
         assert page.locator(".grid-draft-actions").is_visible()
         assert page.locator("#gridRangeReviewDialog").evaluate("dialog => dialog.open") is False
 
+        # The overlay must remain anchored to prices after a real chart wheel
+        # gesture.  Adjustment mode intentionally owns pointer-drag (so it
+        # cannot pan the chart by accident), but wheel zoom remains available.
+        chart_box = page.locator(".standard-kline-canvas").bounding_box()
+        assert chart_box is not None
+        overlay_before = page.locator(".grid-adjust-overlay.on")
+        upper_before = float(
+            overlay_before.locator(".grid-hit.upper").evaluate(
+                "node => parseFloat(node.style.top)"
+            )
+        )
+        assert 0 <= upper_before <= chart_box["height"]
+        page.mouse.move(chart_box["x"] + 300, chart_box["y"] + 180)
+        page.mouse.wheel(0, -180)
+        page.wait_for_timeout(150)
+        upper_after = float(
+            overlay_before.locator(".grid-hit.upper").evaluate(
+                "node => parseFloat(node.style.top)"
+            )
+        )
+        expected_upper = page.evaluate(
+            "() => Number(state.chart.priceToY(state.gridDraft.high)) - 8"
+        )
+        assert abs(upper_after - expected_upper) < 0.01
+        assert control_requests == []
+
         artifact_dir = os.environ.get("GRID_RANGE_SCREENSHOT_DIR")
         if artifact_dir:
             path = Path(artifact_dir)
