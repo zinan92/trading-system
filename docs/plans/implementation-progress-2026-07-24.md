@@ -8,18 +8,18 @@ counts a story as **verified done** only when its stated evidence exists in
 ## Current bar
 
 ```text
-Verified done  20 / 26  ████████████████░░░  77%
+Verified done  21 / 26  █████████████████░░  81%
 In progress     0 / 26
-Remaining       6 / 26  ████
+Remaining       5 / 26  ███
 ```
 
-**As of:** `main@889f292` · **Current work:** no active story · **Next planned
-story:** M2-02 multi-level traversal.
+**As of:** `main@892235e` · **Current work:** no active story · **Next planned
+story:** M4-01 Shadow comparability.
 
 | Milestone | Done | Active | Remaining | Meaning |
 |---|---:|---:|---:|---|
 | M1 Operational truth | 5/5 | 0 | 0 | Runtime, failure and bounded-recovery contracts |
-| M2 Paper lifecycle evidence | 5/6 | 0 | 1 | Grid/DCA evidence; multi-level traversal remains |
+| M2 Paper lifecycle evidence | 6/6 | 0 | 0 | Grid/DCA lifecycle and multi-level precision evidence complete |
 | M3 Operator product | 6/6 | 0 | 0 | Parameter, control, chart, table, and continuous-journey evidence complete |
 | M4 Strategy Shadows/review | 1/3 | 0 | 2 | Variants complete; comparability and review audit remain |
 | M5 Evolution/self-repair | 3/3 | 0 | 0 | Evidence threshold, proposal and safe queue complete |
@@ -35,7 +35,7 @@ story:** M2-02 multi-level traversal.
 | M1-04 Failure-copy matrix | Verified done | API/browser compatibility matrix; merge `f2b4fd8` |
 | M1-05 Safe recovery receipts | Verified done | Bounded receipt evidence; merge `05636e1` |
 | M2-01 Grid lifecycle package | Verified done | [Grid rearm evidence](../evidence/issue-289-grid-rearm-2026-07-24.md); merge `5df6046` |
-| M2-02 Multi-level traversal | Remaining | Define unsupported precision and event ordering; then replay tests |
+| M2-02 Multi-level traversal | Verified done | One-event/bar-granularity and receipt semantics; [PR #345](https://github.com/zinan92/trading-system/pull/345) |
 | M2-03 Grid accounting chain | Verified done | Canonical preflight/accounting evidence; merge `6d7fea1` |
 | M2-04 Aggregate TP | Verified done | Generation/quantity contract; merge `5d5b63b` |
 | M2-05 Attended DCA lifecycle | Verified done | Natural two-addition aggregate-TP closeout documented in `REGISTRY.md` |
