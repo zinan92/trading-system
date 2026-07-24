@@ -1,5 +1,19 @@
 # Decision Log
 
+## Current Nautilus Accounting Uses Canonical DCA Projection
+
+Date: 2026-07-24
+
+### Decision
+
+- Keep the raw current execution snapshot for operational order and position display, but calculate its accounting snapshot through the same evidence-gated terminal-DCA projection used by Grid preflight and production history.
+  - Rationale: raw DCA child facts are valuable execution evidence, yet reporting them as unresolved accounting drift after their fully evidenced aggregate round has closed makes the operator see a different reconciliation truth from the start gate.
+  - Evidence: `build_dualtrack_execution_response`, `normalize_nautilus_snapshot_for_accounting`, `test_current_execution_accounting_reconciles_evidenced_nautilus_dca_round`.
+
+### Gotcha
+
+- This does not sanitize the engine snapshot or waive reconciliation. Without all lifecycle, child-position, and exact target-command evidence, the normalizer leaves the raw facts untouched and current accounting remains drifted.
+
 ## Grid Lifecycle Evidence Package
 
 Date: 2026-07-24

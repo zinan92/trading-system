@@ -1632,6 +1632,55 @@ def test_strategy_console_history_reconciles_evidenced_nautilus_dca_aggregate_ro
     assert {row["source_trade_id"] for row in exits} == {target_a, target_b}
 
 
+def test_current_execution_accounting_reconciles_evidenced_nautilus_dca_round(
+    tmp_path: Path,
+    monkeypatch,
+):
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-24_DAY"
+    plan_id = "plan-dca-current"
+    round_id = f"dca-round:{plan_id}"
+    entry_id, target_id = "entry-current", "target-current"
+    snapshot = {
+        "schema_version": "dualtrack-execution-v1", "engine": "nautilus_paper", "cycle_id": cycle_id,
+        "orders": [],
+        "fills": [
+            {"fill_id": "entry-fill", "order_id": entry_id, "trade_id": round_id, "event": "entry", "side": "buy", "ts": "2026-07-24T01:00:00+00:00", "price": 100.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+            {"fill_id": "target-fill", "order_id": target_id, "trade_id": target_id, "event": "target", "side": "sell", "ts": "2026-07-24T01:01:00+00:00", "price": 105.0, "quantity": 1.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1},
+        ],
+        "positions": [{"trade_id": entry_id, "position_id": f"POS-{entry_id}", "status": "closed", "side": "long", "quantity": 1.0, "remaining_units": 0.0, "entry_price": 100.0, "realized_pnl": 5.0, "strategy_plan_id": plan_id, "strategy_plan_version": 1}],
+        "account": {"starting_cash": 10_000.0, "realized_pnl": 5.0, "ending_cash": 10_005.0, "equity": 10_005.0, "margin": 0.0, "exposure": 0.0, "slippage": 0.0, "fees": 0.0, "funding": 0.0},
+        "pnl": {"realized": 5.0, "unrealized": 0.0},
+        "mark": {"price": 105.0, "fresh": True, "source": "test"},
+    }
+    write_json(output / "dualtrack" / "nautilus_authoritative" / "commands" / f"{cycle_id}.json", [
+        {"command_id": target_id, "command": {"strategy_plan_id": plan_id, "position_id": f"POS-{entry_id}"}},
+    ])
+    write_json(output / "dualtrack" / "dca_lifecycle" / f"{cycle_id}.json", [{
+        "strategy_plan_id": plan_id, "strategy_plan_version": 1, "round_id": round_id,
+        "status": "target_closed",
+        "target_generations": [{"status": "filled", "execution_order_ids": [target_id]}],
+    }])
+
+    class EvidencedDcaAdapter:
+        def snapshot(self, *_args, **_kwargs):
+            return snapshot
+
+        def reconcile(self, *_args, **_kwargs):
+            return {"status": "ok", "issues": []}
+
+    monkeypatch.setattr(dashboard_server, "build_configured_execution_engine_adapter", lambda *_args, **_kwargs: EvidencedDcaAdapter())
+    result = dashboard_server.build_dualtrack_execution_response(
+        cycle_id,
+        output_root=output,
+        as_of="2026-07-24T01:02:00+00:00",
+        market_snapshot={"latest_close": 105.0, "fresh": True, "provider": "binance_usdm_futures"},
+    )
+
+    assert result["reconciliation"]["status"] == "ok"
+    assert result["accounting_snapshot"]["reconciliation"]["status"] == "pass"
+
+
 def test_strategy_console_history_keeps_dca_without_exact_child_command_evidence_in_drift(tmp_path: Path):
     output = tmp_path / "outputs"
     cycle_id = "2026-07-24_DAY"

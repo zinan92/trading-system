@@ -27,6 +27,7 @@ from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_u
 from services.dualtrack_config import dualtrack_config
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.grid_lifecycle_evidence import build_grid_lifecycle_evidence
+from services.production_accounting import normalize_nautilus_snapshot_for_accounting
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_scoring import (
@@ -2085,7 +2086,12 @@ def build_dualtrack_execution_response(
         mark_fresh=mark["fresh"],
         mark_source=mark["source"],
     )
-    accounting_snapshot = project_execution_accounting(snapshot).to_dict()
+    accounting_source = (
+        normalize_nautilus_snapshot_for_accounting(output, snapshot)
+        if str(snapshot.get("engine") or "") == "nautilus_paper"
+        else snapshot
+    )
+    accounting_snapshot = project_execution_accounting(accounting_source).to_dict()
     reconciliation = adapter.reconcile(cycle_id)
     reconciliation_rows = load_json(output / "dualtrack" / "reconciliation" / f"{cycle_id}.json")
     latest_reconciliation = reconciliation_rows[-1] if reconciliation_rows else {
