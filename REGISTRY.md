@@ -5,10 +5,10 @@
 
 ## 现在在哪里(2026-07-24)
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
-- 代码与部署: `main@7c224bb`（#266 / 已保护的全成交 DCA 顶部状态修复，#270 / 失败文案矩阵回归）已在本地 Paper Dashboard 生效；页面 HTTP 200，未重启行情调度器、Paper 执行引擎、live 进程，也未接触交易所密钥。read-model 的单次延迟响应仍待 M1 安全诊断处理，不能把根页面 200 当作全链路健康证明。
+- 代码与部署: `main@7933a84`（#276 / read-model 轮询压缩与按需 AI 收据）已在本地 Paper Dashboard 生效；只重启 Dashboard 服务，未重启行情调度器、Paper 执行引擎或 live 进程，也未接触交易所密钥。实测 `/read-model` 200 完整返回约 364 KB / 1.21 秒（修复前约 1 MB、浏览器可在写回前中断）；点击 AI 收据按需读取约 230 KB / 0.02 秒。静态根页面 200 仍不等同执行健康，运行/对账状态以权威 read-model 为准。
 - Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动;rollover 只停止/撤单/封包,下一周期必须操作者显式启动。tick 失败现会明确标记为行情/路由、生命周期、账本写入或调度器启动阶段并给出下一步；失败绝不写心跳，运行中失联显示「运行降级」。
 - DCA v1 就绪:做多/做空加仓、单张整轮 TP 世代随累计持仓更新(由行情事件触发,不是 entry 挂单,页面已标注)、独立整轮止损、风险确认、read-model 可见;聚合 TP 合同已覆盖 1/2/3 次加仓及提交失败 fail-closed。一个逻辑整轮 TP 在 Nautilus 执行层会按精确 `position_id` 拆成多张 reduce-only 子单，绝不再用共享 round ID 模糊平仓；TP/SL 后停止,v1 显式拒绝 `loop_enabled=true`。此前首次 attended 尝试在两笔加仓后暴露该执行缺陷，已安全撤单平仓，**不计作真实生命周期验收**。
-- #226 attended Paper DCA 正在观察:本轮做多计划 `strategy-plan-2026-07-24_DAY-5-c3bf366f` 已由真实 tick 自然完成两次加仓；第一笔后出现 generation-1，第二笔后 generation-2 将聚合 TP 扩至 `0.004 @ 4037.5`，当前为 2 笔持仓、0 张入场委托。此状态在 #266 后正确显示「运行中」；尚未自然触发 TP 或 SL，因此尚不可称为完整生命周期验收。
+- #226 attended Paper DCA 已自然闭环:做多计划 `strategy-plan-2026-07-24_DAY-5-c3bf366f` 经真实 tick 完成两次加仓；第一笔后 generation-1，第二笔后 generation-2 将聚合 TP 扩至 `0.004 @ 4037.5`。generation-2 于 `2026-07-24T06:20:00Z` 自然成交，lifecycle 为 `target_closed`、0 持仓/0 委托，execution reconciliation=`ok`，canonical accounting=`pass`（两条既有时间异常仍 quarantine）。未注入行情、人工平仓或重启执行器制造证据。
 - 可观测性:请求未达后端/Cloudflare 530/Dashboard 5xx/Binance 上游/网格回滚五类故障链分立文案各带下一步;硬输入 blocker 结构化解释;历史 NAV 仅计 machine 生产已实现 P&L,缺失即显示不可用;终态周期自动尝试 production+notional-half What-if Shadow,缺失原因显式留档。
 - M1 安全恢复链路完成:浏览器响应丢失后只读取 append-only 控制审计回执、权威 runtime 与活动计划身份来确认结果；`prepare_start` 和 `replace_grid` 不再自动二次请求。运行状态卡显示最近控制回执；证据不足时保留未确认状态，不猜测、也不重放控制动作。
 - M2-04 聚合 TP 合同完成（#254 / `main@5d5b63b`）:第二次加仓后，终态成交必须引用最新 generation、排除已撤换 generation，并精确平掉累计数量；有效 DCA 几何的目标/止损结果互斥。该证据是纯回放，不替代真实 Paper 成交。
@@ -19,8 +19,8 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- #226：继续留档首轮 attended Paper DCA 观察。前半段“第一笔成交 → generation-1 → 后续 tick 第二笔成交 → generation-2 扩量”已由 lifecycle JSON 证实；下一项仅是自然发生的整轮 TP 或 SL 退出，并交叉核对订单/成交/仓位与最终 reconciliation。绝不通过注入行情、人工平仓或重启引擎制造证据。
-- M1 安全恢复:诊断一次 read-model 响应延迟的阶段和可读回执；在根因与 fail-closed 行为有证据前，不自动重试任何控制动作。
+- 关闭 #226 attended 证据:将自然 TP、generation-2、0 持仓/0 委托、execution reconciliation=`ok` 与 accounting=`pass` 回帖归档；不把该次 Paper 实绩外推为真钱或未来收益证明。
+- M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
 - 实绩达标后再定义 live 准入标准;任何真钱动作仍需 Park 本人 `park-approved`。
