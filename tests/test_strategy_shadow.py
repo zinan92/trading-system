@@ -11,10 +11,29 @@ from services.dualtrack_nautilus_execution_adapter import REPLAY_VERSION
 from services.dualtrack_nautilus_parity_contract import platform_parity_code_hash
 from services.execution_conformance import build_candidate_execution_receipt
 from services.journal_store import load_json, write_json
-from services.strategy_shadow import StrategyShadowRunner, load_strategy_shadow_runs
+from services.strategy_shadow import (
+    StrategyShadowRunner,
+    load_strategy_shadow_runs,
+    load_strategy_shadow_runs_for_cycles,
+)
 
 
 CYCLE_ID = "2026-07-18_DAY"
+
+
+def test_load_strategy_shadow_runs_for_cycles_keeps_only_requested_latest_rows(tmp_path: Path) -> None:
+    root = tmp_path / "outputs"
+    folder = root / "dualtrack" / "strategy_shadows"
+    write_json(folder / "A_candidate.json", [{"variant_id": "candidate", "revision": 1}, {"variant_id": "candidate", "revision": 2}])
+    write_json(folder / "B_production.json", [{"variant_id": "production", "revision": 3}])
+    write_json(folder / "OTHER_candidate.json", [{"variant_id": "candidate", "revision": 4}])
+
+    rows = load_strategy_shadow_runs_for_cycles(root, {"B", "A", ""})
+
+    assert rows == [
+        {"variant_id": "candidate", "revision": 2},
+        {"variant_id": "production", "revision": 3},
+    ]
 
 
 def _config() -> dict:

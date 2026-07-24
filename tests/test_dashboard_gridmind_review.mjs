@@ -246,3 +246,25 @@ test("counterfactual comparison requires a successful production replay", () => 
     "production 重放（不可作基准）",
   );
 });
+
+test("promotion evidence remains an explicit human-confirmed proposal", () => {
+  const context = reviewHarness();
+  const ready = context.promotionPresentation({
+    candidates: [{
+      variant_id: "notional-half",
+      status: "proposal_ready",
+      comparable_period_count: 2,
+      comparable_trade_count: 100,
+      metrics: {realized_pnl_delta: 8, max_drawdown_delta: 0, cost_delta: 0},
+      evidence: [{cycle_id: "A", evidence_id: "proof", evaluation_window: {}, contracts: {}}],
+    }],
+  });
+  assert.equal(ready.kind, "good");
+  assert.match(ready.text, /不会自动改策略或下单/);
+
+  const blocked = context.promotionPresentation({
+    candidates: [{variant_id: "notional-half", status: "not_comparable", blockers: ["comparable_trade_sample_insufficient"]}],
+  });
+  assert.equal(blocked.kind, "info");
+  assert.match(blocked.text, /comparable_trade_sample_insufficient/);
+});

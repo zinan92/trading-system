@@ -53,7 +53,8 @@ from services.risk_port import (
     require_risk_permission,
 )
 from services.strategy_recommendation import StrategyRecommendationService
-from services.strategy_shadow import load_strategy_shadow_runs
+from services.strategy_shadow import load_strategy_shadow_runs, load_strategy_shadow_runs_for_cycles
+from services.strategy_shadow_promotion import evaluate_grid_shadow_promotion
 from services.strategy_cycle_package import StrategyCyclePackager
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
@@ -1100,6 +1101,14 @@ def _assemble_strategy_console_snapshot(
         if review_cycle_id
         else []
     )
+    closed_cycle_ids = [
+        str(package.get("cycle_id") or "")
+        for package in raw_cycle_packages
+        if package.get("status") == "closed" and package.get("cycle_id")
+    ]
+    shadow_promotion = evaluate_grid_shadow_promotion(
+        load_strategy_shadow_runs_for_cycles(output, closed_cycle_ids)
+    )
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
@@ -1126,6 +1135,7 @@ def _assemble_strategy_console_snapshot(
         "review_cycle_id": review_cycle_id,
         "daily_reports": build_strategy_console_daily_reports_response(output_root=output),
         "strategy_shadows": shadows,
+        "strategy_shadow_promotion": shadow_promotion,
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
             "one_production_strategy": True,

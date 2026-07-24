@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from services.accounting_projection_core import project_execution_accounting
 from services.backtest_port import StrategyShadowReplayPort
@@ -149,6 +149,24 @@ def load_strategy_shadow_runs(output_root: Path, cycle_id: str) -> list[dict[str
         rows = load_json(path)
         if rows and isinstance(rows[-1], dict):
             result.append(dict(rows[-1]))
+    return result
+
+
+def load_strategy_shadow_runs_for_cycles(
+    output_root: Path,
+    cycle_ids: Iterable[str],
+) -> list[dict[str, Any]]:
+    """Load latest immutable Shadow rows only for the supplied closed cycles.
+
+    This is deliberately a read-only convenience around the single-cycle
+    loader.  Promotion evidence must be built from the verified terminal
+    package set chosen by the caller; it must never discover arbitrary files
+    and accidentally treat an open or unrelated cycle as comparable history.
+    """
+
+    result: list[dict[str, Any]] = []
+    for cycle_id in sorted({str(value) for value in cycle_ids if str(value)}):
+        result.extend(load_strategy_shadow_runs(output_root, cycle_id))
     return result
 
 

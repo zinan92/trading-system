@@ -15,6 +15,12 @@ def test_grid_shadow_promotion_requires_100_comparable_trades_and_persistence() 
     assert candidate["comparable_trade_count"] == 100
     assert candidate["comparable_period_count"] == 2
     assert candidate["status"] == "proposal_ready"
+    assert candidate["metrics"]["max_drawdown_delta"] == 0
+    assert candidate["metrics"]["cost_delta"] == 0
+    assert [row["cycle_id"] for row in candidate["evidence"]] == ["A", "B"]
+    assert candidate["evidence"][0]["contracts"]["fee_contract_hash"] == "same"
+    assert candidate["human_confirmation"]["required"] is True
+    assert candidate["human_confirmation"]["submits_orders"] is False
     assert result["safety"]["changes_production_plan"] is False
 
 

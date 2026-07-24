@@ -10892,3 +10892,29 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Synthetic two-period fixtures prove a 100-trade compatible winner can be
   proposal-ready; thin and contract-mismatched evidence remains blocked.
+
+## 2026-07-24 - Shadow promotion proposals stay observational
+
+### Decision
+
+- The operator read model now loads Shadow results only for verified closed
+  cycles and projects the existing Grid promotion gate as a cross-period,
+  read-only proposal.  It retains cycle/evidence IDs, evaluation windows,
+  execution and fee contracts, PnL, drawdown, and cost deltas.
+- The Dashboard separates this evidence from a same-cycle What-if and labels
+  every proposal as requiring a human review followed by a separate plan
+  change.  It offers no promotion, start, or order action.
+
+### Gotchas
+
+- A positive same-cycle What-if is not promotion evidence.  Only the explicit
+  two-period/100-trade gate may surface a candidate as `proposal_ready`.
+- Presentation must retain blocked candidates and their machine-readable
+  blockers.  Replacing absence with a neutral value would hide the exact
+  counter-evidence that should prevent a promotion.
+
+### Verification
+
+- Focused Shadow, promotion, Dashboard purity, read-model, and browser
+  presentation tests cover a ready proposal, thin/contract-mismatched
+  evidence, and the invariant that the projection has no execution authority.
