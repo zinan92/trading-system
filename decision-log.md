@@ -1,5 +1,19 @@
 # Decision Log
 
+## Canonical Nautilus DCA Reconciliation for Grid Preflight
+
+Date: 2026-07-24
+
+### Decision
+
+- Normalize a terminal Nautilus DCA round through the same immutable lifecycle and child-target evidence before both production-history accounting and a later Grid preflight consume it.
+  - Rationale: raw DCA child positions are execution facts, while one completed DCA round is one economic lifecycle. Letting the history read-model aggregate them while Grid risk reads them raw produces a false `execution_reconciliation_drift` and blocks a safe Paper start.
+  - Evidence: `normalize_nautilus_snapshot_for_accounting`, `StrategyControlPlane._grid_risk_request`, `test_nautilus_grid_preflight_uses_evidenced_terminal_dca_projection`.
+
+### Gotcha
+
+- Aggregation is evidence-gated, not a reconciliation bypass. Missing lifecycle, child position, or exact reduce-only target-command evidence leaves the original snapshot untouched, so accounting drift still blocks new exposure.
+
 ## Paper NAV Display Scope
 
 Date: 2026-07-23

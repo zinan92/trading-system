@@ -189,6 +189,7 @@ def _append_nautilus_authoritative(
         cycle_id = path.stem
         snapshots = load_json(path)
         snapshot = snapshots[-1] if snapshots and isinstance(snapshots[-1], dict) else {}
+        snapshot = normalize_nautilus_snapshot_for_accounting(output, snapshot)
         snapshot_fills = [
             {**row, "source_cycle_id": cycle_id}
             for row in snapshot.get("fills") or []
@@ -199,18 +200,40 @@ def _append_nautilus_authoritative(
             for row in snapshot.get("positions") or []
             if isinstance(row, dict) and row.get("strategy_plan_id") not in (None, "")
         ]
-        snapshot_fills, snapshot_positions = _reconcile_nautilus_dca_aggregate_rounds(
-            output,
-            cycle_id=cycle_id,
-            fills=snapshot_fills,
-            positions=snapshot_positions,
-        )
         fills.extend(
             snapshot_fills
         )
         positions.extend(
             snapshot_positions
         )
+
+
+def normalize_nautilus_snapshot_for_accounting(
+    output_root: Path,
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the evidenced DCA aggregate read-model for one Nautilus snapshot.
+
+    Raw Nautilus facts deliberately retain a child position for each DCA add.
+    A terminal DCA round is nevertheless one economic lifecycle, but only when
+    its immutable lifecycle receipt and every child target command agree.  This
+    helper is shared by history and pre-trade risk so they cannot disagree about
+    the same Paper execution facts.
+    """
+
+    normalized = dict(snapshot)
+    cycle_id = str(normalized.get("cycle_id") or "")
+    if not cycle_id:
+        return normalized
+    fills = [dict(row) for row in normalized.get("fills") or [] if isinstance(row, dict)]
+    positions = [dict(row) for row in normalized.get("positions") or [] if isinstance(row, dict)]
+    fills, positions = _reconcile_nautilus_dca_aggregate_rounds(
+        Path(output_root),
+        cycle_id=cycle_id,
+        fills=fills,
+        positions=positions,
+    )
+    return {**normalized, "fills": fills, "positions": positions}
 
 
 def _reconcile_nautilus_dca_aggregate_rounds(
