@@ -10651,3 +10651,32 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused tests cover the writer's current path, the legacy fallback, and the
   fail-closed missing/mismatched cases.
+
+## 2026-07-24 - A fully filled DCA round is healthy only with a valid aggregate TP
+
+### Decision
+
+- Treat a running DCA round with zero remaining entry orders as healthy only
+  when it has open positions and one accepted aggregate target whose side,
+  positive price, and exact quantity match the lifecycle's open quantity.
+- Keep the existing Grid rule unchanged: it remains unhealthy without an
+  accepted entry order. A DCA round missing, stale, malformed, or wrong-side
+  aggregate protection remains fail-closed and is rendered as an error.
+
+### Gotchas
+
+- DCA's active TP is deliberately event-driven rather than an entry-order
+  record. Counting accepted entry orders alone therefore turns the expected
+  full-fill state into a false `运行异常` even while both positions remain
+  protected.
+- Header health is an observability signal, not a replacement for lifecycle
+  validation: accepting any non-empty DCA target would hide an unprotected
+  round. Require the target's accepted state, expected exit side, positive
+  price, and exact open-quantity match together.
+
+### Verification
+
+- Browser coverage proves a two-position, zero-entry-order DCA round with an
+  accepted matching aggregate target renders `运行中`; removing that target
+  immediately returns `运行异常`. Static coverage retains the Grid accepted
+  order gate.

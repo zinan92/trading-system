@@ -53,6 +53,9 @@ def test_gridmind_header_is_a_live_xau_market_tape_without_self_check() -> None:
     assert "交易所当日开盘价至今" in html
     assert 'class="pill run-state" id="marketBadge"' in html
     assert "acceptedOrderCount>0" in html
+    assert "function hasProtectedDcaTarget(data)" in html
+    assert "lifecycleProtected=acceptedOrderCount>0||hasProtectedDcaTarget(data)" in html
+    assert 'String(target?.status||"").toLowerCase()==="accepted"' in html
     assert 'data?.completeness?.status!=="complete"' in html
     assert 'risk.outcome!=="allow"' in html
     assert '(risk.blockers||[]).length>0' in html
