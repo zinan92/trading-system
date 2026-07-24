@@ -22,6 +22,11 @@ LAUNCHD_IMPORT_TARGETS = (
     "services.schedule_manager",
     "services.strategy_control_plane",
 )
+LAUNCHD_API_SURFACE = (
+    "do_GET",
+    "do_POST",
+    "_handle_trading_system_read_model",
+)
 
 
 class LaunchdPythonCompatibility:
@@ -64,16 +69,24 @@ class LaunchdPythonCompatibility:
             parsed = _probe_payload(result.stdout)
             observed = parsed.get("version") if isinstance(parsed, dict) else None
             imports = parsed.get("imports") if isinstance(parsed, dict) else None
+            api_surface = parsed.get("api_surface") if isinstance(parsed, dict) else None
             version_ok = observed == list(EXPECTED_LAUNCHD_VERSION)
             imports_ok = isinstance(imports, dict) and all(imports.get(name) == "ok" for name in LAUNCHD_IMPORT_TARGETS)
-            if result.returncode == 0 and version_ok and imports_ok:
-                payload.update({"status": "pass", "observed_version": observed, "import_results": imports})
+            api_ok = isinstance(api_surface, dict) and all(api_surface.get(name) == "ok" for name in LAUNCHD_API_SURFACE)
+            if result.returncode == 0 and version_ok and imports_ok and api_ok:
+                payload.update({
+                    "status": "pass",
+                    "observed_version": observed,
+                    "import_results": imports,
+                    "api_surface_results": api_surface,
+                })
             else:
                 payload.update({
                     "status": "failed",
                     "reason": "launchd_python_import_or_version_failed",
                     "observed_version": observed,
                     "import_results": imports if isinstance(imports, dict) else {},
+                    "api_surface_results": api_surface if isinstance(api_surface, dict) else {},
                     "returncode": result.returncode,
                     "stderr_tail": str(result.stderr or "")[-600:],
                     "next_action": "fix the Python 3.9 import or version failure before restarting a launchd Paper service",
@@ -85,6 +98,7 @@ class LaunchdPythonCompatibility:
 
 def _probe_program() -> str:
     targets = json.dumps(list(LAUNCHD_IMPORT_TARGETS))
+    api_surface = json.dumps(list(LAUNCHD_API_SURFACE))
     return (
         "import importlib\n"
         "import json\n"
@@ -97,8 +111,16 @@ def _probe_program() -> str:
         "        results[name] = 'ok'\n"
         "    except Exception as exc:\n"
         "        results[name] = type(exc).__name__\n"
-        "print(json.dumps({'version': list(sys.version_info[:2]), 'imports': results}, sort_keys=True))\n"
-        "sys.exit(0 if all(value == 'ok' for value in results.values()) else 1)\n"
+        f"api_targets = {api_surface}\n"
+        "api_results = {}\n"
+        "try:\n"
+        "    from pipelines.dashboard_server import DashboardHandler\n"
+        "    for name in api_targets:\n"
+        "        api_results[name] = 'ok' if callable(getattr(DashboardHandler, name, None)) else 'missing'\n"
+        "except Exception as exc:\n"
+        "    api_results = {name: type(exc).__name__ for name in api_targets}\n"
+        "print(json.dumps({'version': list(sys.version_info[:2]), 'imports': results, 'api_surface': api_results}, sort_keys=True))\n"
+        "sys.exit(0 if all(value == 'ok' for value in results.values()) and all(value == 'ok' for value in api_results.values()) else 1)\n"
     )
 
 
