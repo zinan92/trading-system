@@ -75,6 +75,7 @@ def _evaluate_candidate(
         blockers.append("candidate_drawdown_worse_than_baseline")
     if comparable and candidate_cost > baseline_cost:
         blockers.append("candidate_cost_worse_than_baseline")
+    evidence = [_evidence_row(cycle_id, baseline, challenger) for cycle_id, baseline, challenger in comparable]
     return {
         "variant_id": candidate,
         "status": "proposal_ready" if not blockers else "not_comparable",
@@ -82,8 +83,50 @@ def _evaluate_candidate(
         "comparable_cycle_ids": [cycle for cycle, _, _ in comparable],
         "comparable_period_count": periods,
         "comparable_trade_count": trade_count,
-        "metrics": {"realized_pnl_delta": round(pnl_delta, 8), "candidate_max_drawdown": candidate_drawdown, "baseline_max_drawdown": baseline_drawdown, "candidate_cost": candidate_cost, "baseline_cost": baseline_cost},
-        "evidence_ids": [str(challenger.get("scenario_id") or challenger.get("input_hash") or "") for _, _, challenger in comparable],
+        "metrics": {
+            "realized_pnl_delta": round(pnl_delta, 8),
+            "candidate_max_drawdown": candidate_drawdown,
+            "baseline_max_drawdown": baseline_drawdown,
+            "max_drawdown_delta": round(candidate_drawdown - baseline_drawdown, 8),
+            "candidate_cost": candidate_cost,
+            "baseline_cost": baseline_cost,
+            "cost_delta": round(candidate_cost - baseline_cost, 8),
+        },
+        "evidence_ids": [row["evidence_id"] for row in evidence],
+        "evidence": evidence,
+        "human_confirmation": {
+            "required": True,
+            "action": "review_evidence_then_create_separate_plan_change",
+            "changes_production_plan": False,
+            "submits_orders": False,
+        },
+    }
+
+
+def _evidence_row(cycle_id: str, baseline: dict[str, Any], challenger: dict[str, Any]) -> dict[str, Any]:
+    """Project the minimum comparable lineage for an operator proposal."""
+
+    review = challenger.get("review") if isinstance(challenger.get("review"), dict) else {}
+    scenario = challenger.get("scenario") if isinstance(challenger.get("scenario"), dict) else {}
+    return {
+        "cycle_id": cycle_id,
+        "evidence_id": str(challenger.get("scenario_id") or challenger.get("input_hash") or ""),
+        "evaluation_window": {
+            "started_at": review.get("evaluation_started_at"),
+            "ended_at": review.get("evaluation_ended_at"),
+        },
+        "contracts": dict(scenario.get("contracts") or {}),
+        "baseline": {
+            "scenario_id": str(baseline.get("scenario_id") or baseline.get("input_hash") or ""),
+            "realized_pnl": _metric(baseline, "realized_pnl"),
+            "max_drawdown": _metric(baseline, "max_drawdown"),
+            "cost": _metric(baseline, "cost"),
+        },
+        "candidate": {
+            "realized_pnl": _metric(challenger, "realized_pnl"),
+            "max_drawdown": _metric(challenger, "max_drawdown"),
+            "cost": _metric(challenger, "cost"),
+        },
     }
 
 
