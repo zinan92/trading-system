@@ -11033,3 +11033,23 @@ auditable datafeed port; broker execution remains a separate port.
 - The Paper-only Playwright journey reaches trend refresh, smart fill, range
   adjustment, start, running summary/table inspection, stop, review, Shadows,
   and NAV with no unexpected control request or browser error.
+
+## 2026-07-24 - Multi-level Grid traversal remains bar-granularity evidence
+
+### Decision
+
+- One completed market bar remains one immutable market event.  The runner
+  does not manufacture intrabar ticks or assume a sequence of crossed grid
+  levels.  A deterministic Paper replay may model matching from the bar, but
+  its fills are labelled Paper model receipts, not exchange execution proof.
+
+### Gotchas
+
+- A wide 1m OHLC bar is not enough to call multiple entries, TP, and rearm a
+  natural live sequence.  Each claimed action still requires its own command,
+  receipt, lifecycle transition, and reconciliation evidence.
+
+### Verification
+
+- Canonical-event tests preserve one three-level-spanning bar as one event,
+  reject partial OHLC, and lock the written receipt/precision boundaries.
