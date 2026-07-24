@@ -344,14 +344,14 @@ def test_gridmind_explains_reconciliation_start_blocker_in_plain_language(
         page.locator("#startRiskDialog").wait_for(state="visible")
 
         text = page.locator("#startRiskDialog").inner_text()
-        assert "账本对账未通过" in text
+        assert "账户对账未通过" in text
         assert "已关闭交易缺少对应平仓成交" in text
         assert "存在无法归属到原交易的平仓成交" in text
         assert "成交记录 ID 重复" in text
         assert f"成交 ID：{actual_duplicate_issue['fill_ids'][0]}" in text
         assert "快照数量：40" in text
         assert "持久化数量：39" in text
-        assert "先修复下方账本差异并重新核对" in text
+        assert "先完成账户对账，再重新生成启动预览" in text
         assert "机器码：execution_reconciliation_drift" in text
         assert page.locator("#confirmStartRisk").is_disabled()
         assert [row["action"] for row in requests] == ["preview", "prepare_start"]
@@ -433,7 +433,7 @@ def test_gridmind_keeps_leverage_capacity_details_alone_and_with_ledger_blocker(
         assert "实际杠杆：29.99" in text
         assert "Paper 手动上限：20" in text
         assert "机器码：manual_leverage_capacity_exceeded" in text
-        assert ("账本对账未通过" in text) is mixed
+        assert ("账户对账未通过" in text) is mixed
         assert page.locator("#confirmStartRisk").is_disabled()
         browser.close()
 
@@ -554,7 +554,7 @@ def test_gridmind_sizing_controls_lock_manual_input_and_keep_other_values_auto()
         page.locator("#gridCount").fill("30.4")
         page.wait_for_timeout(450)
         assert len(preview_payloads) == request_count
-        assert "网格数量必须是整数" in page.locator("#paramHint").inner_text()
+        assert "网格数量必须是正整数" in page.locator("#paramHint").inner_text()
         page.locator("#gridCount").fill("31")
         page.wait_for_timeout(450)
         assert "grid_count" in preview_payloads[-1]["solver"]["locked"]
