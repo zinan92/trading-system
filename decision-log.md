@@ -10525,3 +10525,39 @@ auditable datafeed port; broker execution remains a separate port.
   runtime card. They assert title/action identity and safe unknown fallback.
 - Focused dashboard/read-model/control-plane suite: 160 passed; launchd
   Python 3.9 import compile and scoped gitleaks passed.
+
+## 2026-07-24 - A lost control response is reconciled from receipts, never replayed
+
+### Decision
+
+- Treat the append-only control audit event plus the authoritative runtime and
+  active plan identity as the recovery receipt for an interrupted browser
+  response. The Dashboard may read those facts until it can confirm accepted,
+  rejected, or still-unknown; it never repeats a `prepare_start` or
+  `replace_grid` control request automatically.
+- Show the most recent durable control receipt in the production runtime card.
+  A `replace_grid` response loss can clear its draft only after an accepted
+  replacement receipt, running runtime, matched active-plan identity, and
+  known accepted-order count all agree.
+- Give every recovery-only outcome a canonical title and next action. A 502 is
+  not by itself proof that the Dashboard service failed or that Paper remained
+  unchanged.
+
+### Gotchas
+
+- Idempotent server commands are not permission to replay them from a browser:
+  a second request can race a different operator action or a changed market.
+  Read the durable receipt first; if it does not prove the outcome, leave the
+  operation unresolved rather than guessing.
+- `prepare_start` is read-only, but it still creates a frozen specification.
+  A lost response must be surfaced as a new-specification step, not silently
+  replayed in a way that obscures which preview the operator is reviewing.
+
+### Verification
+
+- Browser coverage simulates a lost `replace_grid` response followed by a
+  durable accepted audit event. It proves the UI performs no control request,
+  reads the receipt, confirms the active plan and accepted count, and renders
+  the receipt in the runtime card.
+- Focused static and browser coverage checks the same no-retry rule for
+  `prepare_start`, canonical recovery guidance, and an audited rejected start.
