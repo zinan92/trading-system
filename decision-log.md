@@ -11074,3 +11074,24 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused promotion fixtures prove identical inputs retain comparable evidence
   and two mismatched market streams are rejected despite matching windows and
   contracts.
+
+## 2026-07-24 - Twelve-hour review keeps facts and counterfactuals separate
+
+### Decision
+
+- A closed-cycle review presents plan, execution, P&L, key-level, TP/SL, and
+  reconciliation facts in one plan-versus-analysis ledger. An incompatible
+  Shadow remains visibly `不可比较`; its attractive P&L is not shown as a
+  production delta.
+
+### Gotchas
+
+- A browser rendering test must check the final operator layout, not only the
+  review helper functions. Static labels do not prove a server-selected cycle
+  contains readable values.
+
+### Verification
+
+- The focused Playwright fixture renders a closed cycle and an incompatible
+  Shadow, checks every review dimension plus reconciliation, and optionally
+  emits a desktop screenshot artifact.
