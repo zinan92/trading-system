@@ -10589,3 +10589,36 @@ auditable datafeed port; broker execution remains a separate port.
   target fill names generation 2, excludes the retired generation 1 ID, and
   closes exactly the cumulative quantity. Separate target and stop paths
   assert mutually exclusive outcomes under valid plan geometry.
+
+## 2026-07-24 - Historical Nautilus DCA children reconcile only as an evidenced aggregate round
+
+### Decision
+
+- Keep Nautilus raw fills, child positions, commands, and DCA lifecycle JSON
+  immutable. On the production-accounting read side, synthesize one aggregate
+  DCA trade only when the strategy round ID, all child entry order IDs, closed
+  child positions, exact reduce-only exit commands, quantities, and filled TP
+  generation all agree.
+- Rebind only the copied target/stop/flatten fill to the aggregate round and
+  preserve its original child command ID as `source_trade_id`. If command or
+  child identity evidence is absent, leave the raw facts unrepaired so the
+  usual reconciliation drift remains fail-closed.
+
+### Gotchas
+
+- DCA entry fills intentionally carry the strategy-level round ID while
+  Nautilus materializes position IDs per child. Treating either side as the
+  sole accounting identity produces fake orphan diagnostics; treating a plan
+  ID match alone as sufficient would hide genuine mismatches.
+- A current zero-exposure snapshot does not erase historical fills. Historical
+  accounting must reconstruct terminal DCA rounds truthfully before it can be
+  used as a startup gate.
+
+### Verification
+
+- Production-history fixtures prove a two-child, exact-command DCA target
+  round projects to one passing aggregate trade and retains the child IDs as
+  source evidence. A companion missing-command fixture remains drift.
+- Against the current local immutable Paper archive, the read-side projection
+  changes from 13 active diagnostics to `pass` with zero active issues while
+  retaining the two pre-existing chronology records in `quarantined`.
