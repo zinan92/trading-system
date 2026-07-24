@@ -11013,3 +11013,23 @@ auditable datafeed port; broker execution remains a separate port.
 - The focused Playwright test renders a running Grid plan, 25 accepted
   orders, and one protected open position, then verifies every operator field
   in the visible DOM without browser errors.
+
+## 2026-07-24 - The primary Paper journey verifies its own running evidence
+
+### Decision
+
+- The continuous operator journey now updates its authoritative read-model
+  fixture when a simulated Paper start accepts 30 orders, then verifies the
+  running strategy strip, order count, and TP/SL table fields before stopping.
+
+### Gotchas
+
+- A start response saying "30 accepted" is not enough: the following read
+  model must expose the same 30 accepted lifecycle rows, or the journey is an
+  internally inconsistent mock rather than execution evidence.
+
+### Verification
+
+- The Paper-only Playwright journey reaches trend refresh, smart fill, range
+  adjustment, start, running summary/table inspection, stop, review, Shadows,
+  and NAV with no unexpected control request or browser error.

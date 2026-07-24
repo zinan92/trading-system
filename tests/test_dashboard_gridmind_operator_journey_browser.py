@@ -72,6 +72,16 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
                 "can_stop_when_authorized": True,
             })
             model["execution"]["counts"].update({"open_order_count": 30, "accepted_order_count": 30})
+            accepted = model["execution"]["accepted_orders"][0]
+            accepted_orders = [
+                {**accepted, "order_id": f"operator-journey-{index:02d}"}
+                for index in range(30)
+            ]
+            model["execution"].update({
+                "orders": accepted_orders,
+                "open_orders": accepted_orders,
+                "accepted_orders": accepted_orders,
+            })
             response = {
                 "action": action,
                 "plan": {"version": 8},
@@ -88,6 +98,7 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
                 "can_stop_when_authorized": False,
             })
             model["execution"]["counts"].update({"open_order_count": 0, "accepted_order_count": 0})
+            model["execution"].update({"orders": [], "open_orders": [], "accepted_orders": []})
             response = {"action": action, "cancelled_orders": 30, "flattened_positions": 0}
         else:  # pragma: no cover - assertion makes new controls intentional
             raise AssertionError(f"unexpected control action: {action}")
@@ -137,11 +148,22 @@ def test_gridmind_paper_operator_journey_uses_visible_results_and_control_reques
         assert [row["action"] for row in requests[-2:]] == ["prepare_start", "start"]
         assert requests[-1]["prepared_start_id"] == "operator-journey-prepared"
         assert "当前接受 30 笔委托" in page.locator(".trade-toast").inner_text()
+        summary = page.locator("#productionStrategySummary").inner_text()
+        assert "运行中" in summary
+        assert "中性（双边）" in summary
+        assert "等价差 · 50 格" in summary
+        assert "每格 2,800 USD" in summary
+        assert page.locator("#ordersCount").inner_text() == "(30)"
+        page.locator('[data-tab="orders"]').click()
+        assert "数量" in page.locator("#orders").inner_text()
+        assert "止盈" in page.locator("#orders").inner_text()
+        assert "止损" in page.locator("#orders").inner_text()
 
         page.locator("#stopRobot").click()
         page.locator("#actionStatus").filter(has_text="机器人已停止").wait_for()
         assert requests[-1] == {"action": "stop", "cycle_id": "2026-07-18_DAY"}
         assert "撤销 30 笔挂单" in page.locator("#actionStatus").inner_text()
+        assert page.locator("#ordersCount").inner_text() == "(0)"
 
         for tab, panel in (("review", "#review"), ("shadows", "#shadows"), ("history", "#history")):
             page.locator(f'[data-tab="{tab}"]').click()
