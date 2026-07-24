@@ -199,10 +199,22 @@ def test_gridmind_dca_smart_fill_preview_risk_ack_and_start() -> None:
             "status": "open",
             "status_label": "聚合止盈已保护",
             "protection_semantics": "event_driven_aggregate_target_not_entry_order",
-            "active_target": {"generation": 2, "quantity": 1.001, "price": 4050},
+            "open_quantity": 1.001,
+            "active_target": {"generation": 2, "status": "accepted", "side": "sell", "quantity": 1.001, "price": 4050},
         }
+        model["strategy"]["plan"].update({"strategy_type": "dca", "direction": "long"})
+        model["runtime"].update({"actual_state": "running", "desired_state": "running", "status": "running"})
+        model["risk"].update({"status": "current", "outcome": "approved", "blockers": []})
+        model["execution"]["orders"] = []
+        model["execution"]["positions"] = [{"status": "open"}, {"status": "open"}]
+        model["execution"]["counts"].update({"open_order_count": 0, "accepted_order_count": 0, "open_position_count": 2})
         page.reload(wait_until="load")
         assert "聚合 TP #2：1.001 @ 4,050（行情触发）" in page.locator("#gridSummary").inner_text()
+        assert page.locator("#marketBadge").inner_text() == "运行中"
+
+        model["execution"]["dca_lifecycle"]["active_target"] = None
+        page.reload(wait_until="load")
+        assert page.locator("#marketBadge").inner_text() == "运行异常"
         assert browser_errors == []
         browser.close()
 
