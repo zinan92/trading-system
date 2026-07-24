@@ -17,6 +17,7 @@
 - #280 Grid 生命周期证据包已部署（#287 / `main@d611873`）:每条 Nautilus Paper 网格线只有在 entry/TP/原价重挂、计划版本、订单/成交/交易 ID、生命周期转换和 reconciliation 都一致时才显示为「已证实」；任何缺失都显示「未验证」，不会用 K 线穿越推断成交。
 - #289 Grid Paper 实证已完成（#297 / `main@5df6046`）:StrategyPlan v7 的一条 Nautilus Paper 网格线已自然完成 `entry → TP → 原价重挂`，证据包为 `completed_rearmed_count=1`、`unverified_count=0`、reconciliation=`ok`；命令、成交、快照与生命周期文件哈希见 `docs/evidence/issue-289-grid-rearm-2026-07-24.md`。之后 tick 未保持新鲜窗口，按 fail-safe 正常停止并撤掉第二代挂单；当前 Paper=`stopped`、0 已接受委托、0 开放持仓。
 - #301 Grid Shadows 已扩展（#302 / `main@e9f3591`）:每个符合条件的终态 Grid 周期会在隔离 Nautilus replay 中生成生产基准、50%/150% 名义、交替偶/奇稀疏网格共 5 个同窗口 What-if；它们共享执行/费用合同与输入哈希规则，永不写生产账本、改 StrategyPlan 或创建真实订单。
+- #305 Shadow 推广证据闸已部署（#306 / `main@a05ba05`）:Grid Shadow 候选只有在至少 100 笔有效可比的已平仓交易、至少两个完整周期、同窗口与执行/费用合同一致、收益优于基准且回撤/成本不恶化时才会标记 `proposal_ready`；该状态只供人工审阅，绝不自动升级主策略或下单。
 - 启动前草稿:手动参数若为空或格式无效，页面会标出具体字段、给出修复动作、清除旧预览并禁用启动；`手动` 可一键回到 `AUTO` 求解。该前端提示不放宽任何后端或 Paper 风控门禁。
 - 执行测试:保护性 sweep 只处理已收盘、可信 K 线；形成中的当前 K 线不会送入执行器。#240 已恢复这一合同的锁内正反向回归覆盖。
 - M1-01 运行状态合同已固化为 [`docs/contracts/authoritative-runtime-state-v1.md`](docs/contracts/authoritative-runtime-state-v1.md)：Dashboard 只消费权威 read-model；当前/上一周期、执行快照、tick、对账和不确定计数的字段所有权、降级语义与后续 fixture 矩阵已明确。下一步据此拆实现票，不在设计票中改变执行行为。
@@ -24,7 +25,7 @@
 
 ## 下一步
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
-- M4:将同窗口 Shadow 结果推进为严格可比的跨周期证据与「可建议、不可自动推广」的审阅结论；未达到样本与持续性阈值时必须明确拒绝推广。
+- M5-02:将已通过证据闸的 Shadow 结果渲染为包含支持/反证、风险变化、证据窗口与人工确认路径的只读推广提案；不允许任何自动策略变更。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
