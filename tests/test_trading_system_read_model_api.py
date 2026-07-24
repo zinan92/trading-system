@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from copy import deepcopy
 
@@ -76,6 +77,93 @@ def _two_cycle_history_accounting() -> dict:
         completeness={"status": "complete", "limitations": []},
         reconciliation={"status": "pass", "issues": []},
     ).to_dict()
+
+
+def test_dashboard_polling_payload_compacts_duplicate_history_but_keeps_trend_and_review_facts() -> None:
+    receipt = {
+        "evaluation_id": "eval-1",
+        "status": "success",
+        "input": {"prompt": "x" * 100_000},
+        "archive": {"relative_path": "evaluations/eval-1.json"},
+        "effects": {"orders_created": 0},
+    }
+    proposal = {
+        "proposal_id": "proposal-1",
+        "source": "ai",
+        "direction": "long",
+        "style": "steady",
+        "range": {"low": 4000.0, "high": 4100.0},
+        "grid": {"count": 20},
+        "rationale": "trend summary",
+        "analysis": {"framework": {"strategy": {"recommended_strategy_type": "dca"}}},
+        "evaluation_receipt": receipt,
+        "prompt_contract": {"prompt": "x" * 100_000},
+    }
+    payload = {
+        "strategy": {"proposals": [proposal], "proposal_diff": {"raw": "x" * 100_000}},
+        "execution": {
+            "accounting": {"completeness": {"status": "complete"}, "fills": [{"raw": "x" * 100_000}]},
+            "current_accounting": {"reconciliation": {"status": "pass"}, "orders": [{"raw": "x" * 100_000}]},
+            "orders": [{"is_open": True, "is_accepted": True, "order_id": "open"}] + [{"order_id": f"closed-{index}"} for index in range(100)],
+            "positions": [{"status": "open", "trade_id": "trade-1"}] + [{"status": "closed", "trade_id": f"closed-{index}"} for index in range(100)],
+            "trades": [{"trade_id": f"trade-{index}"} for index in range(100)],
+            "fills": [{"fill_id": f"fill-{index}"} for index in range(100)],
+        },
+        "review": {
+            "cycle_packages": [{"cycle_id": "cycle-1", "proposals": [proposal]}],
+        },
+    }
+
+    compact = dashboard_server._compact_dashboard_read_model_payload(payload)
+    compact_proposal = compact["strategy"]["proposals"][0]
+
+    assert compact_proposal["rationale"] == "trend summary"
+    assert compact_proposal["analysis"]["framework"]["strategy"]["recommended_strategy_type"] == "dca"
+    assert compact_proposal["evaluation_receipt"] == {
+        "evaluation_id": "eval-1",
+        "status": "success",
+        "archive": {"relative_path": "evaluations/eval-1.json"},
+        "effects": {"orders_created": 0},
+    }
+    assert "prompt_contract" not in compact_proposal
+    assert compact["strategy"]["proposal_diff"]["status"] == "available_on_demand"
+    assert "fills" not in compact["execution"]["accounting"]
+    assert "orders" not in compact["execution"]["current_accounting"]
+    assert len(compact["execution"]["trades"]) == dashboard_server._DASHBOARD_RECENT_ACTIVITY_LIMIT
+    assert compact["execution"]["open_orders"][0]["order_id"] == "open"
+    assert compact["execution"]["open_positions"][0]["trade_id"] == "trade-1"
+    assert compact["review"]["cycle_packages"][0]["proposals"][0]["evaluation_receipt"] == compact_proposal["evaluation_receipt"]
+    assert len(json.dumps(compact)) < len(json.dumps(payload)) / 10
+
+
+def test_ai_evaluation_receipt_is_loaded_on_demand_from_current_control_cycle(monkeypatch, tmp_path: Path) -> None:
+    proposal = {
+        "proposal_id": "proposal-1",
+        "cycle_id": "2026-07-24_DAY",
+        "direction": "long",
+        "evaluation_receipt": {"evaluation_id": "eval-1", "input": {"prompt": "full"}},
+        "prompt_contract": {"prompt": "full"},
+    }
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_dualtrack_cycle_current_response",
+        lambda **_kwargs: {"cycle_id": "2026-07-24_DAY"},
+    )
+
+    class FakeControl:
+        def __init__(self, _output):
+            pass
+
+        def read_model(self, _cycle_id, *, as_of=None):
+            return {"proposals": [proposal]}
+
+    monkeypatch.setattr(dashboard_server, "StrategyControlPlane", FakeControl)
+
+    response = dashboard_server.build_ai_evaluation_receipt_response("eval-1", output_root=tmp_path)
+
+    assert response["schema_version"] == "dashboard-ai-evaluation-receipt-v1"
+    assert response["proposal"]["evaluation_receipt"]["input"]["prompt"] == "full"
+    assert response["proposal"]["prompt_contract"]["prompt"] == "full"
 
 
 def test_stable_and_legacy_gets_delegate_to_the_same_named_assembler(

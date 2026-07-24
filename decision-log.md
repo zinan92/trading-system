@@ -10708,3 +10708,34 @@ auditable datafeed port; broker execution remains a separate port.
   the market-bars handler receives that overlay, and a blocked upstream result
   returns normally without a second request. Existing Dashboard purity checks
   remain read-only.
+
+## 2026-07-24 - Dashboard polling transports summaries; AI evidence is lazy-loaded
+
+### Decision
+
+- Keep the polling read-model limited to the active strategy, aggregate
+  accounting trust facts, bounded recent activity, review comparators, and AI
+  trend summaries.  Do not repeatedly transmit raw accounting lists, proposal
+  diffs, or complete AI prompts and model outputs.
+- Serve a selected AI evaluation receipt only after the operator opens it.
+  The on-demand endpoint reads the same current-cycle control-plane evidence;
+  it is read-only and never changes the production plan or creates orders.
+
+### Gotchas
+
+- A `200` response that starts too late is functionally a failed Dashboard
+  refresh.  The local server had to serialize and write roughly one megabyte
+  for every poll, so browsers could abandon the connection before a body was
+  delivered even when the datafeed had already recovered.
+- Do not compact active exposure out of a history limit.  Recent rows can be
+  bounded, but every current accepted/open order and open position must remain
+  in the payload.
+- Compaction is a transport projection, not data retention.  Canonical
+  accounting snapshots, terminal cycle packages, and complete AI receipts
+  remain immutable on disk and available through their explicit read path.
+
+### Verification
+
+- Focused tests prove compact polling retains trend/review facts and active
+  exposure, removes duplicate heavy evidence, and retrieves the complete AI
+  receipt only by its current-cycle evaluation ID.

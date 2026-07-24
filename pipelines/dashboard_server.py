@@ -83,6 +83,9 @@ _TIMEFRAME_PATTERN = re.compile(r"^\d+[mhdMHD]$")
 _DASHBOARD_DATAFEED_TIMEOUT_SECONDS = 2.0
 
 
+_DASHBOARD_RECENT_ACTIVITY_LIMIT = 80
+
+
 _DASHBOARD_VIEWS = {"full", "trader", "ops"}
 
 
@@ -207,6 +210,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/trading-system/read-model":
             self._handle_trading_system_read_model(parsed.query)
             return
+        if parsed.path == "/api/trading-system/ai-evaluation-receipt":
+            self._handle_ai_evaluation_receipt(parsed.query)
+            return
         if parsed.path == "/api/dualtrack/config":
             self._handle_dualtrack_config_get()
             return
@@ -323,6 +329,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             )
         except ValueError as exc:
             self._write_error(400, "trading_system_read_model_unavailable", str(exc))
+
+    def _handle_ai_evaluation_receipt(self, query: str) -> None:
+        params = parse_qs(query)
+        evaluation_id = str((params.get("evaluation_id") or [""])[0]).strip()
+        if not evaluation_id or not _SYMBOL_PATTERN.match(evaluation_id):
+            self._write_error(400, "invalid_evaluation_id", "evaluation_id contains invalid characters")
+            return
+        try:
+            self._write_json(200, build_ai_evaluation_receipt_response(evaluation_id))
+        except ValueError as exc:
+            self._write_error(404, "ai_evaluation_receipt_not_found", str(exc))
 
     def _handle_strategy_console_control(self) -> None:
         try:
@@ -611,7 +628,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(body)
-        except BrokenPipeError:
+        except (BrokenPipeError, ConnectionResetError):
             return
 
     def _write_json(self, status: int, payload: dict) -> None:
@@ -835,12 +852,182 @@ def build_trading_system_read_model_response(
         broker_adapter,
         strategy_id="production_grid",
     )
-    return project_trading_system_read_model(
+    payload = project_trading_system_read_model(
         source,
         risk_decision=risk,
         broker=broker,
         generated_at=parse_utc(as_of).isoformat(),
     ).to_dict()
+    return _compact_dashboard_read_model_payload(payload)
+
+
+def build_ai_evaluation_receipt_response(
+    evaluation_id: str,
+    *,
+    output_root: Path | None = None,
+    as_of: str | None = None,
+) -> dict:
+    """Return one archived AI receipt on demand, never as polling payload."""
+
+    output = _dualtrack_output_root(output_root)
+    cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
+    cycle_id = str(cycle.get("cycle_id") or "")
+    control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
+    for proposal in control.get("proposals") or []:
+        if not isinstance(proposal, dict):
+            continue
+        receipt = proposal.get("evaluation_receipt") or {}
+        if str(receipt.get("evaluation_id") or "") != evaluation_id:
+            continue
+        return {
+            "schema_version": "dashboard-ai-evaluation-receipt-v1",
+            "evaluation_id": evaluation_id,
+            "proposal": {
+                key: proposal.get(key)
+                for key in (
+                    "proposal_id",
+                    "cycle_id",
+                    "source",
+                    "created_at",
+                    "direction",
+                    "style",
+                    "range",
+                    "key_levels",
+                    "grid",
+                    "signal",
+                    "tp_sl",
+                    "rationale",
+                    "analysis",
+                    "prompt_contract",
+                    "evaluation_receipt",
+                )
+            },
+        }
+    raise ValueError("evaluation receipt does not belong to the current cycle")
+
+
+def _compact_dashboard_read_model_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove polling duplicates; canonical artifacts remain on disk and on-demand."""
+
+    compact = json.loads(json.dumps(payload))
+    strategy = compact.get("strategy") or {}
+    strategy["proposals"] = [
+        _compact_dashboard_proposal(row)
+        for row in strategy.get("proposals") or []
+        if isinstance(row, dict)
+    ]
+    strategy["proposal_diff"] = {
+        "status": "available_on_demand",
+        "reason": "omitted_from_polling_payload",
+    }
+
+    execution = compact.get("execution") or {}
+    for key in ("accounting", "current_accounting"):
+        execution[key] = _compact_dashboard_accounting(execution.get(key))
+    execution["orders"] = _bounded_dashboard_rows(
+        execution.get("orders"),
+        active=lambda row: bool(row.get("is_open") or row.get("is_accepted")),
+    )
+    execution["positions"] = _bounded_dashboard_rows(
+        execution.get("positions"),
+        active=lambda row: str(row.get("status") or "") == "open",
+    )
+    for key in ("trades", "fills"):
+        execution[key] = _bounded_dashboard_rows(execution.get(key))
+    execution["open_orders"] = [
+        row for row in execution.get("orders") or [] if isinstance(row, dict) and row.get("is_open")
+    ]
+    execution["accepted_orders"] = [
+        row for row in execution.get("orders") or [] if isinstance(row, dict) and row.get("is_accepted")
+    ]
+    execution["open_positions"] = [
+        row for row in execution.get("positions") or [] if isinstance(row, dict) and row.get("status") == "open"
+    ]
+
+    review = compact.get("review") or {}
+    review["cycle_packages"] = [
+        _compact_dashboard_review_package(row)
+        for row in review.get("cycle_packages") or []
+        if isinstance(row, dict)
+    ]
+    return compact
+
+
+def _compact_dashboard_accounting(snapshot: Any) -> dict[str, Any]:
+    """Retain trust and aggregate facts; lists are projected separately above."""
+
+    if not isinstance(snapshot, dict):
+        return {}
+    return {
+        key: value
+        for key, value in snapshot.items()
+        if key not in {"orders", "positions", "trades", "fills"}
+    }
+
+
+def _bounded_dashboard_rows(value: Any, *, active=None) -> list[Any]:
+    """Keep recent history plus every active row; never hide live exposure."""
+
+    rows = value if isinstance(value, list) else []
+    if len(rows) <= _DASHBOARD_RECENT_ACTIVITY_LIMIT:
+        return rows
+    recent = rows[-_DASHBOARD_RECENT_ACTIVITY_LIMIT:]
+    active_rows = [row for row in rows if isinstance(row, dict) and active and active(row)]
+    seen = {json.dumps(row, sort_keys=True, default=str) for row in recent}
+    return recent + [
+        row for row in active_rows
+        if json.dumps(row, sort_keys=True, default=str) not in seen
+    ]
+
+
+def _compact_dashboard_proposal(proposal: dict[str, Any]) -> dict[str, Any]:
+    """Keep trend-card facts while moving verbose input/output to a lazy receipt."""
+
+    receipt = proposal.get("evaluation_receipt") or {}
+    receipt_summary = {
+        key: receipt.get(key)
+        for key in ("schema_version", "evaluation_id", "cycle_id", "status", "evaluated_at", "archive", "effects")
+        if key in receipt
+    }
+    return {
+        key: proposal.get(key)
+        for key in (
+            "schema_version",
+            "cycle_id",
+            "source",
+            "created_at",
+            "direction",
+            "style",
+            "range",
+            "key_levels",
+            "grid",
+            "signal",
+            "tp_sl",
+            "risk_budget",
+            "intraday_rules",
+            "legacy_status",
+            "legacy",
+            "rationale",
+            "evidence_used",
+            "analysis",
+            "preview_id",
+            "proposal_id",
+        )
+        if key in proposal
+    } | ({"evaluation_receipt": receipt_summary} if receipt_summary else {})
+
+
+def _compact_dashboard_review_package(package: dict[str, Any]) -> dict[str, Any]:
+    """Keep 12-hour review comparability without re-sending raw AI receipts."""
+
+    compact = json.loads(json.dumps(package))
+    proposals = compact.get("proposals") or []
+    compact["proposals"] = [
+        _compact_dashboard_proposal(row)
+        for row in proposals
+        if isinstance(row, dict)
+    ]
+    return compact
 
 
 def _dashboard_market_read_config() -> dict:
