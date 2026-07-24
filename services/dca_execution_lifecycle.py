@@ -195,13 +195,28 @@ class DcaPaperLifecycle:
             and active
             and str(active.get("status") or "") == "accepted"
         ):
-            command = self._target_command(plan, state=after, timestamp=timestamp, mark=mark)
-            submitted_target = self.adapter.submit_order(command)
+            snapshot = self.adapter.snapshot(identity["cycle_id"])
+            commands = self._target_commands(
+                plan,
+                state=after,
+                snapshot=snapshot,
+                timestamp=timestamp,
+                mark=mark,
+            )
+            receipts = [self.adapter.submit_order(command) for command in commands]
+            submitted_target = {
+                "order_ids": [
+                    str(receipt.get("order_id") or receipt.get("fill_id") or "")
+                    for receipt in receipts
+                ],
+                "receipts": receipts,
+            }
             active["status"] = "triggered"
             active["triggered_at"] = timestamp
-            active["execution_order_id"] = str(
-                submitted_target.get("order_id") or submitted_target.get("fill_id") or ""
-            )
+            active["execution_order_ids"] = submitted_target["order_ids"]
+            # Kept for read-model compatibility while consumers migrate to the
+            # explicit execution_order_ids collection.
+            active["execution_order_id"] = submitted_target["order_ids"][0]
             self._sync_target_generation(after, active)
             after["status"] = "target_triggered"
             after["updated_at"] = timestamp
@@ -321,19 +336,27 @@ class DcaPaperLifecycle:
         timestamp: str,
     ) -> None:
         active = state.get("active_target") if isinstance(state.get("active_target"), dict) else None
-        execution_order_id = str((active or {}).get("execution_order_id") or "")
-        if not execution_order_id:
+        execution_order_ids = {
+            str(value)
+            for value in (active or {}).get("execution_order_ids") or []
+            if str(value)
+        }
+        legacy_execution_order_id = str((active or {}).get("execution_order_id") or "")
+        if legacy_execution_order_id:
+            execution_order_ids.add(legacy_execution_order_id)
+        if not execution_order_ids:
             return
         accepted_ids = {
             str(row.get("order_id") or "")
             for row in snapshot.get("orders") or []
             if str(row.get("state") or "").lower() == "accepted"
         }
-        if execution_order_id not in accepted_ids:
+        pending_ids = sorted(execution_order_ids & accepted_ids)
+        if not pending_ids:
             return
         receipt = self.adapter.cancel_orders(
             state["cycle_id"],
-            order_ids=[execution_order_id],
+            order_ids=pending_ids,
             ts=timestamp,
             reason="dca_round_closed_before_target_fill",
         )
@@ -342,40 +365,68 @@ class DcaPaperLifecycle:
         ))
 
     @staticmethod
-    def _target_command(
+    def _target_commands(
         plan: dict[str, Any],
         *,
         state: dict[str, Any],
+        snapshot: dict[str, Any],
         timestamp: str,
         mark: float,
-    ) -> dict[str, Any]:
+    ) -> list[dict[str, Any]]:
         active = dict(state["active_target"])
         context = plan.get("execution_context") if isinstance(plan.get("execution_context"), dict) else {}
         market = context.get("market") if isinstance(context.get("market"), dict) else {}
         quantity = _positive(active.get("quantity"), "DCA target quantity")
         price = _positive(active.get("price"), "DCA target price")
-        return {
-            "cycle_id": state["cycle_id"],
-            "ts": timestamp,
-            "symbol": str(market.get("symbol") or "GOLD"),
-            "side": active["side"],
-            "event": "target",
-            "order_type": "limit",
-            "liquidity": "maker",
-            "price": price,
-            "market_price": mark,
-            "quantity": quantity,
-            "notional": round(price * quantity, 8),
-            "reduce_only": True,
-            "trade_id": state["round_id"],
-            "position_id": state["round_id"],
-            "target_position_side": state["direction"],
-            "strategy_type": "dca",
-            "strategy_plan_id": state["strategy_plan_id"],
-            "strategy_plan_version": state["strategy_plan_version"],
-            "source": "strategy_dca_paper",
-            "source_fill_id": f"strategy-dca-target:{active['target_id']}",
-        }
+        positions = sorted(
+            (
+                dict(row)
+                for row in snapshot.get("positions") or []
+                if str(row.get("strategy_plan_id") or "") == state["strategy_plan_id"]
+                and str(row.get("status") or "") == "open"
+                and str(row.get("side") or "") == state["direction"]
+                and _position_quantity(row) > _EPSILON
+            ),
+            key=lambda row: str(row.get("position_id") or ""),
+        )
+        position_ids = [str(row.get("position_id") or "").strip() for row in positions]
+        if not positions or any(not position_id for position_id in position_ids):
+            raise ValueError("DCA aggregate target requires exact open position identities")
+        if len(set(position_ids)) != len(position_ids):
+            raise ValueError("DCA aggregate target position identities are not unique")
+        position_quantity = sum(_position_quantity(row) for row in positions)
+        if abs(position_quantity - quantity) > _EPSILON:
+            raise ValueError("DCA aggregate target quantity no longer matches open positions")
+
+        commands: list[dict[str, Any]] = []
+        for position, position_id in zip(positions, position_ids):
+            child_quantity = _position_quantity(position)
+            commands.append({
+                "cycle_id": state["cycle_id"],
+                "ts": timestamp,
+                "symbol": str(market.get("symbol") or "GOLD"),
+                "side": active["side"],
+                "event": "target",
+                "order_type": "limit",
+                "liquidity": "maker",
+                "price": price,
+                "market_price": mark,
+                "quantity": child_quantity,
+                "notional": round(price * child_quantity, 8),
+                "reduce_only": True,
+                # Deliberately omit trade_id: a DCA round can span multiple
+                # Nautilus positions sharing the round identity. position_id
+                # is the only safe, singular close selector at this boundary.
+                "position_id": position_id,
+                "target_position_side": state["direction"],
+                "dca_round_id": state["round_id"],
+                "strategy_type": "dca",
+                "strategy_plan_id": state["strategy_plan_id"],
+                "strategy_plan_version": state["strategy_plan_version"],
+                "source": "strategy_dca_paper",
+                "source_fill_id": f"strategy-dca-target:{active['target_id']}:{position_id}",
+            })
+        return commands
 
     def _path(self, cycle_id: str) -> Path:
         return self.output_root / "dualtrack" / "dca_lifecycle" / f"{cycle_id}.json"

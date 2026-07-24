@@ -8,6 +8,8 @@ import pytest
 from services.dca_execution_lifecycle import DcaPaperLifecycle
 from services.dca_plan import build_dca_preview, build_dca_strategy_plan
 from services.dualtrack_config import DEFAULT_DUALTRACK_CONFIG
+from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+from services.journal_store import load_json, write_json
 from services.legacy_paper_execution_adapter import LegacyPaperExecutionAdapter
 
 
@@ -285,6 +287,108 @@ def test_dca_target_cancels_remaining_entries_and_closes_accumulated_round(
     assert target_fills[0]["pnl_units"] == pytest.approx(expected_quantity)
     assert len(target_fills[0]["matched_entries"]) == 2
     assert not [row for row in snapshot["orders"] if row.get("state") == "accepted"]
+
+
+def test_dca_aggregate_target_submits_one_exact_reduce_only_order_per_nautilus_position(
+    tmp_path: Path,
+) -> None:
+    """One logical DCA target must not use the shared round ID as a close selector."""
+
+    output_root = tmp_path / "outputs"
+    preflight = output_root / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    write_json(preflight, [{
+        "status": "ready_for_paper_shadow",
+        "fee_model": {
+            "mode": "account_observed",
+            "maker_fee_rate": "0",
+            "taker_fee_rate": "0.000400",
+            "funding_rate": "0.0001",
+            "funding_time": 1,
+            "observed_at": "2026-07-22T16:00:00+00:00",
+            "real_money_eligible": False,
+        },
+    }])
+    adapter = NautilusExecutionAdapter(
+        output_root,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: {},
+        defer_replay=True,
+        config=_config(),
+    )
+    lifecycle = DcaPaperLifecycle(output_root, adapter)
+    plan = _plan()
+    plan_id = plan["strategy_plan_id"]
+    lifecycle.start(plan, timestamp="2026-07-22T16:00:00+00:00")
+    round_id = f"dca-round:{plan_id}"
+    snapshot = {
+        "schema_version": "dualtrack-execution-v1",
+        "engine": adapter.name,
+        "cycle_id": CYCLE_ID,
+        "orders": [],
+        "fills": [
+            {
+                "fill_id": "dca-entry-a",
+                "order_id": "dca-entry-a",
+                "event": "entry",
+                "strategy_plan_id": plan_id,
+                "strategy_plan_version": 1,
+            },
+            {
+                "fill_id": "dca-entry-b",
+                "order_id": "dca-entry-b",
+                "event": "entry",
+                "strategy_plan_id": plan_id,
+                "strategy_plan_version": 1,
+            },
+        ],
+        "positions": [
+            {
+                "trade_id": round_id,
+                "position_id": "POS-dca-a",
+                "status": "open",
+                "side": "long",
+                "remaining_units": 0.25,
+                "entry_price": 4_004.0,
+                "strategy_plan_id": plan_id,
+                "strategy_plan_version": 1,
+            },
+            {
+                "trade_id": round_id,
+                "position_id": "POS-dca-b",
+                "status": "open",
+                "side": "long",
+                "remaining_units": 0.25,
+                "entry_price": 3_996.0,
+                "strategy_plan_id": plan_id,
+                "strategy_plan_version": 1,
+            },
+        ],
+        "account": {},
+        "pnl": {"realized": 0.0, "unrealized": 0.0},
+        "mark": {"price": 4_050.0, "fresh": True, "source": "test"},
+        "capabilities": {"native_order_lifecycle": True},
+    }
+    adapter._persist_snapshot(CYCLE_ID, snapshot)
+
+    result = lifecycle.process_market_event(plan, _event(3, 4_050.0))
+
+    submitted = result["target_submission"]
+    assert submitted is not None
+    assert len(submitted["order_ids"]) == 2
+    target_commands = [
+        row["command"]
+        for row in load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")
+        if row.get("command", {}).get("event") == "target"
+    ]
+    assert {row["position_id"] for row in target_commands} == {"POS-dca-a", "POS-dca-b"}
+    assert {row["quantity"] for row in target_commands} == {0.25}
+    assert all(row.get("trade_id") in (None, "") for row in target_commands)
+    assert all(row["reduce_only"] is True for row in target_commands)
+    assert result["state"]["active_target"]["execution_order_ids"] == submitted["order_ids"]
+
+    stopped = lifecycle.process_market_event(plan, _event(4, 3_970.0))["state"]
+    assert set(stopped["cancelled_target_order_ids"]) == set(submitted["order_ids"])
 
 
 def test_dca_stop_cancels_remaining_entries_and_retires_target(tmp_path: Path) -> None:

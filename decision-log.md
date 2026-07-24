@@ -10409,3 +10409,34 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused static and Playwright coverage verifies: clear manual notional →
   no control request → marked field, clear repair copy, disabled start → press
   `手动` → `AUTO` solver preview returns.
+
+## 2026-07-24 - One DCA target may execute as several exact Paper close orders
+
+### Decision
+
+- Preserve a DCA round's single aggregate take-profit generation in the plan,
+  lifecycle and read model. At the Nautilus boundary, submit one reduce-only
+  child target command for every exact open position belonging to that plan.
+- Each child uses only its unique `position_id` as the close selector. The
+  shared DCA round ID remains audit metadata (`dca_round_id`) and is never sent
+  as `trade_id` on a close command, because several Nautilus positions can
+  share it.
+- Record all resulting execution order IDs on the logical target generation;
+  stop/flatten cleanup cancels every still-accepted child order, while keeping
+  the legacy singular ID readable during read-model migration.
+
+### Gotchas
+
+- A logical aggregate TP is not necessarily one exchange-shaped order. Treat
+  the lifecycle generation as the strategy object and the exact child orders
+  as execution evidence; never infer safety from a single arbitrary position.
+- Position identities and the summed remaining quantity are verified before a
+  child command is submitted. Missing, duplicate or mismatched identities fail
+  closed rather than selecting a broader plan-level position.
+
+### Verification
+
+- Focused lifecycle and Nautilus adapter tests simulate two open positions
+  with the same DCA round ID. They verify two distinct reduce-only target
+  commands, exact position selectors, no shared `trade_id`, and cancellation
+  of both pending target children on a later stop event.
