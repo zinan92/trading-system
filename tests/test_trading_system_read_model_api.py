@@ -266,6 +266,44 @@ def test_new_route_and_handler_use_no_store_json_boundary(monkeypatch) -> None:
     assert 'self.send_header("Cache-Control", "no-store")' in source
 
 
+def test_dashboard_market_read_config_uses_one_short_datafeed_attempt(monkeypatch) -> None:
+    monkeypatch.setattr(
+        dashboard_server,
+        "load_pipeline_config",
+        lambda: {"datafeed": {"enabled": True, "timeout_seconds": 10}},
+    )
+
+    config = dashboard_server._dashboard_market_read_config()
+
+    assert config["datafeed"]["timeout_seconds"] == 2.0
+    assert config["datafeed"]["live_request_attempts"] == 1
+
+
+def test_market_bars_handler_uses_bounded_dashboard_read_config(monkeypatch) -> None:
+    handler = object.__new__(dashboard_server.DashboardHandler)
+    writes: list[tuple[int, dict]] = []
+    captured: dict = {}
+    handler._write_json = lambda status, payload: writes.append((status, payload))
+    monkeypatch.setattr(
+        dashboard_server,
+        "_dashboard_market_read_config",
+        lambda: {"datafeed": {"timeout_seconds": 2.0, "live_request_attempts": 1}},
+    )
+
+    def market_bars(**kwargs):
+        captured["kwargs"] = kwargs
+        return {"status": "blocked"}
+
+    monkeypatch.setattr(dashboard_server, "build_dualtrack_market_bars_response", market_bars)
+
+    handler._handle_dualtrack_market_bars_get("symbol=GOLD&timeframe=30m&limit=240")
+
+    assert captured["kwargs"]["config"] == {
+        "datafeed": {"timeout_seconds": 2.0, "live_request_attempts": 1},
+    }
+    assert writes == [(200, {"status": "blocked"})]
+
+
 def test_market_bars_response_projects_trust_and_display_label(monkeypatch) -> None:
     monkeypatch.setattr(
         dashboard_server.DualTrackMarketFeed,
