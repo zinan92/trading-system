@@ -10843,3 +10843,29 @@ auditable datafeed port; broker execution remains a separate port.
   separate malformed-DCA fixture proves stop reaches `stopped` with a visible
   warning and the read model stays available. Control-plane, DCA, Dashboard,
   and trading read-model suites pass together.
+
+## 2026-07-24 - Terminal Grid Shadows use a bounded comparable variant set
+
+### Decision
+
+- Eligible terminal Grid cycles now replay five deterministic candidates:
+  production, 50% notional, 150% notional, and alternating even/odd grid
+  density. Each candidate is isolated in its own Shadow replay namespace.
+- The variants change only their declared sizing or density dimension. They
+  retain the same locked-plan availability boundary, market-event window,
+  execution contract, fee contract, and scenario input-hash protocol.
+
+### Gotchas
+
+- A one-order Grid cannot produce both alternating-density variants. That is
+  an explicit missing/blocked Shadow outcome, never a reason to delay or fail
+  production cycle closeout.
+- Shadow results are comparative evidence, not a promotion decision. They
+  cannot alter the active StrategyPlan, production ledger, authority gate, or
+  any Paper/live order.
+
+### Verification
+
+- Terminal-cycle builder coverage proves the five bounded candidates and their
+  declared geometry changes. Shadow replay, Nautilus Shadow, runner, and
+  read-model suites pass together.
