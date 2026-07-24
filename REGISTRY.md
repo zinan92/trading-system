@@ -14,14 +14,15 @@
 - M2-04 聚合 TP 合同完成（#254 / `main@5d5b63b`）:第二次加仓后，终态成交必须引用最新 generation、排除已撤换 generation，并精确平掉累计数量；有效 DCA 几何的目标/止损结果互斥。该证据是纯回放，不替代真实 Paper 成交。
 - #257 历史 DCA 聚合对账已部署（#258 / `main@29227f7`）:仅在 lifecycle、Nautilus 子仓位和精确 child command 三者完整对应时，read-model 才把已完成 DCA 子单重建为逻辑整轮；原始历史文件不改。部署后 reconciliation=`pass`、活动差异=0；两条早于开仓的不可变手工历史继续可见于 quarantine，不被隐藏或当作可交易状态。
 - #283 canonical preflight 对账已部署（#284 / `main@6d7fea1`）:Grid 启动前风险与生产历史现在共享同一套、证据门控的 Nautilus DCA 聚合规则。当前 Paper 原始快照会误报 22 条历史 DCA 对账问题；聚合后 accounting=`pass`、engine reconciliation=`ok`、0 持仓/0 入场挂单。缺 lifecycle、子仓或精确 TP child-command 证据时，快照保持原样且仍 fail-closed。
-- #280 Grid 生命周期证据包已部署（#287 / `main@d611873`）:每条 Nautilus Paper 网格线只有在 entry/TP/原价重挂、计划版本、订单/成交/交易 ID、生命周期转换和 reconciliation 都一致时才显示为「已证实」；任何缺失都显示「未验证」，不会用 K 线穿越推断成交。当前没有已完成 Grid 循环，Dashboard 如实显示 `unavailable / 0`。
+- #280 Grid 生命周期证据包已部署（#287 / `main@d611873`）:每条 Nautilus Paper 网格线只有在 entry/TP/原价重挂、计划版本、订单/成交/交易 ID、生命周期转换和 reconciliation 都一致时才显示为「已证实」；任何缺失都显示「未验证」，不会用 K 线穿越推断成交。
+- #289 Grid Paper 实证已完成（#297 / `main@5df6046`）:StrategyPlan v7 的一条 Nautilus Paper 网格线已自然完成 `entry → TP → 原价重挂`，证据包为 `completed_rearmed_count=1`、`unverified_count=0`、reconciliation=`ok`；命令、成交、快照与生命周期文件哈希见 `docs/evidence/issue-289-grid-rearm-2026-07-24.md`。之后 tick 未保持新鲜窗口，按 fail-safe 正常停止并撤掉第二代挂单；当前 Paper=`stopped`、0 已接受委托、0 开放持仓。
 - 启动前草稿:手动参数若为空或格式无效，页面会标出具体字段、给出修复动作、清除旧预览并禁用启动；`手动` 可一键回到 `AUTO` 求解。该前端提示不放宽任何后端或 Paper 风控门禁。
 - 执行测试:保护性 sweep 只处理已收盘、可信 K 线；形成中的当前 K 线不会送入执行器。#240 已恢复这一合同的锁内正反向回归覆盖。
 - M1-01 运行状态合同已固化为 [`docs/contracts/authoritative-runtime-state-v1.md`](docs/contracts/authoritative-runtime-state-v1.md)：Dashboard 只消费权威 read-model；当前/上一周期、执行快照、tick、对账和不确定计数的字段所有权、降级语义与后续 fixture 矩阵已明确。下一步据此拆实现票，不在设计票中改变执行行为。
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- #289:在独立、受控的 Paper Grid 观察票中积累一条「开仓 → 止盈 → 原价重挂」的自然生命周期和 P&L reconciliation 证据；此前一次身份错误的 Grid 启动已安全撤销，**不计作证据**。仅在实时 tick、当前 0 委托/0 持仓、对账通过和策略预览都健康时才允许重新开始，不触碰真钱。
+- M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
 - 继续积累 Grid 开仓→止盈→原价重挂与 P&L reconciliation 实绩,DCA 与 Grid 必须保持独立 StrategyPlan 与生命周期账本。
 - 用 12 小时复盘与 Strategy Shadows 比较网格变体,只在足够交易样本和可持续原因成立后升级主策略。
