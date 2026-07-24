@@ -32,11 +32,22 @@ from services.dualtrack_market_feed import DualTrackMarketFeed
 from services.dualtrack_tiger_human_sync import DualTrackTigerHumanSync
 from services.journal_store import load_json, write_json
 from services.datafeed_market_repository import DatafeedMarketRepository
+from services.datafeed_market_client import DatafeedUnavailable
 from services.market_store import MarketStore
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
 from pipelines.strategy_shadow_replay import run_strategy_shadow_replay
+
+
+class LiveTickPhaseFailure(RuntimeError):
+    """A failed live tick with an operator-facing phase and recovery action."""
+
+    def __init__(self, *, phase: str, next_action: str, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.phase = phase
+        self.next_action = next_action
+        self.cause = cause
 
 
 def _parse_execution_time(value: Any) -> datetime | None:
@@ -675,11 +686,31 @@ class DualTrackCycleRunner:
     def live_tick(self, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         now = parse_utc(as_of)
         window = cycle_window(now)
-        lifecycle = self._lifecycle_results(now)
-        protective_sweep = self._sweep_active_human_protective_exits(window.cycle_id, now=now)
-        sync = self.sync_obsidian_human_plans(as_of=now, include_next=False)
-        intraday = self.intraday_tick(as_of=now)
-        ledger = self.scorer.rebuild_ledgers()
+        lifecycle = self._live_tick_phase(
+            "lifecycle",
+            "检查当前周期收口与 Paper 生命周期审计，然后等待下一次 tick 重试。",
+            lambda: self._lifecycle_results(now),
+        )
+        protective_sweep = self._live_tick_phase(
+            "lifecycle",
+            "检查 Paper 保护单和执行快照；不要在心跳恢复前启动新策略。",
+            lambda: self._sweep_active_human_protective_exits(window.cycle_id, now=now),
+        )
+        sync = self._live_tick_phase(
+            "lifecycle",
+            "检查本地计划同步与运行时输出目录，然后等待下一次 tick 重试。",
+            lambda: self.sync_obsidian_human_plans(as_of=now, include_next=False),
+        )
+        intraday = self._live_tick_phase(
+            "lifecycle",
+            "检查 Paper 生命周期和执行快照；不要在心跳恢复前启动新策略。",
+            lambda: self.intraday_tick(as_of=now),
+        )
+        ledger = self._live_tick_phase(
+            "ledger_write",
+            "检查本地账本输出是否可写及对账输入；成功 tick 前禁止新启动。",
+            self.scorer.rebuild_ledgers,
+        )
         # The start gate consumes this receipt.  Write it only after all work
         # that makes an accepted Paper order executable has completed: a
         # process that repeatedly enters and crashes must age stale instead of
@@ -700,6 +731,25 @@ class DualTrackCycleRunner:
             "ledger_refreshed": True,
             "ledger_daily_count": len(ledger.get("daily") or []),
         }
+
+    @staticmethod
+    def _live_tick_phase(phase: str, next_action: str, operation):
+        try:
+            return operation()
+        except LiveTickPhaseFailure:
+            raise
+        except DatafeedUnavailable as exc:
+            raise LiveTickPhaseFailure(
+                phase="route_datafeed",
+                next_action="检查 datafeed 路由和上游行情连接；恢复可信行情后等待下一次 tick。",
+                cause=exc,
+            ) from exc
+        except Exception as exc:
+            raise LiveTickPhaseFailure(
+                phase=phase,
+                next_action=next_action,
+                cause=exc,
+            ) from exc
 
     def _lifecycle_results(self, now: datetime) -> list[dict[str, Any]]:
         current = cycle_window(now)
@@ -1805,12 +1855,26 @@ def _write_live_tick_failure_diagnostic(output_root: Path | None, exc: Exception
 
     root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT") or ROOT / "outputs")
     configured_runtime = str(os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or "").strip()
+    recorded_at = datetime.now(timezone.utc).replace(microsecond=0)
+    phase = str(getattr(exc, "phase", "runner_initialization") or "runner_initialization")
+    next_action = str(
+        getattr(
+            exc,
+            "next_action",
+            "检查 launchd 配置、Python 运行时和 Dashboard 服务日志，然后等待下一次 tick。",
+        )
+        or ""
+    )
+    cause = getattr(exc, "cause", exc)
     payload = {
         "schema_version": "dualtrack-live-tick-failure-v1",
         "status": "failed",
         "event": "live-tick",
-        "recorded_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "cycle_id": cycle_window(recorded_at).cycle_id,
+        "recorded_at": recorded_at.isoformat(),
         "heartbeat_written": False,
+        "failure_phase": phase,
+        "next_action": next_action[:500],
         "command": ["-m", "pipelines.dualtrack_cycle_runner", "--event", "live-tick"],
         "runtime": {
             "python_executable": sys.executable,
@@ -1819,8 +1883,8 @@ def _write_live_tick_failure_diagnostic(output_root: Path | None, exc: Exception
             "nautilus_runtime_name": Path(configured_runtime).name if configured_runtime else "",
         },
         "error": {
-            "type": type(exc).__name__,
-            "message": str(exc)[:500],
+            "type": type(cause).__name__,
+            "message": str(cause)[:500],
         },
     }
     try:

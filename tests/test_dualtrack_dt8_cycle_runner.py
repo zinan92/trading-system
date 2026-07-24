@@ -13,6 +13,7 @@ from services.dualtrack_config import base_rung_notional
 from services.dualtrack_clock import parse_utc
 from services.dualtrack_grid_core import GridStop, simulate_conditional_grid
 from services.dualtrack_human import DualTrackHumanEngine
+from services.datafeed_market_client import DatafeedUnavailable
 from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_machine_plan import DualTrackMachinePlanner
 from services.dualtrack_store import DualTrackPlanStore, validate_plan
@@ -1360,7 +1361,65 @@ def test_live_tick_cli_writes_bounded_failure_diagnostic_without_a_heartbeat(tmp
     assert diagnostic["heartbeat_written"] is False
     assert diagnostic["runtime"]["nautilus_runtime_configured"] is True
     assert diagnostic["error"] == {"type": "RuntimeError", "message": "upstream datafeed unavailable"}
+    assert diagnostic["failure_phase"] == "runner_initialization"
+    assert diagnostic["next_action"]
     assert not (output / "dualtrack" / "strategy_control" / "paper_execution_tick_health.json").exists()
+
+
+def test_live_tick_datafeed_failure_records_route_phase_without_a_heartbeat(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    runner = object.__new__(DualTrackCycleRunner)
+
+    def fail_route(_now):
+        raise DatafeedUnavailable("datafeed HTTP 502: upstream_error")
+
+    runner._lifecycle_results = fail_route
+
+    with pytest.raises(cycle_runner_module.LiveTickPhaseFailure, match="HTTP 502") as raised:
+        runner.live_tick(as_of="2026-07-05T01:00:00+00:00")
+
+    cycle_runner_module._write_live_tick_failure_diagnostic(output, raised.value)
+    diagnostic = load_json(output / "dualtrack" / "strategy_control" / "live_tick_failure.json")[-1]
+
+    assert diagnostic["failure_phase"] == "route_datafeed"
+    assert diagnostic["next_action"].startswith("检查 datafeed 路由")
+    assert diagnostic["heartbeat_written"] is False
+    assert diagnostic["error"] == {
+        "type": "DatafeedUnavailable",
+        "message": "datafeed HTTP 502: upstream_error",
+    }
+    assert not (output / "dualtrack" / "runner" / "2026-07-05_DAY.json").exists()
+
+
+def test_live_tick_ledger_failure_records_ledger_phase_without_a_heartbeat(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    runner = object.__new__(DualTrackCycleRunner)
+    runner._lifecycle_results = lambda _now: []
+    runner._sweep_active_human_protective_exits = lambda *_args, **_kwargs: {}
+    runner.sync_obsidian_human_plans = lambda **_kwargs: {}
+    runner.intraday_tick = lambda **_kwargs: {}
+
+    class FailingScorer:
+        @staticmethod
+        def rebuild_ledgers():
+            raise RuntimeError("weekly ledger write failed")
+
+    runner.scorer = FailingScorer()
+
+    with pytest.raises(cycle_runner_module.LiveTickPhaseFailure, match="ledger write failed") as raised:
+        runner.live_tick(as_of="2026-07-05T01:00:00+00:00")
+
+    cycle_runner_module._write_live_tick_failure_diagnostic(output, raised.value)
+    diagnostic = load_json(output / "dualtrack" / "strategy_control" / "live_tick_failure.json")[-1]
+
+    assert diagnostic["failure_phase"] == "ledger_write"
+    assert diagnostic["next_action"].startswith("检查本地账本输出")
+    assert diagnostic["heartbeat_written"] is False
+    assert diagnostic["error"] == {
+        "type": "RuntimeError",
+        "message": "weekly ledger write failed",
+    }
+    assert not (output / "dualtrack" / "runner" / "2026-07-05_DAY.json").exists()
 
 
 def test_d8_3_run_close_run_keeps_frozen_trend_gate_and_fills(tmp_path: Path) -> None:

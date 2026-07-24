@@ -656,6 +656,7 @@ class StrategyControlPlane:
             )
         else:
             state["execution_tick_health"] = {"status": "not_applicable"}
+        state["execution_tick_failure"] = self.paper_execution_tick_failure(cycle_id)
         return state
 
     def _last_control_event(self) -> dict[str, Any] | None:
@@ -716,6 +717,44 @@ class StrategyControlPlane:
             "age_seconds": round(age_seconds, 3),
             "max_age_seconds": PAPER_EXECUTION_TICK_MAX_AGE_SECONDS,
             "event": latest.get("event"),
+        }
+
+    def paper_execution_tick_failure(self, cycle_id: str) -> dict[str, Any]:
+        """Return the latest unresolved tick failure without promoting it to health."""
+
+        rows = load_json(self.root / "live_tick_failure.json")
+        failure = next(
+            (dict(row) for row in reversed(rows) if isinstance(row, dict)),
+            {},
+        )
+        if not failure or str(failure.get("status") or "") != "failed":
+            return {"status": "none"}
+        failure_cycle_id = str(failure.get("cycle_id") or "")
+        if failure_cycle_id and failure_cycle_id != cycle_id:
+            return {"status": "none"}
+        failure_at = _optional_utc(failure.get("recorded_at"))
+        heartbeat_rows = load_json(
+            self.output_root / "dualtrack" / "runner" / f"{cycle_id}.json"
+        )
+        latest_heartbeat = next(
+            (dict(row) for row in reversed(heartbeat_rows) if isinstance(row, dict)),
+            {},
+        )
+        heartbeat_at = _optional_utc(latest_heartbeat.get("ts"))
+        if failure_at and heartbeat_at and heartbeat_at >= failure_at:
+            return {
+                "status": "resolved",
+                "failure_phase": str(failure.get("failure_phase") or "unknown"),
+                "recorded_at": failure_at.isoformat(),
+                "resolved_at": heartbeat_at.isoformat(),
+            }
+        return {
+            "status": "failed",
+            "failure_phase": str(failure.get("failure_phase") or "unknown"),
+            "next_action": str(failure.get("next_action") or ""),
+            "recorded_at": failure.get("recorded_at"),
+            "heartbeat_written": failure.get("heartbeat_written") is True,
+            "error": dict(failure.get("error") or {}) if isinstance(failure.get("error"), dict) else {},
         }
 
     def _require_paper_execution_tick(

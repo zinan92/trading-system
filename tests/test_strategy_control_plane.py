@@ -681,6 +681,48 @@ def test_running_nautilus_runtime_exposes_stale_execution_tick_health(tmp_path: 
     assert fresh["execution_tick_health"]["status"] == "ready"
 
 
+def test_runtime_exposes_unresolved_tick_failure_until_a_new_heartbeat_arrives(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    write_json(
+        output / "dualtrack" / "strategy_control" / "live_tick_failure.json",
+        [{
+            "status": "failed",
+            "cycle_id": cycle_id,
+            "recorded_at": "2026-07-05T01:40:00+00:00",
+            "failure_phase": "route_datafeed",
+            "next_action": "检查 datafeed 路由和上游行情连接。",
+            "heartbeat_written": False,
+            "error": {"type": "DatafeedUnavailable", "message": "datafeed HTTP 502"},
+        }],
+    )
+
+    failed = plane.runtime_state(cycle_id, now="2026-07-05T01:41:00+00:00")
+
+    assert failed["execution_tick_failure"] == {
+        "status": "failed",
+        "failure_phase": "route_datafeed",
+        "next_action": "检查 datafeed 路由和上游行情连接。",
+        "recorded_at": "2026-07-05T01:40:00+00:00",
+        "heartbeat_written": False,
+        "error": {"type": "DatafeedUnavailable", "message": "datafeed HTTP 502"},
+    }
+
+    write_json(
+        output / "dualtrack" / "runner" / f"{cycle_id}.json",
+        [{"ts": "2026-07-05T01:42:00+00:00", "event": "live_tick_heartbeat"}],
+    )
+    resolved = plane.runtime_state(cycle_id, now="2026-07-05T01:43:00+00:00")
+
+    assert resolved["execution_tick_failure"] == {
+        "status": "resolved",
+        "failure_phase": "route_datafeed",
+        "recorded_at": "2026-07-05T01:40:00+00:00",
+        "resolved_at": "2026-07-05T01:42:00+00:00",
+    }
+
+
 @pytest.mark.parametrize(
     ("direction", "moved_close", "inside_source_envelope"),
     [

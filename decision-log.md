@@ -10440,3 +10440,30 @@ auditable datafeed port; broker execution remains a separate port.
   with the same DCA round ID. They verify two distinct reduce-only target
   commands, exact position selectors, no shared `trade_id`, and cancellation
   of both pending target children on a later stop event.
+
+## 2026-07-24 - A stale Paper tick must say which phase failed
+
+### Decision
+
+- Keep the 180-second Paper start gate unchanged: only a fully completed
+  `live_tick` writes a heartbeat and authorizes new Grid or DCA exposure.
+- Wrap tick work in explicit failure phases. `DatafeedUnavailable` is reported
+  as `route_datafeed`; non-datafeed lifecycle work is `lifecycle`; ledger
+  reconstruction is `ledger_write`. Each receipt contains a bounded recovery
+  action and preserves the underlying error type/message.
+- Project the latest unresolved receipt through the authoritative runtime and
+  Dashboard. A later heartbeat resolves the display-only failure indicator; it
+  never retroactively turns a failed tick into a successful one.
+
+### Gotchas
+
+- A Dashboard response or a launchd exit code is not a heartbeat. Do not write
+  a health receipt from a partial tick merely to make the start button usable.
+- The failure receipt is advisory only. The existing heartbeat gate remains
+  the sole authority for whether a new Paper strategy can create exposure.
+
+### Verification
+
+- Focused runner fixtures cover datafeed-route and ledger failures, both with
+  no heartbeat. Strategy-control, read-model and Dashboard tests verify phase,
+  recovery action, and resolution after a later complete heartbeat.
