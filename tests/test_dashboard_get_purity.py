@@ -134,6 +134,7 @@ def test_unmigrated_console_get_is_pure_and_threads_one_market_snapshot(
     assert stable["contract"]["source_identities"]["accounting_snapshot_id"] == "history-accounting"
     assert stable["contract"]["source_identities"]["current_accounting_snapshot_id"] == "current-accounting"
     assert stable["research"]["strategy_shadow_promotion"]["status"] == "collecting_evidence"
+    assert stable["operations"]["safe_repair_queue"]["safety"]["command_authority"] is False
     assert received_market_ids == [id(market), id(market), id(market), id(market), id(market), id(market)]
     assert not (output / "dualtrack" / "strategy_control" / "plans" / f"{cycle_id}.json").exists()
     assert _fingerprint(output) == before
