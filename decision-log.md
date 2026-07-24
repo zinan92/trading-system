@@ -10561,3 +10561,31 @@ auditable datafeed port; broker execution remains a separate port.
   the receipt in the runtime card.
 - Focused static and browser coverage checks the same no-retry rule for
   `prepare_start`, canonical recovery guidance, and an audited rejected start.
+
+## 2026-07-24 - DCA aggregate TP generations retire before a larger one can close
+
+### Decision
+
+- A DCA target generation is a strategy-level protection object. When a later
+  addition changes the aggregate quantity, the previous generation is retired
+  before the replacement becomes the sole active target. A later terminal
+  fill must identify the latest generation, never a retired target.
+- DCA plans have strict target/stop geometry, so a completed mark event has
+  one terminal outcome: target or stop, never both. This is an event-ordering
+  contract, not a claim that a coarse candle provides intrabar execution.
+
+### Gotchas
+
+- Seeing the correct final quantity is not enough: a stale generation could
+  still close a position unless the terminal fill records the active target ID.
+  Keep that identity assertion alongside quantity assertions.
+- These deterministic lifecycle tests prove contract behavior only. They are
+  not a substitute for the still-open attended Paper observation of a later
+  second DCA fill and generation expansion.
+
+### Verification
+
+- DCA lifecycle tests now assert that after the second addition, the terminal
+  target fill names generation 2, excludes the retired generation 1 ID, and
+  closes exactly the cumulative quantity. Separate target and stop paths
+  assert mutually exclusive outcomes under valid plan geometry.
