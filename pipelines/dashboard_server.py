@@ -55,6 +55,7 @@ from services.risk_port import (
 from services.strategy_recommendation import StrategyRecommendationService
 from services.strategy_shadow import load_strategy_shadow_runs, load_strategy_shadow_runs_for_cycles
 from services.strategy_shadow_promotion import evaluate_grid_shadow_promotion
+from services.safe_repair_queue import SafeRepairQueue
 from services.strategy_cycle_package import StrategyCyclePackager
 from services.connector_catalog import ConnectorCatalog
 from services.journal_store import load_json
@@ -1109,6 +1110,7 @@ def _assemble_strategy_console_snapshot(
     shadow_promotion = evaluate_grid_shadow_promotion(
         load_strategy_shadow_runs_for_cycles(output, closed_cycle_ids)
     )
+    safe_repair_queue = SafeRepairQueue(output).read_model()
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
@@ -1136,6 +1138,7 @@ def _assemble_strategy_console_snapshot(
         "daily_reports": build_strategy_console_daily_reports_response(output_root=output),
         "strategy_shadows": shadows,
         "strategy_shadow_promotion": shadow_promotion,
+        "safe_repair_queue": safe_repair_queue,
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
             "one_production_strategy": True,

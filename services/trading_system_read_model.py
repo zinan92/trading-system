@@ -169,6 +169,9 @@ def project_trading_system_read_model(
             "strategy_shadow_promotion": _json_copy(_mapping(source.get("strategy_shadow_promotion"))),
             "execution_shadow": _json_copy(_mapping(source.get("execution_shadow"))),
         },
+        "operations": {
+            "safe_repair_queue": _json_copy(_mapping(source.get("safe_repair_queue"))),
+        },
         "ui_capabilities": _json_copy(_mapping(source.get("ui_capabilities"))),
         "safety": {
             **_json_copy(_mapping(source.get("safety"))),

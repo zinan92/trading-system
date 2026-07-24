@@ -10918,3 +10918,31 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused Shadow, promotion, Dashboard purity, read-model, and browser
   presentation tests cover a ready proposal, thin/contract-mismatched
   evidence, and the invariant that the projection has no execution authority.
+
+## 2026-07-24 - Safe repair starts as evidence, not an actuator
+
+### Decision
+
+- A safe-repair queue now records append-only diagnosis, before-evidence,
+  proposed action, authority classification, and independent after-evidence
+  receipts.  Its only automatic category is an *automatic candidate* for the
+  service/cache/read-model allowlist; this release still has no actuator.
+- Orders, positions, risk, StrategyPlan, execution-engine, and market-provider
+  domains are always `requires_human_confirmation`.  The read model can expose
+  their evidence, but it cannot obtain command authority.
+
+### Gotchas
+
+- A service or cache diagnosis is not authorization to restart a process or
+  delete data.  Verification can record whether an attended action worked, but
+  this queue neither invokes nor retries it.
+- Queue rows must remain append-only.  A failed after-check is counter-evidence
+  for the original proposal, not a mutation that erases the proposal or makes
+  the failure disappear.
+
+### Verification
+
+- Focused tests cover deterministic enqueue/idempotence, passed and failed
+  verification receipts, the permission matrix for every trading-impacting
+  domain, read-model purity, and an import-level negative boundary against
+  broker/control/risk/process-actuator dependencies.

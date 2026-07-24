@@ -864,6 +864,10 @@ def test_review_packages_and_shadows_remain_separate_read_only_evidence() -> Non
         "status": "collecting_evidence",
         "safety": {"read_only": True, "submits_orders": False},
     }
+    source["safe_repair_queue"] = {
+        "counts": {"requires_human_confirmation": 1},
+        "safety": {"command_authority": False},
+    }
 
     model = project_trading_system_read_model(
         source,
@@ -876,6 +880,7 @@ def test_review_packages_and_shadows_remain_separate_read_only_evidence() -> Non
     assert model["review"]["selected_cycle_id"] == "2026-07-17_NIGHT"
     assert model["research"]["strategy_shadows"][0]["variant_id"] == "production"
     assert model["research"]["strategy_shadow_promotion"]["safety"]["submits_orders"] is False
+    assert model["operations"]["safe_repair_queue"]["safety"]["command_authority"] is False
     assert model["safety"]["read_only"] is True
     assert model["safety"]["command_authority"] is False
 
