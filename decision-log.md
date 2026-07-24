@@ -11136,3 +11136,26 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused pass and deliberately incompatible-import fixtures prove the wrapper
   records the nested receipt, exits blocked on failure, and advertises no
   service, order, credential, cancellation, or position operation.
+
+## 2026-07-24 - A Paper release is four evidence surfaces, not one green check
+
+### Decision
+
+- The Paper-only release runbook requires a recorded main SHA, a passing
+  launchd-interpreter receipt, narrow component deployment, read-only
+  health/read-model check, data/tick evidence, focused browser proof, and a
+  rollback receipt. Delivery, health, data, and execution are reported
+  separately.
+
+### Gotchas
+
+- Restarting a service, seeing a browser toast, or passing a UI fixture cannot
+  prove an order executed. `start.command` is deliberately excluded because it
+  kills the listener and starts a foreground runner rather than performing a
+  narrow managed-service release.
+
+### Verification
+
+- A focused runbook contract test locks the mandatory gate, service labels,
+  read-model probe, browser command, evidence location, rollback rules, and
+  live/real-money boundary.
