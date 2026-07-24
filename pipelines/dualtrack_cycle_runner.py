@@ -70,22 +70,65 @@ def _parse_execution_time(value: Any) -> datetime | None:
         return None
 
 
-def _half_notional_shadow_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    """Return a deliberately bounded sizing what-if without touching production."""
+def _scaled_notional_shadow_plan(plan: dict[str, Any], multiplier: float) -> dict[str, Any]:
+    """Return an isolated sizing What-if without touching production."""
 
     candidate = deepcopy(plan)
+    if multiplier <= 0:
+        raise ValueError("shadow notional multiplier must be positive")
     grid = candidate.get("grid") if isinstance(candidate.get("grid"), dict) else {}
     if grid.get("notional_per_grid") is not None:
-        grid["notional_per_grid"] = float(grid["notional_per_grid"]) / 2.0
+        grid["notional_per_grid"] = float(grid["notional_per_grid"]) * multiplier
     orders = grid.get("orders") if isinstance(grid.get("orders"), list) else []
     for order in orders:
         if not isinstance(order, dict):
             continue
         for key in ("quantity", "notional", "planned_net_profit_usd"):
             if order.get(key) is not None:
-                order[key] = float(order[key]) / 2.0
+                order[key] = float(order[key]) * multiplier
     candidate["grid"] = grid
+    candidate["shadow_variant"] = {
+        "dimension": "notional_multiplier",
+        "value": multiplier,
+    }
     return candidate
+
+
+def _half_notional_shadow_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    return _scaled_notional_shadow_plan(plan, 0.5)
+
+
+def _sparse_grid_shadow_plan(plan: dict[str, Any], *, offset: int) -> dict[str, Any]:
+    """Keep alternating Grid orders as an explicit density What-if."""
+
+    candidate = deepcopy(plan)
+    grid = candidate.get("grid") if isinstance(candidate.get("grid"), dict) else {}
+    orders = [dict(row) for row in grid.get("orders") or [] if isinstance(row, dict)]
+    selected = [row for index, row in enumerate(orders) if index % 2 == offset]
+    if not selected:
+        raise ValueError("shadow_grid_density_variant_empty")
+    grid["orders"] = selected
+    grid["count"] = len(selected)
+    candidate["grid"] = grid
+    candidate["shadow_variant"] = {
+        "dimension": "grid_density",
+        "value": "alternating_even" if offset == 0 else "alternating_odd",
+        "source_order_count": len(orders),
+        "candidate_order_count": len(selected),
+    }
+    return candidate
+
+
+def _grid_shadow_variants(plan: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Return a bounded, deterministic five-member Grid What-if set."""
+
+    return [
+        ("production", deepcopy(plan)),
+        ("notional-half", _scaled_notional_shadow_plan(plan, 0.5)),
+        ("notional-150pct", _scaled_notional_shadow_plan(plan, 1.5)),
+        ("alternating-even", _sparse_grid_shadow_plan(plan, offset=0)),
+        ("alternating-odd", _sparse_grid_shadow_plan(plan, offset=1)),
+    ]
 
 
 class DualTrackCycleRunner:
@@ -560,7 +603,12 @@ class DualTrackCycleRunner:
         if not preflight_path.exists():
             return {"status": "missing", "reason": "nautilus_preflight_missing", "variants": []}
 
-        variants = [("production", deepcopy(plan)), ("notional-half", _half_notional_shadow_plan(plan))]
+        if str(plan.get("strategy_type") or "grid") != "grid":
+            return {"status": "missing", "reason": "strategy_type_not_grid", "variants": []}
+        try:
+            variants = _grid_shadow_variants(plan)
+        except ValueError as exc:
+            return {"status": "missing", "reason": str(exc), "variants": []}
         results: list[dict[str, Any]] = []
         for variant_id, candidate in variants:
             try:

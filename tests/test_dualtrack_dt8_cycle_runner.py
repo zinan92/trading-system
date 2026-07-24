@@ -743,15 +743,33 @@ def test_terminal_cycle_shadow_builder_runs_base_and_bounded_what_if(
         "cycle_id": cycle_id,
         "strategy_plan_id": "plan-1",
         "version": 1,
-        "grid": {"notional_per_grid": 100.0, "orders": [{"quantity": 2.0, "notional": 100.0}]},
+        "strategy_type": "grid",
+        "grid": {
+            "notional_per_grid": 100.0,
+            "orders": [
+                {"quantity": 2.0, "notional": 100.0},
+                {"quantity": 2.0, "notional": 100.0},
+                {"quantity": 2.0, "notional": 100.0},
+                {"quantity": 2.0, "notional": 100.0},
+            ],
+        },
     }
 
     result = runner._build_strategy_shadow_evidence(cycle_id, plan, [])
 
     assert result["status"] == "complete"
-    assert [variant for variant, _plan in calls] == ["production", "notional-half"]
+    assert [variant for variant, _plan in calls] == [
+        "production",
+        "notional-half",
+        "notional-150pct",
+        "alternating-even",
+        "alternating-odd",
+    ]
     assert calls[1][1]["grid"]["notional_per_grid"] == 50.0
     assert calls[1][1]["grid"]["orders"][0]["quantity"] == 1.0
+    assert calls[2][1]["grid"]["notional_per_grid"] == 150.0
+    assert len(calls[3][1]["grid"]["orders"]) == 2
+    assert len(calls[4][1]["grid"]["orders"]) == 2
 
 
 def test_live_tick_executes_human_protective_exit_from_fresh_real_bar(tmp_path: Path) -> None:
