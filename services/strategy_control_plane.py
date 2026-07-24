@@ -4502,6 +4502,16 @@ class StrategyControlPlane:
         }
         self._write_runtime(stopping)
         adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
+        # Persist the exact pre-stop identities in the control receipt.  Counts
+        # alone cannot prove that a rollover retry did not cancel a different
+        # set of orders or flatten a different set of positions after a crash.
+        pre_stop_snapshot = adapter.snapshot(cycle_id)
+        cancelled_order_ids = sorted({
+            str(row.get("order_id") or "")
+            for row in pre_stop_snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+            and str(row.get("order_id") or "")
+        })
         cancelled = self._cancel_pending(
             cycle_id,
             now=now,
@@ -4668,7 +4678,13 @@ class StrategyControlPlane:
             "action": "stop",
             "runtime": stopped,
             "cancelled_orders": cancelled,
+            "cancelled_order_ids": cancelled_order_ids,
             "flattened_positions": len(flattened),
+            "flattened_position_ids": sorted({
+                str(row.get("position_id") or "")
+                for row in open_positions
+                if str(row.get("position_id") or "")
+            }),
             "execution_event": execution_event,
             "reconciliation": reconciliation,
             "historical_records_preserved": True,
