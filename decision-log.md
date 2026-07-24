@@ -10641,6 +10641,11 @@ auditable datafeed port; broker execution remains a separate port.
   if producer and consumer disagree about their output-root convention.  The
   header then incorrectly renders `运行异常`; that is an observability defect,
   not proof that the Paper lifecycle failed.
+- The Dashboard helper receives the configured `outputs` root, not the
+  `outputs/dualtrack` subtree.  Derive paths from the control-plane writer
+  (`outputs/dualtrack/strategy_control/...`) and add a real-root fixture;
+  otherwise a plausible-looking one-level-short path can merge green but
+  never resolve a deployed artifact.
 
 ### Verification
 

@@ -786,13 +786,16 @@ def _current_strategy_risk_decision(output: Path, source: dict) -> dict | None:
         cycle = source.get("cycle") if isinstance(source.get("cycle"), dict) else {}
         cycle_id = str(cycle.get("cycle_id") or plan.get("cycle_id") or "")
         # The control plane owns DCA decisions beneath its strategy-control
-        # root.  ``output`` here is already the DualTrack root, while older
-        # fixtures may still place the same artifact directly below it.
+        # root.  ``output`` here is the configured output root, while the
+        # control plane writes beneath its DualTrack subtree.  Older fixtures
+        # may still place the same artifact directly below the configured root.
         # Prefer the writer's current location; only consult the legacy path
         # when no current artifact exists.  A present-but-mismatched decision
         # is deliberately still projected as missing/historical by the read
         # model rather than silently sourcing a different artifact.
-        current_path = output / "strategy_control" / "dca_risk_decisions" / f"{cycle_id}.json"
+        current_path = (
+            output / "dualtrack" / "strategy_control" / "dca_risk_decisions" / f"{cycle_id}.json"
+        )
         legacy_path = output / "dca_risk_decisions" / f"{cycle_id}.json"
         current_rows = load_json(current_path)
         risk_row_sets = [current_rows] if current_rows else [load_json(legacy_path)]
