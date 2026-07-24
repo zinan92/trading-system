@@ -80,3 +80,38 @@ def test_gridmind_names_complete_grid_rollback_as_execution_failure() -> None:
         assert "网格未被完整接受，已安全回滚" in failure
         assert "刷新当前委托与持仓" in failure
         browser.close()
+
+
+def test_gridmind_failure_copy_is_canonical_across_api_dialog_and_runtime_card() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, channel="chrome")
+        page = browser.new_page()
+        page.add_init_script("window.setInterval = () => 0")
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        failure = page.evaluate(
+            """() => {
+                const code = 'execution_reconciliation_drift';
+                const canonical = OPERATOR_FAILURE_COPY[code];
+                return {
+                    canonical,
+                    api: tradingFailure(apiFailure('raw backend detail', 400, code)),
+                    dialog: startBlockerCopy(code, 'raw backend detail'),
+                    tick: executionTickText({execution_tick_health:{status:'blocked',reason:'heartbeat_stale'}}),
+                    tickCanonical: OPERATOR_FAILURE_COPY.paper_execution_tick_unavailable,
+                    unknown: tradingFailure(apiFailure('private RuntimeError detail', 400, 'future_code')),
+                };
+            }"""
+        )
+
+        assert failure["api"]["title"] == failure["canonical"]["title"]
+        assert failure["api"]["action"] == failure["canonical"]["action"]
+        assert failure["dialog"]["title"] == failure["canonical"]["title"]
+        assert failure["dialog"]["explanation"] == failure["canonical"]["reason"]
+        assert failure["dialog"]["action"] == failure["canonical"]["action"]
+        assert failure["tickCanonical"]["title"] in failure["tick"]
+        assert failure["tickCanonical"]["action"] in failure["tick"]
+        assert failure["unknown"]["title"] == "操作未完成"
+        assert "private RuntimeError detail" not in failure["unknown"]["reason"]
+        assert "private RuntimeError detail" not in failure["unknown"]["action"]
+        browser.close()

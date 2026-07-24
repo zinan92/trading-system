@@ -10495,3 +10495,33 @@ auditable datafeed port; broker execution remains a separate port.
   attempts, one terminal receipt, and the original cancelled/flattened IDs.
 - Strategy-control coverage confirms a real stop receipt matches the exact
   accepted orders and open positions seen immediately before that stop.
+
+## 2026-07-24 - Operator-facing control failures use canonical copy
+
+### Decision
+
+- Centralize each supported operator-facing control failure into one browser
+  copy contract: title, safe explanation, and explicit next action. API errors,
+  start-risk blockers, and Paper tick-loss status consume the same entry where
+  their machine code is shared.
+- Keep response loss semantically uncertain: it remains distinct from a
+  rejected or rolled-back action. Unknown codes use a generic recovery path
+  and never show raw exception text as operator guidance.
+
+### Gotchas
+
+- A backend message can be valuable diagnostic evidence but it is not safe UI
+  copy. Do not display an unknown exception string as an instruction, and do
+  not infer that Paper stayed unchanged merely because the browser lost a
+  response.
+- Do not create a second title/action table for a modal or status card. If a
+  code needs different wording, add an explicit context-specific code rather
+  than silently letting two surfaces drift.
+
+### Verification
+
+- Browser fixtures cross-check `execution_reconciliation_drift` through API
+  error presentation and start-risk dialog, and tick-health through the
+  runtime card. They assert title/action identity and safe unknown fallback.
+- Focused dashboard/read-model/control-plane suite: 160 passed; launchd
+  Python 3.9 import compile and scoped gitleaks passed.
