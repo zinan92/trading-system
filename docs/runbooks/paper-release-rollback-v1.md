@@ -71,6 +71,22 @@ means source-attestation refusal only. Code 78 is BSD `EX_CONFIG` and must
 continue to be investigated as a separate configuration/runtime failure; do
 not infer a boot-gate block from 78.
 
+If launchd repeatedly reports `Unable to get updated LWCR ... Invalid argument`
+before the Python boot receipt timestamp advances, treat it as launchd
+registration failure, not datafeed or boot-gate evidence. After confirming
+Paper is stopped with zero accepted orders and zero open positions, use the
+source-gated narrow recovery command for only the affected label:
+
+```bash
+python3 -m pipelines.paper_service_rebootstrap \
+  --label com.wendy.trading-orchestrator.dualtrack-live-tick --json
+```
+
+The command refuses non-Paper labels and missing/stale/source-mismatched release
+receipts. Its durable receipt is
+`outputs/release_gates/paper_service_rebootstrap_current.json`. Do not replace
+this with a broad schedule install or an unrecorded `launchctl kickstart`.
+
 ## 3. Release the Paper service narrowly
 
 Use the existing local service manager only for the intended Paper component.

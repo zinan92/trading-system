@@ -11296,3 +11296,26 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused entrypoint tests prove both services return 79 before binding or
   constructing the runner. Other exception paths are unchanged.
+
+## 2026-07-25 - LWCR recovery re-registers only one gated Paper label
+
+### Decision
+
+- A launchd failure before Python (`Unable to get updated LWCR`) is recovered
+  by a narrow allowlisted bootout/bootstrap command. It requires the same fresh
+  source-bound release receipt as other Paper service mutations and records
+  bounded before/after evidence.
+
+### Gotchas
+
+- An increasing launchd `runs` counter does not prove Python started. If the
+  service boot receipt and stderr timestamps do not advance, datafeed and
+  application exit-code diagnosis has not begun.
+- Broad schedule reinstall and raw kickstart hide which label changed. The
+  recovery command may target only the requested Dashboard or live-tick label.
+
+### Verification
+
+- Focused fixtures prove non-allowlisted labels and failed release gates issue
+  zero commands, while a passing recovery emits only print, bootout, bootstrap,
+  and print for the exact requested service.

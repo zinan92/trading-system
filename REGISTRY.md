@@ -73,6 +73,7 @@
 - #376: Paper pre-deploy receipt 进一步绑定 commit tree 与 tracked checkout 清洁状态；Dashboard 和 dualtrack live-tick 在 boot 时必须验签后才能绑定端口或构造 runner。主动重启仍要求 15 分钟新鲜回执，同一已发布版本的 KeepAlive 自愈和周期 tick 不因时间流逝失效；开发改动必须在独立 worktree 完成。
 - #378: GOLD 的时间边界生命周期读取从 cache-only 改为 cache-first、零行时回同一 `binance_usdm_futures` execution venue；最新行情仍保持 bypass+strict，fallback/synthetic 仍禁止。任何上游或合同失败继续不写 tick heartbeat，并冻结 Grid/DCA 新启动。
 - #380: Paper source-attestation boot 拒绝使用专用退出码 79，并以 service boot receipt 为权威诊断；78 保留为标准 `EX_CONFIG`，不得再把两者混报。
+- #382: launchd 若在 Python 前报 LWCR/Invalid argument，只能通过 fresh source-bound receipt 驱动的单标签 rebootstrap 恢复；命令限制为 Paper allowlist，记录前后状态，不得用 broad schedule reinstall 或裸 kickstart 掩盖变更范围。
 - #180: GridMind 的 Paper 操作者主路径现在有一条连续 Playwright 验收：趋势刷新、智能填充、启动前调整、启动、停止，以及复盘/Shadows/NAV 入口均验证可见结果和控制请求；详细图表、拖动、历史加载仍由各自的聚焦浏览器测试覆盖。
 - #181: `codex/recovery-stash-20260721` 的四个 handoff 指定文件已逐项三方审计；均不应直接恢复，恢复分支仍完整保留为只读证据，结论见 `docs/audits/recovery-stash-20260721.md`。
 - #182: GitHub 404 的历史 #52–#128 已有不可伪造的本仓 provenance 索引；只记录可复验 commit/decision-log 证据，绝不伪造原 Issue，见 `docs/audits/missing-issue-provenance-52-128.md`。
