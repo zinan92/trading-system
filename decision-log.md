@@ -11159,3 +11159,23 @@ auditable datafeed port; broker execution remains a separate port.
 - A focused runbook contract test locks the mandatory gate, service labels,
   read-model probe, browser command, evidence location, rollback rules, and
   live/real-money boundary.
+
+## 2026-07-25 - Runtime compatibility follows each launchd job
+
+### Decision
+
+- Compatibility discovery reads the installed Dashboard and live-tick plists,
+  resolves each job's executable with its own PATH, and probes those runtimes
+  independently. The configured Nautilus Python is a separate dependency
+  target, not a claim about which interpreter launches every job.
+
+### Gotchas
+
+- `/usr/bin/python3` can pass while a PATH-qualified `python3` in a different
+  job resolves to Homebrew. Any discovery or probe exception must remain a
+  failed target in the durable receipt rather than escaping without evidence.
+
+### Verification
+
+- Focused fixtures cover per-job PATH resolution, an absolute interpreter,
+  deduplicated Nautilus dependency discovery, and a non-`OSError` probe failure.

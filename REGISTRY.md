@@ -67,7 +67,7 @@
 - #176: canonical accounting 会保留任何“平仓早于开仓”的历史原始记录并写入明确 reconciliation 诊断；Dashboard 将其隔离为“时间异常”，不再计为正常已完成交易。
 - #177: DCA lifecycle 的聚合止盈世代、累计数量和退出状态已从 Paper JSON 接入 read model；页面明确说明整轮 TP 由行情事件触发、不是 entry 挂单。
 - #178: 24 小时报表已成为受控 launchd 任务，直接执行本仓 pipeline；不再依赖已移动的外部 wrapper。调度状态会给出受限 stderr 摘要、失败分类、下一步以及报表产物是否存在。
-- #179: `/usr/bin/python3`（launchd 实际使用的 Python 3.9）现有独立的 import 兼容性闸和可读回执；Paper 服务重启前必须通过，不能用开发环境 Python 3.13 的测试结果替代。
+- #370: launchd 兼容性不再假定所有 Paper job 都使用 `/usr/bin/python3`。Dashboard 与 live-tick 会按各自 plist 的 `ProgramArguments`/`PATH` 解析并逐一探测；Nautilus Python 作为独立依赖验证。任何 discovery/probe 异常都会保留 blocked receipt，但机械接入 restart 路径仍由下一张发布安全票完成。
 - #180: GridMind 的 Paper 操作者主路径现在有一条连续 Playwright 验收：趋势刷新、智能填充、启动前调整、启动、停止，以及复盘/Shadows/NAV 入口均验证可见结果和控制请求；详细图表、拖动、历史加载仍由各自的聚焦浏览器测试覆盖。
 - #181: `codex/recovery-stash-20260721` 的四个 handoff 指定文件已逐项三方审计；均不应直接恢复，恢复分支仍完整保留为只读证据，结论见 `docs/audits/recovery-stash-20260721.md`。
 - #182: GitHub 404 的历史 #52–#128 已有不可伪造的本仓 provenance 索引；只记录可复验 commit/decision-log 证据，绝不伪造原 Issue，见 `docs/audits/missing-issue-provenance-52-128.md`。

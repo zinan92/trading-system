@@ -1,15 +1,17 @@
 # Paper launchd Python compatibility gate
 
-Before restarting or deploying a local Paper service, verify the interpreter
-that launchd actually runs:
+Before restarting or deploying a local Paper service, verify the interpreters
+that its installed launchd plists actually resolve:
 
 ```bash
-/usr/bin/python3 -m pipelines.launchd_python_compatibility --json
+python3 -m pipelines.launchd_python_compatibility --json
 ```
 
-The command imports the dashboard, Paper tick, daily-report pipeline, schedule
-manager, and strategy control plane using `/usr/bin/python3` (the local
-launchd Python 3.9). It writes a durable, credential-free receipt to
+The command reads the Dashboard and `dualtrack-live-tick` plists, resolves each
+`ProgramArguments[0]` using that job's own `PATH`, and probes them independently.
+It also probes `TRADING_ORCHESTRATOR_NAUTILUS_PYTHON` as a distinct Nautilus
+dependency; that environment value is not described as the launcher for every
+job. The durable credential-free receipt is
 `outputs/runtime_compatibility/launchd_python_current.json`.
 
 The deployable gate is the wrapper below; it runs that same actual-interpreter
