@@ -222,6 +222,47 @@ def test_repository_range_and_point_reads_preserve_request_boundaries() -> None:
     assert client.calls[1]["end"] == "2026-07-18T12:00:30+00:00"
 
 
+def test_repository_uses_refill_policy_only_for_bounded_history() -> None:
+    client = EnvelopeClient()
+    repo = DatafeedMarketRepository(
+        client=client,
+        config={
+            "datafeed": {
+                "instrument_routes": {
+                    "GOLD": {
+                        "asset_class": "commodity",
+                        "ticker": "GOLD",
+                        "source": "binance_usdm_futures",
+                        "historical_cache_policy": "allow",
+                        "historical_quality_policy": "standard",
+                        "live_cache_policy": "bypass",
+                        "live_quality_policy": "strict",
+                        "require_execution_venue": True,
+                    }
+                }
+            }
+        },
+    )
+
+    repo.load_bars_between(
+        "GOLD",
+        "1m",
+        "2026-07-18T12:00:00+00:00",
+        "2026-07-18T12:01:00+00:00",
+    )
+    repo.load_latest_bar("GOLD", "1m")
+
+    historical, latest = client.calls
+    assert historical["cache_policy"] == "allow"
+    assert historical["quality"] == "standard"
+    assert historical["source"] == "binance_usdm_futures"
+    assert historical["require_execution_venue"] is True
+    assert latest["cache_policy"] == "bypass"
+    assert latest["quality"] == "strict"
+    assert latest["source"] == "binance_usdm_futures"
+    assert latest["require_execution_venue"] is True
+
+
 def test_repository_contains_no_second_raw_candle_interpreter() -> None:
     source = (
         Path(__file__).parents[1] / "services" / "datafeed_market_repository.py"

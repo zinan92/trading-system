@@ -11252,3 +11252,28 @@ auditable datafeed port; broker execution remains a separate port.
   stale-but-identical crash recovery, and refusal before Dashboard binding or
   live-tick runner construction. A blocked boot writes a credential-free
   service-specific receipt.
+
+## 2026-07-25 - Live-tick may refill an absent bounded execution window
+
+### Decision
+
+- Time-bounded GOLD lifecycle reads use `cache_policy=allow` with the exact
+  `binance_usdm_futures` source, standard historical quality, execution-venue
+  requirement, and no fallback. A cache hit remains local; a zero-row window
+  may fetch only that same configured upstream.
+- Unbounded latest-market reads remain `cache_policy=bypass` with strict
+  quality. Upstream or contract failure still prevents heartbeat publication
+  and therefore blocks every new Grid/DCA start.
+
+### Gotchas
+
+- `cache_policy=require` means cache-only, not “prefer a trusted cache.” It
+  cannot repair the lifecycle window it depends on. Using `allow` globally
+  would be the opposite error because latest execution reads could return an
+  old cached bar.
+
+### Verification
+
+- Focused repository contracts prove bounded and unbounded calls select
+  different policies while retaining the same execution source and venue
+  requirement. The production route contract locks all four policy fields.
