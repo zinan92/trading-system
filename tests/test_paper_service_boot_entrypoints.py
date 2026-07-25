@@ -3,6 +3,7 @@ import sys
 import pytest
 
 from pipelines import dashboard_server, dualtrack_cycle_runner
+from services.paper_release_receipt import PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE
 
 
 class _BlockedBootGate:
@@ -25,7 +26,7 @@ def test_dashboard_refuses_boot_before_binding(monkeypatch):
     with pytest.raises(SystemExit) as exc_info:
         dashboard_server.main()
 
-    assert exc_info.value.code == 78
+    assert exc_info.value.code == PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE
 
 
 def test_live_tick_refuses_boot_before_runner_construction(monkeypatch, tmp_path):
@@ -40,4 +41,5 @@ def test_live_tick_refuses_boot_before_runner_construction(monkeypatch, tmp_path
         ["--event", "live-tick", "--output-root", str(tmp_path)]
     )
 
-    assert result == 78
+    assert result == PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE
+    assert result == 79

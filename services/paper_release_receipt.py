@@ -12,6 +12,9 @@ from services.journal_store import load_json, write_json
 
 
 DEFAULT_RELEASE_GATE_MAX_AGE_SECONDS = 900
+# BSD sysexits reserves 64-78 (78 is EX_CONFIG). Keep boot attestation
+# refusal outside that range so launchd diagnostics cannot misclassify it.
+PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE = 79
 
 
 def current_source_sha(

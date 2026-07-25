@@ -11277,3 +11277,22 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused repository contracts prove bounded and unbounded calls select
   different policies while retaining the same execution source and venue
   requirement. The production route contract locks all four policy fields.
+
+## 2026-07-25 - Paper boot refusal does not masquerade as EX_CONFIG
+
+### Decision
+
+- Dashboard and dualtrack live-tick return dedicated code 79 only when the
+  shared Paper source-attestation boot gate blocks. BSD sysexits codes 64-78
+  remain available for their standard meanings, including 78 `EX_CONFIG`.
+
+### Gotchas
+
+- A launchd `last exit code = 78: EX_CONFIG` is not evidence that
+  `PaperServiceBootGate` rejected the process. The boot receipt is authoritative;
+  code 79 plus that receipt identifies a source-attestation refusal.
+
+### Verification
+
+- Focused entrypoint tests prove both services return 79 before binding or
+  constructing the runner. Other exception paths are unchanged.
