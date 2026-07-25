@@ -15,6 +15,10 @@
         "asset_class": "commodity",
         "ticker": "GOLD",
         "source": "binance_usdm_futures",
+        "historical_cache_policy": "allow",
+        "historical_quality_policy": "standard",
+        "live_cache_policy": "bypass",
+        "live_quality_policy": "strict",
         "require_execution_venue": true
       },
       "MGCmain": {

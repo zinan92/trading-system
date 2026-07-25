@@ -48,16 +48,30 @@ class DatafeedMarketRepository:
         require_execution_venue = bool(
             route.get("require_execution_venue", False)
         )
+        historical = bool(start or end)
+        cache_policy = str(
+            route.get(
+                "historical_cache_policy" if historical else "live_cache_policy"
+            )
+            or route.get("cache_policy")
+            or "require"
+        )
+        quality_policy = str(
+            route.get(
+                "historical_quality_policy" if historical else "live_quality_policy"
+            )
+            or route.get("quality_policy")
+            or route.get("quality")
+            or "standard"
+        )
         payload = self.client.candles(
             asset_class=str(route["asset_class"]),
             ticker=str(route.get("ticker") or symbol),
             timeframe=timeframe,
             limit=limit,
             source=source,
-            cache_policy=str(route.get("cache_policy") or "require"),
-            quality=str(
-                route.get("quality_policy") or route.get("quality") or "standard"
-            ),
+            cache_policy=cache_policy,
+            quality=quality_policy,
             require_execution_venue=require_execution_venue,
             start=start,
             end=end,
