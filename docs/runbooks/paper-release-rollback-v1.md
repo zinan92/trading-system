@@ -13,12 +13,25 @@ Record the exact merge candidate before changing a local service:
 ```bash
 git fetch origin main
 git rev-parse origin/main
+git rev-parse HEAD
 git status --short
 ```
 
 The candidate must be a clean checkout of the recorded `origin/main` commit.
 Save that commit in the release evidence entry; a branch name or a green local
 test alone is not a deployment receipt.
+
+After running the pre-deploy gate, read its bound SHA:
+
+```bash
+python3 -c 'import json; print(json.load(open("outputs/release_gates/paper_predeploy_current.json"))[-1]["source_sha"])'
+```
+
+The receipt SHA, `git rev-parse HEAD`, and intended release SHA must be
+identical. This identifies the checked-out release candidate. The process is
+proven to run that SHA only when the subsequent managed install/cutover receipt
+names the same release gate and the changed service label. Without that
+mutation receipt, report the deployed process SHA as **unknown**.
 
 ## 2. Block unsafe deployment before any restart
 
@@ -28,7 +41,9 @@ Run the actual launchd-interpreter gate first:
 /usr/bin/python3 -m pipelines.paper_predeploy_gate --json
 ```
 
-Continue only when the output is `status=pass`. The durable receipt is
+With `--json`, continue only when the JSON contains `"status": "pass"`.
+Without `--json`, the plain output is `paper_predeploy_gate: pass`. The durable
+receipt is
 `outputs/release_gates/paper_predeploy_current.json`, including its nested
 `outputs/runtime_compatibility/launchd_python_current.json` compatibility
 result. A blocked gate is a stop condition: fix the interpreter/import/API
@@ -49,6 +64,21 @@ restart, stop, or inspect any live/real-money process as part of this runbook.
 Before a scheduler restart, retain the current runtime, accepted-order,
 position, and reconciliation facts as evidence. A process restart is delivery
 evidence only; it is not proof that data is fresh or that an order executed.
+
+For a Dashboard-only release, prove that live-tick was not included in the
+mutation:
+
+1. Before and after the release, save `launchctl print
+   gui/$(id -u)/com.wendy.trading-orchestrator.dualtrack-live-tick` and the
+   SHA-256 of its installed plist.
+2. Inspect the exact managed schedule receipt under
+   `outputs/schedules/install_current.json` or the cutover receipt under
+   `outputs/dualtrack/cutover/`. Its changed labels and command rows must omit
+   `com.wendy.trading-orchestrator.dualtrack-live-tick`.
+3. Record both artifact paths in the release note. A matching plist hash or a
+   currently loaded state alone cannot prove that no kickstart occurred. If
+   the auditable mutation receipt is absent, record scheduler restart status as
+   **unknown**, not “not restarted.”
 
 ## 4. Verify four separate evidence surfaces
 
@@ -81,11 +111,13 @@ release complete. The baseline Paper operator-flow command is:
 python3 -m pytest -q tests/test_dashboard_gridmind_operator_journey_browser.py
 ```
 
-For the actual local dashboard, open
-`http://127.0.0.1:8765/dashboard-v5.html`, exercise the changed **read-only or
-Paper-safe** flow once, and save a screenshot plus the relevant read-model or
-control receipt. A test fixture and a screenshot prove UI behavior; only
-accepted lifecycle and reconciliation artifacts prove Paper execution.
+For the actual local dashboard, open the supported route alias
+`http://127.0.0.1:8765/dashboard-v5.html`. The server maps that URL to the
+on-disk asset `dashboard-gridmind.html`; there is intentionally no
+`dashboard-v5.html` file. Exercise the changed **read-only or Paper-safe** flow
+once, and save a screenshot plus the relevant read-model or control receipt. A
+test fixture and a screenshot prove UI behavior; only accepted lifecycle and
+reconciliation artifacts prove Paper execution.
 
 ## 6. Release evidence location
 
@@ -99,6 +131,7 @@ GitHub Issue/PR. It must include:
 5. data/tick freshness result;
 6. changed-flow browser command, result, and screenshot path; and
 7. explicit Paper runtime/order/position/reconciliation facts.
+8. deployed-SHA evidence and the scheduler before/after plus mutation receipt.
 
 Redact credentials and never paste a key, signed request, or secret-bearing
 environment value into the evidence.
