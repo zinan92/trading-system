@@ -23,6 +23,13 @@ check, verifies the dashboard API surface, and writes a release receipt:
 
 `status=pass` is required before a Paper service restart. It writes
 `outputs/release_gates/paper_predeploy_current.json` with the nested
-compatibility receipt. `status=blocked` exits non-zero and is a deployment
+compatibility receipt, current source SHA, and 15-minute expiry.
+`status=blocked` exits non-zero and is a deployment
 blocker: fix the reported interpreter or import failure first. The gate neither
 reads exchange keys nor starts, stops, submits, cancels, or closes any order.
+
+Managed schedule install/rollback and attended Nautilus cutover/rollback paths
+re-read this receipt immediately before any modifying command. Missing, stale,
+non-passing, or source-SHA-mismatched evidence blocks
+bootout/bootstrap/kickstart. The legacy `start.command` runs the same
+pre-deploy gate before killing a listener or starting a runner.
