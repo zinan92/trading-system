@@ -70,6 +70,7 @@
 - #370: launchd 兼容性不再假定所有 Paper job 都使用 `/usr/bin/python3`。Dashboard 与 live-tick 会按各自 plist 的 `ProgramArguments`/`PATH` 解析并逐一探测；Nautilus Python 作为独立依赖验证。任何 discovery/probe 异常都会保留 blocked receipt，但机械接入 restart 路径仍由下一张发布安全票完成。
 - #372: Paper 发布闸已机械接入 schedule install/rollback、attended Nautilus cutover/rollback 与旧 `start.command`：receipt 必须 pass、包含兼容性通过、15 分钟内新鲜且 Git SHA 精确匹配当前 checkout，才允许任何 bootout/bootstrap/kickstart 或前台启动；失败路径只写 blocked receipt，不执行修改命令。
 - #374: release runbook 已校正 gate 的 JSON/plain 输出、`/dashboard-v5.html` 路由别名与磁盘 `dashboard-gridmind.html` 的区别，并要求 source-bound mutation receipt 才能声称部署 SHA 或 live-tick 未重启；缺证据一律标 `unknown`。26/26 页使用不可变 completion baseline，不再假装等于移动中的 HEAD。
+- #376: Paper pre-deploy receipt 进一步绑定 commit tree 与 tracked checkout 清洁状态；Dashboard 和 dualtrack live-tick 在 boot 时必须验签后才能绑定端口或构造 runner。主动重启仍要求 15 分钟新鲜回执，同一已发布版本的 KeepAlive 自愈和周期 tick 不因时间流逝失效；开发改动必须在独立 worktree 完成。
 - #180: GridMind 的 Paper 操作者主路径现在有一条连续 Playwright 验收：趋势刷新、智能填充、启动前调整、启动、停止，以及复盘/Shadows/NAV 入口均验证可见结果和控制请求；详细图表、拖动、历史加载仍由各自的聚焦浏览器测试覆盖。
 - #181: `codex/recovery-stash-20260721` 的四个 handoff 指定文件已逐项三方审计；均不应直接恢复，恢复分支仍完整保留为只读证据，结论见 `docs/audits/recovery-stash-20260721.md`。
 - #182: GitHub 404 的历史 #52–#128 已有不可伪造的本仓 provenance 索引；只记录可复验 commit/decision-log 证据，绝不伪造原 Issue，见 `docs/audits/missing-issue-provenance-52-128.md`。

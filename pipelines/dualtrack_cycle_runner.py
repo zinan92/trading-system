@@ -34,6 +34,7 @@ from services.journal_store import load_json, write_json
 from services.datafeed_market_repository import DatafeedMarketRepository
 from services.datafeed_market_client import DatafeedUnavailable
 from services.market_store import MarketStore
+from services.paper_release_receipt import PaperServiceBootGate
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
@@ -1948,6 +1949,15 @@ def _write_live_tick_failure_diagnostic(output_root: Path | None, exc: Exception
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin CLI wrapper
     args = build_parser().parse_args(argv)
     output_root = Path(args.output_root) if args.output_root else None
+    if args.event == "live-tick":
+        boot = PaperServiceBootGate(output_root=output_root).verify("dualtrack-live-tick")
+        if not boot.get("ok"):
+            print(
+                f"[paper-boot] dualtrack-live-tick blocked: {boot.get('blocker') or 'unknown'}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 78
     try:
         runner = DualTrackCycleRunner(
             output_root=output_root,
