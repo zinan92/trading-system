@@ -11201,3 +11201,25 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused receipts prove pass, missing, stale, malformed, source mismatch, and
   current-SHA failure behavior; schedule tests prove blocked paths issue no
   modifying command.
+
+## 2026-07-25 - Release documentation distinguishes candidate, process, and ledger SHAs
+
+### Decision
+
+- The runbook names the exact JSON/plain gate output, documents the V5 URL as a
+  route alias for `dashboard-gridmind.html`, and requires source-bound mutation
+  evidence before claiming a deployed process SHA or that live-tick was not
+  restarted. The completed implementation ledger pins an immutable completion
+  baseline rather than chasing the moving repository HEAD.
+
+### Gotchas
+
+- A matching plist hash and a loaded launchd job do not prove there was no
+  kickstart between observations. Without the managed command receipt, the
+  scheduler restart result is `unknown`.
+
+### Verification
+
+- Focused documentation contracts lock the exact status forms, source-SHA
+  command, route/asset distinction, scheduler evidence paths, and completion
+  baseline semantics.

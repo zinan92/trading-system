@@ -13,8 +13,11 @@ In progress     0 / 26
 Remaining       0 / 26
 ```
 
-**As of:** `main@d3e41a2` · **Current work:** implementation plan complete ·
-**Next planned story:** none; use the Paper release runbook for future releases.
+**Completion evidence baseline:** `main@d3e41a2` ([PR #367](https://github.com/zinan92/trading-system/pull/367))
+is the immutable commit where the 26/26 ledger first entered `main`; it is not
+intended to equal the moving repository HEAD. **Current work:** implementation
+plan complete · **Next planned story:** none; use the Paper release runbook for
+future releases.
 
 | Milestone | Done | Active | Remaining | Meaning |
 |---|---:|---:|---:|---|
