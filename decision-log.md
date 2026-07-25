@@ -11223,3 +11223,32 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused documentation contracts lock the exact status forms, source-SHA
   command, route/asset distinction, scheduler evidence paths, and completion
   baseline semantics.
+
+## 2026-07-25 - Paper service boot verifies the deployed source tree
+
+### Decision
+
+- A passing pre-deploy receipt now binds the commit SHA and committed tree SHA
+  and is only issued from a clean tracked checkout. Dashboard and periodic
+  live-tick boot verify that attestation before binding or constructing the
+  execution runner. Development uses a separate worktree from the runtime
+  checkout.
+- Active service mutation still requires a receipt no older than 15 minutes.
+  Boot verification deliberately ignores that expiry when the exact clean
+  release still matches, preserving launchd crash recovery and periodic ticks.
+
+### Gotchas
+
+- Git SHA alone does not detect an edited tracked file. Conversely, applying
+  the 15-minute mutation expiry to every periodic tick would disable a healthy
+  scheduler after 15 minutes; freshness and deployed-source identity are
+  separate controls.
+- Untracked operator handoff files do not alter executable tracked source and
+  are excluded from the source-tree cleanliness check.
+
+### Verification
+
+- Focused fixtures cover dirty tracked files, commit/tree mismatch,
+  stale-but-identical crash recovery, and refusal before Dashboard binding or
+  live-tick runner construction. A blocked boot writes a credential-free
+  service-specific receipt.

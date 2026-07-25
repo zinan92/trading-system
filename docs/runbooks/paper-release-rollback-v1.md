@@ -21,6 +21,11 @@ The candidate must be a clean checkout of the recorded `origin/main` commit.
 Save that commit in the release evidence entry; a branch name or a green local
 test alone is not a deployment receipt.
 
+Develop in a separate Git worktree from the runtime checkout. Editing tracked
+files in the runtime checkout is not a deployment method: the boot gate will
+reject that dirty tree even if launchd KeepAlive or the Dashboard code watcher
+tries to respawn it.
+
 After running the pre-deploy gate, read its bound SHA:
 
 ```bash
@@ -28,7 +33,9 @@ python3 -c 'import json; print(json.load(open("outputs/release_gates/paper_prede
 ```
 
 The receipt SHA, `git rev-parse HEAD`, and intended release SHA must be
-identical. This identifies the checked-out release candidate. The process is
+identical. The receipt also records `source_tree_sha` and
+`tracked_tree_clean=true`; both must still match at service boot. This
+identifies the checked-out release candidate. The process is
 proven to run that SHA only when the subsequent managed install/cutover receipt
 names the same release gate and the changed service label. Without that
 mutation receipt, report the deployed process SHA as **unknown**.
@@ -48,6 +55,15 @@ receipt is
 `outputs/runtime_compatibility/launchd_python_current.json` compatibility
 result. A blocked gate is a stop condition: fix the interpreter/import/API
 surface first. Do not use a developer-shell Python result as a substitute.
+
+The 15-minute expiry grants authority to actively restart or replace a managed
+Paper service. Each Dashboard and live-tick process also verifies the same
+receipt's exact commit, committed tree, clean tracked checkout, and compatibility
+result at boot. This boot check intentionally does not expire with the
+15-minute mutation window, so normal same-release crash recovery and periodic
+live-tick launches continue. A failed boot writes
+`outputs/release_gates/paper_service_boot_<service>_current.json` and exits
+before the Dashboard binds or live-tick constructs its runner.
 
 ## 3. Release the Paper service narrowly
 

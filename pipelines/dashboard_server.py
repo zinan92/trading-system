@@ -5,6 +5,7 @@ import math
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -18,6 +19,7 @@ from services.accounting_projection_core import project_execution_accounting
 from services.broker_adapter import PaperBrokerAdapter
 from services.broker_read_model import project_broker_read_model
 from services.code_reload import CodeReloadGuard
+from services.paper_release_receipt import PaperServiceBootGate
 from services.config_loader import ROOT, load_pipeline_config
 from services.command_center import build_command_center_state
 from services.connector_activation_plan import ConnectorActivationPlan
@@ -3554,6 +3556,14 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
+    boot = PaperServiceBootGate().verify("dashboard")
+    if not boot.get("ok"):
+        print(
+            f"[paper-boot] dashboard blocked: {boot.get('blocker') or 'unknown'}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(78)
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
     print(f"Dashboard server: http://{args.host}:{args.port}/dashboard-v4.html")
     print(f"Dashboard API: http://{args.host}:{args.port}/api/dashboard?date={utc_run_date()}")

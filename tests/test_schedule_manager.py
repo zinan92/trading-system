@@ -14,7 +14,7 @@ from services.schedule_manager import ScheduleManager
 from services.schedule_post_install_verifier import SchedulePostInstallVerifier
 from services.schedule_status import ScheduleStatus
 from services.schedule_takeover_package import ScheduleTakeoverPackage
-from services.paper_release_receipt import current_source_sha
+from services.paper_release_receipt import current_source_attestation
 
 FULL_SCHEDULE_LABELS = {
     "com.wendy.trading-orchestrator.runner",
@@ -53,13 +53,16 @@ def _takeover_package_id(
 
 
 def _stage_passing_release_gate(root: Path) -> None:
+    attestation = current_source_attestation()
     write_json(
         root / "release_gates" / "paper_predeploy_current.json",
         [{
-            "schema_version": "paper-predeploy-gate-v2",
+            "schema_version": "paper-predeploy-gate-v3",
             "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "status": "pass",
-            "source_sha": current_source_sha(),
+            "source_sha": attestation["source_sha"],
+            "source_tree_sha": attestation["source_tree_sha"],
+            "tracked_tree_clean": attestation["tracked_tree_clean"],
             "compatibility_receipt": {"status": "pass"},
         }],
     )
