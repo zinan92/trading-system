@@ -19,7 +19,10 @@ from services.accounting_projection_core import project_execution_accounting
 from services.broker_adapter import PaperBrokerAdapter
 from services.broker_read_model import project_broker_read_model
 from services.code_reload import CodeReloadGuard
-from services.paper_release_receipt import PaperServiceBootGate
+from services.paper_release_receipt import (
+    PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE,
+    PaperServiceBootGate,
+)
 from services.config_loader import ROOT, load_pipeline_config
 from services.command_center import build_command_center_state
 from services.connector_activation_plan import ConnectorActivationPlan
@@ -3563,7 +3566,7 @@ def main() -> None:
             file=sys.stderr,
             flush=True,
         )
-        raise SystemExit(78)
+        raise SystemExit(PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE)
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
     print(f"Dashboard server: http://{args.host}:{args.port}/dashboard-v4.html")
     print(f"Dashboard API: http://{args.host}:{args.port}/api/dashboard?date={utc_run_date()}")

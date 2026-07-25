@@ -34,7 +34,10 @@ from services.journal_store import load_json, write_json
 from services.datafeed_market_repository import DatafeedMarketRepository
 from services.datafeed_market_client import DatafeedUnavailable
 from services.market_store import MarketStore
-from services.paper_release_receipt import PaperServiceBootGate
+from services.paper_release_receipt import (
+    PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE,
+    PaperServiceBootGate,
+)
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
@@ -1957,7 +1960,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin C
                 file=sys.stderr,
                 flush=True,
             )
-            return 78
+            return PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE
     try:
         runner = DualTrackCycleRunner(
             output_root=output_root,

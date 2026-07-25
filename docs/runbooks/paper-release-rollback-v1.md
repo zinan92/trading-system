@@ -65,6 +65,12 @@ live-tick launches continue. A failed boot writes
 `outputs/release_gates/paper_service_boot_<service>_current.json` and exits
 before the Dashboard binds or live-tick constructs its runner.
 
+A boot-gate refusal exits with dedicated code **79** and names its blocker in
+`outputs/release_gates/paper_service_boot_<service>_current.json`. Code 79
+means source-attestation refusal only. Code 78 is BSD `EX_CONFIG` and must
+continue to be investigated as a separate configuration/runtime failure; do
+not infer a boot-gate block from 78.
+
 ## 3. Release the Paper service narrowly
 
 Use the existing local service manager only for the intended Paper component.
