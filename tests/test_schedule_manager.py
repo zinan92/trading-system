@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import plistlib
 import subprocess
@@ -13,6 +14,7 @@ from services.schedule_manager import ScheduleManager
 from services.schedule_post_install_verifier import SchedulePostInstallVerifier
 from services.schedule_status import ScheduleStatus
 from services.schedule_takeover_package import ScheduleTakeoverPackage
+from services.paper_release_receipt import current_source_sha
 
 FULL_SCHEDULE_LABELS = {
     "com.wendy.trading-orchestrator.runner",
@@ -45,7 +47,22 @@ def _takeover_package_id(
     runner,
     run_date: str = "2026-05-26",
 ) -> str:
-    return ScheduleTakeoverPackage(root, launch_agents, runner).run(run_date)["package_id"]
+    package_id = ScheduleTakeoverPackage(root, launch_agents, runner).run(run_date)["package_id"]
+    _stage_passing_release_gate(root)
+    return package_id
+
+
+def _stage_passing_release_gate(root: Path) -> None:
+    write_json(
+        root / "release_gates" / "paper_predeploy_current.json",
+        [{
+            "schema_version": "paper-predeploy-gate-v2",
+            "checked_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "status": "pass",
+            "source_sha": current_source_sha(),
+            "compatibility_receipt": {"status": "pass"},
+        }],
+    )
 
 
 def _stage_stale_launch_agents(schedule: dict, launch_agents: Path, *, stale_label: str = "com.wendy.trading-orchestrator.runner") -> None:
@@ -529,6 +546,35 @@ def test_schedule_installer_blocks_apply_without_package_id_after_acknowledgemen
     assert result["package_gate"]["ok"] is False
     assert result["safety"]["writes_launch_agents"] is False
     assert result["safety"]["runs_launchctl_modification"] is False
+    assert not launch_agents.exists()
+    assert all(command[:2] == ["launchctl", "print"] for command in commands)
+
+
+def test_schedule_installer_blocks_before_modification_without_release_receipt(tmp_path: Path):
+    root = tmp_path / "outputs"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _full_schedule_manager(root, repo).build(review_hour=22, review_minute=30, dashboard_port=9876)
+    launch_agents = tmp_path / "LaunchAgents"
+    commands = []
+
+    def fake_runner(command: list[str]) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 113, "", "not loaded")
+
+    package_id = _takeover_package_id(root, launch_agents, fake_runner)
+    (root / "release_gates" / "paper_predeploy_current.json").unlink()
+
+    result = ScheduleInstaller(root, launch_agents, fake_runner).install(
+        "2026-05-26",
+        acknowledgement=SCHEDULE_INSTALL_ACKNOWLEDGEMENT,
+        package_id=package_id,
+    )
+
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "missing_paper_predeploy_receipt"
+    assert result["release_gate"]["ok"] is False
+    assert result["safety"]["writes_launch_agents"] is False
     assert not launch_agents.exists()
     assert all(command[:2] == ["launchctl", "print"] for command in commands)
 

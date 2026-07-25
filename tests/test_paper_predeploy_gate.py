@@ -30,13 +30,19 @@ def test_paper_predeploy_gate_passes_and_records_the_compatibility_receipt(tmp_p
         command_runner=lambda command, **kwargs: _probe(),
     )
 
-    result = PaperPredeployGate(tmp_path, compatibility=compatibility).run()
+    result = PaperPredeployGate(
+        tmp_path,
+        compatibility=compatibility,
+        source_sha_resolver=lambda: "a" * 40,
+    ).run()
 
     assert result["status"] == "pass", result
     assert result["compatibility_receipt"]["status"] == "pass"
     assert not any(result["operations"].values())
     receipt = json.loads((tmp_path / "release_gates" / "paper_predeploy_current.json").read_text())[-1]
-    assert receipt["schema_version"] == "paper-predeploy-gate-v1"
+    assert receipt["schema_version"] == "paper-predeploy-gate-v2"
+    assert receipt["source_sha"] == "a" * 40
+    assert receipt["max_age_seconds"] == 900
     target = receipt["compatibility_receipt"]["targets"][0]
     assert target["api_surface_results"]["do_GET"] == "ok"
 
@@ -48,10 +54,34 @@ def test_paper_predeploy_gate_blocks_an_incompatible_import_without_runtime_acti
         command_runner=lambda command, **kwargs: _probe(import_name="pipelines.dashboard_server"),
     )
 
-    result = PaperPredeployGate(tmp_path, compatibility=compatibility).run()
+    result = PaperPredeployGate(
+        tmp_path,
+        compatibility=compatibility,
+        source_sha_resolver=lambda: "a" * 40,
+    ).run()
 
     assert result["status"] == "blocked"
     assert result["reason"] == "launchd_python_compatibility_failed"
     target = result["compatibility_receipt"]["targets"][0]
     assert target["import_results"]["pipelines.dashboard_server"] == "SyntaxError"
     assert not any(result["operations"].values())
+
+
+def test_paper_predeploy_gate_writes_blocked_receipt_when_source_sha_resolution_raises(tmp_path: Path):
+    compatibility = LaunchdPythonCompatibility(
+        tmp_path,
+        interpreter="/usr/bin/python3",
+        command_runner=lambda command, **kwargs: _probe(),
+    )
+
+    result = PaperPredeployGate(
+        tmp_path,
+        compatibility=compatibility,
+        source_sha_resolver=lambda: (_ for _ in ()).throw(RuntimeError("git unavailable")),
+    ).run()
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "paper_predeploy_exception"
+    assert result["source_sha"] == ""
+    receipt = json.loads((tmp_path / "release_gates" / "paper_predeploy_current.json").read_text())[-1]
+    assert receipt["status"] == "blocked"

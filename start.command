@@ -8,6 +8,10 @@ set -e
 # 切到项目根目录(无论你把 .command 放哪)
 cd "$(dirname "$0")"
 
+# Any operation below can replace the dashboard listener or start the Paper
+# runner. Prove the checked-out source and every configured runtime first.
+python3 -m pipelines.paper_predeploy_gate --json
+
 # 用今天的日期
 RUN_DATE="$(date +%Y-%m-%d)"
 DASH_PORT=8765

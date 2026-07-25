@@ -72,8 +72,30 @@ def _fixture(tmp_path: Path, *, ready: bool = True, validator=None):
         service_quiescer=quiesce,
         service_starter=start,
         engine_validator=validator or default_validator,
+        release_gate_validator=lambda: {"ok": True, "source_sha": "a" * 40},
     )
     return controller, output, config_path, launch_agents, calls
+
+
+def test_cutover_release_gate_blocks_before_file_or_service_mutation(tmp_path: Path) -> None:
+    controller, output, config_path, launch_agents, calls = _fixture(tmp_path)
+    controller.release_gate_validator = lambda: {
+        "ok": False,
+        "blocker": "paper_predeploy_source_sha_mismatch",
+    }
+    before = {
+        path: path.read_bytes()
+        for path in [config_path, *(launch_agents / f"{label}.plist" for label in LABELS)]
+    }
+
+    result = controller.apply(acknowledgement=CUTOVER_ACKNOWLEDGEMENT)
+
+    assert result["status"] == "blocked"
+    assert result["blocker"] == "paper_predeploy_source_sha_mismatch"
+    assert result["detail"]["release_gate"]["ok"] is False
+    assert calls == []
+    assert {path: path.read_bytes() for path in before} == before
+    assert result["config_write_performed"] is False
 
 
 def test_cutover_blocker_performs_no_file_or_service_mutation(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.schedule_status import ScheduleStatus
 from services.schedule_profiles import PROJECT_LABEL_PREFIX
+from services.paper_release_receipt import PaperReleaseReceiptGate
 
 
 SCHEDULE_INSTALL_ACKNOWLEDGEMENT = "I_UNDERSTAND_SCHEDULE_INSTALL_WILL_REPLACE_OR_RESTART_LOCAL_LAUNCHD_JOBS"
@@ -33,6 +34,7 @@ class ScheduleInstaller:
         bootstrap_retry_delay_seconds: float = 2.0,
         dashboard_poll_seconds: float = 0.5,
         dashboard_timeout_seconds: float = 15.0,
+        release_gate_validator: Callable[[], dict] | None = None,
     ) -> None:
         config = load_pipeline_config()
         self.output_root = output_root or ROOT / config.get("output_root", "outputs")
@@ -44,6 +46,9 @@ class ScheduleInstaller:
         self.bootstrap_retry_delay_seconds = bootstrap_retry_delay_seconds
         self.dashboard_poll_seconds = dashboard_poll_seconds
         self.dashboard_timeout_seconds = dashboard_timeout_seconds
+        self.release_gate_validator = release_gate_validator or PaperReleaseReceiptGate(
+            self.output_root
+        ).verify
 
     def plan(self, run_date: str, restart_loaded: bool = True, *, persist: bool = True) -> dict:
         schedule_rows = load_json(self.output_root / "schedules" / "current.json")
@@ -110,6 +115,21 @@ class ScheduleInstaller:
                 acknowledgement_ok,
                 package_gate=package_gate,
             )
+        release_gate = (
+            self.release_gate_validator()
+            if plan.get("status") != "noop"
+            else {"ok": True, "status": "not_required_for_noop"}
+        )
+        if plan.get("status") != "noop" and not release_gate.get("ok"):
+            return self._blocked_install_receipt(
+                run_date,
+                restart_loaded,
+                plan,
+                str(release_gate.get("blocker") or "paper_predeploy_gate_failed"),
+                acknowledgement_ok,
+                package_gate=package_gate,
+                release_gate=release_gate,
+            )
         if plan.get("status") == "noop":
             payload = {
                 "run_date": run_date,
@@ -121,6 +141,7 @@ class ScheduleInstaller:
                 "acknowledgement_ok": acknowledgement_ok,
                 "required_acknowledgement": SCHEDULE_INSTALL_ACKNOWLEDGEMENT,
                 "package_gate": package_gate,
+                "release_gate": release_gate,
                 "jobs": [],
                 "orphans": [],
                 "plan": plan,
@@ -164,6 +185,7 @@ class ScheduleInstaller:
             "acknowledgement_ok": True,
             "required_acknowledgement": SCHEDULE_INSTALL_ACKNOWLEDGEMENT,
             "package_gate": package_gate,
+            "release_gate": release_gate,
             "backup_dir": str(backup_dir) if backups else "",
             "backup_count": len(backups),
             "jobs": results,
@@ -248,6 +270,16 @@ class ScheduleInstaller:
             return self._blocked_rollback_receipt(run_date, restart_loaded, plan, plan.get("blocker") or "rollback_plan_blocked", acknowledgement_ok)
         if not acknowledgement_ok:
             return self._blocked_rollback_receipt(run_date, restart_loaded, plan, "missing_acknowledgement", acknowledgement_ok)
+        release_gate = self.release_gate_validator()
+        if not release_gate.get("ok"):
+            return self._blocked_rollback_receipt(
+                run_date,
+                restart_loaded,
+                plan,
+                str(release_gate.get("blocker") or "paper_predeploy_gate_failed"),
+                acknowledgement_ok,
+                release_gate=release_gate,
+            )
         rollback_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         pre_rollback_backup_dir = self.output_root / "schedules" / "rollback_target_backups" / rollback_id
         results = [self._rollback_job(job, restart_loaded, pre_rollback_backup_dir) for job in plan.get("jobs", [])]
@@ -263,6 +295,7 @@ class ScheduleInstaller:
             "launch_agents_dir": str(self.launch_agents_dir),
             "acknowledgement_ok": True,
             "required_acknowledgement": SCHEDULE_ROLLBACK_ACKNOWLEDGEMENT,
+            "release_gate": release_gate,
             "pre_rollback_backup_dir": str(pre_rollback_backup_dir) if backups else "",
             "pre_rollback_backup_count": len(backups),
             "jobs": results,
@@ -283,6 +316,7 @@ class ScheduleInstaller:
         acknowledgement_ok: bool,
         *,
         package_gate: dict | None = None,
+        release_gate: dict | None = None,
     ) -> dict:
         payload = {
             "run_date": run_date,
@@ -295,6 +329,7 @@ class ScheduleInstaller:
             "acknowledgement_ok": acknowledgement_ok,
             "required_acknowledgement": SCHEDULE_INSTALL_ACKNOWLEDGEMENT,
             "package_gate": package_gate or {},
+            "release_gate": release_gate or {},
             "jobs": [],
             "orphans": [],
             "plan": plan,
@@ -381,7 +416,16 @@ class ScheduleInstaller:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc).replace(microsecond=0) > parsed.astimezone(timezone.utc)
 
-    def _blocked_rollback_receipt(self, run_date: str, restart_loaded: bool, plan: dict, blocker: str, acknowledgement_ok: bool) -> dict:
+    def _blocked_rollback_receipt(
+        self,
+        run_date: str,
+        restart_loaded: bool,
+        plan: dict,
+        blocker: str,
+        acknowledgement_ok: bool,
+        *,
+        release_gate: dict | None = None,
+    ) -> dict:
         payload = {
             "run_date": run_date,
             "rolled_back_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -392,6 +436,7 @@ class ScheduleInstaller:
             "launch_agents_dir": str(self.launch_agents_dir),
             "acknowledgement_ok": acknowledgement_ok,
             "required_acknowledgement": SCHEDULE_ROLLBACK_ACKNOWLEDGEMENT,
+            "release_gate": release_gate or {},
             "jobs": [],
             "plan": plan,
             "schedule_status": plan.get("schedule_status", {}),

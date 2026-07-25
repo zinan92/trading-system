@@ -11179,3 +11179,25 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused fixtures cover per-job PATH resolution, an absolute interpreter,
   deduplicated Nautilus dependency discovery, and a non-`OSError` probe failure.
+
+## 2026-07-25 - Paper restart authority is a fresh source-bound receipt
+
+### Decision
+
+- A passing compatibility command now binds its receipt to the full checked-out
+  Git SHA for 15 minutes. Schedule install/rollback and the attended Nautilus
+  cutover/rollback validate status, nested compatibility, age, and exact
+  current SHA before any launchd mutation. The legacy start command runs the
+  gate before killing or starting a process.
+
+### Gotchas
+
+- A receipt from another commit or an earlier terminal session is not release
+  authority. Dry-run schedule plans remain readable without a receipt, but
+  bootout, bootstrap, kickstart, copy, remove, and foreground start paths do not.
+
+### Verification
+
+- Focused receipts prove pass, missing, stale, malformed, source mismatch, and
+  current-SHA failure behavior; schedule tests prove blocked paths issue no
+  modifying command.

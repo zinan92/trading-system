@@ -28,6 +28,7 @@ from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_config import dualtrack_config
 from services.execution_plugin_composition import NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT
 from services.journal_store import load_json, write_json
+from services.paper_release_receipt import PaperReleaseReceiptGate
 
 
 CUTOVER_ACKNOWLEDGEMENT = "I_UNDERSTAND_NAUTILUS_PAPER_CUTOVER_WILL_RESTART_LOCAL_SERVICES"
@@ -52,6 +53,7 @@ class DualTrackNautilusCutoverController:
         service_quiescer: Callable[[tuple[str, ...]], list[dict[str, Any]]] | None = None,
         service_starter: Callable[[tuple[Path, ...]], list[dict[str, Any]]] | None = None,
         engine_validator: Callable[[str], dict[str, Any]] | None = None,
+        release_gate_validator: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.config_path = Path(config_path or ROOT / "configs" / "dualtrack.yaml")
@@ -62,6 +64,9 @@ class DualTrackNautilusCutoverController:
         self.service_quiescer = service_quiescer or self._default_quiesce
         self.service_starter = service_starter or self._default_start
         self.engine_validator = engine_validator or self._default_engine_validator
+        self.release_gate_validator = release_gate_validator or PaperReleaseReceiptGate(
+            self.output_root
+        ).verify
 
     def apply(
         self,
@@ -93,6 +98,14 @@ class DualTrackNautilusCutoverController:
         )
         if precheck.get("status") != "ready_for_operator_cutover":
             return self._blocked("precheck_not_ready", acknowledgement_ok=True, precheck=precheck)
+        release_gate = self.release_gate_validator()
+        if not release_gate.get("ok"):
+            return self._blocked(
+                str(release_gate.get("blocker") or "paper_predeploy_gate_failed"),
+                acknowledgement_ok=True,
+                precheck=precheck,
+                detail={"release_gate": release_gate},
+            )
 
         runtime_path = str(self.environ.get("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or "").strip()
         targets = self._targets()
@@ -152,6 +165,7 @@ class DualTrackNautilusCutoverController:
                 "status": status,
                 "error": str(exc),
                 "precheck": precheck,
+                "release_gate": release_gate,
                 "backups": backups,
                 "quiesce_receipts": quiesce_receipts,
                 "start_receipts": start_receipts,
@@ -179,6 +193,7 @@ class DualTrackNautilusCutoverController:
             "cycle_id": str(precheck.get("cycle_id") or cycle_id or ""),
             "status": "applied",
             "precheck": precheck,
+            "release_gate": release_gate,
             "backups": backups,
             "quiesce_receipts": quiesce_receipts,
             "start_receipts": start_receipts,
@@ -216,6 +231,14 @@ class DualTrackNautilusCutoverController:
         )
         if precheck.get("status") != "ready_for_rollback":
             return self._blocked("rollback_precheck_not_ready", acknowledgement_ok=True, precheck=precheck)
+        release_gate = self.release_gate_validator()
+        if not release_gate.get("ok"):
+            return self._blocked(
+                str(release_gate.get("blocker") or "paper_predeploy_gate_failed"),
+                acknowledgement_ok=True,
+                precheck=precheck,
+                detail={"release_gate": release_gate},
+            )
 
         backups = list(apply_receipt.get("backups") or [])
         if not self._backups_match_targets(backups):
@@ -248,6 +271,7 @@ class DualTrackNautilusCutoverController:
             "status": status,
             "error": error,
             "precheck": precheck,
+            "release_gate": release_gate,
             "quiesce_receipts": quiesce_receipts,
             "start_receipts": start_receipts,
             "post_validation": post_validation,
