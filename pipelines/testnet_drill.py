@@ -353,7 +353,7 @@ class TestnetDrill:
         checks = {
             "always_on_blocked": str(always_on.get("status") or "").startswith("BLOCKED_"),
             "dry_run_fail_branch": ping.get("status") == "dry_run_fail",
-            "fail_url_selected": "/fail" in str(ping.get("url") or ""),
+            "fail_url_selected": ping.get("target_kind") == "fail",
             "critical_when_reconciliation_stale": result.get("severity") == "critical",
             "position_unknown": (result.get("exposure") or {}).get("position_unknown") is True,
         }

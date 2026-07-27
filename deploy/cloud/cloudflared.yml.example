@@ -1,0 +1,7 @@
+tunnel: <TUNNEL_ID>
+credentials-file: /etc/gridmind/cloudflared-credentials.json
+
+ingress:
+  - hostname: <AUTHENTICATED_HOSTNAME>
+    service: http://127.0.0.1:8766
+  - service: http_status:404

@@ -171,6 +171,7 @@ def project_trading_system_read_model(
         },
         "operations": {
             "safe_repair_queue": _json_copy(_mapping(source.get("safe_repair_queue"))),
+            "cloud_health": _json_copy(_mapping(source.get("cloud_health"))),
         },
         "ui_capabilities": _json_copy(_mapping(source.get("ui_capabilities"))),
         "safety": {

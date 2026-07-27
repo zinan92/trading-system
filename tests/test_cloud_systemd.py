@@ -33,6 +33,13 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     assert "/Users/" not in all_text
     assert "--host 127.0.0.1 --port 8100" in rendered["gridmind-datafeed.service"]
     assert "--host 127.0.0.1 --port 8765" in rendered["gridmind-dashboard.service"]
+    assert "--host 127.0.0.1 --port 8766" in rendered[
+        "gridmind-access-gateway.service"
+    ]
+    assert "http://127.0.0.1:8766" not in rendered["gridmind-cloudflared.service"]
+    assert "/etc/gridmind/cloudflared.yml" in rendered[
+        "gridmind-cloudflared.service"
+    ]
     assert "pipelines.cloud_service_boot --service dashboard" in rendered[
         "gridmind-dashboard.service"
     ]
@@ -79,6 +86,20 @@ def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
     dashboard = installer.apply(rendered, "activate-dashboard", dry_run=True)
     assert dashboard["commands"] == [
         ["systemctl", "enable", "--now", "gridmind-dashboard.service"]
+    ]
+    remote = installer.apply(
+        rendered,
+        "activate-remote-access",
+        dry_run=True,
+    )
+    assert remote["commands"] == [
+        [
+            "systemctl",
+            "enable",
+            "--now",
+            "gridmind-access-gateway.service",
+            "gridmind-cloudflared.service",
+        ]
     ]
 
 

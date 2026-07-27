@@ -542,3 +542,11 @@ def test_v5_route_serves_gridmind_without_removing_legacy_console() -> None:
     assert 'if parsed.path == "/dashboard-v5.html":' in server
     assert 'self._serve_static_alias("/dashboard-gridmind.html")' in server
     assert (ROOT / "dashboard-dualtrack-split.html").exists()
+
+
+def test_gridmind_surfaces_layered_cloud_health_in_production_status() -> None:
+    html = _html()
+
+    assert "function cloudHealthText(data)" in html
+    assert "Cloud 7×24 健康 · 全部分层证据通过" in html
+    assert '["Cloud 7×24",cloudHealthText(data)]' in html

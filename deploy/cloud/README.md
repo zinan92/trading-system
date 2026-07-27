@@ -67,6 +67,43 @@ activate-dashboard --apply`. Neither action enables the live-tick, report, or
 dead-man timers. Scheduler activation belongs to the later single-owner
 cutover contract.
 
+## Authenticated remote access and layered health
+
+Never point a public tunnel at ports 8100 or 8765. The public chain is:
+
+```text
+Cloudflare Access -> cloudflared -> 127.0.0.1:8766 allowlist gateway
+                  -> 127.0.0.1:8765 Dashboard
+```
+
+Copy `cloudflared.yml.example` to `/etc/gridmind/cloudflared.yml`, replace only
+the tunnel ID and authenticated hostname, and keep the credential JSON outside
+the Git checkout. In `/etc/gridmind/paper.env` configure
+`GOLDBOT_ACCESS_TEAM_DOMAIN`, `GOLDBOT_ACCESS_AUD`, and
+`GOLDBOT_ACCESS_EMAIL`. The gateway validates the signed Access JWT and
+allowlists exact Dashboard assets/APIs; assertions and tunnel/dead-man tokens
+never enter its audit log.
+
+After Dashboard preflight passes, `activate-remote-access` may enable the
+gateway and tunnel. It does not enable the live-tick scheduler:
+
+```bash
+sudo /opt/gridmind/venvs/app/bin/python -m pipelines.cloud_systemd \
+  --repo-root /opt/gridmind/src/trading-system \
+  --datafeed-root /opt/gridmind/src/datafeed \
+  --app-python /opt/gridmind/venvs/app/bin/python \
+  --datafeed-python /opt/gridmind/venvs/datafeed/bin/python \
+  --render-dir /opt/gridmind/rendered-systemd \
+  --action activate-remote-access --apply
+```
+
+`GET /api/trading-system/cloud-health` reports datafeed freshness, live tick,
+execution, reconciliation, daily self-review, backup, scheduler ownership, and
+deployed SHA separately. Dashboard reachability is explicitly not treated as
+system health. In Cloud mode, the dead-man sends its fail signal when any
+blocking or degraded layer exists; its persisted receipt records only
+`target_kind=success|fail`, never the configured URL.
+
 The focused daily self-review is scheduled for 17:10 UTC (01:10 Beijing),
 after the terminal 24-hour report. It writes immutable evidence revisions
 under `outputs/dualtrack/daily_self_reviews/` and is readable from:

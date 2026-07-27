@@ -12,6 +12,7 @@ from typing import Any
 from services.journal_store import load_json, write_json
 from services.schedule_status import ScheduleStatus
 from services.system_vitals import SystemVitals
+from services.cloud_health import CloudPaperHealth
 
 
 def _utcnow() -> datetime:
@@ -63,6 +64,7 @@ class ExternalDeadmanPing:
         opener: Any = None,
         timeout_seconds: float = 10.0,
         schedule_status_provider: Any = None,
+        cloud_health_provider: Any = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.market_db = Path(market_db)
@@ -71,16 +73,26 @@ class ExternalDeadmanPing:
         self.opener = opener or urllib.request.urlopen
         self.timeout_seconds = timeout_seconds
         self.schedule_status_provider = schedule_status_provider
+        self.cloud_health_provider = cloud_health_provider
 
     def run(self, run_date: str, *, dry_run: bool = False) -> dict:
         now = _utcnow()
         checked_at = now.isoformat()
         vitals = SystemVitals(self.output_root, self.market_db).run(run_date, persist=False)
         schedule_runtime = self._schedule_runtime(run_date)
+        cloud_health = self._cloud_health()
         exposure = self._exposure_snapshot(now=now)
         severity = "critical" if exposure["has_open_position"] else "normal"
         selected_url = self._selected_url(severity)
-        ping = self._ping(selected_url, severity, exposure, vitals, schedule_runtime, dry_run=dry_run)
+        ping = self._ping(
+            selected_url,
+            severity,
+            exposure,
+            vitals,
+            schedule_runtime,
+            cloud_health,
+            dry_run=dry_run,
+        )
         payload = {
             "schema_version": "external-deadman-ping-v1",
             "run_date": run_date,
@@ -93,8 +105,9 @@ class ExternalDeadmanPing:
             "exposure": exposure,
             "always_on": vitals.get("always_on", {}),
             "schedule_runtime": schedule_runtime,
+            "cloud_health": cloud_health,
             "ping": ping,
-            "note": "External dead-man alert is triggered by missed pings outside this laptop.",
+            "note": "External dead-man alert is triggered by missed pings outside this runtime host.",
         }
         write_json(self.output_root / "deadman_ping" / "current.json", [payload])
         write_json(self.output_root / "deadman_ping" / f"{run_date}.json", [payload])
@@ -105,14 +118,28 @@ class ExternalDeadmanPing:
             return self.position_url
         return self.url or self.position_url
 
-    def _ping(self, url: str, severity: str, exposure: dict, vitals: dict, schedule_runtime: dict, *, dry_run: bool) -> dict:
+    def _ping(
+        self,
+        url: str,
+        severity: str,
+        exposure: dict,
+        vitals: dict,
+        schedule_runtime: dict,
+        cloud_health: dict,
+        *,
+        dry_run: bool,
+    ) -> dict:
         if not url:
             return {
                 "status": "not_configured",
                 "delivered": False,
                 "message": "TRADING_ORCHESTRATOR_DEADMAN_URL is not configured",
             }
-        failure_signal = self._always_on_blocked(vitals) or self._schedule_runtime_failed(schedule_runtime)
+        failure_signal = (
+            self._always_on_blocked(vitals)
+            or self._schedule_runtime_failed(schedule_runtime)
+            or self._cloud_health_failed(cloud_health)
+        )
         target_url = self._healthchecks_fail_url(url) if failure_signal else url
         full_url = self._url_with_query(
             target_url,
@@ -121,13 +148,15 @@ class ExternalDeadmanPing:
                 "position_open": "1" if exposure["has_open_position"] else "0",
                 "always_on_status": str((vitals.get("always_on") or {}).get("status") or ""),
                 "schedule_status": str(schedule_runtime.get("status") or ""),
+                "cloud_status": str(cloud_health.get("status") or ""),
             },
         )
+        target_kind = "fail" if failure_signal else "success"
         if dry_run:
             return {
                 "status": "dry_run_fail" if failure_signal else "dry_run",
                 "delivered": False,
-                "url": full_url,
+                "target_kind": target_kind,
                 "failure_signal": failure_signal,
                 "success_ping": not failure_signal,
                 "message": "dry run; ping not sent",
@@ -141,7 +170,7 @@ class ExternalDeadmanPing:
                     "status": ("fail_sent" if ok else "fail_signal_failed") if failure_signal else ("sent" if ok else "failed"),
                     "delivered": ok,
                     "status_code": status_code,
-                    "url": full_url,
+                    "target_kind": target_kind,
                     "failure_signal": failure_signal,
                     "success_ping": not failure_signal,
                     "message": self._ping_message(ok=ok, failure_signal=failure_signal),
@@ -150,11 +179,43 @@ class ExternalDeadmanPing:
             return {
                 "status": "fail_signal_failed" if failure_signal else "failed",
                 "delivered": False,
-                "url": full_url,
+                "target_kind": target_kind,
                 "failure_signal": failure_signal,
                 "success_ping": not failure_signal,
-                "message": f"{type(exc).__name__}: {exc}",
+                "message": f"dead-man request failed: {type(exc).__name__}",
             }
+
+    def _cloud_health(self) -> dict:
+        if str(os.getenv("GRIDMIND_RUNTIME_MODE") or "").lower() != "cloud":
+            return {"status": "not_applicable"}
+        if self.cloud_health_provider is not None:
+            return dict(self.cloud_health_provider())
+        try:
+            return CloudPaperHealth(
+                output_root=self.output_root,
+                backup_root=Path(
+                    os.getenv("GRIDMIND_BACKUP_ROOT", "/var/lib/gridmind/backups")
+                ),
+            ).run(persist=True)
+        except Exception as exc:  # noqa: BLE001 - dead-man must still fail signal.
+            return {
+                "status": "blocked",
+                "incidents": [
+                    {
+                        "stage": "cloud_health",
+                        "code": "cloud_health_check_failed",
+                        "summary": f"Cloud health check failed: {type(exc).__name__}",
+                        "next_action": "Inspect the Cloud health receipt and service logs.",
+                    }
+                ],
+            }
+
+    @staticmethod
+    def _cloud_health_failed(cloud_health: dict) -> bool:
+        return str(cloud_health.get("status") or "") not in {
+            "healthy",
+            "not_applicable",
+        }
 
     def _always_on_blocked(self, vitals: dict) -> bool:
         always_on = vitals.get("always_on") if isinstance(vitals.get("always_on"), dict) else {}

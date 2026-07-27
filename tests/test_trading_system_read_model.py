@@ -234,6 +234,28 @@ def _broker() -> dict:
     }
 
 
+def test_cloud_health_is_exposed_as_read_only_operator_truth() -> None:
+    source = _source()
+    source["cloud_health"] = {
+        "schema_version": "cloud-paper-health-v1",
+        "status": "degraded",
+        "incidents": [
+            {
+                "stage": "backup",
+                "code": "backup_missing_or_stale",
+                "next_action": "Run the verified backup job.",
+            }
+        ],
+        "control_actions_executed": 0,
+    }
+
+    model = project_trading_system_read_model(source).to_dict()
+
+    assert model["operations"]["cloud_health"]["status"] == "degraded"
+    assert model["operations"]["cloud_health"]["incidents"][0]["stage"] == "backup"
+    assert model["safety"]["read_only"] is True
+
+
 def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> None:
     source = _source()
     before = deepcopy(source)

@@ -75,6 +75,7 @@ class CloudPaperBackup:
             receipt = {
                 "status": "pass",
                 "backup_id": backup_id,
+                "created_at": observed.isoformat(),
                 "path": str(final),
                 "manifest_hash": manifest["manifest_hash"],
                 "file_count": manifest["file_count"],

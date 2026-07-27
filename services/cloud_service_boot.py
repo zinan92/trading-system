@@ -20,6 +20,7 @@ CLOUD_PAPER_SERVICES = {
     "daily-self-review",
     "backup",
     "deadman-ping",
+    "access-gateway",
 }
 
 
