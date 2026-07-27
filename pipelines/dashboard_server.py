@@ -73,6 +73,7 @@ from services.trading_system_read_model import (
     project_trading_system_read_model,
 )
 from services.trading_daily_24h_report import load_daily_report_rows
+from services.cloud_daily_self_review import load_daily_self_review
 
 from services.contracts.common import _CYCLE_ID_PATTERN, _DATE_PATTERN, _truthy  # noqa: F401 — re-exported for backward compatibility
 from services.contracts.system import build_market_view_intake_response, build_system_state_response, dashboard_output_root  # noqa: F401 — re-exported for backward compatibility
@@ -223,6 +224,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/trading-system/ai-evaluation-receipt":
             self._handle_ai_evaluation_receipt(parsed.query)
             return
+        if parsed.path == "/api/trading-system/daily-self-review":
+            self._handle_daily_self_review(parsed.query)
+            return
         if parsed.path == "/api/dualtrack/config":
             self._handle_dualtrack_config_get()
             return
@@ -350,6 +354,20 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_json(200, build_ai_evaluation_receipt_response(evaluation_id))
         except ValueError as exc:
             self._write_error(404, "ai_evaluation_receipt_not_found", str(exc))
+
+    def _handle_daily_self_review(self, query: str) -> None:
+        params = parse_qs(query)
+        report_date = str((params.get("date") or [""])[0]).strip() or None
+        if report_date and not _DATE_PATTERN.match(report_date):
+            self._write_error(400, "invalid_review_date", "date must be YYYY-MM-DD")
+            return
+        try:
+            self._write_json(
+                200,
+                build_daily_self_review_response(report_date=report_date),
+            )
+        except ValueError as exc:
+            self._write_error(404, "daily_self_review_not_found", str(exc))
 
     def _handle_strategy_console_control(self) -> None:
         try:
@@ -869,6 +887,15 @@ def build_trading_system_read_model_response(
         generated_at=parse_utc(as_of).isoformat(),
     ).to_dict()
     return _compact_dashboard_read_model_payload(payload)
+
+
+def build_daily_self_review_response(
+    *,
+    output_root: Path | None = None,
+    report_date: str | None = None,
+) -> dict[str, Any]:
+    output = _dualtrack_output_root(output_root)
+    return load_daily_self_review(output, report_date=report_date)
 
 
 def build_ai_evaluation_receipt_response(

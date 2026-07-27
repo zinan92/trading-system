@@ -4,6 +4,7 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-27)
+- Cloud M3 已实现：每天 01:10（北京）在终态 24 小时报表之后生成不可变 JSON/Markdown 自复盘，分开记录 tick 连续性、执行/对账、StrategyPlan/lifecycle，并明确“做对/做错/明天行动”。缺失或哈希错误证据保持 unknown；所有行动均 `executed=false`，稳定 API 为 `/api/trading-system/daily-self-review`。
 - Cloud M2 已实现：systemd 可分别托管 loopback datafeed、Dashboard、one-shot live-tick、24 小时报表和 dead-man；Cloud 模式下 Dashboard/live-tick 只有在 preflight 与当前 clean SHA/tree 精确匹配时才启动。本阶段 installer 默认为 passive，只启动 datafeed，绝不激活 tick scheduler；卸载不触碰 `/var/lib/gridmind` 或 env。
 - Cloud M1 已实现：Linux Paper preflight 会在零控制动作下验证 clean SHA、Paper-only 标志、持久化目录、loopback 端口、datafeed/storage、Binance USD-M 最新/历史可信 K 线和独立 Nautilus runtime；任一失败均落明确 blocked receipt。云端 app/datafeed/Nautilus 三套隔离运行环境与非密钥路径合同见 [`deploy/cloud/`](deploy/cloud/)。
 - Always-on Cloud Paper 已进入实施合同阶段：[#384](https://github.com/zinan92/trading-system/issues/384) 定义 Linux 运行拓扑、独立 datafeed/Nautilus 依赖、持久化、单一调度器所有权、每日证据复盘和 24 小时关机验收；完整合同见 [`docs/plans/cloud-always-on-paper-2026-07-27.md`](docs/plans/cloud-always-on-paper-2026-07-27.md)。当前 Mac 调度器已恢复并连续通过自然 tick，但重启后 launchd LWCR 仍证明它只能作为迁移前桥接。
@@ -35,7 +36,7 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Cloud M3：实现聚焦 DualTrack 的每日自复盘 JSON/Markdown，明确“今天做对/做错/明天行动”，证据不足不得补零或伪造结论，且不得自动改变策略、风险或订单。
+- Cloud M4：实现 outputs + datafeed SQLite 的原子备份、哈希校验恢复与单一 scheduler owner lease，证明本机和云端不会同时推进同一 Paper namespace。
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
 - M3-05:审计当前生产策略摘要与持仓/委托/成交表的字段、计数、对齐和桌面可读性；只补复现的完整性或可理解性缺口。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
