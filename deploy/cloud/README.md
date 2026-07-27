@@ -40,3 +40,29 @@ The receipt is written to
 `$TRADING_ORCHESTRATOR_OUTPUT_ROOT/cloud/preflight/current.json`. A
 `status=blocked` result must stop the later service installer. This command
 does not call the trading control plane or the cycle runner.
+
+Render and stage the systemd surface without activating any Paper scheduler:
+
+```bash
+/opt/gridmind/venvs/app/bin/python -m pipelines.cloud_systemd \
+  --repo-root /opt/gridmind/src/trading-system \
+  --datafeed-root /opt/gridmind/src/datafeed \
+  --app-python /opt/gridmind/venvs/app/bin/python \
+  --datafeed-python /opt/gridmind/venvs/datafeed/bin/python \
+  --render-dir /opt/gridmind/rendered-systemd
+
+# On the Linux host, after reviewing the JSON dry-run:
+sudo /opt/gridmind/venvs/app/bin/python -m pipelines.cloud_systemd \
+  --repo-root /opt/gridmind/src/trading-system \
+  --datafeed-root /opt/gridmind/src/datafeed \
+  --app-python /opt/gridmind/venvs/app/bin/python \
+  --datafeed-python /opt/gridmind/venvs/datafeed/bin/python \
+  --render-dir /opt/gridmind/rendered-systemd \
+  --action install-passive --apply
+```
+
+`install-passive` starts only the independent datafeed. Run the full Cloud
+Paper preflight after it becomes healthy, then use `--action
+activate-dashboard --apply`. Neither action enables the live-tick, report, or
+dead-man timers. Scheduler activation belongs to the later single-owner
+cutover contract.

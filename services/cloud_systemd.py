@@ -1,0 +1,236 @@
+"""Render and install the bounded Cloud Paper systemd surface."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+
+UNIT_NAMES = (
+    "gridmind-datafeed.service",
+    "gridmind-dashboard.service",
+    "gridmind-live-tick.service",
+    "gridmind-live-tick.timer",
+    "gridmind-daily-24h.service",
+    "gridmind-daily-24h.timer",
+    "gridmind-deadman-ping.service",
+    "gridmind-deadman-ping.timer",
+)
+
+
+@dataclass(frozen=True)
+class CloudSystemdPaths:
+    repo_root: Path
+    datafeed_root: Path
+    app_python: Path
+    datafeed_python: Path
+    systemd_dir: Path = Path("/etc/systemd/system")
+
+    def validate(self) -> None:
+        for name, value in (
+            ("repo_root", self.repo_root),
+            ("datafeed_root", self.datafeed_root),
+            ("app_python", self.app_python),
+            ("datafeed_python", self.datafeed_python),
+            ("systemd_dir", self.systemd_dir),
+        ):
+            if not value.is_absolute():
+                raise ValueError(f"{name} must be absolute")
+
+
+class CloudSystemdRenderer:
+    def __init__(self, paths: CloudSystemdPaths) -> None:
+        paths.validate()
+        self.paths = paths
+
+    def render(self, destination: Path) -> dict[str, Any]:
+        destination = Path(destination)
+        destination.mkdir(parents=True, exist_ok=True)
+        units = self._units()
+        for name, content in units.items():
+            (destination / name).write_text(content.rstrip() + "\n", encoding="utf-8")
+        return {
+            "status": "rendered",
+            "destination": str(destination),
+            "units": sorted(units),
+            "scheduler_active": False,
+            "persistent_data_changed": False,
+        }
+
+    def _units(self) -> dict[str, str]:
+        p = self.paths
+        common = "\n".join(
+            [
+                "User=gridmind",
+                "Group=gridmind",
+                f"WorkingDirectory={p.repo_root}",
+                "Environment=GRIDMIND_RUNTIME_MODE=cloud",
+                f"Environment=PYTHONPATH={p.repo_root}",
+                "EnvironmentFile=/etc/gridmind/runtime.env",
+                "EnvironmentFile=-/etc/gridmind/paper.env",
+                "NoNewPrivileges=true",
+                "PrivateTmp=true",
+                "ProtectHome=true",
+                "ProtectSystem=strict",
+                "ReadWritePaths=/var/lib/gridmind",
+            ]
+        )
+        return {
+            "gridmind-datafeed.service": f"""[Unit]
+Description=GridMind independent datafeed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+{common}
+WorkingDirectory={p.datafeed_root}
+ExecStart={p.datafeed_python} -m uvicorn kline.app:create_app --factory --host 127.0.0.1 --port 8100
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target""",
+            "gridmind-dashboard.service": f"""[Unit]
+Description=GridMind Paper Dashboard
+After=network-online.target gridmind-datafeed.service
+Requires=gridmind-datafeed.service
+
+[Service]
+Type=simple
+{common}
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service dashboard
+ExecStart={p.app_python} -m pipelines.dashboard_server --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target""",
+            "gridmind-live-tick.service": f"""[Unit]
+Description=GridMind one-shot Paper live tick
+After=gridmind-datafeed.service
+Requires=gridmind-datafeed.service
+
+[Service]
+Type=oneshot
+{common}
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service dualtrack-live-tick
+ExecStart={p.app_python} -m pipelines.dualtrack_cycle_runner --event live-tick
+TimeoutStartSec=55""",
+            "gridmind-live-tick.timer": """[Unit]
+Description=GridMind non-overlapping minute Paper tick
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=1
+Persistent=true
+Unit=gridmind-live-tick.service
+
+[Install]
+WantedBy=timers.target""",
+            "gridmind-daily-24h.service": f"""[Unit]
+Description=GridMind terminal Beijing 24-hour report
+After=gridmind-live-tick.service
+
+[Service]
+Type=oneshot
+{common}
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service daily-24h
+ExecStart={p.app_python} -m pipelines.trading_daily_24h_report --send --verify
+TimeoutStartSec=300""",
+            "gridmind-daily-24h.timer": """[Unit]
+Description=GridMind terminal report timer
+
+[Timer]
+OnCalendar=*-*-* 17:03:00 UTC
+Persistent=true
+Unit=gridmind-daily-24h.service
+
+[Install]
+WantedBy=timers.target""",
+            "gridmind-deadman-ping.service": f"""[Unit]
+Description=GridMind external dead-man ping
+After=gridmind-live-tick.service
+
+[Service]
+Type=oneshot
+{common}
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service deadman-ping
+ExecStart={p.app_python} -m pipelines.deadman_ping
+TimeoutStartSec=30""",
+            "gridmind-deadman-ping.timer": """[Unit]
+Description=GridMind dead-man timer
+
+[Timer]
+OnBootSec=300
+OnUnitActiveSec=300
+Persistent=true
+Unit=gridmind-deadman-ping.service
+
+[Install]
+WantedBy=timers.target""",
+        }
+
+
+class CloudSystemdInstaller:
+    def __init__(
+        self,
+        *,
+        systemd_dir: Path = Path("/etc/systemd/system"),
+        command_runner: Callable[..., subprocess.CompletedProcess] | None = None,
+    ) -> None:
+        self.systemd_dir = Path(systemd_dir)
+        self.command_runner = command_runner or subprocess.run
+
+    def plan(self, rendered_dir: Path, action: str) -> list[list[str]]:
+        rendered_dir = Path(rendered_dir)
+        if action == "install-passive":
+            return [
+                *[
+                    ["install", "-m", "0644", str(rendered_dir / name), str(self.systemd_dir / name)]
+                    for name in UNIT_NAMES
+                ],
+                ["systemctl", "daemon-reload"],
+                ["systemctl", "enable", "--now", "gridmind-datafeed.service"],
+            ]
+        if action == "activate-dashboard":
+            return [
+                ["systemctl", "enable", "--now", "gridmind-dashboard.service"],
+            ]
+        if action == "uninstall":
+            return [
+                ["systemctl", "disable", "--now", *UNIT_NAMES],
+                *[["rm", "-f", str(self.systemd_dir / name)] for name in UNIT_NAMES],
+                ["systemctl", "daemon-reload"],
+            ]
+        raise ValueError("action must be install-passive, activate-dashboard, or uninstall")
+
+    def apply(self, rendered_dir: Path, action: str, *, dry_run: bool = True) -> dict[str, Any]:
+        commands = self.plan(rendered_dir, action)
+        if dry_run:
+            return {
+                "status": "dry_run",
+                "action": action,
+                "commands": commands,
+                "scheduler_active": False,
+                "persistent_data_changed": False,
+            }
+        if os.name != "posix" or not Path("/run/systemd/system").exists():
+            raise RuntimeError("systemd installer requires a Linux systemd host")
+        for command in commands:
+            result = self.command_runner(command, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"systemd command failed: {command[0]}: {str(result.stderr or '')[-300:]}"
+                )
+        return {
+            "status": "applied",
+            "action": action,
+            "commands": commands,
+            "scheduler_active": False,
+            "persistent_data_changed": False,
+        }
