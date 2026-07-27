@@ -1370,6 +1370,15 @@ def test_live_tick_cli_writes_bounded_failure_diagnostic_without_a_heartbeat(tmp
 
     monkeypatch.setattr(cycle_runner_module, "DualTrackCycleRunner", FailingRunner)
     monkeypatch.setenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON", "/isolated/nautilus/bin/python")
+    monkeypatch.setattr(
+        cycle_runner_module,
+        "PaperServiceBootGate",
+        lambda *args, **kwargs: type(
+            "PassingBootGate",
+            (),
+            {"verify": lambda self, service: {"ok": True}},
+        )(),
+    )
 
     with pytest.raises(RuntimeError, match="upstream datafeed unavailable"):
         cycle_runner_module.main(["--event", "live-tick", "--output-root", str(output)])

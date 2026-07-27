@@ -11423,3 +11423,39 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused fixtures cover profitable, loss, no-trade, drift, missing report,
   corrupt report, absent/partial ticks, datafeed failure, idempotent replay, and
   changed-evidence revision behavior. API loading re-verifies the review hash.
+
+## 2026-07-27 - Paper scheduler ownership is persistent and backups restore offline
+
+### Decision
+
+- Scheduler ownership is part of Paper state. It has a monotonic epoch and can
+  move only through an explicit paused state. A cloud tick requires the exact
+  configured owner ID; after cloud activation, the Mac's default `local-mac`
+  identity blocks before boot-gate or runner construction, including after a
+  reboot.
+- Cloud backup snapshots `outputs/` plus an SQLite-API copy of the independent
+  datafeed. Every file has size/SHA evidence and the manifest is self-hashed.
+  Restore is permitted only into an empty offline destination, re-verifies all
+  bytes, leaves the scheduler disabled, and requires application
+  reconciliation before use.
+- The secret Paper environment is outside the backup source. Encryption mode
+  is explicit in every manifest; provider-volume encryption is the initial
+  contract, with external encrypted export remaining a later provider concern.
+
+### Gotchas
+
+- A time-expiring lease could let the Mac self-elect after a cloud outage and
+  create split brain. Ownership therefore does not fail over automatically;
+  changing hosts always passes through a receipted paused state.
+- SQLite files must not be copied with a normal filesystem copy while the
+  datafeed is active. Creation uses SQLite backup; restore copies the already
+  verified offline backup and runs `PRAGMA integrity_check`.
+- Retention ignores unverified/corrupt directories instead of deleting them.
+  Only a fully verified backup ID under the exact backup root is pruneable.
+
+### Verification
+
+- Temporary fixtures prove manifest-identical restore, SQLite integrity,
+  corrupt backup and non-empty destination refusal, verified-only retention,
+  forward/rollback ownership epochs, cloud mismatch blocking, and refusal
+  before live-tick runner construction.

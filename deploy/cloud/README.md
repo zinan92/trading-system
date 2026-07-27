@@ -78,3 +78,24 @@ GET /api/trading-system/daily-self-review?date=YYYY-MM-DD
 
 The review may recommend a service recovery or human strategy decision. It
 executes no service, strategy, risk, order, position, or live-money action.
+
+Backups run after the review and use the SQLite backup API for the independent
+datafeed. Each backup has a file/size/SHA manifest and excludes the secret
+environment file, which remains outside `outputs/`. `GRIDMIND_BACKUP_ENCRYPTION_MODE`
+records the at-rest/export protection contract; the initial provider volume
+must have encryption at rest enabled.
+
+Restore always targets a new empty output root and a new datafeed database. It
+never overwrites the active namespace, never activates a scheduler, and marks
+application reconciliation as a required next step.
+
+The live-tick also consumes the persistent scheduler owner. A new Cloud host
+must not have a valid owner by default. The later cutover controller performs
+the only allowed sequence:
+
+```text
+local-mac active -> paused -> cloud owner active
+```
+
+Rollback uses the same pause boundary in reverse. There is no dual-owner
+transition and no public low-level transition command in this milestone.

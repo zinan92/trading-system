@@ -39,6 +39,7 @@ from services.paper_release_receipt import (
     PaperServiceBootGate,
 )
 from services.cloud_service_boot import CloudPaperServiceBootGate
+from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
@@ -1954,6 +1955,21 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin C
     args = build_parser().parse_args(argv)
     output_root = Path(args.output_root) if args.output_root else None
     if args.event == "live-tick":
+        ownership = SchedulerOwnershipGuard(
+            output_root
+            or Path(
+                os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT")
+                or ROOT / str(load_pipeline_config().get("output_root", "outputs"))
+            )
+        ).verify()
+        if not ownership.get("ok"):
+            print(
+                f"[paper-owner] dualtrack-live-tick blocked: "
+                f"{ownership.get('blocker') or 'unknown'}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE
         boot = (
             CloudPaperServiceBootGate(output_root=output_root).verify(
                 "dualtrack-live-tick"

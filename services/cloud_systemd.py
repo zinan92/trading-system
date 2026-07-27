@@ -18,6 +18,8 @@ UNIT_NAMES = (
     "gridmind-daily-24h.timer",
     "gridmind-daily-self-review.service",
     "gridmind-daily-self-review.timer",
+    "gridmind-backup.service",
+    "gridmind-backup.timer",
     "gridmind-deadman-ping.service",
     "gridmind-deadman-ping.timer",
 )
@@ -171,6 +173,26 @@ Description=GridMind daily self-review timer
 OnCalendar=*-*-* 17:10:00 UTC
 Persistent=true
 Unit=gridmind-daily-self-review.service
+
+[Install]
+WantedBy=timers.target""",
+            "gridmind-backup.service": f"""[Unit]
+Description=GridMind verified Paper backup
+After=gridmind-daily-self-review.service
+
+[Service]
+Type=oneshot
+{common}
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service backup
+ExecStart={p.app_python} -m pipelines.cloud_backup create --keep 7
+TimeoutStartSec=900""",
+            "gridmind-backup.timer": """[Unit]
+Description=GridMind daily verified backup timer
+
+[Timer]
+OnCalendar=*-*-* 17:30:00 UTC
+Persistent=true
+Unit=gridmind-backup.service
 
 [Install]
 WantedBy=timers.target""",
