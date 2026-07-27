@@ -11534,3 +11534,33 @@ auditable datafeed port; broker execution remains a separate port.
   precheck blockers, source mismatch, dry-run purity, successful forward
   cutover, every post-pause fail-disabled branch, idempotent completion,
   monotonic rollback, and secret-free deployment manifests.
+# 2026-07-27 — Cloud host provisioning is source-bound and passive by default
+
+## Decision
+
+- Provision the initial always-on Paper host through a reviewed AWS Lightsail
+  plan in Singapore. Discover active blueprint, bundle, and availability-zone
+  identifiers from the provider catalog; select Ubuntu 24.04 and the
+  lowest-cost active Linux bundle meeting 2 vCPU, 2 GB RAM, and USD 12/month.
+- Cloud-init is rendered from the exact trading-system and datafeed SHAs. The
+  Python and cloudflared downloads are version- and SHA256-pinned.
+- The first boot installs and starts only the datafeed and Dashboard after the
+  read-only Cloud preflight passes. Scheduler timers, Grid, DCA, orders, and
+  positions remain untouched.
+- The provider firewall exposes only SSH from a supplied restricted operator
+  CIDR. Application ports remain loopback-only; remote use requires the
+  authenticated Cloudflare Access chain introduced in M5.
+- Provider failures write only bounded status, action name, host label, region,
+  and plan hash. AWS stderr, account identity, credentials, keys, and tunnel
+  material never enter receipts.
+
+## Gotchas
+
+- AWS login, identity, payment, CAPTCHA, key-pair creation, and provider
+  agreement are user-controlled boundaries even though the resulting Paper VM
+  is reversible.
+- The checked-in package proves deterministic planning and safe passive boot;
+  it is not evidence that a VM exists. Issue #398 closes only after real host,
+  preflight, access, firewall, and restore receipts pass.
+- A host with a healthy Dashboard is still not a scheduler owner. M6c is the
+  only phase allowed to move the owner lease and enable the Cloud live-tick.

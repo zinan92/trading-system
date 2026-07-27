@@ -92,3 +92,14 @@
 - #214: 策略类型的 Grid / DCA 选择使用高对比选中卡、`✓ 当前选择` 标签和同步的 `aria-pressed` 状态；切换后仅一个类型保持选中，策略计算与下单语义未变。
 - #216: 浏览器未收到 Dashboard 响应时不再断言请求未到后端或 Paper 未改变；控制动作一律进入权威 read-model 核对，读取动作明确提示刷新重试。
 - #218: AI 市场评估改为位置优先：D1 200 根完整日线先给出低/中/高位与方向倾向，再由 D1/4H 明确震荡、形成中、已形成趋势，最后才推荐 Grid/DCA 与确定性参数职责；只写提案与本地预览，绝不自动启动或下单。
+# 2026-07-27 Cloud M6b — passive host provisioning in progress
+
+- Cloud M6a merged as PR #397 at `main@ec8be27`: exact-source deployment
+  manifests and fail-disabled single-owner cutover/rollback are available.
+- Issue #398 now owns the AWS Lightsail Singapore passive-host build. The
+  source-bound, checksum-pinned provisioning package is under implementation;
+  no VM, scheduler, strategy, order, position, credential, or live process has
+  been changed yet.
+- Next: pass focused tests, review the dry-run provider plan, cross the
+  user-controlled AWS account/payment boundary, provision the passive host,
+  then prove authenticated access and temporary restore before M6c cutover.

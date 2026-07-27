@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec > >(tee -a /var/log/gridmind-cloud-init.log) 2>&1
+
+TRADING_SHA="@@TRADING_SHA@@"
+DATAFEED_SHA="@@DATAFEED_SHA@@"
+PYTHON_VERSION="@@PYTHON_VERSION@@"
+UV_VERSION="@@UV_VERSION@@"
+UV_WHEEL_SHA256="@@UV_WHEEL_SHA256@@"
+CLOUDFLARED_VERSION="@@CLOUDFLARED_VERSION@@"
+CLOUDFLARED_SHA256="@@CLOUDFLARED_SHA256@@"
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends \
+  ca-certificates curl git jq python3 python3-venv python3-pip ufw
+
+if ! id gridmind >/dev/null 2>&1; then
+  useradd --system --home /opt/gridmind --create-home --shell /usr/sbin/nologin gridmind
+fi
+install -d -o gridmind -g gridmind \
+  /opt/gridmind/src /opt/gridmind/venvs /opt/gridmind/python \
+  /var/lib/gridmind/outputs /var/lib/gridmind/datafeed /var/lib/gridmind/backups
+install -d -m 0750 -o root -g gridmind /etc/gridmind
+
+clone_exact() {
+  local repository="$1"
+  local destination="$2"
+  local revision="$3"
+  if [ ! -d "$destination/.git" ]; then
+    git clone --filter=blob:none "$repository" "$destination"
+  fi
+  git -C "$destination" fetch --depth 1 origin "$revision"
+  git -C "$destination" checkout --detach "$revision"
+  test "$(git -C "$destination" rev-parse HEAD)" = "$revision"
+  test -z "$(git -C "$destination" status --porcelain --untracked-files=no)"
+}
+
+clone_exact https://github.com/zinan92/trading-system.git \
+  /opt/gridmind/src/trading-system "$TRADING_SHA"
+clone_exact https://github.com/zinan92/datafeed.git \
+  /opt/gridmind/src/datafeed "$DATAFEED_SHA"
+
+UV_WHEEL="/tmp/uv-${UV_VERSION}.whl"
+curl --fail --location --silent --show-error \
+  "https://files.pythonhosted.org/packages/15/19/b35928e55307beb69b60b88446df3cb8d7ff3ba0993fc2214a43266c17d1/uv-0.9.27-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" \
+  --output "$UV_WHEEL"
+echo "${UV_WHEEL_SHA256}  ${UV_WHEEL}" | sha256sum --check -
+python3 -m venv /opt/gridmind/venvs/bootstrap
+/opt/gridmind/venvs/bootstrap/bin/pip install --no-deps "$UV_WHEEL"
+UV=/opt/gridmind/venvs/bootstrap/bin/uv
+export UV_PYTHON_INSTALL_DIR=/opt/gridmind/python
+"$UV" python install "$PYTHON_VERSION"
+"$UV" venv --python "$PYTHON_VERSION" /opt/gridmind/venvs/app
+"$UV" venv --python "$PYTHON_VERSION" /opt/gridmind/venvs/nautilus
+"$UV" venv --python "$PYTHON_VERSION" /opt/gridmind/venvs/datafeed
+"$UV" pip install --python /opt/gridmind/venvs/app/bin/python \
+  -r /opt/gridmind/src/trading-system/deploy/cloud/requirements-app.txt
+"$UV" pip install --python /opt/gridmind/venvs/nautilus/bin/python \
+  -r /opt/gridmind/src/trading-system/deploy/cloud/requirements-nautilus.txt
+"$UV" pip install --python /opt/gridmind/venvs/datafeed/bin/python \
+  /opt/gridmind/src/datafeed
+
+CLOUDFLARED="/tmp/cloudflared-${CLOUDFLARED_VERSION}"
+curl --fail --location --silent --show-error \
+  "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" \
+  --output "$CLOUDFLARED"
+echo "${CLOUDFLARED_SHA256}  ${CLOUDFLARED}" | sha256sum --check -
+install -m 0755 "$CLOUDFLARED" /usr/local/bin/cloudflared
+
+install -m 0644 \
+  /opt/gridmind/src/trading-system/deploy/cloud/runtime.env.example \
+  /etc/gridmind/runtime.env
+install -m 0600 /dev/null /etc/gridmind/paper.env
+chown -R gridmind:gridmind /opt/gridmind /var/lib/gridmind
+
+ufw --force reset
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp
+ufw --force enable
+
+APP_PYTHON=/opt/gridmind/venvs/app/bin/python
+REPO=/opt/gridmind/src/trading-system
+export PYTHONPATH="$REPO"
+export TRADING_ORCHESTRATOR_OUTPUT_ROOT=/var/lib/gridmind/outputs
+"$APP_PYTHON" -m pipelines.cloud_systemd \
+  --repo-root "$REPO" \
+  --datafeed-root /opt/gridmind/src/datafeed \
+  --app-python "$APP_PYTHON" \
+  --datafeed-python /opt/gridmind/venvs/datafeed/bin/python \
+  --render-dir /opt/gridmind/rendered-systemd \
+  --action install-passive --apply
+
+for attempt in $(seq 1 60); do
+  if curl --fail --silent http://127.0.0.1:8100/health >/dev/null; then
+    break
+  fi
+  if [ "$attempt" -eq 60 ]; then
+    echo "datafeed did not become healthy" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+set -a
+. /etc/gridmind/runtime.env
+set +a
+"$APP_PYTHON" -m pipelines.cloud_paper_preflight --json
+chown -R gridmind:gridmind /var/lib/gridmind/outputs
+"$APP_PYTHON" -m pipelines.cloud_systemd \
+  --repo-root "$REPO" \
+  --datafeed-root /opt/gridmind/src/datafeed \
+  --app-python "$APP_PYTHON" \
+  --datafeed-python /opt/gridmind/venvs/datafeed/bin/python \
+  --render-dir /opt/gridmind/rendered-systemd \
+  --action activate-dashboard --apply
+
+systemctl is-enabled gridmind-live-tick.timer >/dev/null 2>&1 && {
+  echo "live tick timer unexpectedly enabled" >&2
+  exit 1
+} || true
+
+install -d -o gridmind -g gridmind /var/lib/gridmind/outputs/cloud/provision
+cat > /var/lib/gridmind/outputs/cloud/provision/current.json <<EOF
+[{"schema_version":"cloud-host-provision-v1","status":"pass","provider":"aws_lightsail","region":"ap-southeast-1","trading_system_sha":"${TRADING_SHA}","datafeed_sha":"${DATAFEED_SHA}","paper_only":true,"scheduler_enabled":false,"passive_services":["datafeed","dashboard"],"secret_values_recorded":false}]
+EOF
+chown gridmind:gridmind /var/lib/gridmind/outputs/cloud/provision/current.json

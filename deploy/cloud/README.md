@@ -143,3 +143,31 @@ Render `pipelines.cloud_deploy_manifest` before provisioning. The actual
 cutover controller is dry-run by default and its remote/local service ports
 must be supplied by the provider adapter; no generic shell execution surface
 is exposed.
+
+## AWS Lightsail passive host
+
+The initial provider package is driven by `lightsail-plan.json`. It discovers
+the current provider catalog instead of hard-coding blueprint, bundle, or
+availability-zone IDs. Rendering is read-only and apply remains explicit:
+
+```bash
+python -m pipelines.cloud_lightsail catalog > /tmp/lightsail-catalog.json
+python -m pipelines.cloud_lightsail render \
+  --catalog /tmp/lightsail-catalog.json \
+  --operator-cidr <CURRENT_PUBLIC_IPV4>/32 \
+  --key-pair-name <EXISTING_LIGHTSAIL_KEY_PAIR> \
+  --render-dir /tmp/gridmind-lightsail
+python -m pipelines.cloud_lightsail apply \
+  --plan /tmp/gridmind-lightsail/provision-plan.json
+```
+
+The final command above is still a dry run. Only after the AWS
+login/identity/payment boundary and plan review may the operator append
+`--apply`. Cloud-init verifies exact source revisions and pinned binary hashes,
+installs passive services, starts the datafeed, runs preflight, and starts the
+loopback Dashboard. It fails if the live-tick timer is enabled.
+
+The Lightsail firewall plan exposes only SSH restricted to the supplied
+operator `/32`; ports 8100, 8765, and 8766 are never public. Authenticated
+Dashboard access is activated separately after a dedicated Cloudflare Tunnel
+credential and Access policy are installed in host-owned paths.
