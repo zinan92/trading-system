@@ -1,0 +1,2 @@
+# Keep Nautilus isolated from the application/datafeed environments.
+nautilus_trader==1.230.0
