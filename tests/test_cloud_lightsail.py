@@ -34,7 +34,7 @@ def _spec() -> dict:
             "python_version": "3.13.7",
             "uv_version": "0.9.27",
             "uv_wheel_sha256": "c" * 64,
-            "cloudflared_version": "2026.7.1",
+            "cloudflared_version": "2026.7.3",
             "cloudflared_sha256": "d" * 64,
         },
     }
