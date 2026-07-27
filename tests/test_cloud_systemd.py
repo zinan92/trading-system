@@ -49,6 +49,12 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     assert "OnCalendar=*-*-* 17:10:00 UTC" in rendered[
         "gridmind-daily-self-review.timer"
     ]
+    assert "pipelines.cloud_backup create --keep 7" in rendered[
+        "gridmind-backup.service"
+    ]
+    assert "OnCalendar=*-*-* 17:30:00 UTC" in rendered[
+        "gridmind-backup.timer"
+    ]
     timer = rendered["gridmind-live-tick.timer"]
     assert "OnUnitActiveSec=60" in timer
     assert "Persistent=true" in timer

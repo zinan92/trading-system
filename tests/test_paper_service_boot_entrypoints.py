@@ -89,3 +89,39 @@ def test_cloud_live_tick_uses_cloud_gate_before_runner(monkeypatch, tmp_path):
     )
 
     assert result == PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE
+
+
+def test_local_live_tick_refuses_cloud_owned_namespace_before_boot_gate(
+    monkeypatch,
+    tmp_path,
+):
+    from services.scheduler_ownership import SchedulerOwnershipStore
+
+    store = SchedulerOwnershipStore(tmp_path)
+    local = store.initialize_local()
+    paused = store.pause(
+        expected_owner_id="local-mac",
+        expected_epoch=local["epoch"],
+    )
+    store.activate(
+        new_owner_id="cloud-primary",
+        expected_epoch=paused["epoch"],
+    )
+    monkeypatch.delenv("GRIDMIND_RUNTIME_MODE", raising=False)
+    monkeypatch.delenv("GRIDMIND_SCHEDULER_OWNER_ID", raising=False)
+    monkeypatch.setattr(
+        dualtrack_cycle_runner,
+        "PaperServiceBootGate",
+        lambda *args, **kwargs: pytest.fail("boot gate ran despite owner mismatch"),
+    )
+    monkeypatch.setattr(
+        dualtrack_cycle_runner,
+        "DualTrackCycleRunner",
+        lambda *args, **kwargs: pytest.fail("runner constructed despite owner mismatch"),
+    )
+
+    result = dualtrack_cycle_runner.main(
+        ["--event", "live-tick", "--output-root", str(tmp_path)]
+    )
+
+    assert result == PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE
