@@ -16,7 +16,8 @@ from services.contracts.common import _DATE_PATTERN, _truthy
 
 def dashboard_output_root() -> Path:
     cfg = load_pipeline_config()
-    return ROOT / str(cfg.get("output_root", "outputs"))
+    configured = ROOT / str(cfg.get("output_root", "outputs"))
+    return Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(configured)))
 
 
 def build_system_state_response(output_root: Path | None = None, *, as_of: str | datetime | None = None) -> dict:

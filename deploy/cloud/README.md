@@ -66,3 +66,15 @@ Paper preflight after it becomes healthy, then use `--action
 activate-dashboard --apply`. Neither action enables the live-tick, report, or
 dead-man timers. Scheduler activation belongs to the later single-owner
 cutover contract.
+
+The focused daily self-review is scheduled for 17:10 UTC (01:10 Beijing),
+after the terminal 24-hour report. It writes immutable evidence revisions
+under `outputs/dualtrack/daily_self_reviews/` and is readable from:
+
+```text
+GET /api/trading-system/daily-self-review
+GET /api/trading-system/daily-self-review?date=YYYY-MM-DD
+```
+
+The review may recommend a service recovery or human strategy decision. It
+executes no service, strategy, risk, order, position, or live-money action.

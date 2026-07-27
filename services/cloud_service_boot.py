@@ -17,6 +17,7 @@ CLOUD_PAPER_SERVICES = {
     "dashboard",
     "dualtrack-live-tick",
     "daily-24h",
+    "daily-self-review",
     "deadman-ping",
 }
 

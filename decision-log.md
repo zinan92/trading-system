@@ -11388,3 +11388,38 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused gate, entrypoint, renderer, installer, release receipt, and report
   tests pass. Rendered units contain no Mac path or public bind, and passive
   install dry-run enables only the datafeed.
+
+## 2026-07-27 - Daily self-review separates uptime, execution, and strategy truth
+
+### Decision
+
+- The focused Cloud Paper review is built only after the terminal Beijing-day
+  report. It separates tick continuity, terminal execution/reconciliation, and
+  StrategyPlan/lifecycle facts before deriving `went_well`, `went_poorly`, and
+  ranked tomorrow actions.
+- Missing or hash-invalid reports, missing heartbeat history, and missing
+  StrategyPlan packages remain `unknown`; they are never converted to zero or
+  a passing strategy conclusion. Every evidence revision has its own immutable
+  JSON and Markdown artifact. Re-running unchanged evidence returns the same
+  revision.
+- Recommendations carry a permission class and `executed=false`. This builder
+  never invokes a service recovery, control plane, strategy mutation, Shadow
+  promotion, risk change, order, position, or live-money action.
+
+### Gotchas
+
+- The terminal daily report proves closed execution truth, but it does not
+  prove minute-by-minute uptime. Tick coverage is computed separately from the
+  append-only runner heartbeat history.
+- A no-trade day can have correct execution and reconciliation. It is still an
+  insufficient new strategy sample and should produce a human What-if review,
+  not an automatic range change.
+- The current service restart count is explicitly unknown until cloud
+  observability supplies a durable journal/receipt. It must not be inferred
+  from heartbeat gaps.
+
+### Verification
+
+- Focused fixtures cover profitable, loss, no-trade, drift, missing report,
+  corrupt report, absent/partial ticks, datafeed failure, idempotent replay, and
+  changed-evidence revision behavior. API loading re-verifies the review hash.

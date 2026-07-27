@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
@@ -58,7 +59,10 @@ def build_dualtrack_ledger_response(*, output_root: Path | None = None, week: st
 
 
 def _dualtrack_output_root(output_root: Path | None = None) -> Path:
-    return Path(output_root) if output_root else ROOT / load_pipeline_config().get("output_root", "outputs")
+    if output_root:
+        return Path(output_root)
+    configured = ROOT / load_pipeline_config().get("output_root", "outputs")
+    return Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(configured)))
 
 
 def build_dualtrack_verdict_post_response(payload: dict, *, output_root: Path | None = None) -> dict:
