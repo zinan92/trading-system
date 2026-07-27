@@ -38,6 +38,7 @@ from services.paper_release_receipt import (
     PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE,
     PaperServiceBootGate,
 )
+from services.cloud_service_boot import CloudPaperServiceBootGate
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
@@ -1953,7 +1954,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin C
     args = build_parser().parse_args(argv)
     output_root = Path(args.output_root) if args.output_root else None
     if args.event == "live-tick":
-        boot = PaperServiceBootGate(output_root=output_root).verify("dualtrack-live-tick")
+        boot = (
+            CloudPaperServiceBootGate(output_root=output_root).verify(
+                "dualtrack-live-tick"
+            )
+            if os.getenv("GRIDMIND_RUNTIME_MODE") == "cloud"
+            else PaperServiceBootGate(output_root=output_root).verify(
+                "dualtrack-live-tick"
+            )
+        )
         if not boot.get("ok"):
             print(
                 f"[paper-boot] dualtrack-live-tick blocked: {boot.get('blocker') or 'unknown'}",

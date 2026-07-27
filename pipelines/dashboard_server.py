@@ -23,6 +23,7 @@ from services.paper_release_receipt import (
     PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE,
     PaperServiceBootGate,
 )
+from services.cloud_service_boot import CloudPaperServiceBootGate
 from services.config_loader import ROOT, load_pipeline_config
 from services.command_center import build_command_center_state
 from services.connector_activation_plan import ConnectorActivationPlan
@@ -3559,7 +3560,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
-    boot = PaperServiceBootGate().verify("dashboard")
+    boot = (
+        CloudPaperServiceBootGate().verify("dashboard")
+        if os.getenv("GRIDMIND_RUNTIME_MODE") == "cloud"
+        else PaperServiceBootGate().verify("dashboard")
+    )
     if not boot.get("ok"):
         print(
             f"[paper-boot] dashboard blocked: {boot.get('blocker') or 'unknown'}",

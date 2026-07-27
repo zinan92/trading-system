@@ -11352,3 +11352,39 @@ auditable datafeed port; broker execution remains a separate port.
   failure, invalid persistence shape, Nautilus import failure, and loopback
   override enforcement. A local macOS diagnostic run remained blocked on OS
   and dirty development source while all runtime/datafeed checks passed.
+
+## 2026-07-27 - Cloud systemd installs passive before scheduler ownership
+
+### Decision
+
+- Cloud Paper uses independently supervised datafeed, Dashboard, one-shot
+  live-tick, terminal-report, and dead-man units. Dashboard and live-tick boot
+  consume the passing Cloud preflight only when `GRIDMIND_RUNTIME_MODE=cloud`;
+  local launchd keeps its existing release receipt and behavior.
+- Installation is deliberately two-stage. `install-passive` installs every
+  reviewed unit but starts only the independent loopback datafeed. After a
+  source-matched Cloud preflight passes, `activate-dashboard` may start the
+  read/control surface. No installer action in this change enables the Paper
+  live-tick or report timers.
+- The one-minute tick is a systemd one-shot timer using `OnUnitActiveSec`, so
+  systemd cannot create overlapping runner processes. Persistent data and
+  environment files are outside the unit directory and are never uninstall
+  targets.
+
+### Gotchas
+
+- Requiring full datafeed health before the datafeed service itself boots is a
+  dependency cycle. The datafeed starts passive and loopback-only; the complete
+  preflight then authorizes Dashboard and later scheduler activation.
+- `Persistent=true` catches a missed timer after reboot; it is not permission
+  to run two scheduler owners. Cloud timer activation remains part of the
+  later local-to-cloud ownership cutover.
+- The terminal 24-hour report previously ignored
+  `TRADING_ORCHESTRATOR_OUTPUT_ROOT`. A cloud timer must write to persistent
+  state rather than the immutable checkout.
+
+### Verification
+
+- Focused gate, entrypoint, renderer, installer, release receipt, and report
+  tests pass. Rendered units contain no Mac path or public bind, and passive
+  install dry-run enables only the datafeed.

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 from services.config_loader import ROOT, load_pipeline_config
 from services.feishu_report_sender import FeishuReportSender
@@ -18,7 +20,12 @@ def main() -> None:
     parser.add_argument("--verify", action="store_true")
     args = parser.parse_args()
 
-    output_root = ROOT / str(load_pipeline_config().get("output_root", "outputs"))
+    output_root = Path(
+        os.getenv(
+            "TRADING_ORCHESTRATOR_OUTPUT_ROOT",
+            str(ROOT / load_pipeline_config().get("output_root", "outputs")),
+        )
+    )
     report_path = TradingDaily24hReportBuilder(output_root).build(
         now=datetime.now(timezone.utc),
         report_date=args.date,
