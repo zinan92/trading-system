@@ -11319,3 +11319,36 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused fixtures prove non-allowlisted labels and failed release gates issue
   zero commands, while a passing recovery emits only print, bootout, bootstrap,
   and print for the exact requested service.
+
+## 2026-07-27 - Cloud Paper preflight is read-only and execution-venue strict
+
+### Decision
+
+- A Linux Cloud Paper host must pass one machine-readable preflight before
+  service installation. It separately proves a clean source attestation,
+  Paper-only flags, loopback endpoints, writable persistent paths, independent
+  datafeed/storage health, fresh and historical Binance USD-M GOLD candles,
+  and the dedicated Nautilus import.
+- Cloud path overrides are environment-driven. Datafeed and Dashboard URLs are
+  accepted only on loopback; the committed local defaults remain unchanged.
+  The preflight writes evidence but never invokes the trading control plane or
+  cycle runner.
+
+### Gotchas
+
+- A healthy `/api/health` does not prove the execution venue is reachable.
+  Latest candles must be bypass+strict+fresh; historical candles may be
+  cache-first but must retain the same non-synthetic execution source.
+- Cloud readiness is not permission to start a strategy. Service installation,
+  scheduler ownership, state cutover, and the final Paper start remain later
+  contracts.
+- The datafeed and Nautilus environments are intentionally separate from the
+  application environment. Installing all dependencies into one environment
+  would make a provider swap or Nautilus upgrade harder to isolate.
+
+### Verification
+
+- Focused tests cover all-pass, live-capable config rejection, datafeed
+  failure, invalid persistence shape, Nautilus import failure, and loopback
+  override enforcement. A local macOS diagnostic run remained blocked on OS
+  and dirty development source while all runtime/datafeed checks passed.
