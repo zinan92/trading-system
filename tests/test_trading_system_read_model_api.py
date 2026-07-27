@@ -243,6 +243,7 @@ def test_new_endpoint_uses_history_for_lifecycle_and_pnl_but_current_cycle_for_p
         "open_trade_count": 0,
         "completed_trade_count": 2,
         "completed_round_trip_count": 2,
+        "chronology_invalid_trade_count": 0,
         "fill_count": 4,
         "entry_fill_count": 2,
         "exit_fill_count": 2,

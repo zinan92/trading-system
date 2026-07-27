@@ -20,7 +20,13 @@ def main() -> int:
     parser.add_argument("--render-dir", type=Path, required=True)
     parser.add_argument(
         "--action",
-        choices=("render", "install-passive", "activate-dashboard", "uninstall"),
+        choices=(
+            "render",
+            "install-passive",
+            "activate-dashboard",
+            "activate-remote-access",
+            "uninstall",
+        ),
         default="render",
     )
     parser.add_argument("--apply", action="store_true")

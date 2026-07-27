@@ -229,6 +229,45 @@ def test_deadman_ping_treats_missing_reconciliation_as_possible_position(tmp_pat
     assert result["exposure"]["reconciliation_freshness"]["reason_code"] == "live_reconciliation_missing"
 
 
+def test_cloud_deadman_uses_layered_health_and_never_persists_url(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root, db, run_date = _healthy_root(tmp_path)
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        return _Response()
+
+    result = ExternalDeadmanPing(
+        root,
+        db,
+        url="https://hc-ping.example/secret-token",
+        opener=opener,
+        cloud_health_provider=lambda: {
+            "status": "degraded",
+            "incidents": [
+                {
+                    "stage": "daily_self_review",
+                    "code": "daily_self_review_missing_or_incomplete",
+                    "next_action": "Regenerate the review.",
+                }
+            ],
+        },
+    ).run(run_date)
+
+    assert result["status"] == "fail_sent"
+    assert result["ping"]["target_kind"] == "fail"
+    assert calls and "/fail?" in calls[0]
+    saved = (
+        root / "deadman_ping" / "current.json"
+    ).read_text(encoding="utf-8")
+    assert "secret-token" not in saved
+    assert '"url"' not in saved
+
+
 def test_deadman_ping_cli_loads_deadman_url_from_live_env(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.delenv("TRADING_ORCHESTRATOR_DEADMAN_URL", raising=False)
     monkeypatch.delenv("TRADING_ORCHESTRATOR_DEADMAN_POSITION_URL", raising=False)

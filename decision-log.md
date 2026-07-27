@@ -11459,3 +11459,42 @@ auditable datafeed port; broker execution remains a separate port.
   corrupt backup and non-empty destination refusal, verified-only retention,
   forward/rollback ownership epochs, cloud mismatch blocking, and refusal
   before live-tick runner construction.
+
+## 2026-07-27 - Cloud reachability is not Cloud trading health
+
+### Decision
+
+- The public Cloud chain terminates at Cloudflare Access, then reaches a
+  loopback-only allowlist gateway on 8766. The gateway validates the signed
+  Access JWT and exact operator email before forwarding any control request to
+  the loopback-only Dashboard on 8765. The datafeed on 8100 is never a tunnel
+  target.
+- One `cloud-paper-health-v1` contract reports datafeed freshness, live-tick,
+  execution state, reconciliation, prior-day self-review, backup, scheduler
+  ownership, and deployed SHA independently. Dashboard reachability is
+  explicitly not a health signal; missing evidence remains unknown/degraded
+  and stale execution evidence blocks.
+- In Cloud mode, dead-man delivery consumes this layered contract. A stale
+  tick, owner mismatch, reconciliation failure, or missed/invalid review or
+  backup selects the external fail signal. Persisted receipts record only the
+  fail/success target kind, never a configured URL or token.
+
+### Gotchas
+
+- Cloudflare Access at the edge is necessary but not sufficient for trading
+  control. The local allowlist gateway remains the application security
+  boundary and must validate the JWT itself before asserting the actor header
+  upstream.
+- A stopped Paper runtime may legitimately have no current execution snapshot.
+  That reconciliation layer stays unknown and must pass during cutover/start;
+  it is not silently converted to pass.
+- A daily review with the correct date and `status=complete` is still invalid
+  when its content hash does not verify. A backup receipt also needs a
+  creation timestamp so staleness is mechanically checkable.
+
+### Verification
+
+- Focused service, gateway, systemd, backup, dead-man, Dashboard API/read-model,
+  testnet drill, and static browser-contract tests pass. Fixtures cover all
+  healthy layers, stale tick, missing review/backup, owner mismatch, datafeed
+  probe failure, JWT denial, exact allowlisting, and secret-redacted receipts.

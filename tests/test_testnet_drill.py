@@ -62,7 +62,7 @@ def test_testnet_drill_deadman_uses_fail_branch_for_stale_runner_and_unknown_pos
     deadman = result["evidence"]["deadman"]
     assert deadman["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
     assert deadman["ping"]["status"] == "dry_run_fail"
-    assert "/fail" in deadman["ping"]["url"]
+    assert deadman["ping"]["target_kind"] == "fail"
     assert deadman["severity"] == "critical"
     assert deadman["exposure"]["position_unknown"] is True
 

@@ -74,6 +74,7 @@ from services.trading_system_read_model import (
 )
 from services.trading_daily_24h_report import load_daily_report_rows
 from services.cloud_daily_self_review import load_daily_self_review
+from pipelines.cloud_health import build_cloud_health
 
 from services.contracts.common import _CYCLE_ID_PATTERN, _DATE_PATTERN, _truthy  # noqa: F401 — re-exported for backward compatibility
 from services.contracts.system import build_market_view_intake_response, build_system_state_response, dashboard_output_root  # noqa: F401 — re-exported for backward compatibility
@@ -227,6 +228,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/trading-system/daily-self-review":
             self._handle_daily_self_review(parsed.query)
             return
+        if parsed.path == "/api/trading-system/cloud-health":
+            self._handle_cloud_health()
+            return
         if parsed.path == "/api/dualtrack/config":
             self._handle_dualtrack_config_get()
             return
@@ -368,6 +372,30 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             )
         except ValueError as exc:
             self._write_error(404, "daily_self_review_not_found", str(exc))
+
+    def _handle_cloud_health(self) -> None:
+        try:
+            self._write_json(200, build_cloud_health(persist=True))
+        except Exception as exc:  # noqa: BLE001 - preserve classified failure.
+            self._write_json(
+                503,
+                {
+                    "schema_version": "cloud-paper-health-v1",
+                    "runtime_mode": "cloud",
+                    "paper_only": True,
+                    "status": "blocked",
+                    "incidents": [
+                        {
+                            "stage": "cloud_health",
+                            "code": "cloud_health_unavailable",
+                            "summary": f"Cloud health could not be built: {type(exc).__name__}",
+                            "next_action": "Inspect the Cloud health service and latest receipt.",
+                        }
+                    ],
+                    "control_actions_executed": 0,
+                    "secrets_included": False,
+                },
+            )
 
     def _handle_strategy_console_control(self) -> None:
         try:
@@ -1144,6 +1172,13 @@ def _assemble_strategy_console_snapshot(
         load_strategy_shadow_runs_for_cycles(output, closed_cycle_ids)
     )
     safe_repair_queue = SafeRepairQueue(output).read_model()
+    cloud_health = {}
+    try:
+        rows = load_json(output / "cloud" / "health" / "current.json")
+        if rows and isinstance(rows[-1], dict):
+            cloud_health = dict(rows[-1])
+    except (OSError, ValueError):
+        cloud_health = {}
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
@@ -1172,6 +1207,7 @@ def _assemble_strategy_console_snapshot(
         "strategy_shadows": shadows,
         "strategy_shadow_promotion": shadow_promotion,
         "safe_repair_queue": safe_repair_queue,
+        "cloud_health": cloud_health,
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
             "one_production_strategy": True,

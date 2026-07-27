@@ -12,6 +12,8 @@ from typing import Any, Callable
 UNIT_NAMES = (
     "gridmind-datafeed.service",
     "gridmind-dashboard.service",
+    "gridmind-access-gateway.service",
+    "gridmind-cloudflared.service",
     "gridmind-live-tick.service",
     "gridmind-live-tick.timer",
     "gridmind-daily-24h.service",
@@ -108,6 +110,41 @@ Type=simple
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service dashboard
 ExecStart={p.app_python} -m pipelines.dashboard_server --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target""",
+            "gridmind-access-gateway.service": f"""[Unit]
+Description=GridMind authenticated allowlist gateway
+After=gridmind-dashboard.service
+Requires=gridmind-dashboard.service
+
+[Service]
+Type=simple
+{common}
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service access-gateway
+ExecStart={p.app_python} -m services.cloud_access_gateway --host 127.0.0.1 --port 8766
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target""",
+            "gridmind-cloudflared.service": f"""[Unit]
+Description=GridMind authenticated Cloudflare Tunnel
+After=gridmind-access-gateway.service network-online.target
+Requires=gridmind-access-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gridmind
+Group=gridmind
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/gridmind/cloudflared.yml tunnel run
 Restart=on-failure
 RestartSec=5
 
@@ -245,13 +282,26 @@ class CloudSystemdInstaller:
             return [
                 ["systemctl", "enable", "--now", "gridmind-dashboard.service"],
             ]
+        if action == "activate-remote-access":
+            return [
+                [
+                    "systemctl",
+                    "enable",
+                    "--now",
+                    "gridmind-access-gateway.service",
+                    "gridmind-cloudflared.service",
+                ],
+            ]
         if action == "uninstall":
             return [
                 ["systemctl", "disable", "--now", *UNIT_NAMES],
                 *[["rm", "-f", str(self.systemd_dir / name)] for name in UNIT_NAMES],
                 ["systemctl", "daemon-reload"],
             ]
-        raise ValueError("action must be install-passive, activate-dashboard, or uninstall")
+        raise ValueError(
+            "action must be install-passive, activate-dashboard, "
+            "activate-remote-access, or uninstall"
+        )
 
     def apply(self, rendered_dir: Path, action: str, *, dry_run: bool = True) -> dict[str, Any]:
         commands = self.plan(rendered_dir, action)
