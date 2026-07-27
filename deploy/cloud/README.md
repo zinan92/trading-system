@@ -136,3 +136,10 @@ local-mac active -> paused -> cloud owner active
 
 Rollback uses the same pause boundary in reverse. There is no dual-owner
 transition and no public low-level transition command in this milestone.
+
+The source-bound deployment and single-owner transition are specified in
+[`docs/runbooks/cloud-paper-cutover-v1.md`](../../docs/runbooks/cloud-paper-cutover-v1.md).
+Render `pipelines.cloud_deploy_manifest` before provisioning. The actual
+cutover controller is dry-run by default and its remote/local service ports
+must be supplied by the provider adapter; no generic shell execution surface
+is exposed.

@@ -4,6 +4,7 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-27)
+- Cloud M6a 已实现：部署 manifest 锁定 trading-system/datafeed 的精确 SHA 且不携带密钥或激活 scheduler；切换前机械要求 Paper stopped、0 已接受委托、0 开放持仓、execution reconciliation 通过、备份验证、Cloud preflight 同 SHA 通过且 Cloud tick 禁用。正向切换只能 `local active -> paused -> cloud active`，失败后双端 tick 保持禁用；rollback 只接受更高 epoch 的 paused 状态再恢复 local owner。
 - Cloud M5 已实现：公网链路固定为 `Cloudflare Access -> loopback 8766 allowlist gateway -> loopback 8765 Dashboard`，8100/8765 不公开暴露；gateway 只转发精确页面/API，控制请求必须通过 Access JWT 与操作者邮箱校验。`/api/trading-system/cloud-health` 分开报告行情、live-tick、执行、对账、每日复盘、备份、scheduler owner 与部署 SHA，Dashboard 生产状态卡显示 Cloud 7×24 总结；dead-man 的持久化回执不再包含 URL/token。
 - Cloud M4 已实现：`outputs/` 与 datafeed SQLite 可生成自哈希、逐文件校验的离线恢复包；恢复只允许空目标、不会激活 scheduler，并强制后续 reconciliation。Paper scheduler owner 具有单调 epoch，只能 `active -> paused -> active`；一旦 cloud owner 生效，本机默认 `local-mac` 会在构造 live-tick runner 前被拒绝。
 - Cloud M3 已实现：每天 01:10（北京）在终态 24 小时报表之后生成不可变 JSON/Markdown 自复盘，分开记录 tick 连续性、执行/对账、StrategyPlan/lifecycle，并明确“做对/做错/明天行动”。缺失或哈希错误证据保持 unknown；所有行动均 `executed=false`，稳定 API 为 `/api/trading-system/daily-self-review`。
@@ -38,7 +39,7 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Cloud M6：在真实云主机完成 provider/region preflight、不可变 SHA 部署、单一 scheduler owner 切换与 24 小时 soak；只有账号登录、身份、支付、CAPTCHA 或供应商协议边界需要 Park 亲自操作。
+- Cloud M6b：创建真实云主机并完成 provider/region preflight 与不可变 SHA 被动部署；只有账号登录、身份、支付、CAPTCHA 或供应商协议边界需要 Park 亲自操作。随后 M6c 才切换唯一 scheduler owner 并开始 24 小时 soak。
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
 - M3-05:审计当前生产策略摘要与持仓/委托/成交表的字段、计数、对齐和桌面可读性；只补复现的完整性或可理解性缺口。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。

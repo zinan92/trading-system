@@ -11498,3 +11498,39 @@ auditable datafeed port; broker execution remains a separate port.
   testnet drill, and static browser-contract tests pass. Fixtures cover all
   healthy layers, stale tick, missing review/backup, owner mismatch, datafeed
   probe failure, JWT denial, exact allowlisting, and secret-redacted receipts.
+
+## 2026-07-27 - Cloud cutover fails disabled between scheduler owners
+
+### Decision
+
+- Cloud deployment is bound to exact trading-system and datafeed SHAs. The
+  deploy manifest contains only allowlisted source/preflight commands and
+  points to a host-owned secret file; it never embeds a secret or enables a
+  scheduler.
+- Forward cutover is fixed to `local active -> paused -> cloud active`.
+  Before mutation, Paper must be stopped, accepted orders known-zero, open
+  positions zero, execution reconciliation passing, backup verified, Cloud
+  preflight source-matched, and Cloud tick disabled.
+- Any post-pause failure disables Cloud tick and leaves local tick disabled.
+  It does not automatically fall back, replay a control action, start a
+  strategy, cancel orders, or flatten positions. Rollback is an explicit
+  reverse monotonic owner transition.
+
+### Gotchas
+
+- A Nautilus snapshot can retain closed historical positions. The cutover gate
+  counts only `status=open` or non-zero remaining quantity; counting every
+  historical row would permanently block an otherwise flat Paper runtime.
+- The pre-cutover backup proves recoverability, but the transferred image must
+  be created after the local owner is paused. Otherwise the Cloud restore
+  could resurrect an `active local-mac` owner record.
+- After cloud activation, a failed health check is not permission to reactivate
+  the Mac. Both timers remain disabled until explicit rollback imports the
+  higher paused epoch.
+
+### Verification
+
+- Focused state-machine and adjacent ownership/backup/systemd tests cover
+  precheck blockers, source mismatch, dry-run purity, successful forward
+  cutover, every post-pause fail-disabled branch, idempotent completion,
+  monotonic rollback, and secret-free deployment manifests.
