@@ -1953,15 +1953,14 @@ def _write_live_tick_failure_diagnostic(output_root: Path | None, exc: Exception
 
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin CLI wrapper
     args = build_parser().parse_args(argv)
-    output_root = Path(args.output_root) if args.output_root else None
+    pipeline_config = load_pipeline_config()
+    output_root = Path(
+        args.output_root
+        or os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT")
+        or ROOT / str(pipeline_config.get("output_root", "outputs"))
+    )
     if args.event == "live-tick":
-        ownership = SchedulerOwnershipGuard(
-            output_root
-            or Path(
-                os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT")
-                or ROOT / str(load_pipeline_config().get("output_root", "outputs"))
-            )
-        ).verify()
+        ownership = SchedulerOwnershipGuard(output_root).verify()
         if not ownership.get("ok"):
             print(
                 f"[paper-owner] dualtrack-live-tick blocked: "

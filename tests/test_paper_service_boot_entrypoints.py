@@ -91,6 +91,43 @@ def test_cloud_live_tick_uses_cloud_gate_before_runner(monkeypatch, tmp_path):
     assert result == PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE
 
 
+def test_live_tick_passes_environment_output_root_to_runner(monkeypatch, tmp_path):
+    output_root = tmp_path / "cloud-outputs"
+    observed = {}
+
+    class _AllowedGate:
+        def __init__(self, output_root):
+            observed.setdefault("gate_roots", []).append(output_root)
+
+        def verify(self, service):
+            return {"ok": True}
+
+    class _AllowedOwnership:
+        def __init__(self, root):
+            observed["ownership_root"] = root
+
+        def verify(self):
+            return {"ok": True}
+
+    class _Runner:
+        def __init__(self, *, output_root, **kwargs):
+            observed["runner_root"] = output_root
+
+        def live_tick(self, *, as_of=None):
+            return {"status": "ok", "as_of": as_of}
+
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    monkeypatch.setenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(output_root))
+    monkeypatch.setattr(dualtrack_cycle_runner, "SchedulerOwnershipGuard", _AllowedOwnership)
+    monkeypatch.setattr(dualtrack_cycle_runner, "CloudPaperServiceBootGate", _AllowedGate)
+    monkeypatch.setattr(dualtrack_cycle_runner, "DualTrackCycleRunner", _Runner)
+
+    assert dualtrack_cycle_runner.main(["--event", "live-tick"]) == 0
+    assert observed["ownership_root"] == output_root
+    assert observed["gate_roots"] == [output_root]
+    assert observed["runner_root"] == output_root
+
+
 def test_local_live_tick_refuses_cloud_owned_namespace_before_boot_gate(
     monkeypatch,
     tmp_path,
