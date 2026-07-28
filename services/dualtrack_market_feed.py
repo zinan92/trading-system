@@ -398,7 +398,35 @@ class DualTrackMarketFeed:
         bridged.setdefault("selected_source", self.datafeed_source)
         bridged.setdefault("attempted_sources", [self.datafeed_source])
         bridged.setdefault("selection_reason", "requested_or_default")
+        timestamps: list[tuple[dict, str]] = []
+        for row in bridged.get("candles") or []:
+            if not isinstance(row, dict):
+                return response
+            normalized = self._legacy_utc_timestamp(row.get("timestamp"))
+            if normalized is None:
+                return response
+            timestamps.append((row, normalized))
+        latest_timestamp = self._legacy_utc_timestamp(
+            bridged.get("latest_timestamp")
+        )
+        if latest_timestamp is None:
+            return response
+        for row, normalized in timestamps:
+            row["timestamp"] = normalized
+        bridged["latest_timestamp"] = latest_timestamp
         return bridged
+
+    @staticmethod
+    def _legacy_utc_timestamp(value: object) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
 
     def _legacy_datafeed_payload(
         self,

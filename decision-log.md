@@ -11614,7 +11614,9 @@ auditable datafeed port; broker execution remains a separate port.
   compatibility projection may derive them only when provider, requested
   source, selected source mode, execution-venue requirement, non-synthetic
   status, and ticker all prove the same exact source. Any mismatch remains a
-  blocking contract error.
+  blocking contract error. Its Binance candle timestamps are known UTC but
+  timezone-naive; the same exact-source bridge may attach UTC only after strict
+  ISO parsing, and malformed timestamps remain blocking.
 
 ## Verification
 

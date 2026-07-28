@@ -468,6 +468,9 @@ def test_authoritative_mode_bridges_known_exact_source_v1_identity_gap(
         "selection_reason",
     ):
         raw.pop(key)
+    for row in raw["candles"]:
+        row["timestamp"] = row["timestamp"].removesuffix("+00:00")
+    raw["latest_timestamp"] = raw["latest_timestamp"].removesuffix("+00:00")
     client = _FakeDatafeedClient(raw)
     config = _config()
     config["datafeed"] = {
