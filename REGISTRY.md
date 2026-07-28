@@ -4,6 +4,8 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-28)
+- 当前 Cloud Paper 已按新鲜 AI 建议启动中性稳健 Grid（#408）：evaluation=`ai-eval-d539413e2589488a`、StrategyPlan=`strategy-plan-2026-07-28_DAY-3-4fbccf9b` v3、risk decision=`risk-decision-9caee40ee8f9287a09ad6d558d6b76937f4f51c14fbe110ab5ec2c0add7c0d66`。确定性规格为 38 格、每格约 5,049.89 USD、最低计划净利约 10.01 USD/格、实际杠杆约 9.59x；原子启动创建/接受 38/38 张 Paper 委托，权威生命周期已有 38 条 `armed`，runtime=`running`、tick=`ready`、行情 fresh、0 当前计划持仓。当前计划真实 fill/trade 仍为 0；历史累计 64 fills/29 trades 不得计作今日证据。
+- AI recommendation provider 的 Mac-only 硬编码已由 #409/#410 修复并合入 `main@68754a5`：默认命令改为可配置的 `codex`，缺失/不可执行/超时/失败/非法输出均有稳定 fail-closed 机器码；credential-free attended bridge 以精确 Prompt SHA 和原子 JSON 回传隔离模型凭据。正在运行的 Cloud checkout 仍保持 source-attested `140c683`，本条合并尚未部署；必须等生命周期安全窗口按 source-bound release 更新，不能用改工作树或重启 tick 的方式打断活动网格。
 - Cloud M6c 已完成唯一 Paper scheduler owner 切换并部署 `main@140c683`：Alibaba Cloud `cloud-primary` 为 active owner（epoch 3），Mac tick/report/feed/dead-man jobs 保持卸载且不存在自动 failback。Cloud live-tick、24 小时报表、每日自复盘、备份与 dead-man 五个 systemd timers 均 enabled/active；公网 Dashboard、Access gateway、Cloudflare tunnel 与 datafeed services 均 active。最终证据 soak `soak-20260728T043856Z-0329916e` 正在运行，24 小时最低窗口于 2026-07-29 12:38:56（北京）结束；本次切换未启动 Grid/DCA、未创建订单、未改变持仓。
 - 默认测试基线已与已合并合同重新对齐（#401）：Completion Audit 的 full/focus 调度标签包含 24 小时报表，Standard K-line 空十字线标签不再占位，Cloud 备份/预检的只读 SQLite seam 被精确登记；手工 Paper 订单仍由服务端风险事实裁决，最大计划损失保持 advisory，杠杆超限等硬闸保持 fail-closed。
 - Cloud M6a 已实现：部署 manifest 锁定 trading-system/datafeed 的精确 SHA 且不携带密钥或激活 scheduler；切换前机械要求 Paper stopped、0 已接受委托、0 开放持仓、execution reconciliation 通过、备份验证、Cloud preflight 同 SHA 通过且 Cloud tick 禁用。正向切换只能 `local active -> paused -> cloud active`，失败后双端 tick 保持禁用；rollback 只接受更高 epoch 的 paused 状态再恢复 local owner。
@@ -41,6 +43,8 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- 持续监测 `strategy-plan-2026-07-28_DAY-3-4fbccf9b` 的首个自然 fill/TP/重挂；只接受当前计划的 Nautilus fill、trade、position、生命周期和 reconciliation 共同证据，`armed`/accepted 委托与历史累计计数都不是成交。
+- 在当前 Paper 生命周期允许的安全发布窗口，把 `main@68754a5` 通过 clean SHA/source-attestation 发布到 Cloud，并验证 provider failure taxonomy；发布不得重复启动策略、撤单、平仓、改持仓或破坏 cloud-primary owner/tick 连续性。
 - Cloud soak 满 24 小时后继续运行至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick 连续性、备份、dead-man、服务重启、行情新鲜度和 owner epoch 做终态验收。7 月 28 日中午切云前的缺失 tick 不得被伪装成完整自然日；验收前 Mac scheduler 保持禁用，不自动 failback。
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
 - M3-05:审计当前生产策略摘要与持仓/委托/成交表的字段、计数、对齐和桌面可读性；只补复现的完整性或可理解性缺口。
