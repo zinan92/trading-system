@@ -11538,27 +11538,32 @@ auditable datafeed port; broker execution remains a separate port.
 
 ## Decision
 
-- Provision the initial always-on Paper host through a reviewed AWS Lightsail
-  plan in Singapore. Discover active blueprint, bundle, and availability-zone
-  identifiers from the provider catalog; select Ubuntu 24.04 and the
-  lowest-cost active Linux bundle meeting 2 vCPU, 2 GB RAM, and USD 12/month.
-- Cloud-init is rendered from the exact trading-system and datafeed SHAs. The
-  Python and cloudflared downloads are version- and SHA256-pinned.
+- Provision the initial always-on Paper host through a reviewed Alibaba Cloud
+  Simple Application Server plan in Singapore. The purchased host runs Ubuntu
+  24.04 x86_64 with 2 vCPU, 2 GiB memory, and 40 GiB storage.
+- The host must not receive a GitHub credential. Build deterministic local
+  source archives from the exact trading-system and datafeed SHAs, upload them
+  over key-only SSH, and verify their SHA256 digests before extraction. Python,
+  uv, and cloudflared remain version-pinned.
 - The first boot installs and starts only the datafeed and Dashboard after the
   read-only Cloud preflight passes. Scheduler timers, Grid, DCA, orders, and
   positions remain untouched.
-- The provider firewall exposes only SSH from a supplied restricted operator
-  CIDR. Application ports remain loopback-only; remote use requires the
-  authenticated Cloudflare Access chain introduced in M5.
+- Application ports remain loopback-only; remote use requires the authenticated
+  Cloudflare Access chain introduced in M5. SSH is used only for attended,
+  key-only provisioning and host acceptance.
 - Provider failures write only bounded status, action name, host label, region,
-  and plan hash. AWS stderr, account identity, credentials, keys, and tunnel
-  material never enter receipts.
+  and plan hash. Alibaba Cloud response bodies, account identity, credentials,
+  keys, and tunnel material never enter receipts.
 
 ## Gotchas
 
-- AWS login, identity, payment, CAPTCHA, key-pair creation, and provider
+- Alibaba Cloud login, identity, payment, CAPTCHA, key-pair creation, and provider
   agreement are user-controlled boundaries even though the resulting Paper VM
   is reversible.
+- Reopening provider checkout without preserving its image identifier can
+  silently replace the selected Ubuntu image with the provider default. Always
+  verify the installed OS over SSH before bootstrap; reinstall the empty
+  instance before any Paper state exists if the image is wrong.
 - The checked-in package proves deterministic planning and safe passive boot;
   it is not evidence that a VM exists. Issue #398 closes only after real host,
   preflight, access, firewall, and restore receipts pass.

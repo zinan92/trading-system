@@ -96,10 +96,11 @@
 
 - Cloud M6a merged as PR #397 at `main@ec8be27`: exact-source deployment
   manifests and fail-disabled single-owner cutover/rollback are available.
-- Issue #398 now owns the AWS Lightsail Singapore passive-host build. The
-  source-bound, checksum-pinned provisioning package is under implementation;
-  no VM, scheduler, strategy, order, position, credential, or live process has
-  been changed yet.
-- Next: pass focused tests, review the dry-run provider plan, cross the
-  user-controlled AWS account/payment boundary, provision the passive host,
-  then prove authenticated access and temporary restore before M6c cutover.
+- Issue #398 now owns the Alibaba Cloud Singapore passive-host build. The
+  purchased host is a Simple Application Server running Ubuntu 24.04 x86_64
+  with 2 vCPU, 2 GiB memory, and 40 GiB storage. The provider/login/payment
+  boundary is complete; no Paper scheduler, strategy, order, position, exchange
+  credential, or live process has been moved.
+- Next: merge the source-bound Alibaba adapter, upload exact source archives,
+  activate only loopback datafeed and Dashboard, then prove authenticated
+  access and temporary restore before the separate M6c scheduler cutover.

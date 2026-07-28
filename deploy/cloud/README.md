@@ -171,3 +171,27 @@ The Lightsail firewall plan exposes only SSH restricted to the supplied
 operator `/32`; ports 8100, 8765, and 8766 are never public. Authenticated
 Dashboard access is activated separately after a dedicated Cloudflare Tunnel
 credential and Access policy are installed in host-owned paths.
+
+## Alibaba Cloud Simple Application Server passive host
+
+`aliyun-plan.json` is the reviewed contract for the purchased Singapore host:
+Ubuntu 24.04 x86_64, 2 vCPU, 2 GiB memory, and 40 GiB storage. The deployment
+does not place a GitHub credential on the host. Instead, it creates
+deterministic source archives from the exact local Git SHAs, uploads them over
+key-only SSH, and verifies their SHA256 digests before extraction.
+
+```bash
+python -m pipelines.cloud_aliyun render \
+  --datafeed-root /path/to/datafeed \
+  --render-dir /tmp/gridmind-aliyun \
+  --host <PUBLIC_IP> \
+  --ssh-key /path/to/private-key
+python -m pipelines.cloud_aliyun apply \
+  --plan /tmp/gridmind-aliyun/deploy-plan.json
+```
+
+The second command is a dry run unless `--apply` is appended. Bootstrap starts
+only the loopback datafeed and Dashboard after preflight. It explicitly
+disables the live-tick timer, never starts Grid or DCA, and writes only a
+secret-free provisioning receipt. Cloudflare Tunnel credentials and Access
+policy remain outside Git and are installed only after loopback acceptance.

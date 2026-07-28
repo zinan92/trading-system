@@ -4,34 +4,37 @@ Issue: [#398](https://github.com/zinan92/trading-system/issues/398)
 
 ## Outcome
 
-Provision one AWS Lightsail host in Singapore from a reviewed, source-bound
-plan, then install the Paper stack in passive mode. The live-tick timer remains
-disabled and no strategy or order control path is called.
+Provision one Alibaba Cloud Simple Application Server in Singapore from a
+reviewed, source-bound plan, then install the Paper stack in passive mode. The
+live-tick timer remains disabled and no strategy or order control path is
+called.
 
 ## Implementation
 
-1. Render a deterministic Lightsail plan from the provider catalog. Select an
-   active Ubuntu 24.04 Linux blueprint, the lowest-cost bundle with at least
-   2 vCPU and 2 GB RAM, and an availability zone in `ap-southeast-1`.
-2. Render checksum-pinned cloud-init with the exact trading-system and datafeed
-   SHAs. It creates the `gridmind` account and persistent paths, installs Python
-   3.13.7, isolated virtual environments, cloudflared, and passive systemd
-   units.
-3. Restrict the Lightsail firewall to SSH from the operator CIDR. Ports 8100,
-   8765, and 8766 remain loopback-only and are never public.
+1. Validate the purchased Simple Application Server against the checked-in
+   contract: Singapore `ap-southeast-1`, Ubuntu 24.04 x86_64, 2 vCPU, 2 GiB
+   memory, and 40 GiB storage.
+2. Build deterministic local source archives from the exact trading-system and
+   datafeed Git SHAs. Render a checksum-pinned bootstrap which verifies those
+   archives before extraction, creates the `gridmind` account and persistent
+   paths, installs Python 3.13.7, isolated virtual environments, cloudflared,
+   and passive systemd units.
+3. Keep ports 8100, 8765, and 8766 loopback-only and never expose application
+   ports through the provider or host firewall. SSH remains key-only for
+   attended provisioning.
 4. Start the datafeed, run the read-only Cloud preflight, and activate the
    Dashboard only after the preflight passes. Do not enable the live-tick,
    report, review, backup, or dead-man timers.
-5. After the AWS login/payment boundary, apply the plan, inspect the
-   secret-free provisioning receipt, configure a dedicated Cloudflare Tunnel
-   outside Git, activate authenticated remote access, and rehearse restore into
-   temporary paths.
+5. After the Alibaba Cloud login/payment boundary, upload the two exact source
+   archives and bootstrap over SSH, inspect the secret-free provisioning
+   receipt, configure a dedicated Cloudflare Tunnel outside Git, activate
+   authenticated remote access, and rehearse restore into temporary paths.
 
 ## Verification
 
-- Unit tests cover catalog selection, dry-run purity, missing provider context,
-  source mismatch, failed commands, scheduler-disabled invariants, firewall
-  shape, and secret redaction.
+- Unit tests cover instance-contract validation, deterministic source archives,
+  dry-run purity, source mismatch, failed commands, scheduler-disabled
+  invariants, private application ports, and secret redaction.
 - Shell syntax and placeholder completeness are validated without running
   cloud-init.
 - Focused M1-M6 service, preflight, access, backup, ownership, and cutover tests
@@ -42,6 +45,6 @@ disabled and no strategy or order control path is called.
 
 ## Safety boundary
 
-AWS login, identity, CAPTCHA, provider agreement, and payment remain
+Alibaba Cloud login, identity, CAPTCHA, provider agreement, and payment remain
 user-controlled. Provisioning is Paper-only. It does not copy active state,
 activate a scheduler owner, start Grid/DCA, or touch live credentials.
