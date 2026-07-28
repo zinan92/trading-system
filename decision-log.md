@@ -11564,6 +11564,16 @@ auditable datafeed port; broker execution remains a separate port.
   silently replace the selected Ubuntu image with the provider default. Always
   verify the installed OS over SSH before bootstrap; reinstall the empty
   instance before any Paper state exists if the image is wrong.
+- A plain `git archive` proves file bytes but cannot satisfy runtime source
+  attestation because it has no Git object database. Upload a checksum-pinned
+  Git bundle beside each archive and reconstruct an exact clean checkout
+  without placing a private-repository credential on the host.
+- The reviewed datafeed main revision predates the optional `storage` and
+  `selected_source` response fields. Cloud preflight may bridge that adapter
+  delta only with equivalent evidence: `source_mode` must identify the required
+  execution venue, and an absent storage envelope requires a read-only SQLite
+  `PRAGMA quick_check` against the owner DB. Missing or failed evidence remains
+  blocking.
 - The checked-in package proves deterministic planning and safe passive boot;
   it is not evidence that a VM exists. Issue #398 closes only after real host,
   preflight, access, firewall, and restore receipts pass.

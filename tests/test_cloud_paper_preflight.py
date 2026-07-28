@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -140,6 +141,45 @@ def test_cloud_preflight_preserves_datafeed_failure(tmp_path: Path):
     assert "datafeed_health" in result["failed_check_ids"]
     health = next(row for row in result["checks"] if row["id"] == "datafeed_health")
     assert "connection refused" in health["detail"]
+
+
+def test_cloud_preflight_accepts_legacy_health_with_owner_sqlite_proof(
+    tmp_path: Path,
+):
+    class LegacyDatafeed(FakeDatafeed):
+        def health(self) -> dict:
+            return {"status": "ok"}
+
+        def candles(self, **kwargs) -> dict:
+            payload = super().candles(**kwargs)
+            payload["source_mode"] = payload.pop("selected_source")
+            return payload
+
+    db_path = tmp_path / "datafeed" / "kline.db"
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("CREATE TABLE receipt (value TEXT)")
+
+    result = build(tmp_path, datafeed_client=LegacyDatafeed()).run()
+
+    assert result["status"] == "pass"
+    health = next(row for row in result["checks"] if row["id"] == "datafeed_health")
+    assert health["storage_health_source"] == "owner_sqlite_quick_check"
+    latest = next(
+        row for row in result["checks"] if row["id"] == "latest_execution_venue_candle"
+    )
+    assert latest["selected_source"] == "binance_usdm_futures"
+
+
+def test_cloud_preflight_rejects_legacy_health_without_owner_db(tmp_path: Path):
+    class LegacyDatafeed(FakeDatafeed):
+        def health(self) -> dict:
+            return {"status": "ok"}
+
+    result = build(tmp_path, datafeed_client=LegacyDatafeed()).run()
+
+    assert result["status"] == "blocked"
+    assert "datafeed_health" in result["failed_check_ids"]
 
 
 def test_cloud_preflight_blocks_unwritable_persistence_shape(tmp_path: Path):

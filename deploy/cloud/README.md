@@ -177,8 +177,9 @@ credential and Access policy are installed in host-owned paths.
 `aliyun-plan.json` is the reviewed contract for the purchased Singapore host:
 Ubuntu 24.04 x86_64, 2 vCPU, 2 GiB memory, and 40 GiB storage. The deployment
 does not place a GitHub credential on the host. Instead, it creates
-deterministic source archives from the exact local Git SHAs, uploads them over
-key-only SSH, and verifies their SHA256 digests before extraction.
+deterministic source archives and Git bundles from the exact local Git SHAs,
+uploads them over key-only SSH, and verifies their SHA256 digests before
+reconstructing clean, attestable checkouts.
 
 ```bash
 python -m pipelines.cloud_aliyun render \

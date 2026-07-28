@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import sqlite3
 import stat
 import subprocess
 from datetime import datetime, timezone
@@ -213,10 +214,30 @@ class CloudPaperPreflight:
         payload = self.datafeed_client.health()
         if payload.get("status") != "ok":
             raise RuntimeError(f"datafeed status is {payload.get('status')!r}")
-        storage = payload.get("storage") or {}
-        if storage.get("status") != "ok":
-            raise RuntimeError(f"datafeed storage status is {storage.get('status')!r}")
-        return {"service_status": "ok", "storage_status": "ok"}
+        storage = payload.get("storage")
+        if isinstance(storage, dict):
+            if storage.get("status") != "ok":
+                raise RuntimeError(f"datafeed storage status is {storage.get('status')!r}")
+            return {
+                "service_status": "ok",
+                "storage_status": "ok",
+                "storage_health_source": "datafeed_endpoint",
+            }
+        datafeed_db = Path(
+            self.environment.get("KLINE_DB_PATH")
+            or "/var/lib/gridmind/datafeed/kline.db"
+        )
+        if not datafeed_db.is_file():
+            raise RuntimeError("legacy datafeed health omitted storage and owner DB is missing")
+        with sqlite3.connect(f"file:{datafeed_db}?mode=ro", uri=True) as connection:
+            quick_check = str(connection.execute("PRAGMA quick_check").fetchone()[0])
+        if quick_check.lower() != "ok":
+            raise RuntimeError(f"datafeed owner DB quick_check is {quick_check!r}")
+        return {
+            "service_status": "ok",
+            "storage_status": "ok",
+            "storage_health_source": "owner_sqlite_quick_check",
+        }
 
     def _latest_candle(self) -> dict[str, Any]:
         payload = self.datafeed_client.candles(
@@ -253,7 +274,8 @@ class CloudPaperPreflight:
         candles = payload.get("candles")
         if not isinstance(candles, list) or not candles:
             raise RuntimeError("trusted candle response is empty")
-        if payload.get("selected_source") != "binance_usdm_futures":
+        selected_source = payload.get("selected_source") or payload.get("source_mode")
+        if selected_source != "binance_usdm_futures":
             raise RuntimeError("execution-venue source mismatch")
         if payload.get("execution_venue") is not True or payload.get("is_synthetic") is not False:
             raise RuntimeError("response is not a non-synthetic execution venue")
@@ -261,7 +283,7 @@ class CloudPaperPreflight:
             raise RuntimeError("latest candle is not fresh")
         return {
             "candle_count": len(candles),
-            "selected_source": payload.get("selected_source"),
+            "selected_source": selected_source,
             "fresh": payload.get("fresh"),
             "latest_timestamp": payload.get("latest_timestamp"),
         }

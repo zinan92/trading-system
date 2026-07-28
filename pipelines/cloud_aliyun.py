@@ -57,6 +57,8 @@ def main() -> int:
         datafeed_sha = _datafeed_sha()
         trading_archive = render_dir / "trading-system.tar.gz"
         datafeed_archive = render_dir / "datafeed.tar.gz"
+        trading_bundle = render_dir / "trading-system.bundle"
+        datafeed_bundle = render_dir / "datafeed.bundle"
         trading_archive_sha = provisioner.source_archive(
             repo=ROOT, revision=trading_sha, destination=trading_archive
         )
@@ -65,11 +67,21 @@ def main() -> int:
             revision=datafeed_sha,
             destination=datafeed_archive,
         )
+        trading_bundle_sha = provisioner.source_bundle(
+            repo=ROOT, ref="HEAD", destination=trading_bundle
+        )
+        datafeed_bundle_sha = provisioner.source_bundle(
+            repo=args.datafeed_root,
+            ref="refs/remotes/origin/main",
+            destination=datafeed_bundle,
+        )
         bootstrap = provisioner.render_bootstrap(
             trading_sha=trading_sha,
             datafeed_sha=datafeed_sha,
             trading_archive_sha256=trading_archive_sha,
             datafeed_archive_sha256=datafeed_archive_sha,
+            trading_bundle_sha256=trading_bundle_sha,
+            datafeed_bundle_sha256=datafeed_bundle_sha,
             runtime=spec.get("runtime") or {},
         )
         bootstrap_path = render_dir / "bootstrap.sh"

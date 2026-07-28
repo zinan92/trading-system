@@ -15,6 +15,8 @@ REQUIRED_TEMPLATE_FIELDS = {
     "DATAFEED_SHA",
     "TRADING_ARCHIVE_SHA256",
     "DATAFEED_ARCHIVE_SHA256",
+    "TRADING_BUNDLE_SHA256",
+    "DATAFEED_BUNDLE_SHA256",
     "PYTHON_VERSION",
     "UV_VERSION",
     "UV_WHEEL_SHA256",
@@ -77,6 +79,20 @@ class CloudAliyunProvisioner:
                 zipped.write(result.stdout)
         return _file_sha256(destination)
 
+    @staticmethod
+    def source_bundle(*, repo: Path, ref: str, destination: Path) -> str:
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["git", "bundle", "create", str(destination), ref],
+            cwd=str(repo),
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("source_bundle_failed")
+        return _file_sha256(destination)
+
     def render_bootstrap(
         self,
         *,
@@ -84,6 +100,8 @@ class CloudAliyunProvisioner:
         datafeed_sha: str,
         trading_archive_sha256: str,
         datafeed_archive_sha256: str,
+        trading_bundle_sha256: str,
+        datafeed_bundle_sha256: str,
         runtime: Mapping[str, Any],
     ) -> str:
         values = {
@@ -94,6 +112,12 @@ class CloudAliyunProvisioner:
             ),
             "DATAFEED_ARCHIVE_SHA256": _sha(
                 datafeed_archive_sha256, "datafeed_archive_sha256"
+            ),
+            "TRADING_BUNDLE_SHA256": _sha(
+                trading_bundle_sha256, "trading_bundle_sha256"
+            ),
+            "DATAFEED_BUNDLE_SHA256": _sha(
+                datafeed_bundle_sha256, "datafeed_bundle_sha256"
             ),
             "PYTHON_VERSION": _version(runtime.get("python_version"), "python_version"),
             "UV_VERSION": _version(runtime.get("uv_version"), "uv_version"),
@@ -135,6 +159,8 @@ class CloudAliyunProvisioner:
                 str(ssh_key),
                 str(render_dir / "trading-system.tar.gz"),
                 str(render_dir / "datafeed.tar.gz"),
+                str(render_dir / "trading-system.bundle"),
+                str(render_dir / "datafeed.bundle"),
                 str(render_dir / "bootstrap.sh"),
                 f"root@{host}:/tmp/",
             ],

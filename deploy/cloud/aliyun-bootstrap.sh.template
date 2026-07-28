@@ -7,6 +7,8 @@ TRADING_SHA="@@TRADING_SHA@@"
 DATAFEED_SHA="@@DATAFEED_SHA@@"
 TRADING_ARCHIVE_SHA256="@@TRADING_ARCHIVE_SHA256@@"
 DATAFEED_ARCHIVE_SHA256="@@DATAFEED_ARCHIVE_SHA256@@"
+TRADING_BUNDLE_SHA256="@@TRADING_BUNDLE_SHA256@@"
+DATAFEED_BUNDLE_SHA256="@@DATAFEED_BUNDLE_SHA256@@"
 PYTHON_VERSION="@@PYTHON_VERSION@@"
 UV_VERSION="@@UV_VERSION@@"
 UV_WHEEL_SHA256="@@UV_WHEEL_SHA256@@"
@@ -15,9 +17,13 @@ CLOUDFLARED_SHA256="@@CLOUDFLARED_SHA256@@"
 
 TRADING_ARCHIVE=/tmp/trading-system.tar.gz
 DATAFEED_ARCHIVE=/tmp/datafeed.tar.gz
+TRADING_BUNDLE=/tmp/trading-system.bundle
+DATAFEED_BUNDLE=/tmp/datafeed.bundle
 
 echo "${TRADING_ARCHIVE_SHA256}  ${TRADING_ARCHIVE}" | sha256sum --check -
 echo "${DATAFEED_ARCHIVE_SHA256}  ${DATAFEED_ARCHIVE}" | sha256sum --check -
+echo "${TRADING_BUNDLE_SHA256}  ${TRADING_BUNDLE}" | sha256sum --check -
+echo "${DATAFEED_BUNDLE_SHA256}  ${DATAFEED_BUNDLE}" | sha256sum --check -
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -34,19 +40,26 @@ install -d -m 0750 -o root -g gridmind /etc/gridmind
 
 install_archive() {
   local archive="$1"
-  local destination="$2"
-  local revision="$3"
+  local bundle="$2"
+  local destination="$3"
+  local revision="$4"
   local staged="${destination}.new"
   rm -rf "$staged"
   install -d "$staged"
   tar -xzf "$archive" --strip-components=1 -C "$staged"
-  printf '%s\n' "$revision" > "$staged/.source-commit"
+  git -C "$staged" init --quiet
+  git -C "$staged" fetch --quiet --no-tags "$bundle" "$revision"
+  git -C "$staged" reset --quiet --hard FETCH_HEAD
+  test "$(git -C "$staged" rev-parse HEAD)" = "$revision"
+  test -z "$(git -C "$staged" status --porcelain)"
   rm -rf "$destination"
   mv "$staged" "$destination"
 }
 
-install_archive "$TRADING_ARCHIVE" /opt/gridmind/src/trading-system "$TRADING_SHA"
-install_archive "$DATAFEED_ARCHIVE" /opt/gridmind/src/datafeed "$DATAFEED_SHA"
+install_archive "$TRADING_ARCHIVE" "$TRADING_BUNDLE" \
+  /opt/gridmind/src/trading-system "$TRADING_SHA"
+install_archive "$DATAFEED_ARCHIVE" "$DATAFEED_BUNDLE" \
+  /opt/gridmind/src/datafeed "$DATAFEED_SHA"
 
 UV_WHEEL="/tmp/uv-${UV_VERSION}-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
 curl --fail --location --silent --show-error \

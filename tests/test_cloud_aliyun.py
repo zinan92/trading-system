@@ -62,6 +62,25 @@ def test_source_archive_is_repeatable_and_bound_to_revision(tmp_path: Path) -> N
     assert first.read_bytes() == second.read_bytes()
 
 
+def test_source_bundle_is_repeatable(tmp_path: Path) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    (repo / "value.txt").write_text("bound\n", encoding="utf-8")
+    subprocess.run(["git", "add", "value.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "source"], cwd=repo, check=True, capture_output=True)
+    first = tmp_path / "first.bundle"
+    second = tmp_path / "second.bundle"
+    assert CloudAliyunProvisioner.source_bundle(
+        repo=repo, ref="HEAD", destination=first
+    ) == CloudAliyunProvisioner.source_bundle(
+        repo=repo, ref="HEAD", destination=second
+    )
+    assert first.read_bytes() == second.read_bytes()
+
+
 def test_dry_run_does_not_execute(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     plan = CloudAliyunProvisioner.plan(
         spec=_spec(),
@@ -89,6 +108,8 @@ def test_plan_upload_names_match_bootstrap_contract(tmp_path: Path) -> None:
     upload = plan["commands"][0]
     assert str(tmp_path / "trading-system.tar.gz") in upload
     assert str(tmp_path / "datafeed.tar.gz") in upload
+    assert str(tmp_path / "trading-system.bundle") in upload
+    assert str(tmp_path / "datafeed.bundle") in upload
     bootstrap = (
         Path(__file__).parents[1] / "deploy/cloud/aliyun-bootstrap.sh.template"
     ).read_text(encoding="utf-8")

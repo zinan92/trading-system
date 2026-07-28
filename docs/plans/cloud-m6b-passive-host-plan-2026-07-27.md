@@ -14,11 +14,12 @@ called.
 1. Validate the purchased Simple Application Server against the checked-in
    contract: Singapore `ap-southeast-1`, Ubuntu 24.04 x86_64, 2 vCPU, 2 GiB
    memory, and 40 GiB storage.
-2. Build deterministic local source archives from the exact trading-system and
-   datafeed Git SHAs. Render a checksum-pinned bootstrap which verifies those
-   archives before extraction, creates the `gridmind` account and persistent
-   paths, installs Python 3.13.7, isolated virtual environments, cloudflared,
-   and passive systemd units.
+2. Build deterministic local source archives and Git bundles from the exact
+   trading-system and datafeed Git SHAs. Render a checksum-pinned bootstrap
+   which verifies both forms before extraction, reconstructs a clean Git
+   checkout for runtime source attestation, creates the `gridmind` account and
+   persistent paths, and installs Python 3.13.7, isolated virtual environments,
+   cloudflared, and passive systemd units.
 3. Keep ports 8100, 8765, and 8766 loopback-only and never expose application
    ports through the provider or host firewall. SSH remains key-only for
    attended provisioning.
