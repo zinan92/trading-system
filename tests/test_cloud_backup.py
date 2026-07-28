@@ -83,6 +83,36 @@ def test_backup_restore_preserves_every_manifest_hash(tmp_path: Path):
     )
 
 
+def test_backup_normalizes_wal_database_to_self_contained_snapshot(tmp_path: Path):
+    output, database, backup_root = make_source(tmp_path)
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("insert into candles values('2026-07-27T00:01:00Z', 4124.0)")
+    backup = CloudPaperBackup(
+        output_root=output,
+        datafeed_db=database,
+        backup_root=backup_root,
+        deployed_sha="a" * 40,
+        now=Clock(),
+    )
+
+    created = backup.create()
+    manifest = json.loads(
+        (Path(created["path"]) / "manifest.json").read_text(encoding="utf-8")
+    )[-1]
+
+    assert "datafeed/kline.db" in {row["path"] for row in manifest["files"]}
+    assert not any(
+        row["path"].endswith(("-wal", "-shm")) for row in manifest["files"]
+    )
+    restored = backup.restore(
+        backup_id=created["backup_id"],
+        destination_output_root=tmp_path / "wal-restore" / "outputs",
+        destination_datafeed_db=tmp_path / "wal-restore" / "datafeed" / "kline.db",
+    )
+    assert restored["status"] == "pass"
+
+
 def test_corrupt_backup_is_rejected_before_restore(tmp_path: Path):
     backup = builder(tmp_path)
     created = backup.create()

@@ -1,0 +1,30 @@
+{
+  "schema_version": "gridmind-lightsail-plan-v1",
+  "provider": "aws_lightsail",
+  "region": "ap-southeast-1",
+  "instance_name": "gridmind-paper-sg",
+  "os": {
+    "group": "ubuntu",
+    "version_prefix": "24.04",
+    "platform": "LINUX_UNIX"
+  },
+  "capacity": {
+    "minimum_vcpu": 2,
+    "minimum_ram_gb": 2,
+    "maximum_monthly_usd": 12
+  },
+  "network": {
+    "public_application_ports": [],
+    "ssh_port": 22,
+    "operator_cidr_required": true
+  },
+  "runtime": {
+    "python_version": "3.13.7",
+    "uv_version": "0.9.27",
+    "uv_wheel_sha256": "79939f7e92d707fb84933509df747d1b88b00d94ebe41f3a1e30916cc33c7307",
+    "cloudflared_version": "2026.7.3",
+    "cloudflared_sha256": "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17"
+  },
+  "paper_only": true,
+  "scheduler_enabled": false
+}

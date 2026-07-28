@@ -452,6 +452,77 @@ def test_datafeed_authoritative_mode_returns_envelope_projection(tmp_path: Path)
     assert client.calls == 1
 
 
+def test_authoritative_mode_bridges_known_exact_source_v1_identity_gap(
+    tmp_path: Path,
+) -> None:
+    raw = json.loads(
+        (FIXTURES / "trusted_execution_candles_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for key in (
+        "instrument_id",
+        "provider_symbol",
+        "selected_source",
+        "attempted_sources",
+        "selection_reason",
+    ):
+        raw.pop(key)
+    for row in raw["candles"]:
+        row["timestamp"] = row["timestamp"].removesuffix("+00:00")
+    raw["latest_timestamp"] = raw["latest_timestamp"].removesuffix("+00:00")
+    client = _FakeDatafeedClient(raw)
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+        "market_data_contract_mode": "authoritative",
+    }
+
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(
+        symbol="GOLD",
+        timeframe="1m",
+        as_of="2026-07-18T12:01:05+00:00",
+    )
+
+    assert payload["status"] == "ready"
+    assert payload["symbol"] == "GOLD"
+    assert payload["provider_symbol"] == "XAUUSDT"
+    assert payload["market_data_contract"]["execution_ready"] is True
+
+
+def test_exact_source_v1_bridge_refuses_source_mismatch(tmp_path: Path) -> None:
+    raw = json.loads(
+        (FIXTURES / "trusted_execution_candles_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw.pop("instrument_id")
+    raw["source_mode"] = "unexpected_source"
+    client = _FakeDatafeedClient(raw)
+    config = _config()
+    config["datafeed"] = {
+        "enabled": True,
+        "source": "binance_usdm_futures",
+        "asset_class": "commodity",
+        "market_data_contract_mode": "authoritative",
+    }
+
+    payload = DualTrackMarketFeed(
+        market_db=tmp_path / "unused.db",
+        config=config,
+        datafeed_client=client,
+    ).snapshot(as_of="2026-07-18T12:00:05+00:00")
+
+    assert payload["status"] == "blocked"
+    assert payload["market_data_contract"]["status"] == "blocked"
+
+
 def test_datafeed_authoritative_mode_never_falls_back_on_invalid_contract(tmp_path: Path) -> None:
     raw = _trusted_v2_payload()
     raw.pop("schema_version")
