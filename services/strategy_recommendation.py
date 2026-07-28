@@ -12,6 +12,7 @@ import hashlib
 import math
 import os
 import shlex
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -28,6 +29,16 @@ PROMPT_VERSION = "strategy-recommendation-prompt-v3"
 EVALUATION_SCHEMA = "strategy-ai-evaluation-v2"
 TIMEFRAMES = ("1d", "4h", "1h", "15m")
 LONG_TERM_D1_BARS = 200
+
+
+class RecommendationProviderError(RuntimeError):
+    """Stable operator-facing failure from the external AI provider port."""
+
+    def __init__(self, code: str, detail: str = "") -> None:
+        self.code = str(code)
+        self.detail = str(detail).strip()
+        message = self.code if not self.detail else f"{self.code}:{self.detail}"
+        super().__init__(message)
 
 
 class StrategyRecommendationService:
@@ -352,11 +363,36 @@ class StrategyRecommendationService:
         command = str(planner.get("command") or "codex")
         model = str(planner.get("model") or "gpt-5.4")
         timeout = int(planner.get("timeout_seconds") or 240)
+        command_args = shlex.split(command)
+        if not command_args:
+            raise RecommendationProviderError(
+                "strategy_recommendation_provider_command_invalid",
+                "configured command is empty",
+            )
+        executable = command_args[0]
+        executable_path = Path(executable)
+        if executable_path.is_absolute() and not executable_path.exists():
+            raise RecommendationProviderError(
+                "strategy_recommendation_provider_missing",
+                executable,
+            )
+        if executable_path.is_absolute() and not os.access(executable, os.X_OK):
+            raise RecommendationProviderError(
+                "strategy_recommendation_provider_not_executable",
+                executable,
+            )
+        resolved = executable if executable_path.is_absolute() else shutil.which(executable)
+        if not resolved:
+            raise RecommendationProviderError(
+                "strategy_recommendation_provider_missing",
+                executable,
+            )
+        command_args[0] = resolved
         with tempfile.NamedTemporaryFile(prefix="strategy-recommendation-", suffix=".json", delete=False) as handle:
             result_path = Path(handle.name)
         try:
             args = [
-                *shlex.split(command), "--ask-for-approval", "never", "exec",
+                *command_args, "--ask-for-approval", "never", "exec",
                 "--ignore-user-config", "--ephemeral", "--model", model,
                 "--sandbox", "read-only", "--cd", str(ROOT),
                 "--output-last-message", str(result_path), "-",
@@ -364,20 +400,40 @@ class StrategyRecommendationService:
             env = dict(os.environ)
             path_parts = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", str(env.get("PATH") or "")]
             env["PATH"] = ":".join(part for part in path_parts if part)
-            result = subprocess.run(
-                args,
-                input=prompt,
-                text=True,
-                capture_output=True,
-                timeout=timeout,
-                check=False,
-                env=env,
-            )
+            try:
+                result = subprocess.run(
+                    args,
+                    input=prompt,
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout,
+                    check=False,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_timeout",
+                    f"{timeout}s",
+                ) from exc
+            except OSError as exc:
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_unavailable",
+                    str(exc),
+                ) from exc
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "unknown recommendation error").strip()
-                raise RuntimeError(f"strategy_recommendation_failed:{detail[-1000:]}")
-            self._last_raw_model_response = result_path.read_text(encoding="utf-8")
-            return _parse_json_object(self._last_raw_model_response)
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_failed",
+                    detail[-1000:],
+                )
+            try:
+                self._last_raw_model_response = result_path.read_text(encoding="utf-8")
+                return _parse_json_object(self._last_raw_model_response)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_invalid_output",
+                    str(exc),
+                ) from exc
         finally:
             result_path.unlink(missing_ok=True)
 
