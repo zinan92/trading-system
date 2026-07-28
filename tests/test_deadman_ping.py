@@ -301,3 +301,20 @@ def test_deadman_ping_cli_loads_deadman_url_from_live_env(tmp_path: Path, monkey
 
     assert captured["env_url"] == "https://example.invalid/deadman"
     assert captured["url_arg"] is None
+
+
+def test_deadman_ping_cloud_runtime_uses_systemd_environment(monkeypatch):
+    import pipelines.deadman_ping as deadman_ping_cli
+
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    monkeypatch.setenv(
+        "TRADING_ORCHESTRATOR_DEADMAN_URL",
+        "https://example.invalid/already-loaded",
+    )
+    monkeypatch.setattr(
+        deadman_ping_cli,
+        "apply_live_env",
+        lambda: pytest.fail("cloud service reread the protected EnvironmentFile"),
+    )
+
+    deadman_ping_cli._load_runtime_env()
