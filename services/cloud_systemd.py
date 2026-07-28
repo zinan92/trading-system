@@ -166,7 +166,7 @@ Description=GridMind non-overlapping minute Paper tick
 
 [Timer]
 OnBootSec=60
-OnUnitActiveSec=60
+OnUnitInactiveSec=60
 AccuracySec=1
 Persistent=true
 Unit=gridmind-live-tick.service
@@ -248,7 +248,7 @@ Description=GridMind dead-man timer
 
 [Timer]
 OnBootSec=300
-OnUnitActiveSec=300
+OnUnitInactiveSec=300
 Persistent=true
 Unit=gridmind-deadman-ping.service
 
