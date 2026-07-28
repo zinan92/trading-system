@@ -413,6 +413,21 @@ def test_market_bars_response_projects_trust_and_display_label(monkeypatch) -> N
     assert response["provider_label"] == "Venue A"
 
 
+def test_dashboard_market_identity_survives_missing_production_plan(monkeypatch) -> None:
+    monkeypatch.setattr(
+        dashboard_server,
+        "dualtrack_config",
+        lambda: {
+            "market_data": {
+                "symbol": "GOLD",
+                "timeframe": "1m",
+            }
+        },
+    )
+
+    assert dashboard_server._dashboard_market_identity() == ("GOLD", "1m")
+
+
 def test_review_cycle_selection_never_mixes_open_or_unreviewed_cycles() -> None:
     packages = [
         {"cycle_id": "2026-07-20_NIGHT", "status": "blocked"},

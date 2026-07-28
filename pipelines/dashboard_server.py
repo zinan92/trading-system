@@ -1113,6 +1113,17 @@ def _dashboard_market_read_config() -> dict:
     return config
 
 
+def _dashboard_market_identity() -> tuple[str, str]:
+    """Keep the passive Dashboard on the configured market without a plan."""
+
+    market = dualtrack_config().get("market_data")
+    market = market if isinstance(market, dict) else {}
+    return (
+        str(market.get("symbol") or "GOLD"),
+        str(market.get("timeframe") or "1m"),
+    )
+
+
 def _assemble_strategy_console_snapshot(
     *,
     output_root: Path | None = None,
@@ -1124,7 +1135,10 @@ def _assemble_strategy_console_snapshot(
     cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
     cycle_id = str(cycle["cycle_id"])
     control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
+    market_symbol, market_timeframe = _dashboard_market_identity()
     market = build_dualtrack_market_bars_response(
+        symbol=market_symbol,
+        timeframe=market_timeframe,
         limit=240,
         as_of=as_of,
         config=_dashboard_market_read_config(),

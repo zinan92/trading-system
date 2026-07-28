@@ -11607,6 +11607,9 @@ auditable datafeed port; broker execution remains a separate port.
 - An empty blocked read model must identify why it is empty. Returning ordinary
   zero orders and positions without `cloud_execution_authority_unavailable`
   would falsely imply a reconciled active account.
+- A passive host has no production plan yet, but its market identity is still
+  configured. Dashboard market reads must use the configured GOLD/1m identity
+  instead of deriving empty request parameters from absent strategy state.
 
 ## Verification
 
