@@ -11681,3 +11681,51 @@ auditable datafeed port; broker execution remains a separate port.
 
 - The five previously failing tests pass together. The full default suite and
   gitleaks are required before merge.
+
+# 2026-07-28 Cloud M6c — Alibaba becomes the sole Paper scheduler owner
+
+## Decision
+
+- Paper authority moved monotonically from `local-mac active` through epoch 2
+  `paused` to `cloud-primary active` at epoch 3. The Mac tick/report/feed/
+  dead-man launchd jobs remain unloaded; no automatic failback exists.
+- The migration copied only manifest-hashed DualTrack and scheduler-ownership
+  state. It replayed zero control actions and started no Grid or DCA.
+- Cloud tick, terminal report, evidence self-review, verified backup and
+  external dead-man are systemd-owned. A source-bound 24-hour soak receipt
+  records tick coverage, failures, report/review/backup/dead-man evidence,
+  service restarts, data freshness and scheduler ownership without issuing
+  trading commands.
+
+## Gotchas
+
+- The launch entrypoint originally verified `/var/lib/gridmind/outputs` and
+  then constructed the runner with the repository-local default `outputs/`.
+  Resolve the output root once and pass that exact path through owner, boot and
+  runner construction; otherwise valid Cloud authority appears to fail its
+  own Nautilus evidence gate.
+- The independent datafeed HTTP contract caps one candle response at 2,000
+  rows. A 60,000-row client request is rejected with HTTP 422 even when the
+  requested 12-hour cycle needs fewer than 1,000 rows.
+- Trading's strict trusted-envelope mapper must not be weakened to accommodate
+  an obsolete datafeed deployment. The canonical source-aware envelope was
+  merged in the datafeed repository first, then deployed and revalidated.
+- `Type=oneshot` units do not provide a lasting active transition for
+  `OnUnitActiveSec`. Recurring non-overlapping timers must use
+  `OnUnitInactiveSec`, seeded by one successful service completion.
+- systemd reads a root-owned 0600 `EnvironmentFile` before dropping
+  privileges. A Cloud child process must use that inherited environment rather
+  than reopening the protected file as the unprivileged service user.
+- A delivered dead-man `/fail` ping during the first day is correct while the
+  previous Beijing-day self-review is incomplete. Cloud health becomes fully
+  healthy only after the scheduled terminal report and evidence review close a
+  complete post-cutover day; Dashboard reachability alone is not that proof.
+
+## Verification
+
+- Cloud preflight passed 9/9 at the deployed source SHA.
+- Three consecutive scheduled ticks completed at 11:46, 11:47 and 11:48 CST
+  while every Mac scheduler job remained unloaded.
+- A verified Cloud backup completed, all five Cloud timers are enabled, the
+  authenticated Dashboard services are active, and the external dead-man
+  endpoint accepted its explicit degraded-health signal.
