@@ -100,7 +100,7 @@ export TRADING_ORCHESTRATOR_OUTPUT_ROOT=/var/lib/gridmind/outputs
   --action install-passive --apply
 
 for attempt in $(seq 1 60); do
-  if curl --fail --silent http://127.0.0.1:8100/health >/dev/null; then
+  if curl --fail --silent http://127.0.0.1:8100/api/health >/dev/null; then
     break
   fi
   if [ "$attempt" -eq 60 ]; then

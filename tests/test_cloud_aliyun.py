@@ -106,6 +106,14 @@ def test_bootstrap_keeps_valid_uv_wheel_filename() -> None:
     ) in bootstrap
 
 
+def test_bootstrap_uses_datafeed_health_contract() -> None:
+    bootstrap = (
+        Path(__file__).parents[1] / "deploy/cloud/aliyun-bootstrap.sh.template"
+    ).read_text(encoding="utf-8")
+    assert "http://127.0.0.1:8100/api/health" in bootstrap
+    assert "http://127.0.0.1:8100/health" not in bootstrap
+
+
 def test_plan_rejects_scheduler_activation(tmp_path: Path) -> None:
     spec = _spec()
     spec["scheduler_enabled"] = True
