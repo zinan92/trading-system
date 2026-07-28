@@ -96,6 +96,16 @@ def test_plan_upload_names_match_bootstrap_contract(tmp_path: Path) -> None:
     assert "DATAFEED_ARCHIVE=/tmp/datafeed.tar.gz" in bootstrap
 
 
+def test_bootstrap_keeps_valid_uv_wheel_filename() -> None:
+    bootstrap = (
+        Path(__file__).parents[1] / "deploy/cloud/aliyun-bootstrap.sh.template"
+    ).read_text(encoding="utf-8")
+    assert (
+        'UV_WHEEL="/tmp/uv-${UV_VERSION}-py3-none-'
+        'manylinux_2_17_x86_64.manylinux2014_x86_64.whl"'
+    ) in bootstrap
+
+
 def test_plan_rejects_scheduler_activation(tmp_path: Path) -> None:
     spec = _spec()
     spec["scheduler_enabled"] = True

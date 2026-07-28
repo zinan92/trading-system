@@ -48,7 +48,7 @@ install_archive() {
 install_archive "$TRADING_ARCHIVE" /opt/gridmind/src/trading-system "$TRADING_SHA"
 install_archive "$DATAFEED_ARCHIVE" /opt/gridmind/src/datafeed "$DATAFEED_SHA"
 
-UV_WHEEL="/tmp/uv-${UV_VERSION}.whl"
+UV_WHEEL="/tmp/uv-${UV_VERSION}-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
 curl --fail --location --silent --show-error \
   "https://files.pythonhosted.org/packages/15/19/b35928e55307beb69b60b88446df3cb8d7ff3ba0993fc2214a43266c17d1/uv-0.9.27-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" \
   --output "$UV_WHEEL"
