@@ -56,6 +56,8 @@ def test_sqlite_market_access_is_frozen_to_ownerless_test_and_rehearsal_seams():
     approved = {
         "pipelines/testnet_drill.py",
         "services/connector_config_apply.py",
+        "services/cloud_backup.py",
+        "services/cloud_paper_preflight.py",
         "services/data_health.py",
         "services/data_integrity_check.py",
         "services/market_store.py",

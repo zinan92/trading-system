@@ -98,6 +98,7 @@ def test_completion_audit_surfaces_paper_ready_with_live_broker_warning(tmp_path
                     {"label": "com.wendy.trading-orchestrator.trading-plan"},
                     {"label": "com.wendy.trading-orchestrator.evening-review"},
                     {"label": "com.wendy.trading-orchestrator.daily-review"},
+                    {"label": "com.wendy.trading-orchestrator.daily-24h-report"},
                     {"label": "com.wendy.trading-orchestrator.dashboard"},
                     {"label": "com.wendy.trading-orchestrator.strategies"},
                     {"label": "com.wendy.trading-orchestrator.dualtrack-cycle"},
@@ -183,6 +184,7 @@ def test_completion_audit_focus_profile_requires_only_focus_schedule_jobs(tmp_pa
                     {"label": "com.wendy.trading-orchestrator.gold-1m-feed"},
                     {"label": "com.wendy.trading-orchestrator.dualtrack-live-tick"},
                     {"label": "com.wendy.trading-orchestrator.deadman-ping"},
+                    {"label": "com.wendy.trading-orchestrator.daily-24h-report"},
                 ],
             }
         ],
@@ -198,6 +200,7 @@ def test_completion_audit_focus_profile_requires_only_focus_schedule_jobs(tmp_pa
         "com.wendy.trading-orchestrator.dualtrack-live-tick",
         "com.wendy.trading-orchestrator.dashboard",
         "com.wendy.trading-orchestrator.deadman-ping",
+        "com.wendy.trading-orchestrator.daily-24h-report",
     ]
 
 
