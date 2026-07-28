@@ -189,6 +189,7 @@ class CloudPaperBackup:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(source) as source_db, sqlite3.connect(destination) as target_db:
             source_db.backup(target_db)
+            target_db.execute("PRAGMA journal_mode=DELETE")
         CloudPaperBackup._sqlite_integrity(destination)
 
     @staticmethod

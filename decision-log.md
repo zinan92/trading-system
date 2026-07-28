@@ -11574,6 +11574,10 @@ auditable datafeed port; broker execution remains a separate port.
   execution venue, and an absent storage envelope requires a read-only SQLite
   `PRAGMA quick_check` against the owner DB. Missing or failed evidence remains
   blocking.
+- SQLite online backup can inherit WAL journal mode. A restore package must be
+  self-contained, so the copied database is normalized to DELETE journal mode
+  before its file manifest is sealed; transient `-wal` and `-shm` files are
+  never restoration requirements.
 - The checked-in package proves deterministic planning and safe passive boot;
   it is not evidence that a VM exists. Issue #398 closes only after real host,
   preflight, access, firewall, and restore receipts pass.
