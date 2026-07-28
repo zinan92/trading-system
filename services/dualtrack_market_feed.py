@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -266,9 +267,13 @@ class DualTrackMarketFeed:
             requested=requested,
             checked_at=checked_at,
         )
+        contract_response = self._bridge_exact_source_v1_contract(
+            response,
+            resolved_symbol=resolved_symbol,
+        )
         try:
             envelope = map_candle_response(
-                response,
+                contract_response,
                 expected_asset_class=self.datafeed_asset_class,
                 expected_timeframe=resolved_timeframe,
                 expected_source=self.datafeed_source,
@@ -350,6 +355,50 @@ class DualTrackMarketFeed:
             trusted_history=candidate.get("trusted_history") is True,
             has_more=has_more,
         )
+
+    def _bridge_exact_source_v1_contract(
+        self,
+        response: dict,
+        *,
+        resolved_symbol: str,
+    ) -> dict:
+        """Complete only the known pre-envelope exact-source v1 response."""
+
+        if response.get("schema_version") != "kline-candles-v1":
+            return response
+        missing = {
+            key
+            for key in (
+                "instrument_id",
+                "provider_symbol",
+                "selected_source",
+                "attempted_sources",
+                "selection_reason",
+            )
+            if not response.get(key)
+        }
+        if not missing:
+            return response
+        exact_source = (
+            response.get("provider") == self.datafeed_source
+            and response.get("source_mode") == self.datafeed_source
+            and response.get("requested_source") == self.datafeed_source
+            and response.get("execution_venue") is True
+            and response.get("require_execution_venue") is True
+            and response.get("is_synthetic") is False
+            and not response.get("reject_reason")
+            and isinstance(response.get("ticker"), str)
+            and bool(response["ticker"].strip())
+        )
+        if not exact_source:
+            return response
+        bridged = copy.deepcopy(response)
+        bridged.setdefault("instrument_id", resolved_symbol)
+        bridged.setdefault("provider_symbol", response["ticker"].strip())
+        bridged.setdefault("selected_source", self.datafeed_source)
+        bridged.setdefault("attempted_sources", [self.datafeed_source])
+        bridged.setdefault("selection_reason", "requested_or_default")
+        return bridged
 
     def _legacy_datafeed_payload(
         self,

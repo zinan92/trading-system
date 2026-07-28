@@ -11610,6 +11610,11 @@ auditable datafeed port; broker execution remains a separate port.
 - A passive host has no production plan yet, but its market identity is still
   configured. Dashboard market reads must use the configured GOLD/1m identity
   instead of deriving empty request parameters from absent strategy state.
+- The pinned datafeed v1 revision predates five envelope identity fields. A
+  compatibility projection may derive them only when provider, requested
+  source, selected source mode, execution-venue requirement, non-synthetic
+  status, and ticker all prove the same exact source. Any mismatch remains a
+  blocking contract error.
 
 ## Verification
 
