@@ -11583,3 +11583,33 @@ auditable datafeed port; broker execution remains a separate port.
   preflight, access, firewall, and restore receipts pass.
 - A host with a healthy Dashboard is still not a scheduler owner. M6c is the
   only phase allowed to move the owner lease and enable the Cloud live-tick.
+
+# 2026-07-28 — Passive Cloud Dashboard reports missing authority without failing
+
+## Decision
+
+- A passive Cloud host may serve the read-only Dashboard before it owns Paper
+  execution authority. If execution-adapter construction is refused for that
+  reason, the execution read model returns an explicit
+  `cloud_execution_authority_unavailable` blocked state with no orders,
+  positions, or control capability.
+- The fallback is Cloud-runtime-only and wraps only execution-adapter
+  construction. Local behavior and downstream accounting or snapshot failures
+  continue to fail visibly instead of being converted into an empty account.
+- This read-model behavior does not grant approval, import a release receipt,
+  activate a scheduler, or make a control endpoint callable.
+
+## Gotchas
+
+- Read availability and execution authority are different contracts. Requiring
+  an active execution adapter merely to render a passive host turns an expected
+  pre-cutover safety state into a misleading HTTP 502.
+- An empty blocked read model must identify why it is empty. Returning ordinary
+  zero orders and positions without `cloud_execution_authority_unavailable`
+  would falsely imply a reconciled active account.
+
+## Verification
+
+- Focused execution-control, trading-system read-model, and Dashboard server
+  tests cover the passive Cloud response while preserving fail-visible
+  accounting behavior.

@@ -112,6 +112,38 @@ def test_execution_accounting_projection_failure_is_not_silently_recomputed(
         )
 
 
+def test_cloud_passive_read_model_surfaces_missing_execution_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("Nautilus paper switch requires attended approval")
+
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        unavailable,
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "_dualtrack_mark_price",
+        lambda *_args, **_kwargs: {"price": 100.0, "fresh": True, "source": "test"},
+    )
+
+    payload = dashboard_server.build_dualtrack_execution_response(
+        "2026-07-10_DAY",
+        output_root=tmp_path / "outputs",
+        as_of="2026-07-10T02:00:00+00:00",
+    )
+
+    assert payload["engine"] == "unavailable"
+    assert payload["availability"]["reason"] == "cloud_execution_authority_unavailable"
+    assert payload["orders"] == []
+    assert payload["positions"] == []
+    assert payload["safety"]["execution_control"] is False
+
+
 def test_reconciliation_pipeline_records_blocked_without_candidate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     result = reconcile_pipeline.main([
         "--cycle-id", "2026-07-10_DAY",

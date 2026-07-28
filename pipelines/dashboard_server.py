@@ -2161,7 +2161,49 @@ def build_dualtrack_execution_response(
         as_of=as_of,
         market_snapshot=market_snapshot,
     )
-    adapter = build_configured_execution_engine_adapter(output)
+    try:
+        adapter = build_configured_execution_engine_adapter(output)
+    except RuntimeError as exc:
+        if os.getenv("GRIDMIND_RUNTIME_MODE") != "cloud":
+            raise
+        return {
+            "schema_version": "dualtrack-execution-v1",
+            "cycle_id": cycle_id,
+            "engine": "unavailable",
+            "orders": [],
+            "fills": [],
+            "positions": [],
+            "account": {},
+            "pnl": {"realized": 0.0, "unrealized": 0.0},
+            "accounting_snapshot": {},
+            "reconciliation": {
+                "status": "blocked",
+                "reason": "cloud_execution_authority_unavailable",
+            },
+            "grid_lifecycle": {},
+            "execution_shadow_reconciliation": {
+                "status": "missing",
+                "reason": "cloud_execution_authority_unavailable",
+            },
+            "shadow_cutover": {
+                "status": "missing",
+                "blocker": "cloud_execution_authority_unavailable",
+            },
+            "availability": {
+                "status": "blocked",
+                "reason": "cloud_execution_authority_unavailable",
+                "detail": str(exc)[-300:],
+                "next_action": (
+                    "Keep control disabled until the single-owner Paper cutover "
+                    "imports verified state and authority."
+                ),
+            },
+            "safety": {
+                "read_only": True,
+                "execution_control": False,
+                "machine_track_disclosed": False,
+            },
+        }
     snapshot = adapter.snapshot(
         cycle_id,
         mark_price=mark["price"],
