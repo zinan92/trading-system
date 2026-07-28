@@ -135,6 +135,17 @@ def test_bootstrap_uses_datafeed_health_contract() -> None:
     assert "http://127.0.0.1:8100/health" not in bootstrap
 
 
+def test_bootstrap_runs_preflight_as_service_owner() -> None:
+    bootstrap = (
+        Path(__file__).parents[1] / "deploy/cloud/aliyun-bootstrap.sh.template"
+    ).read_text(encoding="utf-8")
+    assert (
+        'runuser -u gridmind -- "$APP_PYTHON" '
+        "-m pipelines.cloud_paper_preflight --json"
+    ) in bootstrap
+    assert "git config --global --add safe.directory" not in bootstrap
+
+
 def test_plan_rejects_scheduler_activation(tmp_path: Path) -> None:
     spec = _spec()
     spec["scheduler_enabled"] = True

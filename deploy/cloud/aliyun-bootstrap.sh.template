@@ -126,7 +126,7 @@ done
 set -a
 . /etc/gridmind/runtime.env
 set +a
-"$APP_PYTHON" -m pipelines.cloud_paper_preflight --json
+runuser -u gridmind -- "$APP_PYTHON" -m pipelines.cloud_paper_preflight --json
 chown -R gridmind:gridmind /var/lib/gridmind/outputs
 "$APP_PYTHON" -m pipelines.cloud_systemd \
   --repo-root "$REPO" \
