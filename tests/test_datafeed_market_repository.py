@@ -214,7 +214,7 @@ def test_repository_range_and_point_reads_preserve_request_boundaries() -> None:
 
     assert len(ranged) == 2
     assert point["close"] == 4001.0
-    assert client.calls[0]["limit"] == 60_000
+    assert client.calls[0]["limit"] == 2_000
     assert client.calls[0]["start"] == "2026-07-18T12:00:00+00:00"
     assert client.calls[0]["end"] == "2026-07-18T12:01:00+00:00"
     assert client.calls[1]["limit"] == 1

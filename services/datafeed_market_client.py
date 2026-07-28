@@ -13,6 +13,9 @@ class DatafeedUnavailable(RuntimeError):
     pass
 
 
+DATAFEED_CANDLE_LIMIT_MAX = 2_000
+
+
 class DatafeedMarketClient:
     def __init__(
         self,
@@ -41,7 +44,7 @@ class DatafeedMarketClient:
     ) -> dict:
         params: dict[str, Any] = {
             "timeframe": timeframe,
-            "limit": max(1, min(int(limit), 60000)),
+            "limit": max(1, min(int(limit), DATAFEED_CANDLE_LIMIT_MAX)),
             "source": source,
             "cache_policy": cache_policy,
             "quality": quality,

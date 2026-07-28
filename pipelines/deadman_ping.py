@@ -21,6 +21,14 @@ def _market_db() -> Path:
     return Path(os.getenv("TRADING_ORCHESTRATOR_MARKET_DB", str(ROOT / config.get("local_market_db", "data/market_data.db"))))
 
 
+def _load_runtime_env() -> None:
+    # Cloud systemd already loads the root-owned EnvironmentFile before
+    # dropping privileges to the gridmind user. Reading that 0600 file again
+    # from the service process would fail even though its values are present.
+    if os.getenv("GRIDMIND_RUNTIME_MODE") != "cloud":
+        apply_live_env()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ping the external trading dead-man switch.")
     parser.add_argument("--date", default=utc_run_date(), help="UTC run date in YYYY-MM-DD format.")
@@ -31,7 +39,7 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", help="Print the full JSON payload.")
     args = parser.parse_args()
 
-    apply_live_env()
+    _load_runtime_env()
     result = ExternalDeadmanPing(
         _output_root(),
         _market_db(),

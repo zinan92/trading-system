@@ -550,3 +550,5 @@ def test_gridmind_surfaces_layered_cloud_health_in_production_status() -> None:
     assert "function cloudHealthText(data)" in html
     assert "Cloud 7×24 健康 · 全部分层证据通过" in html
     assert '["Cloud 7×24",cloudHealthText(data)]' in html
+    assert "function cloudSchedulerOwnerText(data)" in html
+    assert '["调度器所有者",cloudSchedulerOwnerText(data)]' in html

@@ -7,7 +7,10 @@ from typing import Any
 
 from schemas.market_data import Bar, MarketDataEnvelope
 from services.config_loader import load_pipeline_config
-from services.datafeed_market_client import DatafeedMarketClient
+from services.datafeed_market_client import (
+    DATAFEED_CANDLE_LIMIT_MAX,
+    DatafeedMarketClient,
+)
 from services.datafeed_market_mapper import map_candle_response
 
 
@@ -98,7 +101,7 @@ class DatafeedMarketRepository:
             self.load_envelope(
                 symbol,
                 timeframe,
-                60_000,
+                DATAFEED_CANDLE_LIMIT_MAX,
                 start=start_timestamp,
                 end=end_timestamp,
             ).bars

@@ -50,6 +50,25 @@ def test_client_calls_standard_datafeed_contract():
     assert "require_execution_venue=true" in seen["url"]
 
 
+def test_client_caps_limit_to_datafeed_contract():
+    seen = {}
+
+    def opener(request, timeout):
+        seen["url"] = request.full_url
+        return FakeResponse({"schema_version": "kline-candles-v1", "candles": []})
+
+    client = DatafeedMarketClient(base_url="http://datafeed.test", opener=opener)
+    client.candles(
+        asset_class="commodity",
+        ticker="GOLD",
+        timeframe="1m",
+        limit=60_000,
+        source="binance_usdm_futures",
+    )
+
+    assert "limit=2000" in seen["url"]
+
+
 def test_client_fails_closed_when_datafeed_is_unavailable():
     def opener(_request, timeout):
         raise OSError("connection refused")

@@ -63,10 +63,14 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
         "gridmind-backup.timer"
     ]
     timer = rendered["gridmind-live-tick.timer"]
-    assert "OnUnitActiveSec=60" in timer
+    assert "OnUnitInactiveSec=60" in timer
+    assert "OnUnitActiveSec" not in timer
     assert "Persistent=true" in timer
     assert "Unit=gridmind-live-tick.service" in timer
     assert "Type=oneshot" in rendered["gridmind-live-tick.service"]
+    deadman_timer = rendered["gridmind-deadman-ping.timer"]
+    assert "OnUnitInactiveSec=300" in deadman_timer
+    assert "OnUnitActiveSec" not in deadman_timer
 
 
 def test_passive_install_does_not_enable_scheduler(tmp_path: Path):

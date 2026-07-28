@@ -11584,6 +11584,35 @@ auditable datafeed port; broker execution remains a separate port.
 - A host with a healthy Dashboard is still not a scheduler owner. M6c is the
   only phase allowed to move the owner lease and enable the Cloud live-tick.
 
+# 2026-07-28 — Scheduler cutover transfers only authoritative Paper state
+
+## Decision
+
+- The Mac-to-Cloud ownership transition packages only `dualtrack/` and
+  `cloud/scheduler_ownership/`. Historical strategy research, screenshots,
+  schedule logs, archives, and the Mac market database are not execution state
+  and do not cross the cutover boundary.
+- Every transferred file is size- and SHA256-bound in a manifest; the archive
+  and manifest are verified again before restore. Symbolic links and existing
+  authoritative destinations are rejected.
+- The Cloud keeps its already accepted, fresh execution-venue datafeed
+  database. Restoring the Paper state package never activates a scheduler or
+  replays a strategy control action.
+
+## Gotchas
+
+- The Mac output tree exceeds 5 GiB because it contains years of derived and
+  exploratory artifacts, while the authoritative DualTrack state compresses
+  to only a few MiB. Copying the whole tree would make rollback slower and
+  accidentally broaden the trust boundary.
+- Ownership must be recorded before packaging. A package with missing or
+  ambiguous owner state cannot participate in a monotonic cutover.
+
+## Verification
+
+- Focused tests cover verified create/restore, zero scheduler activation,
+  refusal to overwrite existing Cloud authority, and symlink rejection.
+
 # 2026-07-28 — Passive Cloud Dashboard reports missing authority without failing
 
 ## Decision
@@ -11652,3 +11681,51 @@ auditable datafeed port; broker execution remains a separate port.
 
 - The five previously failing tests pass together. The full default suite and
   gitleaks are required before merge.
+
+# 2026-07-28 Cloud M6c — Alibaba becomes the sole Paper scheduler owner
+
+## Decision
+
+- Paper authority moved monotonically from `local-mac active` through epoch 2
+  `paused` to `cloud-primary active` at epoch 3. The Mac tick/report/feed/
+  dead-man launchd jobs remain unloaded; no automatic failback exists.
+- The migration copied only manifest-hashed DualTrack and scheduler-ownership
+  state. It replayed zero control actions and started no Grid or DCA.
+- Cloud tick, terminal report, evidence self-review, verified backup and
+  external dead-man are systemd-owned. A source-bound 24-hour soak receipt
+  records tick coverage, failures, report/review/backup/dead-man evidence,
+  service restarts, data freshness and scheduler ownership without issuing
+  trading commands.
+
+## Gotchas
+
+- The launch entrypoint originally verified `/var/lib/gridmind/outputs` and
+  then constructed the runner with the repository-local default `outputs/`.
+  Resolve the output root once and pass that exact path through owner, boot and
+  runner construction; otherwise valid Cloud authority appears to fail its
+  own Nautilus evidence gate.
+- The independent datafeed HTTP contract caps one candle response at 2,000
+  rows. A 60,000-row client request is rejected with HTTP 422 even when the
+  requested 12-hour cycle needs fewer than 1,000 rows.
+- Trading's strict trusted-envelope mapper must not be weakened to accommodate
+  an obsolete datafeed deployment. The canonical source-aware envelope was
+  merged in the datafeed repository first, then deployed and revalidated.
+- `Type=oneshot` units do not provide a lasting active transition for
+  `OnUnitActiveSec`. Recurring non-overlapping timers must use
+  `OnUnitInactiveSec`, seeded by one successful service completion.
+- systemd reads a root-owned 0600 `EnvironmentFile` before dropping
+  privileges. A Cloud child process must use that inherited environment rather
+  than reopening the protected file as the unprivileged service user.
+- A delivered dead-man `/fail` ping during the first day is correct while the
+  previous Beijing-day self-review is incomplete. Cloud health becomes fully
+  healthy only after the scheduled terminal report and evidence review close a
+  complete post-cutover day; Dashboard reachability alone is not that proof.
+
+## Verification
+
+- Cloud preflight passed 9/9 at the deployed source SHA.
+- Three consecutive scheduled ticks completed at 11:46, 11:47 and 11:48 CST
+  while every Mac scheduler job remained unloaded.
+- A verified Cloud backup completed, all five Cloud timers are enabled, the
+  authenticated Dashboard services are active, and the external dead-man
+  endpoint accepted its explicit degraded-health signal.
