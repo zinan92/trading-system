@@ -11584,6 +11584,35 @@ auditable datafeed port; broker execution remains a separate port.
 - A host with a healthy Dashboard is still not a scheduler owner. M6c is the
   only phase allowed to move the owner lease and enable the Cloud live-tick.
 
+# 2026-07-28 — Scheduler cutover transfers only authoritative Paper state
+
+## Decision
+
+- The Mac-to-Cloud ownership transition packages only `dualtrack/` and
+  `cloud/scheduler_ownership/`. Historical strategy research, screenshots,
+  schedule logs, archives, and the Mac market database are not execution state
+  and do not cross the cutover boundary.
+- Every transferred file is size- and SHA256-bound in a manifest; the archive
+  and manifest are verified again before restore. Symbolic links and existing
+  authoritative destinations are rejected.
+- The Cloud keeps its already accepted, fresh execution-venue datafeed
+  database. Restoring the Paper state package never activates a scheduler or
+  replays a strategy control action.
+
+## Gotchas
+
+- The Mac output tree exceeds 5 GiB because it contains years of derived and
+  exploratory artifacts, while the authoritative DualTrack state compresses
+  to only a few MiB. Copying the whole tree would make rollback slower and
+  accidentally broaden the trust boundary.
+- Ownership must be recorded before packaging. A package with missing or
+  ambiguous owner state cannot participate in a monotonic cutover.
+
+## Verification
+
+- Focused tests cover verified create/restore, zero scheduler activation,
+  refusal to overwrite existing Cloud authority, and symlink rejection.
+
 # 2026-07-28 — Passive Cloud Dashboard reports missing authority without failing
 
 ## Decision
