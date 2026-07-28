@@ -1,6 +1,10 @@
 import json
+import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from services.strategy_recommendation import LONG_TERM_D1_BARS, StrategyRecommendationService, build_position_first_framework
 
@@ -118,6 +122,151 @@ def test_strategy_recommendation_archives_provider_failure(tmp_path: Path) -> No
     receipt = json.loads(archives[0].read_text(encoding="utf-8"))[0]
     assert receipt["status"] == "failed"
     assert receipt["output"]["error"] == "provider unavailable"
+
+
+def _trusted_contexts() -> dict:
+    return {
+        "1d": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1d", LONG_TERM_D1_BARS + 20, 4100, 20)},
+        "4h": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("4h", 60, 4070, 8)},
+        "1h": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("1h", 60, 4050, 4)},
+        "15m": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("15m", 80, 4045, 2)},
+    }
+
+
+def _configure_external_provider(
+    service: StrategyRecommendationService,
+    command: str,
+    *,
+    timeout_seconds: int = 10,
+) -> None:
+    service.config = {
+        **service.config,
+        "machine_planner": {
+            **dict(service.config.get("machine_planner") or {}),
+            "command": command,
+            "timeout_seconds": timeout_seconds,
+        },
+    }
+
+
+def test_configured_portable_provider_command_returns_valid_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = tmp_path / "provider.py"
+    provider.write_text(
+        """#!/usr/bin/env python3
+import json, sys
+output = sys.argv[sys.argv.index("--output-last-message") + 1]
+decision = {
+    "direction": "neutral",
+    "style": "steady",
+    "rationale": "长期位置偏低但趋势尚未建立，维持中性网格。",
+    "key_levels": [4050.0],
+    "ai_self_assessment": 7,
+    "evidence_used": ["D1", "4H", "1H"],
+}
+open(output, "w", encoding="utf-8").write(json.dumps(decision, ensure_ascii=False))
+""",
+        encoding="utf-8",
+    )
+    provider.chmod(0o700)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    service = StrategyRecommendationService(tmp_path / "outputs")
+    _configure_external_provider(service, str(provider))
+
+    result = service.recommend(
+        "2026-07-05_DAY",
+        strategy_timeframes=_trusted_contexts(),
+        current_plan={},
+        account={},
+        review={},
+    )
+
+    assert result["direction"] == "neutral"
+    assert result["evaluation_receipt"]["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("provider_setup", "expected_code"),
+    [
+        ("missing", "strategy_recommendation_provider_missing"),
+        ("not_executable", "strategy_recommendation_provider_not_executable"),
+        ("invalid_output", "strategy_recommendation_provider_invalid_output"),
+    ],
+)
+def test_external_provider_failures_have_stable_codes_and_failed_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_setup: str,
+    expected_code: str,
+) -> None:
+    provider = tmp_path / "provider"
+    if provider_setup == "missing":
+        command = str(provider)
+    else:
+        provider.write_text(
+            "#!/bin/sh\n"
+            + (
+                "exit 0\n"
+                if provider_setup == "invalid_output"
+                else "exit 0\n"
+            ),
+            encoding="utf-8",
+        )
+        provider.chmod(0o600 if provider_setup == "not_executable" else 0o700)
+        command = str(provider)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    service = StrategyRecommendationService(tmp_path / "outputs")
+    _configure_external_provider(service, command)
+
+    with pytest.raises(RuntimeError, match=expected_code):
+        service.recommend(
+            "2026-07-05_DAY",
+            strategy_timeframes=_trusted_contexts(),
+            current_plan={},
+            account={},
+            review={},
+        )
+
+    receipt_path = next(
+        (tmp_path / "outputs" / "dualtrack" / "strategy_control" / "evaluations" / "2026-07-05_DAY").glob("*.json")
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))[0]
+    assert receipt["status"] == "failed"
+    assert expected_code in receipt["output"]["error"]
+
+
+def test_external_provider_timeout_has_stable_code_and_failed_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(args[0], timeout=1)
+        ),
+    )
+    service = StrategyRecommendationService(tmp_path / "outputs")
+    _configure_external_provider(service, os.environ.get("PYTHON", "/usr/bin/python3"), timeout_seconds=1)
+
+    with pytest.raises(RuntimeError, match="strategy_recommendation_provider_timeout"):
+        service.recommend(
+            "2026-07-05_DAY",
+            strategy_timeframes=_trusted_contexts(),
+            current_plan={},
+            account={},
+            review={},
+        )
+
+    receipt_path = next(
+        (tmp_path / "outputs" / "dualtrack" / "strategy_control" / "evaluations" / "2026-07-05_DAY").glob("*.json")
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))[0]
+    assert receipt["status"] == "failed"
+    assert "strategy_recommendation_provider_timeout" in receipt["output"]["error"]
 
 
 def test_position_first_framework_classifies_position_before_trend_archetype() -> None:

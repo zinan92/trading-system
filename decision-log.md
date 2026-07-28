@@ -1,5 +1,34 @@
 # Decision Log
 
+## Cloud AI Recommendations Use an Explicit Provider Command Boundary
+
+Date: 2026-07-28
+
+### Decision
+
+- Resolve the strategy recommendation provider from the configured command
+  contract instead of assuming the Mac-only `/opt/homebrew/bin/codex` path.
+  Missing, non-executable, timed-out, failed, and invalid-output providers have
+  separate stable error codes; every failure remains proposal-only and writes
+  a failed evaluation receipt without changing a plan or order.
+- Permit an attended, credential-free file bridge for Cloud Paper: Cloud writes
+  the exact prompt and its SHA-256 to a protected exchange directory, while a
+  separately authenticated environment returns only the JSON decision named by
+  that digest. The normal recommendation service still validates and archives
+  the result.
+  - Evidence: focused recommendation/API/file-bridge tests and the Paper-only
+    operating procedure in
+    `docs/runbooks/cloud-ai-recommendation-provider.md`.
+
+### Gotchas
+
+- A portable command name does not install or authenticate a provider. Cloud
+  must receive an explicit provider configuration; absence is a visible
+  fail-closed state, never a fixture or stale-proposal fallback.
+- Responses crossing a shared filesystem must be published by atomic rename.
+  An upload can make a zero-length destination visible before its bytes arrive;
+  the bridge therefore waits for a non-empty, valid JSON object.
+
 ## Chart Autoscale Protects the Candle View, Not the Entire Grid Range
 
 Date: 2026-07-24
