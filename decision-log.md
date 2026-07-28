@@ -11623,3 +11623,32 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused execution-control, trading-system read-model, and Dashboard server
   tests cover the passive Cloud response while preserving fail-visible
   accounting behavior.
+
+# 2026-07-28 — Restore the default test baseline to accepted contracts
+
+## Decision
+
+- Completion-audit fixtures now include the already-required 24-hour report
+  scheduler in both full and focus profiles.
+- The manual network-order hostile-source test uses projected leverage as its
+  hard blocker. Maximum plan loss remains the advisory/manual-acknowledgement
+  contract adopted on 2026-07-22; this maintenance change does not turn it back
+  into a global hard stop.
+- The architecture allowlist names only the two intentional Cloud SQLite
+  readers: backup creation and Paper preflight quick-check. Standard K-line
+  also restores the missing empty-crosshair presentation rule.
+
+## Gotchas
+
+- A stale test expectation is not permission to reverse a product decision.
+  Source spoofing remains ineffective because the server recomputes risk from
+  canonical account, market, execution, and policy facts; the fixture must
+  breach a current hard constraint to prove that boundary.
+- SQLite allowlists are exact architecture contracts. Cloud ownership work
+  may add read-only recovery seams, but unrelated production market consumers
+  still cannot bypass the datafeed port.
+
+## Verification
+
+- The five previously failing tests pass together. The full default suite and
+  gitleaks are required before merge.

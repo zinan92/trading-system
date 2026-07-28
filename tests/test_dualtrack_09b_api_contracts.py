@@ -495,7 +495,7 @@ def test_network_manual_entry_cannot_bypass_risk_with_client_source(
         "latest_timestamp": "2026-07-05T01:19:00+00:00",
     }
 
-    with pytest.raises(ValueError, match="plan_loss_budget_exceeded"):
+    with pytest.raises(ValueError, match="projected_leverage_exceeded"):
         dashboard_server.build_dualtrack_order_post_response(
             {
                 "cycle_id": cycle_id,
@@ -504,7 +504,7 @@ def test_network_manual_entry_cannot_bypass_risk_with_client_source(
                 "event": "entry",
                 "order_type": "limit",
                 "price": 100.0,
-                "notional": 50_000.0,
+                "notional": 150_000.0,
                 "sl": 50.0,
                 "tp": 110.0,
                 "source": "spoofed-browser-source",
