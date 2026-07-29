@@ -11853,3 +11853,30 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused Dashboard state, endpoint contract and GET-purity tests cover the
   Cloud environment regression and full/trader/ops/strategy variants.
+
+# 2026-07-29 — Distinguish Cloudflare Access from stale public HTML
+
+## Decision
+
+- Public deployment probes identify the Cloudflare Access login interstitial
+  from the final redirect URL and the Access document title.
+- An authenticated route is reported as `public_access_protected`; application
+  feature fingerprints are explicitly not observable without authentication
+  and no missing Dashboard markers are emitted.
+- When application HTML is directly reachable, the existing V5, replay and OPS
+  fingerprints continue to run and genuine missing features remain warnings.
+
+## Gotchas
+
+- `urlopen` follows the Cloudflare redirect and returns the login page with
+  HTTP 200. Treating every 2xx HTML document as the requested Dashboard made a
+  healthy Access policy look exactly like an outdated static deployment.
+- Asset URLs behind the same policy can also return the interstitial with 200.
+  A successful unauthenticated asset fetch is reachability evidence, not proof
+  of the asset contents.
+- The health probe does not gain an Access token or bypass authentication.
+
+## Verification
+
+- Focused tests cover Access redirects/interstitials, the protected health
+  diagnosis and existing direct stale-feature classification.

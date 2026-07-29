@@ -1170,6 +1170,99 @@ def test_probe_failures_return_json_serializable_reason(monkeypatch):
     assert isinstance(feature_probe["reason"], str)
 
 
+def test_probe_classifies_cloudflare_access_interstitial_without_feature_failures(monkeypatch):
+    class AccessResponse:
+        status = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return "https://team.cloudflareaccess.com/cdn-cgi/access/login/goldbot.example"
+
+        def read(self, _limit):
+            return b"<html><title>Sign in \xc2\xb7 Cloudflare Access</title></html>"
+
+    monkeypatch.setattr(dashboard_server, "urlopen", lambda *_args, **_kwargs: AccessResponse())
+
+    probe = dashboard_server._probe_html_features(
+        "https://goldbot.example/dashboard-v5.html",
+        1,
+        {"dashboard_v5_title": "Extended grid"},
+    )
+
+    assert probe["ok"] is True
+    assert probe["access_protected"] is True
+    assert probe["checks"] == []
+
+
+def test_deployment_feature_summary_treats_access_interstitial_as_protected(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_server,
+        "_probe_html_features",
+        lambda _url, _timeout, _features: {
+            "ok": True,
+            "status_code": 200,
+            "access_protected": True,
+            "final_url": "https://team.cloudflareaccess.com/cdn-cgi/access/login/goldbot.example",
+            "checks": [],
+        },
+    )
+
+    summary = dashboard_server._deployment_feature_summary(
+        "https://goldbot.example/dashboard-v5.html",
+        1,
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["reason"] == "access_protected"
+    assert summary["access"] == "protected"
+    assert summary["missing_features"] == []
+    assert summary["feature_fingerprint_status"] == "not_observable_without_authentication"
+
+
+def test_public_access_health_reports_authenticated_route_without_stale_markers(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(
+        dashboard_server,
+        "_probe_http",
+        lambda _url, _timeout: {"ok": True, "status_code": 200, "reason": "OK"},
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "_deployment_feature_summary",
+        lambda _url, _timeout: {
+            "status": "ok",
+            "reason": "access_protected",
+            "access": "protected",
+            "checks": [],
+            "missing_features": [],
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "_cloudflared_process_summary",
+        lambda: {"running": True, "processes": []},
+    )
+
+    health = build_public_access_health(
+        public_url="https://goldbot.example/dashboard-v5.html",
+        local_url="http://127.0.0.1:8766/dashboard-v5.html",
+        log_path=tmp_path / "cloudflared.log",
+    )
+
+    assert health["status"] == "ok"
+    assert health["diagnosis"] == "public_access_protected"
+    assert health["deployment_features"]["missing_features"] == []
+    assert "authenticate" in health["operator_action"]
+
+
 def test_deployment_feature_summary_reports_missing_trader_and_ops_features(monkeypatch):
     def fake_feature_probe(url, _timeout, features):
         checks = []
