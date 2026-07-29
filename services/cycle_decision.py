@@ -47,7 +47,7 @@ class CycleDecisionLedger:
 
     def read(self, cycle_id: str) -> dict[str, Any] | None:
         rows = [row for row in load_json(self.path(cycle_id)) if isinstance(row, dict)]
-        return dict(rows[0]) if len(rows) == 1 else None
+        return _project_decision(rows[0]) if len(rows) == 1 else None
 
     def record(self, payload: dict[str, Any]) -> dict[str, Any]:
         row = dict(payload)
@@ -107,7 +107,7 @@ class CycleDecisionLedger:
                 "cycle_id": cycle_id,
                 "record_count": len(rows),
             }
-        row = rows[0]
+        row = _project_decision(rows[0])
         terminal_status = str(row.get("terminal_status") or "")
         if not terminal_status:
             terminal_status = (
@@ -197,6 +197,30 @@ def _blocker_details(exc: Exception) -> tuple[str, str, str]:
         "Inspect the recorded machine code and relevant control receipt. "
         "Resolve the blocker before a later cycle; do not replay this cycle.",
     )
+
+
+def _project_decision(row: dict[str, Any]) -> dict[str, Any]:
+    projected = dict(row)
+    if str(projected.get("terminal_status") or "") != "blocked":
+        return projected
+    code = str(projected.get("reason_code") or "")
+    guidance = _BLOCKER_GUIDANCE.get(code)
+    bare_reason = str(projected.get("reason") or "").strip()
+    bare_next_action = str(projected.get("next_action") or "").strip()
+    if guidance and bare_reason in {"", code}:
+        projected["reason"] = guidance[0]
+        projected["guidance_derived"] = True
+    if guidance and (
+        not bare_next_action
+        or bare_next_action
+        == (
+            "Resolve the recorded blocker and wait for the next cycle; "
+            "do not replay this cycle decision."
+        )
+    ):
+        projected["next_action"] = guidance[1]
+        projected["guidance_derived"] = True
+    return projected
 
 
 class CycleDecisionCoordinator:

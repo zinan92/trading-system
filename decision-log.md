@@ -12174,3 +12174,10 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused tests cover known market-move guidance, unknown-error redaction, and
   incomplete N/N start guidance.
+
+## Compatibility note
+
+- Immutable legacy blocker receipts are never rewritten. Their read-model
+  projection may derive the current operator guidance when the stored reason
+  is empty or merely repeats a known machine code; the projection marks
+  `guidance_derived=true` and preserves the decision identity and raw artifact.

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from services.cycle_decision import CycleDecisionCoordinator, CycleDecisionLedger
+from services.journal_store import load_json, write_json
 
 
 CYCLE = "2026-07-29_DAY"
@@ -430,3 +431,53 @@ def test_unknown_blocker_is_bounded_and_operator_readable(tmp_path: Path) -> Non
     )
     assert "secret-like-text" not in decision["reason"]
     assert "do not replay" in decision["next_action"].lower()
+
+
+def test_legacy_bare_blocker_gets_read_only_operator_guidance(
+    tmp_path: Path,
+) -> None:
+    ledger = CycleDecisionLedger(tmp_path)
+    stored = {
+        "schema_version": "paper-cycle-decision-v1",
+        "decision_id": "cycle-decision-legacy123456",
+        "cycle_id": CYCLE,
+        "recorded_at": NOW,
+        "source": "auto_ai",
+        "outcome": "not_executed",
+        "terminal_status": "blocked",
+        "reason_code": "prepared_start_market_moved",
+        "reason": "prepared_start_market_moved",
+        "next_action": (
+            "Resolve the recorded blocker and wait for the next cycle; "
+            "do not replay this cycle decision."
+        ),
+        "orders_created": 0,
+    }
+    write_json(ledger.path(CYCLE), [stored])
+
+    projected = ledger.read(CYCLE)
+
+    assert projected is not None
+    assert projected["reason_code"] == stored["reason_code"]
+    assert projected["decision_id"] == stored["decision_id"]
+    assert projected["guidance_derived"] is True
+    assert "trusted market moved" in projected["reason"]
+    assert load_json(ledger.path(CYCLE)) == [stored]
+
+
+def test_readable_blocker_projection_is_not_replaced(tmp_path: Path) -> None:
+    ledger = CycleDecisionLedger(tmp_path)
+    recorded = ledger.record(
+        {
+            "cycle_id": CYCLE,
+            "recorded_at": NOW,
+            "source": "auto_ai",
+            "outcome": "not_executed",
+            "terminal_status": "blocked",
+            "reason_code": "prepared_start_market_moved",
+            "reason": "Custom operator explanation.",
+            "next_action": "Custom safe action.",
+        }
+    )
+
+    assert ledger.read(CYCLE) == recorded
