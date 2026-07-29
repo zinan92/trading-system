@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from services.accounting_projection_core import project_execution_accounting
 from services.journal_store import load_json, write_json
 from services.schedule_status import ScheduleStatus
 from services.system_vitals import SystemVitals
@@ -265,6 +266,8 @@ class ExternalDeadmanPing:
         return urllib.parse.urlunparse(parsed._replace(query=query))
 
     def _exposure_snapshot(self, *, now: datetime) -> dict:
+        if self._cloud_paper_owner_active():
+            return self._paper_exposure_snapshot(now=now)
         live = _latest(_safe_load_json(self.output_root / "live_reconciliation" / "current.json"))
         freshness = self._reconciliation_freshness(live, now=now)
         exchange_positions = [
@@ -294,6 +297,116 @@ class ExternalDeadmanPing:
             "strategy_open_trades": strategy_open[:20],
             "source": "live_reconciliation.current",
         }
+
+    def _cloud_paper_owner_active(self) -> bool:
+        ownership = _latest(
+            _safe_load_json(self.output_root / "cloud" / "scheduler_ownership" / "current.json")
+        )
+        return (
+            ownership.get("status") == "active"
+            and ownership.get("active_owner_id") == "cloud-primary"
+            and ownership.get("dual_owner_allowed") is False
+        )
+
+    def _paper_exposure_snapshot(self, *, now: datetime) -> dict:
+        runtime = _latest(
+            _safe_load_json(self.output_root / "dualtrack" / "strategy_control" / "runtime.json")
+        )
+        cycle_id = str(runtime.get("cycle_id") or "").strip()
+        snapshot_path = (
+            self.output_root
+            / "dualtrack"
+            / "nautilus_authoritative"
+            / "snapshots"
+            / f"{cycle_id}.json"
+        )
+        snapshot = _latest(_safe_load_json(snapshot_path)) if cycle_id else {}
+        freshness = self._artifact_freshness(snapshot_path, now=now)
+        engine_reconciliation = (
+            snapshot.get("reconciliation")
+            if isinstance(snapshot.get("reconciliation"), dict)
+            else {}
+        )
+        accounting_error = ""
+        try:
+            accounting = project_execution_accounting(snapshot).to_dict() if snapshot else {}
+        except Exception as exc:  # noqa: BLE001 - malformed exposure evidence is fail-closed.
+            accounting = {}
+            accounting_error = f"{type(exc).__name__}: {exc}"
+        accounting_reconciliation = (
+            accounting.get("reconciliation")
+            if isinstance(accounting.get("reconciliation"), dict)
+            else {}
+        )
+        identity_matches = bool(
+            cycle_id
+            and snapshot
+            and str(snapshot.get("cycle_id") or "") == cycle_id
+            and str(snapshot.get("engine") or "") == "nautilus_paper"
+        )
+        engine_ok = (
+            engine_reconciliation.get("status") == "ok"
+            and not engine_reconciliation.get("issues")
+        )
+        accounting_ok = accounting_reconciliation.get("status") == "pass"
+        position_unknown = not (
+            freshness["fresh"] and identity_matches and engine_ok and accounting_ok
+        )
+        positions = [
+            row
+            for row in (accounting.get("positions") or [])
+            if isinstance(row, dict)
+            and str(row.get("status") or "").lower() == "open"
+            and abs(self._float(row.get("remaining_quantity") or row.get("quantity"))) > 0
+        ]
+        return {
+            "has_open_position": position_unknown or bool(positions),
+            "position_unknown": position_unknown,
+            "exchange_position_count": 0,
+            "exchange_positions": [],
+            "suspected_naked_position": False,
+            "confirmation_status": "paper_execution_verified" if not position_unknown else "paper_execution_unknown",
+            "system_state": str(runtime.get("actual_state") or "unknown"),
+            "reconciliation_fresh": freshness["fresh"],
+            "reconciliation_freshness": freshness,
+            "strategy_open_trade_count": len(positions),
+            "strategy_open_trades": positions[:20],
+            "source": "nautilus_authoritative.snapshot",
+            "source_path": str(snapshot_path),
+            "cycle_id": cycle_id,
+            "runtime_plan_id": runtime.get("strategy_plan_id"),
+            "identity_matches": identity_matches,
+            "engine_reconciliation_status": engine_reconciliation.get("status", "missing"),
+            "accounting_reconciliation_status": accounting_reconciliation.get("status", "missing"),
+            "accounting_error": accounting_error,
+        }
+
+    def _artifact_freshness(self, path: Path, *, now: datetime) -> dict:
+        if not path.exists():
+            return {
+                "fresh": False,
+                "reason_code": "paper_execution_snapshot_missing",
+                "max_age_seconds": _MAX_RECONCILIATION_AGE_SECONDS,
+            }
+        try:
+            observed = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            return {
+                "fresh": False,
+                "reason_code": "paper_execution_snapshot_unreadable",
+                "max_age_seconds": _MAX_RECONCILIATION_AGE_SECONDS,
+            }
+        age = (now - observed).total_seconds()
+        base = {
+            "timestamp": observed.isoformat(),
+            "age_seconds": round(age, 2),
+            "max_age_seconds": _MAX_RECONCILIATION_AGE_SECONDS,
+        }
+        if age < -_FUTURE_SKEW_SECONDS:
+            return {**base, "fresh": False, "reason_code": "paper_execution_snapshot_future"}
+        if age > _MAX_RECONCILIATION_AGE_SECONDS:
+            return {**base, "fresh": False, "reason_code": "paper_execution_snapshot_stale"}
+        return {**base, "fresh": True, "reason_code": "fresh"}
 
     def _reconciliation_freshness(self, live: dict, *, now: datetime) -> dict:
         if not live:
