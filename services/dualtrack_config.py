@@ -40,6 +40,8 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
     },
     "cycle_decision": {
         "enabled": False,
+        "provider_timeout_seconds": 30,
+        "terminal_deadline_seconds": 300,
     },
     "plan_lock_deadline_min_before_cycle": 0,
     "machine_planner": {

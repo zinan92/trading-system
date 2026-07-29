@@ -26,6 +26,7 @@ from services.paper_release_receipt import (
 from services.cloud_service_boot import CloudPaperServiceBootGate
 from services.config_loader import ROOT, load_pipeline_config
 from services.command_center import build_command_center_state
+from services.cycle_decision import CycleDecisionLedger
 from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
@@ -1195,6 +1196,7 @@ def _assemble_strategy_console_snapshot(
             cloud_health = dict(rows[-1])
     except (OSError, ValueError):
         cloud_health = {}
+    cycle_decision = CycleDecisionLedger(output).read(cycle_id) or {}
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
@@ -1225,6 +1227,7 @@ def _assemble_strategy_console_snapshot(
         "strategy_shadow_promotion": shadow_promotion,
         "safe_repair_queue": safe_repair_queue,
         "cloud_health": cloud_health,
+        "cycle_decision": cycle_decision,
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
             "one_production_strategy": True,
@@ -1381,6 +1384,7 @@ def build_strategy_console_control_response(
     market: dict | None = None,
     account: dict | None = None,
     recommendation_provider=None,
+    recommendation_timeout_seconds: int | None = None,
     actor: dict | None = None,
 ) -> dict:
     output = _dualtrack_output_root(output_root)
@@ -1475,6 +1479,7 @@ def build_strategy_console_control_response(
             recommendation_service = StrategyRecommendationService(
                 output,
                 decision_provider=recommendation_provider,
+                provider_timeout_seconds=recommendation_timeout_seconds,
             )
             recommendation = recommendation_service.recommend(
                 cycle_id,
