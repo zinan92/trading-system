@@ -20,7 +20,7 @@
   "execution_engine": {
     "authoritative": "nautilus_paper",
     "shadow": "nautilus_paper",
-    "shadow_runtime_path": "/Users/wendy/.local/share/trading-orchestrator/nautilus-1.230.0/bin/python",
+    "shadow_runtime_path": "",
     "paper_gate_override_approved": true,
     "real_money_eligible": false,
     "switch_requires_attended_approval": true
@@ -49,7 +49,7 @@
     "command": "codex",
     "model": "gpt-5.4",
     "timeout_seconds": 240,
-    "newsletter_root": "/Users/wendy/park-io/007_finance daily newsletter",
+    "newsletter_root": "inputs/newsletters",
     "volatility_lookback_cycles": 10,
     "minimum_active_cycle_samples": 3,
     "minimum_sample_coverage_pct": 0.8,

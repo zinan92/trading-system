@@ -110,7 +110,7 @@ _PUBLIC_DASHBOARD_URL = "https://goldbot.park-ai-intel.com/dashboard-v5.html"
 _LOCAL_GATEWAY_URL = "http://127.0.0.1:8766/dashboard-v5.html"
 
 
-_CLOUDFLARED_LOG = Path("/Users/wendy/work/选题工作台/launchd-tunnel.log")
+_CLOUDFLARED_LOG = ROOT / "outputs" / "cloudflared.log"
 
 
 _DUALTRACK_POST_ENDPOINTS = {"/api/dualtrack/plan", "/api/dualtrack/orders", "/api/dualtrack/verdict"}

@@ -1,5 +1,44 @@
 # Decision Log
 
+## Linux Cloud Runtime Has an Executable Portability Boundary
+
+Date: 2026-07-29
+
+### Decision
+
+- Declare the files and directories that constitute the Linux Cloud Paper
+  runtime and reject macOS package paths, personal home paths, macOS system
+  Python, LaunchAgents and launchd commands inside that closure.
+- Run the check both as a standalone architecture command and as part of the
+  normal Cloud Paper preflight.
+- Keep local launchd installation, status, rebootstrap and failback code as an
+  explicit macOS adapter. Historical documents and failure fixtures remain
+  provenance rather than production defaults.
+- Resolve AI provider commands through the deployed service `PATH`; resolve
+  Nautilus through its existing environment contract; keep optional newsletter
+  and diagnostic-log defaults repository-relative.
+
+### Gotchas
+
+- Replacing `/opt/homebrew/bin/codex` with `codex` is portable only when the
+  service manager supplies a valid `PATH`. The architecture check does not
+  install or authenticate an AI provider.
+- A repository-wide raw match count includes intentional Mac adapters, test
+  fixtures, historical decision evidence, and the guard's own forbidden-marker
+  definitions. The release blocker is the declared Cloud runtime closure, not
+  a context-free grep count.
+- Emptying the checked-in shadow runtime path does not relax the Nautilus gate:
+  the authoritative runtime still requires
+  `TRADING_ORCHESTRATOR_NAUTILUS_PYTHON`.
+
+### Verification
+
+- `python -m pipelines.cloud_linux_portability --json`
+- Focused Cloud preflight, AI provider, strategy proposal, planner and
+  portability tests.
+- Full classification:
+  `docs/audits/environment-hardcoding-2026-07-29.md`.
+
 ## Cloud AI Recommendations Use an Explicit Provider Command Boundary
 
 Date: 2026-07-28
