@@ -53,7 +53,7 @@ Any false or unknown item blocks before service or ownership mutation.
 Run dry-run first. The applied state machine is fixed:
 
 ```text
-disable local tick
+persistently disable and unload all five Mac Paper focus jobs
 -> local owner active -> paused
 -> create paused-state backup
 -> transfer, restore, and hash-verify paused state
@@ -62,8 +62,20 @@ disable local tick
 -> require layered cloud health = healthy
 ```
 
+The Mac step must use:
+
+```bash
+python -m pipelines.mac_paper_scheduler_isolation isolate --json
+```
+
+Its receipt must prove every label in `FOCUS_SCHEDULE_LABELS` is both unloaded
+and persistently disabled. `bootout` alone is insufficient: launchd will load
+an enabled plist again at the next login or reboot. The command is a Paper
+service mutation and therefore also requires the current source-bound
+predeploy receipt to pass.
+
 If any step after pause fails, the controller disables Cloud tick and leaves
-local tick disabled. It does not replay a control request, start a strategy,
+all Mac Paper jobs disabled. It does not replay a control request, start a strategy,
 cancel an order, or flatten a position. The next action is explicit rollback.
 
 ## 5. Rollback
@@ -76,11 +88,19 @@ disable cloud tick
 -> transfer the higher paused epoch to local
 -> import only a validated monotonic paused state
 -> local owner paused -> active
--> enable local tick
+-> explicitly enable and bootstrap all five Mac Paper focus jobs
 ```
 
 Failure keeps schedulers disabled. Never restore an older owner epoch or
 manually edit `scheduler_ownership/current.json`.
+
+Only after the validated local owner is active, run:
+
+```bash
+python -m pipelines.mac_paper_scheduler_isolation restore \
+  --acknowledgement I_UNDERSTAND_THIS_RESTORES_LOCAL_PAPER_SCHEDULERS \
+  --json
+```
 
 ## 6. Evidence
 
@@ -89,6 +109,7 @@ Required receipts:
 - `outputs/cloud/cutover/precheck_current.json`
 - `outputs/cloud/cutover/cutover_current.json`
 - `outputs/cloud/cutover/rollback_current.json` when rollback is used
+- `outputs/cloud/mac_paper_scheduler_isolation/current.json`
 - Cloud preflight, backup manifest, layered Cloud health, and systemd state
 
 Every receipt is Paper-only, source-bound, and secret-free. A deploy manifest,
