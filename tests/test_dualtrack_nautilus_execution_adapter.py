@@ -661,6 +661,76 @@ def test_later_success_acknowledges_every_event_in_the_replayed_prefix(tmp_path:
     assert adapter.process_market_event(first)["status"] == "idempotent"
 
 
+def test_late_event_is_audited_without_revising_an_immutable_fill(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    replayed_timestamps: list[list[str]] = []
+
+    def replay(_preflight: Path, input_path: Path, _output: Path) -> dict:
+        event_timestamps = [
+            str(row["ts_event"])
+            for row in load_json(input_path)[-1]["market_events"]
+        ]
+        replayed_timestamps.append(event_timestamps)
+        candidate = _candidate(CYCLE_ID)
+        candidate["fills"][0]["ts"] = min(event_timestamps)
+        candidate["orders"][0]["ts"] = min(event_timestamps)
+        candidate["positions"][0]["entry_ts"] = min(event_timestamps)
+        return candidate
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=replay,
+    )
+    base = {
+        "cycle_id": CYCLE_ID,
+        "price": 100.0,
+        "fresh": True,
+        "is_synthetic": False,
+        "source": "market_db:binance_usdm_futures",
+        "provider": "binance_usdm_futures",
+        "instrument_id": "XAUUSDT",
+    }
+    current = {
+        **base,
+        "event_id": "event-current",
+        "ts_event": "2026-07-10T01:41:00+00:00",
+    }
+    late = {
+        **base,
+        "event_id": "event-late",
+        "ts_event": "2026-07-10T01:31:00+00:00",
+    }
+
+    assert adapter.process_market_event(current)["status"] == "replayed"
+    persisted_before = load_json(adapter.root / "fills" / f"{CYCLE_ID}.json")
+    assert adapter.process_market_event(late)["status"] == "replayed"
+
+    assert replayed_timestamps == [
+        ["2026-07-10T01:41:00+00:00"],
+        ["2026-07-10T01:41:00+00:00"],
+    ]
+    assert load_json(adapter.root / "fills" / f"{CYCLE_ID}.json") == persisted_before
+    assert {row["event_id"] for row in load_json(adapter.root / "events" / f"{CYCLE_ID}.json")} == {
+        "event-current",
+        "event-late",
+    }
+    processed = load_json(adapter.root / "processed_events" / f"{CYCLE_ID}.json")
+    assert processed[-1] == {
+        "cycle_id": CYCLE_ID,
+        "event_id": "event-late",
+        "disposition": "late_ignored",
+        "ts_event": "2026-07-10T01:31:00+00:00",
+        "reason": "ts_event_not_after_execution_watermark",
+        "execution_watermark": "2026-07-10T01:41:00+00:00",
+    }
+
+
 def test_deferred_mode_queues_many_events_and_replays_the_batch_once(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"

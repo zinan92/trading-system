@@ -61,6 +61,7 @@
 ## Appendix — 历史记录(只追加,原文搬运,不删除)
 
 ### 2026-07-29 逐票记录
+- #424: Nautilus Paper 对迟到 K 线采用“保留原始事件、追加 `late_ignored` 处置、不得回写既有成交”的执行水位合同；不可变成交检测未放宽。根因与字段级证据见 [`docs/evidence/issue-424-late-market-event-replay.md`](docs/evidence/issue-424-late-market-event-replay.md)。
 - #422: 全仓环境硬编码已完成分类审计；Cloud Paper preflight 新增可执行 Linux 运行闭包门禁，生产默认值不再依赖 Homebrew、个人 macOS 主目录或固定系统 Python。launchd/failback 保留为隔离的 Mac adapter，完整清单见 [`docs/audits/environment-hardcoding-2026-07-29.md`](docs/audits/environment-hardcoding-2026-07-29.md)。
 - #416: 生产 Paper 日账本改从验证通过的终态周期包投影执行事实；根因、下游影响与重建边界见 [`docs/evidence/issue-416-daily-ledger-root-cause.md`](docs/evidence/issue-416-daily-ledger-root-cause.md)。
 - #406: Cloud dead-man 的仓位严重级别改读 cloud-primary 当前周期的 Nautilus 权威执行快照；仅新鲜、身份一致且执行/会计双重对账通过的空仓显示 normal，其余未知仍 fail-closed 为 critical。非 Cloud 与 live/真钱读取路径保持不变。

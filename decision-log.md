@@ -1,5 +1,36 @@
 # Decision Log
 
+## Late Market Data Cannot Rewrite a Committed Paper Fill
+
+Date: 2026-07-29
+
+### Decision
+
+- Treat an event arriving at or behind the accepted execution watermark as an
+  immutable raw audit fact, but exclude it from Paper execution replay.
+- Append a `late_ignored` disposition with the event timestamp, execution
+  watermark and stable reason to the processed-event ledger.
+- Keep the existing immutable-fill regression check unchanged. Missing or
+  changed economic fill fields still stop the tick.
+
+### Gotchas
+
+- Sorting a complete event file by exchange timestamp is not deterministic
+  execution when the source can backfill a previously missing candle. Arrival
+  order and accepted execution time are separate facts.
+- Deleting the delayed candle or accepting the newly calculated earlier fill
+  would both rewrite history. The correct boundary is to retain the raw event
+  and make its non-execution disposition explicit.
+- Existing processed-event rows predate the disposition field and are treated
+  as accepted. This preserves their historical replay semantics.
+
+### Verification
+
+- Focused adapter regression reproduces a ten-minute late candle after a fill
+  and proves the fill remains byte-for-byte unchanged.
+- Runtime root-cause evidence:
+  `docs/evidence/issue-424-late-market-event-replay.md`.
+
 ## Linux Cloud Runtime Has an Executable Portability Boundary
 
 Date: 2026-07-29
