@@ -103,10 +103,305 @@ def test_rollover_stops_packages_then_requires_explicit_next_cycle_start(tmp_pat
     path = output / "dualtrack" / "strategy_control" / "rollovers" / "2026-07-04_NIGHT__2026-07-05_DAY.json"
     assert [row["status"] for row in load_json(path)] == [
         "intent_recorded",
+        "handoff_unavailable",
         "previous_cycle_stopped",
         "previous_cycle_packaged",
         "awaiting_operator_start",
     ]
+
+
+def test_rollover_hands_off_healthy_running_namespace_without_order_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    previous_cycle_id = "2026-07-04_NIGHT"
+    current_cycle_id = "2026-07-05_DAY"
+    previous_plan_id = "plan-previous"
+    current_plan_id = "plan-current"
+    calls: list[str] = []
+
+    class Control:
+        state = {
+            "cycle_id": previous_cycle_id,
+            "desired_state": "running",
+            "actual_state": "running",
+            "updated_at": "2026-07-05T00:59:00+00:00",
+            "strategy_plan_id": previous_plan_id,
+            "accepted_order_count": 2,
+        }
+
+        def __init__(self, _output):
+            pass
+
+        def runtime_configured(self):
+            return True
+
+        def persisted_runtime_state(self):
+            return dict(self.state)
+
+        def paper_execution_tick_health(self, cycle_id, *, now):
+            assert cycle_id == previous_cycle_id
+            return {"status": "ready", "reason": "heartbeat_fresh"}
+
+        def active_plan(self, cycle_id):
+            assert cycle_id == current_cycle_id
+            return {
+                "cycle_id": current_cycle_id,
+                "strategy_plan_id": current_plan_id,
+                "version": 1,
+                "takeover_from_strategy_plan_id": previous_plan_id,
+            }
+
+        def adopt_cycle_handoff(self, previous, current, **kwargs):
+            assert previous == previous_cycle_id
+            assert current == current_cycle_id
+            assert kwargs["expected_runtime_updated_at"] == self.state["updated_at"]
+            calls.append("adopt")
+            self.__class__.state = {
+                **self.state,
+                "cycle_id": current_cycle_id,
+                "strategy_plan_id": current_plan_id,
+                "updated_at": kwargs["now"],
+            }
+            return dict(self.state)
+
+        def control(self, *_args, **_kwargs):
+            raise AssertionError("healthy handoff must not stop, cancel, or flatten")
+
+    handoff = {
+        "status": "verified",
+        "identity_preserved": True,
+        "previous_cycle_id": previous_cycle_id,
+        "current_cycle_id": current_cycle_id,
+        "current_strategy_plan_id": current_plan_id,
+        "accepted_order_ids": ["order-1", "order-2"],
+        "open_position_ids": ["position-1"],
+    }
+
+    class Execution:
+        def handoff_cycle(self, previous, current, **kwargs):
+            assert previous == previous_cycle_id
+            assert current == current_cycle_id
+            assert kwargs["current_strategy_plan_id"] == current_plan_id
+            calls.append("handoff")
+            return dict(handoff)
+
+    class Packager:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def package(self, cycle_id, *, now, handoff):
+            assert cycle_id == previous_cycle_id
+            assert handoff["identity_preserved"] is True
+            calls.append("package")
+            return {
+                "status": "closed",
+                "package_hash": "handoff-package",
+                "execution": {"terminal_mode": "handed_off"},
+            }
+
+    monkeypatch.setattr(runner_module, "StrategyControlPlane", Control)
+    monkeypatch.setattr(runner_module, "StrategyCyclePackager", Packager)
+    runner = _runner(output)
+    runner.execution = Execution()
+    runner._production_market_snapshot = lambda _now: {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+    }
+
+    result = runner._rollover_production(
+        previous_cycle_id,
+        current_cycle_id,
+        now=parse_utc("2026-07-05T01:00:00+00:00"),
+    )
+
+    assert result["status"] == "completed"
+    assert result["terminal_mode"] == "handed_off"
+    assert result["identity_preserved"] is True
+    assert result["accepted_orders"] == 2
+    assert calls == ["handoff", "adopt", "package"]
+    rows = load_json(runner._rollover_path(previous_cycle_id, current_cycle_id))
+    assert [row["status"] for row in rows] == [
+        "intent_recorded",
+        "previous_cycle_handed_off",
+        "completed",
+    ]
+
+
+def test_rollover_retries_package_after_verified_handoff_without_repeating_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    previous_cycle_id = "2026-07-04_NIGHT"
+    current_cycle_id = "2026-07-05_DAY"
+    calls: list[str] = []
+    handoff = {
+        "status": "verified",
+        "identity_preserved": True,
+        "previous_cycle_id": previous_cycle_id,
+        "current_cycle_id": current_cycle_id,
+        "current_strategy_plan_id": "plan-current",
+        "accepted_order_ids": ["order-1"],
+        "open_position_ids": ["position-1"],
+    }
+
+    class Control:
+        state = {
+            "cycle_id": previous_cycle_id,
+            "desired_state": "running",
+            "actual_state": "running",
+            "updated_at": "2026-07-05T00:59:00+00:00",
+            "strategy_plan_id": "plan-previous",
+            "strategy_plan_version": 1,
+            "accepted_order_count": 1,
+        }
+
+        def __init__(self, _output):
+            pass
+
+        def runtime_configured(self):
+            return True
+
+        def persisted_runtime_state(self):
+            return dict(self.state)
+
+        def paper_execution_tick_health(self, *_args, **_kwargs):
+            return {"status": "ready"}
+
+        def active_plan(self, _cycle_id):
+            return {
+                "strategy_plan_id": "plan-current",
+                "version": 1,
+                "takeover_from_strategy_plan_id": "plan-previous",
+            }
+
+        def adopt_cycle_handoff(self, _previous, _current, **kwargs):
+            self.__class__.state = {
+                **self.state,
+                "cycle_id": current_cycle_id,
+                "strategy_plan_id": "plan-current",
+                "strategy_plan_version": 1,
+                "updated_at": kwargs["now"],
+            }
+            calls.append("adopt")
+            return dict(self.state)
+
+        def control(self, *_args, **_kwargs):
+            raise AssertionError("verified handoff recovery must not stop")
+
+    class Execution:
+        def handoff_cycle(self, *_args, **_kwargs):
+            calls.append("handoff")
+            return dict(handoff)
+
+    class Packager:
+        attempts = 0
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def package(self, *_args, **_kwargs):
+            self.__class__.attempts += 1
+            calls.append("package")
+            if self.__class__.attempts == 1:
+                raise RuntimeError("fault injected after verified handoff")
+            return {
+                "status": "closed",
+                "package_hash": "handoff-package",
+                "execution": {"terminal_mode": "handed_off"},
+            }
+
+    monkeypatch.setattr(runner_module, "StrategyControlPlane", Control)
+    monkeypatch.setattr(runner_module, "StrategyCyclePackager", Packager)
+    runner = _runner(output)
+    runner.execution = Execution()
+    runner._production_market_snapshot = lambda _now: {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+    }
+
+    first = runner._rollover_production(
+        previous_cycle_id,
+        current_cycle_id,
+        now=parse_utc("2026-07-05T01:00:00+00:00"),
+    )
+    second = runner._rollover_production(
+        previous_cycle_id,
+        current_cycle_id,
+        now=parse_utc("2026-07-05T01:01:00+00:00"),
+    )
+
+    assert first["status"] == "blocked"
+    assert first["stage"] == "packaging_previous_cycle_handoff"
+    assert first["runtime_preserved"] is True
+    assert second["status"] == "completed"
+    assert second["recovered_after_restart"] is True
+    assert calls == ["handoff", "adopt", "package", "package"]
+
+
+def test_control_plane_adopts_only_verified_declared_cycle_handoff(
+    tmp_path: Path,
+) -> None:
+    from services.strategy_control_plane import StrategyControlPlane
+
+    output = tmp_path / "outputs"
+    root = output / "dualtrack" / "strategy_control"
+    previous_cycle_id = "2026-07-04_NIGHT"
+    current_cycle_id = "2026-07-05_DAY"
+    write_json(root / "runtime.json", [{
+        "cycle_id": previous_cycle_id,
+        "desired_state": "running",
+        "actual_state": "running",
+        "updated_at": "2026-07-05T00:59:00+00:00",
+        "strategy_plan_id": "plan-previous",
+        "strategy_plan_version": 3,
+        "accepted_order_count": 2,
+    }])
+    write_json(root / "plans" / f"{current_cycle_id}.json", [{
+        "cycle_id": current_cycle_id,
+        "strategy_plan_id": "plan-current",
+        "version": 1,
+        "status": "active",
+        "strategy_type": "grid",
+        "takeover_from_strategy_plan_id": "plan-previous",
+    }])
+    handoff = {
+        "status": "verified",
+        "identity_preserved": True,
+        "previous_cycle_id": previous_cycle_id,
+        "current_cycle_id": current_cycle_id,
+        "current_strategy_plan_id": "plan-current",
+        "target_accepted_order_ids": ["order-1", "order-2"],
+        "target_open_position_ids": ["position-1"],
+    }
+
+    runtime = StrategyControlPlane(output).adopt_cycle_handoff(
+        previous_cycle_id,
+        current_cycle_id,
+        expected_runtime_updated_at="2026-07-05T00:59:00+00:00",
+        handoff=handoff,
+        now="2026-07-05T01:00:00+00:00",
+    )
+
+    assert runtime["cycle_id"] == current_cycle_id
+    assert runtime["strategy_plan_id"] == "plan-current"
+    assert runtime["accepted_order_count"] == 2
+    assert runtime["last_action"] == "cycle_handoff"
+    assert runtime["rollover_handoff"]["previous_strategy_plan_id"] == "plan-previous"
+
+    invalid = {**handoff, "identity_preserved": False}
+    with pytest.raises(RuntimeError, match="runtime changed|not verified"):
+        StrategyControlPlane(output).adopt_cycle_handoff(
+            previous_cycle_id,
+            current_cycle_id,
+            expected_runtime_updated_at="2026-07-05T00:59:00+00:00",
+            handoff=invalid,
+            now="2026-07-05T01:01:00+00:00",
+        )
 
 
 def test_rollover_gate_failure_writes_blocked_receipt_and_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,6 +509,7 @@ def test_missing_planning_timeframes_do_not_prevent_terminal_old_cycle_package(
     rows = load_json(runner._rollover_path("2026-07-04_NIGHT", "2026-07-05_DAY"))
     assert [row["status"] for row in rows] == [
         "intent_recorded",
+        "handoff_unavailable",
         "previous_cycle_stopped",
         "previous_cycle_packaged",
         "awaiting_operator_start",

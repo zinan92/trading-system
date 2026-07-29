@@ -44,11 +44,23 @@ class StrategyCyclePackager:
         self.adapter = adapter
         self.shadow_evidence_builder = shadow_evidence_builder
 
-    def package(self, cycle_id: str, *, now: str | None = None) -> dict[str, Any]:
+    def package(
+        self,
+        cycle_id: str,
+        *,
+        now: str | None = None,
+        handoff: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         with production_mutation_lock(self.output_root):
-            return self._package_locked(cycle_id, now=now)
+            return self._package_locked(cycle_id, now=now, handoff=handoff)
 
-    def _package_locked(self, cycle_id: str, *, now: str | None = None) -> dict[str, Any]:
+    def _package_locked(
+        self,
+        cycle_id: str,
+        *,
+        now: str | None = None,
+        handoff: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         path = self._path(cycle_id)
         existing = load_json(path)
         supersedes_hash = ""
@@ -95,7 +107,15 @@ class StrategyCyclePackager:
             str(reconciliation.get("status") or "").lower() == "ok"
             and not reconciliation.get("issues")
         )
-        execution_terminal = not accepted and not open_positions and reconciliation_ok
+        handoff_verified = _verified_handoff(
+            handoff,
+            cycle_id=cycle_id,
+            accepted=accepted,
+            open_positions=open_positions,
+        )
+        execution_terminal = (
+            (not accepted and not open_positions) or handoff_verified
+        ) and reconciliation_ok
         plan_linked = (
             isinstance(plan, dict)
             and plan.get("strategy_plan_id") not in (None, "")
@@ -103,9 +123,9 @@ class StrategyCyclePackager:
         )
         terminal = execution_terminal and plan_linked
         blockers = []
-        if accepted:
+        if accepted and not handoff_verified:
             blockers.append("accepted_orders_remain")
-        if open_positions:
+        if open_positions and not handoff_verified:
             blockers.append("open_positions_remain")
         if not reconciliation_ok:
             blockers.append("execution_reconciliation_not_ok")
@@ -135,6 +155,8 @@ class StrategyCyclePackager:
                 "account": dict(snapshot.get("account") or {}),
                 "pnl": pnl,
                 "reconciliation": dict(reconciliation),
+                "terminal_mode": "handed_off" if handoff_verified else "flat",
+                "handoff": dict(handoff or {}) if handoff_verified else None,
             },
             "review": self._review(
                 cycle_id,
@@ -144,6 +166,7 @@ class StrategyCyclePackager:
                 open_positions=open_positions,
                 reconciliation=reconciliation,
                 pnl=pnl,
+                handoff_verified=handoff_verified,
             ),
             "strategy_shadows": load_strategy_shadow_runs(self.output_root, cycle_id),
             "shadow_generation": shadow_generation,
@@ -153,12 +176,14 @@ class StrategyCyclePackager:
                 "orders_linked": all(row.get("strategy_plan_id") not in (None, "") for row in orders),
                 "fills_linked": all(row.get("strategy_plan_id") not in (None, "") for row in fills),
                 "production_ledger_immutable": True,
+                "cycle_handoff_verified": handoff_verified,
             },
             "safety": {
                 "real_orders": False,
                 "writes_production_ledger": False,
                 "historical_records_preserved": True,
                 "shadow_failure_blocks_production_close": False,
+                "positions_preserved_only_by_verified_handoff": handoff_verified,
             },
         }
         if supersedes_hash:
@@ -301,6 +326,7 @@ class StrategyCyclePackager:
         open_positions: list[dict[str, Any]],
         reconciliation: dict[str, Any],
         pnl: dict[str, Any],
+        handoff_verified: bool = False,
     ) -> dict[str, Any]:
         realized = (
             float(pnl["realized"])
@@ -310,8 +336,7 @@ class StrategyCyclePackager:
         legacy_rows = load_json(self.root / "reviews" / f"{cycle_id}_machine.json")
         legacy = dict(legacy_rows[-1]) if legacy_rows and isinstance(legacy_rows[-1], dict) else {}
         terminal = (
-            not accepted
-            and not open_positions
+            (handoff_verified or (not accepted and not open_positions))
             and str(reconciliation.get("status") or "") == "ok"
             and not reconciliation.get("issues")
         )
@@ -329,6 +354,7 @@ class StrategyCyclePackager:
             "order_count": len(orders),
             "accepted_order_count_at_close": len(accepted),
             "open_position_count_at_close": len(open_positions),
+            "terminal_mode": "handed_off" if handoff_verified else "flat",
             "reconciliation_status": reconciliation.get("status"),
             "legacy_review": legacy,
         }
@@ -426,6 +452,28 @@ class StrategyCyclePackager:
 def _hash_payload(value: Any) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _verified_handoff(
+    handoff: dict[str, Any] | None,
+    *,
+    cycle_id: str,
+    accepted: list[dict[str, Any]],
+    open_positions: list[dict[str, Any]],
+) -> bool:
+    if not isinstance(handoff, dict):
+        return False
+    accepted_ids = sorted(str(row.get("order_id") or "") for row in accepted)
+    position_ids = sorted(str(row.get("position_id") or "") for row in open_positions)
+    return (
+        handoff.get("status") == "verified"
+        and handoff.get("identity_preserved") is True
+        and str(handoff.get("previous_cycle_id") or "") == cycle_id
+        and sorted(str(value) for value in handoff.get("accepted_order_ids") or [])
+        == accepted_ids
+        and sorted(str(value) for value in handoff.get("open_position_ids") or [])
+        == position_ids
+    )
 
 
 def _expected_package_hash(value: Any) -> str:

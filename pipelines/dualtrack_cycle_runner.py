@@ -874,6 +874,15 @@ class DualTrackCycleRunner:
             desired = str(persisted.get("desired_state") or "stopped")
             actual = str(persisted.get("actual_state") or desired)
             if desired == "running" and actual == "running":
+                handed_off = next(
+                    (
+                        row
+                        for row in reversed(rows)
+                        if row.get("status") == "previous_cycle_handed_off"
+                        and isinstance(row.get("handoff"), dict)
+                    ),
+                    None,
+                )
                 package_hash = next(
                     (
                         str(row.get("package_hash"))
@@ -882,6 +891,59 @@ class DualTrackCycleRunner:
                     ),
                     "",
                 )
+                if handed_off and not package_hash:
+                    try:
+                        package = StrategyCyclePackager(
+                            self.output_root,
+                            config=self.config,
+                            adapter=self.execution,
+                            shadow_evidence_builder=self._build_strategy_shadow_evidence,
+                        ).package(
+                            previous_cycle_id,
+                            now=now.isoformat(),
+                            handoff=dict(handed_off["handoff"]),
+                        )
+                        if (
+                            package.get("status") != "closed"
+                            or (package.get("execution") or {}).get("terminal_mode")
+                            != "handed_off"
+                        ):
+                            raise ValueError(
+                                "previous production cycle handoff package is not terminal"
+                            )
+                        latest = self._record_rollover(
+                            previous_cycle_id,
+                            current_cycle_id,
+                            {
+                                "status": "completed",
+                                "should_continue": True,
+                                "package_hash": package.get("package_hash"),
+                                "strategy_plan_id": persisted.get("strategy_plan_id"),
+                                "strategy_plan_version": persisted.get("strategy_plan_version"),
+                                "accepted_orders": int(persisted.get("accepted_order_count") or 0),
+                                "identity_preserved": True,
+                                "terminal_mode": "handed_off",
+                                "recovered_after_restart": True,
+                            },
+                            now=now,
+                        )
+                        return {"event": "production_rollover", **latest, "package": package}
+                    except Exception as exc:
+                        blocked = self._record_rollover(
+                            previous_cycle_id,
+                            current_cycle_id,
+                            {
+                                "status": "blocked",
+                                "stage": "packaging_previous_cycle_handoff",
+                                "should_continue": True,
+                                "reason": str(exc),
+                                "error_type": type(exc).__name__,
+                                "runtime_preserved": True,
+                                "fail_closed": True,
+                            },
+                            now=now,
+                        )
+                        return {"event": "production_rollover", **blocked}
                 if latest.get("status") != "completed" and package_hash:
                     latest = self._record_rollover(
                         previous_cycle_id,
@@ -1027,6 +1089,84 @@ class DualTrackCycleRunner:
 
         stage = str(latest.get("status") or "intent_recorded")
         try:
+            handoff_failure = ""
+            if (
+                persisted.get("cycle_id") == previous_cycle_id
+                and persisted.get("actual_state") == "running"
+            ):
+                stage = "checking_cycle_handoff"
+                handoff = None
+                try:
+                    handoff = self._attempt_managed_cycle_handoff(
+                        control,
+                        previous_cycle_id,
+                        current_cycle_id,
+                        persisted=persisted,
+                        now=now,
+                    )
+                except Exception as exc:
+                    handoff_failure = str(exc)
+                    self._record_rollover(
+                        previous_cycle_id,
+                        current_cycle_id,
+                        {
+                            "status": "handoff_unavailable",
+                            "should_continue": True,
+                            "reason": handoff_failure,
+                            "error_type": type(exc).__name__,
+                            "fallback": "safe_stop_cancel_flatten",
+                            "fail_closed": True,
+                        },
+                        now=now,
+                    )
+                if handoff is not None:
+                    latest = self._record_rollover(
+                        previous_cycle_id,
+                        current_cycle_id,
+                        {
+                            "status": "previous_cycle_handed_off",
+                            "should_continue": True,
+                            "strategy_plan_id": handoff.get("current_strategy_plan_id"),
+                            "accepted_order_ids": list(handoff.get("accepted_order_ids") or []),
+                            "open_position_ids": list(handoff.get("open_position_ids") or []),
+                            "identity_preserved": handoff.get("identity_preserved") is True,
+                            "handoff": handoff,
+                        },
+                        now=now,
+                    )
+                    stage = "packaging_previous_cycle_handoff"
+                    package = StrategyCyclePackager(
+                        self.output_root,
+                        config=self.config,
+                        adapter=self.execution,
+                        shadow_evidence_builder=self._build_strategy_shadow_evidence,
+                    ).package(
+                        previous_cycle_id,
+                        now=now.isoformat(),
+                        handoff=handoff,
+                    )
+                    if (
+                        package.get("status") != "closed"
+                        or (package.get("execution") or {}).get("terminal_mode")
+                        != "handed_off"
+                    ):
+                        raise ValueError("previous production cycle handoff package is not terminal")
+                    final = self._record_rollover(
+                        previous_cycle_id,
+                        current_cycle_id,
+                        {
+                            "status": "completed",
+                            "should_continue": True,
+                            "package_hash": package.get("package_hash"),
+                            "strategy_plan_id": handoff.get("current_strategy_plan_id"),
+                            "accepted_orders": len(handoff.get("accepted_order_ids") or []),
+                            "identity_preserved": True,
+                            "terminal_mode": "handed_off",
+                        },
+                        now=now,
+                    )
+                    return {"event": "production_rollover", **final, "package": package}
+
             market = self._paper_safe_action_market_snapshot(now)
             if persisted.get("cycle_id") == previous_cycle_id and persisted.get("actual_state") != "stopped":
                 stage = "stopping_previous_cycle"
@@ -1064,6 +1204,7 @@ class DualTrackCycleRunner:
                         "flattened_position_ids": list(stopped.get("flattened_position_ids") or []),
                         "reconciliation_status": reconciliation.get("status"),
                         "runtime_updated_at": (stopped.get("runtime") or {}).get("updated_at"),
+                        "handoff_failure_reason": handoff_failure or None,
                     },
                     now=now,
                 )
@@ -1120,11 +1261,64 @@ class DualTrackCycleRunner:
                     "should_continue": not operator_changed_runtime,
                     "reason": str(exc),
                     "error_type": type(exc).__name__,
+                    "runtime_preserved": stage == "packaging_previous_cycle_handoff",
                     "fail_closed": True,
                 },
                 now=now,
             )
             return {"event": "production_rollover", **blocked}
+
+    def _attempt_managed_cycle_handoff(
+        self,
+        control: StrategyControlPlane,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        *,
+        persisted: dict[str, Any],
+        now: datetime,
+    ) -> dict[str, Any]:
+        tick_health = control.paper_execution_tick_health(previous_cycle_id, now=now)
+        if str(tick_health.get("status") or "") != "ready":
+            raise RuntimeError(
+                "managed rollover requires a fresh execution tick"
+                f":{tick_health.get('reason') or 'unknown'}"
+            )
+        plan = control.active_plan(current_cycle_id)
+        if not isinstance(plan, dict):
+            raise RuntimeError("managed rollover requires an active current-cycle StrategyPlan")
+        previous_plan_id = str(persisted.get("strategy_plan_id") or "")
+        if (
+            not previous_plan_id
+            or str(plan.get("takeover_from_strategy_plan_id") or "")
+            != previous_plan_id
+        ):
+            raise RuntimeError(
+                "current-cycle StrategyPlan did not declare takeover of the running plan"
+            )
+        market = self._production_market_snapshot(now)
+        if (
+            str(market.get("status") or "") not in {"ready", "ok"}
+            or market.get("fresh") is not True
+            or market.get("is_synthetic") is not False
+        ):
+            raise RuntimeError("managed rollover requires trusted fresh market data")
+        handoff_operation = getattr(self.execution, "handoff_cycle", None)
+        if not callable(handoff_operation):
+            raise RuntimeError("authoritative Paper adapter does not support cycle handoff")
+        handoff = handoff_operation(
+            previous_cycle_id,
+            current_cycle_id,
+            current_strategy_plan_id=str(plan.get("strategy_plan_id") or ""),
+            boundary_at=now.isoformat(),
+        )
+        control.adopt_cycle_handoff(
+            previous_cycle_id,
+            current_cycle_id,
+            expected_runtime_updated_at=str(persisted.get("updated_at") or ""),
+            handoff=handoff,
+            now=now.isoformat(),
+        )
+        return handoff
 
     def _production_market_snapshot(self, now: datetime) -> dict[str, Any]:
         pipeline_config = load_pipeline_config()

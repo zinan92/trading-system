@@ -102,6 +102,49 @@ class ShadowingExecutionEngineAdapter:
     def reconcile(self, cycle_id: str) -> dict[str, Any]:
         return self.authoritative.reconcile(cycle_id)
 
+    def handoff_cycle(
+        self,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        *,
+        current_strategy_plan_id: str,
+        boundary_at: str,
+    ) -> dict[str, Any]:
+        handoff = getattr(self.authoritative, "handoff_cycle", None)
+        if not callable(handoff):
+            raise RuntimeError("authoritative Paper adapter does not support cycle handoff")
+        receipt = handoff(
+            previous_cycle_id,
+            current_cycle_id,
+            current_strategy_plan_id=current_strategy_plan_id,
+            boundary_at=boundary_at,
+        )
+        shadow_handoff = getattr(self.shadow, "handoff_cycle", None)
+        if callable(shadow_handoff):
+            try:
+                shadow_handoff(
+                    previous_cycle_id,
+                    current_cycle_id,
+                    current_strategy_plan_id=current_strategy_plan_id,
+                    boundary_at=boundary_at,
+                )
+            except Exception as exc:
+                self._record(
+                    {
+                        "schema_version": "dualtrack-nautilus-shadow-runtime-v1",
+                        "cycle_id": current_cycle_id,
+                        "operation": "handoff_cycle",
+                        "identity": f"{previous_cycle_id}->{current_cycle_id}",
+                        "authoritative_engine": self.name,
+                        "shadow_engine": str(getattr(self.shadow, "name", "")),
+                        "recorded_at": datetime.now(timezone.utc).isoformat(),
+                        "authoritative_unchanged": True,
+                        "status": "error",
+                        "error": str(exc)[-1000:],
+                    }
+                )
+        return receipt
+
     def flush_shadow(self, cycle_id: str, *, cycle_complete: bool = False) -> dict[str, Any]:
         base = {
             "schema_version": "dualtrack-nautilus-shadow-runtime-v1",

@@ -84,6 +84,55 @@ def test_package_blocks_on_non_terminal_execution(tmp_path: Path) -> None:
     assert result["execution"]["reconciliation"]["status"] == "drift"
 
 
+def test_verified_handoff_closes_books_without_closing_positions(tmp_path: Path) -> None:
+    class HandedOffAdapter(TerminalAdapter):
+        def snapshot(self, _cycle_id: str) -> dict:
+            return {
+                "engine": self.name,
+                "orders": [{
+                    "order_id": "o-open",
+                    "state": "accepted",
+                    "strategy_plan_id": "plan-1",
+                }],
+                "fills": [{
+                    "fill_id": "f-entry",
+                    "realized_pnl": 2.0,
+                    "strategy_plan_id": "plan-1",
+                }],
+                "positions": [{
+                    "position_id": "p-open",
+                    "status": "open",
+                    "strategy_plan_id": "plan-1",
+                }],
+                "account": {"equity": 10_006.0},
+                "pnl": {"realized": 2.0, "unrealized": 4.0},
+            }
+
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_NIGHT"
+    _seed_plan(output, cycle_id)
+    handoff = {
+        "status": "verified",
+        "identity_preserved": True,
+        "previous_cycle_id": cycle_id,
+        "current_cycle_id": "2026-07-06_DAY",
+        "accepted_order_ids": ["o-open"],
+        "open_position_ids": ["p-open"],
+    }
+
+    result = StrategyCyclePackager(
+        output,
+        adapter=HandedOffAdapter(),
+    ).package(cycle_id, handoff=handoff)
+
+    assert result["status"] == "closed"
+    assert result["execution"]["terminal_mode"] == "handed_off"
+    assert result["execution"]["handoff"]["current_cycle_id"] == "2026-07-06_DAY"
+    assert result["review"]["status"] == "complete"
+    assert result["review"]["terminal_mode"] == "handed_off"
+    assert result["traceability"]["cycle_handoff_verified"] is True
+
+
 def test_package_blocks_when_strategy_plan_identity_is_missing(tmp_path: Path) -> None:
     result = StrategyCyclePackager(
         tmp_path / "outputs",

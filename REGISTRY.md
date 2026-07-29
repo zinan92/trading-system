@@ -19,7 +19,7 @@
 - 进度: [实施进度页](docs/plans/implementation-progress-2026-07-24.md) 的 26 个已审核 story 已全部验证完成（**26/26，100%**）。M6-03 将 main SHA、发布前兼容性闸、健康/行情/执行分离、浏览器验收、证据落点及 Paper-only rollback 固化为 [release runbook](docs/runbooks/paper-release-rollback-v1.md)（[PR #365](https://github.com/zinan92/trading-system/pull/365)）。计划完成不等于自动启动或真实交易：后续每次 Paper 发布仍须按 runbook 的实时安全闸与证据步骤执行。
 - GitHub provenance: `main` 的 #223–#328 merge commits 仍完整，但对应 Issue/PR 元数据对象会返回 404；这是 GitHub 元数据缺口而非代码丢失。可访问的追踪入口为 [#330](https://github.com/zinan92/trading-system/issues/330)，完整 commit 索引与“先 API 读回再报告链接”规则见 [`docs/audits/github-provenance-222-329.md`](docs/audits/github-provenance-222-329.md)。
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
-- Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动;rollover 只停止/撤单/封包,下一周期必须操作者显式启动。tick 失败现会明确标记为行情/路由、生命周期、账本写入或调度器启动阶段并给出下一步；失败绝不写心跳，运行中失联显示「运行降级」。
+- Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动。#413 允许 12 小时边界在新周期已有显式接管 StrategyPlan、tick/行情新鲜且 Nautilus 订单/仓位/生命周期身份逐项不变时只关账不平仓；任一条件缺失仍撤单、平仓、对账并等待新启动。tick 失败现会明确标记为行情/路由、生命周期、账本写入或调度器启动阶段并给出下一步；失败绝不写心跳，运行中失联显示「运行降级」。
 - DCA v1 就绪:做多/做空加仓、单张整轮 TP 世代随累计持仓更新(由行情事件触发,不是 entry 挂单,页面已标注)、独立整轮止损、风险确认、read-model 可见;聚合 TP 合同已覆盖 1/2/3 次加仓及提交失败 fail-closed。一个逻辑整轮 TP 在 Nautilus 执行层会按精确 `position_id` 拆成多张 reduce-only 子单，绝不再用共享 round ID 模糊平仓；TP/SL 后停止,v1 显式拒绝 `loop_enabled=true`。此前首次 attended 尝试在两笔加仓后暴露该执行缺陷，已安全撤单平仓，**不计作真实生命周期验收**。
 - #226 attended Paper DCA 已自然闭环:做多计划 `strategy-plan-2026-07-24_DAY-5-c3bf366f` 经真实 tick 完成两次加仓；第一笔后 generation-1，第二笔后 generation-2 将聚合 TP 扩至 `0.004 @ 4037.5`。generation-2 于 `2026-07-24T06:20:00Z` 自然成交，lifecycle 为 `target_closed`、0 持仓/0 委托，execution reconciliation=`ok`，canonical accounting=`pass`（两条既有时间异常仍 quarantine）。未注入行情、人工平仓或重启执行器制造证据。
 - 可观测性:请求未达后端/Cloudflare 530/Dashboard 5xx/Binance 上游/网格回滚五类故障链分立文案各带下一步;硬输入 blocker 结构化解释;历史 NAV 仅计 machine 生产已实现 P&L,缺失即显示不可用;终态周期自动尝试 production+notional-half What-if Shadow,缺失原因显式留档。
@@ -46,7 +46,7 @@
 - 只读监测当前 `strategy-plan-2026-07-29_DAY-2-52d364d4` 的 TP/SL/循环生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改 StrategyPlan。现有 1 个真实 fill 已满足 #408 的“当前计划成交证据”，后续 accepted/armed 仍不得冒充新增成交。
 - 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。
 - 监测自然 tick 单次耗时和 `late_ignored` 数量；如果再发生 timeout、不可变成交回归或执行/会计对账漂移，按独立缺陷 Issue fail-closed 处理，不得重放控制动作。
-- #413/#414/#415 保持独立设计排期，本轮不混入；真钱/live 仍需 Park 本人 `park-approved`。
+- #415 按已审核合同实现“每周期唯一决策记录 + 无手工计划时自动 AI 建议”；#414 继续独立排期且不混入。真钱/live 仍需 Park 本人 `park-approved`。
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
 - M3-05:审计当前生产策略摘要与持仓/委托/成交表的字段、计数、对齐和桌面可读性；只补复现的完整性或可理解性缺口。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
@@ -61,6 +61,7 @@
 ## Appendix — 历史记录(只追加,原文搬运,不删除)
 
 ### 2026-07-29 逐票记录
+- #413: 12 小时周期边界在且仅在当前周期 active StrategyPlan 显式引用旧计划、执行 tick/行情新鲜、Nautilus 新命名空间对账通过且 accepted order/open position/Grid lifecycle ID 全部不变时执行 Paper handoff；旧周期以 `terminal_mode=handed_off` 封包，realized 留旧账、unrealized 随仓位进新账。任何缺项保留原安全撤单/平仓路径并记录确切原因。
 - #433: Dashboard 生产运行状态新增一行 `策略运行占比 24h / 7d`；只按 accepted control event 中可证明的 `actual_state=running` 区间计时，进程在线、rejected 动作与无法证明的窗口前段均不冒充策略运行，证据不足显示 `--`。
 - #431: Mac Paper 隔离 receipt 兼容当前 macOS `launchctl print-disabled` 的 `enabled/disabled` 输出及旧式 `true/false`；缺 label 或未知值仍 fail-closed，不会把命令成功冒充成验证成功。
 - #428: Cloud owner 切换后，Mac Paper 的五个 focus launchd job 现在同时执行持久 `disable` 与当前会话 `bootout`；重启/重新登录不会自动加载。只有 owner 已明确回到 active `local-mac` 且给出专用确认词时，才会按同一 allowlist 恢复；每个 label 的前后 loaded/disabled 状态均留 receipt。
