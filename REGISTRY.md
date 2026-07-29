@@ -64,6 +64,7 @@
 - #416: 生产 Paper 日账本改从验证通过的终态周期包投影执行事实；根因、下游影响与重建边界见 [`docs/evidence/issue-416-daily-ledger-root-cause.md`](docs/evidence/issue-416-daily-ledger-root-cause.md)。
 - #406: Cloud dead-man 的仓位严重级别改读 cloud-primary 当前周期的 Nautilus 权威执行快照；仅新鲜、身份一致且执行/会计双重对账通过的空仓显示 normal，其余未知仍 fail-closed 为 critical。非 Cloud 与 live/真钱读取路径保持不变。
 - #407: 正式 `/api/dashboard` 诊断在独立 datafeed 模式下不再把 Cloud 的兼容 SQLite 环境路径误组装为 legacy 市场源；full/trader/ops/strategy 合同继续使用可信 datafeed，生产 legacy/synthetic 限制未放宽。
+- #420: public-access-health 现在区分 Cloudflare Access 登录页与真实 Dashboard HTML；受保护路由显示 `public_access_protected` 且特征状态为未认证不可观测，不再把 Access 页缺少应用标记误报为 `public_deployment_stale`，也未给探针新增任何认证绕过。
 
 ### 2026-07-22/23 逐票记录(蒸馏于 2026-07-23,原正文条目原样保留)
 - Goldbot V5 已部署代码提交 `main@890aa89`(DCA 基线 `1b5fcd9`);部署与浏览器验收期间保留原 Paper Grid 运行态,15 张已接受挂单、0 活跃持仓,未执行启动、停止、撤单或平仓。

@@ -3306,6 +3306,12 @@ def build_public_access_health(
         if any(token in latest_text for token in ("QUIC", "7844", "HTTP/2", "TLS handshake", "no route to host")):
             diagnosis = "cloudflare_edge_unreachable"
             action = "Allow outbound Cloudflare Tunnel traffic on port 7844 or run the connector from a network that can reach Cloudflare edge."
+    elif deployment.get("reason") == "access_protected":
+        diagnosis = "public_access_protected"
+        action = (
+            "Public route is reachable and protected by Cloudflare Access; "
+            "authenticate before verifying application feature fingerprints."
+        )
     elif deployment.get("status") != "ok":
         status = "warn"
         if deployment.get("reason") == "ops_access_forbidden":
@@ -3429,6 +3435,17 @@ def _deployment_feature_summary(public_url: str, timeout: float) -> dict:
             "replay_trader_focus": "Trader Focus",
         }
     trader = _probe_html_features(public_url, timeout, trader_checks)
+    if trader.get("access_protected"):
+        return {
+            "status": "ok",
+            "reason": "access_protected",
+            "access": "protected",
+            "trader_url": public_url,
+            "trader": trader,
+            "checks": [],
+            "missing_features": [],
+            "feature_fingerprint_status": "not_observable_without_authentication",
+        }
     trader_vendor_filename = "packages/standard-kline/standard-kline.js" if is_v5 else "data/vendor/echarts.min.js"
     trader_vendor_name = "trader_vendor_standard_kline" if is_v5 else "trader_vendor_echarts"
     trader_vendor_url = _sibling_dashboard_url(public_url, trader_vendor_filename)
@@ -3528,15 +3545,19 @@ def _probe_html_features(url: str, timeout: float, features: dict[str, str]) -> 
             body = response.read(1_500_000).decode("utf-8", errors="replace")
             status_code = int(getattr(response, "status", 0) or 0)
             headers = response.headers
+            final_url = str(getattr(response, "geturl", lambda: url)() or url)
+            access_protected = _is_cloudflare_access_interstitial(final_url, body)
             checks = [{"name": name, "ok": token in body} for name, token in features.items()]
             return {
                 "ok": 200 <= status_code < 400,
                 "status_code": status_code,
+                "final_url": final_url,
+                "access_protected": access_protected,
                 "elapsed_ms": round((time.perf_counter() - started) * 1000),
                 "cache_control": headers.get("Cache-Control", ""),
                 "cf_cache_status": headers.get("cf-cache-status", ""),
                 "content_length": len(body),
-                "checks": checks,
+                "checks": [] if access_protected else checks,
             }
     except Exception as exc:  # noqa: BLE001 - deployment freshness should degrade gracefully.
         return {
@@ -3546,6 +3567,21 @@ def _probe_html_features(url: str, timeout: float, features: dict[str, str]) -> 
             "elapsed_ms": round((time.perf_counter() - started) * 1000),
             "checks": [{"name": name, "ok": False} for name in features],
         }
+
+
+def _is_cloudflare_access_interstitial(final_url: str, body: str) -> bool:
+    parsed = urlparse(final_url)
+    access_host = parsed.hostname or ""
+    access_route = parsed.path.startswith("/cdn-cgi/access/")
+    access_body = (
+        "<title>Sign in ・ Cloudflare Access</title>" in body
+        or "<title>Sign in · Cloudflare Access</title>" in body
+    )
+    return bool(
+        (access_host.endswith(".cloudflareaccess.com") and access_route)
+        or (access_route and access_body)
+        or access_body
+    )
 
 
 def _probe_http(url: str, timeout: float) -> dict:
