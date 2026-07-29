@@ -3,7 +3,8 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-07-28)
+## 现在在哪里(2026-07-29)
+- #416 已定位并修复生产成交到派生日账本的长期断链：账本重建过去只读 legacy machine fills，忽略 Nautilus 终态周期包，因此真实成交会被稳定覆盖为 0。现在仅在终态包哈希链、closed 状态和 reconciliation 全部验证后投影真实 P&L/成交/填单计数；历史 fills/trades/周期包保持不可变，派生账本可安全重建。
 - 当前 Cloud Paper 已按新鲜 AI 建议启动中性稳健 Grid（#408）：evaluation=`ai-eval-d539413e2589488a`、StrategyPlan=`strategy-plan-2026-07-28_DAY-3-4fbccf9b` v3、risk decision=`risk-decision-9caee40ee8f9287a09ad6d558d6b76937f4f51c14fbe110ab5ec2c0add7c0d66`。确定性规格为 38 格、每格约 5,049.89 USD、最低计划净利约 10.01 USD/格、实际杠杆约 9.59x；原子启动创建/接受 38/38 张 Paper 委托，权威生命周期已有 38 条 `armed`，runtime=`running`、tick=`ready`、行情 fresh、0 当前计划持仓。当前计划真实 fill/trade 仍为 0；历史累计 64 fills/29 trades 不得计作今日证据。
 - AI recommendation provider 的 Mac-only 硬编码已由 #409/#410 修复并合入 `main@68754a5`：默认命令改为可配置的 `codex`，缺失/不可执行/超时/失败/非法输出均有稳定 fail-closed 机器码；credential-free attended bridge 以精确 Prompt SHA 和原子 JSON 回传隔离模型凭据。正在运行的 Cloud checkout 仍保持 source-attested `140c683`，本条合并尚未部署；必须等生命周期安全窗口按 source-bound release 更新，不能用改工作树或重启 tick 的方式打断活动网格。
 - Cloud M6c 已完成唯一 Paper scheduler owner 切换并部署 `main@140c683`：Alibaba Cloud `cloud-primary` 为 active owner（epoch 3），Mac tick/report/feed/dead-man jobs 保持卸载且不存在自动 failback。Cloud live-tick、24 小时报表、每日自复盘、备份与 dead-man 五个 systemd timers 均 enabled/active；公网 Dashboard、Access gateway、Cloudflare tunnel 与 datafeed services 均 active。最终证据 soak `soak-20260728T043856Z-0329916e` 正在运行，24 小时最低窗口于 2026-07-29 12:38:56（北京）结束；本次切换未启动 Grid/DCA、未创建订单、未改变持仓。
@@ -58,6 +59,9 @@
 完整的 expectation、当前 65% 基线、Milestone/Epic/Story 合同和审核顺序见 [`docs/plans/implementation-plan-2026-07-24.md`](docs/plans/implementation-plan-2026-07-24.md)。已批准按文档顺序分阶段执行；attended Paper 已获 Park 授权但每次仍须通过实时安全 preflight，真钱仍需独立人工授权。
 
 ## Appendix — 历史记录(只追加,原文搬运,不删除)
+
+### 2026-07-29 逐票记录
+- #416: 生产 Paper 日账本改从验证通过的终态周期包投影执行事实；根因、下游影响与重建边界见 [`docs/evidence/issue-416-daily-ledger-root-cause.md`](docs/evidence/issue-416-daily-ledger-root-cause.md)。
 
 ### 2026-07-22/23 逐票记录(蒸馏于 2026-07-23,原正文条目原样保留)
 - Goldbot V5 已部署代码提交 `main@890aa89`(DCA 基线 `1b5fcd9`);部署与浏览器验收期间保留原 Paper Grid 运行态,15 张已接受挂单、0 活跃持仓,未执行启动、停止、撤单或平仓。

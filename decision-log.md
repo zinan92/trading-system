@@ -11758,3 +11758,38 @@ auditable datafeed port; broker execution remains a separate port.
 - A verified Cloud backup completed, all five Cloud timers are enabled, the
   authenticated Dashboard services are active, and the external dead-man
   endpoint accepted its explicit degraded-health signal.
+
+# 2026-07-29 — Project production execution from verified terminal packages
+
+## Decision
+
+- Daily and weekly machine ledgers discover production terminal cycle packages
+  in addition to legacy simulation fill files.
+- A terminal package may override legacy machine-fill projection only after
+  its complete append-only hash chain verifies, its status is `closed`, and
+  execution reconciliation is `ok` without issues.
+- The derived ledger records realized P&L, closed-trade count, fill count and
+  the selected source. Historical rebuilds may replace only derived
+  daily/weekly ledger files; fills, trades, Nautilus snapshots, cycle records
+  and terminal packages remain immutable.
+
+## Gotchas
+
+- Production Nautilus Paper and the legacy machine simulator intentionally use
+  different stores. Treating an empty legacy fill file as production truth
+  repeatedly converted valid production trades into zero during every tick.
+- Rollover packages production execution after the legacy review closes, so
+  the package-aware projection belongs in the subsequent ledger rebuild, not
+  in a guessed pre-package compatibility write.
+- A corrupt package must stop the ledger phase and age the tick heartbeat. A
+  silent fallback to legacy zero would recreate the original false-health
+  failure.
+- Correcting derived ledger history changes NAV and any ledger-count consumer.
+  It does not authorize rewriting terminal reviews or auto-promoting a Shadow
+  strategy.
+
+## Verification
+
+- Focused scoring, cycle-runner and terminal-package suites prove exact
+  non-zero projection from a verified package while preserving legacy and
+  recovery-replay behavior.
