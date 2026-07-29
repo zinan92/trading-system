@@ -12,10 +12,17 @@ from services.scheduler_ownership import SchedulerOwnershipStore
 
 
 class FakeLaunchctl:
-    def __init__(self, *, loaded: bool = True, fail_label: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        loaded: bool = True,
+        fail_label: str = "",
+        state_vocabulary: str = "words",
+    ) -> None:
         self.loaded = {label: loaded for label in FOCUS_SCHEDULE_LABELS}
         self.disabled = {label: False for label in FOCUS_SCHEDULE_LABELS}
         self.fail_label = fail_label
+        self.state_vocabulary = state_vocabulary
         self.commands: list[list[str]] = []
 
     def __call__(self, command: list[str], **_: object) -> subprocess.CompletedProcess:
@@ -24,8 +31,13 @@ class FakeLaunchctl:
         target = command[-1]
         label = target.rsplit("/", 1)[-1].removesuffix(".plist")
         if action == "print-disabled":
+            def _value(value: bool) -> str:
+                if self.state_vocabulary == "booleans":
+                    return str(value).lower()
+                return "disabled" if value else "enabled"
+
             text = "\n".join(
-                f'    "{item}" => {str(value).lower()}'
+                f'    "{item}" => {_value(value)}'
                 for item, value in self.disabled.items()
             )
             return subprocess.CompletedProcess(command, 0, stdout=text, stderr="")
@@ -137,3 +149,13 @@ def test_isolate_refuses_while_local_owner_is_active(tmp_path: Path) -> None:
     assert result["status"] == "blocked"
     assert result["blocker"] == "local_scheduler_ownership_not_paused"
     assert not any(command[1] == "disable" for command in fake.commands)
+
+
+def test_legacy_boolean_disabled_vocabulary_remains_supported(
+    tmp_path: Path,
+) -> None:
+    fake = FakeLaunchctl(state_vocabulary="booleans")
+    _paused_owner(tmp_path)
+    result = _service(tmp_path, fake).isolate()
+    assert result["status"] == "pass"
+    assert all(item["disabled"] is True for item in result["after"])

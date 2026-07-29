@@ -11983,3 +11983,24 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused tests cover exact-allowlist isolation, simulated login persistence,
   explicit owner-gated restore, active-owner refusal and partial command
   failure.
+
+# 2026-07-29 — Parse launchd persistent state by observed vocabulary
+
+## Decision
+
+- The Mac Paper scheduler receipt accepts the current macOS
+  `enabled`/`disabled` vocabulary and the legacy `true`/`false` vocabulary
+  emitted by `launchctl print-disabled`.
+- Any absent label, unknown value or command failure remains `None` and blocks
+  verification.
+
+## Gotchas
+
+- `launchctl disable` succeeded for all five labels, but a boolean-only parser
+  turned the subsequent correct `disabled` output into unknown. Command success
+  and receipt verification are separate evidence surfaces.
+
+## Verification
+
+- Focused tests cover current word values, legacy boolean values, persistent
+  login simulation and unknown/failure fail-closed behavior.

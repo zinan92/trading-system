@@ -165,15 +165,16 @@ class MacPaperSchedulerIsolation:
                 ["launchctl", "print", f"gui/{self.uid}/{label}"]
             )
             match = re.search(
-                rf'"{re.escape(label)}"\s*=>\s*(true|false)',
+                rf'"{re.escape(label)}"\s*=>\s*(true|false|enabled|disabled)',
                 disabled_text,
             )
+            disabled_value = match.group(1) if match else ""
             rows.append(
                 {
                     "label": label,
                     "loaded": loaded_result.returncode == 0,
                     "disabled": (
-                        match.group(1) == "true"
+                        disabled_value in {"true", "disabled"}
                         if disabled_result.returncode == 0 and match
                         else None
                     ),
