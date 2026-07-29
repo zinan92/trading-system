@@ -5057,3 +5057,52 @@ def test_concurrent_refresh_cannot_override_started_plan_or_create_two_active_pl
     assert orders
     assert all(order["strategy_plan_id"] == active[0]["strategy_plan_id"] for order in orders)
     assert all(result.get("strategy_plan_id") for result in results)
+
+
+def test_suspend_entries_cancels_exact_entries_and_preserves_protection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orders = [
+        {"order_id": "entry-1", "state": "accepted", "event": "entry"},
+        {"order_id": "target-1", "state": "accepted", "event": "target"},
+        {"order_id": "stop-1", "state": "accepted", "event": "stop"},
+    ]
+
+    class Adapter:
+        name = "legacy_paper"
+
+        def snapshot(self, _cycle_id):
+            return {"orders": [dict(row) for row in orders], "positions": []}
+
+        def cancel_orders(self, _cycle_id, *, order_ids, **_kwargs):
+            for row in orders:
+                if row["order_id"] in order_ids:
+                    row["state"] = "cancelled"
+            return {
+                "cancelled_order_ids": list(order_ids),
+                "cancelled_order_count": len(order_ids),
+            }
+
+        def reconcile(self, _cycle_id):
+            return {"status": "ok"}
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: Adapter(),
+    )
+    plane = StrategyControlPlane(tmp_path / "outputs")
+
+    result = plane.control(
+        "2026-07-05_DAY",
+        "suspend_entries",
+        {"order_ids": ["entry-1"]},
+        now="2026-07-05T02:00:00+00:00",
+    )
+
+    assert result["cancelled_entry_order_ids"] == ["entry-1"]
+    assert {row["order_id"] for row in orders if row["state"] == "accepted"} == {
+        "target-1",
+        "stop-1",
+    }

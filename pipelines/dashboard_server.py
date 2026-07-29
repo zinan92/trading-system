@@ -1388,13 +1388,13 @@ def build_strategy_console_control_response(
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
     action = str(payload.get("action") or "").lower()
-    safe_control = action in {"stop", "cancel_all"}
+    safe_control = action in {"stop", "cancel_all", "suspend_entries"}
     # The chart selector is display-only. Production planning always receives
     # the fixed 1m execution tape. Grid geometry needs only D1/4H; the AI
     # recommendation path separately requires D1/4H/1H/15m.
     if market is not None:
         trusted_market = dict(market)
-    elif action == "cancel_all":
+    elif action in {"cancel_all", "suspend_entries"}:
         trusted_market = {}
     elif action == "stop":
         try:
@@ -1441,6 +1441,26 @@ def build_strategy_console_control_response(
             **dict(history.get("account") or {}),
             "accounting_snapshot": dict(history.get("accounting_snapshot") or {}),
         }
+    if action == "refresh_recommendation" and account is None:
+        execution_snapshot = build_configured_execution_engine_adapter(
+            output,
+            config=dualtrack_config(),
+        ).snapshot(cycle_id)
+        trusted_account = {
+            **dict(trusted_account or {}),
+            "execution": {
+                "open_positions": [
+                    dict(row)
+                    for row in execution_snapshot.get("positions") or []
+                    if str(row.get("status") or "").lower() == "open"
+                ],
+                "accepted_orders": [
+                    dict(row)
+                    for row in execution_snapshot.get("orders") or []
+                    if str(row.get("state") or "").lower() == "accepted"
+                ],
+            },
+        }
     plane = StrategyControlPlane(output)
     if action == "refresh_recommendation":
         contexts = dict(trusted_market.get("strategy_timeframes") or {})
@@ -1470,7 +1490,11 @@ def build_strategy_console_control_response(
             raise ValueError(f"AI recommendation unavailable: {exc}") from exc
         preview = plane.preview(
             cycle_id,
-            {"direction": recommendation["direction"], "style": recommendation["style"]},
+            {
+                "direction": recommendation["direction"],
+                "style": recommendation["style"],
+                "strategy_type": recommendation["strategy_type"],
+            },
             market=trusted_market,
             account=trusted_account,
         )

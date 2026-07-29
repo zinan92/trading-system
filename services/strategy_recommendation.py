@@ -314,7 +314,7 @@ class StrategyRecommendationService:
 完整 D1、4H、1H、15m 可信行情与指标: {json.dumps(contexts, ensure_ascii=False, sort_keys=True)}
 确定性评估框架（必须按此顺序解释，不可绕过）: {json.dumps(framework, ensure_ascii=False, sort_keys=True)}
 当前生产计划: {json.dumps(current_plan, ensure_ascii=False, sort_keys=True)}
-账户状态: {json.dumps(account, ensure_ascii=False, sort_keys=True)}
+账户与权威执行状态（包括 open_positions / accepted_orders）: {json.dumps(account, ensure_ascii=False, sort_keys=True)}
 上一周期复盘: {json.dumps(review, ensure_ascii=False, sort_keys=True)}
 
 只输出 JSON 对象，字段必须为：
@@ -332,6 +332,7 @@ class StrategyRecommendationService:
 4. 材料冲突时必须写明冲突；信息不足时必须明确说明，禁止静默补全。
 5. 只输出 JSON，不要 markdown。
 6. 长期位置是默认方向倾向；趋势阶段只决定更适合 Grid 还是 DCA。不得把 DCA 写成自动启用，也不得绕过确定性 Range、格子、杠杆和风险计算。
+7. 必须先检查账户里的 open_positions。若建议方向与已有持仓相反，明确标注冲突；不得建议自动平仓、反手、对冲或删除既有 TP/SL。
 """
 
     def _rule_score(self, contexts: dict[str, Any], *, direction: str, style: str) -> dict[str, float]:

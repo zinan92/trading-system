@@ -39,6 +39,7 @@ from services.paper_release_receipt import (
     PaperServiceBootGate,
 )
 from services.cloud_service_boot import CloudPaperServiceBootGate
+from services.cycle_decision import CycleDecisionCoordinator
 from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
@@ -775,6 +776,17 @@ class DualTrackCycleRunner:
             {"runner": "dualtrack-live-tick", "ledger_refreshed": True},
             observed_at=now,
         )
+        if bool((self.config.get("cycle_decision") or {}).get("enabled")):
+            cycle_decision = self._live_tick_phase(
+                "cycle_decision",
+                "Inspect the current cycle decision receipt; never replay a control action for the same cycle.",
+                lambda: self._ensure_cycle_decision(window.cycle_id, now=now),
+            )
+        else:
+            cycle_decision = {
+                "status": "disabled",
+                "reason": "cycle_decision_orchestration_disabled",
+            }
         return {
             "event": "live_tick",
             "as_of": now.isoformat(),
@@ -784,7 +796,51 @@ class DualTrackCycleRunner:
             "intraday": intraday,
             "ledger_refreshed": True,
             "ledger_daily_count": len(ledger.get("daily") or []),
+            "cycle_decision": cycle_decision,
         }
+
+    def _ensure_cycle_decision(
+        self,
+        cycle_id: str,
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        """Create the cycle's sole Paper decision after a complete fresh tick."""
+
+        # Local import keeps the HTTP composition layer out of runner module
+        # import time while reusing the exact same trusted market/account and
+        # control path as the Dashboard.
+        from pipelines.dashboard_server import build_strategy_console_control_response
+
+        plane = StrategyControlPlane(self.output_root)
+        snapshot = self.execution.snapshot(cycle_id)
+        as_of = now.isoformat()
+        actor = {
+            "type": "scheduler",
+            "id": "dualtrack-live-tick",
+            "source": "cycle_decision_orchestrator",
+        }
+
+        def invoke(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+            return build_strategy_console_control_response(
+                {
+                    **dict(payload),
+                    "cycle_id": cycle_id,
+                    "as_of": as_of,
+                    "action": action,
+                },
+                output_root=self.output_root,
+                actor=actor,
+            )
+
+        return CycleDecisionCoordinator(self.output_root).ensure(
+            cycle_id,
+            now=as_of,
+            plane=plane,
+            execution_snapshot=snapshot,
+            refresh_recommendation=lambda: invoke("refresh_recommendation", {}),
+            control=invoke,
+        )
 
     @staticmethod
     def _live_tick_phase(phase: str, next_action: str, operation):

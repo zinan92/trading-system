@@ -46,7 +46,7 @@
 - 只读监测当前 `strategy-plan-2026-07-29_DAY-2-52d364d4` 的 TP/SL/循环生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改 StrategyPlan。现有 1 个真实 fill 已满足 #408 的“当前计划成交证据”，后续 accepted/armed 仍不得冒充新增成交。
 - 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。
 - 监测自然 tick 单次耗时和 `late_ignored` 数量；如果再发生 timeout、不可变成交回归或执行/会计对账漂移，按独立缺陷 Issue fail-closed 处理，不得重放控制动作。
-- #415 按已审核合同实现“每周期唯一决策记录 + 无手工计划时自动 AI 建议”；#414 继续独立排期且不混入。真钱/live 仍需 Park 本人 `park-approved`。
+- #415 已实现“每周期唯一决策记录 + 无手工计划时自动 AI 建议”：完整 tick 后复用正常预览/启动闸，需要人工风险确认或存在仓位方向冲突时记录明确不执行；#414 继续独立排期且不混入。真钱/live 仍需 Park 本人 `park-approved`。
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
 - M3-05:审计当前生产策略摘要与持仓/委托/成交表的字段、计数、对齐和桌面可读性；只补复现的完整性或可理解性缺口。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
@@ -61,6 +61,7 @@
 ## Appendix — 历史记录(只追加,原文搬运,不删除)
 
 ### 2026-07-29 逐票记录
+- #415: 每个 DAY/NIGHT Paper 周期现在必须有且仅有一条不可变决策；完整 live tick 后若无人工决策会生成新 AI 建议并走正常 `prepare_start → start`。人工风险确认不得自动代签；已有持仓与新方向冲突时只按精确 ID 撤掉待成交入场单，保护单身份必须保持不变，不平仓、不反手、不对冲、不创建新单，并等待自然退出。Cloud health 会将缺失或重复决策标为 blocked。
 - #413: 12 小时周期边界在且仅在当前周期 active StrategyPlan 显式引用旧计划、执行 tick/行情新鲜、Nautilus 新命名空间对账通过且 accepted order/open position/Grid lifecycle ID 全部不变时执行 Paper handoff；旧周期以 `terminal_mode=handed_off` 封包，realized 留旧账、unrealized 随仓位进新账。任何缺项保留原安全撤单/平仓路径并记录确切原因。
 - #433: Dashboard 生产运行状态新增一行 `策略运行占比 24h / 7d`；只按 accepted control event 中可证明的 `actual_state=running` 区间计时，进程在线、rejected 动作与无法证明的窗口前段均不冒充策略运行，证据不足显示 `--`。
 - #431: Mac Paper 隔离 receipt 兼容当前 macOS `launchctl print-disabled` 的 `enabled/disabled` 输出及旧式 `true/false`；缺 label 或未知值仍 fail-closed，不会把命令成功冒充成验证成功。

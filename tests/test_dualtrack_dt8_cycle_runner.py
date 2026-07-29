@@ -1316,6 +1316,56 @@ def test_live_tick_rejects_one_minute_protective_mark_older_than_three_minutes(t
     }
 
 
+def test_complete_live_tick_records_cycle_decision_after_heartbeat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = deepcopy(TEST_CONFIG)
+    config["cycle_decision"] = {"enabled": True}
+    runner = DualTrackCycleRunner(
+        output_root=tmp_path / "outputs",
+        market_db=tmp_path / "market.db",
+        config=config,
+    )
+    order = []
+    monkeypatch.setattr(runner, "_lifecycle_results", lambda _now: [])
+    monkeypatch.setattr(
+        runner,
+        "_sweep_active_human_protective_exits",
+        lambda *args, **kwargs: {"status": "skipped"},
+    )
+    monkeypatch.setattr(
+        runner,
+        "sync_obsidian_human_plans",
+        lambda **kwargs: {"status": "skipped"},
+    )
+    monkeypatch.setattr(
+        runner,
+        "intraday_tick",
+        lambda **kwargs: {"status": "skipped"},
+    )
+    monkeypatch.setattr(
+        runner.scorer,
+        "rebuild_ledgers",
+        lambda: {"daily": []},
+    )
+    monkeypatch.setattr(
+        runner,
+        "_write_runner_state",
+        lambda *args, **kwargs: order.append("heartbeat"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_ensure_cycle_decision",
+        lambda *args, **kwargs: order.append("decision") or {"status": "recorded"},
+    )
+
+    result = runner.live_tick(as_of="2026-07-05T01:02:00+00:00")
+
+    assert order == ["heartbeat", "decision"]
+    assert result["cycle_decision"]["status"] == "recorded"
+
+
 def test_d8_3_intraday_tick_is_idempotent_for_same_bar_set(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)
