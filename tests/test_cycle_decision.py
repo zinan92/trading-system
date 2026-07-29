@@ -381,4 +381,52 @@ def test_zero_order_start_is_recorded_as_blocked_and_never_retried(
     assert calls == ["prepare_start", "start"]
     assert first["decision"]["terminal_status"] == "blocked"
     assert first["decision"]["reason_code"] == "paper_start_incomplete"
+    assert "complete N/N" in first["decision"]["reason"]
+    assert "Do not retry" in first["decision"]["next_action"]
     assert second["status"] == "existing"
+
+
+def test_known_market_move_blocker_has_operator_reason_and_next_action(
+    tmp_path: Path,
+) -> None:
+    def control(action, _payload):
+        if action == "prepare_start":
+            raise ValueError("prepared_start_market_moved")
+        pytest.fail("start must not run")
+
+    result = CycleDecisionCoordinator(tmp_path).ensure(
+        CYCLE,
+        now=NOW,
+        plane=FakePlane(),
+        execution_snapshot={"orders": [], "positions": []},
+        refresh_recommendation=_evaluation,
+        control=control,
+    )
+
+    decision = result["decision"]
+    assert decision["terminal_status"] == "blocked"
+    assert decision["reason_code"] == "prepared_start_market_moved"
+    assert "trusted market moved" in decision["reason"]
+    assert "do not replay" in decision["next_action"].lower()
+
+
+def test_unknown_blocker_is_bounded_and_operator_readable(tmp_path: Path) -> None:
+    result = CycleDecisionCoordinator(tmp_path).ensure(
+        CYCLE,
+        now=NOW,
+        plane=FakePlane(),
+        execution_snapshot={"orders": [], "positions": []},
+        refresh_recommendation=lambda: (_ for _ in ()).throw(
+            RuntimeError("unexpected_detail:secret-like-text")
+        ),
+        control=lambda _action, _payload: {},
+    )
+
+    decision = result["decision"]
+    assert decision["reason_code"] == "unexpected_detail"
+    assert decision["reason"] == (
+        "The automatic Paper cycle decision was blocked by "
+        "RuntimeError (unexpected_detail)."
+    )
+    assert "secret-like-text" not in decision["reason"]
+    assert "do not replay" in decision["next_action"].lower()

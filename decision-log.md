@@ -12150,3 +12150,27 @@ auditable datafeed port; broker execution remains a separate port.
   starting without a second evaluation, stale/provider refusal with zero
   orders, existing-running adoption, zero-order incomplete start, five-minute
   stall detection, provider timeout wiring and canonical read-model exposure.
+
+# 2026-07-29 — Cycle blocker codes require operator guidance
+
+## Decision
+
+- A cycle-decision machine code is an audit identity, not a human explanation.
+  Known prepare/start safety refusals map to a bounded explanation and a
+  concrete no-replay next action while preserving the original code.
+- Unknown exceptions remain fail-closed, but their operator reason includes
+  only the exception type and stable code. Raw exception details are not
+  copied into the read-model because they may be noisy or secret-bearing.
+
+## Gotchas
+
+- `prepared_start_market_moved` is a valid blocked decision, not permission to
+  refresh and retry the same cycle. The plan remains stopped with zero new
+  orders.
+- Human-readable text must not replace the machine code; both are required for
+  reliable automation and operator comprehension.
+
+## Verification
+
+- Focused tests cover known market-move guidance, unknown-error redaction, and
+  incomplete N/N start guidance.
