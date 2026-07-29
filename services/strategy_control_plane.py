@@ -2085,6 +2085,74 @@ class StrategyControlPlane:
                 account=account or {},
                 now=now,
             )
+        if action == "suspend_entries":
+            adapter = build_configured_execution_engine_adapter(
+                self.output_root,
+                config=self.config,
+            )
+            requested_ids = {
+                str(value)
+                for value in body.get("order_ids") or []
+                if str(value)
+            }
+            if not requested_ids:
+                raise ValueError("suspend_entries requires exact order IDs")
+            before = adapter.snapshot(cycle_id)
+            accepted_entries = {
+                str(row.get("order_id") or ""): dict(row)
+                for row in before.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+                and str(row.get("event") or "entry").lower() == "entry"
+                and str(row.get("order_id") or "")
+            }
+            if not requested_ids <= set(accepted_entries):
+                raise ValueError("suspend_entries may cancel accepted entry orders only")
+            receipt = adapter.cancel_orders(
+                cycle_id,
+                order_ids=sorted(requested_ids),
+                ts=_timestamp(now),
+                reason="cycle_direction_conflict",
+            )
+            execution_event = self._settle_safe_action_commands(
+                adapter,
+                cycle_id,
+            )
+            after = adapter.snapshot(cycle_id)
+            still_accepted = {
+                str(row.get("order_id") or "")
+                for row in after.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+            }
+            if requested_ids & still_accepted:
+                raise RuntimeError("suspend_entries left accepted entry orders")
+            before_protection = {
+                str(row.get("order_id") or "")
+                for row in before.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+                and str(row.get("event") or "entry").lower() != "entry"
+            }
+            after_protection = {
+                str(row.get("order_id") or "")
+                for row in after.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+                and str(row.get("event") or "entry").lower() != "entry"
+            }
+            if before_protection != after_protection:
+                raise RuntimeError("suspend_entries changed protective orders")
+            reconciliation = adapter.reconcile(cycle_id)
+            if reconciliation.get("status") != "ok":
+                raise ValueError("paper ledger reconciliation failed")
+            return {
+                "action": action,
+                "cancelled_entry_order_ids": sorted(requested_ids),
+                "cancelled_orders": int(
+                    receipt.get("cancelled_order_count")
+                    or len(receipt.get("cancelled_order_ids") or [])
+                ),
+                "execution_receipt": receipt,
+                "execution_event": execution_event,
+                "reconciliation": reconciliation,
+            }
         if action == "cancel_all":
             adapter = build_configured_execution_engine_adapter(self.output_root, config=self.config)
             receipt = adapter.cancel_orders(
@@ -6162,6 +6230,7 @@ def normalize_proposal(payload: dict[str, Any], *, now: str | None = None, legac
         "created_at": _timestamp(now or payload.get("locked_at")),
         "direction": str(payload.get("direction") or "neutral"),
         "style": str(payload.get("style") or "steady"),
+        "strategy_type": str(payload.get("strategy_type") or "grid").lower(),
         "range": dict(payload.get("range") or {}),
         "key_levels": list(payload.get("key_levels") or []),
         "grid": dict(payload.get("grid") or {"orders": list(payload.get("grid_orders") or [])}),

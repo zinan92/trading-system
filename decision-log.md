@@ -12066,3 +12066,42 @@ auditable datafeed port; broker execution remains a separate port.
   contract fallback, package-failure recovery without repeating handoff,
   control-plane adoption, terminal handoff packaging, and Nautilus
   order/position/lifecycle identity plus realized/unrealized cycle splitting.
+
+# 2026-07-29 — Require one durable Paper decision per cycle
+
+## Decision
+
+- Each DAY/NIGHT cycle owns one immutable decision record. Executed,
+  deliberately not executed, and existing-position conflict are explicit
+  outcomes; a missing record is a Cloud health blocker.
+- After every complete live tick, a cycle without a manual decision requests a
+  fresh AI recommendation and uses the same trusted market/account,
+  `prepare_start`, risk and `start` controls as the Dashboard.
+- The scheduler never signs human-only risk acknowledgements. A required
+  confirmation or any safety/provider/control failure becomes one
+  `not_executed` decision with code, reason and next action.
+- An opposite recommendation while a position is open cancels only exact
+  still-accepted entry IDs, records a conflict and creates no orders. Existing
+  TP/SL identities and natural exit ownership remain intact; v1 never
+  flattens, reverses or hedges automatically.
+
+## Gotchas
+
+- Writing the heartbeat before cycle decision orchestration is intentional:
+  `prepare_start` consumes a complete current tick, while the decision phase
+  must not manufacture heartbeat health before lifecycle and ledger work pass.
+- A running plan that predates this schema must be adopted as an executed
+  decision on the first upgraded tick; trying to start it again would
+  misclassify valid exposure and risk duplicate controls.
+- AI proposals may recommend DCA, but DCA's explicit human risk confirmation
+  remains human-only. The valid automated outcome in that case is
+  `risk_confirmation_required`, not a fabricated acknowledgement.
+- Entry suspension must compare protective-order identities before and after;
+  a broad cancel would silently remove TP/SL and is forbidden.
+
+## Verification
+
+- Focused tests cover immutable uniqueness, complete Grid start, human-risk
+  refusal, stale-tick/provider failure recording, manual/running adoption,
+  opposite-direction open-position conflict, health detection and live-tick
+  ordering.

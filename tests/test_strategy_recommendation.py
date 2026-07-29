@@ -49,7 +49,16 @@ def test_strategy_recommendation_uses_fixed_multitimeframe_input_and_rule_score(
             "15m": {"provider": "derived:binance_usdm", "is_synthetic": False, "bars": _bars("15m", 80, 4045, 2)},
         },
         current_plan={"direction": "neutral", "style": "steady", "version": 3},
-        account={"equity": 10_000, "margin": 0},
+        account={
+            "equity": 10_000,
+            "margin": 0,
+            "execution": {
+                "open_positions": [
+                    {"position_id": "position-1", "side": "long", "status": "open"}
+                ],
+                "accepted_orders": [],
+            },
+        },
         review={"summary": "上一周期方向失误"},
         now="2026-07-05T02:00:00+00:00",
     )
@@ -68,6 +77,8 @@ def test_strategy_recommendation_uses_fixed_multitimeframe_input_and_rule_score(
     assert result["strategy_type"] == "grid"
     assert "完整 D1、4H、1H、15m" in prompts[0]
     assert "不得输出概率或胜率" in prompts[0]
+    assert "position-1" in prompts[0]
+    assert "不得建议自动平仓、反手、对冲或删除既有 TP/SL" in prompts[0]
     receipt = result["evaluation_receipt"]
     assert receipt["schema_version"] == "strategy-ai-evaluation-v2"
     assert receipt["status"] == "success"

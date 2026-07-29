@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services.cloud_health import CloudPaperHealth, _hash_json
+from services.cycle_decision import CycleDecisionLedger
 from services.journal_store import write_json
 
 
@@ -29,6 +30,15 @@ def _healthy(tmp_path: Path) -> CloudPaperHealth:
                 "previous_runtime_unresolved": False,
             }
         ],
+    )
+    CycleDecisionLedger(output).record(
+        {
+            "cycle_id": "2026-07-28_DAY",
+            "recorded_at": "2026-07-28T01:59:00+00:00",
+            "source": "auto_ai",
+            "outcome": "executed",
+            "strategy_plan_id": "plan-1",
+        }
     )
     write_json(
         output
@@ -91,6 +101,7 @@ def test_cloud_health_separates_all_ready_layers(tmp_path: Path) -> None:
         "datafeed",
         "live_tick",
         "execution",
+        "cycle_decision",
         "reconciliation",
         "daily_self_review",
         "backup",
@@ -101,6 +112,21 @@ def test_cloud_health_separates_all_ready_layers(tmp_path: Path) -> None:
     assert result["dashboard_reachable_is_not_system_health"] is True
     assert result["control_actions_executed"] == 0
     assert result["secrets_included"] is False
+
+
+def test_missing_cycle_decision_is_blocked_and_detectable(tmp_path: Path) -> None:
+    health = _healthy(tmp_path)
+    health.output_root.joinpath(
+        "dualtrack",
+        "strategy_control",
+        "cycle_decisions",
+        "2026-07-28_DAY.json",
+    ).unlink()
+
+    result = health.run()
+
+    assert result["status"] == "blocked"
+    assert result["checks"]["cycle_decision"]["code"] == "cycle_decision_missing"
 
 
 def test_stale_tick_is_blocked_with_stage_and_next_action(tmp_path: Path) -> None:

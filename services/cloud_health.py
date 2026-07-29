@@ -11,6 +11,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from services.datafeed_market_repository import DatafeedMarketRepository
+from services.cycle_decision import CycleDecisionLedger
 from services.journal_store import load_json, write_json
 
 
@@ -89,6 +90,7 @@ class CloudPaperHealth:
             "datafeed": self._datafeed(observed),
             "live_tick": self._live_tick(observed),
             "execution": self._execution(),
+            "cycle_decision": self._cycle_decision(),
             "reconciliation": self._reconciliation(),
             "daily_self_review": self._daily_review(observed),
             "backup": self._backup(observed),
@@ -168,6 +170,38 @@ class CloudPaperHealth:
                 "age_seconds": round(age, 2),
                 "max_age_seconds": DATA_MAX_AGE_SECONDS,
             },
+        )
+
+    def _cycle_decision(self) -> dict[str, Any]:
+        runtime = _latest(
+            self.output_root / "dualtrack" / "strategy_control" / "runtime.json"
+        )
+        cycle_id = str(runtime.get("cycle_id") or "")
+        if not cycle_id:
+            return _check(
+                "cycle_decision",
+                "blocked",
+                code="cycle_decision_missing",
+                summary="Current Paper cycle has no durable strategy decision.",
+                next_action="Restore the current runtime identity and let one complete live tick record its decision.",
+            )
+        health = CycleDecisionLedger(self.output_root).health(cycle_id)
+        ready = health.get("status") == "ready"
+        return _check(
+            "cycle_decision",
+            "ready" if ready else "blocked",
+            code=str(health.get("code") or "cycle_decision_invalid"),
+            summary=(
+                "Current Paper cycle has exactly one durable strategy decision."
+                if ready
+                else "Current Paper cycle is missing one valid strategy decision."
+            ),
+            next_action=(
+                "No action."
+                if ready
+                else "Inspect the live-tick cycle-decision phase; do not replay control actions manually."
+            ),
+            evidence=health,
         )
 
     def _live_tick(self, now: datetime) -> dict[str, Any]:

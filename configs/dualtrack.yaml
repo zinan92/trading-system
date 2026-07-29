@@ -28,6 +28,9 @@
   "risk_policy": {
     "paper_grid": "paper_grid_risk"
   },
+  "cycle_decision": {
+    "enabled": true
+  },
   "market_session": {
     "enabled": false,
     "venue": "",
