@@ -44,7 +44,19 @@ class DashboardState(
         env_output_root = os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT")
         env_market_db = os.getenv("TRADING_ORCHESTRATOR_MARKET_DB")
         self.output_root = output_root or Path(env_output_root or str(ROOT / config.get("output_root", "outputs")))
-        db_value = market_db or Path(env_market_db or str(ROOT / config.get("local_market_db", "data/market_data.db")))
+        configured_market_db = ROOT / str(config.get("local_market_db", "data/market_data.db"))
+        # The Cloud EnvironmentFile keeps a local DB path for compatibility
+        # with jobs that still need an explicit SQLite destination. Dashboard
+        # diagnostics must not pass that deployment-specific path into the
+        # production market-data composition root: doing so is intentionally
+        # classified as a legacy-store request and rejected. An explicit
+        # constructor argument remains the isolated test/migration seam.
+        if market_db is not None:
+            db_value = Path(market_db)
+        elif bool((config.get("datafeed") or {}).get("enabled", False)):
+            db_value = configured_market_db
+        else:
+            db_value = Path(env_market_db or str(configured_market_db))
         self.market_db = db_value
 
     def snapshot(self, run_date: str) -> dict:

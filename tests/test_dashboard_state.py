@@ -1161,3 +1161,31 @@ def test_dashboard_state_summarizes_market_db_coverage(tmp_path: Path):
     assert state["market_db"]["gold_5m_official_rows"] == 1
     assert state["market_db"]["gold_5m_synthetic_rows"] == 1
     assert any(item["provider"] == "broker_csv" for item in state["market_db"]["bars"])
+
+
+def test_cloud_dashboard_ignores_legacy_market_db_env_when_datafeed_is_enabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import services.dashboard_state as dashboard_state
+    from services.market_data_access import market_data_repository
+    from services.datafeed_market_repository import DatafeedMarketRepository
+
+    monkeypatch.setenv(
+        "TRADING_ORCHESTRATOR_MARKET_DB",
+        "/var/lib/gridmind/data/market_data.db",
+    )
+    monkeypatch.setattr(
+        dashboard_state,
+        "load_pipeline_config",
+        lambda: {
+            "output_root": "outputs",
+            "local_market_db": "data/market_data.db",
+            "datafeed": {"enabled": True},
+        },
+    )
+
+    state = DashboardState(output_root=tmp_path / "outputs")
+
+    assert state.market_db == dashboard_state.ROOT / "data/market_data.db"
+    assert isinstance(market_data_repository(state.market_db), DatafeedMarketRepository)

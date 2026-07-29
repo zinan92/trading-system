@@ -11826,3 +11826,30 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused tests cover Cloud flat/open positions, stale evidence,
   reconciliation drift, identity mismatch, and legacy live-path
   non-regression.
+
+# 2026-07-29 — Keep formal Dashboard diagnostics on the datafeed port
+
+## Decision
+
+- When independent datafeed mode is enabled, the default `DashboardState`
+  composes market reads with the configured production market identity even
+  if a Cloud EnvironmentFile also exposes a deployment-specific SQLite path.
+- Explicit `market_db` constructor arguments remain the isolated
+  test/migration seam. They are not silently promoted to production data.
+- `/api/dashboard` retains its full/trader/ops/strategy response contracts;
+  `/api/trading-system/read-model` and V5 control behavior are unchanged.
+
+## Gotchas
+
+- `TRADING_ORCHESTRATOR_MARKET_DB` serves multiple older jobs, but in
+  datafeed-only production it is not authority to instantiate a legacy
+  market store. Passing `/var/lib/...` into the composition root correctly
+  triggered the production restriction and caused the diagnostic 500.
+- Fixing this at the legacy-store allowlist would weaken the architecture
+  boundary. The correct fix is to compose the Dashboard with the datafeed
+  port and keep explicit temporary paths restricted.
+
+## Verification
+
+- Focused Dashboard state, endpoint contract and GET-purity tests cover the
+  Cloud environment regression and full/trader/ops/strategy variants.
