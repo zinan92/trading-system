@@ -66,6 +66,157 @@ def _healthy_root(tmp_path: Path) -> tuple[Path, Path, str]:
     return root, db, run_date
 
 
+def _cloud_paper_snapshot(
+    root: Path,
+    *,
+    cycle_id: str = "2026-07-29_DAY",
+    positions: list[dict] | None = None,
+    reconciliation: dict | None = None,
+) -> Path:
+    position_rows = positions or []
+    fills = []
+    if position_rows:
+        position = position_rows[0]
+        fills = [{
+            "fill_id": "fill-entry-1",
+            "order_id": "order-entry-1",
+            "trade_id": position["trade_id"],
+            "event": "entry",
+            "side": "buy",
+            "price": position["entry_price"],
+            "quantity": position["quantity"],
+            "cost": 0,
+            "gross_pnl": 0,
+            "realized_pnl": 0,
+            "ts": position["entry_ts"],
+        }]
+    write_json(root / "cloud" / "scheduler_ownership" / "current.json", [{
+        "status": "active",
+        "active_owner_id": "cloud-primary",
+        "dual_owner_allowed": False,
+        "epoch": 3,
+    }])
+    write_json(root / "dualtrack" / "strategy_control" / "runtime.json", [{
+        "cycle_id": cycle_id,
+        "actual_state": "running",
+        "strategy_plan_id": "strategy-plan-cloud",
+    }])
+    path = root / "dualtrack" / "nautilus_authoritative" / "snapshots" / f"{cycle_id}.json"
+    write_json(path, [{
+        "schema_version": "dualtrack-execution-v1",
+        "engine": "nautilus_paper",
+        "cycle_id": cycle_id,
+        "orders": [],
+        "fills": fills,
+        "positions": position_rows,
+        "account": {
+            "starting_cash": 10000,
+            "cash": 10000,
+            "ending_cash": 10000,
+            "equity": 10000,
+            "realized_pnl": 0,
+            "unrealized_pnl": 0,
+            "fees": 0,
+            "margin": 400,
+            "exposure": 4000 if position_rows else 0,
+            "slippage": 0,
+            "funding": 0,
+        },
+        "pnl": {"realized": 0, "unrealized": 0, "total": 0},
+        "reconciliation": reconciliation or {"status": "ok", "issues": []},
+    }])
+    return path
+
+
+def test_cloud_paper_deadman_uses_authoritative_flat_snapshot(tmp_path: Path):
+    root, db, run_date = _healthy_root(tmp_path)
+    _cloud_paper_snapshot(root)
+
+    result = ExternalDeadmanPing(root, db, url="", position_url="").run(run_date)
+
+    assert result["severity"] == "normal"
+    assert result["exposure"]["has_open_position"] is False
+    assert result["exposure"]["position_unknown"] is False
+    assert result["exposure"]["source"] == "nautilus_authoritative.snapshot"
+    assert result["exposure"]["identity_matches"] is True
+    assert result["exposure"]["engine_reconciliation_status"] == "ok"
+    assert result["exposure"]["accounting_reconciliation_status"] == "pass"
+
+
+def test_cloud_paper_deadman_detects_authoritative_open_position(tmp_path: Path):
+    root, db, run_date = _healthy_root(tmp_path)
+    _cloud_paper_snapshot(root, positions=[{
+        "position_id": "position-1",
+        "trade_id": "trade-1",
+        "status": "open",
+        "side": "long",
+        "quantity": 1,
+        "remaining_quantity": 1,
+        "entry_price": 4000,
+        "entry_ts": _iso(2),
+    }])
+
+    result = ExternalDeadmanPing(root, db, url="", position_url="").run(run_date)
+
+    assert result["severity"] == "critical"
+    assert result["exposure"]["has_open_position"] is True
+    assert result["exposure"]["position_unknown"] is False
+    assert result["exposure"]["strategy_open_trade_count"] == 1
+
+
+def test_cloud_paper_deadman_fails_closed_for_stale_snapshot(tmp_path: Path):
+    root, db, run_date = _healthy_root(tmp_path)
+    path = _cloud_paper_snapshot(root)
+    stale = datetime.now(timezone.utc).timestamp() - 1200
+    os.utime(path, (stale, stale))
+
+    result = ExternalDeadmanPing(root, db, url="", position_url="").run(run_date)
+
+    assert result["severity"] == "critical"
+    assert result["exposure"]["position_unknown"] is True
+    assert result["exposure"]["reconciliation_freshness"]["reason_code"] == "paper_execution_snapshot_stale"
+
+
+def test_cloud_paper_deadman_fails_closed_for_reconciliation_drift(tmp_path: Path):
+    root, db, run_date = _healthy_root(tmp_path)
+    _cloud_paper_snapshot(root, reconciliation={"status": "drift", "issues": [{"code": "mismatch"}]})
+
+    result = ExternalDeadmanPing(root, db, url="", position_url="").run(run_date)
+
+    assert result["severity"] == "critical"
+    assert result["exposure"]["position_unknown"] is True
+    assert result["exposure"]["engine_reconciliation_status"] == "drift"
+
+
+def test_cloud_paper_deadman_fails_closed_for_identity_mismatch(tmp_path: Path):
+    root, db, run_date = _healthy_root(tmp_path)
+    path = _cloud_paper_snapshot(root)
+    rows = load_json(path)
+    rows[-1]["cycle_id"] = "2026-07-28_NIGHT"
+    write_json(path, rows)
+
+    result = ExternalDeadmanPing(root, db, url="", position_url="").run(run_date)
+
+    assert result["severity"] == "critical"
+    assert result["exposure"]["position_unknown"] is True
+    assert result["exposure"]["identity_matches"] is False
+
+
+def test_cloud_paper_deadman_fails_closed_for_malformed_accounting(tmp_path: Path):
+    root, db, run_date = _healthy_root(tmp_path)
+    path = _cloud_paper_snapshot(root)
+    rows = load_json(path)
+    rows[-1]["account"]["equity"] = "not-a-number"
+    write_json(path, rows)
+
+    result = ExternalDeadmanPing(root, db, url="", position_url="").run(run_date)
+
+    assert result["severity"] == "critical"
+    assert result["exposure"]["position_unknown"] is True
+    assert result["exposure"]["accounting_reconciliation_status"] == "missing"
+    assert result["exposure"]["accounting_error"].startswith("AccountingContractError:")
+
+
 def test_deadman_ping_without_url_is_recorded_but_not_sent(tmp_path: Path):
     root, db, run_date = _healthy_root(tmp_path)
 

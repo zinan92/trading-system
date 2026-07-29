@@ -11793,3 +11793,36 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused scoring, cycle-runner and terminal-package suites prove exact
   non-zero projection from a verified package while preserving legacy and
   recovery-replay behavior.
+
+# 2026-07-29 — Source Cloud dead-man exposure from authoritative Paper execution
+
+## Decision
+
+- When scheduler ownership is actively and exclusively `cloud-primary`, the
+  dead-man reads the current StrategyControl runtime identity and the matching
+  Nautilus authoritative snapshot instead of the live/real-money
+  reconciliation namespace.
+- Flat Paper exposure is normal only when the snapshot is fresh, its
+  cycle/engine identity matches, engine reconciliation is `ok`, and canonical
+  accounting reconciliation is `pass`. Every missing, stale, drifted or
+  identity-mismatched state remains unknown and therefore critical.
+- Non-Cloud and live/real-money modes retain the existing
+  `live_reconciliation.current` behavior unchanged.
+
+## Gotchas
+
+- A stopped or empty Paper runtime is not independently sufficient evidence of
+  flat exposure. The execution snapshot and both reconciliation layers must
+  agree.
+- Cloud mode is selected from the monotonic scheduler-ownership artifact, not
+  a hostname or filesystem heuristic. This prevents a local checkout from
+  accidentally changing the live/real-money dead-man source.
+- Snapshot file modification time is the freshness clock because the Nautilus
+  execution schema intentionally has no generated-at field; scheduled ticks
+  refresh this artifact even when no order state changes.
+
+## Verification
+
+- Focused tests cover Cloud flat/open positions, stale evidence,
+  reconciliation drift, identity mismatch, and legacy live-path
+  non-regression.
