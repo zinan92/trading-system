@@ -4,10 +4,11 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-29)
-- #416 已定位并修复生产成交到派生日账本的长期断链：账本重建过去只读 legacy machine fills，忽略 Nautilus 终态周期包，因此真实成交会被稳定覆盖为 0。现在仅在终态包哈希链、closed 状态和 reconciliation 全部验证后投影真实 P&L/成交/填单计数；历史 fills/trades/周期包保持不可变，派生账本可安全重建。
-- 当前 Cloud Paper 已按新鲜 AI 建议启动中性稳健 Grid（#408）：evaluation=`ai-eval-d539413e2589488a`、StrategyPlan=`strategy-plan-2026-07-28_DAY-3-4fbccf9b` v3、risk decision=`risk-decision-9caee40ee8f9287a09ad6d558d6b76937f4f51c14fbe110ab5ec2c0add7c0d66`。确定性规格为 38 格、每格约 5,049.89 USD、最低计划净利约 10.01 USD/格、实际杠杆约 9.59x；原子启动创建/接受 38/38 张 Paper 委托，权威生命周期已有 38 条 `armed`，runtime=`running`、tick=`ready`、行情 fresh、0 当前计划持仓。当前计划真实 fill/trade 仍为 0；历史累计 64 fills/29 trades 不得计作今日证据。
-- AI recommendation provider 的 Mac-only 硬编码已由 #409/#410 修复并合入 `main@68754a5`：默认命令改为可配置的 `codex`，缺失/不可执行/超时/失败/非法输出均有稳定 fail-closed 机器码；credential-free attended bridge 以精确 Prompt SHA 和原子 JSON 回传隔离模型凭据。正在运行的 Cloud checkout 仍保持 source-attested `140c683`，本条合并尚未部署；必须等生命周期安全窗口按 source-bound release 更新，不能用改工作树或重启 tick 的方式打断活动网格。
-- Cloud M6c 已完成唯一 Paper scheduler owner 切换并部署 `main@140c683`：Alibaba Cloud `cloud-primary` 为 active owner（epoch 3），Mac tick/report/feed/dead-man jobs 保持卸载且不存在自动 failback。Cloud live-tick、24 小时报表、每日自复盘、备份与 dead-man 五个 systemd timers 均 enabled/active；公网 Dashboard、Access gateway、Cloudflare tunnel 与 datafeed services 均 active。最终证据 soak `soak-20260728T043856Z-0329916e` 正在运行，24 小时最低窗口于 2026-07-29 12:38:56（北京）结束；本次切换未启动 Grid/DCA、未创建订单、未改变持仓。
+- Cloud Paper 当前部署为 `main@fcb0df3597acc9d989d3923e1025eac91fefa606`（#425），preflight 与 dashboard/access-gateway/dead-man/live-tick boot receipts 均绑定同一 source/tree。4 个常驻服务和 5 个 systemd timers 均 active；最近自然 tick 成功且 180 秒内新鲜，可信 Binance USD-M Futures 行情 fresh。
+- 今日新鲜 AI 建议 `ai-eval-4272ba2b41ca4382` 已经完整安全路径启动为中性稳健 Grid：StrategyPlan=`strategy-plan-2026-07-29_DAY-2-52d364d4` v2，38/38 委托创建并接受、38 条 lifecycle armed。当前仍为同一计划，runtime=`running`；已有 1 个当前计划真实 entry fill、1 个带 TP/SL 的 Paper 空头持仓与 37 张剩余委托，execution reconciliation=`ok`、canonical accounting=`pass`。2026-07-28 DAY 的 3 笔成交不计入今日计划证据。
+- #416/#417 已修复生产执行到派生日账本的长期断链：`2026-07-28_DAY` 现为 3 trades / 6 fills / `-7.47319148 USD`，来源为验证通过的终态 StrategyCyclePackage；原始 fills/trades/周期包未改写。NAV 与基于账本计数的复盘/推广聚合必须使用重建后的派生账本，既有终态复盘和 Shadow 原始证据保持不可变。
+- #406/#418、#407/#419、#420/#421 与 #422/#423 已部署：Cloud dead-man 使用当前 Paper 权威执行快照且未知仍 fail-closed；正式 Dashboard 诊断和策略控制台均返回 200；公网探针正确区分 Cloudflare Access 登录页；Linux Cloud preflight 对 29 个活动运行时文件执行 macOS 路径门禁且零违规。#424/#425 进一步把晚到行情保留为 `late_ignored`，防止重放回写既有 fill；当前 fill 时间仍保持 `2026-07-29T02:41:00Z`。
+- Cloud soak 仍未终态通过：第一份可证明完整 Cloud 北京自然日的 `report_date=2026-07-29` 日报/自复盘只能在 2026-07-30 01:10 后验收。当前 cloud-health 因 2026-07-28 自复盘不完整显示 degraded；这不是行情、tick、执行或对账故障，也不得降低完整自然日门槛。完整任务验收见 [`docs/evidence/cloud-paper-recovery-2026-07-29.md`](docs/evidence/cloud-paper-recovery-2026-07-29.md)。
 - 默认测试基线已与已合并合同重新对齐（#401）：Completion Audit 的 full/focus 调度标签包含 24 小时报表，Standard K-line 空十字线标签不再占位，Cloud 备份/预检的只读 SQLite seam 被精确登记；手工 Paper 订单仍由服务端风险事实裁决，最大计划损失保持 advisory，杠杆超限等硬闸保持 fail-closed。
 - Cloud M6a 已实现：部署 manifest 锁定 trading-system/datafeed 的精确 SHA 且不携带密钥或激活 scheduler；切换前机械要求 Paper stopped、0 已接受委托、0 开放持仓、execution reconciliation 通过、备份验证、Cloud preflight 同 SHA 通过且 Cloud tick 禁用。正向切换只能 `local active -> paused -> cloud active`，失败后双端 tick 保持禁用；rollback 只接受更高 epoch 的 paused 状态再恢复 local owner。
 - Cloud M5 已实现：公网链路固定为 `Cloudflare Access -> loopback 8766 allowlist gateway -> loopback 8765 Dashboard`，8100/8765 不公开暴露；gateway 只转发精确页面/API，控制请求必须通过 Access JWT 与操作者邮箱校验。`/api/trading-system/cloud-health` 分开报告行情、live-tick、执行、对账、每日复盘、备份、scheduler owner 与部署 SHA，Dashboard 生产状态卡显示 Cloud 7×24 总结；dead-man 的持久化回执不再包含 URL/token。
@@ -15,11 +16,9 @@
 - Cloud M3 已实现：每天 01:10（北京）在终态 24 小时报表之后生成不可变 JSON/Markdown 自复盘，分开记录 tick 连续性、执行/对账、StrategyPlan/lifecycle，并明确“做对/做错/明天行动”。缺失或哈希错误证据保持 unknown；所有行动均 `executed=false`，稳定 API 为 `/api/trading-system/daily-self-review`。
 - Cloud M2 已实现：systemd 可分别托管 loopback datafeed、Dashboard、one-shot live-tick、24 小时报表和 dead-man；Cloud 模式下 Dashboard/live-tick 只有在 preflight 与当前 clean SHA/tree 精确匹配时才启动。本阶段 installer 默认为 passive，只启动 datafeed，绝不激活 tick scheduler；卸载不触碰 `/var/lib/gridmind` 或 env。
 - Cloud M1 已实现：Linux Paper preflight 会在零控制动作下验证 clean SHA、Paper-only 标志、持久化目录、loopback 端口、datafeed/storage、Binance USD-M 最新/历史可信 K 线和独立 Nautilus runtime；任一失败均落明确 blocked receipt。云端 app/datafeed/Nautilus 三套隔离运行环境与非密钥路径合同见 [`deploy/cloud/`](deploy/cloud/)。
-- Always-on Cloud Paper 已进入实施合同阶段：[#384](https://github.com/zinan92/trading-system/issues/384) 定义 Linux 运行拓扑、独立 datafeed/Nautilus 依赖、持久化、单一调度器所有权、每日证据复盘和 24 小时关机验收；完整合同见 [`docs/plans/cloud-always-on-paper-2026-07-27.md`](docs/plans/cloud-always-on-paper-2026-07-27.md)。当前 Mac 调度器已恢复并连续通过自然 tick，但重启后 launchd LWCR 仍证明它只能作为迁移前桥接。
 - 进度: [实施进度页](docs/plans/implementation-progress-2026-07-24.md) 的 26 个已审核 story 已全部验证完成（**26/26，100%**）。M6-03 将 main SHA、发布前兼容性闸、健康/行情/执行分离、浏览器验收、证据落点及 Paper-only rollback 固化为 [release runbook](docs/runbooks/paper-release-rollback-v1.md)（[PR #365](https://github.com/zinan92/trading-system/pull/365)）。计划完成不等于自动启动或真实交易：后续每次 Paper 发布仍须按 runbook 的实时安全闸与证据步骤执行。
 - GitHub provenance: `main` 的 #223–#328 merge commits 仍完整，但对应 Issue/PR 元数据对象会返回 404；这是 GitHub 元数据缺口而非代码丢失。可访问的追踪入口为 [#330](https://github.com/zinan92/trading-system/issues/330)，完整 commit 索引与“先 API 读回再报告链接”规则见 [`docs/audits/github-provenance-222-329.md`](docs/audits/github-provenance-222-329.md)。
 - 架构:19 节 ports-and-adapters 重构已落地;DualTrack / Nautilus Paper 是权威验证场;live/真钱路径仍关闭。
-- 代码与部署: `main@f90814c`（#314 / 安全修复证据队列）已部署到本地 Paper Dashboard；只重启 Dashboard 服务，未重启行情调度器、Paper 执行引擎或 live 进程，也未接触交易所密钥。部署后 read-model 的修复队列为空且 `command_authority=false`、无自动 actuator；当前 Paper runtime=`stopped`、0 已接受委托、0 开放持仓。旧畸形 DCA 生命周期仅以明确 `unavailable` 告警保留审计，不会阻塞安全停止或让读模型整体失败。
 - Grid 全链路在 main:预览/风险确认/启动/循环重挂/收口;Grid 与 DCA 启动均要求 180 秒内完整 tick 心跳,旧周期未收口一律拒绝新启动;rollover 只停止/撤单/封包,下一周期必须操作者显式启动。tick 失败现会明确标记为行情/路由、生命周期、账本写入或调度器启动阶段并给出下一步；失败绝不写心跳，运行中失联显示「运行降级」。
 - DCA v1 就绪:做多/做空加仓、单张整轮 TP 世代随累计持仓更新(由行情事件触发,不是 entry 挂单,页面已标注)、独立整轮止损、风险确认、read-model 可见;聚合 TP 合同已覆盖 1/2/3 次加仓及提交失败 fail-closed。一个逻辑整轮 TP 在 Nautilus 执行层会按精确 `position_id` 拆成多张 reduce-only 子单，绝不再用共享 round ID 模糊平仓；TP/SL 后停止,v1 显式拒绝 `loop_enabled=true`。此前首次 attended 尝试在两笔加仓后暴露该执行缺陷，已安全撤单平仓，**不计作真实生命周期验收**。
 - #226 attended Paper DCA 已自然闭环:做多计划 `strategy-plan-2026-07-24_DAY-5-c3bf366f` 经真实 tick 完成两次加仓；第一笔后 generation-1，第二笔后 generation-2 将聚合 TP 扩至 `0.004 @ 4037.5`。generation-2 于 `2026-07-24T06:20:00Z` 自然成交，lifecycle 为 `target_closed`、0 持仓/0 委托，execution reconciliation=`ok`，canonical accounting=`pass`（两条既有时间异常仍 quarantine）。未注入行情、人工平仓或重启执行器制造证据。
@@ -44,9 +43,10 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- 持续监测 `strategy-plan-2026-07-28_DAY-3-4fbccf9b` 的首个自然 fill/TP/重挂；只接受当前计划的 Nautilus fill、trade、position、生命周期和 reconciliation 共同证据，`armed`/accepted 委托与历史累计计数都不是成交。
-- 在当前 Paper 生命周期允许的安全发布窗口，把 `main@68754a5` 通过 clean SHA/source-attestation 发布到 Cloud，并验证 provider failure taxonomy；发布不得重复启动策略、撤单、平仓、改持仓或破坏 cloud-primary owner/tick 连续性。
-- Cloud soak 满 24 小时后继续运行至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick 连续性、备份、dead-man、服务重启、行情新鲜度和 owner epoch 做终态验收。7 月 28 日中午切云前的缺失 tick 不得被伪装成完整自然日；验收前 Mac scheduler 保持禁用，不自动 failback。
+- 只读监测当前 `strategy-plan-2026-07-29_DAY-2-52d364d4` 的 TP/SL/循环生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改 StrategyPlan。现有 1 个真实 fill 已满足 #408 的“当前计划成交证据”，后续 accepted/armed 仍不得冒充新增成交。
+- 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。
+- 监测自然 tick 单次耗时和 `late_ignored` 数量；如果再发生 timeout、不可变成交回归或执行/会计对账漂移，按独立缺陷 Issue fail-closed 处理，不得重放控制动作。
+- #413/#414/#415 保持独立设计排期，本轮不混入；真钱/live 仍需 Park 本人 `park-approved`。
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
 - M3-05:审计当前生产策略摘要与持仓/委托/成交表的字段、计数、对齐和桌面可读性；只补复现的完整性或可理解性缺口。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
