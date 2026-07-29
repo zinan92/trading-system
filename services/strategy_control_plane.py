@@ -32,6 +32,7 @@ from services.dualtrack_clock import parse_utc
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_store import DualTrackPlanStore
 from services.control_audit import append_control_event, build_control_event, read_last_control_event
+from services.cycle_risk_envelope import CycleRiskEnvelopeStore
 from services.grid_sizing import (
     AdaptiveGridInputError,
     GRID_STYLES,
@@ -430,6 +431,7 @@ class StrategyControlPlane:
         self.risk_store = risk_store or build_risk_decision_store(self.output_root)
         if not isinstance(self.risk_store, RiskDecisionStorePort):
             raise TypeError("risk_store does not implement RiskDecisionStorePort")
+        self.risk_envelopes = CycleRiskEnvelopeStore(self.output_root)
 
     def upsert_proposal(self, payload: dict[str, Any], *, now: str | None = None) -> dict[str, Any]:
         proposal = normalize_proposal(payload, now=now)
@@ -1924,7 +1926,15 @@ class StrategyControlPlane:
     ) -> dict[str, Any]:
         with production_mutation_lock(self.output_root):
             try:
-                result = self._control_locked(cycle_id, action, payload, market=market, account=account, now=now)
+                result = self._control_locked(
+                    cycle_id,
+                    action,
+                    payload,
+                    market=market,
+                    account=account,
+                    now=now,
+                    actor=actor,
+                )
             except ValueError as exc:
                 # A rejected mutation is still an operator action and must
                 # stay attributable; the original rejection is re-raised.
@@ -1932,9 +1942,19 @@ class StrategyControlPlane:
                     self._audit_control(cycle_id, action, payload, actor=actor, result="rejected", error=str(exc), now=now)
                 raise
             if str(action or "").lower() not in {"preview", "preview_range"}:
-                evidence = None
+                evidence: dict[str, Any] = {}
                 if isinstance(result, dict) and result.get("safe_action_market_gates"):
-                    evidence = {"safe_action_market_gates": result["safe_action_market_gates"]}
+                    evidence["safe_action_market_gates"] = result["safe_action_market_gates"]
+                if isinstance(result, dict) and str(action or "").lower() == "prepare_start":
+                    evidence["prepared_start"] = {
+                        "prepared_start_id": result.get("prepared_start_id"),
+                        "preview_id": (result.get("preview") or {}).get("preview_id"),
+                        "expires_at": result.get("expires_at"),
+                    }
+                if isinstance(result, dict) and str(action or "").lower() == "start":
+                    verification = result.get("cycle_risk_envelope")
+                    if isinstance(verification, dict):
+                        evidence["cycle_risk_envelope"] = verification
                 recorded = self._audit_control(
                     cycle_id,
                     action,
@@ -1942,7 +1962,7 @@ class StrategyControlPlane:
                     actor=actor,
                     result="accepted",
                     error=None,
-                    evidence=evidence,
+                    evidence=evidence or None,
                     now=now,
                 )
                 if isinstance(result, dict):
@@ -1989,6 +2009,7 @@ class StrategyControlPlane:
         market: dict[str, Any] | None = None,
         account: dict[str, Any] | None = None,
         now: str | None = None,
+        actor: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         body = dict(payload or {})
         action = str(action or "").lower()
@@ -2011,6 +2032,29 @@ class StrategyControlPlane:
                 account=account or {},
                 now=now,
             )
+        if action == "authorize_outer_strategy_policy":
+            return {
+                "action": action,
+                "outer_strategy_policy": self.risk_envelopes.authorize_outer_policy(
+                    payload=body,
+                    actor=actor,
+                    now=now,
+                ),
+            }
+        if action == "authorize_cycle_risk_envelope":
+            current = self.active_plan(cycle_id)
+            if not current:
+                raise ValueError("cannot authorize cycle risk envelope without an active StrategyPlan")
+            return {
+                "action": action,
+                "cycle_risk_envelope": self.risk_envelopes.authorize_envelope(
+                    cycle_id=cycle_id,
+                    plan=current,
+                    payload=body,
+                    actor=actor,
+                    now=now,
+                ),
+            }
         if action == "preview_range":
             return {
                 "action": action,
@@ -2273,13 +2317,31 @@ class StrategyControlPlane:
         if pending or open_positions:
             raise ValueError("new grid start requires zero accepted orders and zero open positions")
 
+        envelope_verification = None
+        envelope_authorization_id = str(body.get("cycle_risk_envelope_id") or "")
+        if envelope_authorization_id:
+            envelope_verification = self.risk_envelopes.verify_preview(
+                cycle_id=cycle_id,
+                plan=current,
+                envelope_authorization_id=envelope_authorization_id,
+                preview=preview,
+            )
         adjusted = self._plan_from_preview(current, preview, now=now)
+        if envelope_verification is not None:
+            envelope_verification = self.risk_envelopes.bind_execution_plan(
+                envelope_verification,
+                adjusted,
+            )
         timestamp = _timestamp(now)
         commands = build_plan_grid_entry_commands(adjusted, timestamp=timestamp)
         manual_override = None
         confirmation = dict(preview.get("manual_confirmation") or {})
         risk_market = market
         if confirmation.get("required") is True:
+            # A cycle envelope is a bounded authorization record, never a
+            # blanket replacement for an existing preview-specific manual
+            # risk gate.  Every existing manual blocker must still pass the
+            # original acknowledgement contract.
             manual_override = _validated_manual_range_acknowledgement(
                 preview,
                 body,
@@ -2302,6 +2364,14 @@ class StrategyControlPlane:
             timestamp=timestamp,
             manual_override=manual_override,
         )
+        envelope_receipt = None
+        if envelope_verification is not None:
+            envelope_receipt = self.risk_envelopes.record_start_verification(
+                cycle_id=cycle_id,
+                verification=envelope_verification,
+                prepared_start_id=prepared_start_id or None,
+                now=now,
+            )
         self._assert_rollover_start_guard(body)
         # From this point through the first submit the shared control lock owns
         # every in-process production mutation path. Plan/runtime writes do not
@@ -2324,6 +2394,17 @@ class StrategyControlPlane:
             "prepared_start_id": prepared_start_id or None,
             "risk_decision_id": risk_decision["decision_id"],
             "risk_policy_id": (risk_decision.get("policy") or {}).get("policy_id"),
+            "cycle_risk_envelope_id": (
+                envelope_verification.get("envelope_authorization_id")
+                if envelope_verification
+                else None
+            ),
+            "cycle_risk_envelope_verification": envelope_verification,
+            "cycle_risk_envelope_verification_receipt_id": (
+                envelope_receipt.get("verification_record_id")
+                if envelope_receipt
+                else None
+            ),
             "accepted_order_count": 0,
             "accepted_order_count_known": True,
             "transition_owner": (
@@ -2485,6 +2566,7 @@ class StrategyControlPlane:
             "accepted_orders": len(accepted),
             "filled_orders": filled_count,
             "risk_decision": risk_decision,
+            "cycle_risk_envelope": envelope_verification,
             "idempotent": False,
         }
 
@@ -2543,6 +2625,19 @@ class StrategyControlPlane:
             or dca_preview_id(preview) != expected_preview_id
         ):
             raise ValueError("strategy_preview_changed")
+        envelope_verification = None
+        envelope_authorization_id = str(body.get("cycle_risk_envelope_id") or "")
+        if envelope_authorization_id:
+            if not current:
+                raise ValueError("risk_envelope_missing")
+            envelope_verification = self.risk_envelopes.verify_preview(
+                cycle_id=cycle_id,
+                plan=current,
+                envelope_authorization_id=envelope_authorization_id,
+                preview=preview,
+            )
+        # An envelope is an additional bounded policy check. It never replaces
+        # DCA's existing preview-bound human acknowledgement gate.
         acknowledgement = _validated_dca_acknowledgement(preview, body, now=now)
 
         runtime = self.runtime_state(cycle_id)
@@ -2597,6 +2692,11 @@ class StrategyControlPlane:
             version=version,
             locked_at=timestamp,
         )
+        if envelope_verification is not None:
+            envelope_verification = self.risk_envelopes.bind_execution_plan(
+                envelope_verification,
+                adjusted,
+            )
         risk_payload = {
             "schema_version": "dca-risk-decision-v1",
             "cycle_id": cycle_id,
@@ -2606,12 +2706,21 @@ class StrategyControlPlane:
             "scope": "paper_only",
             "risk": dict(preview["risk"]),
             "acknowledgement": acknowledgement,
+            "cycle_risk_envelope": envelope_verification,
             "evaluated_at": timestamp,
         }
         risk_payload["decision_id"] = _content_id("dca-risk", risk_payload)
         adjusted["risk_decision_id"] = risk_payload["decision_id"]
         adjusted["risk_acknowledgement"] = acknowledgement
         self._write_dca_risk_decision(cycle_id, risk_payload)
+        envelope_receipt = None
+        if envelope_verification is not None:
+            envelope_receipt = self.risk_envelopes.record_start_verification(
+                cycle_id=cycle_id,
+                verification=envelope_verification,
+                prepared_start_id=prepared_start_id or None,
+                now=now,
+            )
         self._assert_rollover_start_guard(body)
         self._activate_plan(adjusted)
         starting = {
@@ -2629,6 +2738,17 @@ class StrategyControlPlane:
             "prepared_start_id": prepared_start_id or None,
             "risk_decision_id": risk_payload["decision_id"],
             "risk_policy_id": "paper-dca-explicit-consent-v1",
+            "cycle_risk_envelope_id": (
+                envelope_verification.get("envelope_authorization_id")
+                if envelope_verification
+                else None
+            ),
+            "cycle_risk_envelope_verification": envelope_verification,
+            "cycle_risk_envelope_verification_receipt_id": (
+                envelope_receipt.get("verification_record_id")
+                if envelope_receipt
+                else None
+            ),
             "accepted_order_count": 0,
             "accepted_order_count_known": True,
         }
@@ -2721,6 +2841,7 @@ class StrategyControlPlane:
             "accepted_orders": len(accepted),
             "filled_orders": len(filled),
             "risk_decision": risk_payload,
+            "cycle_risk_envelope": envelope_verification,
             "idempotent": False,
         }
 

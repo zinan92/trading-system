@@ -1,5 +1,52 @@
 # Decision Log
 
+## Paper Supervisor Uses a Cycle Risk Envelope and Fresh Start Identities
+
+Date: 2026-07-30
+
+### Decision
+
+- Keep the existing safety gates as their only source of execution permission,
+  and add an immutable Paper-only cycle risk envelope as the authorization
+  boundary for automated recovery.
+- A recovery preview is always regenerated. It may rely on an envelope only
+  when its plan identity and every exact numeric field are within the bound;
+  it never reuses an older preview facts digest or acknowledgement.
+- An AI envelope must fit an immutable Park-authorized outer strategy policy.
+  Missing or unverifiable policy/envelope facts fail closed.
+- Refine Issue #440 narrowly: never invoke `start` twice with one
+  `prepared_start_id`; a newly generated preview and newly prepared id may be
+  attempted only for the closed Supervisor transient whitelist.
+
+### Gotchas
+
+- A fresh market mark is not a reason to synthesize human consent. The
+  envelope comparison is exact and is recorded separately from the current
+  risk decision, which is still re-evaluated immediately before submission.
+- New exception prose must not become retryable through a prefix/substring
+  rule. The classifier accepts only typed evidence or exact known codes;
+  every other condition is `unknown_blocker` and structural.
+- A missing control response is not a retry signal. It is
+  `control_outcome_unknown` until authoritative runtime and append-only
+  control-audit reconciliation establish what occurred.
+- An envelope is an additional policy boundary, never a substitute for an
+  existing preview-bound manual acknowledgement. Grid and DCA retain their
+  original acknowledgement and immediate pre-submit safety checks.
+- Start materializes a derived execution plan. Audit evidence must therefore
+  link the immutable source plan, the fresh preview, and the new execution
+  plan explicitly rather than pretending their plan identities are equal.
+- Generic control-audit payloads intentionally bound nested content, so they
+  cannot be the sole evidence surface for field-level envelope comparisons.
+  A separate append-only start-verification receipt retains the complete rows
+  before a start invocation without claiming that execution later succeeded.
+
+### Verification
+
+- `python3 -m pytest -q tests/test_cycle_risk_envelope.py tests/test_strategy_control_plane.py`
+- Exact decimal bounds, nested AI policy, unknown-code fail-closed behavior,
+  ten-minute tick escalation, and control-audit envelope authorization are
+  covered by focused tests.
+
 ## Late Market Data Cannot Rewrite a Committed Paper Fill
 
 Date: 2026-07-29
