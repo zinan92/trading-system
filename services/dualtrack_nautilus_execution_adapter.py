@@ -313,9 +313,13 @@ class NautilusExecutionAdapter:
                 "processed_command_count": 0,
                 "snapshot": self.snapshot(cycle_id),
             }
+        replay_rows, late_event_ids, execution_watermark = _execution_replay_events(
+            rows,
+            processed_rows,
+        )
         snapshot = self._replay(
             cycle_id,
-            events=rows,
+            events=replay_rows,
             commands=commands,
         )
         # Rearm appends next-generation grid commands during replay; re-read
@@ -325,7 +329,24 @@ class NautilusExecutionAdapter:
         for persisted in rows:
             persisted_id = str(persisted.get("event_id") or "")
             if persisted_id and persisted_id not in processed_by_id:
-                processed_rows.append({"cycle_id": cycle_id, "event_id": persisted_id})
+                processed_row = {
+                    "cycle_id": cycle_id,
+                    "event_id": persisted_id,
+                    "disposition": (
+                        "late_ignored"
+                        if persisted_id in late_event_ids
+                        else "accepted"
+                    ),
+                    "ts_event": str(persisted.get("ts_event") or ""),
+                }
+                if persisted_id in late_event_ids:
+                    processed_row.update(
+                        {
+                            "reason": "ts_event_not_after_execution_watermark",
+                            "execution_watermark": execution_watermark,
+                        }
+                    )
+                processed_rows.append(processed_row)
                 processed_by_id[persisted_id] = processed_rows[-1]
         write_json(self._processed_events_path(cycle_id), processed_rows)
         processed_command_by_id = {
@@ -925,6 +946,55 @@ def _order_receipt(row: dict[str, Any]) -> dict[str, Any]:
 
 def _market_event_sort_key(row: dict[str, Any]) -> str:
     return str(row.get("ts_event") or "")
+
+
+def _execution_replay_events(
+    events: list[dict[str, Any]],
+    processed_events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], set[str], str]:
+    """Keep late-arriving candles as audit facts without revising execution history."""
+
+    event_by_id = {
+        str(row.get("event_id") or ""): row
+        for row in events
+        if str(row.get("event_id") or "")
+    }
+    ignored_ids = {
+        str(row.get("event_id") or "")
+        for row in processed_events
+        if str(row.get("disposition") or "") == "late_ignored"
+    }
+    accepted_processed = [
+        event_by_id[event_id]
+        for event_id in (
+            str(row.get("event_id") or "")
+            for row in processed_events
+            if str(row.get("disposition") or "") != "late_ignored"
+        )
+        if event_id in event_by_id
+    ]
+    watermark = max(
+        (_market_event_sort_key(row) for row in accepted_processed),
+        default="",
+    )
+    processed_ids = {
+        str(row.get("event_id") or "")
+        for row in processed_events
+        if str(row.get("event_id") or "")
+    }
+    late_ids = {
+        event_id
+        for event_id, event in event_by_id.items()
+        if event_id not in processed_ids
+        and bool(watermark)
+        and _market_event_sort_key(event) <= watermark
+    }
+    replay_events = [
+        row
+        for row in events
+        if str(row.get("event_id") or "") not in ignored_ids | late_ids
+    ]
+    return replay_events, late_ids, watermark
 
 
 def _command_sort_key(row: dict[str, Any]) -> str:
