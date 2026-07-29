@@ -12004,3 +12004,29 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused tests cover current word values, legacy boolean values, persistent
   login simulation and unknown/failure fail-closed behavior.
+
+# 2026-07-29 — Derive strategy runtime utilization from accepted control facts
+
+## Decision
+
+- Dashboard reports one compact `24h / 7d` utilization row from accepted
+  strategy-control events and their authoritative `runtime_after.actual_state`.
+- Only `running` time contributes to the numerator. Process uptime, scheduler
+  uptime, rejected control actions and market availability are not strategy
+  runtime.
+- A rolling window is publishable only when an accepted event at or before the
+  window boundary proves the initial state. Otherwise the percentage is
+  unavailable rather than a fabricated zero.
+
+## Gotchas
+
+- The current runtime row proves only the current state; it cannot safely
+  backfill the beginning of a 24-hour or 7-day window.
+- Rejected start/stop events carry a `runtime_after` observation but do not
+  create a state transition and therefore must not alter utilization.
+
+## Verification
+
+- Focused tests cover boundary-crossing start/stop intervals, a still-running
+  tail, rejected events, insufficient evidence, read-model projection and the
+  Dashboard row.

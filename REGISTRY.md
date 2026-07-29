@@ -61,6 +61,7 @@
 ## Appendix — 历史记录(只追加,原文搬运,不删除)
 
 ### 2026-07-29 逐票记录
+- #433: Dashboard 生产运行状态新增一行 `策略运行占比 24h / 7d`；只按 accepted control event 中可证明的 `actual_state=running` 区间计时，进程在线、rejected 动作与无法证明的窗口前段均不冒充策略运行，证据不足显示 `--`。
 - #431: Mac Paper 隔离 receipt 兼容当前 macOS `launchctl print-disabled` 的 `enabled/disabled` 输出及旧式 `true/false`；缺 label 或未知值仍 fail-closed，不会把命令成功冒充成验证成功。
 - #428: Cloud owner 切换后，Mac Paper 的五个 focus launchd job 现在同时执行持久 `disable` 与当前会话 `bootout`；重启/重新登录不会自动加载。只有 owner 已明确回到 active `local-mac` 且给出专用确认词时，才会按同一 allowlist 恢复；每个 label 的前后 loaded/disabled 状态均留 receipt。
 - #424: Nautilus Paper 对迟到 K 线采用“保留原始事件、追加 `late_ignored` 处置、不得回写既有成交”的执行水位合同；不可变成交检测未放宽。根因与字段级证据见 [`docs/evidence/issue-424-late-market-event-replay.md`](docs/evidence/issue-424-late-market-event-replay.md)。

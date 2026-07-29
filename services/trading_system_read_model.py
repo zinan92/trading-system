@@ -138,6 +138,9 @@ def project_trading_system_read_model(
         risk_status=risk["status"],
         completeness_issues=completeness_issues,
     )
+    runtime["utilization"] = _json_copy(
+        _mapping(source.get("runtime_utilization"))
+    )
     strategy_summary = _project_strategy_summary(plan, completeness_issues)
     broker_view = _json_copy(_mapping(broker))
     if not broker_view:
