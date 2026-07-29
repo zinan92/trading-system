@@ -12030,3 +12030,39 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused tests cover boundary-crossing start/stop intervals, a still-running
   tail, rejected events, insufficient evidence, read-model projection and the
   Dashboard row.
+
+# 2026-07-29 — Close cycle books through a verified Paper execution handoff
+
+## Decision
+
+- A 12-hour boundary may preserve Paper positions and accepted orders only
+  when the previous execution heartbeat and boundary market are fresh, and an
+  active current-cycle StrategyPlan explicitly declares
+  `takeover_from_strategy_plan_id`.
+- Nautilus creates the current-cycle namespace in staging, replays the prior
+  execution seed, and publishes it only after accepted order IDs, open
+  position IDs, Grid lifecycle IDs and reconciliation all match.
+- The previous terminal package records `terminal_mode=handed_off`; prior
+  realized P&L and fills remain in the previous book. The new cycle starts
+  from prior ending cash, excludes carried fills, and owns only subsequent
+  realized P&L while retaining current unrealized P&L.
+- Any missing contract or failed verification falls back to the existing
+  cancel/flatten/reconcile path with the exact handoff failure in the rollover
+  receipt.
+
+## Gotchas
+
+- Preserving a runtime row without migrating the execution namespace would
+  orphan positions because live tick processes the current `cycle_id`.
+- A verified handoff can succeed before terminal packaging. If packaging then
+  fails, runtime must remain on the handed-off current namespace and retry
+  packaging; it must never cancel or flatten the already adopted namespace.
+- An active next-cycle plan is not sufficient by itself. The explicit source
+  plan link prevents an unrelated plan from silently assuming old exposure.
+
+## Verification
+
+- Focused tests cover healthy identity-preserving handoff, stale/missing
+  contract fallback, package-failure recovery without repeating handoff,
+  control-plane adoption, terminal handoff packaging, and Nautilus
+  order/position/lifecycle identity plus realized/unrealized cycle splitting.

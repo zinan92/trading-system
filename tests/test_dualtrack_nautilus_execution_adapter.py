@@ -110,6 +110,132 @@ def _grid_market_event(index: int, price: float) -> dict:
     }
 
 
+def _open_grid_replay(_preflight_path: Path, input_path: Path, output_path: Path) -> dict:
+    bundle = load_json(input_path)[-1]
+    row = bundle["commands"][0]
+    command_id = row["command_id"]
+    command = row["command"]
+    event = bundle["market_events"][-1]
+    fill = {
+        "fill_id": f"fill-{command_id}",
+        "order_id": command_id,
+        "trade_id": command_id,
+        "event": "entry",
+        "side": "buy",
+        "price": 4000.0,
+        "quantity": 1.0,
+        "cost": 0.0,
+        "realized_pnl": 0.0,
+        "ts": "2026-07-10T01:01:00+00:00",
+    }
+    snapshot = {
+        "schema_version": "dualtrack-execution-v1",
+        "engine": "nautilus_shadow",
+        "cycle_id": bundle["cycle_id"],
+        "orders": [{
+            "order_id": command_id,
+            "state": "accepted",
+            "side": "buy",
+            "event": "entry",
+            "order_type": "limit",
+            "price": 4000.0,
+            "quantity": 1.0,
+            "strategy_plan_id": command["strategy_plan_id"],
+            "strategy_plan_version": command["strategy_plan_version"],
+        }],
+        "fills": [fill],
+        "positions": [{
+            "trade_id": command_id,
+            "position_id": f"POS-{command_id}",
+            "status": "open",
+            "side": "long",
+            "remaining_units": 1.0,
+            "entry_price": 4000.0,
+            "entry_ts": fill["ts"],
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 1.0,
+            "strategy_plan_id": command["strategy_plan_id"],
+            "strategy_plan_version": command["strategy_plan_version"],
+        }],
+        "account": {
+            "starting_cash": 10_000.0,
+            "realized_pnl": 0.0,
+            "ending_cash": 10_000.0,
+            "equity": 10_001.0,
+            "margin": 400.0,
+            "exposure": 4_000.0,
+            "slippage": 0.0,
+            "fees": 0.0,
+            "funding": 0.0,
+        },
+        "pnl": {"realized": 0.0, "unrealized": 1.0},
+        "mark": {"price": event["price"], "fresh": True, "source": event["source"]},
+        "capabilities": {"native_order_lifecycle": True},
+        "reconciliation": {"status": "ok", "issues": []},
+    }
+    write_json(output_path, [snapshot])
+    return snapshot
+
+
+def test_cycle_handoff_preserves_order_position_and_lifecycle_identity(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    config = {
+        "capital_per_track_usd": 10_000.0,
+        "max_leverage": 10.0,
+        "paper_fee_model": {
+            "maker_fee_rate": 0.0,
+            "taker_fee_rate": 0.0004,
+            "real_money_eligible": False,
+        },
+    }
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python="/usr/bin/python3",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=_open_grid_replay,
+        config=config,
+    )
+    receipt = adapter.submit_order(_grid_command())
+    adapter.process_market_event(_grid_market_event(1, 4001.0))
+    previous = adapter.snapshot(CYCLE_ID)
+    previous_lifecycle = load_json(
+        output / "dualtrack" / "grid_lifecycle" / f"{CYCLE_ID}_nautilus.json"
+    )
+
+    current_cycle_id = "2026-07-10_NIGHT"
+    handoff = adapter.handoff_cycle(
+        CYCLE_ID,
+        current_cycle_id,
+        current_strategy_plan_id="plan-current",
+        boundary_at="2026-07-10T13:00:00+00:00",
+    )
+    current = adapter.snapshot(current_cycle_id)
+    current_lifecycle = load_json(
+        output / "dualtrack" / "grid_lifecycle" / f"{current_cycle_id}_nautilus.json"
+    )
+
+    assert handoff["status"] == "verified"
+    assert handoff["identity_preserved"] is True
+    assert handoff["accepted_order_ids"] == [receipt["order_id"]]
+    assert [row["order_id"] for row in current["orders"]] == [
+        row["order_id"] for row in previous["orders"]
+    ]
+    assert [row["position_id"] for row in current["positions"]] == [
+        row["position_id"] for row in previous["positions"]
+    ]
+    assert {row["line_id"] for row in current_lifecycle} == {
+        row["line_id"] for row in previous_lifecycle
+    }
+    assert current["fills"] == []
+    assert current["pnl"]["realized"] == 0.0
+    assert current["pnl"]["unrealized"] == previous["pnl"]["unrealized"]
+    assert current["account"]["starting_cash"] == previous["account"]["ending_cash"]
+    assert adapter.reconcile(current_cycle_id)["status"] == "ok"
+
+
 def _completed_grid_replay(input_path: Path, output_path: Path) -> dict:
     bundle = load_json(input_path)[-1]
     commands = [

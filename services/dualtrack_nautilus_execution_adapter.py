@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -77,6 +79,185 @@ class NautilusExecutionAdapter:
         write_json(path, rows)
         self._persist_accepted_orders(cycle_id, rows)
         return _order_receipt(row)
+
+    def handoff_cycle(
+        self,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        *,
+        current_strategy_plan_id: str,
+        boundary_at: str,
+    ) -> dict[str, Any]:
+        """Checkpoint one Paper namespace into the next without order mutation."""
+
+        previous_cycle_id = str(previous_cycle_id or "").strip()
+        current_cycle_id = str(current_cycle_id or "").strip()
+        current_strategy_plan_id = str(current_strategy_plan_id or "").strip()
+        boundary_at = str(boundary_at or "").strip()
+        if (
+            not previous_cycle_id
+            or not current_cycle_id
+            or previous_cycle_id == current_cycle_id
+            or not current_strategy_plan_id
+            or not boundary_at
+        ):
+            raise ValueError("Nautilus cycle handoff identity is incomplete")
+
+        existing = load_json(self._handoff_path(previous_cycle_id, current_cycle_id))
+        verified = next(
+            (
+                dict(row)
+                for row in reversed(existing)
+                if isinstance(row, dict) and row.get("status") == "verified"
+            ),
+            None,
+        )
+        if verified:
+            return verified
+        if any(
+            path.exists()
+            for path in (
+                self._commands_path(current_cycle_id),
+                self._events_path(current_cycle_id),
+                self._snapshot_path(current_cycle_id),
+            )
+        ):
+            raise RuntimeError("Nautilus cycle handoff target namespace is not empty")
+
+        source = self.snapshot(previous_cycle_id)
+        reconciliation = self.reconcile(previous_cycle_id)
+        if str(reconciliation.get("status") or "") != "ok" or reconciliation.get("issues"):
+            raise RuntimeError("Nautilus cycle handoff source reconciliation failed")
+        source_orders = [dict(row) for row in source.get("orders") or []]
+        source_positions = [dict(row) for row in source.get("positions") or []]
+        accepted_ids = sorted(
+            str(row.get("order_id") or "")
+            for row in source_orders
+            if str(row.get("state") or "").lower() == "accepted"
+        )
+        position_ids = sorted(
+            str(row.get("position_id") or "")
+            for row in source_positions
+            if str(row.get("status") or "").lower() == "open"
+        )
+        if any(not value for value in [*accepted_ids, *position_ids]):
+            raise RuntimeError("Nautilus cycle handoff source identity is incomplete")
+
+        commands = [
+            {
+                **dict(row),
+                "cycle_id": current_cycle_id,
+                "command": {
+                    **dict(row.get("command") or {}),
+                    "cycle_id": current_cycle_id,
+                    "carried_from_cycle_id": previous_cycle_id,
+                },
+            }
+            for row in load_json(self._commands_path(previous_cycle_id))
+            if isinstance(row, dict)
+        ]
+        events = [
+            {
+                **dict(row),
+                "cycle_id": current_cycle_id,
+                "carried_from_cycle_id": previous_cycle_id,
+            }
+            for row in load_json(self._events_path(previous_cycle_id))
+            if isinstance(row, dict)
+        ]
+        if not events:
+            raise RuntimeError("Nautilus cycle handoff source market history is missing")
+        processed_events = [
+            {**dict(row), "cycle_id": current_cycle_id}
+            for row in load_json(self._processed_events_path(previous_cycle_id))
+            if isinstance(row, dict)
+        ]
+        processed_commands = [
+            {**dict(row), "cycle_id": current_cycle_id}
+            for row in load_json(self._processed_commands_path(previous_cycle_id))
+            if isinstance(row, dict)
+        ]
+        source_fills = [dict(row) for row in source.get("fills") or []]
+        handoff = {
+            "schema_version": "dualtrack-paper-cycle-handoff-v1",
+            "status": "preparing",
+            "previous_cycle_id": previous_cycle_id,
+            "current_cycle_id": current_cycle_id,
+            "current_strategy_plan_id": current_strategy_plan_id,
+            "boundary_at": boundary_at,
+            "source_fill_ids": sorted(
+                str(row.get("fill_id") or "")
+                for row in source_fills
+                if str(row.get("fill_id") or "")
+            ),
+            "source_realized_pnl": float((source.get("pnl") or {}).get("realized") or 0.0),
+            "source_fees": float((source.get("account") or {}).get("fees") or 0.0),
+            "source_ending_cash": float((source.get("account") or {}).get("ending_cash") or 0.0),
+            "accepted_order_ids": accepted_ids,
+            "open_position_ids": position_ids,
+            "identity_preserved": False,
+            "paper_only": True,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="dualtrack-cycle-handoff-") as folder:
+            staging_root = Path(folder)
+            staging = NautilusExecutionAdapter(
+                staging_root,
+                nautilus_python=self.nautilus_python,
+                storage_namespace=self.storage_namespace,
+                preflight_path=self.preflight_path,
+                replay_executor=self._replay_executor,
+                config=self.config,
+            )
+            write_json(staging._commands_path(current_cycle_id), commands)
+            write_json(staging._events_path(current_cycle_id), events)
+            write_json(staging._processed_events_path(current_cycle_id), processed_events)
+            write_json(staging._processed_commands_path(current_cycle_id), processed_commands)
+            write_json(
+                staging._handoff_path(previous_cycle_id, current_cycle_id),
+                [handoff],
+            )
+            snapshot = staging._replay(
+                current_cycle_id,
+                events=events,
+                commands=commands,
+            )
+            target_accepted_ids = sorted(
+                str(row.get("order_id") or "")
+                for row in snapshot.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+            )
+            target_position_ids = sorted(
+                str(row.get("position_id") or "")
+                for row in snapshot.get("positions") or []
+                if str(row.get("status") or "").lower() == "open"
+            )
+            target_reconciliation = staging.reconcile(current_cycle_id)
+            if (
+                accepted_ids != target_accepted_ids
+                or position_ids != target_position_ids
+                or str(target_reconciliation.get("status") or "") != "ok"
+                or target_reconciliation.get("issues")
+            ):
+                raise RuntimeError("Nautilus cycle handoff identity verification failed")
+            verified = {
+                **handoff,
+                "status": "verified",
+                "identity_preserved": True,
+                "target_accepted_order_ids": target_accepted_ids,
+                "target_open_position_ids": target_position_ids,
+                "reconciliation_status": "ok",
+            }
+            write_json(
+                staging._handoff_path(previous_cycle_id, current_cycle_id),
+                [verified],
+            )
+            self._publish_handoff_staging(
+                staging,
+                previous_cycle_id=previous_cycle_id,
+                current_cycle_id=current_cycle_id,
+            )
+        return verified
 
     def _prepare_command(self, command: dict[str, Any]) -> dict[str, Any]:
         prepared = normalize_execution_command(command, self.config)
@@ -543,6 +724,7 @@ class NautilusExecutionAdapter:
                 "replay_version": REPLAY_VERSION,
             },
         }
+        normalized = self._apply_cycle_handoff_accounting(cycle_id, normalized)
         if self.storage_namespace == "nautilus_authoritative":
             lifecycle = self._persist_grid_lifecycle(cycle_id, commands, snapshot)
             normalized["rearms"] = lifecycle["rearms"]
@@ -551,6 +733,93 @@ class NautilusExecutionAdapter:
             self._merge_future_accepted_orders(normalized, commands, events)
         self._persist_snapshot(cycle_id, normalized)
         return normalized
+
+    def _apply_cycle_handoff_accounting(
+        self,
+        cycle_id: str,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        rows = load_json(self.root / "handoffs" / f"{cycle_id}.json")
+        handoff = next(
+            (dict(row) for row in reversed(rows) if isinstance(row, dict)),
+            None,
+        )
+        if not handoff:
+            return snapshot
+        source_fill_ids = set(handoff.get("source_fill_ids") or [])
+        pnl = dict(snapshot.get("pnl") or {})
+        account = dict(snapshot.get("account") or {})
+        realized = round(
+            float(pnl.get("realized") or 0.0)
+            - float(handoff.get("source_realized_pnl") or 0.0),
+            8,
+        )
+        fees = round(
+            float(account.get("fees") or 0.0)
+            - float(handoff.get("source_fees") or 0.0),
+            8,
+        )
+        return {
+            **snapshot,
+            "fills": [
+                dict(row)
+                for row in snapshot.get("fills") or []
+                if str(row.get("fill_id") or "") not in source_fill_ids
+            ],
+            "account": {
+                **account,
+                "starting_cash": float(handoff.get("source_ending_cash") or 0.0),
+                "realized_pnl": realized,
+                "fees": fees,
+            },
+            "pnl": {**pnl, "realized": realized},
+            "cycle_handoff": dict(handoff),
+        }
+
+    def _publish_handoff_staging(
+        self,
+        staging: "NautilusExecutionAdapter",
+        *,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+    ) -> None:
+        pairs = [
+            (staging._commands_path(current_cycle_id), self._commands_path(current_cycle_id)),
+            (staging._events_path(current_cycle_id), self._events_path(current_cycle_id)),
+            (staging._processed_events_path(current_cycle_id), self._processed_events_path(current_cycle_id)),
+            (staging._processed_commands_path(current_cycle_id), self._processed_commands_path(current_cycle_id)),
+            (staging._orders_path(current_cycle_id), self._orders_path(current_cycle_id)),
+            (staging._fills_path(current_cycle_id), self._fills_path(current_cycle_id)),
+            (staging._positions_path(current_cycle_id), self._positions_path(current_cycle_id)),
+            (staging._snapshot_path(current_cycle_id), self._snapshot_path(current_cycle_id)),
+            (
+                staging._handoff_path(previous_cycle_id, current_cycle_id),
+                self._handoff_path(previous_cycle_id, current_cycle_id),
+            ),
+        ]
+        staging_lifecycle = (
+            staging.output_root
+            / "dualtrack"
+            / "grid_lifecycle"
+            / f"{current_cycle_id}_nautilus.json"
+        )
+        if staging_lifecycle.exists():
+            pairs.append(
+                (
+                    staging_lifecycle,
+                    self.output_root
+                    / "dualtrack"
+                    / "grid_lifecycle"
+                    / f"{current_cycle_id}_nautilus.json",
+                )
+            )
+        for source, target in pairs:
+            if not source.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            pending = target.with_suffix(f"{target.suffix}.handoff")
+            shutil.copy2(source, pending)
+            os.replace(pending, target)
 
     def _next_grid_rearm_commands(
         self,
@@ -874,6 +1143,10 @@ class NautilusExecutionAdapter:
 
     def _snapshot_path(self, cycle_id: str) -> Path:
         return self.root / "snapshots" / f"{cycle_id}.json"
+
+    def _handoff_path(self, previous_cycle_id: str, current_cycle_id: str) -> Path:
+        del previous_cycle_id
+        return self.root / "handoffs" / f"{current_cycle_id}.json"
 
 
 def _canonical_command(command: dict[str, Any]) -> dict[str, Any]:

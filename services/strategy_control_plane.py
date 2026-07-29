@@ -805,6 +805,69 @@ class StrategyControlPlane:
             "transition_owner": row.get("transition_owner"),
         }
 
+    def adopt_cycle_handoff(
+        self,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        *,
+        expected_runtime_updated_at: str,
+        handoff: dict[str, Any],
+        now: str,
+    ) -> dict[str, Any]:
+        """Move Paper runtime ownership after a verified identity-preserving handoff."""
+
+        persisted = self.persisted_runtime_state()
+        previous_plan_id = str(persisted.get("strategy_plan_id") or "")
+        current_plan = self.active_plan(current_cycle_id)
+        if (
+            str(persisted.get("cycle_id") or "") != previous_cycle_id
+            or str(persisted.get("desired_state") or "") != "running"
+            or str(persisted.get("actual_state") or "") != "running"
+            or str(persisted.get("updated_at") or "") != str(expected_runtime_updated_at or "")
+        ):
+            raise RuntimeError("Paper runtime changed before cycle handoff")
+        if not isinstance(current_plan, dict):
+            raise RuntimeError("current cycle active StrategyPlan is missing")
+        if (
+            str(current_plan.get("takeover_from_strategy_plan_id") or "")
+            != previous_plan_id
+        ):
+            raise RuntimeError("current cycle StrategyPlan did not declare the running plan takeover")
+        if (
+            str(handoff.get("status") or "") != "verified"
+            or handoff.get("identity_preserved") is not True
+            or str(handoff.get("previous_cycle_id") or "") != previous_cycle_id
+            or str(handoff.get("current_cycle_id") or "") != current_cycle_id
+            or str(handoff.get("current_strategy_plan_id") or "")
+            != str(current_plan.get("strategy_plan_id") or "")
+        ):
+            raise RuntimeError("Paper cycle handoff receipt is not verified")
+        accepted = list(handoff.get("target_accepted_order_ids") or [])
+        row = {
+            **persisted,
+            "cycle_id": current_cycle_id,
+            "desired_state": "running",
+            "actual_state": "running",
+            "updated_at": _timestamp(now),
+            "statistics_baseline_at": _timestamp(now),
+            "strategy_plan_id": current_plan["strategy_plan_id"],
+            "strategy_plan_version": current_plan["version"],
+            "strategy_type": current_plan.get("strategy_type"),
+            "accepted_order_count": len(accepted),
+            "accepted_order_count_known": True,
+            "transition_owner": None,
+            "last_action": "cycle_handoff",
+            "last_error": None,
+            "rollover_handoff": {
+                "previous_cycle_id": previous_cycle_id,
+                "previous_strategy_plan_id": previous_plan_id,
+                "receipt_status": "verified",
+                "identity_preserved": True,
+            },
+        }
+        self._write_runtime(row)
+        return row
+
     def _assert_rollover_start_guard(self, body: dict[str, Any]) -> None:
         guard = body.get("rollover_guard")
         if not isinstance(guard, dict):
