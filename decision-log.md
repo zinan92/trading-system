@@ -11950,3 +11950,36 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused tests cover Access redirects/interstitials, the protected health
   diagnosis and existing direct stale-feature classification.
+
+# 2026-07-29 — Persist Mac Paper isolation across login and reboot
+
+## Decision
+
+- Cloud cutover disables and unloads the exact five labels in
+  `FOCUS_SCHEDULE_LABELS`; it records before/after loaded and persistent
+  disabled state for every label.
+- Isolation is permitted only while the local scheduler owner is explicitly
+  paused, dual ownership is forbidden, and the source-bound Paper predeploy
+  receipt is fresh and passing.
+- Restoring Mac Paper scheduling is a separate, acknowledged operation allowed
+  only after the validated ownership state has returned to active
+  `local-mac`; the source-bound release receipt must also pass. It enables and
+  bootstraps the same allowlist, never a broad launchd domain.
+
+## Gotchas
+
+- `launchctl bootout` changes the current process state but does not prevent a
+  plist left in `~/Library/LaunchAgents` from loading at the next login or
+  reboot. Persistent `launchctl disable` is a distinct safety state.
+- A loaded local job can remain harmless behind the ownership guard, but that
+  is not sufficient Cloud-soak evidence: local jobs must be both unloaded and
+  disabled.
+- A partial disable failure is fail-closed and best-effort: remaining
+  allowlisted jobs are still disabled, the receipt is blocked, and no job is
+  re-enabled as compensation.
+
+## Verification
+
+- Focused tests cover exact-allowlist isolation, simulated login persistence,
+  explicit owner-gated restore, active-owner refusal and partial command
+  failure.
