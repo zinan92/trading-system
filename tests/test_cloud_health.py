@@ -129,6 +129,55 @@ def test_missing_cycle_decision_is_blocked_and_detectable(tmp_path: Path) -> Non
     assert result["checks"]["cycle_decision"]["code"] == "cycle_decision_missing"
 
 
+def test_active_plan_stopped_past_deadline_is_detected_for_clock_cycle(
+    tmp_path: Path,
+) -> None:
+    health = _healthy(tmp_path)
+    health.output_root.joinpath(
+        "dualtrack",
+        "strategy_control",
+        "cycle_decisions",
+        "2026-07-28_DAY.json",
+    ).unlink()
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "plans"
+        / "2026-07-28_DAY.json",
+        [
+            {
+                "strategy_plan_id": "stalled-plan",
+                "cycle_id": "2026-07-28_DAY",
+                "status": "active",
+                "locked_at": "2026-07-28T01:50:00+00:00",
+            }
+        ],
+    )
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "runtime.json",
+        [
+            {
+                "cycle_id": "2026-07-27_NIGHT",
+                "desired_state": "stopped",
+                "actual_state": "stopped",
+                "accepted_order_count": 0,
+            }
+        ],
+    )
+
+    result = health.run()
+
+    decision = result["checks"]["cycle_decision"]
+    assert decision["status"] == "blocked"
+    assert decision["code"] == "cycle_decision_stalled_after_plan_activation"
+    assert decision["evidence"]["strategy_plan_id"] == "stalled-plan"
+    assert decision["evidence"]["plan_age_seconds"] == 600
+
+
 def test_stale_tick_is_blocked_with_stage_and_next_action(tmp_path: Path) -> None:
     health = _healthy(tmp_path)
     write_json(

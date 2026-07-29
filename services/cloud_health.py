@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 from services.datafeed_market_repository import DatafeedMarketRepository
 from services.cycle_decision import CycleDecisionLedger
+from services.dualtrack_clock import cycle_window
+from services.dualtrack_config import dualtrack_config
 from services.journal_store import load_json, write_json
 
 
@@ -90,7 +92,7 @@ class CloudPaperHealth:
             "datafeed": self._datafeed(observed),
             "live_tick": self._live_tick(observed),
             "execution": self._execution(),
-            "cycle_decision": self._cycle_decision(),
+            "cycle_decision": self._cycle_decision(observed),
             "reconciliation": self._reconciliation(),
             "daily_self_review": self._daily_review(observed),
             "backup": self._backup(observed),
@@ -172,21 +174,57 @@ class CloudPaperHealth:
             },
         )
 
-    def _cycle_decision(self) -> dict[str, Any]:
+    def _cycle_decision(self, now: datetime) -> dict[str, Any]:
+        cycle_id = cycle_window(now).cycle_id
         runtime = _latest(
             self.output_root / "dualtrack" / "strategy_control" / "runtime.json"
         )
-        cycle_id = str(runtime.get("cycle_id") or "")
-        if not cycle_id:
-            return _check(
-                "cycle_decision",
-                "blocked",
-                code="cycle_decision_missing",
-                summary="Current Paper cycle has no durable strategy decision.",
-                next_action="Restore the current runtime identity and let one complete live tick record its decision.",
-            )
         health = CycleDecisionLedger(self.output_root).health(cycle_id)
         ready = health.get("status") == "ready"
+        if not ready:
+            plans_path = (
+                self.output_root
+                / "dualtrack"
+                / "strategy_control"
+                / "plans"
+                / f"{cycle_id}.json"
+            )
+            active_plans = [
+                row
+                for row in load_json(plans_path)
+                if isinstance(row, dict) and row.get("status") == "active"
+            ]
+            active_plan = active_plans[-1] if active_plans else {}
+            locked_at = _parse_ts(active_plan.get("locked_at"))
+            decision_config = dualtrack_config().get("cycle_decision")
+            decision_config = (
+                decision_config if isinstance(decision_config, dict) else {}
+            )
+            deadline = float(
+                decision_config.get("terminal_deadline_seconds") or 300
+            )
+            age = (now - locked_at).total_seconds() if locked_at else None
+            current_runtime_running = (
+                runtime.get("cycle_id") == cycle_id
+                and runtime.get("desired_state") == "running"
+                and runtime.get("actual_state") == "running"
+            )
+            if (
+                active_plan
+                and age is not None
+                and age > deadline
+                and not current_runtime_running
+            ):
+                health = {
+                    **health,
+                    "code": "cycle_decision_stalled_after_plan_activation",
+                    "strategy_plan_id": active_plan.get("strategy_plan_id"),
+                    "plan_locked_at": locked_at.isoformat(),
+                    "plan_age_seconds": round(age, 2),
+                    "terminal_deadline_seconds": deadline,
+                    "runtime_cycle_id": runtime.get("cycle_id"),
+                    "runtime_actual_state": runtime.get("actual_state"),
+                }
         return _check(
             "cycle_decision",
             "ready" if ready else "blocked",
@@ -194,7 +232,13 @@ class CloudPaperHealth:
             summary=(
                 "Current Paper cycle has exactly one durable strategy decision."
                 if ready
-                else "Current Paper cycle is missing one valid strategy decision."
+                else (
+                    "Current Paper cycle has an active plan but no terminal "
+                    "execution decision within its deadline."
+                    if health.get("code")
+                    == "cycle_decision_stalled_after_plan_activation"
+                    else "Current Paper cycle is missing one valid strategy decision."
+                )
             ),
             next_action=(
                 "No action."

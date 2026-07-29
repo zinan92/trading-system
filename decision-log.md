@@ -12105,3 +12105,48 @@ auditable datafeed port; broker execution remains a separate port.
   refusal, stale-tick/provider failure recording, manual/running adoption,
   opposite-direction open-position conflict, health detection and live-tick
   ordering.
+
+# 2026-07-29 — A cycle decision ends in execution, adoption or an explicit block
+
+## Decision
+
+- Creating and activating a StrategyPlan is an intermediate state, not a
+  completed cycle decision. Within five minutes of the cycle boundary the
+  scheduler-owned decision must be `executed`, `adopted_existing` or `blocked`.
+- A stopped, active AI plan is resumed through the existing
+  `prepare_start -> deterministic risk checks -> start` control path. The
+  scheduler does not request another AI evaluation merely because rollover
+  already created the plan.
+- A successful execution requires a positive, complete N/N order acceptance
+  and a published `running/running` runtime with the same accepted count.
+  Zero-order and partial/ambiguous starts are durable blocked decisions and are
+  never retried in the same cycle.
+- If no active plan exists, the external recommendation provider is bounded to
+  30 seconds inside the 55-second live-tick service deadline. Any provider,
+  market, risk or execution refusal becomes one immutable blocked decision
+  with machine code, explanation and next action.
+- Cloud health evaluates the wall-clock DAY/NIGHT cycle, not a stale runtime
+  identity, and explicitly detects an active plan left stopped beyond the
+  five-minute terminal deadline. The terminal receipt is exposed in the
+  canonical read-model.
+
+## Gotchas
+
+- `plan.status=active` means the specification is frozen; it does not prove
+  that any order exists. Treating it as success can leave an entire cycle
+  silently idle.
+- The recommendation timeout must remain shorter than the systemd live-tick
+  deadline. A longer child timeout lets systemd kill the process before the
+  blocked receipt can be written, causing an unsafe-looking retry loop.
+- Existing running plans are adopted, not restarted. Idempotency is anchored
+  by the immutable per-cycle decision record, so a later tick reads the
+  receipt and performs no control action.
+- The scheduler never signs human-only risk acknowledgements. If
+  `prepare_start` requires one, `blocked` is the correct terminal decision.
+
+## Verification
+
+- Focused tests cover fresh-plan complete start, an already active AI plan
+  starting without a second evaluation, stale/provider refusal with zero
+  orders, existing-running adoption, zero-order incomplete start, five-minute
+  stall detection, provider timeout wiring and canonical read-model exposure.

@@ -47,10 +47,12 @@ class StrategyRecommendationService:
         output_root: Path,
         *,
         decision_provider: Callable[[str], dict[str, Any]] | None = None,
+        provider_timeout_seconds: int | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.config = dualtrack_config()
         self.decision_provider = decision_provider or self._codex_decision
+        self.provider_timeout_seconds = provider_timeout_seconds
         self._last_raw_model_response: str | None = None
 
     def recommend(
@@ -363,7 +365,16 @@ class StrategyRecommendationService:
         planner = self.config.get("machine_planner") if isinstance(self.config.get("machine_planner"), dict) else {}
         command = str(planner.get("command") or "codex")
         model = str(planner.get("model") or "gpt-5.4")
-        timeout = int(planner.get("timeout_seconds") or 240)
+        timeout = int(
+            self.provider_timeout_seconds
+            if self.provider_timeout_seconds is not None
+            else planner.get("timeout_seconds") or 240
+        )
+        if timeout <= 0:
+            raise RecommendationProviderError(
+                "strategy_recommendation_provider_timeout_invalid",
+                str(timeout),
+            )
         command_args = shlex.split(command)
         if not command_args:
             raise RecommendationProviderError(

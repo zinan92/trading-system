@@ -13,6 +13,7 @@ from services.journal_store import load_json, write_json
 SCHEMA_VERSION = "paper-cycle-decision-v1"
 VALID_SOURCES = {"manual", "auto_ai"}
 VALID_OUTCOMES = {"executed", "not_executed", "position_conflict"}
+VALID_TERMINAL_STATUSES = {"executed", "blocked", "adopted_existing"}
 
 
 def _decision_id(payload: dict[str, Any]) -> str:
@@ -59,10 +60,16 @@ class CycleDecisionLedger:
             raise ValueError("cycle decision source must be manual or auto_ai")
         if outcome not in VALID_OUTCOMES:
             raise ValueError("invalid cycle decision outcome")
-        if outcome != "executed":
+        terminal_status = str(row.get("terminal_status") or "")
+        if not terminal_status:
+            terminal_status = "executed" if outcome == "executed" else "blocked"
+        if terminal_status not in VALID_TERMINAL_STATUSES:
+            raise ValueError("invalid cycle decision terminal_status")
+        if terminal_status == "blocked":
             for field in ("reason_code", "reason", "next_action"):
                 if not str(row.get(field) or "").strip():
-                    raise ValueError(f"non-executed cycle decision requires {field}")
+                    raise ValueError(f"blocked cycle decision requires {field}")
+        row["terminal_status"] = terminal_status
         row["schema_version"] = SCHEMA_VERSION
         row["decision_id"] = str(row.get("decision_id") or _decision_id(row))
         existing_rows = [
@@ -101,10 +108,16 @@ class CycleDecisionLedger:
                 "record_count": len(rows),
             }
         row = rows[0]
+        terminal_status = str(row.get("terminal_status") or "")
+        if not terminal_status:
+            terminal_status = (
+                "executed" if row.get("outcome") == "executed" else "blocked"
+            )
         valid = (
             row.get("schema_version") == SCHEMA_VERSION
             and row.get("source") in VALID_SOURCES
             and row.get("outcome") in VALID_OUTCOMES
+            and terminal_status in VALID_TERMINAL_STATUSES
             and str(row.get("decision_id") or "").startswith("cycle-decision-")
         )
         return {
@@ -115,6 +128,7 @@ class CycleDecisionLedger:
             "decision_id": row.get("decision_id"),
             "source": row.get("source"),
             "outcome": row.get("outcome"),
+            "terminal_status": terminal_status,
             "reason_code": row.get("reason_code"),
         }
 
@@ -170,6 +184,7 @@ class CycleDecisionCoordinator:
                     "recorded_at": now,
                     "source": "manual" if manual else "auto_ai",
                     "outcome": "executed",
+                    "terminal_status": "adopted_existing",
                     "reason_code": "",
                     "reason": "",
                     "next_action": "",
@@ -195,14 +210,42 @@ class CycleDecisionCoordinator:
             return {"status": "recorded", "decision": decision}
 
         try:
-            evaluation = refresh_recommendation()
-            recommendation = dict(evaluation.get("recommendation") or {})
-            proposal = dict(evaluation.get("proposal") or {})
-            preview = dict(evaluation.get("preview") or {})
-            receipt = dict(recommendation.get("evaluation_receipt") or {})
+            use_active_ai_plan = bool(current and not self._is_manual(current))
+            if use_active_ai_plan:
+                receipt = dict(current.get("evaluation_receipt") or {})
+                source_proposal_ids = [
+                    str(value)
+                    for value in current.get("source_proposal_ids") or []
+                    if str(value)
+                ]
+                evaluation = {}
+                recommendation = {
+                    "direction": current.get("direction"),
+                    "style": current.get("style"),
+                    "strategy_type": current.get("strategy_type") or "grid",
+                    "evaluation_receipt": receipt,
+                }
+                proposal = {
+                    "proposal_id": source_proposal_ids[0] if source_proposal_ids else "",
+                    "direction": current.get("direction"),
+                    "style": current.get("style"),
+                }
+                preview = {}
+            else:
+                evaluation = refresh_recommendation()
+                recommendation = dict(evaluation.get("recommendation") or {})
+                proposal = dict(evaluation.get("proposal") or {})
+                preview = dict(evaluation.get("preview") or {})
+                receipt = dict(recommendation.get("evaluation_receipt") or {})
             evaluation_id = str(receipt.get("evaluation_id") or "")
-            direction = str(recommendation.get("direction") or proposal.get("direction") or "")
-            strategy_type = str(recommendation.get("strategy_type") or "grid").lower()
+            direction = str(
+                recommendation.get("direction") or proposal.get("direction") or ""
+            )
+            strategy_type = str(
+                recommendation.get("strategy_type") or "grid"
+            ).lower()
+            if direction not in {"neutral", "long", "short"}:
+                raise RuntimeError("cycle_active_plan_direction_invalid")
 
             open_positions = [
                 dict(row)
@@ -273,7 +316,7 @@ class CycleDecisionCoordinator:
                 )
                 return {"status": "recorded", "decision": decision}
 
-            if strategy_type != "dca":
+            if strategy_type != "dca" and not use_active_ai_plan:
                 plane.lock_production_plan(
                     cycle_id,
                     selected_proposal_id=str(proposal.get("proposal_id") or ""),
@@ -323,9 +366,24 @@ class CycleDecisionCoordinator:
             )
             created = int(started.get("created_orders") or 0)
             accepted = int(started.get("accepted_orders") or 0)
-            if created != accepted:
+            started_runtime = dict(started.get("runtime") or {})
+            runtime_running = (
+                started_runtime.get("desired_state") == "running"
+                and started_runtime.get("actual_state") == "running"
+            )
+            runtime_accepted = int(
+                started_runtime.get("accepted_order_count") or accepted
+            )
+            if (
+                created <= 0
+                or created != accepted
+                or runtime_accepted != accepted
+                or not runtime_running
+            ):
                 raise RuntimeError(
-                    f"paper_start_incomplete:{created}/{accepted}"
+                    "paper_start_incomplete:"
+                    f"{created}/{accepted}/{runtime_accepted}/"
+                    f"{started_runtime.get('actual_state') or 'unknown'}"
                 )
             plan = dict(started.get("plan") or {})
             decision = self.ledger.record(
@@ -334,6 +392,7 @@ class CycleDecisionCoordinator:
                     "recorded_at": now,
                     "source": "auto_ai",
                     "outcome": "executed",
+                    "terminal_status": "executed",
                     "reason_code": "",
                     "reason": "",
                     "next_action": "",
@@ -344,6 +403,7 @@ class CycleDecisionCoordinator:
                     "preview_id": prepared_preview.get("preview_id"),
                     "orders_created": created,
                     "orders_accepted": accepted,
+                    "runtime_actual_state": started_runtime.get("actual_state"),
                 }
             )
             return {"status": "recorded", "decision": decision}

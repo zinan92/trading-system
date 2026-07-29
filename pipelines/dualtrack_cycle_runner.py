@@ -821,6 +821,14 @@ class DualTrackCycleRunner:
             "source": "cycle_decision_orchestrator",
         }
 
+        decision_config = self.config.get("cycle_decision")
+        decision_config = (
+            decision_config if isinstance(decision_config, dict) else {}
+        )
+        provider_timeout_seconds = int(
+            decision_config.get("provider_timeout_seconds") or 30
+        )
+
         def invoke(action: str, payload: dict[str, Any]) -> dict[str, Any]:
             return build_strategy_console_control_response(
                 {
@@ -831,6 +839,11 @@ class DualTrackCycleRunner:
                 },
                 output_root=self.output_root,
                 actor=actor,
+                recommendation_timeout_seconds=(
+                    provider_timeout_seconds
+                    if action == "refresh_recommendation"
+                    else None
+                ),
             )
 
         return CycleDecisionCoordinator(self.output_root).ensure(

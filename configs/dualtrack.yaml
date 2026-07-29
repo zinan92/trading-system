@@ -29,7 +29,9 @@
     "paper_grid": "paper_grid_risk"
   },
   "cycle_decision": {
-    "enabled": true
+    "enabled": true,
+    "provider_timeout_seconds": 30,
+    "terminal_deadline_seconds": 300
   },
   "market_session": {
     "enabled": false,
