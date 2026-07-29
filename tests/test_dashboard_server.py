@@ -1,3 +1,5 @@
+import io
+import json
 from pathlib import Path
 
 import pipelines.dashboard_server as dashboard_server
@@ -20,6 +22,50 @@ ORAL_MARKET_VIEW = (
     "计划只做空，反弹到 EMA50 附近出现顶分型入场，止损放顶分型高点。"
     "观点有效 4 小时，价格偏离 0.8% 失效，上破 4100 后停止使用。"
 )
+
+
+def test_formal_dashboard_diagnostics_support_all_views_and_strategy(monkeypatch) -> None:
+    class FakeState:
+        def __init__(self, output_root=None, market_db=None):
+            self.output_root = output_root or Path("/tmp/outputs")
+            self.market_db = market_db or Path("/tmp/market.db")
+
+        def snapshot(self, run_date):
+            return {"run_date": run_date, "source": "trusted-datafeed"}
+
+    monkeypatch.setattr(dashboard_server, "DashboardState", FakeState)
+    monkeypatch.setattr(dashboard_server, "compact_trader_payload", lambda payload: {**payload, "view": "trader"})
+    monkeypatch.setattr(dashboard_server, "compact_ops_payload", lambda payload: {**payload, "view": "ops"})
+    monkeypatch.setattr(
+        dashboard_server,
+        "compact_strategy_payload",
+        lambda payload: {**payload, "view": "strategy"},
+    )
+
+    for query, expected_view in (
+        ("view=full", None),
+        ("view=trader", "trader"),
+        ("view=ops", "ops"),
+        ("strategy=gold_1m_chan&view=full", None),
+        ("strategy=gold_1m_chan&view=trader", "strategy"),
+    ):
+        handler = object.__new__(dashboard_server.DashboardHandler)
+        handler.wfile = io.BytesIO()
+        statuses = []
+        errors = []
+        handler.send_response = statuses.append
+        handler.send_header = lambda *_args: None
+        handler.end_headers = lambda: None
+        handler.log_error = lambda *_args: None
+        handler._write_error = lambda *args: errors.append(args)
+
+        handler._handle_dashboard_api(query)
+
+        assert statuses == [200]
+        assert errors == []
+        payload = json.loads(handler.wfile.getvalue())
+        assert payload["source"] == "trusted-datafeed"
+        assert payload.get("view") == expected_view
 
 
 def test_read_model_selects_matching_dca_risk_decision(tmp_path: Path):
