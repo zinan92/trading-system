@@ -157,6 +157,9 @@ class DualTrackScorer:
                 stem = path.stem
                 if stem.endswith("_machine") or stem.endswith("_human"):
                     cycle_ids.add(stem.rsplit("_", 1)[0])
+        packages_dir = self.root / "strategy_cycle_packages"
+        if packages_dir.exists():
+            cycle_ids.update(path.stem for path in packages_dir.glob("*.json"))
         daily_dir = self.root / "ledger" / "daily"
         if daily_dir.exists():
             for path in daily_dir.glob("*.json"):
@@ -174,11 +177,13 @@ class DualTrackScorer:
                 continue
             machine_all = load_json(self._fills_path(cycle_id, "machine"))
             human_fills = load_json(self._fills_path(cycle_id, "human"))
+            production_projection = self._production_cycle_projection(cycle_id)
             self._write_daily_ledger(
                 cycle_id,
                 _live_execution_fills(machine_all),
                 human_fills,
                 _recovery_replay_fills(machine_all),
+                production_projection=production_projection,
             )
             dates.add(date)
         for date in sorted(dates):
@@ -232,18 +237,42 @@ class DualTrackScorer:
         machine_fills: list[dict[str, Any]],
         human_fills: list[dict[str, Any]],
         recovery_replay_fills: list[dict[str, Any]],
+        *,
+        production_projection: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         date = cycle_id.split("_", 1)[0]
         path = self.root / "ledger" / "daily" / f"{date}.json"
         existing = load_json(path)
         row = existing[-1] if existing else {"date": date, "cycles": {}}
-        machine = _pnl(machine_fills)
+        machine = (
+            round(float(production_projection["realized_pnl"]), 8)
+            if production_projection is not None
+            else _pnl(machine_fills)
+        )
+        machine_trade_count = (
+            int(production_projection["trade_count"])
+            if production_projection is not None
+            else _closed_trade_count(machine_fills)
+        )
+        machine_fill_count = (
+            int(production_projection["fill_count"])
+            if production_projection is not None
+            else len(machine_fills)
+        )
+        machine_source = (
+            str(production_projection["source"])
+            if production_projection is not None
+            else "dualtrack_live_execution_fills"
+        )
         human = _pnl(human_fills)
         recovery = _pnl(recovery_replay_fills)
         machine_recorded = round(machine + recovery, 8)
         row["cycles"][cycle_id] = {
             "machine": machine,
             "machine_recorded": machine_recorded,
+            "machine_trade_count": machine_trade_count,
+            "machine_fill_count": machine_fill_count,
+            "machine_source": machine_source,
             "human": human,
             "delta_machine_minus_human": round(machine_recorded - human, 8),
             "total": round(machine_recorded + human, 8),
@@ -260,12 +289,22 @@ class DualTrackScorer:
             8,
         )
         machine_total = round(machine_live + machine_recovery, 8)
+        machine_trade_total = sum(
+            int(item.get("machine_trade_count") or 0)
+            for item in row["cycles"].values()
+        )
+        machine_fill_total = sum(
+            int(item.get("machine_fill_count") or 0)
+            for item in row["cycles"].values()
+        )
         human_total = round(sum(float(item.get("human") or 0.0) for item in row["cycles"].values()), 8)
         row["tracks"] = {
             "machine": {
                 "realized_pnl": machine_total,
                 "live_observed_realized_pnl": machine_live,
                 "recovery_replay_realized_pnl": machine_recovery,
+                "trade_count": machine_trade_total,
+                "fill_count": machine_fill_total,
             },
             "human": {"realized_pnl": human_total},
         }
@@ -273,6 +312,68 @@ class DualTrackScorer:
         row["total_pnl"] = round(row["tracks"]["machine"]["realized_pnl"] + row["tracks"]["human"]["realized_pnl"], 8)
         write_json(path, [row])
         return row
+
+    def _production_cycle_projection(self, cycle_id: str) -> dict[str, Any] | None:
+        """Project immutable terminal execution truth into the derived ledger.
+
+        Legacy simulation fills and production Paper execution use different
+        stores.  A terminal package is the only immutable record that binds the
+        production plan, fills, closed positions, reconciliation and PnL.  It
+        may override legacy fill-derived values only after its complete hash
+        chain verifies and the package is terminal.
+        """
+
+        path = self.root / "strategy_cycle_packages" / f"{cycle_id}.json"
+        if not path.exists():
+            return None
+        # Local import avoids the execution-adapter compatibility cycle:
+        # strategy_cycle_package -> execution composition -> legacy adapter ->
+        # dualtrack_scoring.
+        from services.strategy_cycle_package import load_latest_verified_cycle_package
+
+        try:
+            package = load_latest_verified_cycle_package(path)
+        except ValueError as exc:
+            raise ValueError(
+                f"verified production cycle package required for ledger projection: {cycle_id}"
+            ) from exc
+        if str(package.get("status") or "") != "closed":
+            return None
+        execution = package.get("execution")
+        if not isinstance(execution, dict):
+            return None
+        reconciliation = execution.get("reconciliation")
+        if not isinstance(reconciliation, dict):
+            return None
+        if str(reconciliation.get("status") or "").lower() != "ok":
+            return None
+        if reconciliation.get("issues"):
+            return None
+        pnl = execution.get("pnl")
+        if not isinstance(pnl, dict) or _optional_number(pnl.get("realized")) is None:
+            return None
+        positions = [
+            row
+            for row in execution.get("positions") or []
+            if isinstance(row, dict)
+        ]
+        closed_positions = [
+            row
+            for row in positions
+            if str(row.get("status") or "").lower() == "closed"
+        ]
+        fills = [
+            row
+            for row in execution.get("fills") or []
+            if isinstance(row, dict)
+        ]
+        return {
+            "realized_pnl": round(float(pnl["realized"]), 8),
+            "trade_count": len(closed_positions),
+            "fill_count": len(fills),
+            "source": "verified_strategy_cycle_package.execution",
+            "package_hash": str(package.get("package_hash") or ""),
+        }
 
     def _write_weekly_ledger(self, date: str) -> dict[str, Any]:
         week = _iso_week(date)
@@ -304,6 +405,14 @@ class DualTrackScorer:
         machine = round(sum(row["tracks"]["machine"]["realized_pnl"] for row in daily_rows), 8)
         machine_live = round(sum(row["tracks"]["machine"].get("live_observed_realized_pnl", row["tracks"]["machine"]["realized_pnl"]) for row in daily_rows), 8)
         machine_recovery = round(sum(row["tracks"]["machine"].get("recovery_replay_realized_pnl", 0.0) for row in daily_rows), 8)
+        machine_trades = sum(
+            int(row["tracks"]["machine"].get("trade_count") or 0)
+            for row in daily_rows
+        )
+        machine_fills = sum(
+            int(row["tracks"]["machine"].get("fill_count") or 0)
+            for row in daily_rows
+        )
         human = round(sum(row["tracks"]["human"]["realized_pnl"] for row in daily_rows), 8)
         payload = {
             "week": week,
@@ -313,6 +422,8 @@ class DualTrackScorer:
                     "realized_pnl": machine,
                     "live_observed_realized_pnl": machine_live,
                     "recovery_replay_realized_pnl": machine_recovery,
+                    "trade_count": machine_trades,
+                    "fill_count": machine_fills,
                 },
                 "human": {"realized_pnl": human},
             },
@@ -1222,6 +1333,14 @@ def _human_next_iteration(
 
 def _pnl(fills: list[dict[str, Any]]) -> float:
     return round(sum(float(fill.get("realized_pnl", 0.0)) for fill in fills), 8)
+
+
+def _closed_trade_count(fills: list[dict[str, Any]]) -> int:
+    return sum(
+        1
+        for trade in _trades_from_fills(fills, track="machine")
+        if str(trade.get("status") or "").lower() == "closed"
+    )
 
 
 def _live_execution_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -11,6 +11,7 @@ from services.dualtrack_machine import DualTrackMachineRunner
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore
 from services.journal_store import load_json, write_json
+from services.strategy_cycle_package import _hash_payload
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
@@ -136,6 +137,59 @@ def test_rebuild_ledgers_skips_malformed_legacy_cycle_dates_and_records_diagnost
         "reason": "non_iso_date",
         "recorded_at": diagnostics[0]["recorded_at"],
     }]
+
+
+def test_rebuild_ledgers_projects_verified_terminal_production_trades(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-28_DAY"
+    scorer = DualTrackScorer(output, config=TEST_CONFIG)
+    write_json(output / "dualtrack" / "fills" / f"{cycle_id}_machine.json", [])
+    package = {
+        "schema_version": "strategy-cycle-package-v1",
+        "cycle_id": cycle_id,
+        "status": "closed",
+        "blockers": [],
+        "execution": {
+            "fills": [
+                {"fill_id": "entry-a", "event": "entry"},
+                {"fill_id": "exit-a", "event": "target"},
+                {"fill_id": "entry-b", "event": "entry"},
+                {"fill_id": "exit-b", "event": "flatten"},
+                {"fill_id": "entry-c", "event": "entry"},
+                {"fill_id": "exit-c", "event": "flatten"},
+            ],
+            "positions": [
+                {"trade_id": "a", "status": "closed", "realized_pnl": 11.01387},
+                {"trade_id": "b", "status": "closed", "realized_pnl": -14.71923648},
+                {"trade_id": "c", "status": "closed", "realized_pnl": -3.767825},
+            ],
+            "pnl": {"realized": -7.47319148, "unrealized": 0.0},
+            "reconciliation": {"status": "ok", "issues": []},
+        },
+    }
+    package["package_hash"] = _hash_payload(package)
+    write_json(
+        output / "dualtrack" / "strategy_cycle_packages" / f"{cycle_id}.json",
+        [package],
+    )
+
+    scorer.rebuild_ledgers()
+
+    daily = load_json(
+        output / "dualtrack" / "ledger" / "daily" / "2026-07-28.json"
+    )[-1]
+    assert daily["cycles"][cycle_id]["machine"] == pytest.approx(-7.47319148)
+    assert daily["cycles"][cycle_id]["machine_trade_count"] == 3
+    assert daily["cycles"][cycle_id]["machine_fill_count"] == 6
+    assert daily["cycles"][cycle_id]["machine_source"] == (
+        "verified_strategy_cycle_package.execution"
+    )
+    assert daily["tracks"]["machine"]["trade_count"] == 3
+    assert daily["tracks"]["machine"]["fill_count"] == 6
+    assert daily["tracks"]["machine"]["realized_pnl"] == pytest.approx(-7.47319148)
+    assert daily["total_pnl"] == pytest.approx(-7.47319148)
 
 
 def test_recovery_replay_is_preserved_but_excluded_from_paper_pnl(tmp_path: Path) -> None:
