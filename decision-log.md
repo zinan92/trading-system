@@ -29,6 +29,16 @@ Date: 2026-07-30
 - A missing control response is not a retry signal. It is
   `control_outcome_unknown` until authoritative runtime and append-only
   control-audit reconciliation establish what occurred.
+- An envelope is an additional policy boundary, never a substitute for an
+  existing preview-bound manual acknowledgement. Grid and DCA retain their
+  original acknowledgement and immediate pre-submit safety checks.
+- Start materializes a derived execution plan. Audit evidence must therefore
+  link the immutable source plan, the fresh preview, and the new execution
+  plan explicitly rather than pretending their plan identities are equal.
+- Generic control-audit payloads intentionally bound nested content, so they
+  cannot be the sole evidence surface for field-level envelope comparisons.
+  A separate append-only start-verification receipt retains the complete rows
+  before a start invocation without claiming that execution later succeeded.
 
 ### Verification
 

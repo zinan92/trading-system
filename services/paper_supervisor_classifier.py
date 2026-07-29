@@ -22,13 +22,7 @@ _EXACT_TRANSIENT = {
 _EXACT_STRUCTURAL = {
     "prepared_start_changed": "prepared_start_identity_changed",
     "strategy_preview_changed": "strategy_preview_identity_changed",
-    "cannot prepare start without an active StrategyPlan": "active_plan_missing",
-    "cannot start without an already selected active StrategyPlan": "active_plan_missing",
-    "robot is already running; stop it before changing the grid": "runtime_state_conflict",
     "strategy_plan_changed": "runtime_state_conflict",
-    "new grid start requires zero accepted orders and zero open positions": "existing_exposure_conflict",
-    "paper ledger reconciliation failed": "ledger_reconciliation_drift",
-    "paper start receipts require valid unique order IDs": "execution_receipt_identity_invalid",
     "range_risk_acknowledgements_incomplete": "manual_risk_confirmation_required",
     "dca_risk_acknowledgements_incomplete": "manual_risk_confirmation_required",
 }
@@ -68,6 +62,16 @@ def classify_blocker(
         return _result("risk_envelope_authorization_invalid", STRUCTURAL, code, typed)
     if typed.get("risk_envelope") == "out_of_bounds":
         return _result("risk_envelope_preview_out_of_bounds", STRUCTURAL, code, typed)
+    if typed.get("active_plan") == "missing":
+        return _result("active_plan_missing", STRUCTURAL, code, typed)
+    if typed.get("runtime") == "conflict":
+        return _result("runtime_state_conflict", STRUCTURAL, code, typed)
+    if typed.get("execution") == "existing_exposure_conflict":
+        return _result("existing_exposure_conflict", STRUCTURAL, code, typed)
+    if typed.get("reconciliation") == "drift":
+        return _result("ledger_reconciliation_drift", STRUCTURAL, code, typed)
+    if typed.get("order_identity") == "invalid":
+        return _result("execution_receipt_identity_invalid", STRUCTURAL, code, typed)
     if typed.get("tick_episode_seconds") is not None:
         age = _finite_nonnegative(typed.get("tick_episode_seconds"))
         if age is None:

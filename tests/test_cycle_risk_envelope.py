@@ -41,9 +41,50 @@ def _preview(**overrides: object) -> dict:
         (grid if section == "grid" else risk)[field] = value
     return {
         "strategy_type": "grid",
+        "direction": "neutral",
         "preview_id": "grid-preview-fresh",
         "grid": grid,
         "risk": risk,
+    }
+
+
+def _dca_plan() -> dict:
+    return {
+        "cycle_id": "2026-07-30_DAY",
+        "strategy_plan_id": "strategy-plan-2026-07-30_DAY-1-dca",
+        "version": 1,
+        "strategy_type": "dca",
+        "direction": "long",
+        "dca": {"max_additions": 2},
+        "risk_budget": {"leverage": 3},
+    }
+
+
+def _dca_limits() -> dict:
+    return {
+        "max_actual_leverage": "3",
+        "max_full_depth_loss": "100",
+        "max_notional_per_addition": "50",
+        "max_total_possible_notional": "150",
+        "min_additions": "1",
+        "max_additions": "3",
+    }
+
+
+def _dca_preview() -> dict:
+    return {
+        "strategy_type": "dca",
+        "direction": "long",
+        "preview_id": "dca-preview-fresh",
+        "dca": {
+            "notional_per_addition": "50",
+            "total_possible_notional": "150",
+            "max_additions": 2,
+        },
+        "risk": {
+            "actual_leverage_at_full_depth": "3",
+            "maximum_loss_at_full_depth": "100",
+        },
     }
 
 
@@ -93,7 +134,8 @@ def test_envelope_rejects_even_small_out_of_bound_value(tmp_path: Path) -> None:
         )
 
 
-def test_ai_envelope_must_be_nested_inside_human_policy(tmp_path: Path) -> None:
+def test_ai_envelope_must_be_nested_inside_human_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOLDBOT_ACCESS_EMAIL", "park@example.com")
     store = CycleRiskEnvelopeStore(tmp_path)
     policy = store.authorize_outer_policy(
         payload={
@@ -101,6 +143,7 @@ def test_ai_envelope_must_be_nested_inside_human_policy(tmp_path: Path) -> None:
             "version": 1,
             "strategy_type": "grid",
             "direction": "neutral",
+            "summary": "Park-approved Grid policy boundary",
             "limits": _limits(max_notional_per_grid="60"),
         },
         actor={"email": "park@example.com"},
@@ -132,6 +175,82 @@ def test_ai_envelope_must_be_nested_inside_human_policy(tmp_path: Path) -> None:
             actor=None,
         )
 
+    with pytest.raises(CycleRiskEnvelopeError, match="outer_strategy_policy_envelope_out_of_bounds"):
+        store.authorize_envelope(
+            cycle_id="2026-07-30_DAY",
+            plan={**_plan(), "direction": "long"},
+            payload={
+                "authorization_kind": "ai_policy_within_preapproved_strategy_boundary",
+                "outer_policy_id": policy["policy_id"],
+                "outer_policy_version": policy["version"],
+                "limits": _limits(),
+            },
+            actor=None,
+        )
+
+
+def test_dca_envelope_uses_full_depth_loss_field_and_links_execution_plan(tmp_path: Path) -> None:
+    store = CycleRiskEnvelopeStore(tmp_path)
+    envelope = store.authorize_envelope(
+        cycle_id="2026-07-30_DAY",
+        plan=_dca_plan(),
+        payload={"authorization_kind": "human_explicit", "limits": _dca_limits()},
+        actor={"email": "park@example.com"},
+    )
+    verification = store.verify_preview(
+        cycle_id="2026-07-30_DAY",
+        plan=_dca_plan(),
+        envelope_authorization_id=envelope["envelope_authorization_id"],
+        preview=_dca_preview(),
+    )
+    linked = store.bind_execution_plan(
+        verification,
+        {
+            **_dca_plan(),
+            "strategy_plan_id": "strategy-plan-2026-07-30_DAY-2-dca",
+            "version": 2,
+            "preview_id": verification["preview_id"],
+            "dca": {
+                "max_additions": 2,
+                "notional_per_addition": "50",
+                "total_possible_notional": "150",
+            },
+            "risk_budget": {
+                "actual_leverage_at_full_depth": "3",
+                "maximum_loss_at_full_depth": "100",
+            },
+        },
+    )
+    assert linked["execution_plan"]["strategy_plan_id"].endswith("-2-dca")
+    assert all(row["pass"] for row in verification["comparisons"])
+    receipt = store.record_start_verification(
+        cycle_id="2026-07-30_DAY",
+        verification=linked,
+        prepared_start_id="prepared-start-fresh",
+    )
+    assert receipt["comparisons"] == linked["comparisons"]
+    assert receipt["execution_plan"] == linked["execution_plan"]
+
+    with pytest.raises(CycleRiskEnvelopeError, match="plan_identity_conflict"):
+        store.bind_execution_plan(
+            verification,
+            {
+                **_dca_plan(),
+                "strategy_plan_id": "strategy-plan-2026-07-30_DAY-3-dca",
+                "version": 3,
+                "preview_id": "dca-preview-other",
+                "dca": {
+                    "max_additions": 2,
+                    "notional_per_addition": "50",
+                    "total_possible_notional": "150",
+                },
+                "risk_budget": {
+                    "actual_leverage_at_full_depth": "3",
+                    "maximum_loss_at_full_depth": "100",
+                },
+            },
+        )
+
 
 def test_classifier_is_closed_and_tick_dead_after_ten_minutes() -> None:
     assert classify_blocker(control_code="prepared_start_market_moved")["classification"] == TRANSIENT
@@ -150,10 +269,13 @@ def test_classifier_is_closed_and_tick_dead_after_ten_minutes() -> None:
     unknown = classify_blocker(control_code="new_unclassified_failure")
     assert unknown["machine_code"] == "unknown_blocker"
     assert unknown["classification"] == STRUCTURAL
+    prose = classify_blocker(control_code="paper ledger reconciliation failed")
+    assert prose["machine_code"] == "unknown_blocker"
     assert classify_blocker(evidence={"control_outcome": "unknown"})["machine_code"] == "control_outcome_unknown"
 
 
-def test_control_plane_audits_human_policy_and_cycle_envelope(tmp_path: Path) -> None:
+def test_control_plane_audits_human_policy_and_cycle_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOLDBOT_ACCESS_EMAIL", "park@example.com")
     plane = StrategyControlPlane(tmp_path / "outputs")
     cycle_id = "2026-07-30_DAY"
     plan = _plan()
@@ -168,6 +290,7 @@ def test_control_plane_audits_human_policy_and_cycle_envelope(tmp_path: Path) ->
             "version": 1,
             "strategy_type": "grid",
             "direction": "neutral",
+            "summary": "Park-approved Grid policy boundary",
             "limits": _limits(),
         },
         actor=actor,
