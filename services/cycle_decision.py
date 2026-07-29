@@ -149,6 +149,56 @@ def _error_code(exc: Exception) -> str:
     return text.split(":", 1)[0].replace(" ", "_").lower()
 
 
+_BLOCKER_GUIDANCE = {
+    "prepared_start_market_moved": (
+        "The trusted market moved across the frozen grid geometry after preview, "
+        "so the prepared start is no longer safe to execute.",
+        "Keep this cycle stopped. Let the next cycle create a fresh plan from "
+        "current trusted market data; do not replay this start.",
+    ),
+    "prepared_start_expired": (
+        "The frozen Paper start preview expired before execution.",
+        "Keep this cycle stopped and wait for the next scheduler-owned cycle "
+        "decision; do not replay the expired start.",
+    ),
+    "prepared_start_changed": (
+        "The frozen Paper start specification changed before execution.",
+        "Keep this cycle stopped and inspect the plan/preview identity before "
+        "the next cycle; do not replay this start.",
+    ),
+    "strategy_preview_changed": (
+        "The deterministic strategy preview changed before execution.",
+        "Keep this cycle stopped and let the next cycle build a fresh preview "
+        "from current facts.",
+    ),
+    "paper_execution_tick_unavailable": (
+        "The required complete Paper execution tick was missing or stale.",
+        "Restore a fresh complete tick and wait for the next cycle decision; "
+        "do not replay this start.",
+    ),
+    "paper_start_incomplete": (
+        "The Paper execution engine did not publish a positive, complete N/N "
+        "order acceptance with a running runtime.",
+        "Inspect the execution and rollback receipts. Do not retry this cycle's "
+        "start or assume that any order is active.",
+    ),
+}
+
+
+def _blocker_details(exc: Exception) -> tuple[str, str, str]:
+    code = _error_code(exc)
+    guidance = _BLOCKER_GUIDANCE.get(code)
+    if guidance:
+        return code, guidance[0], guidance[1]
+    return (
+        code,
+        f"The automatic Paper cycle decision was blocked by "
+        f"{type(exc).__name__} ({code}).",
+        "Inspect the recorded machine code and relevant control receipt. "
+        "Resolve the blocker before a later cycle; do not replay this cycle.",
+    )
+
+
 class CycleDecisionCoordinator:
     """Execute one scheduler-owned Paper decision through normal controls."""
 
@@ -408,15 +458,16 @@ class CycleDecisionCoordinator:
             )
             return {"status": "recorded", "decision": decision}
         except Exception as exc:
+            reason_code, reason, next_action = _blocker_details(exc)
             decision = self.ledger.record(
                 {
                     "cycle_id": cycle_id,
                     "recorded_at": now,
                     "source": "auto_ai",
                     "outcome": "not_executed",
-                    "reason_code": _error_code(exc),
-                    "reason": str(exc) or type(exc).__name__,
-                    "next_action": "Resolve the recorded blocker and wait for the next cycle; do not replay this cycle decision.",
+                    "reason_code": reason_code,
+                    "reason": reason,
+                    "next_action": next_action,
                     "orders_created": 0,
                 }
             )

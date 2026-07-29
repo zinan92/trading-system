@@ -47,6 +47,7 @@
 - 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。
 - 监测自然 tick 单次耗时和 `late_ignored` 数量；如果再发生 timeout、不可变成交回归或执行/会计对账漂移，按独立缺陷 Issue fail-closed 处理，不得重放控制动作。
 - #440 完成 #415 的执行终态返工：`plan active` 不再等于决策完成；每个周期须在 5 分钟内进入 `executed / blocked / adopted_existing`。已有 AI 计划直接走正常 `prepare_start → 风险闸 → start`，不重复跑 AI；成功必须正数 N/N 委托且 runtime=`running/running`，其余情况留下机器码、原因与下一步且同周期不重试。真钱/live 仍需 Park 本人 `park-approved`。
+- #442 补齐自动周期阻塞的操作者说明：机器码与人类原因/下一步分离；已知安全拒绝给出具体 no-replay 动作，未知异常不把原始详情投影到 read-model。2026-07-29 NIGHT 的既有 blocked 决策保持不可变，未发生第二次 start。
 - M1-02:补齐 tick 剩余路由/账本失败阶段的诊断与恢复动作证据；不重做现有 180 秒心跳闸，不放宽任何 Paper 启动保护。
 - M3-05:审计当前生产策略摘要与持仓/委托/成交表的字段、计数、对齐和桌面可读性；只补复现的完整性或可理解性缺口。
 - M1 安全恢复:继续验证 read-model 在浏览器轮询下的完成率；#276 已隔离并压缩重证据，若再出现超时，按阶段记录原因与回执，在有证据前不自动重试任何控制动作。
@@ -61,6 +62,7 @@
 ## Appendix — 历史记录(只追加,原文搬运,不删除)
 
 ### 2026-07-29 逐票记录
+- #442: `prepared_start_market_moved` 等周期启动安全码现映射为明确的人类原因和下一步；未知异常只公开类型与稳定码，避免把潜在敏感原始详情带入 read-model。当前 NIGHT 决策与执行历史均未改写。
 - #440: 周期决策的完成态改为“已执行、明确阻塞或接管既有运行策略”；Cloud health 按当前时钟周期检测 active 计划超过 5 分钟仍 stopped 的中间态，canonical read-model 公开终态回执。AI provider 在 live-tick 内限时 30 秒，避免 systemd 先杀进程而来不及留下 blocked receipt。
 - #415: 每个 DAY/NIGHT Paper 周期现在必须有且仅有一条不可变决策；完整 live tick 后若无人工决策会生成新 AI 建议并走正常 `prepare_start → start`。人工风险确认不得自动代签；已有持仓与新方向冲突时只按精确 ID 撤掉待成交入场单，保护单身份必须保持不变，不平仓、不反手、不对冲、不创建新单，并等待自然退出。Cloud health 会将缺失或重复决策标为 blocked。
 - #413: 12 小时周期边界在且仅在当前周期 active StrategyPlan 显式引用旧计划、执行 tick/行情新鲜、Nautilus 新命名空间对账通过且 accepted order/open position/Grid lifecycle ID 全部不变时执行 Paper handoff；旧周期以 `terminal_mode=handed_off` 封包，realized 留旧账、unrealized 随仓位进新账。任何缺项保留原安全撤单/平仓路径并记录确切原因。
