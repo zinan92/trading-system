@@ -62,8 +62,6 @@ class CodexNewsletterStrategyProposal:
                 "-",
             ]
             env = dict(os.environ)
-            path_parts = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", str(env.get("PATH") or "")]
-            env["PATH"] = ":".join(part for part in path_parts if part)
             result = subprocess.run(
                 args,
                 input=prompt,

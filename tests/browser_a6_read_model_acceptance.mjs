@@ -1,8 +1,9 @@
 import {writeFile} from "node:fs/promises";
+import path from "node:path";
 
 const debugBase = process.env.CHROME_DEBUG_URL || "http://127.0.0.1:9229";
 const dashboardUrl = process.env.A6_DASHBOARD_URL || "http://127.0.0.1:8876/dashboard-v5.html";
-const evidenceRoot = process.env.A6_EVIDENCE_ROOT || "/Users/wendy/park-io/008_codex session insights and decision logs/交易系统/evidence";
+const evidenceRoot = process.env.A6_EVIDENCE_ROOT || path.resolve("docs/evidence/browser");
 
 const pages = await (await fetch(`${debugBase}/json/list`)).json();
 let page = pages.find(item => item.type === "page" && item.url.includes("dashboard-v5.html"));

@@ -17,6 +17,7 @@ from services.config_loader import (
     load_dualtrack_config,
     load_pipeline_config,
 )
+from services.cloud_linux_portability import audit_cloud_runtime
 from services.datafeed_market_client import DatafeedMarketClient
 from services.journal_store import write_json
 from services.paper_release_receipt import current_source_attestation
@@ -68,6 +69,7 @@ class CloudPaperPreflight:
     def run(self) -> dict[str, Any]:
         checks = [
             self._check("linux_os", self._linux_os),
+            self._check("linux_runtime_portability", self._linux_runtime_portability),
             self._check("source_attestation", self._source),
             self._check("paper_only", self._paper_only),
             self._check("loopback_ports", self._loopback_ports),
@@ -138,6 +140,19 @@ class CloudPaperPreflight:
         if self.platform_name != "Linux":
             raise RuntimeError(f"expected Linux; observed {self.platform_name}")
         return {"observed": self.platform_name}
+
+    def _linux_runtime_portability(self) -> dict[str, Any]:
+        result = audit_cloud_runtime(ROOT)
+        if result["status"] != "pass":
+            raise RuntimeError(
+                "Cloud runtime contains macOS or personal path dependencies: "
+                f"{result['violations'] or result['missing_paths']}"
+            )
+        return {
+            "schema_version": result["schema_version"],
+            "file_count": result["file_count"],
+            "violations": [],
+        }
 
     def _source(self) -> dict[str, Any]:
         attestation = self.source_attestation()
@@ -318,6 +333,9 @@ class CloudPaperPreflight:
     def _next_action(check_id: str) -> str:
         actions = {
             "linux_os": "Run this preflight on the target Linux host.",
+            "linux_runtime_portability": (
+                "Remove macOS or personal absolute paths from the declared Cloud runtime closure."
+            ),
             "source_attestation": "Deploy a clean committed SHA before installing services.",
             "paper_only": "Restore Paper-only flags; do not continue with live-capable configuration.",
             "loopback_ports": "Bind datafeed and Dashboard to loopback-only URLs.",

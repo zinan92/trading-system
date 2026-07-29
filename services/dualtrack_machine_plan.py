@@ -19,7 +19,7 @@ from services.strategy_proposal_port import (
 )
 
 
-DEFAULT_NEWSLETTER_ROOT = Path("/Users/wendy/park-io/007_finance daily newsletter")
+DEFAULT_NEWSLETTER_ROOT = ROOT / "inputs" / "newsletters"
 PROPOSABLE_DECISION_FIELDS = frozenset({
     "direction",
     "range",
@@ -53,7 +53,10 @@ class DualTrackMachinePlanner:
         self.config = config or dualtrack_config()
         planner_config = self.config.get("machine_planner") if isinstance(self.config.get("machine_planner"), dict) else {}
         configured_root = planner_config.get("newsletter_root")
-        self.newsletter_root = Path(newsletter_root or configured_root or DEFAULT_NEWSLETTER_ROOT)
+        selected_root = Path(newsletter_root or configured_root or DEFAULT_NEWSLETTER_ROOT)
+        self.newsletter_root = (
+            selected_root if selected_root.is_absolute() else ROOT / selected_root
+        )
         if decision_provider is not None and proposal_runtime is not None:
             raise ValueError("decision_provider cannot be combined with proposal_runtime")
         if proposal_runtime is None:

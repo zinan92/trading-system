@@ -398,8 +398,6 @@ class StrategyRecommendationService:
                 "--output-last-message", str(result_path), "-",
             ]
             env = dict(os.environ)
-            path_parts = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", str(env.get("PATH") or "")]
-            env["PATH"] = ":".join(part for part in path_parts if part)
             try:
                 result = subprocess.run(
                     args,

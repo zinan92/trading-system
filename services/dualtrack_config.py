@@ -44,7 +44,7 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "command": "codex",
         "model": "gpt-5.4",
         "timeout_seconds": 240,
-        "newsletter_root": "/Users/wendy/park-io/007_finance daily newsletter",
+        "newsletter_root": "inputs/newsletters",
         "volatility_lookback_cycles": 10,
         "minimum_active_cycle_samples": 3,
         "minimum_sample_coverage_pct": 0.8,
