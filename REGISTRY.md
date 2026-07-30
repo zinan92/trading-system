@@ -4,6 +4,7 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-30)
+- #464 已实现但尚未接入或部署：Paper Supervisor 现在有独立的 append+fsync 哈希事件链、原子状态投影和稳定 inode 的非阻塞单飞锁；任何 `prepared_start_id` 在 `start_intent` 落盘后永久作废。响应丢失只在 active plan、runtime、精确订单 fingerprints、双层对账与 append-only 控制审计全部一致时收口为 `executed` 或可分类的零订单干净拒绝，其余一律 `control_outcome_unknown`，恢复过程零控制调用。该模块尚未连接自然 tick、Dashboard 或 Nautilus，不代表 Supervisor 已上线。
 - #476 将 full-schedule 测试所断言的 attended Paper Nautilus runtime 改为显式 fixture，并新增缺少 runtime path 时不得凭空生成授权环境的反例；这是测试基线修复，不改变 scheduler、unit、云端运行状态或任何交易路径。
 - #462 已实现但尚未部署：Paper Supervisor 的 AI 授权只能嵌套在 Park 通过
   Cloudflare Access 显式签发并不可变持久化的外层策略内；Gateway、
@@ -65,6 +66,7 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- #465 在 #464 的持久化边界上实现 episode 退避/30 分钟 probe、危险尝试 cap=2、已证明零订单的 clean-refusal guard=48 与十分钟 heartbeat promotion；任何新鲜重试都必须使用全新 preview/prepared 身份，旧 intent 永不重放。
 - #460–#472/#474 Paper Supervisor 阶段二：v2 合同已冻结；Cloud 当前保持
   #474 的 `742c49fd1079c5a70ea710d9ba781f36483cf8bb`，每个自然 Paper tick
   只追加 source-bound 分阶段耗时回执，零控制动作。#461 必须在这一相同

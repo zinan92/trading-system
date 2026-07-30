@@ -1,5 +1,53 @@
 # Decision Log
 
+## Supervisor start attempts are durable before control (Issue #464)
+
+Date: 2026-07-30
+
+### Decision
+
+- Use a never-replaced `.lease.lock` inode with non-blocking `flock` as the
+  only Supervisor writer capability. `lease.json` is an atomic observation;
+  it is not lock authority.
+- Make the per-cycle JSONL event chain authoritative. Every event has an exact
+  sequence, previous hash and content hash, and is appended with flush/fsync.
+  The cycle state is a deterministic atomic projection with file and directory
+  fsync.
+- Persist and fsync `start_intent` before invoking the injected public Paper
+  start operation. Any `prepared_start_id` that appears in an intent remains
+  permanently spent, including after a crash or a clean rejection.
+- Resolve an unfinished intent only from an exact active-plan identity,
+  runtime identity, accepted-order fingerprint set, both reconciliation
+  statuses and the append-only control audit. Complete agreement yields
+  `executed`; proven stopped/zero-order rejection may be classified for a
+  wholly fresh attempt; every other shape is `control_outcome_unknown`.
+
+### Gotchas
+
+- A response saying “rejected” is not enough to prove a clean refusal. Missing
+  audit, one position, one order fingerprint, reconciliation drift, duplicate
+  control events or plan identity drift all remain structurally unknown.
+- A fresh attempt after a clean transient is different from replaying the old
+  prepared start. Recovery therefore exposes
+  `fresh_attempt_classification_required=true` while keeping
+  `same_prepared_start_retry_allowed=false`.
+- A crash can durably append an event before replacing its derived state. A
+  valid event-chain prefix is replayed deterministically; a corrupt,
+  nonsequential, ahead-of-log or rehashed-divergent state is never guessed or
+  repaired and becomes `attempt_store_corrupt`.
+- This story supplies an injected operation seam only. It is not wired into a
+  natural tick, scheduler, Dashboard control or execution adapter and creates
+  no Paper orders by itself.
+
+### Verification
+
+- Focused tests cover stable lock inode, non-blocking contention, fsync-before-
+  operation ordering, crash-after-intent, permanent prepared-id spending,
+  exact executed/clean/unknown recovery, stale projection replay, corrupt
+  hashes/sequences and two-process exactly-once invocation.
+- Supervisor v2 contract and cycle-risk envelope tests remain unchanged and
+  green.
+
 ## Live-Tick Timing Is Observation, Not a New Gate
 
 Date: 2026-07-30
