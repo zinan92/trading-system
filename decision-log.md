@@ -12254,3 +12254,20 @@ auditable datafeed port; broker execution remains a separate port.
   projection may derive the current operator guidance when the stored reason
   is empty or merely repeats a known machine code; the projection marks
   `guidance_derived=true` and preserves the decision identity and raw artifact.
+
+# 2026-07-30 — Dynamic dead-man timer contract correction (Issue #444)
+
+## Decision
+
+- Require a future trigger timestamp only for the calendar-driven 24h-report
+  timer. The dead-man timer instead requires its canonical target and exact
+  `OnUnitInactiveSec=300` cadence.
+
+## Gotchas
+
+- systemd deliberately leaves `NextElapseUSecRealtime` empty for an
+  `OnUnitInactiveSec` timer. Treating it as a universal invariant would block
+  the same dead-man safety path this contract is intended to protect.
+- `active + enabled` is still insufficient evidence: the machine contract
+  checks cadence, and deployment must additionally confirm a fresh persisted,
+  endpoint-accepted dead-man delivery receipt.

@@ -14,7 +14,8 @@ def _runner(command, **_kwargs):
             0,
             "\n".join([
                 f"Id={unit}", "LoadState=loaded", "UnitFileState=enabled",
-                "ActiveState=active", "NextElapseUSecRealtime=Fri 2026-07-31 01:03:00 CST",
+                "ActiveState=active",
+                "NextElapseUSecRealtime=Fri 2026-07-31 01:03:00 CST" if unit == "gridmind-daily-24h.timer" else "NextElapseUSecRealtime=",
             ]),
             "",
         )
@@ -33,7 +34,7 @@ def test_cloud_timer_contract_requires_canonical_enabled_active_timers(tmp_path:
     }
 
 
-def test_cloud_timer_contract_fails_closed_without_next_trigger(tmp_path: Path):
+def test_cloud_timer_contract_fails_closed_without_daily_next_trigger(tmp_path: Path):
     def missing_next(command, **kwargs):
         result = _runner(command, **kwargs)
         if command[1] == "show":
@@ -44,3 +45,16 @@ def test_cloud_timer_contract_fails_closed_without_next_trigger(tmp_path: Path):
 
     assert result["status"] == "blocked"
     assert any(row.get("reason") == "timer_next_trigger_missing" for row in result["checks"])
+
+
+def test_cloud_timer_contract_requires_deadman_cadence(tmp_path: Path):
+    def missing_cadence(command, **kwargs):
+        result = _runner(command, **kwargs)
+        if command[1] == "cat" and command[2] == "gridmind-deadman-ping.timer":
+            result.stdout = result.stdout.replace("OnUnitInactiveSec=300", "OnUnitInactiveSec=600")
+        return result
+
+    result = CloudTimerContract(tmp_path, command_runner=missing_cadence).run()
+
+    assert result["status"] == "blocked"
+    assert any(row.get("reason") == "timer_cadence_mismatch" for row in result["checks"])
