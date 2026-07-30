@@ -79,3 +79,16 @@ def test_cloud_service_boot_blocks_non_allowlisted_service(tmp_path: Path):
 
     assert result["ok"] is False
     assert result["blocker"] == "cloud_paper_service_not_allowlisted"
+
+
+def test_daily_and_deadman_boot_require_the_read_only_timer_contract(tmp_path: Path):
+    write_preflight(tmp_path)
+
+    result = CloudPaperServiceBootGate(
+        tmp_path,
+        source_attestation=attestation,
+        timer_contract=lambda: {"status": "blocked"},
+    ).verify("deadman-ping")
+
+    assert result["ok"] is False
+    assert result["blocker"] == "cloud_paper_timer_contract_not_passing"
