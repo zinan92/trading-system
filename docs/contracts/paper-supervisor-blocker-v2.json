@@ -1,0 +1,89 @@
+{
+  "schema_version": "paper-supervisor-blocker-v2",
+  "matching": "exact_typed_only",
+  "default": {
+    "machine_code": "unknown_blocker",
+    "classification": "structural"
+  },
+  "transient": [
+    "prepared_start_market_moved",
+    "prepared_start_expired",
+    "trusted_market_temporarily_unavailable",
+    "execution_tick_heartbeat_temporarily_missing",
+    "upstream_data_source_transient_failure",
+    "supervisor_attempt_deadline_before_intent"
+  ],
+  "structural": [
+    "control_outcome_unknown",
+    "partial_execution_or_cleanup_required",
+    "ledger_reconciliation_drift",
+    "previous_cycle_paper_state_unresolved",
+    "order_identity_conflict",
+    "attempt_store_corrupt",
+    "execution_tick_scheduler_down",
+    "outer_strategy_policy_missing",
+    "outer_strategy_policy_invalid",
+    "outer_strategy_policy_expired",
+    "outer_strategy_policy_envelope_out_of_bounds",
+    "risk_envelope_missing",
+    "risk_envelope_authorization_invalid",
+    "risk_envelope_preview_out_of_bounds",
+    "manual_risk_confirmation_required",
+    "prepared_start_identity_changed",
+    "strategy_preview_identity_changed",
+    "active_plan_missing",
+    "runtime_state_conflict",
+    "existing_exposure_conflict",
+    "plan_identity_conflict",
+    "execution_receipt_identity_invalid",
+    "immutable_fill_guard_triggered",
+    "risk_policy_rejected",
+    "trusted_market_provenance_invalid",
+    "supervisor_configuration_invalid",
+    "dangerous_start_attempt_cap_reached",
+    "clean_refusal_observation_cap_reached",
+    "unknown_blocker"
+  ],
+  "event_labels": [
+    "episode_short_budget_exhausted",
+    "clean_refusal_observation_budget_warning"
+  ],
+  "amendments_from_v1": [
+    {
+      "change": "add",
+      "from": null,
+      "to": "supervisor_attempt_deadline_before_intent",
+      "classification": "transient"
+    },
+    {
+      "change": "add",
+      "from": null,
+      "to": "outer_strategy_policy_expired",
+      "classification": "structural"
+    },
+    {
+      "change": "replace",
+      "from": "cycle_start_attempt_cap_reached",
+      "to": "dangerous_start_attempt_cap_reached",
+      "classification": "structural"
+    },
+    {
+      "change": "add",
+      "from": null,
+      "to": "clean_refusal_observation_cap_reached",
+      "classification": "structural"
+    },
+    {
+      "change": "replace",
+      "from": "retry_budget_exhausted",
+      "to": "episode_short_budget_exhausted",
+      "classification": "event"
+    },
+    {
+      "change": "add",
+      "from": null,
+      "to": "clean_refusal_observation_budget_warning",
+      "classification": "event"
+    }
+  ]
+}
