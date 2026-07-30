@@ -14,10 +14,15 @@ REQUIRED_TIMERS = {
     "gridmind-daily-24h.timer": {
         "service": "gridmind-daily-24h.service",
         "on_calendar": "*-*-* 01:03:00 UTC",
+        "requires_next_trigger": True,
     },
     "gridmind-deadman-ping.timer": {
         "service": "gridmind-deadman-ping.service",
         "on_calendar": None,
+        # OnUnitInactiveSec timers have no fixed NextElapseUSecRealtime value.
+        # Their cadence must be verified from the deployed unit instead.
+        "on_unit_inactive_sec": "300",
+        "requires_next_trigger": False,
     },
 }
 
@@ -64,7 +69,7 @@ class CloudTimerContract:
                 raise RuntimeError("timer_not_enabled")
             if values.get("ActiveState") != "active":
                 raise RuntimeError("timer_not_active")
-            if not values.get("NextElapseUSecRealtime", "").strip():
+            if expected.get("requires_next_trigger") and not values.get("NextElapseUSecRealtime", "").strip():
                 raise RuntimeError("timer_next_trigger_missing")
             cat = self._run(["systemctl", "cat", unit, "--no-pager"])
             if f"Unit={expected['service']}" not in cat:
@@ -72,14 +77,18 @@ class CloudTimerContract:
             calendar = expected.get("on_calendar")
             if calendar and f"OnCalendar={calendar}" not in cat:
                 raise RuntimeError("timer_schedule_mismatch")
+            inactive_sec = expected.get("on_unit_inactive_sec")
+            if inactive_sec and f"OnUnitInactiveSec={inactive_sec}" not in cat:
+                raise RuntimeError("timer_cadence_mismatch")
             return {
                 "unit": unit,
                 "status": "pass",
                 "enabled": True,
                 "active": True,
-                "next_trigger": values["NextElapseUSecRealtime"],
+                "next_trigger": values.get("NextElapseUSecRealtime", "") or None,
                 "service": expected["service"],
                 "on_calendar": calendar,
+                "on_unit_inactive_sec": inactive_sec,
             }
         except Exception as exc:  # noqa: BLE001 - timer uncertainty must fail closed.
             return {
