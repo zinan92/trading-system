@@ -12346,3 +12346,26 @@ auditable datafeed port; broker execution remains a separate port.
 - `active + enabled` is still insufficient evidence: the machine contract
   checks cadence, and deployment must additionally confirm a fresh persisted,
   endpoint-accepted dead-man delivery receipt.
+
+# 2026-07-30 — Make the Nautilus schedule fixture explicit (Issue #476)
+
+## Decision
+
+- The full schedule artifact test now injects the attended Paper Nautilus
+  runtime contract that it asserts, including the isolated interpreter and
+  explicit Paper gate approval.
+- A separate negative case proves that a missing runtime path still omits the
+  attended runtime environment instead of inventing one.
+
+## Gotchas
+
+- The prior test depended on ambient repository configuration, so a legitimate
+  fail-closed production change could make the clean full-suite baseline fail.
+- Adding a production default merely to satisfy that stale expectation would
+  have weakened the runtime boundary. The correction belongs in the fixture,
+  not the scheduler implementation.
+
+## Verification
+
+- Run the focused schedule-manager suite and the complete repository suite from
+  a clean committed tree.

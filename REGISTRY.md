@@ -4,6 +4,7 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-30)
+- #476 将 full-schedule 测试所断言的 attended Paper Nautilus runtime 改为显式 fixture，并新增缺少 runtime path 时不得凭空生成授权环境的反例；这是测试基线修复，不改变 scheduler、unit、云端运行状态或任何交易路径。
 - Cloud Paper 当前部署为 `main@adf2599f4bfc544870d28d90060858a6e36c41b6`（#444/#453/#454）。24h-report、daily self-review、backup 与 dead-man timers 均 active；24h timer 的下一次触发为次日 09:03 北京时间，dead-man 为精确 `OnUnitInactiveSec=300` cadence。daily-24h 与 dead-man 的 source-bound boot receipts 均绑定同一 source/tree，dead-man 于 11:05 CST 自然运行并取得外部端点 HTTP 200 的 `fail_sent` 回执。
 - 今日新鲜 AI 建议 `ai-eval-4272ba2b41ca4382` 已经完整安全路径启动为中性稳健 Grid：StrategyPlan=`strategy-plan-2026-07-29_DAY-2-52d364d4` v2，38/38 委托创建并接受、38 条 lifecycle armed。当前仍为同一计划，runtime=`running`；已有 1 个当前计划真实 entry fill、1 个带 TP/SL 的 Paper 空头持仓与 37 张剩余委托，execution reconciliation=`ok`、canonical accounting=`pass`。2026-07-28 DAY 的 3 笔成交不计入今日计划证据。
 - #416/#417 已修复生产执行到派生日账本的长期断链：`2026-07-28_DAY` 现为 3 trades / 6 fills / `-7.47319148 USD`，来源为验证通过的终态 StrategyCyclePackage；原始 fills/trades/周期包未改写。NAV 与基于账本计数的复盘/推广聚合必须使用重建后的派生账本，既有终态复盘和 Shadow 原始证据保持不可变。

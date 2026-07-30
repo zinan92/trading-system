@@ -110,7 +110,21 @@ def test_schedule_manager_generates_full_launch_agent_artifacts(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
 
-    result = _full_schedule_manager(root, repo).build(review_hour=22, review_minute=30, dashboard_port=9876)
+    manager = _full_schedule_manager(root, repo)
+    manager.dualtrack_config["execution_engine"] = {
+        "authoritative": "nautilus_paper",
+        "shadow": "none",
+        "shadow_runtime_path": str(
+            repo / ".venv-nautilus" / "bin" / "python"
+        ),
+        "paper_gate_override_approved": True,
+        "real_money_eligible": False,
+    }
+    result = manager.build(
+        review_hour=22,
+        review_minute=30,
+        dashboard_port=9876,
+    )
 
     labels = {item["label"] for item in result["jobs"]}
     assert labels == FULL_SCHEDULE_LABELS
@@ -181,6 +195,43 @@ def test_schedule_manager_generates_full_launch_agent_artifacts(tmp_path: Path):
     assert dualtrack_live_tick["EnvironmentVariables"]["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED"] == "1"
     assert dualtrack_live_tick["EnvironmentVariables"]["TRADING_ORCHESTRATOR_NAUTILUS_PYTHON"].endswith("/bin/python")
     assert "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE" in dualtrack_live_tick["EnvironmentVariables"]
+
+
+def test_schedule_manager_does_not_invent_attended_runtime_without_path(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "outputs"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manager = _full_schedule_manager(root, repo)
+    manager.dualtrack_config["execution_engine"] = {
+        "authoritative": "nautilus_paper",
+        "shadow": "none",
+        "shadow_runtime_path": "",
+        "paper_gate_override_approved": True,
+        "real_money_eligible": False,
+    }
+
+    result = manager.build()
+    live_tick_job = next(
+        row
+        for row in result["jobs"]
+        if row["label"]
+        == "com.wendy.trading-orchestrator.dualtrack-live-tick"
+    )
+    with Path(live_tick_job["plist"]).open("rb") as handle:
+        live_tick = plistlib.load(handle)
+    environment = live_tick["EnvironmentVariables"]
+
+    assert (
+        "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED"
+        not in environment
+    )
+    assert "TRADING_ORCHESTRATOR_NAUTILUS_PYTHON" not in environment
+    assert (
+        "TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE"
+        not in environment
+    )
 
 
 def test_schedule_manager_generates_dualtrack_focus_profile_and_removes_stale_generated_plists(tmp_path: Path):
@@ -924,7 +975,7 @@ def test_schedule_installer_waits_for_bootout_to_disappear_before_bootstrap(tmp_
         dashboard_poll_seconds=0,
         dashboard_timeout_seconds=1,
     ).install("2026-05-26", acknowledgement=SCHEDULE_INSTALL_ACKNOWLEDGEMENT, package_id=package_id)
-    runner_service = f"gui/__UID__/com.wendy.trading-orchestrator.runner"
+    runner_service = "gui/__UID__/com.wendy.trading-orchestrator.runner"
     normalized = [
         [runner_service if item.startswith("gui/") and item.endswith("com.wendy.trading-orchestrator.runner") else item for item in command]
         for command in commands
