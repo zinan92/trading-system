@@ -1,5 +1,57 @@
 # Decision Log
 
+## Supervisor Retry Episodes Remain Recoverable (Issue #465)
+
+Date: 2026-07-30
+
+### Decision
+
+- Implement retry policy as a pure per-cycle state machine outside every
+  existing safety gate. The classifier accepts exact machine codes or typed
+  evidence only; unknown, malformed and free-text conditions remain
+  `unknown_blocker` / structural.
+- Schedule the first five consecutive transient failures at
+  60/120/300/600/1200 seconds. The fifth failure emits the non-blocking
+  `episode_short_budget_exhausted` event, requires an alert and enters
+  30-minute probe mode; it does not terminate the cycle.
+- Reset an episode after a successful `prepare_start`, while keeping the
+  per-cycle attempt observations. A new cycle creates a new episode and clean
+  budgets instead of inheriting the preceding cycle's exhaustion state.
+- Count unknown or potentially partial outcomes against a dangerous cap of
+  two. Count a rejected start outside that cap only when runtime, authoritative
+  order snapshot and control audit jointly prove zero created orders. Proven
+  clean refusals use a separate 48-observation logic-runaway guard with a
+  warning at 40.
+- Promote one continuously missing tick heartbeat to
+  `execution_tick_scheduler_down` only after more than ten minutes. Structural
+  conditions require an exact read-only recheck; clearing one restores the
+  prior ready/backoff/probe observation mode and never replays a command.
+
+### Gotchas
+
+- The fifth failure records the final 1,200-second short-backoff value for
+  audit, but the 1,800-second probe interval governs its next attempt. The
+  exhausted event is deliberately not a blocker.
+- Dangerous and clean-observation caps are cycle-local and cannot be cleared
+  inside the same cycle. The next cycle starts with new state; this prevents a
+  cap from becoming a cross-cycle absorbing state.
+- A clean-rejection claim without all three authorities is dangerous even when
+  its machine code is normally transient. Inability to prove zero orders is
+  never treated as permission to retry.
+- While a structural blocker overlays a backoff or probe, clearing it restores
+  the saved schedule. It neither makes an attempt immediately due nor reuses
+  an earlier preview, prepared start or intent.
+- This story supplies policy/state transitions only. #466 must bind every due
+  attempt to #464's durable single-writer store and create a wholly new preview
+  and prepared-start identity; no order or control call is made here.
+
+### Verification
+
+- Focused tests lock exact taxonomy parity, pre-/post-intent deadline behavior,
+  short backoff and perpetual probing, episode reset, two-tier budgets,
+  three-authority clean-refusal proof, no-replay structural rechecks,
+  heartbeat promotion, new-cycle reset and tamper failure.
+
 ## Supervisor start attempts are durable before control (Issue #464)
 
 Date: 2026-07-30
