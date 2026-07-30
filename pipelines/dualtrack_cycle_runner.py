@@ -41,6 +41,7 @@ from services.paper_release_receipt import (
 from services.cloud_service_boot import CloudPaperServiceBootGate
 from services.cycle_decision import CycleDecisionCoordinator
 from services.scheduler_ownership import SchedulerOwnershipGuard
+from services.live_tick_timing import LiveTickTimingSession
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
@@ -741,52 +742,93 @@ class DualTrackCycleRunner:
     def live_tick(self, *, as_of: str | datetime | None = None) -> dict[str, Any]:
         now = parse_utc(as_of)
         window = cycle_window(now)
-        lifecycle = self._live_tick_phase(
-            "lifecycle",
-            "检查当前周期收口与 Paper 生命周期审计，然后等待下一次 tick 重试。",
-            lambda: self._lifecycle_results(now),
-        )
-        protective_sweep = self._live_tick_phase(
-            "lifecycle",
-            "检查 Paper 保护单和执行快照；不要在心跳恢复前启动新策略。",
-            lambda: self._sweep_active_human_protective_exits(window.cycle_id, now=now),
-        )
-        sync = self._live_tick_phase(
-            "lifecycle",
-            "检查本地计划同步与运行时输出目录，然后等待下一次 tick 重试。",
-            lambda: self.sync_obsidian_human_plans(as_of=now, include_next=False),
-        )
-        intraday = self._live_tick_phase(
-            "lifecycle",
-            "检查 Paper 生命周期和执行快照；不要在心跳恢复前启动新策略。",
-            lambda: self.intraday_tick(as_of=now),
-        )
-        ledger = self._live_tick_phase(
-            "ledger_write",
-            "检查本地账本输出是否可写及对账输入；成功 tick 前禁止新启动。",
-            self.scorer.rebuild_ledgers,
-        )
-        # The start gate consumes this receipt.  Write it only after all work
-        # that makes an accepted Paper order executable has completed: a
-        # process that repeatedly enters and crashes must age stale instead of
-        # producing a misleading green heartbeat.
-        self._write_runner_state(
-            window.cycle_id,
-            "live_tick_heartbeat",
-            {"runner": "dualtrack-live-tick", "ledger_refreshed": True},
+        timing = LiveTickTimingSession(
+            output_root=self.output_root,
+            cycle_id=window.cycle_id,
             observed_at=now,
         )
-        if bool((self.config.get("cycle_decision") or {}).get("enabled")):
-            cycle_decision = self._live_tick_phase(
-                "cycle_decision",
-                "Inspect the current cycle decision receipt; never replay a control action for the same cycle.",
-                lambda: self._ensure_cycle_decision(window.cycle_id, now=now),
+        try:
+            lifecycle = timing.measure(
+                "lifecycle",
+                lambda: self._live_tick_phase(
+                    "lifecycle",
+                    "检查当前周期收口与 Paper 生命周期审计，然后等待下一次 tick 重试。",
+                    lambda: self._lifecycle_results(now),
+                ),
             )
-        else:
-            cycle_decision = {
-                "status": "disabled",
-                "reason": "cycle_decision_orchestration_disabled",
-            }
+            protective_sweep = timing.measure(
+                "protective_sweep",
+                lambda: self._live_tick_phase(
+                    "lifecycle",
+                    "检查 Paper 保护单和执行快照；不要在心跳恢复前启动新策略。",
+                    lambda: self._sweep_active_human_protective_exits(
+                        window.cycle_id,
+                        now=now,
+                    ),
+                ),
+            )
+            sync = timing.measure(
+                "plan_sync",
+                lambda: self._live_tick_phase(
+                    "lifecycle",
+                    "检查本地计划同步与运行时输出目录，然后等待下一次 tick 重试。",
+                    lambda: self.sync_obsidian_human_plans(
+                        as_of=now,
+                        include_next=False,
+                    ),
+                ),
+            )
+            intraday = timing.measure(
+                "intraday",
+                lambda: self._live_tick_phase(
+                    "lifecycle",
+                    "检查 Paper 生命周期和执行快照；不要在心跳恢复前启动新策略。",
+                    lambda: self.intraday_tick(as_of=now),
+                ),
+            )
+            ledger = timing.measure(
+                "ledger",
+                lambda: self._live_tick_phase(
+                    "ledger_write",
+                    "检查本地账本输出是否可写及对账输入；成功 tick 前禁止新启动。",
+                    self.scorer.rebuild_ledgers,
+                ),
+            )
+            # The start gate consumes this receipt. Write it only after all
+            # work that makes an accepted Paper order executable has completed.
+            timing.measure(
+                "heartbeat",
+                lambda: self._write_runner_state(
+                    window.cycle_id,
+                    "live_tick_heartbeat",
+                    {"runner": "dualtrack-live-tick", "ledger_refreshed": True},
+                    observed_at=now,
+                ),
+            )
+            if bool((self.config.get("cycle_decision") or {}).get("enabled")):
+                cycle_decision = timing.measure(
+                    "cycle_decision",
+                    lambda: self._live_tick_phase(
+                        "cycle_decision",
+                        "Inspect the current cycle decision receipt; never replay a control action for the same cycle.",
+                        lambda: self._ensure_cycle_decision(
+                            window.cycle_id,
+                            now=now,
+                        ),
+                    ),
+                )
+            else:
+                cycle_decision = timing.measure(
+                    "cycle_decision",
+                    lambda: {
+                        "status": "disabled",
+                        "reason": "cycle_decision_orchestration_disabled",
+                    },
+                )
+        except Exception as exc:
+            timing.finish(status="failed", error_type=type(exc).__name__)
+            raise
+        timing.finish(status="success")
         return {
             "event": "live_tick",
             "as_of": now.isoformat(),
