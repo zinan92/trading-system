@@ -4,7 +4,11 @@ from pathlib import Path
 import pytest
 
 import pipelines.dashboard_server as dashboard_server
+import services.cycle_risk_envelope as risk_envelope_module
 from pipelines.dashboard_server import build_strategy_console_control_response
+from services.cycle_risk_envelope import CycleRiskEnvelopeStore
+from services.cycle_decision import CycleDecisionCoordinator
+from services.journal_store import load_json, write_json
 from services.strategy_control_plane import StrategyControlPlane
 
 
@@ -47,8 +51,155 @@ def _market() -> dict:
     }
 
 
-def test_refresh_recommendation_saves_ai_proposal_without_mutating_production(tmp_path: Path) -> None:
+def _bind_outer_policy(
+    output: Path,
+    monkeypatch,
+    *,
+    strategy_type: str = "grid",
+    direction: str = "short",
+) -> dict:
+    monkeypatch.setenv("GOLDBOT_ACCESS_EMAIL", "park@example.com")
+    monkeypatch.setattr(
+        risk_envelope_module,
+        "authenticated_access_identity",
+        lambda _headers: {
+            "email": "park@example.com",
+            "subject": "park-subject",
+            "issued_at": 1782871200,
+            "expires_at": 1788141600,
+            "issuer": "https://park.cloudflareaccess.com",
+        },
+    )
+    limits = (
+        {
+            "max_actual_leverage": "20",
+            "max_full_depth_loss": "100000",
+            "max_notional_per_grid": "100000",
+            "min_grid_count": "1",
+            "max_grid_count": "200",
+        }
+        if strategy_type == "grid"
+        else {
+            "max_actual_leverage": "20",
+            "max_full_depth_loss": "100000",
+            "max_notional_per_addition": "2000",
+            "max_total_possible_notional": "12000",
+            "min_additions": "1",
+            "max_additions": "6",
+        }
+    )
+    store = CycleRiskEnvelopeStore(output)
+    actor = {
+        "email": "park@example.com",
+        "transport": "public_gateway",
+        "_access_assertion": "signed-park-assertion",
+    }
+    policy = store.authorize_outer_policy(
+        payload={
+            "policy_id": f"park-{strategy_type}-{direction}",
+            "version": 1,
+            "strategy_type": strategy_type,
+            "direction": direction,
+            "summary": f"Test Park {strategy_type} boundary",
+            "expires_at": "2026-08-31T00:00:00+00:00",
+            "limits": limits,
+        },
+        actor=actor,
+        now="2026-07-01T00:00:00+00:00",
+    )
+    binding = store.bind_supervisor_outer_policy(
+        payload={
+            "binding_id": f"paper-supervisor-{strategy_type}",
+            "binding_version": 1,
+            "policy_id": policy["policy_id"],
+            "policy_version": policy["version"],
+            "policy_digest": policy["policy_digest"],
+            "summary": "Test exact binding",
+        },
+        actor=actor,
+        now="2026-07-01T00:01:00+00:00",
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_ID",
+        binding["binding_id"],
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_VERSION",
+        str(binding["binding_version"]),
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_DIGEST",
+        binding["binding_digest"],
+    )
+    return binding
+
+
+def test_refresh_recommendation_saves_ai_proposal_without_mutating_production(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     output = tmp_path / "outputs"
+    monkeypatch.setenv("GOLDBOT_ACCESS_EMAIL", "park@example.com")
+    monkeypatch.setattr(
+        risk_envelope_module,
+        "authenticated_access_identity",
+        lambda _headers: {
+            "email": "park@example.com",
+            "subject": "park-subject",
+            "issued_at": 1782871200,
+            "expires_at": 1788141600,
+            "issuer": "https://park.cloudflareaccess.com",
+        },
+    )
+    policy_store = CycleRiskEnvelopeStore(output)
+    actor = {
+        "email": "park@example.com",
+        "transport": "public_gateway",
+        "_access_assertion": "signed-park-assertion",
+    }
+    policy = policy_store.authorize_outer_policy(
+        payload={
+            "policy_id": "park-grid-short",
+            "version": 1,
+            "strategy_type": "grid",
+            "direction": "short",
+            "summary": "Test Park Grid boundary",
+            "expires_at": "2026-08-31T00:00:00+00:00",
+            "limits": {
+                "max_actual_leverage": "20",
+                "max_full_depth_loss": "100000",
+                "max_notional_per_grid": "100000",
+                "min_grid_count": "1",
+                "max_grid_count": "200",
+            },
+        },
+        actor=actor,
+        now="2026-07-01T00:00:00+00:00",
+    )
+    binding = policy_store.bind_supervisor_outer_policy(
+        payload={
+            "binding_id": "paper-supervisor-grid",
+            "binding_version": 1,
+            "policy_id": policy["policy_id"],
+            "policy_version": policy["version"],
+            "policy_digest": policy["policy_digest"],
+            "summary": "Test binding",
+        },
+        actor=actor,
+        now="2026-07-01T00:01:00+00:00",
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_ID",
+        binding["binding_id"],
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_VERSION",
+        str(binding["binding_version"]),
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_DIGEST",
+        binding["binding_digest"],
+    )
     plane = StrategyControlPlane(output)
     cycle_id = "2026-07-05_DAY"
     original = plane.upsert_proposal({
@@ -87,6 +238,183 @@ def test_refresh_recommendation_saves_ai_proposal_without_mutating_production(tm
     assert result["preview"]["strategy_timeframes"] == {"range": "1d", "spacing": "4h", "execution": "1m"}
     assert plane.active_plan(cycle_id)["strategy_plan_id"] == active["strategy_plan_id"]
     assert not (output / "dualtrack" / "orders" / f"{cycle_id}_human.json").exists()
+
+
+def test_refresh_provider_failure_never_promotes_legacy_ai_proposal(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    _bind_outer_policy(output, monkeypatch)
+    plane = StrategyControlPlane(output)
+    cycle_id = "2026-07-05_DAY"
+    legacy = plane.upsert_proposal(
+        {
+            "cycle_id": cycle_id,
+            "source": "ai",
+            "direction": "short",
+            "style": "steady",
+            "range": {"low": 4000, "high": 4100},
+            "grid": {"count": 30},
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="AI recommendation unavailable",
+    ):
+        build_strategy_console_control_response(
+            {
+                "cycle_id": cycle_id,
+                "action": "refresh_recommendation",
+                "as_of": "2026-07-05T02:00:00+00:00",
+            },
+            output_root=output,
+            market=_market(),
+            account={"equity": 100_000},
+            recommendation_provider=lambda _prompt: (
+                (_ for _ in ()).throw(RuntimeError("provider down"))
+            ),
+        )
+
+    assert plane.active_plan(cycle_id) is None
+    assert plane.proposals(cycle_id) == [legacy]
+    assert not plane._plans_path(cycle_id).exists()
+    assert not list((output / "dualtrack" / "orders").glob("*"))
+
+
+def test_dca_ai_refresh_reaches_candidate_envelope_then_human_confirmation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    _bind_outer_policy(
+        output,
+        monkeypatch,
+        strategy_type="dca",
+        direction="long",
+    )
+    market = _market()
+    long_term = _bars("1d", 220, 5000, 20)
+    long_term[-1].update(
+        {
+            "open": 4049.9,
+            "high": 4051.0,
+            "low": 4049.0,
+            "close": 4050.0,
+        }
+    )
+    market["strategy_timeframes"]["1d"][
+        "long_term_position_bars"
+    ] = long_term
+    cycle_id = "2026-07-30_DAY"
+    now = "2026-07-30T03:00:00+00:00"
+    refresh = build_strategy_console_control_response(
+        {
+            "cycle_id": cycle_id,
+            "action": "refresh_recommendation",
+            "as_of": now,
+        },
+        output_root=output,
+        market=market,
+        account={"equity": 100_000},
+        recommendation_provider=lambda _prompt: {
+            "direction": "long",
+            "style": "steady",
+            "rationale": "D1 与 4H 趋势向上且长期位置偏低。",
+            "key_levels": [],
+            "ai_self_assessment": 7,
+            "evidence_used": ["D1", "4H"],
+        },
+    )
+    assert refresh["recommendation"]["strategy_type"] == "dca"
+    assert refresh["preview"]["manual_confirmation"]["required"] is True
+    assert refresh["proposal"]["dca"]["max_additions"] == 6
+
+    write_json(
+        output / "dualtrack" / "runner" / f"{cycle_id}.json",
+        [
+            {
+                "ts": now,
+                "cycle_id": cycle_id,
+                "event": "live_tick_heartbeat",
+                "detail": {
+                    "runner": "dualtrack-live-tick",
+                    "ledger_refreshed": True,
+                },
+            }
+        ],
+    )
+    plane = StrategyControlPlane(
+        output,
+        authorization_clock=lambda: now,
+    )
+    plane.config["execution_engine"] = {
+        "authoritative": "legacy_paper",
+        "shadow": "none",
+        "real_money_eligible": False,
+    }
+    result = CycleDecisionCoordinator(output).ensure(
+        cycle_id,
+        now=now,
+        plane=plane,
+        execution_snapshot={"orders": [], "positions": []},
+        refresh_recommendation=lambda: refresh,
+        control=lambda action, payload: plane.control(
+            cycle_id,
+            action,
+            payload,
+            market=market,
+            account={"equity": 100_000},
+            now=now,
+            actor={"type": "scheduler"},
+        ),
+    )
+
+    assert result["decision"]["reason_code"] == (
+        "risk_confirmation_required"
+    )
+    assert result["decision"]["orders_created"] == 0
+    assert plane.active_plan(cycle_id) is None
+    prepared_rows = load_json(plane._prepared_starts_path(cycle_id))
+    prepared = prepared_rows[-1]
+    assert prepared["cycle_risk_envelope_id"] == result["decision"][
+        "cycle_risk_envelope_id"
+    ]
+    with pytest.raises(ValueError, match="prepared_start_changed"):
+        plane.control(
+            cycle_id,
+            "start",
+            {
+                "direction": "long",
+                "style": "steady",
+                "strategy_type": "dca",
+                "dca": dict(refresh["proposal"]["dca"]),
+                "risk_budget": {
+                    "leverage": refresh["preview"]["risk"][
+                        "selected_leverage"
+                    ],
+                },
+                "cycle_risk_envelope_id": "different-envelope",
+                "prepared_start_id": prepared["prepared_start_id"],
+                "expected_preview_id": prepared["preview"][
+                    "preview_id"
+                ],
+            },
+            market=market,
+            account={"equity": 100_000},
+            now=now,
+        )
+    envelopes = list(
+        (
+            output
+            / "dualtrack"
+            / "supervisor"
+            / "risk_envelopes"
+        ).glob(f"{cycle_id}.json")
+    )
+    assert len(envelopes) == 1
+    assert not list((output / "dualtrack" / "orders").glob("*"))
 
 
 def test_grid_preview_requires_only_the_d1_and_4h_planning_timeframes(tmp_path: Path, monkeypatch) -> None:

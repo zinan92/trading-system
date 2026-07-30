@@ -24,6 +24,52 @@ ORAL_MARKET_VIEW = (
 )
 
 
+def test_loopback_control_actor_rejects_forgeable_email_header(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_server,
+        "authenticated_access_identity",
+        lambda _headers: None,
+    )
+    handler = object.__new__(dashboard_server.DashboardHandler)
+    handler.headers = {
+        "X-Goldbot-Actor-Email": "park@example.com",
+    }
+    handler.client_address = ("127.0.0.1", 12345)
+
+    assert handler._control_actor() == {
+        "email": None,
+        "transport": "local",
+        "client": "127.0.0.1",
+    }
+
+
+def test_control_actor_requires_signed_identity_and_matching_forwarded_email(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_server,
+        "authenticated_access_identity",
+        lambda _headers: {"email": "park@example.com"},
+    )
+    handler = object.__new__(dashboard_server.DashboardHandler)
+    handler.headers = {
+        "X-Goldbot-Actor-Email": "park@example.com",
+        "Cf-Access-Jwt-Assertion": "signed-jwt",
+    }
+    handler.client_address = ("127.0.0.1", 12345)
+
+    assert handler._control_actor() == {
+        "email": "park@example.com",
+        "transport": "public_gateway",
+        "client": "127.0.0.1",
+        "_access_assertion": "signed-jwt",
+    }
+    handler.headers["X-Goldbot-Actor-Email"] = "intruder@example.com"
+    assert handler._control_actor()["transport"] == "local"
+
+
 def test_formal_dashboard_diagnostics_support_all_views_and_strategy(monkeypatch) -> None:
     class FakeState:
         def __init__(self, output_root=None, market_db=None):

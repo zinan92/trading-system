@@ -108,20 +108,27 @@ def _validated_access_claims(headers: Any) -> dict[str, Any] | None:
     return claims if isinstance(claims, dict) else None
 
 
-def _authenticated_identity(headers: Any) -> dict[str, Any] | None:
+def authenticated_access_identity(headers: Any) -> dict[str, Any] | None:
+    """Return the cryptographically verified Cloudflare Access identity."""
+
     claims = _validated_access_claims(headers)
     email = str((claims or {}).get("email") or "").strip().lower()
     if not email or email != ALLOWED_ACCESS_EMAIL:
         return None
     return {
         "email": email,
+        "issued_at": claims.get("iat"),
         "expires_at": claims.get("exp"),
+        "issuer": claims.get("iss"),
         "subject": claims.get("sub"),
     }
 
 
+_authenticated_identity = authenticated_access_identity
+
+
 def _session_payload(headers: Any) -> dict[str, Any]:
-    identity = _authenticated_identity(headers)
+    identity = authenticated_access_identity(headers)
     return {
         "authenticated": identity is not None,
         "can_control": identity is not None,
@@ -137,7 +144,23 @@ def _session_payload(headers: Any) -> dict[str, Any]:
 def _mutation_identity(path: str, payload: Any, headers: Any) -> dict[str, Any] | None:
     if path not in MUTATION_EXACT or not isinstance(payload, dict):
         return None
-    return _authenticated_identity(headers)
+    return authenticated_access_identity(headers)
+
+
+def _upstream_mutation_headers(
+    headers: Any,
+    identity: dict[str, Any],
+) -> dict[str, str]:
+    """Forward the signed assertion so the loopback server can re-verify it."""
+
+    assertion = str(headers.get("Cf-Access-Jwt-Assertion") or "").strip()
+    if not assertion:
+        raise ValueError("validated Cloudflare Access assertion is missing")
+    return {
+        "Content-Type": "application/json",
+        "X-Goldbot-Actor-Email": str(identity["email"]),
+        "Cf-Access-Jwt-Assertion": assertion,
+    }
 
 
 def _write_audit(event: dict[str, Any]) -> None:
@@ -209,10 +232,7 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
             f"{UPSTREAM}{parsed.path}",
             method="POST",
             body=body,
-            request_headers={
-                "Content-Type": "application/json",
-                "X-Goldbot-Actor-Email": identity["email"],
-            },
+            request_headers=_upstream_mutation_headers(self.headers, identity),
             audit={
                 "email": identity["email"],
                 "path": parsed.path,

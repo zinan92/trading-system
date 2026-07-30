@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from services.dca_plan import build_deterministic_dca_candidate_payload_v1
 from tests.test_dashboard_gridmind_header_browser import _header_model
 from tests.test_dashboard_gridmind_order_lifecycle_browser import _static_server
 
@@ -154,7 +155,12 @@ def test_gridmind_dca_smart_fill_preview_risk_ack_and_start() -> None:
         assert page.locator("#dcaTarget").input_value() == "4040"
         assert page.locator("#dcaStop").input_value() == "3880"
         assert requests[-1]["strategy_type"] == "dca"
-        assert requests[-1]["dca"]["entry_levels"] == [3994, 3979.2, 3964.4, 3949.6, 3934.8, 3920]
+        expected_candidate = build_deterministic_dca_candidate_payload_v1(
+            direction="long",
+            market_price=4_000,
+        )
+        assert requests[-1]["dca"] == expected_candidate["dca"]
+        assert requests[-1]["risk_budget"] == expected_candidate["risk_budget"]
         assert "满仓目标净利\n120 USD" in page.locator("#previewSummary").inner_text()
         assert "达到目标或止损后停止" in page.locator("#dcaModeNote").inner_text()
         assert page.locator("#gridAdjustToggle").is_disabled()
@@ -217,6 +223,172 @@ def test_gridmind_dca_smart_fill_preview_risk_ack_and_start() -> None:
         assert page.locator("#marketBadge").inner_text() == "运行异常"
         assert browser_errors == []
         browser.close()
+
+
+def test_gridmind_dca_smart_fill_matches_half_cent_boundary() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    market_price = 3_906.25
+    model = _header_model(market_price)
+    model["runtime"].update(
+        {
+            "actual_state": "stopped",
+            "desired_state": "stopped",
+            "status": "stopped",
+        }
+    )
+    requests: list[dict] = []
+
+    def fulfill_control(route) -> None:
+        payload = route.request.post_data_json
+        requests.append(payload)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "action": "preview",
+                    "preview": _dca_preview(payload),
+                }
+            ),
+        )
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(
+                headless=True,
+                channel="chrome",
+            )
+        except Exception as exc:  # pragma: no cover
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.add_init_script("window.setInterval = () => 0")
+        page.route(
+            "**/api/trading-system/read-model",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(model),
+            ),
+        )
+        page.route(
+            "**/api/dualtrack/market/bars?*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({**model["market"], "bars": []}),
+            ),
+        )
+        page.route(
+            "**/api/strategy-console/control",
+            fulfill_control,
+        )
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator('[data-strategy-type="dca"]').click()
+        page.locator("#previewSummary").wait_for(state="visible")
+        browser.close()
+
+    expected = build_deterministic_dca_candidate_payload_v1(
+        direction="long",
+        market_price=market_price,
+    )
+    assert requests[-1]["dca"] == expected["dca"]
+    assert requests[-1]["risk_budget"] == expected["risk_budget"]
+
+
+def test_python_dca_builder_matches_browser_across_gold_cent_grid() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(
+                headless=True,
+                channel="chrome",
+            )
+        except Exception as exc:  # pragma: no cover
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page()
+        page.goto("about:blank")
+        page.evaluate(
+            """
+            () => {
+              window.checkDcaParity = rows => {
+              for (const row of rows) {
+                const [cents, direction, ...expected] = row;
+                const price = cents / 100;
+                const long = direction === "long";
+                const low = Number(
+                  (price * (long ? .98 : 1.0015)).toFixed(2)
+                );
+                const high = Number(
+                  (price * (long ? .9985 : 1.02)).toFixed(2)
+                );
+                const target = Number(
+                  (price * (long ? 1.01 : .99)).toFixed(2)
+                );
+                const stop = Number(
+                  (price * (long ? .97 : 1.03)).toFixed(2)
+                );
+                const step = (high - low) / 5;
+                const levels = Array.from(
+                  {length: 6},
+                  (_, index) => long
+                    ? high - index * step
+                    : low + index * step
+                );
+                const actual = [...levels, target, stop];
+                if (
+                  actual.some(
+                    (value, index) => value !== expected[index]
+                  )
+                ) {
+                  return {cents, direction, expected, actual};
+                }
+              }
+              return null;
+              };
+            }
+            """
+        )
+        start_cents = 350_000
+        end_cents = 450_000
+        batch_size = 5_000
+        mismatch = None
+        rows: list[list[object]] = []
+        for cents in range(start_cents, end_cents + 1):
+            for direction in ("long", "short"):
+                candidate = (
+                    build_deterministic_dca_candidate_payload_v1(
+                        direction=direction,
+                        market_price=cents / 100,
+                    )
+                )
+                dca = candidate["dca"]
+                rows.append(
+                    [
+                        cents,
+                        direction,
+                        *dca["entry_levels"],
+                        dca["target_price"],
+                        dca["stop_price"],
+                    ]
+                )
+                if len(rows) >= batch_size:
+                    mismatch = page.evaluate(
+                        "rows => window.checkDcaParity(rows)",
+                        rows,
+                    )
+                    rows = []
+                    if mismatch is not None:
+                        break
+            if mismatch is not None:
+                break
+        if mismatch is None and rows:
+            mismatch = page.evaluate(
+                "rows => window.checkDcaParity(rows)",
+                rows,
+            )
+        browser.close()
+
+    assert mismatch is None
 
 
 def test_gridmind_strategy_type_selection_is_explicit_and_exclusive() -> None:

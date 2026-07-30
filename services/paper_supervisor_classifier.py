@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 
-CLASSIFIER_VERSION = "paper-supervisor-blocker-v1"
+CLASSIFIER_VERSION = "paper-supervisor-blocker-v2"
 TRANSIENT = "transient"
 STRUCTURAL = "structural"
 
@@ -25,6 +25,10 @@ _EXACT_STRUCTURAL = {
     "strategy_plan_changed": "runtime_state_conflict",
     "range_risk_acknowledgements_incomplete": "manual_risk_confirmation_required",
     "dca_risk_acknowledgements_incomplete": "manual_risk_confirmation_required",
+    "outer_strategy_policy_missing": "outer_strategy_policy_missing",
+    "outer_strategy_policy_expired": "outer_strategy_policy_expired",
+    "outer_strategy_policy_invalid": "outer_strategy_policy_invalid",
+    "outer_strategy_policy_envelope_out_of_bounds": "outer_strategy_policy_envelope_out_of_bounds",
 }
 _TEMPORARY_SOURCE_FAILURES = {
     "upstream_timeout",
@@ -50,8 +54,10 @@ def classify_blocker(
         return _result("previous_cycle_paper_state_unresolved", STRUCTURAL, code, typed)
     if typed.get("partial_execution_or_cleanup_required") is True:
         return _result("partial_execution_or_cleanup_required", STRUCTURAL, code, typed)
-    if typed.get("outer_strategy_policy") in {"missing", "expired"}:
+    if typed.get("outer_strategy_policy") == "missing":
         return _result("outer_strategy_policy_missing", STRUCTURAL, code, typed)
+    if typed.get("outer_strategy_policy") == "expired":
+        return _result("outer_strategy_policy_expired", STRUCTURAL, code, typed)
     if typed.get("outer_strategy_policy") == "invalid":
         return _result("outer_strategy_policy_invalid", STRUCTURAL, code, typed)
     if typed.get("outer_strategy_policy") == "out_of_bounds":

@@ -32,6 +32,7 @@ from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc, seconds_until_end
 from services.dualtrack_config import dualtrack_config
+from services.dca_plan import build_deterministic_dca_candidate_payload_v1
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.grid_lifecycle_evidence import build_grid_lifecycle_evidence
 from services.production_accounting import normalize_nautilus_snapshot_for_accounting
@@ -76,6 +77,7 @@ from services.trading_system_read_model import (
 )
 from services.trading_daily_24h_report import load_daily_report_rows
 from services.cloud_daily_self_review import load_daily_self_review
+from services.cloud_access_gateway import authenticated_access_identity
 from pipelines.cloud_health import build_cloud_health
 
 from services.contracts.common import _CYCLE_ID_PATTERN, _DATE_PATTERN, _truthy  # noqa: F401 — re-exported for backward compatibility
@@ -407,15 +409,30 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_error(400, "invalid_strategy_console_control", str(exc))
 
     def _control_actor(self) -> dict:
-        # The gateway asserts this header only after validating the Cloudflare
-        # Access JWT, and never forwards client-supplied headers. The server is
-        # loopback-bound, so a request without it is a local operator.
-        email = str(self.headers.get("X-Goldbot-Actor-Email") or "").strip().lower()
-        return {
+        # Loopback is not an authorization boundary: re-verify the signed
+        # Cloudflare assertion instead of trusting a forgeable identity header.
+        identity = authenticated_access_identity(self.headers)
+        asserted_email = str(
+            self.headers.get("X-Goldbot-Actor-Email") or ""
+        ).strip().lower()
+        verified_email = str((identity or {}).get("email") or "").strip().lower()
+        email = (
+            verified_email
+            if verified_email and verified_email == asserted_email
+            else ""
+        )
+        actor = {
             "email": email or None,
             "transport": "public_gateway" if email else "local",
             "client": self.client_address[0] if self.client_address else None,
         }
+        if email:
+            # In-memory capability only. Control audit normalizes the actor to
+            # email/transport/client and never persists this signed assertion.
+            actor["_access_assertion"] = str(
+                self.headers.get("Cf-Access-Jwt-Assertion") or ""
+            )
+        return actor
 
     def _handle_dualtrack_plan_get(self, path: str, query: str) -> None:
         cycle_id = path.rsplit("/", 1)[-1]
@@ -1467,11 +1484,15 @@ def build_strategy_console_control_response(
         }
     plane = StrategyControlPlane(output)
     if action == "refresh_recommendation":
+        plane.verify_supervisor_outer_policy()
         contexts = dict(trusted_market.get("strategy_timeframes") or {})
         if not all(timeframe in contexts for timeframe in ("1d", "4h", "1h", "15m")):
             contexts.update(build_strategy_timeframes_response(as_of=payload.get("as_of")))
             trusted_market["strategy_timeframes"] = contexts
-        before = plane.active_plan(cycle_id) or plane.ensure_compatible_active_plan(cycle_id, as_of=payload.get("as_of"))
+        # Recommendation context is strictly read-only.  In particular, a
+        # legacy proposal must not be promoted into an active plan merely
+        # because the provider is about to be called.
+        before = plane.active_plan(cycle_id) or plane.latest_plan(cycle_id)
         review_files = sorted((output / "dualtrack" / "reviews").glob("*_machine.json"))
         review_rows = load_json(review_files[-1]) if review_files else []
         review = review_rows[-1] if review_rows else {}
@@ -1493,34 +1514,73 @@ def build_strategy_console_control_response(
             # Return a structured fail-closed API error instead of dropping the
             # browser connection. Production state remains untouched.
             raise ValueError(f"AI recommendation unavailable: {exc}") from exc
+        preview_payload = {
+            "direction": recommendation["direction"],
+            "style": recommendation["style"],
+            "strategy_type": recommendation["strategy_type"],
+        }
+        if recommendation["strategy_type"] == "dca":
+            preview_payload.update(
+                _deterministic_dca_candidate_payload(
+                    plane,
+                    cycle_id,
+                    recommendation=recommendation,
+                    market=trusted_market,
+                    account=trusted_account or {},
+                )
+            )
         preview = plane.preview(
             cycle_id,
-            {
-                "direction": recommendation["direction"],
-                "style": recommendation["style"],
-                "strategy_type": recommendation["strategy_type"],
-            },
+            preview_payload,
             market=trusted_market,
             account=trusted_account,
         )
-        proposal = plane.upsert_proposal({
+        if preview.get("strategy_type") == "dca":
+            proposal_range: dict[str, Any] = {}
+            proposal_key_levels = list(
+                preview.get("dca", {}).get("entry_levels") or []
+            )
+            proposal_grid: dict[str, Any] = {}
+            # Preserve the exact deterministic smart-fill inputs.  Reusing
+            # rounded preview outputs would produce a different preview id on
+            # the later prepare step.
+            proposal_dca = dict(preview_payload.get("dca") or {})
+            proposal_tp_sl = {
+                "mode": "aggregate_fixed_price",
+                "take_profit": proposal_dca.get("target_price"),
+                "stop_loss": proposal_dca.get("stop_price"),
+            }
+        else:
+            proposal_range = dict(preview["range"])
+            proposal_key_levels = recommendation["key_levels"] or [
+                preview["range"]["low"],
+                preview["range"]["high"],
+            ]
+            proposal_grid = {
+                **preview["grid"],
+                "orders": preview["orders"],
+            }
+            proposal_dca = {}
+            proposal_tp_sl = {
+                "mode": "per_grid",
+                "take_profit": "next_grid_level",
+                "stop_loss": "one_grid_beyond_range",
+                "r_multiple": 1.0,
+            }
+        proposal = plane.upsert_supervisor_ai_proposal({
             "proposal_id": f"proposal-{recommendation['evaluation_receipt']['evaluation_id']}",
             "cycle_id": cycle_id,
             "source": "ai",
             "created_at": recommendation["created_at"],
             "direction": recommendation["direction"],
             "style": recommendation["style"],
-            "range": preview["range"],
-            "key_levels": recommendation["key_levels"] or [preview["range"]["low"], preview["range"]["high"]],
-            "grid": {**preview["grid"], "orders": preview["orders"]},
+            "range": proposal_range,
+            "key_levels": proposal_key_levels,
+            "grid": proposal_grid,
+            "dca": proposal_dca,
             "signal": recommendation["signal"],
-            "tp_sl": {
-                "mode": "per_grid",
-                "take_profit": "next_grid_level",
-                "stop_loss": "one_grid_beyond_range",
-                "r_multiple": 1.0,
-            },
-            "risk_budget": preview["risk"],
+            "tp_sl": proposal_tp_sl,
+            "risk_budget": dict(preview["risk"]),
             "intraday_rules": [
                 {"if": "1m closes outside range for 3 consecutive bars", "then": "exit_only_and_replan"},
             ],
@@ -1546,7 +1606,10 @@ def build_strategy_console_control_response(
         )
         recommendation["evaluation_receipt"] = finalized_receipt
         proposal["evaluation_receipt"] = finalized_receipt
-        proposal = plane.upsert_proposal(proposal, now=recommendation["created_at"])
+        proposal = plane.upsert_supervisor_ai_proposal(
+            proposal,
+            now=recommendation["created_at"],
+        )
         return {
             "action": action,
             "recommendation": recommendation,
@@ -1562,6 +1625,23 @@ def build_strategy_console_control_response(
         account=trusted_account,
         now=payload.get("as_of"),
         actor=actor,
+    )
+
+
+def _deterministic_dca_candidate_payload(
+    plane: StrategyControlPlane,
+    cycle_id: str,
+    *,
+    recommendation: dict[str, Any],
+    market: dict[str, Any],
+    account: dict[str, Any],
+) -> dict[str, Any]:
+    """Reuse the versioned Dashboard smart-fill contract for AI DCA review."""
+
+    del plane, cycle_id, account
+    return build_deterministic_dca_candidate_payload_v1(
+        direction=str(recommendation.get("direction") or ""),
+        market_price=float(market.get("latest_close") or 0),
     )
 
 

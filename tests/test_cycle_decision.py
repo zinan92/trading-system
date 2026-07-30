@@ -20,6 +20,7 @@ class FakePlane:
             "actual_state": "stopped",
         }
         self.locked = []
+        self.policy_preflights = []
 
     def runtime_state(self, _cycle_id):
         return dict(self.runtime)
@@ -27,13 +28,54 @@ class FakePlane:
     def active_plan(self, _cycle_id):
         return dict(self.plan) if self.plan else None
 
-    def lock_production_plan(self, cycle_id, *, selected_proposal_id, now):
-        self.locked.append((cycle_id, selected_proposal_id, now))
+    def lock_production_plan(
+        self,
+        cycle_id,
+        *,
+        selected_proposal_id,
+        cycle_risk_envelope_id,
+        now,
+    ):
+        self.locked.append(
+            (
+                cycle_id,
+                selected_proposal_id,
+                cycle_risk_envelope_id,
+                now,
+            )
+        )
         self.plan = {
             "strategy_plan_id": "plan-ai-1",
             "field_sources": {"direction": "ai"},
+            "cycle_risk_envelope_id": cycle_risk_envelope_id,
         }
         return dict(self.plan)
+
+    def verify_supervisor_outer_policy(self, *, at):
+        self.policy_preflights.append(at)
+        return {
+            "binding_id": "paper-supervisor-grid",
+            "binding_version": 1,
+            "binding_digest": "b" * 64,
+            "policy_id": "park-grid-policy",
+            "policy_version": 1,
+            "policy_digest": "a" * 64,
+            "passed": True,
+        }
+
+    def authorize_supervisor_ai_envelope(
+        self,
+        cycle_id,
+        *,
+        proposal,
+        preview,
+    ):
+        return {
+            "cycle_id": cycle_id,
+            "envelope_authorization_id": "envelope-ai-1",
+            "proposal_id": proposal.get("proposal_id"),
+            "preview_id": preview.get("preview_id"),
+        }
 
 
 def _evaluation(direction="long", strategy_type="grid"):
@@ -115,11 +157,113 @@ def test_automatic_decision_runs_prepare_then_complete_start(tmp_path: Path) -> 
     )
 
     assert [row[0] for row in calls] == ["prepare_start", "start"]
-    assert plane.locked == [(CYCLE, "proposal-ai-1", NOW)]
+    assert calls[0][1]["cycle_risk_envelope_id"] == (
+        "envelope-ai-1"
+    )
+    assert calls[1][1]["cycle_risk_envelope_id"] == (
+        calls[0][1]["cycle_risk_envelope_id"]
+    )
+    assert plane.locked == [
+        (CYCLE, "proposal-ai-1", "envelope-ai-1", NOW)
+    ]
+    assert plane.policy_preflights == [NOW]
     assert result["decision"]["outcome"] == "executed"
     assert result["decision"]["terminal_status"] == "executed"
     assert result["decision"]["orders_created"] == 30
     assert result["decision"]["orders_accepted"] == 30
+    assert result["decision"]["outer_policy_preflight"]["passed"] is True
+    assert (
+        result["decision"]["cycle_risk_envelope_id"]
+        == "envelope-ai-1"
+    )
+
+
+def test_missing_outer_policy_blocks_before_ai_refresh_plan_or_orders(
+    tmp_path: Path,
+) -> None:
+    class MissingPolicyPlane(FakePlane):
+        def verify_supervisor_outer_policy(self, *, at):
+            raise ValueError("outer_strategy_policy_missing")
+
+    plane = MissingPolicyPlane()
+    refreshed = []
+    controls = []
+
+    result = CycleDecisionCoordinator(tmp_path).ensure(
+        CYCLE,
+        now=NOW,
+        plane=plane,
+        execution_snapshot={"orders": [], "positions": []},
+        refresh_recommendation=lambda: refreshed.append(True) or _evaluation(),
+        control=lambda action, payload: controls.append((action, payload)) or {},
+    )
+
+    assert refreshed == []
+    assert plane.locked == []
+    assert controls == []
+    assert result["decision"]["reason_code"] == "outer_strategy_policy_missing"
+    assert result["decision"]["orders_created"] == 0
+
+
+@pytest.mark.parametrize(
+    ("stage", "code"),
+    [
+        ("preflight", "outer_strategy_policy_expired"),
+        ("preflight", "outer_strategy_policy_invalid"),
+        ("authorize", "plan_identity_conflict"),
+        (
+            "authorize",
+            "outer_strategy_policy_envelope_out_of_bounds",
+        ),
+    ],
+)
+def test_structural_policy_failures_never_lock_prepare_or_start(
+    tmp_path: Path,
+    stage: str,
+    code: str,
+) -> None:
+    class BlockedPlane(FakePlane):
+        def verify_supervisor_outer_policy(self, *, at):
+            if stage == "preflight":
+                raise ValueError(code)
+            return super().verify_supervisor_outer_policy(at=at)
+
+        def authorize_supervisor_ai_envelope(
+            self,
+            cycle_id,
+            *,
+            proposal,
+            preview,
+        ):
+            if stage == "authorize":
+                raise ValueError(code)
+            return super().authorize_supervisor_ai_envelope(
+                cycle_id,
+                proposal=proposal,
+                preview=preview,
+            )
+
+    plane = BlockedPlane()
+    refreshed = []
+    controls = []
+    result = CycleDecisionCoordinator(tmp_path).ensure(
+        CYCLE,
+        now=NOW,
+        plane=plane,
+        execution_snapshot={"orders": [], "positions": []},
+        refresh_recommendation=lambda: refreshed.append(True)
+        or _evaluation(),
+        control=lambda action, payload: controls.append(
+            (action, payload)
+        )
+        or {},
+    )
+
+    assert refreshed == ([] if stage == "preflight" else [True])
+    assert plane.locked == []
+    assert controls == []
+    assert result["decision"]["reason_code"] == code
+    assert result["decision"]["orders_created"] == 0
 
 
 def test_risk_confirmation_records_not_executed_without_start(tmp_path: Path) -> None:
@@ -269,6 +413,7 @@ def test_active_ai_plan_is_started_without_repeating_ai_evaluation(
             "strategy_type": "grid",
             "field_sources": {"direction": "ai", "style": "ai"},
             "source_proposal_ids": ["proposal-ai-existing"],
+            "cycle_risk_envelope_id": "envelope-ai-existing",
             "evaluation_receipt": {"evaluation_id": "ai-eval-existing"},
         }
     )

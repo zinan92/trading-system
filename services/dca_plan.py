@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Iterable
 
 from services.dualtrack_execution_contract import normalize_execution_command
@@ -22,6 +23,62 @@ DCA_PREVIEW_SCHEMA = "strategy-dca-preview-v1"
 DCA_PLAN_SCHEMA = "strategy-plan-v1"
 DCA_REPLAY_SCHEMA = "strategy-dca-replay-v1"
 DCA_DIRECTIONS = {"long", "short"}
+DETERMINISTIC_DCA_CANDIDATE_VERSION = "dca-smart-fill-v1"
+
+
+def build_deterministic_dca_candidate_payload_v1(
+    *,
+    direction: str,
+    market_price: float,
+) -> dict[str, Any]:
+    """Return the existing Dashboard smart-fill contract as a pure payload."""
+
+    normalized_direction = str(direction or "").strip().lower()
+    if normalized_direction not in DCA_DIRECTIONS:
+        raise ValueError("DCA recommendation requires long or short")
+    price = _positive_number(market_price, "market price")
+    is_long = normalized_direction == "long"
+    low = _dashboard_price_2(
+        price * (0.98 if is_long else 1.0015)
+    )
+    high = _dashboard_price_2(
+        price * (0.9985 if is_long else 1.02)
+    )
+    count = 6
+    step = (high - low) / (count - 1)
+    levels = [
+        high - index * step if is_long else low + index * step
+        for index in range(count)
+    ]
+    return {
+        "candidate_builder_version": DETERMINISTIC_DCA_CANDIDATE_VERSION,
+        "strategy_type": "dca",
+        "direction": normalized_direction,
+        "dca": {
+            "entry_levels": levels,
+            "target_price": _dashboard_price_2(
+                price * (1.01 if is_long else 0.99)
+            ),
+            "stop_price": _dashboard_price_2(
+                price * (0.97 if is_long else 1.03)
+            ),
+            "notional_per_addition": 2_000.0,
+            "max_additions": count,
+            "loop_enabled": False,
+        },
+        "risk_budget": {"leverage": 10.0},
+    }
+
+
+def _dashboard_price_2(value: float) -> float:
+    """Apply ``toFixed(2)`` to the exact IEEE-754 product value."""
+
+    return float(
+        Decimal.from_float(value).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+    )
 
 
 def build_dca_preview(

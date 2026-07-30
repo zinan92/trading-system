@@ -13,6 +13,7 @@ from services.dualtrack_config import DEFAULT_DUALTRACK_CONFIG
 from services.execution_plugin_composition import (
     build_configured_execution_engine_adapter,
 )
+from services.dca_plan import build_dca_strategy_plan
 from services.journal_store import write_json
 from services.strategy_control_plane import StrategyControlPlane
 import services.strategy_control_plane as control_plane_module
@@ -181,6 +182,90 @@ def test_dca_prepare_is_read_only_and_start_requires_exact_risk_acknowledgement(
     )
     assert repeated["idempotent"] is True
     assert repeated["created_orders"] == 0
+
+
+def test_dca_prepared_start_freezes_risk_envelope_identity(
+    tmp_path: Path,
+) -> None:
+    plane = _plane(tmp_path)
+    preview = plane.control(
+        CYCLE_ID,
+        "preview",
+        _payload(),
+        market=_market(),
+        account={"equity": 10_000.0},
+        now="2026-07-22T16:00:00+00:00",
+    )["preview"]
+    plan = build_dca_strategy_plan(
+        preview,
+        strategy_plan_id="strategy-plan-dca-envelope-freeze",
+        version=1,
+        locked_at="2026-07-22T16:00:00+00:00",
+    )
+    envelope = plane.risk_envelopes.authorize_envelope(
+        cycle_id=CYCLE_ID,
+        plan=plan,
+        payload={
+            "authorization_kind": "human_explicit",
+            "limits": {
+                "max_actual_leverage": "20",
+                "max_full_depth_loss": "100000",
+                "max_notional_per_addition": "100000",
+                "max_total_possible_notional": "1000000",
+                "min_additions": "1",
+                "max_additions": "20",
+            },
+        },
+        actor={"email": "park@example.com"},
+        now="2026-07-22T16:00:00+00:00",
+    )
+    plan["cycle_risk_envelope_id"] = envelope[
+        "envelope_authorization_id"
+    ]
+    plane._write_plan(plan)
+    prepared = plane.control(
+        CYCLE_ID,
+        "prepare_start",
+        {
+            **_payload(),
+            "cycle_risk_envelope_id": envelope[
+                "envelope_authorization_id"
+            ],
+        },
+        market=_market(),
+        account={"equity": 10_000.0},
+        now="2026-07-22T16:00:00+00:00",
+    )
+
+    assert prepared["cycle_risk_envelope_id"] == (
+        envelope["envelope_authorization_id"]
+    )
+    with pytest.raises(ValueError, match="prepared_start_changed"):
+        plane.control(
+            CYCLE_ID,
+            "start",
+            {
+                **_payload(),
+                "cycle_risk_envelope_id": "candidate-envelope-b",
+                "prepared_start_id": prepared["prepared_start_id"],
+                "expected_preview_id": prepared["preview"][
+                    "preview_id"
+                ],
+            },
+            market=_market(),
+            account={"equity": 10_000.0},
+            now="2026-07-22T16:01:00+00:00",
+        )
+
+    adapter = build_configured_execution_engine_adapter(
+        tmp_path / "outputs",
+        config=plane.config,
+    )
+    assert adapter.snapshot(CYCLE_ID)["orders"] == []
+    assert (
+        plane.active_plan(CYCLE_ID)["strategy_plan_id"]
+        == plan["strategy_plan_id"]
+    )
 
 
 def test_nautilus_paper_dca_start_requires_a_fresh_execution_tick(

@@ -31,7 +31,9 @@ def test_mutation_requires_validated_allowed_identity(monkeypatch) -> None:
 
     assert identity == {
         "email": "operator@example.com",
+        "issued_at": None,
         "expires_at": 1,
+        "issuer": None,
         "subject": None,
     }
 
@@ -54,6 +56,19 @@ def test_wrong_or_missing_identity_cannot_mutate(monkeypatch) -> None:
         {},
         {},
     ) is None
+
+
+def test_upstream_mutation_forwards_signed_assertion_for_independent_verification() -> None:
+    headers = gateway._upstream_mutation_headers(
+        {"Cf-Access-Jwt-Assertion": "signed-access-jwt"},
+        {"email": "operator@example.com"},
+    )
+
+    assert headers == {
+        "Content-Type": "application/json",
+        "X-Goldbot-Actor-Email": "operator@example.com",
+        "Cf-Access-Jwt-Assertion": "signed-access-jwt",
+    }
 
 
 def test_access_audit_never_persists_assertion_or_secret(monkeypatch, tmp_path: Path) -> None:
