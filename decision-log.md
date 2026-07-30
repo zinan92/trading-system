@@ -1,5 +1,43 @@
 # Decision Log
 
+## Paper Supervisor v2 Keeps Recoverable Conditions Recoverable
+
+Date: 2026-07-30
+
+### Decision
+
+- Freeze the exact Supervisor v2 blocker vocabulary in both
+  `paper-supervisor-convergence-v2.md` and a machine-readable JSON contract.
+  Matching is exact and typed; every unknown or malformed code remains
+  `unknown_blocker` / structural.
+- Treat a local deadline strictly before durable `start_intent` as the
+  dedicated transient `supervisor_attempt_deadline_before_intent`. At or after
+  the intent, uncertainty remains `control_outcome_unknown` / structural.
+- Make five failed short retries an alerted transition to 30-minute probe mode,
+  not a terminal blocker. Reset episode state at a cycle boundary.
+- Split caps by risk: at most two dangerous/unproven start intents per cycle,
+  while proven zero-order clean refusals use a separate 48-observation
+  logic-runaway guard.
+- Keep utilization below 85% visible as warning/informational; before one full
+  24-hour window it is `insufficient`. Neither condition drives the critical
+  dead-man failure endpoint.
+
+### Gotchas
+
+- A control rejection is not “clean” merely because its code says rejected.
+  Runtime, authoritative order snapshot and append-only control audit must all
+  prove zero orders; otherwise it consumes the dangerous cap.
+- An upstream timeout and a local Supervisor deadline have different typed
+  evidence and recovery actions. Generic exception text cannot classify either.
+- `episode_short_budget_exhausted` is an event label, not a blocker. Making it
+  structural would recreate the stopped absorbing state.
+- Timing numbers remain deliberately unset until #461 measures Cloud tick
+  stages. A paper budget without measured execution headroom is not a contract.
+
+### Verification
+
+- `python3 -m pytest -q tests/test_paper_supervisor_contract_v2.py`
+
 ## Cloud Terminal Report Waits for Its Final Overlapping Cycle
 
 Date: 2026-07-30

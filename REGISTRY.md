@@ -43,7 +43,7 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- #449 Paper Supervisor：在既有安全闸之外实现持续收敛、显式 blocker 白名单、episode 重试预算与外部 structural 告警；不得触碰 live/真钱路径或跨周期持仓交接（#413）。唯一真实验收仍是连续 48 小时运行率 ≥85% 且有一次完整自动恢复证据。
+- #460–#472 Paper Supervisor 阶段二：v2 合同已冻结精确 blocker 白名单、意图前/后超时边界、episode 转 probe、危险尝试与干净拒绝双上限、外层 Park 策略和告警分级；下一张 #461 必须先实测 Cloud tick 各阶段耗时，再决定同进程预算或独立 timer。不得触碰 live/真钱路径或跨周期持仓交接（#413）。唯一真实验收仍是连续 48 小时运行率 ≥85%、三个真实周期边界（含一次 21:00）且有一次完整真实自动恢复证据。
 - #455：24h-report 在正确时序的补跑中发现 `2026-07-28_NIGHT` 已验证策略周期包缺失。先查其不可变权威 provenance；不得伪造、重写或补造历史 fills/trades/周期包。该 structural blocker 继续由已恢复的 dead-man 对外告警。
 - 只读监测当前 `strategy-plan-2026-07-29_DAY-2-52d364d4` 的 TP/SL/循环生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改 StrategyPlan。现有 1 个真实 fill 已满足 #408 的“当前计划成交证据”，后续 accepted/armed 仍不得冒充新增成交。
 - 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。
