@@ -10,6 +10,7 @@ from typing import Any, Callable
 from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.paper_release_receipt import current_source_attestation
+from services.cloud_timer_contract import CloudTimerContract
 
 
 CLOUD_PAPER_SERVICES = {
@@ -31,6 +32,7 @@ class CloudPaperServiceBootGate:
         *,
         repo_root: Path = ROOT,
         source_attestation: Callable[[], dict[str, Any]] | None = None,
+        timer_contract: Callable[[], dict[str, Any]] | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         config = load_pipeline_config()
@@ -44,6 +46,9 @@ class CloudPaperServiceBootGate:
             lambda: current_source_attestation(self.repo_root)
         )
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.timer_contract = timer_contract or (
+            lambda: CloudTimerContract(self.output_root, now=self.now).run()
+        )
 
     def verify(self, service: str) -> dict[str, Any]:
         checked_at = self.now().astimezone(timezone.utc).replace(microsecond=0).isoformat()
@@ -87,6 +92,10 @@ class CloudPaperServiceBootGate:
                 raise ValueError("cloud_paper_source_sha_mismatch")
             if not receipt_tree or receipt_tree != current_tree:
                 raise ValueError("cloud_paper_source_tree_sha_mismatch")
+            if service in {"daily-24h", "deadman-ping"}:
+                timers = self.timer_contract()
+                if timers.get("status") != "pass":
+                    raise ValueError("cloud_paper_timer_contract_not_passing")
             payload.update(
                 {
                     "status": "pass",

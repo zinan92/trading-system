@@ -104,7 +104,7 @@ system health. In Cloud mode, the dead-man sends its fail signal when any
 blocking or degraded layer exists; its persisted receipt records only
 `target_kind=success|fail`, never the configured URL.
 
-The focused daily self-review is scheduled for 17:10 UTC (01:10 Beijing),
+The focused daily self-review is scheduled for 01:10 UTC (09:10 Beijing),
 after the terminal 24-hour report. It writes immutable evidence revisions
 under `outputs/dualtrack/daily_self_reviews/` and is readable from:
 

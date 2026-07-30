@@ -187,7 +187,7 @@ TimeoutStartSec=300""",
 Description=GridMind terminal report timer
 
 [Timer]
-OnCalendar=*-*-* 17:03:00 UTC
+OnCalendar=*-*-* 01:03:00 UTC
 Persistent=true
 Unit=gridmind-daily-24h.service
 
@@ -207,7 +207,7 @@ TimeoutStartSec=300""",
 Description=GridMind daily self-review timer
 
 [Timer]
-OnCalendar=*-*-* 17:10:00 UTC
+OnCalendar=*-*-* 01:10:00 UTC
 Persistent=true
 Unit=gridmind-daily-self-review.service
 
@@ -227,7 +227,7 @@ TimeoutStartSec=900""",
 Description=GridMind daily verified backup timer
 
 [Timer]
-OnCalendar=*-*-* 17:30:00 UTC
+OnCalendar=*-*-* 01:30:00 UTC
 Persistent=true
 Unit=gridmind-backup.service
 

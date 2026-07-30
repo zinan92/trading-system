@@ -1,5 +1,31 @@
 # Decision Log
 
+## Cloud Terminal Report Waits for Its Final Overlapping Cycle
+
+Date: 2026-07-30
+
+### Decision
+
+- Schedule the terminal 24-hour report at 01:03 UTC (09:03 Beijing), after
+  the final 12-hour cycle overlapping the Beijing day ends at 01:00 UTC.
+  Schedule the dependent self-review and backup at 01:10 and 01:30 UTC.
+- Treat `gridmind-daily-24h.timer` and `gridmind-deadman-ping.timer` as
+  read-only boot invariants: their canonical names, enablement, active state,
+  next trigger, service target, and daily calendar contract are receipted
+  before either service runs.
+
+### Gotchas
+
+- A successful `Type=oneshot` dead-man service becomes inactive after exit;
+  its timer must be `active (waiting)`. Checking the service alone creates a
+  false outage and can trigger unsafe attempts to restart it.
+- The external dead-man receipt is delivery evidence only when its persisted
+  result reports an accepted request. Timer enablement never proves delivery.
+
+### Verification
+
+- `python3 -m pytest -q tests/test_cloud_systemd.py tests/test_cloud_service_boot.py tests/test_cloud_timer_contract.py`
+
 ## Paper Supervisor Uses a Cycle Risk Envelope and Fresh Start Identities
 
 Date: 2026-07-30
