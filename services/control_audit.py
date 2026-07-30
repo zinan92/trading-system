@@ -10,11 +10,10 @@ The event answers "who did what, from where, with what request, and what
 happened" — the gap exposed by the 2026-07-15 stop diagnosis, where the
 runtime row proved an action's time but could not attribute it to anyone.
 
-Trust model: the actor email is asserted by the public gateway via the
-`X-Goldbot-Actor-Email` header only after it has validated the Cloudflare
-Access JWT; the upstream server is loopback-bound, and the gateway never
-forwards client-supplied headers. A request without that header is a
-local operator by definition.
+Trust model: the gateway validates the Cloudflare Access JWT, then forwards the
+signed assertion for an independent Dashboard verification. The email header
+is accepted only when it matches that cryptographic identity. The raw
+assertion is an in-memory capability and is never retained in this audit.
 
 Audit writes must never block a control action: stopping a robot with a
 full disk is more important than logging the stop. Callers report a

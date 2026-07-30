@@ -285,6 +285,13 @@ class CycleDecisionCoordinator:
 
         try:
             use_active_ai_plan = bool(current and not self._is_manual(current))
+            # The automatic actor cannot create a proposal, lock a plan, or
+            # prepare orders until the exact Park-authored outer binding is
+            # independently verified at this decision time.
+            outer_policy_preflight = plane.verify_supervisor_outer_policy(
+                at=now,
+            )
+            envelope = None
             if use_active_ai_plan:
                 receipt = dict(current.get("evaluation_receipt") or {})
                 source_proposal_ids = [
@@ -305,12 +312,18 @@ class CycleDecisionCoordinator:
                     "style": current.get("style"),
                 }
                 preview = {}
+                envelope_id = str(
+                    current.get("cycle_risk_envelope_id") or ""
+                )
+                if not envelope_id:
+                    raise RuntimeError("risk_envelope_missing")
             else:
                 evaluation = refresh_recommendation()
                 recommendation = dict(evaluation.get("recommendation") or {})
                 proposal = dict(evaluation.get("proposal") or {})
                 preview = dict(evaluation.get("preview") or {})
                 receipt = dict(recommendation.get("evaluation_receipt") or {})
+                envelope_id = ""
             evaluation_id = str(receipt.get("evaluation_id") or "")
             direction = str(
                 recommendation.get("direction") or proposal.get("direction") or ""
@@ -390,17 +403,49 @@ class CycleDecisionCoordinator:
                 )
                 return {"status": "recorded", "decision": decision}
 
+            if not use_active_ai_plan:
+                envelope = plane.authorize_supervisor_ai_envelope(
+                    cycle_id,
+                    proposal=proposal,
+                    preview=preview,
+                )
+                envelope_id = str(
+                    envelope.get("envelope_authorization_id") or ""
+                )
+                if not envelope_id:
+                    raise RuntimeError(
+                        "risk_envelope_authorization_invalid"
+                    )
             if strategy_type != "dca" and not use_active_ai_plan:
                 plane.lock_production_plan(
                     cycle_id,
                     selected_proposal_id=str(proposal.get("proposal_id") or ""),
+                    cycle_risk_envelope_id=envelope_id,
                     now=now,
                 )
             request = {
                 "direction": direction,
                 "style": recommendation.get("style") or proposal.get("style"),
                 "strategy_type": strategy_type,
+                "cycle_risk_envelope_id": envelope_id,
             }
+            if strategy_type == "dca":
+                dca = dict(proposal.get("dca") or {})
+                risk = dict(preview.get("risk") or {})
+                request["dca"] = {
+                    key: dca.get(key)
+                    for key in (
+                        "entry_levels",
+                        "target_price",
+                        "stop_price",
+                        "notional_per_addition",
+                        "max_additions",
+                        "loop_enabled",
+                    )
+                }
+                request["risk_budget"] = {
+                    "leverage": risk.get("selected_leverage"),
+                }
             prepared = control("prepare_start", request)
             prepared_preview = dict(prepared.get("preview") or preview)
             confirmation = dict(prepared_preview.get("manual_confirmation") or {})
@@ -420,6 +465,7 @@ class CycleDecisionCoordinator:
                         ),
                         "strategy_type": strategy_type,
                         "recommended_direction": direction,
+                        "cycle_risk_envelope_id": envelope_id,
                         "preview_id": prepared_preview.get("preview_id"),
                         "required_acknowledgement_codes": [
                             str(row.get("code") or "")
@@ -478,6 +524,11 @@ class CycleDecisionCoordinator:
                     "orders_created": created,
                     "orders_accepted": accepted,
                     "runtime_actual_state": started_runtime.get("actual_state"),
+                    "outer_policy_preflight": outer_policy_preflight,
+                    "cycle_risk_envelope_id": envelope_id,
+                    "cycle_risk_envelope_authorized": (
+                        envelope is not None
+                    ),
                 }
             )
             return {"status": "recorded", "decision": decision}

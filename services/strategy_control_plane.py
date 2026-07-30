@@ -18,12 +18,11 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dca_execution_lifecycle import DcaPaperLifecycle
 from services.dca_plan import (
-    build_dca_entry_commands,
     build_dca_preview,
     build_dca_strategy_plan,
     dca_preview_id,
@@ -417,6 +416,7 @@ class StrategyControlPlane:
         *,
         risk_port: RiskDecisionPort | None = None,
         risk_store: RiskDecisionStorePort | None = None,
+        authorization_clock: Callable[[], str] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "strategy_control"
@@ -431,7 +431,13 @@ class StrategyControlPlane:
         self.risk_store = risk_store or build_risk_decision_store(self.output_root)
         if not isinstance(self.risk_store, RiskDecisionStorePort):
             raise TypeError("risk_store does not implement RiskDecisionStorePort")
-        self.risk_envelopes = CycleRiskEnvelopeStore(self.output_root)
+        self._authorization_clock = authorization_clock or (
+            lambda: datetime.now(timezone.utc).isoformat()
+        )
+        self.risk_envelopes = CycleRiskEnvelopeStore(
+            self.output_root,
+            authorization_clock=self._authorization_clock,
+        )
 
     def upsert_proposal(self, payload: dict[str, Any], *, now: str | None = None) -> dict[str, Any]:
         proposal = normalize_proposal(payload, now=now)
@@ -455,6 +461,75 @@ class StrategyControlPlane:
                 legacy.append(normalize_proposal({**row, "source": source}, legacy=True))
         return legacy
 
+    def verify_supervisor_outer_policy(
+        self,
+        *,
+        at: str | None = None,
+    ) -> dict[str, Any]:
+        """Fail closed using the trusted server clock, never caller ``as_of``."""
+
+        del at
+        return self.risk_envelopes.verify_supervisor_outer_policy(
+            at=self._authorization_clock(),
+        )
+
+    def upsert_supervisor_ai_proposal(
+        self,
+        payload: dict[str, Any],
+        *,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Write an AI proposal only after a fresh exact-policy preflight."""
+
+        self.verify_supervisor_outer_policy()
+        proposal = normalize_proposal(payload, now=now)
+        if proposal.get("source") != "ai":
+            raise ValueError("supervisor proposal source must be ai")
+        return self.upsert_proposal(proposal, now=now)
+
+    def authorize_supervisor_ai_envelope(
+        self,
+        cycle_id: str,
+        *,
+        proposal: dict[str, Any],
+        preview: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist candidate comparisons before the production plan exists."""
+
+        return self.risk_envelopes.authorize_ai_candidate_envelope(
+            cycle_id=cycle_id,
+            proposal=proposal,
+            preview=preview,
+            now=self._authorization_clock(),
+        )
+
+    def _candidate_proposal_for_envelope(
+        self,
+        cycle_id: str,
+        envelope_authorization_id: str,
+    ) -> dict[str, Any] | None:
+        envelope = self.risk_envelopes.envelope(
+            cycle_id,
+            envelope_authorization_id,
+        )
+        if not isinstance(envelope, dict):
+            raise ValueError("risk_envelope_missing")
+        source = envelope.get("source_proposal")
+        if not isinstance(source, dict):
+            return None
+        proposal_id = str(source.get("proposal_id") or "")
+        proposal = next(
+            (
+                row
+                for row in self.proposals(cycle_id)
+                if str(row.get("proposal_id") or "") == proposal_id
+            ),
+            None,
+        )
+        if proposal is None:
+            raise ValueError("plan_identity_conflict")
+        return proposal
+
     def proposal_diff(self, cycle_id: str) -> dict[str, Any]:
         proposals = self.proposals(cycle_id)
         by_source = {str(row.get("source")): row for row in proposals}
@@ -472,6 +547,7 @@ class StrategyControlPlane:
         *,
         selected_proposal_id: str,
         field_sources: dict[str, str] | None = None,
+        cycle_risk_envelope_id: str | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
         with production_mutation_lock(self.output_root):
@@ -479,6 +555,7 @@ class StrategyControlPlane:
                 cycle_id,
                 selected_proposal_id=selected_proposal_id,
                 field_sources=field_sources,
+                cycle_risk_envelope_id=cycle_risk_envelope_id,
                 now=now,
             )
 
@@ -488,6 +565,7 @@ class StrategyControlPlane:
         *,
         selected_proposal_id: str,
         field_sources: dict[str, str] | None = None,
+        cycle_risk_envelope_id: str | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
         proposals = self.proposals(cycle_id)
@@ -508,6 +586,18 @@ class StrategyControlPlane:
             "field_sources": sources,
             **{key: selected.get(key) for key in PLAN_FIELDS},
         }
+        if cycle_risk_envelope_id:
+            plan["cycle_risk_envelope_id"] = str(
+                cycle_risk_envelope_id
+            )
+            self.risk_envelopes.verify_candidate_plan_identity(
+                cycle_id=cycle_id,
+                envelope_authorization_id=str(
+                    cycle_risk_envelope_id
+                ),
+                plan=plan,
+                now=self._authorization_clock(),
+            )
         self._activate_plan(plan)
         return plan
 
@@ -545,6 +635,7 @@ class StrategyControlPlane:
             cycle_id,
             selected_proposal_id=str(selected["proposal_id"]),
             field_sources={key: str(selected["source"]) for key in PLAN_FIELDS},
+            cycle_risk_envelope_id=None,
             now=as_of,
         )
 
@@ -1181,6 +1272,17 @@ class StrategyControlPlane:
         strategy_type = str(payload.get("strategy_type") or "grid").lower()
         if not current and strategy_type != "dca":
             raise ValueError("cannot prepare start without an active StrategyPlan")
+        requested_envelope_id = str(
+            payload.get("cycle_risk_envelope_id") or ""
+        )
+        active_envelope_id = str(
+            (current or {}).get("cycle_risk_envelope_id") or ""
+        )
+        if (
+            active_envelope_id
+            and requested_envelope_id != active_envelope_id
+        ):
+            raise ValueError("plan_identity_conflict")
         runtime = self.runtime_state(cycle_id)
         if runtime.get("desired_state") == "running":
             raise ValueError("robot is already running; stop it before changing the grid")
@@ -1215,6 +1317,23 @@ class StrategyControlPlane:
             account=account,
             now=now,
         )
+        if requested_envelope_id:
+            candidate_proposal = (
+                self._candidate_proposal_for_envelope(
+                    cycle_id,
+                    requested_envelope_id,
+                )
+                if not current
+                else None
+            )
+            self.risk_envelopes.verify_preview(
+                cycle_id=cycle_id,
+                plan=current or {},
+                envelope_authorization_id=requested_envelope_id,
+                preview=preview,
+                proposal=candidate_proposal,
+                now=self._authorization_clock(),
+            )
         prepared_at = _timestamp(now)
         record = {
             "schema_version": PREPARED_START_SCHEMA,
@@ -1228,6 +1347,10 @@ class StrategyControlPlane:
                 (current or {}).get("strategy_plan_id") or ""
             ),
             "expected_strategy_plan_version": int((current or {}).get("version") or 0),
+            "cycle_risk_envelope_id": (
+                requested_envelope_id
+                or None
+            ),
             "execution_adapter_name": str(getattr(adapter, "name", "")),
             "market_snapshot": canonical_market_risk_state(market),
             "preview": preview,
@@ -1238,6 +1361,9 @@ class StrategyControlPlane:
         return {
             "action": "prepare_start",
             "prepared_start_id": prepared_start_id,
+            "cycle_risk_envelope_id": record[
+                "cycle_risk_envelope_id"
+            ],
             "expires_at": record["expires_at"],
             "preview": preview,
             "side_effects": {
@@ -1277,6 +1403,7 @@ class StrategyControlPlane:
         prepared: dict[str, Any],
         *,
         expected_preview_id: str,
+        expected_envelope_authorization_id: str,
         current: dict[str, Any],
         market: dict[str, Any],
         adapter_name: str,
@@ -1289,6 +1416,9 @@ class StrategyControlPlane:
                 prepared,
                 preview=preview,
                 expected_preview_id=expected_preview_id,
+                expected_envelope_authorization_id=(
+                    expected_envelope_authorization_id
+                ),
                 current=current,
                 market=market,
                 adapter_name=adapter_name,
@@ -1308,6 +1438,8 @@ class StrategyControlPlane:
             or str(prepared.get("expected_strategy_plan_id") or "")
             != str(current.get("strategy_plan_id") or "")
             or prepared_plan_version != int(current.get("version") or 0)
+            or str(prepared.get("cycle_risk_envelope_id") or "")
+            != expected_envelope_authorization_id
             or str(prepared.get("execution_adapter_name") or "") != adapter_name
             or not expected_preview_id
             or expected_preview_id != str(preview.get("preview_id") or "")
@@ -1402,6 +1534,7 @@ class StrategyControlPlane:
         *,
         preview: dict[str, Any],
         expected_preview_id: str,
+        expected_envelope_authorization_id: str,
         current: dict[str, Any],
         market: dict[str, Any],
         adapter_name: str,
@@ -1431,6 +1564,8 @@ class StrategyControlPlane:
             str(prepared.get("prepared_start_id") or "") != content_id
             or str(prepared.get("cycle_id") or "") != cycle_id
             or not prepared_plan_matches
+            or str(prepared.get("cycle_risk_envelope_id") or "")
+            != expected_envelope_authorization_id
             or str(prepared.get("execution_adapter_name") or "") != adapter_name
             or not expected_preview_id
             or expected_preview_id != str(preview.get("preview_id") or "")
@@ -1480,6 +1615,7 @@ class StrategyControlPlane:
                 "expires_at",
                 "expected_strategy_plan_id",
                 "expected_strategy_plan_version",
+                "cycle_risk_envelope_id",
                 "execution_adapter_name",
                 "market_snapshot",
                 "preview",
@@ -2025,6 +2161,11 @@ class StrategyControlPlane:
                 ),
             }
         if action == "prepare_start":
+            if (
+                str((actor or {}).get("type") or "") == "scheduler"
+                and not str(body.get("cycle_risk_envelope_id") or "")
+            ):
+                raise ValueError("risk_envelope_missing")
             return self._prepare_start(
                 cycle_id,
                 body,
@@ -2038,7 +2179,18 @@ class StrategyControlPlane:
                 "outer_strategy_policy": self.risk_envelopes.authorize_outer_policy(
                     payload=body,
                     actor=actor,
-                    now=now,
+                    now=self._authorization_clock(),
+                ),
+            }
+        if action == "bind_supervisor_outer_strategy_policy":
+            return {
+                "action": action,
+                "outer_strategy_policy_binding": (
+                    self.risk_envelopes.bind_supervisor_outer_policy(
+                        payload=body,
+                        actor=actor,
+                        now=self._authorization_clock(),
+                    )
                 ),
             }
         if action == "authorize_cycle_risk_envelope":
@@ -2067,6 +2219,11 @@ class StrategyControlPlane:
                 ),
             }
         if action == "start":
+            if (
+                str((actor or {}).get("type") or "") == "scheduler"
+                and not str(body.get("cycle_risk_envelope_id") or "")
+            ):
+                raise ValueError("risk_envelope_missing")
             return self._start(cycle_id, body, market=market or {}, account=account or {}, now=now)
         if action == "stop":
             return self._stop(
@@ -2248,6 +2405,17 @@ class StrategyControlPlane:
         current = self.active_plan(cycle_id)
         if not current:
             raise ValueError("cannot start without an already selected active StrategyPlan")
+        envelope_authorization_id = str(
+            body.get("cycle_risk_envelope_id") or ""
+        )
+        plan_envelope_id = str(
+            current.get("cycle_risk_envelope_id") or ""
+        )
+        if (
+            plan_envelope_id
+            and envelope_authorization_id != plan_envelope_id
+        ):
+            raise ValueError("plan_identity_conflict")
         expected_preview_id = str(body.get("expected_preview_id") or "")
         prepared_start_id = str(body.get("prepared_start_id") or "")
         adapter = build_configured_execution_engine_adapter(
@@ -2267,6 +2435,9 @@ class StrategyControlPlane:
                 cycle_id,
                 prepared,
                 expected_preview_id=expected_preview_id,
+                expected_envelope_authorization_id=(
+                    envelope_authorization_id
+                ),
                 current=current,
                 market=market,
                 adapter_name=str(getattr(adapter, "name", "")),
@@ -2318,13 +2489,21 @@ class StrategyControlPlane:
             raise ValueError("new grid start requires zero accepted orders and zero open positions")
 
         envelope_verification = None
-        envelope_authorization_id = str(body.get("cycle_risk_envelope_id") or "")
         if envelope_authorization_id:
             envelope_verification = self.risk_envelopes.verify_preview(
                 cycle_id=cycle_id,
                 plan=current,
                 envelope_authorization_id=envelope_authorization_id,
                 preview=preview,
+                proposal=(
+                    self._candidate_proposal_for_envelope(
+                        cycle_id,
+                        envelope_authorization_id,
+                    )
+                    if not current
+                    else None
+                ),
+                now=self._authorization_clock(),
             )
         adjusted = self._plan_from_preview(current, preview, now=now)
         if envelope_verification is not None:
@@ -2604,6 +2783,9 @@ class StrategyControlPlane:
                 cycle_id,
                 prepared,
                 expected_preview_id=expected_preview_id,
+                expected_envelope_authorization_id=(
+                    str(body.get("cycle_risk_envelope_id") or "")
+                ),
                 current=current,
                 market=market,
                 adapter_name=adapter_name,
@@ -2627,14 +2809,29 @@ class StrategyControlPlane:
             raise ValueError("strategy_preview_changed")
         envelope_verification = None
         envelope_authorization_id = str(body.get("cycle_risk_envelope_id") or "")
+        plan_envelope_id = str(
+            current.get("cycle_risk_envelope_id") or ""
+        )
+        if (
+            plan_envelope_id
+            and envelope_authorization_id != plan_envelope_id
+        ):
+            raise ValueError("plan_identity_conflict")
         if envelope_authorization_id:
-            if not current:
-                raise ValueError("risk_envelope_missing")
             envelope_verification = self.risk_envelopes.verify_preview(
                 cycle_id=cycle_id,
                 plan=current,
                 envelope_authorization_id=envelope_authorization_id,
                 preview=preview,
+                proposal=(
+                    self._candidate_proposal_for_envelope(
+                        cycle_id,
+                        envelope_authorization_id,
+                    )
+                    if not current
+                    else None
+                ),
+                now=self._authorization_clock(),
             )
         # An envelope is an additional bounded policy check. It never replaces
         # DCA's existing preview-bound human acknowledgement gate.
@@ -2712,6 +2909,10 @@ class StrategyControlPlane:
         risk_payload["decision_id"] = _content_id("dca-risk", risk_payload)
         adjusted["risk_decision_id"] = risk_payload["decision_id"]
         adjusted["risk_acknowledgement"] = acknowledgement
+        if envelope_authorization_id:
+            adjusted["cycle_risk_envelope_id"] = (
+                envelope_authorization_id
+            )
         self._write_dca_risk_decision(cycle_id, risk_payload)
         envelope_receipt = None
         if envelope_verification is not None:
@@ -6355,6 +6556,7 @@ def normalize_proposal(payload: dict[str, Any], *, now: str | None = None, legac
         "range": dict(payload.get("range") or {}),
         "key_levels": list(payload.get("key_levels") or []),
         "grid": dict(payload.get("grid") or {"orders": list(payload.get("grid_orders") or [])}),
+        "dca": dict(payload.get("dca") or {}),
         "signal": dict(payload.get("signal") or {"confidence": payload.get("confidence")}),
         "tp_sl": dict(payload.get("tp_sl") or payload.get("bracket") or {}),
         "risk_budget": dict(payload.get("risk_budget") or {}),

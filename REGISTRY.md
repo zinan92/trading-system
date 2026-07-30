@@ -5,7 +5,28 @@
 
 ## 现在在哪里(2026-07-30)
 - #476 将 full-schedule 测试所断言的 attended Paper Nautilus runtime 改为显式 fixture，并新增缺少 runtime path 时不得凭空生成授权环境的反例；这是测试基线修复，不改变 scheduler、unit、云端运行状态或任何交易路径。
-- Cloud Paper 当前部署为 `main@adf2599f4bfc544870d28d90060858a6e36c41b6`（#444/#453/#454）。24h-report、daily self-review、backup 与 dead-man timers 均 active；24h timer 的下一次触发为次日 09:03 北京时间，dead-man 为精确 `OnUnitInactiveSec=300` cadence。daily-24h 与 dead-man 的 source-bound boot receipts 均绑定同一 source/tree，dead-man 于 11:05 CST 自然运行并取得外部端点 HTTP 200 的 `fail_sent` 回执。
+- #462 已实现但尚未部署：Paper Supervisor 的 AI 授权只能嵌套在 Park 通过
+  Cloudflare Access 显式签发并不可变持久化的外层策略内；Gateway、
+  Dashboard 与策略写入边界逐层复验签名 assertion，本机伪造邮箱/transport
+  字段不能取得 Park 权限。Supervisor 只绑定精确 policy/binding
+  id、version、digest，并在生产计划落盘前先持久化 AI 候选信封及逐字段比对；
+  推荐上下文只读 active/latest plan，provider 失败不会把旧 proposal 晋升为
+  active plan。scheduler 的 prepare/start 必须携带同一信封，prepared receipt
+  也把该 ID 纳入内容寻址；A→B 替换在订单前拒绝。Grid 锁计划前先核验 proposal
+  digest 与当前外层 binding，DCA 则复用页面既有 `dca-smart-fill-v1` 并冻结原始
+  参数、完整 preview digest 与执行几何，仍停在人工风险确认。Park policy /
+  binding 的授权时间只取服务器时钟。缺失、过期、篡改、坏行、重复身份、方向
+  冲突或越界均在订单前 fail-closed。此实现未触碰任何 live/真钱路径，也未放宽
+  现有行情、心跳、对账、人工确认或成交守卫。
+- Cloud Paper 当前部署为
+  `main@742c49fd1079c5a70ea710d9ba781f36483cf8bb`（#474 自然 tick
+  分阶段计时）。24h-report 与 dead-man 的规范 timer
+  `gridmind-daily-24h.timer` / `gridmind-deadman-ping.timer` 均 enabled +
+  active；24h timer 下一次触发为 2026-07-31 09:03 北京时间，dead-man
+  为精确 `OnUnitInactiveSec=300` cadence。dead-man 于
+  2026-07-30 12:49 北京时间自然取得外部端点 HTTP 200 的 `fail_sent`
+  回执。daily-24h 服务仍因不可变 `2026-07-28_NIGHT` 周期包缺失而失败，
+  该 structural blocker 不得通过补造历史证据掩盖。
 - 今日新鲜 AI 建议 `ai-eval-4272ba2b41ca4382` 已经完整安全路径启动为中性稳健 Grid：StrategyPlan=`strategy-plan-2026-07-29_DAY-2-52d364d4` v2，38/38 委托创建并接受、38 条 lifecycle armed。当前仍为同一计划，runtime=`running`；已有 1 个当前计划真实 entry fill、1 个带 TP/SL 的 Paper 空头持仓与 37 张剩余委托，execution reconciliation=`ok`、canonical accounting=`pass`。2026-07-28 DAY 的 3 笔成交不计入今日计划证据。
 - #416/#417 已修复生产执行到派生日账本的长期断链：`2026-07-28_DAY` 现为 3 trades / 6 fills / `-7.47319148 USD`，来源为验证通过的终态 StrategyCyclePackage；原始 fills/trades/周期包未改写。NAV 与基于账本计数的复盘/推广聚合必须使用重建后的派生账本，既有终态复盘和 Shadow 原始证据保持不可变。
 - #406/#418、#407/#419、#420/#421 与 #422/#423 已部署：Cloud dead-man 使用当前 Paper 权威执行快照且未知仍 fail-closed；正式 Dashboard 诊断和策略控制台均返回 200；公网探针正确区分 Cloudflare Access 登录页；Linux Cloud preflight 对 29 个活动运行时文件执行 macOS 路径门禁且零违规。#424/#425 进一步把晚到行情保留为 `late_ignored`，防止重放回写既有 fill；当前 fill 时间仍保持 `2026-07-29T02:41:00Z`。
@@ -44,7 +65,15 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- #460–#472/#474 Paper Supervisor 阶段二：v2 合同已冻结；#474 已为每个自然 Paper tick 增加不影响控制结果的 source-bound 分阶段耗时回执。下一张 #461 必须从部署后的同一 Cloud SHA/host/owner 收满至少 120 个自然 tick 和一个真实 DAY/NIGHT 边界，再决定同进程预算或独立 timer。不得触碰 live/真钱路径或跨周期持仓交接（#413）。唯一真实验收仍是连续 48 小时运行率 ≥85%、三个真实周期边界（含一次 21:00）且有一次完整真实自动恢复证据。
+- #460–#472/#474 Paper Supervisor 阶段二：v2 合同已冻结；Cloud 当前保持
+  #474 的 `742c49fd1079c5a70ea710d9ba781f36483cf8bb`，每个自然 Paper tick
+  只追加 source-bound 分阶段耗时回执，零控制动作。#461 必须在这一相同
+  Cloud SHA/host/owner 上收满至少 120 个自然 tick 和一个真实 DAY/NIGHT
+  边界，再决定同进程预算或独立 timer；在样本闭合前不得部署 #462 造成
+  混样。随后由 Park 走已验签通道签发并绑定外层策略，再进入 Supervisor
+  持久状态/重试循环。不得触碰 live/真钱路径或跨周期持仓交接（#413）。
+  唯一真实验收仍是连续 48 小时运行率 ≥85%、三个真实周期边界（含一次
+  21:00）且有一次完整真实自动恢复证据。
 - #455：24h-report 在正确时序的补跑中发现 `2026-07-28_NIGHT` 已验证策略周期包缺失。先查其不可变权威 provenance；不得伪造、重写或补造历史 fills/trades/周期包。该 structural blocker 继续由已恢复的 dead-man 对外告警。
 - 只读监测当前 `strategy-plan-2026-07-29_DAY-2-52d364d4` 的 TP/SL/循环生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改 StrategyPlan。现有 1 个真实 fill 已满足 #408 的“当前计划成交证据”，后续 accepted/armed 仍不得冒充新增成交。
 - 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。

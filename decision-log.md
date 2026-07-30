@@ -12369,3 +12369,99 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Run the focused schedule-manager suite and the complete repository suite from
   a clean committed tree.
+
+# 2026-07-30 — Autonomous AI is nested inside an immutable Park boundary (Issue #462)
+
+## Decision
+
+- A Park-authored outer Paper strategy policy is an append-only record with an
+  independent id, version, digest, summary, authorization time, expiry,
+  strategy type/direction and exact numeric limits. A second Park-authored
+  binding selects one exact id/version/digest for the Supervisor; there is no
+  latest-version or fallback lookup.
+- Park-only writes require a Cloudflare Access assertion that is
+  cryptographically verified by the gateway, the loopback Dashboard and again
+  at the policy-write domain boundary. The forwarded email/transport strings
+  are corroborating data only and cannot grant authority by themselves. The
+  persisted actor contains bounded verified claim metadata and a one-way
+  assertion digest, never the assertion.
+- Before automatic AI refreshes a recommendation, locks a plan or prepares an
+  order, it verifies the exact configured binding and its policy using the
+  server clock, never caller `as_of`. After the read-only recommendation and
+  preview exist—but before a production plan exists—it persists a candidate
+  cycle envelope whose direction and exact derived limits are compared field by
+  field against the outer policy. Missing, expired, malformed, duplicated,
+  tampered, direction-mismatched or out-of-bound state stops before plan/order
+  creation.
+- Recommendation context reads only an existing active plan or latest
+  historical plan. It never promotes a legacy proposal or writes an active plan
+  before the provider and candidate-envelope checks succeed.
+- The automatic plan records that envelope id. Scheduler-owned
+  `prepare_start`/`start` requests must carry it, and start rechecks both the
+  exact source proposal/plan identity and a fresh preview before any order
+  command is submitted.
+- `prepare_start` freezes the exact envelope id into its content-addressed
+  record. Prepare and start compare the request, prepared record and active
+  Grid plan (or no-plan DCA candidate) identities; changing A to B is rejected
+  before order creation.
+- AI cycle envelopes accept only the declared authorization kind and exact
+  strategy-specific limit keys. They persist the outer policy/binding
+  identities and field-by-field comparison rows. Start re-verifies the same
+  exact policy against the control request timestamp; expiry at that instant is
+  a structural refusal with zero new orders.
+- Exact outer-policy blocker codes are structural. Unknown codes remain
+  `unknown_blocker` and structural; no text, substring or regex classification
+  was added.
+
+## Gotchas
+
+- A loopback socket is not proof of Park identity. Any same-host process can
+  construct `X-Goldbot-Actor-Email`; only a valid signed Access assertion can
+  establish the `public_gateway` transport or write a policy/binding through a
+  direct domain call.
+- Validating only the selected registry row hides corruption in later or
+  duplicate rows. Every policy/binding read validates the entire file,
+  including schema, digest and identity uniqueness, before returning one row.
+- Policy rotation appends a new exact record and binding. Changing an
+  environment reference does not rewrite or silently supersede history.
+- Caller `as_of` is market/replay context, never an authorization timestamp.
+  Park policy and binding records use the injected server authorization clock.
+- AI DCA review reuses the versioned Dashboard `dca-smart-fill-v1` pure
+  contract (trusted latest price, six additions, 2000 USD each, 10x,
+  ±1% target and ±3% stop). Neutral is rejected rather than silently changed
+  to long. The original deterministic inputs, full preview digest and derived
+  execution-shape digest are all frozen; DCA's existing human acknowledgement
+  remains mandatory and no automatic order is created.
+- A preview's venue rounding can retain `requested_price` facts that are absent
+  from its displayed entry levels. Rebuilding a candidate from rounded output
+  changes its preview id, so the persisted proposal retains the original
+  deterministic smart-fill inputs and prepare replays those exact inputs.
+- Python `round(x, 2)` uses ties-to-even and does not match the Dashboard's
+  positive-price `toFixed(2)` behavior at half-cent boundaries. The shared
+  candidate builder therefore first computes the same IEEE-754 product, then
+  converts that exact float with `Decimal.from_float` and `ROUND_HALF_UP` for
+  the four two-decimal anchors before deriving the six levels. Opposite
+  boundary vectors at `3900.25` and `3906.25`, plus a real Chromium scan of
+  every cent from 3500.00 through 4500.00 in both directions, guard parity.
+- The Access assertion is forwarded only for independent verification. It is
+  never copied into control audit, policy records, logs or read-model output.
+- The classifier implementation now identifies itself as
+  `paper-supervisor-blocker-v2`, matching the frozen exact-code contract after
+  the explicit outer-policy additions.
+- This story does not deploy or activate a policy. Cloud remains on the
+  homogeneous timing-instrumentation SHA until #461 has enough real boundary
+  samples; policy activation is a separate attended Park authorization step.
+
+## Verification
+
+- Focused adversarial tests cover forged loopback identity headers, signed
+  identity/email mismatch, missing policy before AI refresh/plan/control,
+  candidate envelope creation before plan lock, mandatory scheduler envelope
+  propagation, exact nested limit schemas, server-clock expiry, tamper, corrupt
+  unselected rows, duplicate identities, rotation invalidation, immutable
+  concurrent writes and exact structural classification.
+- Real composition counterexamples cover provider failure with a legacy AI
+  proposal (no plan/order mutation), DCA recommendation through candidate
+  envelope and `risk_confirmation_required`, A-to-B prepared-envelope
+  rejection, pre-activation proposal-digest conflict, and Python/browser DCA
+  smart-fill parity.

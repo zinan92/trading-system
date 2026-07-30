@@ -5,8 +5,10 @@ from copy import deepcopy
 import pytest
 
 from services.dca_plan import (
+    DETERMINISTIC_DCA_CANDIDATE_VERSION,
     build_dca_preview,
     build_dca_strategy_plan,
+    build_deterministic_dca_candidate_payload_v1,
     replay_dca_marks,
 )
 from services.dualtrack_config import DEFAULT_DUALTRACK_CONFIG
@@ -63,6 +65,95 @@ def _payload(direction: str = "long") -> dict:
         },
         "risk_budget": {"leverage": 10},
     }
+
+
+@pytest.mark.parametrize(
+    ("direction", "levels", "target", "stop"),
+    [
+        (
+            "long",
+            [3994.0, 3979.2, 3964.4, 3949.6, 3934.8, 3920.0],
+            4040.0,
+            3880.0,
+        ),
+        (
+            "short",
+            [4006.0, 4020.8, 4035.6, 4050.4, 4065.2, 4080.0],
+            3960.0,
+            4120.0,
+        ),
+    ],
+)
+def test_deterministic_candidate_matches_dashboard_smart_fill_contract(
+    direction: str,
+    levels: list[float],
+    target: float,
+    stop: float,
+) -> None:
+    candidate = build_deterministic_dca_candidate_payload_v1(
+        direction=direction,
+        market_price=4_000.0,
+    )
+
+    assert (
+        candidate["candidate_builder_version"]
+        == DETERMINISTIC_DCA_CANDIDATE_VERSION
+    )
+    assert candidate["dca"]["entry_levels"] == pytest.approx(levels)
+    assert candidate["dca"]["target_price"] == target
+    assert candidate["dca"]["stop_price"] == stop
+    assert candidate["dca"]["notional_per_addition"] == 2_000.0
+    assert candidate["dca"]["max_additions"] == 6
+    assert candidate["risk_budget"]["leverage"] == 10.0
+
+
+def test_deterministic_candidate_rejects_neutral_direction() -> None:
+    with pytest.raises(
+        ValueError,
+        match="requires long or short",
+    ):
+        build_deterministic_dca_candidate_payload_v1(
+            direction="neutral",
+            market_price=4_000.0,
+        )
+
+
+def test_deterministic_candidate_matches_browser_half_cent_boundary() -> None:
+    candidate = build_deterministic_dca_candidate_payload_v1(
+        direction="long",
+        market_price=3_906.25,
+    )
+
+    assert candidate["dca"]["entry_levels"] == pytest.approx(
+        [
+            3900.39,
+            3885.938,
+            3871.486,
+            3857.034,
+            3842.582,
+            3828.13,
+        ]
+    )
+    assert candidate["dca"]["target_price"] == 3945.31
+    assert candidate["dca"]["stop_price"] == 3789.06
+
+
+def test_deterministic_candidate_matches_opposite_float_boundary() -> None:
+    candidate = build_deterministic_dca_candidate_payload_v1(
+        direction="long",
+        market_price=3_900.25,
+    )
+
+    assert candidate["dca"]["entry_levels"] == pytest.approx(
+        [
+            3894.4,
+            3879.968,
+            3865.536,
+            3851.104,
+            3836.672,
+            3822.24,
+        ]
+    )
 
 
 def test_long_dca_preview_resizes_one_fixed_target_at_every_fill_depth() -> None:
