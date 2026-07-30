@@ -3,8 +3,8 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-07-29)
-- Cloud Paper 当前部署为 `main@fcb0df3597acc9d989d3923e1025eac91fefa606`（#425），preflight 与 dashboard/access-gateway/dead-man/live-tick boot receipts 均绑定同一 source/tree。4 个常驻服务和 5 个 systemd timers 均 active；最近自然 tick 成功且 180 秒内新鲜，可信 Binance USD-M Futures 行情 fresh。
+## 现在在哪里(2026-07-30)
+- Cloud Paper 当前部署为 `main@adf2599f4bfc544870d28d90060858a6e36c41b6`（#444/#453/#454）。24h-report、daily self-review、backup 与 dead-man timers 均 active；24h timer 的下一次触发为次日 09:03 北京时间，dead-man 为精确 `OnUnitInactiveSec=300` cadence。daily-24h 与 dead-man 的 source-bound boot receipts 均绑定同一 source/tree，dead-man 于 11:05 CST 自然运行并取得外部端点 HTTP 200 的 `fail_sent` 回执。
 - 今日新鲜 AI 建议 `ai-eval-4272ba2b41ca4382` 已经完整安全路径启动为中性稳健 Grid：StrategyPlan=`strategy-plan-2026-07-29_DAY-2-52d364d4` v2，38/38 委托创建并接受、38 条 lifecycle armed。当前仍为同一计划，runtime=`running`；已有 1 个当前计划真实 entry fill、1 个带 TP/SL 的 Paper 空头持仓与 37 张剩余委托，execution reconciliation=`ok`、canonical accounting=`pass`。2026-07-28 DAY 的 3 笔成交不计入今日计划证据。
 - #416/#417 已修复生产执行到派生日账本的长期断链：`2026-07-28_DAY` 现为 3 trades / 6 fills / `-7.47319148 USD`，来源为验证通过的终态 StrategyCyclePackage；原始 fills/trades/周期包未改写。NAV 与基于账本计数的复盘/推广聚合必须使用重建后的派生账本，既有终态复盘和 Shadow 原始证据保持不可变。
 - #406/#418、#407/#419、#420/#421 与 #422/#423 已部署：Cloud dead-man 使用当前 Paper 权威执行快照且未知仍 fail-closed；正式 Dashboard 诊断和策略控制台均返回 200；公网探针正确区分 Cloudflare Access 登录页；Linux Cloud preflight 对 29 个活动运行时文件执行 macOS 路径门禁且零违规。#424/#425 进一步把晚到行情保留为 `late_ignored`，防止重放回写既有 fill；当前 fill 时间仍保持 `2026-07-29T02:41:00Z`。
@@ -43,6 +43,8 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- #449 Paper Supervisor：在既有安全闸之外实现持续收敛、显式 blocker 白名单、episode 重试预算与外部 structural 告警；不得触碰 live/真钱路径或跨周期持仓交接（#413）。唯一真实验收仍是连续 48 小时运行率 ≥85% 且有一次完整自动恢复证据。
+- #455：24h-report 在正确时序的补跑中发现 `2026-07-28_NIGHT` 已验证策略周期包缺失。先查其不可变权威 provenance；不得伪造、重写或补造历史 fills/trades/周期包。该 structural blocker 继续由已恢复的 dead-man 对外告警。
 - 只读监测当前 `strategy-plan-2026-07-29_DAY-2-52d364d4` 的 TP/SL/循环生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改 StrategyPlan。现有 1 个真实 fill 已满足 #408 的“当前计划成交证据”，后续 accepted/armed 仍不得冒充新增成交。
 - 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。
 - 监测自然 tick 单次耗时和 `late_ignored` 数量；如果再发生 timeout、不可变成交回归或执行/会计对账漂移，按独立缺陷 Issue fail-closed 处理，不得重放控制动作。
