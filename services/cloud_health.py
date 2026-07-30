@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from services.datafeed_market_repository import DatafeedMarketRepository
 from services.cycle_decision import CycleDecisionLedger
+from services.paper_supervisor_store import PaperSupervisorStore, PaperSupervisorStoreError
 from services.dualtrack_clock import cycle_window
 from services.dualtrack_config import dualtrack_config
 from services.journal_store import load_json, write_json
@@ -88,11 +89,22 @@ class CloudPaperHealth:
 
     def run(self, *, persist: bool = True) -> dict[str, Any]:
         observed = self.now().astimezone(timezone.utc).replace(microsecond=0)
+        supervisor_config = dualtrack_config().get("paper_supervisor")
+        supervisor_enabled = bool(
+            supervisor_config.get("enabled")
+            if isinstance(supervisor_config, dict)
+            else False
+        )
+        convergence_check = (
+            {"supervisor": self._supervisor(observed)}
+            if supervisor_enabled
+            else {"cycle_decision": self._cycle_decision(observed)}
+        )
         checks = {
             "datafeed": self._datafeed(observed),
             "live_tick": self._live_tick(observed),
             "execution": self._execution(),
-            "cycle_decision": self._cycle_decision(observed),
+            **convergence_check,
             "reconciliation": self._reconciliation(),
             "daily_self_review": self._daily_review(observed),
             "backup": self._backup(observed),
@@ -135,6 +147,57 @@ class CloudPaperHealth:
                 [payload],
             )
         return payload
+
+    def _supervisor(self, now: datetime) -> dict[str, Any]:
+        """Health projection for the stateful convergence contract.
+
+        An active plan with a stopped runtime and no structural Supervisor
+        record is exactly the formerly invisible absorbing state. Treat it as
+        blocked so the existing dead-man fail path sends an external alert.
+        """
+
+        cycle_id = cycle_window(now).cycle_id
+        runtime = _latest(self.output_root / "dualtrack" / "strategy_control" / "runtime.json")
+        plans_path = self.output_root / "dualtrack" / "strategy_control" / "plans" / f"{cycle_id}.json"
+        active_plans = [
+            row for row in load_json(plans_path)
+            if isinstance(row, dict) and row.get("status") == "active"
+        ]
+        try:
+            state = PaperSupervisorStore(self.output_root).read_state(cycle_id)
+        except PaperSupervisorStoreError:
+            return _check(
+                "supervisor", "blocked", code="attempt_store_corrupt",
+                summary="Paper Supervisor evidence store cannot be verified.",
+                next_action="Reconcile the Supervisor store, authoritative runtime and control audit before any start.",
+            )
+        status = str(state.get("status") or "converging")
+        blocker = state.get("structural_blocker") if isinstance(state.get("structural_blocker"), dict) else {}
+        if status == "blocked_structural":
+            return _check(
+                "supervisor", "blocked", code=str(blocker.get("machine_code") or "unknown_blocker"),
+                summary=str(blocker.get("human_reason") or "Paper Supervisor requires human reconciliation."),
+                next_action=str(blocker.get("next_action") or "Reconcile authoritative runtime and control audit."),
+                evidence={"cycle_id": cycle_id, "attempt_count": state.get("attempt_count")},
+            )
+        runtime_running = (
+            runtime.get("cycle_id") == cycle_id
+            and runtime.get("desired_state") == "running"
+            and runtime.get("actual_state") == "running"
+        )
+        if active_plans and not runtime_running:
+            return _check(
+                "supervisor", "blocked", code="supervisor_unexplained_stopped_after_plan_activation",
+                summary="An active plan is stopped without a structural Supervisor blocker.",
+                next_action="Inspect Supervisor attempt history and control audit; dead-man alert is required.",
+                evidence={"cycle_id": cycle_id, "attempt_count": state.get("attempt_count"), "supervisor_status": status},
+            )
+        return _check(
+            "supervisor", "ready", code="supervisor_convergence_observed",
+            summary="Paper Supervisor has a non-absorbing convergence state for the current cycle.",
+            next_action="No action.",
+            evidence={"cycle_id": cycle_id, "status": status, "attempt_count": state.get("attempt_count")},
+        )
 
     def _datafeed(self, now: datetime) -> dict[str, Any]:
         try:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import services.cloud_health as cloud_health_module
 from services.cloud_health import CloudPaperHealth, _hash_json
 from services.cycle_decision import CycleDecisionLedger
 from services.journal_store import write_json
@@ -176,6 +177,27 @@ def test_active_plan_stopped_past_deadline_is_detected_for_clock_cycle(
     assert decision["code"] == "cycle_decision_stalled_after_plan_activation"
     assert decision["evidence"]["strategy_plan_id"] == "stalled-plan"
     assert decision["evidence"]["plan_age_seconds"] == 600
+
+
+def test_supervisor_mode_detects_active_plan_stopped_without_blocker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    health = _healthy(tmp_path)
+    monkeypatch.setattr(
+        cloud_health_module,
+        "dualtrack_config",
+        lambda: {"paper_supervisor": {"enabled": True}},
+    )
+    write_json(
+        health.output_root / "dualtrack" / "strategy_control" / "plans" / "2026-07-28_DAY.json",
+        [{"strategy_plan_id": "stalled-plan", "cycle_id": "2026-07-28_DAY", "status": "active"}],
+    )
+
+    result = health.run()
+
+    assert result["status"] == "blocked"
+    assert result["checks"]["supervisor"]["code"] == "supervisor_unexplained_stopped_after_plan_activation"
 
 
 def test_stale_tick_is_blocked_with_stage_and_next_action(tmp_path: Path) -> None:

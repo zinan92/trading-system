@@ -1366,6 +1366,53 @@ def test_complete_live_tick_records_cycle_decision_after_heartbeat(
     assert result["cycle_decision"]["status"] == "recorded"
 
 
+def test_complete_live_tick_uses_supervisor_instead_of_legacy_cycle_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = deepcopy(TEST_CONFIG)
+    config["cycle_decision"] = {"enabled": True}
+    config["paper_supervisor"] = {"enabled": True}
+    runner = DualTrackCycleRunner(
+        output_root=tmp_path / "outputs",
+        market_db=tmp_path / "market.db",
+        config=config,
+    )
+    order: list[str] = []
+    monkeypatch.setattr(runner, "_lifecycle_results", lambda _now: [])
+    monkeypatch.setattr(runner, "_sweep_active_human_protective_exits", lambda *args, **kwargs: {"status": "skipped"})
+    monkeypatch.setattr(runner, "sync_obsidian_human_plans", lambda **kwargs: {"status": "skipped"})
+    monkeypatch.setattr(runner, "intraday_tick", lambda **kwargs: {"status": "skipped"})
+    monkeypatch.setattr(runner.scorer, "rebuild_ledgers", lambda: {"daily": []})
+    monkeypatch.setattr(runner, "_write_runner_state", lambda *args, **kwargs: order.append("heartbeat"))
+    monkeypatch.setattr(runner, "_ensure_cycle_decision", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy coordinator must not run")))
+    monkeypatch.setattr(runner, "_ensure_paper_supervisor", lambda *args, **kwargs: order.append("supervisor") or {"status": "converging"})
+
+    result = runner.live_tick(as_of="2026-07-05T01:02:00+00:00")
+
+    assert order == ["heartbeat", "supervisor"]
+    assert result["cycle_decision"]["status"] == "converging"
+
+
+def test_supervisor_missing_outer_policy_is_structural_before_plan_or_start(tmp_path: Path) -> None:
+    config = deepcopy(TEST_CONFIG)
+    config["paper_supervisor"] = {"enabled": True}
+    runner = DualTrackCycleRunner(
+        output_root=tmp_path / "outputs",
+        market_db=tmp_path / "market.db",
+        config=config,
+    )
+
+    result = runner._ensure_paper_supervisor(
+        "2026-07-05_DAY",
+        now=datetime(2026, 7, 5, 1, 2, tzinfo=timezone.utc),
+    )
+
+    assert result["status"] == "blocked_structural"
+    assert result["machine_code"] == "outer_strategy_policy_missing"
+    assert not (tmp_path / "outputs" / "dualtrack" / "strategy_control" / "plans" / "2026-07-05_DAY.json").exists()
+
+
 def test_d8_3_intraday_tick_is_idempotent_for_same_bar_set(tmp_path: Path) -> None:
     db = tmp_path / "market_data.db"
     _seed_previous_and_day(db)

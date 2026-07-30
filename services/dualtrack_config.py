@@ -43,6 +43,15 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "provider_timeout_seconds": 30,
         "terminal_deadline_seconds": 300,
     },
+    # Mutually exclusive with ``cycle_decision``.  It remains off until Park's
+    # explicit outer-policy binding is installed; enabling it never falls back
+    # to the legacy one-shot coordinator.
+    "paper_supervisor": {
+        "enabled": False,
+        "attempt_timeout_seconds": 45,
+        "recommendation_timeout_seconds": 25,
+        "max_start_attempts_per_cycle": 12,
+    },
     "plan_lock_deadline_min_before_cycle": 0,
     "machine_planner": {
         "plugin": "codex_newsletter",

@@ -12271,3 +12271,47 @@ auditable datafeed port; broker execution remains a separate port.
 - `active + enabled` is still insufficient evidence: the machine contract
   checks cadence, and deployment must additionally confirm a fresh persisted,
   endpoint-accepted dead-man delivery receipt.
+
+# 2026-07-30 — Paper Supervisor convergence contract (Issue #458)
+
+## Decision
+
+- Supervisor state is append-only and single-flight: the lease inode is never
+  replaced, every start intent is fsynced before `start`, and a missing result
+  is `control_outcome_unknown` / structural rather than permission to replay.
+- A transient blocker has an episode-scoped short retry budget
+  (60/120/300/600/1200 seconds). The fifth failure alerts and changes to a
+  30-minute probe; it does not make the remaining cycle an absorbing stop.
+  A successful `prepare_start` clears that episode. A fresh cycle starts with
+  a fresh budget. At most 12 durable start intents are permitted per cycle.
+- In Supervisor mode, a complete natural live tick runs the Supervisor instead
+  of the legacy one-shot cycle-decision coordinator. It uses the existing
+  dashboard control composition and never introduces a direct start path.
+- AI-generated inner envelopes are enabled only when deployment names one
+  exact, integrity-verified Park outer-policy id/version. The inner limits are
+  copied from that immutable policy, not supplied by AI. Missing or invalid
+  binding is structural before plan creation or order control.
+- The authoritative read-model projects attempt history. In Supervisor mode,
+  Cloud health detects an active plan that is stopped without a structural
+  Supervisor record, allowing the existing dead-man fail endpoint to alert.
+
+## Gotchas
+
+- Existing control methods still expose several rejections as exceptions. The
+  adapter accepts only exact known machine-code values; it never derives a
+  retry class from exception prose, substrings, or regexes. Everything else
+  is fail-closed unknown.
+- `prepared_start_market_moved` may only schedule another attempt after the
+  typed rejection closes the prior durable intent. A process loss after the
+  intent is deliberately not equivalent to a typed rejection.
+- The implementation is not a runtime-rate acceptance claim. Production
+  enablement additionally requires Park's outer policy binding, release-gate
+  deployment evidence, and then the full 48-hour utilization observation.
+
+## Verification
+
+- Focused tests cover fresh preview/prepared IDs after market movement,
+  episode exhaustion and long probes, zero-action structural blocks,
+  unfinished intent fail-closed recovery, 12-attempt cap, lease integrity,
+  natural-tick coordinator exclusion, policy-missing pre-plan block,
+  read-model exposure, and Supervisor health detection.

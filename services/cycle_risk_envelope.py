@@ -175,6 +175,23 @@ class CycleRiskEnvelopeStore:
             None,
         )
 
+    def outer_policy(self, policy_id: str, version: int) -> dict[str, Any] | None:
+        """Read one exact Park-authorized outer boundary, fail closed on tamper.
+
+        The Supervisor may use this only after its deployment configuration
+        names the exact policy id and version. There is deliberately no
+        latest selection or AI fallback.
+        """
+
+        try:
+            return self._load_outer_policy(
+                {"outer_policy_id": policy_id, "outer_policy_version": version}
+            )
+        except CycleRiskEnvelopeError as exc:
+            if exc.code == "outer_strategy_policy_missing":
+                return None
+            raise
+
     def verify_preview(
         self,
         *,

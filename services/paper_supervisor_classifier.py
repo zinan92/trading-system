@@ -44,6 +44,8 @@ def classify_blocker(
     typed = evidence if isinstance(evidence, Mapping) else {}
     if typed.get("control_outcome") == "unknown":
         return _result("control_outcome_unknown", STRUCTURAL, code, typed)
+    if typed.get("attempt_store") == "corrupt":
+        return _result("attempt_store_corrupt", STRUCTURAL, code, typed)
     if typed.get("immutable_fill_guard") is True:
         return _result("immutable_fill_guard_triggered", STRUCTURAL, code, typed)
     if typed.get("previous_cycle_unresolved") is True:
@@ -72,6 +74,10 @@ def classify_blocker(
         return _result("ledger_reconciliation_drift", STRUCTURAL, code, typed)
     if typed.get("order_identity") == "invalid":
         return _result("execution_receipt_identity_invalid", STRUCTURAL, code, typed)
+    if typed.get("order_identity") == "conflict":
+        return _result("order_identity_conflict", STRUCTURAL, code, typed)
+    if typed.get("start_attempt_cap") == "reached":
+        return _result("cycle_start_attempt_cap_reached", STRUCTURAL, code, typed)
     if typed.get("tick_episode_seconds") is not None:
         age = _finite_nonnegative(typed.get("tick_episode_seconds"))
         if age is None:

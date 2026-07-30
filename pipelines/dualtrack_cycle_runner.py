@@ -40,6 +40,9 @@ from services.paper_release_receipt import (
 )
 from services.cloud_service_boot import CloudPaperServiceBootGate
 from services.cycle_decision import CycleDecisionCoordinator
+from services.cycle_risk_envelope import CycleRiskEnvelopeError
+from services.paper_supervisor import PaperSupervisor, SupervisorControlError, SupervisorOperations
+from services.paper_supervisor_store import PaperSupervisorStore
 from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
@@ -55,6 +58,27 @@ class LiveTickPhaseFailure(RuntimeError):
         self.phase = phase
         self.next_action = next_action
         self.cause = cause
+
+
+# The integration accepts only exact existing machine codes. It never parses
+# exception prose, prefixes, or free-form messages into a retry decision.
+_SUPERVISOR_EXACT_CONTROL_CODES = {
+    "prepared_start_market_moved",
+    "prepared_start_expired",
+    "prepared_start_changed",
+    "strategy_preview_changed",
+    "strategy_plan_changed",
+    "range_risk_acknowledgements_incomplete",
+    "dca_risk_acknowledgements_incomplete",
+    "previous_cycle_paper_state_unresolved",
+    "plan_identity_conflict",
+    "risk_envelope_missing",
+    "risk_envelope_authorization_invalid",
+    "risk_envelope_preview_out_of_bounds",
+    "outer_strategy_policy_missing",
+    "outer_strategy_policy_invalid",
+    "outer_strategy_policy_envelope_out_of_bounds",
+}
 
 
 def _parse_execution_time(value: Any) -> datetime | None:
@@ -776,7 +800,19 @@ class DualTrackCycleRunner:
             {"runner": "dualtrack-live-tick", "ledger_refreshed": True},
             observed_at=now,
         )
-        if bool((self.config.get("cycle_decision") or {}).get("enabled")):
+        supervisor_config = self.config.get("paper_supervisor")
+        supervisor_enabled = bool(
+            supervisor_config.get("enabled")
+            if isinstance(supervisor_config, dict)
+            else False
+        )
+        if supervisor_enabled:
+            cycle_decision = self._live_tick_phase(
+                "paper_supervisor",
+                "Read Paper Supervisor evidence and wait for the next natural tick; do not invoke the legacy decision coordinator.",
+                lambda: self._ensure_paper_supervisor(window.cycle_id, now=now),
+            )
+        elif bool((self.config.get("cycle_decision") or {}).get("enabled")):
             cycle_decision = self._live_tick_phase(
                 "cycle_decision",
                 "Inspect the current cycle decision receipt; never replay a control action for the same cycle.",
@@ -798,6 +834,159 @@ class DualTrackCycleRunner:
             "ledger_daily_count": len(ledger.get("daily") or []),
             "cycle_decision": cycle_decision,
         }
+
+    def _ensure_paper_supervisor(
+        self,
+        cycle_id: str,
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        """Run the stateful convergence loop after a complete heartbeat.
+
+        This deliberately selects one coordinator.  Deployments that enable
+        the Supervisor cannot also run the old one-shot cycle ledger.
+        Concrete public-control adapters are added in the next milestone;
+        until then the disabled default preserves the current production path.
+        """
+
+        config = self.config.get("paper_supervisor")
+        config = config if isinstance(config, dict) else {}
+        plane = StrategyControlPlane(self.output_root)
+
+        def observe(current_cycle_id: str) -> dict[str, Any]:
+            runtime = plane.runtime_state(current_cycle_id, now=now)
+            plan = plane.active_plan(current_cycle_id) or {}
+            snapshot = self.execution.snapshot(current_cycle_id)
+            reconciliation = self.execution.reconcile(current_cycle_id)
+            blocker_evidence: dict[str, Any] = {}
+            if reconciliation.get("status") not in {"ok", "pass"}:
+                blocker_evidence["reconciliation"] = "drift"
+            if runtime.get("previous_runtime_unresolved") is True:
+                blocker_evidence["previous_cycle_unresolved"] = True
+            return {
+                "runtime": runtime,
+                "plan": plan,
+                "orders": snapshot.get("orders") or [],
+                "positions": snapshot.get("positions") or [],
+                "reconciliation": {"status": "pass" if reconciliation.get("status") in {"ok", "pass"} else "drift", **dict(reconciliation)},
+                "tick": dict(runtime.get("execution_tick_health") or {}),
+                "blocker_evidence": blocker_evidence,
+            }
+
+        def invoke(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+            # Reuse the dashboard's public control composition. This is not a
+            # second start path with its own market/account construction.
+            from pipelines.dashboard_server import build_strategy_console_control_response
+
+            try:
+                return build_strategy_console_control_response(
+                    {**payload, "cycle_id": cycle_id, "as_of": now.isoformat(), "action": action},
+                    output_root=self.output_root,
+                    actor={"type": "scheduler", "id": "dualtrack-live-tick", "source": "paper_supervisor"},
+                    recommendation_timeout_seconds=(
+                        int(config.get("recommendation_timeout_seconds") or 25)
+                        if action == "refresh_recommendation" else None
+                    ),
+                )
+            except ValueError as exc:
+                code = str(exc)
+                if code in _SUPERVISOR_EXACT_CONTROL_CODES:
+                    raise SupervisorControlError(code) from exc
+                raise SupervisorControlError("", evidence={"control_outcome": "unknown"}) from exc
+
+        def policy_binding() -> dict[str, Any]:
+            binding = config.get("outer_policy_binding")
+            if not isinstance(binding, dict):
+                raise SupervisorControlError("", evidence={"outer_strategy_policy": "missing"})
+            policy_id, version = binding.get("policy_id"), binding.get("version")
+            if not isinstance(policy_id, str) or not policy_id or not isinstance(version, int):
+                raise SupervisorControlError("", evidence={"outer_strategy_policy": "invalid"})
+            try:
+                policy = plane.risk_envelopes.outer_policy(policy_id, version)
+            except CycleRiskEnvelopeError as exc:
+                raise SupervisorControlError("", evidence={"outer_strategy_policy": "invalid"}) from exc
+            if policy is None:
+                raise SupervisorControlError("", evidence={"outer_strategy_policy": "missing"})
+            return policy
+
+        def fresh_preview(current_cycle_id: str, _observed: dict[str, Any]) -> dict[str, Any]:
+            # Validate the Park-selected outer boundary before allowing AI work
+            # to create or lock a production plan for this convergence pass.
+            policy = policy_binding()
+            plan = plane.active_plan(current_cycle_id)
+            if plan is None:
+                recommendation = invoke("refresh_recommendation", {})
+                proposal = recommendation.get("proposal")
+                proposal_id = proposal.get("proposal_id") if isinstance(proposal, dict) else None
+                if not isinstance(proposal_id, str) or not proposal_id:
+                    raise SupervisorControlError("", evidence={"control_outcome": "unknown"})
+                try:
+                    plan = plane.lock_production_plan(current_cycle_id, selected_proposal_id=proposal_id, now=now.isoformat())
+                except ValueError as exc:
+                    code = str(exc)
+                    if code in _SUPERVISOR_EXACT_CONTROL_CODES:
+                        raise SupervisorControlError(code) from exc
+                    raise SupervisorControlError("", evidence={"control_outcome": "unknown"}) from exc
+            try:
+                envelope_result = plane.control(
+                    current_cycle_id,
+                    "authorize_cycle_risk_envelope",
+                    {
+                        "authorization_kind": "ai_policy_within_preapproved_strategy_boundary",
+                        "outer_policy_id": policy["policy_id"],
+                        "outer_policy_version": policy["version"],
+                        # Copied from the immutable Park policy, never AI input.
+                        "limits": dict(policy["limits"]),
+                    },
+                    actor={"type": "scheduler", "id": "paper_supervisor"}, now=now.isoformat(),
+                )
+            except ValueError as exc:
+                code = str(exc)
+                if code in _SUPERVISOR_EXACT_CONTROL_CODES:
+                    raise SupervisorControlError(code) from exc
+                raise SupervisorControlError("", evidence={"control_outcome": "unknown"}) from exc
+            envelope = envelope_result.get("cycle_risk_envelope")
+            envelope_id = envelope.get("envelope_authorization_id") if isinstance(envelope, dict) else None
+            if not isinstance(envelope_id, str) or not envelope_id:
+                raise SupervisorControlError("", evidence={"control_outcome": "unknown"})
+            control_payload = {"strategy_type": plan.get("strategy_type"), "direction": plan.get("direction"), "style": plan.get("style")}
+            result = invoke("preview", control_payload)
+            preview = result.get("preview")
+            if not isinstance(preview, dict) or not isinstance(preview.get("preview_id"), str):
+                raise SupervisorControlError("", evidence={"control_outcome": "unknown"})
+            return {**preview, "_paper_supervisor": {"control_payload": control_payload, "cycle_risk_envelope_id": envelope_id}}
+
+        def prepare_start(current_cycle_id: str, preview: dict[str, Any], _observed: dict[str, Any]) -> dict[str, Any]:
+            context = preview.get("_paper_supervisor")
+            if not isinstance(context, dict) or not isinstance(context.get("control_payload"), dict):
+                raise SupervisorControlError("", evidence={"control_outcome": "unknown"})
+            result = invoke("prepare_start", dict(context["control_payload"]))
+            prepared_preview = result.get("preview")
+            if not isinstance(prepared_preview, dict) or prepared_preview.get("preview_id") != preview.get("preview_id"):
+                raise SupervisorControlError("prepared_start_changed")
+            return {**result, "_paper_supervisor": {"cycle_risk_envelope_id": context.get("cycle_risk_envelope_id")}}
+
+        def start(current_cycle_id: str, prepared_start_id: str, prepared: dict[str, Any]) -> dict[str, Any]:
+            preview, context = prepared.get("preview"), prepared.get("_paper_supervisor")
+            envelope_id = context.get("cycle_risk_envelope_id") if isinstance(context, dict) else None
+            if not isinstance(preview, dict) or not isinstance(envelope_id, str) or not envelope_id:
+                raise SupervisorControlError("", evidence={"risk_envelope": "missing"})
+            return invoke("start", {
+                "prepared_start_id": prepared_start_id,
+                "expected_preview_id": preview.get("preview_id"),
+                "cycle_risk_envelope_id": envelope_id,
+            })
+
+        return PaperSupervisor(
+            PaperSupervisorStore(self.output_root),
+            SupervisorOperations(
+                observe=observe,
+                fresh_preview=fresh_preview,
+                prepare_start=prepare_start,
+                start=start,
+            ),
+            max_start_attempts=int(config.get("max_start_attempts_per_cycle") or 12),
+        ).tick(cycle_id, now=now)
 
     def _ensure_cycle_decision(
         self,

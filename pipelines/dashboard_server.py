@@ -27,6 +27,7 @@ from services.cloud_service_boot import CloudPaperServiceBootGate
 from services.config_loader import ROOT, load_pipeline_config
 from services.command_center import build_command_center_state
 from services.cycle_decision import CycleDecisionLedger
+from services.paper_supervisor_store import PaperSupervisorStore, PaperSupervisorStoreError
 from services.connector_activation_plan import ConnectorActivationPlan
 from services.connector_onboarding import ConnectorOnboardingDryRun
 from services.dashboard_state import DashboardState
@@ -1197,11 +1198,22 @@ def _assemble_strategy_console_snapshot(
     except (OSError, ValueError):
         cloud_health = {}
     cycle_decision = CycleDecisionLedger(output).read(cycle_id) or {}
+    try:
+        supervisor = PaperSupervisorStore(output).read_model(cycle_id)
+    except PaperSupervisorStoreError:
+        supervisor = {
+            "status": "blocked_structural",
+            "structural_blocker": {
+                "machine_code": "attempt_store_corrupt",
+                "next_action": "human_reconcile_authoritative_runtime_and_control_audit",
+            },
+        }
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
         **control,
         "runtime_utilization": runtime_utilization,
+        "supervisor": supervisor,
         "market": market,
         "production_execution": {
             **execution,

@@ -161,6 +161,8 @@ def test_ai_envelope_must_be_nested_inside_human_policy(tmp_path: Path, monkeypa
     )
     assert envelope["outer_policy"]["policy_id"] == "park-grid-policy"
     assert all(row["pass"] for row in envelope["outer_policy_comparisons"])
+    assert store.outer_policy("park-grid-policy", 1)["policy_digest"] == policy["policy_digest"]
+    assert store.outer_policy("park-grid-policy", 2) is None
 
     with pytest.raises(CycleRiskEnvelopeError, match="outer_strategy_policy_envelope_out_of_bounds"):
         store.authorize_envelope(
@@ -272,6 +274,9 @@ def test_classifier_is_closed_and_tick_dead_after_ten_minutes() -> None:
     prose = classify_blocker(control_code="paper ledger reconciliation failed")
     assert prose["machine_code"] == "unknown_blocker"
     assert classify_blocker(evidence={"control_outcome": "unknown"})["machine_code"] == "control_outcome_unknown"
+    assert classify_blocker(evidence={"attempt_store": "corrupt"})["machine_code"] == "attempt_store_corrupt"
+    assert classify_blocker(evidence={"order_identity": "conflict"})["machine_code"] == "order_identity_conflict"
+    assert classify_blocker(evidence={"start_attempt_cap": "reached"})["machine_code"] == "cycle_start_attempt_cap_reached"
 
 
 def test_control_plane_audits_human_policy_and_cycle_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
