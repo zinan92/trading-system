@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -604,6 +605,25 @@ def test_live_tick_syncs_obsidian_plan_and_runs_intraday(tmp_path: Path) -> None
     assert runner_rows[-1]["event"] == "live_tick_heartbeat"
     assert runner_rows[-1]["detail"]["ledger_refreshed"] is True
     assert [row["event"] for row in runner_rows].count("intraday") == 1
+    timing_path = next(
+        (
+            output
+            / "dualtrack"
+            / "observability"
+            / "live_tick_timing"
+        ).glob("*.jsonl")
+    )
+    timing = json.loads(timing_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert [row["name"] for row in timing["phases"]] == [
+        "lifecycle",
+        "protective_sweep",
+        "plan_sync",
+        "intraday",
+        "ledger",
+        "heartbeat",
+        "cycle_decision",
+    ]
+    assert timing["control_actions_executed"] == 0
 
 
 def test_live_tick_does_not_refresh_heartbeat_when_ledger_rebuild_fails(
@@ -1446,6 +1466,7 @@ def test_live_tick_cli_writes_bounded_failure_diagnostic_without_a_heartbeat(tmp
 def test_live_tick_datafeed_failure_records_route_phase_without_a_heartbeat(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     runner = object.__new__(DualTrackCycleRunner)
+    runner.output_root = output
 
     def fail_route(_now):
         raise DatafeedUnavailable("datafeed HTTP 502: upstream_error")
@@ -1471,6 +1492,7 @@ def test_live_tick_datafeed_failure_records_route_phase_without_a_heartbeat(tmp_
 def test_live_tick_ledger_failure_records_ledger_phase_without_a_heartbeat(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     runner = object.__new__(DualTrackCycleRunner)
+    runner.output_root = output
     runner._lifecycle_results = lambda _now: []
     runner._sweep_active_human_protective_exits = lambda *_args, **_kwargs: {}
     runner.sync_obsidian_human_plans = lambda **_kwargs: {}

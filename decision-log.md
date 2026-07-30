@@ -1,5 +1,42 @@
 # Decision Log
 
+## Live-Tick Timing Is Observation, Not a New Gate
+
+Date: 2026-07-30
+
+### Decision
+
+- Persist one source-bound, append-only timing receipt for every natural Paper
+  live tick, with exact lifecycle, protective-sweep, plan-sync, intraday,
+  ledger, heartbeat and cycle-decision phase durations.
+- Use monotonic time for durations and wall-clock UTC only for provenance.
+  Bind every row to the Cloud host, runtime mode, scheduler owner/epoch and
+  clean committed source SHA/tree.
+- Keep timing outside the control contract. It calls each existing phase
+  exactly once and preserves its result or exception. Receipt/metadata failure
+  cannot turn a successful tick into a failure or vice versa.
+- Require #461 to validate a homogeneous Cloud sample before statistics. Local,
+  mixed-SHA, mixed-owner, incomplete, non-closing or control-bearing timing
+  rows fail closed.
+
+### Gotchas
+
+- `OnUnitInactiveSec=60` means the next tick starts sixty seconds after the
+  previous service becomes inactive. It does not produce 1,440 starts per day
+  unless execution time is zero.
+- `control_actions_executed=0` is scoped to the timing instrumentation. The
+  measured existing cycle-decision phase retains its existing behavior and
+  audit trail; timing neither authorizes nor suppresses it.
+- Timing receipt persistence deliberately follows the existing heartbeat and
+  cycle-decision ordering. Moving the heartbeat earlier to simplify timing
+  would create false-fresh safety evidence.
+- Missing timing rows are not filled from fixtures or optimistic estimates.
+  The later Cloud report must reject insufficient evidence.
+
+### Verification
+
+- `python3 -m pytest -q tests/test_live_tick_timing.py tests/test_dualtrack_dt8_cycle_runner.py tests/test_cycle_decision.py tests/test_cloud_service_boot.py tests/test_scheduler_ownership.py`
+
 ## Paper Supervisor v2 Keeps Recoverable Conditions Recoverable
 
 Date: 2026-07-30
