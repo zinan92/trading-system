@@ -1,5 +1,54 @@
 # Decision Log
 
+## Supervisor Stays in the Natural Live-Tick Process (Issue #461)
+
+Date: 2026-07-31
+
+### Decision
+
+- Measure one homogeneous Cloud sample before assigning a Supervisor deadline
+  or topology. The accepted sample contains 1,281 natural successful ticks
+  from one host, clean source SHA/tree and scheduler owner epoch, spanning two
+  production Beijing cycle boundaries.
+- Define non-Supervisor work per receipt as total tick duration minus the
+  existing `cycle_decision` phase. This isolates the exact market, lifecycle,
+  protective sweep, plan sync, intraday, ledger and heartbeat work that must
+  fit beside the proposed 45-second Supervisor budget.
+- Keep Supervisor convergence in the existing live-tick process. Measured
+  non-Supervisor latency is p99 1.785 seconds and max 2.610 seconds, leaving
+  8.215 seconds p99 and 7.390 seconds max inside the approved 10-second
+  allowance under the current 55-second systemd timeout.
+- Select approved option (c): reduce the AI provider sub-budget from the
+  current 30 seconds to 25 seconds, keep the complete Supervisor attempt at
+  45 seconds and retain the 55-second service timeout. #466 must enforce both
+  nested deadlines rather than relying on the systemd kill boundary.
+- Preserve heartbeat ordering. The Supervisor may converge only after the same
+  natural tick has completed all prerequisite phases and persisted its complete
+  fresh heartbeat. Timing evidence does not authorize any control action.
+
+### Gotchas
+
+- Total tick max is 32.659 seconds because the existing cycle-decision phase
+  once took 31.243 seconds. Counting that AI/control phase as base tick work
+  would answer the wrong budget question.
+- A DAY/NIGHT string change alone is not boundary proof. The report validates
+  every cycle ID against the production Beijing cycle clock and rejects
+  plausible but time-inconsistent IDs.
+- `OnUnitInactiveSec=60` produced a p50 61.204-second inactive gap and p50
+  63.001-second start interval. Expected coverage must include prior service
+  duration instead of assuming 1,440 fixed starts per day.
+- Same-process eligibility is based on the observed max as well as p99. If a
+  later deployed source changes the base-tick latency contract, this decision
+  must be remeasured; the old report is not a permanent timeout waiver.
+- This decision does not deploy Supervisor or prove 48-hour utilization. The
+  exact evidence and input hashes are in
+  `docs/evidence/issue-461-cloud-live-tick-latency-2026-07-31.md`.
+
+### Verification
+
+- `python3 -m pytest -q tests/test_live_tick_latency_report.py tests/test_live_tick_timing.py tests/test_dualtrack_clock.py`
+- `python3 -m pipelines.live_tick_latency_report --output-root <read-only-copy>`
+
 ## Supervisor Retry Episodes Remain Recoverable (Issue #465)
 
 Date: 2026-07-30
