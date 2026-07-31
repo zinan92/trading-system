@@ -12802,6 +12802,21 @@ auditable datafeed port; broker execution remains a separate port.
 - A mode label alone is not an activation switch.  The runner validates the
   mutually exclusive pair and fail-closes when both coordinators are enabled.
 
+# 2026-07-31 — Align Cloud health mode enum (Issue #491)
+
+## Decision
+
+- Cloud health enters Supervisor-specific checks only for the exact production
+  enum `paper_supervisor`, matching the runner and activation configuration.
+- Legacy or unknown convergence modes continue through their existing paths;
+  unknown health codes remain fail-closed.
+
+## Gotchas
+
+- The earlier implementation recognized `supervisor`, a label rejected by the
+  runner. Without this correction, activation would leave the legacy health
+  check active and misclassify Supervisor observations.
+
 # 2026-07-31 — Correct Supervisor activation enum (Issue #487)
 
 ## Decision
