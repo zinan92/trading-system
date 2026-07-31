@@ -12786,6 +12786,28 @@ auditable datafeed port; broker execution remains a separate port.
   preview, prepared-start and observation-chain rows are visible. Screenshot:
   [`docs/evidence/issue-467/issue-467-supervisor-history.png`](docs/evidence/issue-467/issue-467-supervisor-history.png).
 
+# 2026-07-31 — Paper Supervisor activation configuration (Issue #485)
+
+## Decision
+
+- The activation is a separate configuration release with its own SHA.  It
+  changes only `configs/dualtrack.yaml` convergence mode from
+  `legacy_cycle_decision` to `supervisor`; no safety gate, strategy parameter,
+  order, position, or live-money path changes.
+- Deployment must pass the normal source/tree, Paper-only, preflight, and boot
+  gates before the switch is observed by any service.
+
+## Gotchas
+
+- The activation release must switch the systemd source symlink used by
+  `WorkingDirectory`/`PYTHONPATH` (`/opt/gridmind/src/trading-system`) as well
+  as the operator-facing current link.  Switching only `/opt/gridmind/current`
+  leaves timers on the previous SHA and is not a deployment.
+- A failed five-minute convergence check is not by itself permission to
+  rollback.  Rollback is allowed only after authoritative runtime, order
+  snapshot, and control-audit evidence proves zero orders, zero positions, and
+  no `control_outcome_unknown`; otherwise preserve the scene and escalate.
+
 # 2026-07-31 — Severity-aware Cloud health and dead-man routing (Issue #468)
 
 ## Decision
