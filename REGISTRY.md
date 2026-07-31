@@ -3,7 +3,15 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-07-30)
+## 现在在哪里(2026-07-31)
+- #461 已实测并选择拓扑，尚未部署 Supervisor：同一 Cloud host、owner
+  epoch 3、clean `742c49f` 的 1,281 个自然成功 tick 跨过
+  `DAY→NIGHT→DAY` 两个真实北京时间边界。基础 tick 工作 p99=1.785s、
+  max=2.610s，在 55s unit 超时与 45s Supervisor 预算之间仍分别保留
+  8.215s/7.390s 余量，因此 #466 使用现有 live-tick 同进程收敛，不新增
+  timer，并把 AI 子预算从 30s 压到 25s；完整 tick 心跳仍必须先成功持久化。
+  原始输入哈希、分阶段分位数和 unit 合同见
+  [`docs/evidence/issue-461-cloud-live-tick-latency-2026-07-31.md`](docs/evidence/issue-461-cloud-live-tick-latency-2026-07-31.md)。
 - #465 已实现但尚未接入或部署：Paper Supervisor 的纯状态机以精确白名单
   区分 transient/structural；五次短退避失败后告警并转为每 30 分钟持续
   probe，不把预算耗尽变成周期终止。未知/部分执行结果使用每周期 cap=2 的
@@ -74,18 +82,14 @@
 
 ## 下一步
 - #466 将 #462 外层策略授权、#464 持久化单飞边界与 #465 episode 状态机
-  接入自然 Paper 收敛循环；每次 due attempt 都必须重新读取权威状态并生成
-  全新 preview/prepared 身份，旧 intent 永不重放。缺失 rollover 事件也须
-  从状态恢复，结构性阻塞必须零订单并保留告警证据。
-- #460–#472/#474 Paper Supervisor 阶段二：v2 合同已冻结；Cloud 当前保持
-  #474 的 `742c49fd1079c5a70ea710d9ba781f36483cf8bb`，每个自然 Paper tick
-  只追加 source-bound 分阶段耗时回执，零控制动作。#461 必须在这一相同
-  Cloud SHA/host/owner 上收满至少 120 个自然 tick 和一个真实 DAY/NIGHT
-  边界，再决定同进程预算或独立 timer；在样本闭合前不得部署 #462 造成
-  混样。随后由 Park 走已验签通道签发并绑定外层策略，再进入 Supervisor
-  持久状态/重试循环。不得触碰 live/真钱路径或跨周期持仓交接（#413）。
-  唯一真实验收仍是连续 48 小时运行率 ≥85%、三个真实周期边界（含一次
-  21:00）且有一次完整真实自动恢复证据。
+  接入同进程、状态驱动的自然 Paper 收敛循环；沿用已测 45s 总预算/25s AI
+  子预算并严格放在完整 heartbeat 之后。每次 due attempt 都必须重新读取
+  权威状态并生成全新 preview/prepared 身份，旧 intent 永不重放；缺失
+  rollover 事件也须从状态恢复。pre-intent deadline 只记录 transient，
+  post-intent 不确定结果必须 structural，结构性阻塞必须零订单并保留告警
+  证据。不得触碰 live/真钱路径或跨周期持仓交接（#413）。唯一真实验收仍是
+  连续 48 小时运行率 ≥85%、三个真实周期边界（含一次 21:00）且有一次完整
+  真实自动恢复证据。
 - #455：24h-report 在正确时序的补跑中发现 `2026-07-28_NIGHT` 已验证策略周期包缺失。先查其不可变权威 provenance；不得伪造、重写或补造历史 fills/trades/周期包。该 structural blocker 继续由已恢复的 dead-man 对外告警。
 - 只读监测当前 `strategy-plan-2026-07-29_DAY-2-52d364d4` 的 TP/SL/循环生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改 StrategyPlan。现有 1 个真实 fill 已满足 #408 的“当前计划成交证据”，后续 accepted/armed 仍不得冒充新增成交。
 - 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。
