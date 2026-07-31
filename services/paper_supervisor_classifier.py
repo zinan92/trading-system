@@ -15,6 +15,50 @@ CLASSIFIER_VERSION = "paper-supervisor-blocker-v2"
 TRANSIENT = "transient"
 STRUCTURAL = "structural"
 
+TRANSIENT_MACHINE_CODES = frozenset(
+    {
+        "prepared_start_market_moved",
+        "prepared_start_expired",
+        "trusted_market_temporarily_unavailable",
+        "execution_tick_heartbeat_temporarily_missing",
+        "upstream_data_source_transient_failure",
+        "supervisor_attempt_deadline_before_intent",
+    }
+)
+STRUCTURAL_MACHINE_CODES = frozenset(
+    {
+        "control_outcome_unknown",
+        "partial_execution_or_cleanup_required",
+        "ledger_reconciliation_drift",
+        "previous_cycle_paper_state_unresolved",
+        "order_identity_conflict",
+        "attempt_store_corrupt",
+        "execution_tick_scheduler_down",
+        "outer_strategy_policy_missing",
+        "outer_strategy_policy_invalid",
+        "outer_strategy_policy_expired",
+        "outer_strategy_policy_envelope_out_of_bounds",
+        "risk_envelope_missing",
+        "risk_envelope_authorization_invalid",
+        "risk_envelope_preview_out_of_bounds",
+        "manual_risk_confirmation_required",
+        "prepared_start_identity_changed",
+        "strategy_preview_identity_changed",
+        "active_plan_missing",
+        "runtime_state_conflict",
+        "existing_exposure_conflict",
+        "plan_identity_conflict",
+        "execution_receipt_identity_invalid",
+        "immutable_fill_guard_triggered",
+        "risk_policy_rejected",
+        "trusted_market_provenance_invalid",
+        "supervisor_configuration_invalid",
+        "dangerous_start_attempt_cap_reached",
+        "clean_refusal_observation_cap_reached",
+        "unknown_blocker",
+    }
+)
+
 _EXACT_TRANSIENT = {
     "prepared_start_market_moved": "prepared_start_market_moved",
     "prepared_start_expired": "prepared_start_expired",
@@ -46,6 +90,21 @@ def classify_blocker(
 
     code = str(control_code or "")
     typed = evidence if isinstance(evidence, Mapping) else {}
+    if (
+        typed.get("local_attempt_deadline") == "exceeded"
+        and typed.get("start_intent_persisted") is False
+    ):
+        return _result(
+            "supervisor_attempt_deadline_before_intent",
+            TRANSIENT,
+            code,
+            typed,
+        )
+    if (
+        typed.get("local_attempt_deadline") == "exceeded"
+        and typed.get("start_intent_persisted") is True
+    ):
+        return _result("control_outcome_unknown", STRUCTURAL, code, typed)
     if typed.get("control_outcome") == "unknown":
         return _result("control_outcome_unknown", STRUCTURAL, code, typed)
     if typed.get("immutable_fill_guard") is True:
@@ -91,6 +150,8 @@ def classify_blocker(
             )
     source_failure = typed.get("source_failure")
     if source_failure in _TEMPORARY_SOURCE_FAILURES:
+        if typed.get("market_trusted") not in {True, False}:
+            return _result("unknown_blocker", STRUCTURAL, code, typed)
         if typed.get("market_trusted") is False:
             return _result("trusted_market_temporarily_unavailable", TRANSIENT, code, typed)
         return _result("upstream_data_source_transient_failure", TRANSIENT, code, typed)
@@ -98,6 +159,10 @@ def classify_blocker(
         return _result(_EXACT_TRANSIENT[code], TRANSIENT, code, typed)
     if code in _EXACT_STRUCTURAL:
         return _result(_EXACT_STRUCTURAL[code], STRUCTURAL, code, typed)
+    if code in TRANSIENT_MACHINE_CODES:
+        return _result(code, TRANSIENT, code, typed)
+    if code in STRUCTURAL_MACHINE_CODES:
+        return _result(code, STRUCTURAL, code, typed)
     return _result("unknown_blocker", STRUCTURAL, code, typed)
 
 
