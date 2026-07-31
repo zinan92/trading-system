@@ -12848,6 +12848,20 @@ auditable datafeed port; broker execution remains a separate port.
   snapshot and control audit must prove zero orders, zero positions and no
   `control_outcome_unknown` before reverting this config release.
 
+# 2026-07-31 — Cloud health follows current cycle (Issue #497)
+
+## Decision
+
+- Supervisor health selects the wall-clock current cycle when locating the
+  active plan and read-model. A stale runtime is evidence to inspect, not a
+  reason to skip the current Supervisor check.
+
+## Gotchas
+
+- The first live activation left runtime metadata on `2026-07-29_DAY` while
+  the active plan was `2026-07-31_DAY`; using runtime as the selector silently
+  returned `supervisor_not_required` and would have invalidated soak health.
+
 # 2026-07-31 — Correct Supervisor activation enum (Issue #487)
 
 ## Decision

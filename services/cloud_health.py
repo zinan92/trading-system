@@ -233,7 +233,11 @@ class CloudPaperHealth:
         runtime = _latest(
             self.output_root / "dualtrack" / "strategy_control" / "runtime.json"
         )
-        cycle_id = str(runtime.get("cycle_id") or cycle_window(now).cycle_id)
+        # Runtime may legitimately lag a cycle boundary while Supervisor is
+        # responsible for recovering the current active plan. Health must
+        # inspect the wall-clock cycle rather than hiding that plan behind a
+        # stale runtime cycle.
+        cycle_id = cycle_window(now).cycle_id
         plans_path = (
             self.output_root
             / "dualtrack"
