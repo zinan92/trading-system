@@ -213,6 +213,13 @@ class ExternalDeadmanPing:
 
     @staticmethod
     def _cloud_health_failed(cloud_health: dict) -> bool:
+        # Cloud health may be degraded for warning-only observability items
+        # (including the first incomplete utilization window).  Only the
+        # explicit critical severity drives the external /fail endpoint.
+        if str(cloud_health.get("severity") or ""):
+            return str(cloud_health.get("severity")) == "critical"
+        # Backward-compatible fail-closed behavior for pre-#468 receipts that
+        # do not carry the severity field.
         return str(cloud_health.get("status") or "") not in {
             "healthy",
             "not_applicable",

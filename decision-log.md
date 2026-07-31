@@ -12785,3 +12785,41 @@ auditable datafeed port; broker execution remains a separate port.
 - A real Chromium test opens the Supervisor tab and verifies all attempt,
   preview, prepared-start and observation-chain rows are visible. Screenshot:
   [`docs/evidence/issue-467/issue-467-supervisor-history.png`](docs/evidence/issue-467/issue-467-supervisor-history.png).
+
+# 2026-07-31 — Severity-aware Cloud health and dead-man routing (Issue #468)
+
+## Decision
+
+- Cloud health now carries an explicit severity for every emitted machine code:
+  `critical`, `warning`, `insufficient`, or `none`.  The classifier is
+  fail-closed: a newly emitted code is `critical` until deliberately added to
+  the table.
+- `daily_self_review_missing_or_incomplete` and `backup_missing_or_stale` are
+  warning-only periodic-artifact conditions.  Runtime utilization below 85%
+  is warning-only; before the first complete 24-hour evidence window it is
+  `insufficient` and excluded from health failure.
+- In Supervisor mode the health surface replaces the legacy cycle-decision
+  check under the same exclusive configuration switch.  Missing/stale
+  Supervisor observations or attempts beyond 300 seconds, and exhausted
+  episodes, are critical.  Explicit `backing_off` and `probing` are not
+  reported as unexplained stopped states.
+- The external dead-man uses the health severity, so only critical conditions
+  target `/fail`; warning and insufficient conditions continue the success
+  heartbeat.  No alert sender, execution path, safety gate, or live path was
+  changed.
+
+## Gotchas
+
+- A degraded top-level health status is not sufficient to select `/fail` after
+  this change; callers must consume the explicit severity field.  Receipts
+  without the field retain the old fail-closed behavior for compatibility.
+- The 24-hour ramp is intentionally represented in the read-model as an
+  `insufficient_conditions` entry while the overall status remains healthy;
+  this keeps the condition visible without generating soak-start noise.
+
+## Verification
+
+- `python3 -m pytest -q tests/test_cloud_health.py tests/test_deadman_ping.py`
+  (26 passed).
+- `python3 -m pytest -q tests/test_cloud_*.py tests/test_paper_supervisor_read_model.py tests/test_trading_system_read_model.py`
+  (114 passed).
