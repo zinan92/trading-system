@@ -29,7 +29,7 @@
     "paper_grid": "paper_grid_risk"
   },
   "cycle_decision": {
-    "enabled": true,
+    "enabled": false,
     "provider_timeout_seconds": 30,
     "terminal_deadline_seconds": 300
   },
