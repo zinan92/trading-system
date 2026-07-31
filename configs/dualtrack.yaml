@@ -33,6 +33,11 @@
     "provider_timeout_seconds": 30,
     "terminal_deadline_seconds": 300
   },
+  "convergence": {
+    "mode": "legacy_cycle_decision",
+    "provider_timeout_seconds": 25,
+    "attempt_deadline_seconds": 45
+  },
   "market_session": {
     "enabled": false,
     "venue": "",

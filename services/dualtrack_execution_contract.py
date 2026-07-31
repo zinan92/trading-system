@@ -21,6 +21,10 @@ EXECUTION_RECONCILIATION_SCHEMA = "dualtrack-execution-parity-v1"
 EXECUTION_COMMAND_CONTRACT_SCHEMA = "dualtrack-execution-contract-v1"
 
 
+class ImmutableFillGuardError(RuntimeError):
+    """An execution adapter detected mutation of persisted fill history."""
+
+
 def normalize_execution_command(command: dict[str, Any], config: dict[str, Any] | None) -> dict[str, Any]:
     """Apply one explicit venue precision and attach immutable contract evidence.
 

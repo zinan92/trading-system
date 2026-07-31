@@ -535,7 +535,7 @@ def _apply_paper_safe_action_settlements(
 def _paper_order_from_command(command_id: str, command: dict[str, Any]) -> dict[str, Any]:
     """Project a canceled-before-fill command that native replay intentionally omits."""
 
-    return {
+    order = {
         "order_id": command_id,
         "state": "accepted",
         "side": str(command.get("side") or "").lower(),
@@ -554,6 +554,20 @@ def _paper_order_from_command(command_id: str, command: dict[str, Any]) -> dict[
         "strategy_plan_id": command.get("strategy_plan_id"),
         "strategy_plan_version": command.get("strategy_plan_version"),
     }
+    for field in (
+        "symbol",
+        "notional",
+        "sl",
+        "tp",
+        "source_fill_id",
+        "grid_line_id",
+        "grid_generation",
+        "grid_rearm_enabled",
+        "rearm_of_order_id",
+    ):
+        if command.get(field) not in (None, ""):
+            order[field] = command[field]
+    return order
 
 
 def _valid_safe_action_gate(value: Any, *, action_class: str) -> bool:
@@ -773,6 +787,19 @@ def _normalized_order(
             result["requested_price"] = requested_price
         requested_quantity = _finite_float(command.get("quantity"))
         result["requested_quantity"] = requested_quantity if requested_quantity is not None else quantity
+        for field in (
+            "symbol",
+            "notional",
+            "sl",
+            "tp",
+            "source_fill_id",
+            "grid_line_id",
+            "grid_generation",
+            "grid_rearm_enabled",
+            "rearm_of_order_id",
+        ):
+            if command.get(field) not in (None, ""):
+                result[field] = command[field]
     return result
 
 

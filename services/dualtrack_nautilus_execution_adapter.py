@@ -7,11 +7,16 @@ import shutil
 import subprocess
 import tempfile
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
 
 from services.config_loader import ROOT
-from services.dualtrack_execution_contract import canonical_market_event, normalize_execution_command
+from services.dualtrack_execution_contract import (
+    ImmutableFillGuardError,
+    canonical_market_event,
+    normalize_execution_command,
+)
 from services.dualtrack_config import dualtrack_config
 from services.dualtrack_grid_core import GridLineLifecycle
 from services.dualtrack_shadow_input import build_shadow_input
@@ -637,13 +642,250 @@ class NautilusExecutionAdapter:
         if account.get("margin") not in (None, "") and account.get("exposure") not in (None, ""):
             expected_margin = round(float(account["exposure"]) / float(self.config["max_leverage"]), 8)
             _check_account_identity(issues, account, "margin", expected_margin)
-        for position in snapshot.get("positions") or []:
+        open_positions = [
+            position
+            for position in snapshot.get("positions") or []
+            if position.get("status") == "open"
+        ]
+        position_ids = [
+            str(position.get("position_id") or "")
+            for position in open_positions
+        ]
+        trade_ids = [
+            str(position.get("trade_id") or "")
+            for position in open_positions
+        ]
+        if len({value for value in position_ids if value}) != len(position_ids):
+            issues.append({"code": "duplicate_open_position_id"})
+        if len({value for value in trade_ids if value}) != len(trade_ids):
+            issues.append({"code": "duplicate_open_position_trade_id"})
+        entry_fills_by_trade: dict[str, list[dict[str, Any]]] = {}
+        for fill in snapshot.get("fills") or []:
+            if str(fill.get("event") or "").lower() != "entry":
+                continue
+            entry_fills_by_trade.setdefault(
+                str(fill.get("trade_id") or ""),
+                [],
+            ).append(fill)
+        order_sides = {
+            str(order.get("order_id") or ""): str(
+                order.get("side") or ""
+            ).lower()
+            for order in snapshot.get("orders") or []
+            if str(order.get("order_id") or "")
+        }
+        orders_by_id = {
+            str(order.get("order_id") or ""): order
+            for order in snapshot.get("orders") or []
+            if str(order.get("order_id") or "")
+        }
+        command_sides = {
+            str(row.get("command_id") or ""): str(
+                dict(row.get("command") or {}).get("side") or ""
+            ).lower()
+            for row in load_json(self._commands_path(cycle_id))
+            if isinstance(row, dict)
+            and isinstance(row.get("command"), dict)
+            and str(row.get("command_id") or "")
+        }
+        command_quantities = {
+            str(row.get("command_id") or ""): (
+                dict(row.get("command") or {}).get("quantity")
+                or dict(row.get("command") or {}).get("contracts")
+            )
+            for row in load_json(self._commands_path(cycle_id))
+            if isinstance(row, dict)
+            and isinstance(row.get("command"), dict)
+            and str(row.get("command_id") or "")
+        }
+        handoff = dict(snapshot.get("cycle_handoff") or {})
+        carried_position_ids = (
+            {
+                str(value)
+                for value in handoff.get("open_position_ids") or []
+                if str(value)
+            }
+            if (
+                (
+                    handoff.get("status") == "verified"
+                    and handoff.get("identity_preserved") is True
+                )
+                or handoff.get("status") == "preparing"
+            )
+            and handoff.get("paper_only") is True
+            else set()
+        )
+        for position in open_positions:
             if position.get("status") != "open":
                 continue
             if not position.get("trade_id") or not position.get("position_id"):
                 issues.append({"code": "open_position_identity_missing"})
             if position.get("strategy_plan_id") in (None, ""):
                 issues.append({"code": "open_position_strategy_plan_missing", "trade_id": position.get("trade_id")})
+            trade_id = str(position.get("trade_id") or "")
+            position_id = str(position.get("position_id") or "")
+            entry_fills = entry_fills_by_trade.get(trade_id, [])
+            if not entry_fills and position_id not in carried_position_ids:
+                issues.append({
+                    "code": "open_position_entry_fill_missing",
+                    "position_id": position_id,
+                    "trade_id": trade_id,
+                })
+                continue
+            if entry_fills:
+                entry_fill_ids = [
+                    str(fill.get("fill_id") or "")
+                    for fill in entry_fills
+                ]
+                entry_quantity = sum(
+                    float(fill.get("quantity") or 0.0)
+                    for fill in entry_fills
+                )
+                remaining = float(
+                    position.get("remaining_units")
+                    or position.get("quantity")
+                    or 0.0
+                )
+                position_side = str(
+                    position.get("side") or ""
+                ).lower()
+                normalized_position_side = (
+                    "long"
+                    if position_side in {"long", "buy"}
+                    else "short"
+                    if position_side in {"short", "sell"}
+                    else ""
+                )
+                fill_sides = {
+                    str(fill.get("side") or "").lower()
+                    for fill in entry_fills
+                }
+                expected_position_sides = {
+                    "long"
+                    if side == "buy"
+                    else "short"
+                    if side == "sell"
+                    else ""
+                    for side in fill_sides
+                }
+                fill_order_sides_exact = all(
+                    str(fill.get("order_id") or "") == trade_id
+                    and order_sides.get(trade_id)
+                    == str(fill.get("side") or "").lower()
+                    for fill in entry_fills
+                )
+                command_side = command_sides.get(trade_id)
+                command_side_exact = (
+                    command_side is None
+                    or command_side in fill_sides
+                )
+                try:
+                    position_entry_price = Decimal(
+                        str(position.get("entry_price"))
+                    )
+                    fill_quantity_price = [
+                        (
+                            Decimal(str(fill.get("quantity"))),
+                            Decimal(str(fill.get("price"))),
+                        )
+                        for fill in entry_fills
+                    ]
+                    exact_entry_quantity = sum(
+                        (
+                            quantity
+                            for quantity, _price
+                            in fill_quantity_price
+                        ),
+                        Decimal("0"),
+                    )
+                    exact_entry_notional = sum(
+                        (
+                            quantity * price
+                            for quantity, price
+                            in fill_quantity_price
+                        ),
+                        Decimal("0"),
+                    )
+                    entry_order = orders_by_id.get(trade_id)
+                    order_quantity = Decimal(
+                        str(
+                            dict(entry_order or {}).get("quantity")
+                            or dict(entry_order or {}).get("contracts")
+                        )
+                    )
+                    raw_command_quantity = command_quantities.get(
+                        trade_id
+                    )
+                    command_quantity = (
+                        Decimal(str(raw_command_quantity))
+                        if raw_command_quantity not in {None, ""}
+                        else order_quantity
+                    )
+                    entry_price_exact = (
+                        position_entry_price.is_finite()
+                        and position_entry_price > 0
+                        and all(
+                            quantity.is_finite()
+                            and quantity > 0
+                            and price.is_finite()
+                            and price > 0
+                            for quantity, price in fill_quantity_price
+                        )
+                        and position_entry_price
+                        == exact_entry_notional
+                        / exact_entry_quantity
+                    )
+                    quantity_authority_exact = (
+                        entry_order is not None
+                        and order_quantity.is_finite()
+                        and order_quantity > 0
+                        and command_quantity.is_finite()
+                        and command_quantity > 0
+                        and order_quantity == command_quantity
+                        and exact_entry_quantity <= order_quantity
+                        and (
+                            str(
+                                dict(entry_order).get("state") or ""
+                            ).lower()
+                            != "filled"
+                            or exact_entry_quantity == order_quantity
+                        )
+                    )
+                except (
+                    InvalidOperation,
+                    TypeError,
+                    ValueError,
+                    ZeroDivisionError,
+                ):
+                    entry_price_exact = False
+                    quantity_authority_exact = False
+                fill_plan_exact = all(
+                    str(fill.get("strategy_plan_id") or "")
+                    == str(position.get("strategy_plan_id") or "")
+                    and fill.get("strategy_plan_version")
+                    == position.get("strategy_plan_version")
+                    for fill in entry_fills
+                )
+                if (
+                    "" in entry_fill_ids
+                    or len(set(entry_fill_ids)) != len(entry_fill_ids)
+                    or remaining <= 0.0
+                    or entry_quantity + 1e-9 < remaining
+                    or len(expected_position_sides) != 1
+                    or "" in expected_position_sides
+                    or normalized_position_side
+                    not in expected_position_sides
+                    or not fill_order_sides_exact
+                    or not command_side_exact
+                    or not entry_price_exact
+                    or not quantity_authority_exact
+                    or not fill_plan_exact
+                ):
+                    issues.append({
+                        "code": "open_position_entry_fill_invalid",
+                        "position_id": position_id,
+                        "trade_id": trade_id,
+                    })
         return {
             "schema_version": "dualtrack-execution-reconciliation-v1",
             "engine": self.name,
@@ -1047,7 +1289,7 @@ class NautilusExecutionAdapter:
                 != _fill_business_value(next_by_id[fill_id])
             )
             if missing or changed or len(previous_by_id) != len(previous_fills):
-                raise RuntimeError(
+                raise ImmutableFillGuardError(
                     "immutable fill history regressed"
                     f"; missing={missing}; changed={changed}"
                 )
@@ -1207,7 +1449,16 @@ def _order_receipt(row: dict[str, Any]) -> dict[str, Any]:
         "quantity": float(command.get("quantity") or 0.0),
         "engine": "nautilus_paper",
     }
-    for field in ("ts", "sl", "tp", "strategy_plan_id", "strategy_plan_version"):
+    for field in (
+        "ts",
+        "symbol",
+        "notional",
+        "sl",
+        "tp",
+        "source_fill_id",
+        "strategy_plan_id",
+        "strategy_plan_version",
+    ):
         if command.get(field) not in (None, ""):
             receipt[field] = command[field]
     receipt["requested_price"] = float(command.get("requested_price") or command.get("price") or 0.0)

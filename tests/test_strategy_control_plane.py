@@ -12,6 +12,7 @@ from services.dualtrack_config import dualtrack_config as load_test_config
 from services.journal_store import load_json, write_json
 from services.strategy_control_plane import StrategyControlPlane
 import services.strategy_control_plane as strategy_control_plane_module
+from services.paper_supervisor_store import PaperSupervisorStore
 
 
 @pytest.fixture(autouse=True)
@@ -1107,7 +1108,10 @@ def test_prepared_start_rejects_a_tampered_candidate_receipt(tmp_path: Path) -> 
     assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
 
     path.write_text("{", encoding="utf-8")
-    with pytest.raises(ValueError, match="prepared_start_changed"):
+    with pytest.raises(
+        ValueError,
+        match="prepared_start_id_already_spent",
+    ):
         plane.control(
             cycle_id,
             "start",
@@ -5106,3 +5110,179 @@ def test_suspend_entries_cancels_exact_entries_and_preserves_protection(
         "target-1",
         "stop-1",
     }
+
+
+def test_prepared_start_consumption_is_global_across_cycles(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    prepared_start_id = "prepared-start-0123456789abcdef"
+
+    plane._spend_prepared_start(
+        "2026-07-30_DAY",
+        prepared_start_id=prepared_start_id,
+        now="2026-07-30T08:00:00+00:00",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="prepared_start_id_already_spent",
+    ):
+        plane._spend_prepared_start(
+            "2026-07-31_NIGHT",
+            prepared_start_id=prepared_start_id,
+            now="2026-07-31T12:00:00+00:00",
+        )
+
+
+def test_abandoned_supervisor_attempt_cannot_use_orphan_prepared_start(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    payload = adaptive_grid_payload()
+    attempt_id = "supervisor-attempt-orphan"
+    store = PaperSupervisorStore(output)
+    with store.try_lease(cycle_id, holder_id="supervisor") as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id=attempt_id,
+            observed_at="2026-07-05T01:40:00+00:00",
+            phase_scope="create_or_prepare",
+        )
+        prepared = plane.control(
+            cycle_id,
+            "prepare_start",
+            {
+                **payload,
+                "supervisor_attempt_id": attempt_id,
+            },
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+        lease.abandon_pre_intent(
+            attempt_id=attempt_id,
+            observed_at="2026-07-05T01:40:01+00:00",
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="supervisor_pre_intent_attempt_invalid",
+    ):
+        plane.control(
+            cycle_id,
+            "start",
+            {
+                **payload,
+                "supervisor_attempt_id": attempt_id,
+                "expected_preview_id": prepared["preview"][
+                    "preview_id"
+                ],
+                "prepared_start_id": prepared[
+                    "prepared_start_id"
+                ],
+            },
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:02+00:00",
+        )
+
+    assert (
+        build_execution_engine_adapter(output)
+        .snapshot(cycle_id)["orders"]
+        == []
+    )
+
+
+def test_supervisor_attempt_cannot_start_a_second_prepared_capability(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    payload = adaptive_grid_payload()
+    attempt_id = "supervisor-attempt-double-prepare"
+    store = PaperSupervisorStore(output)
+    with store.try_lease(cycle_id, holder_id="supervisor") as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id=attempt_id,
+            observed_at="2026-07-05T01:40:00+00:00",
+            phase_scope="create_or_prepare",
+        )
+        first = plane.control(
+            cycle_id,
+            "prepare_start",
+            {
+                **payload,
+                "supervisor_attempt_id": attempt_id,
+            },
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+        second = plane.control(
+            cycle_id,
+            "prepare_start",
+            {
+                **payload,
+                "supervisor_attempt_id": attempt_id,
+            },
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:01+00:00",
+        )
+        assert first["prepared_start_id"] != second["prepared_start_id"]
+        lease.record_pre_intent_prepare_succeeded(
+            attempt_id=attempt_id,
+            observed_at="2026-07-05T01:40:01+00:00",
+        )
+        contract = first["start_intent_contract"]
+        lease.record_start_intent(
+            attempt_id=attempt_id,
+            preview_id=first["preview"]["preview_id"],
+            prepared_start_id=first["prepared_start_id"],
+            plan_identity=contract["plan_identity"],
+            pre_start_plan_identity=contract[
+                "pre_start_plan_identity"
+            ],
+            expected_order_fingerprints=contract[
+                "expected_order_fingerprints"
+            ],
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="supervisor_pre_intent_attempt_invalid",
+    ):
+        plane.control(
+            cycle_id,
+            "start",
+            {
+                **payload,
+                "supervisor_attempt_id": attempt_id,
+                "expected_preview_id": second["preview"]["preview_id"],
+                "prepared_start_id": second["prepared_start_id"],
+            },
+            market=market(close=4_137.44),
+            account=account_context(),
+            now="2026-07-05T01:40:02+00:00",
+        )
+
+    assert (
+        build_execution_engine_adapter(output)
+        .snapshot(cycle_id)["orders"]
+        == []
+    )

@@ -43,6 +43,7 @@ def _candidate(cycle_id: str) -> dict:
             "event": "entry", "side": "buy", "price": 100.0, "quantity": 1.0,
             "cost": 0.005, "gross_pnl": 0.0, "realized_pnl": -0.005,
             "ts": "2026-07-10T01:00:00+00:00",
+            "strategy_plan_id": "plan-test", "strategy_plan_version": 1,
         }],
         "positions": [{
             "trade_id": "n-entry-1",
@@ -127,6 +128,8 @@ def _open_grid_replay(_preflight_path: Path, input_path: Path, output_path: Path
         "cost": 0.0,
         "realized_pnl": 0.0,
         "ts": "2026-07-10T01:01:00+00:00",
+        "strategy_plan_id": command["strategy_plan_id"],
+        "strategy_plan_version": command["strategy_plan_version"],
     }
     snapshot = {
         "schema_version": "dualtrack-execution-v1",
@@ -363,6 +366,24 @@ def test_persists_orders_fills_positions_and_restarts_idempotently(tmp_path: Pat
     def replay(_preflight: Path, _input: Path, output_path: Path) -> dict:
         snapshot = _candidate(CYCLE_ID)
         snapshot["orders"][0]["order_id"] = first["order_id"]
+        snapshot["orders"][0]["strategy_plan_id"] = "plan-1"
+        snapshot["orders"][0]["strategy_plan_version"] = 1
+        snapshot["fills"][0].update(
+            {
+                "order_id": first["order_id"],
+                "trade_id": first["order_id"],
+                "strategy_plan_id": "plan-1",
+                "strategy_plan_version": 1,
+            }
+        )
+        snapshot["positions"][0].update(
+            {
+                "trade_id": first["order_id"],
+                "position_id": f"POS-{first['order_id']}",
+                "strategy_plan_id": "plan-1",
+                "strategy_plan_version": 1,
+            }
+        )
         write_json(output_path, [snapshot])
         return snapshot
 
@@ -375,16 +396,45 @@ def test_persists_orders_fills_positions_and_restarts_idempotently(tmp_path: Pat
     command = {
         "cycle_id": CYCLE_ID,
         "ts": "2026-07-10T01:00:00+00:00",
+        "symbol": "GOLD",
         "side": "buy",
         "event": "entry",
         "order_type": "market",
         "price": 100.0,
         "quantity": 1.0,
+        "notional": 100.0,
+        "sl": 90.0,
+        "tp": 110.0,
         "source_fill_id": "external-1",
+        "strategy_plan_id": "plan-1",
+        "strategy_plan_version": 1,
     }
     first = adapter.submit_order(command)
     second = adapter.submit_order(command)
     assert first == second
+    assert {
+        key: first[key]
+        for key in (
+            "symbol",
+            "notional",
+            "sl",
+            "tp",
+            "source_fill_id",
+            "strategy_plan_id",
+            "strategy_plan_version",
+        )
+    } == {
+        key: command[key]
+        for key in (
+            "symbol",
+            "notional",
+            "sl",
+            "tp",
+            "source_fill_id",
+            "strategy_plan_id",
+            "strategy_plan_version",
+        )
+    }
     assert len(load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")) == 1
 
     event = {
@@ -1146,6 +1196,110 @@ def test_reconciliation_detects_account_identity_and_traceability_drift(tmp_path
         "account_margin_mismatch",
         "open_position_strategy_plan_missing",
     } <= codes
+
+
+def test_reconciliation_detects_open_position_entry_fill_lineage_drift(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    preflight = (
+        output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    )
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+    )
+    snapshot = _candidate(CYCLE_ID)
+    snapshot["fills"][0]["trade_id"] = "different-trade"
+    adapter._persist_snapshot(CYCLE_ID, snapshot)
+
+    report = adapter.reconcile(CYCLE_ID)
+
+    assert report["status"] == "drift"
+    assert "open_position_entry_fill_missing" in {
+        row["code"] for row in report["issues"]
+    }
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda snapshot: snapshot["positions"][0].update(
+            {"side": "short"}
+        ),
+        lambda snapshot: (
+            snapshot["positions"][0].update({"side": "short"}),
+            snapshot["fills"][0].update({"side": "sell"}),
+        ),
+        lambda snapshot: snapshot["positions"][0].update(
+            {"entry_price": 99.0}
+        ),
+        lambda snapshot: snapshot["fills"][0].update(
+            {"strategy_plan_id": None}
+        ),
+    ],
+    ids=[
+        "position-vs-fill-side",
+        "command-vs-fill-side",
+        "entry-price",
+        "fill-plan",
+    ],
+)
+def test_reconciliation_detects_open_position_economic_identity_drift(
+    tmp_path: Path,
+    mutate,
+) -> None:
+    output = tmp_path / "outputs"
+    preflight = (
+        output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    )
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+    )
+    snapshot = _candidate(CYCLE_ID)
+    mutate(snapshot)
+    adapter._persist_snapshot(CYCLE_ID, snapshot)
+
+    report = adapter.reconcile(CYCLE_ID)
+
+    assert report["status"] == "drift"
+    assert "open_position_entry_fill_invalid" in {
+        row["code"] for row in report["issues"]
+    }
+
+
+def test_reconciliation_detects_entry_quantity_above_authorized_order(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    preflight = (
+        output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    )
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+    )
+    snapshot = _candidate(CYCLE_ID)
+    snapshot["fills"][0]["quantity"] = 3.0
+    snapshot["positions"][0]["remaining_units"] = 3.0
+    adapter._persist_snapshot(CYCLE_ID, snapshot)
+
+    report = adapter.reconcile(CYCLE_ID)
+
+    assert report["status"] == "drift"
+    assert "open_position_entry_fill_invalid" in {
+        row["code"] for row in report["issues"]
+    }
 
 
 def test_rejects_market_event_without_execution_identity(tmp_path: Path) -> None:

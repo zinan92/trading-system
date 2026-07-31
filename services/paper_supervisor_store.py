@@ -16,6 +16,7 @@ import tempfile
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
@@ -25,12 +26,28 @@ EVENT_SCHEMA_VERSION = "paper-supervisor-convergence-event-v1"
 STATE_SCHEMA_VERSION = "paper-supervisor-cycle-state-v1"
 LEASE_SCHEMA_VERSION = "paper-supervisor-lease-v1"
 AUTHORITY_SCHEMA_VERSION = "paper-supervisor-start-authority-v1"
-_EVENT_TYPES = frozenset({"start_intent", "start_result", "recovery_result"})
+OBSERVATION_SCHEMA_VERSION = "paper-supervisor-observation-v1"
+_EVENT_TYPES = frozenset(
+    {
+        "typed_heartbeat_observed",
+        "pre_intent_attempt_started",
+        "pre_intent_prepare_succeeded",
+        "pre_intent_attempt_finished",
+        "pre_intent_attempt_abandoned",
+        "start_intent",
+        "start_result",
+        "recovery_result",
+    }
+)
 _RESULTS = frozenset({"accepted", "rejected", "unknown"})
 _RECOVERY_RESULTS = frozenset(
     {"executed", "clean_rejection", "control_outcome_unknown"}
 )
+_PRE_INTENT_RESULTS = frozenset(
+    {"prepare_succeeded", "no_action", "transient", "structural"}
+)
 _CYCLE_SUFFIXES = ("_DAY", "_NIGHT")
+_UNSET = object()
 
 
 class SupervisorStoreError(RuntimeError):
@@ -52,6 +69,9 @@ class StartAuthoritySnapshot:
     open_position_count: int
     reconciliation: Mapping[str, Any]
     control_events: Sequence[Mapping[str, Any]]
+    accepted_order_identities: Sequence[Mapping[str, str]] = ()
+    authorized_order_identities: Sequence[Mapping[str, str]] = ()
+    open_position_identities: Sequence[Mapping[str, Any]] = ()
     schema_version: str = AUTHORITY_SCHEMA_VERSION
 
     def as_dict(self) -> dict[str, Any]:
@@ -63,6 +83,15 @@ class StartAuthoritySnapshot:
             "accepted_order_fingerprints": list(
                 self.accepted_order_fingerprints
             ),
+            "accepted_order_identities": [
+                dict(row) for row in self.accepted_order_identities
+            ],
+            "authorized_order_identities": [
+                dict(row) for row in self.authorized_order_identities
+            ],
+            "open_position_identities": [
+                dict(row) for row in self.open_position_identities
+            ],
             "open_position_count": self.open_position_count,
             "reconciliation": dict(self.reconciliation),
             "control_events": [dict(row) for row in self.control_events],
@@ -196,6 +225,274 @@ class PaperSupervisorStore:
         pending = state.get("unfinished_intent")
         return dict(pending) if isinstance(pending, dict) else None
 
+    def unfinished_pre_intent(
+        self,
+        cycle_id: str,
+    ) -> dict[str, Any] | None:
+        state = self.current_state(cycle_id)
+        pending = state.get("unfinished_pre_intent")
+        return dict(pending) if isinstance(pending, dict) else None
+
+    def episode_state(self, cycle_id: str) -> dict[str, Any] | None:
+        """Read or recover the episode anchored to the observation chain."""
+
+        cycle = _cycle_id(cycle_id)
+        path = self._episode_path(cycle)
+        stored: dict[str, Any] | None = None
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError) as exc:
+                raise SupervisorStoreError("attempt_store_corrupt") from exc
+            if (
+                not isinstance(raw, dict)
+                or str(raw.get("cycle_id") or "") != cycle
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            stored = raw
+        observations = self._observations(cycle)
+        if not observations:
+            if stored is not None and stored.get(
+                "last_observation_sha256"
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            return stored
+        tail = observations[-1]
+        tail_hash = str(tail["observation_sha256"])
+        if (
+            stored is not None
+            and stored.get("last_observation_sha256") == tail_hash
+        ):
+            return stored
+        stored_anchor = (
+            str(stored.get("last_observation_sha256") or "")
+            if stored is not None
+            else ""
+        )
+        chain_hashes = {
+            str(row["observation_sha256"]) for row in observations
+        }
+        if stored_anchor and stored_anchor not in chain_hashes:
+            raise SupervisorStoreError("attempt_store_corrupt")
+        embedded = (tail.get("payload") or {}).get("episode_state")
+        if (
+            not isinstance(embedded, dict)
+            or str(embedded.get("cycle_id") or "") != cycle
+            or str(embedded.get("last_observation_sha256") or "")
+            != str(tail.get("previous_observation_sha256") or "")
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
+        return {
+            **embedded,
+            "last_observation_sha256": tail_hash,
+        }
+
+    def write_episode_state(
+        self,
+        lease: SupervisorLease,
+        state: Mapping[str, Any],
+    ) -> None:
+        """Atomically persist the exact episode state owned by this lease."""
+
+        lease._require_active(self)
+        payload = _json_object(
+            state,
+            "attempt_store_corrupt",
+        )
+        if str(payload.get("cycle_id") or "") != lease.cycle_id:
+            raise SupervisorStoreError(
+                "supervisor_authority_cycle_mismatch"
+            )
+        _atomic_write_json(
+            self._episode_path(lease.cycle_id),
+            payload,
+        )
+
+    def commit_episode_observation(
+        self,
+        lease: SupervisorLease,
+        *,
+        state: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Append the authority first, then checkpoint its exact tail.
+
+        If the process dies between these writes, ``episode_state`` recovers
+        the state embedded in the append-only observation.  A truncated tail
+        can no longer look valid because the checkpoint names its exact hash.
+        """
+
+        lease._require_active(self)
+        episode = _json_object(state, "attempt_store_corrupt")
+        if str(episode.get("cycle_id") or "") != lease.cycle_id:
+            raise SupervisorStoreError(
+                "supervisor_authority_cycle_mismatch"
+            )
+        observations = self._observations(lease.cycle_id)
+        current_tail = (
+            str(observations[-1]["observation_sha256"])
+            if observations
+            else ""
+        )
+        if (
+            str(episode.get("last_observation_sha256") or "")
+            != current_tail
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
+        observation = self.append_observation(
+            lease,
+            {
+                **_json_object(
+                    payload,
+                    "supervisor_event_payload_invalid",
+                ),
+                "episode_state": episode,
+            },
+        )
+        committed = {
+            **episode,
+            "last_observation_sha256": observation[
+                "observation_sha256"
+            ],
+        }
+        self.write_episode_state(lease, committed)
+        return committed
+
+    def append_observation(
+        self,
+        lease: SupervisorLease,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Append and fsync one bounded convergence observation."""
+
+        lease._require_active(self)
+        detail = _json_object(
+            payload,
+            "supervisor_event_payload_invalid",
+        )
+        recorded_at = _utc(self.now()).isoformat()
+        path = (
+            self.root
+            / "observations"
+            / f"{lease.cycle_id}.jsonl"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        observations = self._observations(lease.cycle_id)
+        previous = observations[-1] if observations else None
+        observation = {
+            "schema_version": OBSERVATION_SCHEMA_VERSION,
+            "observation_id": f"supervisor-observation-{uuid.uuid4().hex}",
+            "recorded_at": recorded_at,
+            "cycle_id": lease.cycle_id,
+            "lease_id": lease.lease_id,
+            "previous_observation_sha256": (
+                previous.get("observation_sha256")
+                if previous
+                else None
+            ),
+            "payload": detail,
+        }
+        observation["observation_sha256"] = _digest(observation)
+        line = _canonical(observation) + "\n"
+        try:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _fsync_directory(path.parent)
+        except OSError as exc:
+            raise SupervisorStoreError("attempt_store_corrupt") from exc
+        return observation
+
+    def _last_observation(
+        self,
+        cycle_id: str,
+    ) -> dict[str, Any] | None:
+        """Validate one bounded 12h cycle chain and return its tail."""
+
+        observations = self._observations(cycle_id)
+        return observations[-1] if observations else None
+
+    def _observations(
+        self,
+        cycle_id: str,
+    ) -> list[dict[str, Any]]:
+        """Validate one bounded 12h cycle chain."""
+
+        cycle = _cycle_id(cycle_id)
+        path = self.root / "observations" / f"{cycle}.jsonl"
+        if not path.exists():
+            return []
+        previous: dict[str, Any] | None = None
+        observations: list[dict[str, Any]] = []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise SupervisorStoreError("attempt_store_corrupt") from exc
+        for line in lines:
+            if not line.strip():
+                raise SupervisorStoreError("attempt_store_corrupt")
+            try:
+                row = json.loads(line)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise SupervisorStoreError(
+                    "attempt_store_corrupt"
+                ) from exc
+            if not isinstance(row, dict):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            supplied_hash = str(
+                row.get("observation_sha256") or ""
+            )
+            try:
+                _parse_timestamp(row.get("recorded_at"))
+                if _cycle_id(row.get("cycle_id")) != cycle:
+                    raise SupervisorStoreError("attempt_store_corrupt")
+                _identity(
+                    row.get("observation_id"),
+                    "attempt_store_corrupt",
+                )
+                _identity(
+                    row.get("lease_id"),
+                    "attempt_store_corrupt",
+                )
+                _json_object(
+                    row.get("payload"),
+                    "attempt_store_corrupt",
+                )
+            except (SupervisorStoreError, ValueError) as exc:
+                raise SupervisorStoreError(
+                    "attempt_store_corrupt"
+                ) from exc
+            expected_previous = (
+                previous.get("observation_sha256")
+                if previous
+                else None
+            )
+            if (
+                row.get("schema_version")
+                != OBSERVATION_SCHEMA_VERSION
+                or not str(
+                    row.get("observation_id") or ""
+                ).startswith("supervisor-observation-")
+                or not str(row.get("lease_id") or "").startswith(
+                    "supervisor-lease-"
+                )
+                or row.get("previous_observation_sha256")
+                != expected_previous
+                or supplied_hash
+                != _digest(
+                    {
+                        key: value
+                        for key, value in row.items()
+                        if key != "observation_sha256"
+                    }
+                )
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            previous = row
+            observations.append(row)
+        return observations
+
     def _append(
         self,
         lease: SupervisorLease,
@@ -223,6 +520,11 @@ class PaperSupervisorStore:
             payload,
             "supervisor_event_payload_invalid",
         )
+        _validate_event_payload(
+            event_type,
+            canonical_payload,
+            code="supervisor_event_payload_invalid",
+        )
         event = {
             "schema_version": EVENT_SCHEMA_VERSION,
             "sequence": len(events) + 1,
@@ -247,6 +549,55 @@ class PaperSupervisorStore:
         self._write_state(lease.cycle_id, updated_state)
         return event
 
+    def _spend_prepared_start_global(
+        self,
+        lease: SupervisorLease,
+        *,
+        prepared_start_id: str,
+    ) -> None:
+        """Spend one prepared capability across every cycle."""
+
+        lease._require_active(self)
+        prepared = _identity(
+            prepared_start_id,
+            "prepared_start_id_invalid",
+        )
+        directory = self.root / "spent_prepared_starts"
+        directory.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(prepared.encode("utf-8")).hexdigest()
+        path = directory / f"{digest}.json"
+        payload = {
+            "schema_version": (
+                "paper-supervisor-prepared-start-consumption-v1"
+            ),
+            "prepared_start_id": prepared,
+            "cycle_id": lease.cycle_id,
+            "consumed_at": _utc(self.now()).isoformat(),
+            "reuse_allowed": False,
+        }
+        encoded = (_canonical(payload) + "\n").encode("utf-8")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+            os.write(descriptor, encoded)
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            _fsync_directory(directory)
+        except FileExistsError as exc:
+            raise SupervisorStoreError(
+                "prepared_start_id_already_spent"
+            ) from exc
+        except OSError as exc:
+            raise SupervisorStoreError("attempt_store_corrupt") from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
     @staticmethod
     def _validate_transition(
         state: Mapping[str, Any],
@@ -268,6 +619,61 @@ class PaperSupervisorStore:
             ),
             None,
         )
+        pre_attempts = [
+            row
+            for row in state.get("pre_intent_attempts", [])
+            if isinstance(row, dict)
+        ]
+        pre_existing = next(
+            (
+                row
+                for row in pre_attempts
+                if str(row.get("attempt_id") or "") == attempt_id
+            ),
+            None,
+        )
+        if event_type == "typed_heartbeat_observed":
+            if any(
+                str(row.get("observation_id") or "") == attempt_id
+                for row in state.get("typed_heartbeats", [])
+                if isinstance(row, dict)
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_attempt_id_reused"
+                )
+            return
+        if event_type == "pre_intent_attempt_started":
+            if pre_existing is not None or existing is not None:
+                raise SupervisorStoreError(
+                    "supervisor_attempt_id_reused"
+                )
+            if state.get("unfinished_pre_intent"):
+                raise SupervisorStoreError(
+                    "unfinished_pre_intent_requires_recovery"
+                )
+            return
+        if event_type in {
+            "pre_intent_prepare_succeeded",
+            "pre_intent_attempt_finished",
+            "pre_intent_attempt_abandoned",
+        }:
+            if pre_existing is None:
+                raise SupervisorStoreError(
+                    "supervisor_attempt_missing"
+                )
+            if pre_existing.get("terminal_result") is not None:
+                raise SupervisorStoreError(
+                    "supervisor_attempt_already_resolved"
+                )
+            if (
+                event_type == "pre_intent_prepare_succeeded"
+                and pre_existing.get("prepare_succeeded_sequence")
+                is not None
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_attempt_already_resolved"
+                )
+            return
         if event_type == "start_intent":
             if state.get("unfinished_intent"):
                 raise SupervisorStoreError(
@@ -275,6 +681,13 @@ class PaperSupervisorStore:
                 )
             if existing is not None:
                 raise SupervisorStoreError("supervisor_attempt_id_reused")
+            if (
+                pre_existing is not None
+                and pre_existing.get("terminal_result") is not None
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_attempt_already_resolved"
+                )
             prepared_id = _identity(
                 payload.get("prepared_start_id"),
                 "prepared_start_id_invalid",
@@ -365,6 +778,9 @@ class PaperSupervisorStore:
     def _state_path(self, cycle_id: str) -> Path:
         return self.root / "states" / f"{cycle_id}.json"
 
+    def _episode_path(self, cycle_id: str) -> Path:
+        return self.root / "episodes" / f"{cycle_id}.json"
+
 
 class SupervisorLease:
     """Capability proving the caller owns the process-level writer lock."""
@@ -389,6 +805,102 @@ class SupervisorLease:
         self.lock_inode = lock_inode
         self._active = True
 
+    def record_typed_heartbeat(
+        self,
+        *,
+        observation_id: str,
+        observed_at: str,
+        status: str,
+        machine_code: str,
+        reason: str,
+        heartbeat_recorded_at: str | None,
+        heartbeat_digest: str,
+    ) -> dict[str, Any]:
+        return self._store._append(
+            self,
+            event_type="typed_heartbeat_observed",
+            attempt_id=observation_id,
+            payload={
+                "observed_at": str(observed_at),
+                "status": str(status),
+                "machine_code": str(machine_code),
+                "reason": str(reason),
+                "heartbeat_recorded_at": heartbeat_recorded_at,
+                "heartbeat_digest": heartbeat_digest,
+            },
+        )
+
+    def record_pre_intent_started(
+        self,
+        *,
+        attempt_id: str,
+        observed_at: str,
+        phase_scope: str,
+    ) -> dict[str, Any]:
+        return self._store._append(
+            self,
+            event_type="pre_intent_attempt_started",
+            attempt_id=attempt_id,
+            payload={
+                "observed_at": str(observed_at),
+                "phase_scope": str(phase_scope),
+            },
+        )
+
+    def record_pre_intent_finished(
+        self,
+        *,
+        attempt_id: str,
+        result: str,
+        machine_code: str | None,
+        classification: str | None,
+        observed_at: str,
+    ) -> dict[str, Any]:
+        return self._store._append(
+            self,
+            event_type="pre_intent_attempt_finished",
+            attempt_id=attempt_id,
+            payload={
+                "result": str(result),
+                "machine_code": machine_code,
+                "classification": classification,
+                "observed_at": str(observed_at),
+            },
+        )
+
+    def record_pre_intent_prepare_succeeded(
+        self,
+        *,
+        attempt_id: str,
+        observed_at: str,
+    ) -> dict[str, Any]:
+        return self._store._append(
+            self,
+            event_type="pre_intent_prepare_succeeded",
+            attempt_id=attempt_id,
+            payload={"observed_at": str(observed_at)},
+        )
+
+    def abandon_pre_intent(
+        self,
+        *,
+        attempt_id: str,
+        observed_at: str,
+    ) -> dict[str, Any]:
+        return self._store._append(
+            self,
+            event_type="pre_intent_attempt_abandoned",
+            attempt_id=attempt_id,
+            payload={
+                "result": "transient",
+                "machine_code": (
+                    "supervisor_attempt_deadline_before_intent"
+                ),
+                "classification": "transient",
+                "observed_at": str(observed_at),
+            },
+        )
+
     def record_start_intent(
         self,
         *,
@@ -397,8 +909,23 @@ class SupervisorLease:
         prepared_start_id: str,
         plan_identity: Mapping[str, Any],
         expected_order_fingerprints: Sequence[str],
+        pre_start_plan_identity: Mapping[str, Any] | None | object = _UNSET,
     ) -> dict[str, Any]:
         fingerprints = _fingerprints(expected_order_fingerprints)
+        prepared = _identity(
+            prepared_start_id,
+            "prepared_start_id_invalid",
+        )
+        if self._store.current_state(
+            self.cycle_id
+        ).get("unfinished_intent"):
+            raise SupervisorStoreError(
+                "unfinished_start_intent_requires_recovery"
+            )
+        self._store._spend_prepared_start_global(
+            self,
+            prepared_start_id=prepared,
+        )
         return self._store._append(
             self,
             event_type="start_intent",
@@ -408,11 +935,17 @@ class SupervisorLease:
                     preview_id,
                     "supervisor_preview_id_invalid",
                 ),
-                "prepared_start_id": _identity(
-                    prepared_start_id,
-                    "prepared_start_id_invalid",
-                ),
+                "prepared_start_id": prepared,
                 "plan_identity": _plan_identity(plan_identity),
+                "pre_start_plan_identity": (
+                    _plan_identity(plan_identity)
+                    if pre_start_plan_identity is _UNSET
+                    else (
+                        _plan_identity(pre_start_plan_identity)
+                        if pre_start_plan_identity
+                        else None
+                    )
+                ),
                 "expected_order_count": len(fingerprints),
                 "expected_order_fingerprints": fingerprints,
             },
@@ -448,6 +981,7 @@ class SupervisorLease:
         plan_identity: Mapping[str, Any],
         expected_order_fingerprints: Sequence[str],
         operation: Callable[[], Mapping[str, Any]],
+        pre_start_plan_identity: Mapping[str, Any] | None | object = _UNSET,
     ) -> Mapping[str, Any]:
         """Persist intent, invoke once, then persist a bounded result."""
 
@@ -457,6 +991,7 @@ class SupervisorLease:
             prepared_start_id=prepared_start_id,
             plan_identity=plan_identity,
             expected_order_fingerprints=expected_order_fingerprints,
+            pre_start_plan_identity=pre_start_plan_identity,
         )
         response = operation()
         if not isinstance(response, Mapping):
@@ -520,7 +1055,17 @@ def resolve_start_outcome(
         "supervisor_intent_payload_invalid",
     )
     plan = _plan_identity(payload.get("plan_identity"))
-    active_plan = _plan_identity(snapshot.get("active_plan"))
+    raw_active_plan = snapshot.get("active_plan")
+    active_plan = (
+        _plan_identity(raw_active_plan)
+        if raw_active_plan
+        else {}
+    )
+    pre_start_plan = (
+        _plan_identity(payload.get("pre_start_plan_identity"))
+        if payload.get("pre_start_plan_identity")
+        else {}
+    )
     expected_fingerprints = _fingerprints(
         payload.get("expected_order_fingerprints") or []
     )
@@ -528,6 +1073,57 @@ def resolve_start_outcome(
     actual_fingerprints = _fingerprints(
         snapshot["accepted_order_fingerprints"],
         allow_empty=True,
+    )
+    accepted_identities = _accepted_order_identities(
+        snapshot.get("accepted_order_identities")
+    )
+    authorized_identities = _accepted_order_identities(
+        snapshot.get("authorized_order_identities")
+    )
+    position_identities = _open_position_identities(
+        snapshot.get("open_position_identities")
+    )
+    receipt_fingerprints = sorted(
+        row["fingerprint"] for row in accepted_identities
+    )
+    authorized_by_order_id = {
+        row["order_id"]: row
+        for row in authorized_identities
+    }
+    position_fingerprints = [
+        dict(authorized_by_order_id.get(row["trade_id"]) or {}).get(
+            "fingerprint"
+        )
+        for row in position_identities
+    ]
+    complete_position_authority = all(
+        fingerprint
+        and _command_position_side(
+            dict(authorized_by_order_id[row["trade_id"]])["side"]
+        )
+        == row["side"]
+        and dict(authorized_by_order_id[row["trade_id"]])[
+            "quantity"
+        ]
+        == row["order_quantity"]
+        for row, fingerprint in zip(
+            position_identities,
+            position_fingerprints,
+        )
+        if row["trade_id"] in authorized_by_order_id
+    ) and all(
+        row["trade_id"] in authorized_by_order_id
+        for row in position_identities
+    )
+    current_fingerprints = sorted(
+        [
+            *receipt_fingerprints,
+            *[
+                str(fingerprint)
+                for fingerprint in position_fingerprints
+                if fingerprint
+            ],
+        ]
     )
     reconciliation = dict(snapshot["reconciliation"])
     exact_reconciliation = (
@@ -561,6 +1157,9 @@ def resolve_start_outcome(
             "active_plan": active_plan,
             "runtime": runtime,
             "accepted_order_fingerprints": actual_fingerprints,
+            "accepted_order_identities": accepted_identities,
+            "authorized_order_identities": authorized_identities,
+            "open_position_identities": position_identities,
             "open_position_count": snapshot["open_position_count"],
             "reconciliation": reconciliation,
             "matching_control_events": matching_audit,
@@ -571,8 +1170,23 @@ def resolve_start_outcome(
         and runtime_identity
         and runtime.get("actual_state") == "running"
         and runtime.get("desired_state") == "running"
-        and actual_fingerprints == expected_fingerprints
-        and len(actual_fingerprints)
+        and receipt_fingerprints == actual_fingerprints
+        and complete_position_authority
+        and current_fingerprints == expected_fingerprints
+        and len(current_fingerprints) == len(set(current_fingerprints))
+        and all(
+            row["strategy_plan_id"] == plan["strategy_plan_id"]
+            and row["strategy_plan_version"]
+            == plan["strategy_plan_version"]
+            for row in position_identities
+        )
+        and int(snapshot["open_position_count"])
+        == len(position_identities)
+        and all(
+            row in authorized_identities
+            for row in accepted_identities
+        )
+        and len(current_fingerprints)
         == int(payload["expected_order_count"])
         and len(matching_audit) == 1
         and matching_audit[0]["result"] == "accepted"
@@ -585,8 +1199,20 @@ def resolve_start_outcome(
             "fresh_attempt_classification_required": False,
             "orders_created_by_recovery": 0,
         }
+    pre_start_runtime_identity = (
+        str(runtime.get("strategy_plan_id") or "")
+        == pre_start_plan["strategy_plan_id"]
+        and int(runtime.get("strategy_plan_version") or 0)
+        == pre_start_plan["strategy_plan_version"]
+        if pre_start_plan
+        else (
+            not str(runtime.get("strategy_plan_id") or "")
+            and int(runtime.get("strategy_plan_version") or 0) == 0
+        )
+    )
     clean_runtime = (
-        runtime_plan_identity
+        active_plan == pre_start_plan
+        and pre_start_runtime_identity
         and runtime.get("actual_state") == "stopped"
         and runtime.get("desired_state") == "stopped"
         and str(runtime.get("preview_id") or "")
@@ -598,6 +1224,8 @@ def resolve_start_outcome(
         exact_reconciliation
         and clean_runtime
         and actual_fingerprints == []
+        and accepted_identities == []
+        and position_identities == []
         and int(snapshot["open_position_count"]) == 0
         and len(matching_audit) == 1
         and matching_audit[0]["result"] == "rejected"
@@ -663,11 +1291,84 @@ def _project(
 ) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
+    pre_intent_attempts: list[dict[str, Any]] = []
+    pre_by_id: dict[str, dict[str, Any]] = {}
+    typed_heartbeats: list[dict[str, Any]] = []
     spent: list[str] = []
     for event in events:
         event_type = str(event.get("event_type") or "")
         attempt_id = str(event.get("attempt_id") or "")
         payload = dict(event.get("payload") or {})
+        if event_type == "typed_heartbeat_observed":
+            if any(
+                row["observation_id"] == attempt_id
+                for row in typed_heartbeats
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            typed_heartbeats.append(
+                {
+                    "observation_id": attempt_id,
+                    "sequence": event["sequence"],
+                    "event_sha256": event["event_sha256"],
+                    **payload,
+                }
+            )
+            continue
+        if event_type == "pre_intent_attempt_started":
+            if attempt_id in pre_by_id or attempt_id in by_id:
+                raise SupervisorStoreError("attempt_store_corrupt")
+            row = {
+                "attempt_id": attempt_id,
+                "started_sequence": event["sequence"],
+                "started_event_sha256": event["event_sha256"],
+                "observed_at": payload["observed_at"],
+                "phase_scope": payload["phase_scope"],
+                "prepare_succeeded_sequence": None,
+                "prepare_succeeded_event_sha256": None,
+                "terminal_result": None,
+                "terminal_sequence": None,
+                "terminal_event_sha256": None,
+            }
+            pre_intent_attempts.append(row)
+            pre_by_id[attempt_id] = row
+            continue
+        if event_type == "pre_intent_prepare_succeeded":
+            row = pre_by_id.get(attempt_id)
+            if (
+                row is None
+                or row["terminal_result"] is not None
+                or row["prepare_succeeded_sequence"] is not None
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            row["prepare_succeeded_sequence"] = event["sequence"]
+            row["prepare_succeeded_event_sha256"] = event[
+                "event_sha256"
+            ]
+            row["prepare_succeeded_at"] = payload["observed_at"]
+            continue
+        if event_type in {
+            "pre_intent_attempt_finished",
+            "pre_intent_attempt_abandoned",
+        }:
+            row = pre_by_id.get(attempt_id)
+            if row is None or row["terminal_result"] is not None:
+                raise SupervisorStoreError("attempt_store_corrupt")
+            row.update(
+                {
+                    "terminal_result": payload["result"],
+                    "terminal_machine_code": payload.get(
+                        "machine_code"
+                    ),
+                    "terminal_classification": payload.get(
+                        "classification"
+                    ),
+                    "terminal_observed_at": payload["observed_at"],
+                    "terminal_event_type": event_type,
+                    "terminal_sequence": event["sequence"],
+                    "terminal_event_sha256": event["event_sha256"],
+                }
+            )
+            continue
         if event_type == "start_intent":
             if attempt_id in by_id:
                 raise SupervisorStoreError("attempt_store_corrupt")
@@ -681,6 +1382,9 @@ def _project(
                 "preview_id": payload.get("preview_id"),
                 "prepared_start_id": prepared_id,
                 "plan_identity": payload.get("plan_identity"),
+                "pre_start_plan_identity": payload.get(
+                    "pre_start_plan_identity"
+                ),
                 "expected_order_count": payload.get(
                     "expected_order_count"
                 ),
@@ -688,11 +1392,29 @@ def _project(
                     "expected_order_fingerprints"
                 ),
                 "terminal_result": None,
+                "terminal_event_type": None,
                 "terminal_sequence": None,
             }
             attempts.append(row)
             by_id[attempt_id] = row
             spent.append(prepared_id)
+            pre = pre_by_id.get(attempt_id)
+            if pre is not None:
+                if pre["terminal_result"] is not None:
+                    raise SupervisorStoreError("attempt_store_corrupt")
+                pre.update(
+                    {
+                        "terminal_result": "start_intent",
+                        "terminal_machine_code": None,
+                        "terminal_classification": None,
+                        "terminal_observed_at": event["recorded_at"],
+                        "terminal_event_type": "start_intent",
+                        "terminal_sequence": event["sequence"],
+                        "terminal_event_sha256": event[
+                            "event_sha256"
+                        ],
+                    }
+                )
             continue
         row = by_id.get(attempt_id)
         if row is None or row.get("terminal_result") is not None:
@@ -702,7 +1424,12 @@ def _project(
             if event_type == "start_result"
             else payload.get("resolution")
         )
+        row["terminal_event_type"] = event_type
         row["terminal_machine_code"] = payload.get("machine_code")
+        row["terminal_authority_digest"] = payload.get(
+            "authority_digest"
+        )
+        row["terminal_response_digest"] = payload.get("response_digest")
         row["terminal_sequence"] = event["sequence"]
         row["terminal_recorded_at"] = event["recorded_at"]
     unfinished = next(
@@ -714,6 +1441,9 @@ def _project(
                     "preview_id": row["preview_id"],
                     "prepared_start_id": row["prepared_start_id"],
                     "plan_identity": row["plan_identity"],
+                    "pre_start_plan_identity": row[
+                        "pre_start_plan_identity"
+                    ],
                     "expected_order_count": row["expected_order_count"],
                     "expected_order_fingerprints": row[
                         "expected_order_fingerprints"
@@ -727,6 +1457,22 @@ def _project(
     )
     if sum(row["terminal_result"] is None for row in attempts) > 1:
         raise SupervisorStoreError("attempt_store_corrupt")
+    unfinished_pre_intent = next(
+        (
+            dict(row)
+            for row in pre_intent_attempts
+            if row["terminal_result"] is None
+        ),
+        None,
+    )
+    if (
+        sum(
+            row["terminal_result"] is None
+            for row in pre_intent_attempts
+        )
+        > 1
+    ):
+        raise SupervisorStoreError("attempt_store_corrupt")
     last_hash = str(events[-1]["event_sha256"]) if events else None
     state = {
         "schema_version": STATE_SCHEMA_VERSION,
@@ -735,7 +1481,32 @@ def _project(
         "last_event_sha256": last_hash,
         "attempt_count": len(attempts),
         "attempts": attempts,
+        "pre_intent_attempts": pre_intent_attempts,
+        "unfinished_pre_intent": unfinished_pre_intent,
+        "typed_heartbeats": typed_heartbeats,
         "spent_prepared_start_ids": spent,
+        "budget_floor": {
+            "dangerous_start_attempts": sum(
+                1
+                for row in attempts
+                if (
+                    row.get("terminal_result")
+                    == "control_outcome_unknown"
+                    or (
+                        row.get("terminal_event_type")
+                        == "start_result"
+                        and row.get("terminal_result") == "unknown"
+                    )
+                )
+            ),
+            "clean_refusal_observations": sum(
+                1
+                for row in attempts
+                if row.get("terminal_event_type")
+                == "recovery_result"
+                and row.get("terminal_result") == "clean_rejection"
+            ),
+        },
         "unfinished_intent": unfinished,
         "status": "intent_pending" if unfinished else "idle",
     }
@@ -814,6 +1585,52 @@ def _validate_event_payload(
     code: str,
 ) -> None:
     try:
+        if event_type == "typed_heartbeat_observed":
+            _parse_timestamp(payload.get("observed_at"))
+            if payload.get("status") not in {"fresh", "missing"}:
+                raise SupervisorStoreError(code)
+            _identity(payload.get("machine_code"), code)
+            _identity(payload.get("reason"), code)
+            if payload.get("heartbeat_recorded_at") is not None:
+                _parse_timestamp(payload.get("heartbeat_recorded_at"))
+            _required_digest(payload.get("heartbeat_digest"), code=code)
+            return
+        if event_type == "pre_intent_attempt_started":
+            _parse_timestamp(payload.get("observed_at"))
+            if payload.get("phase_scope") != "create_or_prepare":
+                raise SupervisorStoreError(code)
+            return
+        if event_type == "pre_intent_prepare_succeeded":
+            _parse_timestamp(payload.get("observed_at"))
+            return
+        if event_type in {
+            "pre_intent_attempt_finished",
+            "pre_intent_attempt_abandoned",
+        }:
+            _parse_timestamp(payload.get("observed_at"))
+            result = str(payload.get("result") or "")
+            if result not in _PRE_INTENT_RESULTS:
+                raise SupervisorStoreError(code)
+            classification = payload.get("classification")
+            machine_code = payload.get("machine_code")
+            if result in {"prepare_succeeded", "no_action"}:
+                if classification is not None or machine_code is not None:
+                    raise SupervisorStoreError(code)
+            elif classification not in {"transient", "structural"}:
+                raise SupervisorStoreError(code)
+            else:
+                _identity(machine_code, code)
+            if (
+                event_type == "pre_intent_attempt_abandoned"
+                and (
+                    result != "transient"
+                    or machine_code
+                    != "supervisor_attempt_deadline_before_intent"
+                    or classification != "transient"
+                )
+            ):
+                raise SupervisorStoreError(code)
+            return
         if event_type == "start_intent":
             _validate_intent_payload(payload)
             return
@@ -841,6 +1658,8 @@ def _validate_intent_payload(payload: Mapping[str, Any]) -> None:
     _identity(payload.get("preview_id"), "supervisor_preview_id_invalid")
     _identity(payload.get("prepared_start_id"), "prepared_start_id_invalid")
     _plan_identity(payload.get("plan_identity"))
+    if payload.get("pre_start_plan_identity") is not None:
+        _plan_identity(payload.get("pre_start_plan_identity"))
     fingerprints = _fingerprints(
         payload.get("expected_order_fingerprints") or []
     )
@@ -864,8 +1683,21 @@ def _validate_authority(snapshot: Mapping[str, Any]) -> None:
         snapshot.get("accepted_order_fingerprints") or [],
         allow_empty=True,
     )
+    _accepted_order_identities(
+        snapshot.get("accepted_order_identities")
+    )
+    _accepted_order_identities(
+        snapshot.get("authorized_order_identities")
+    )
+    position_identities = _open_position_identities(
+        snapshot.get("open_position_identities")
+    )
     count = snapshot.get("open_position_count")
-    if not isinstance(count, int) or count < 0:
+    if (
+        not isinstance(count, int)
+        or count < 0
+        or count != len(position_identities)
+    ):
         raise SupervisorStoreError("supervisor_authority_invalid")
 
 
@@ -892,6 +1724,153 @@ def _plan_identity(value: Any) -> dict[str, Any]:
         "strategy_type": strategy_type,
         "direction": direction,
     }
+
+
+def _accepted_order_identities(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise SupervisorStoreError("supervisor_authority_invalid")
+    result: list[dict[str, str]] = []
+    for raw in value:
+        if not isinstance(raw, Mapping):
+            raise SupervisorStoreError("supervisor_authority_invalid")
+        order_id = _identity(
+            raw.get("order_id"),
+            "supervisor_authority_invalid",
+        )
+        fingerprint = _required_digest(
+            raw.get("fingerprint"),
+            code="supervisor_authority_invalid",
+        )
+        side = str(raw.get("side") or "").lower()
+        quantity = _positive_decimal_text(
+            raw.get("quantity"),
+            code="supervisor_authority_invalid",
+        )
+        if side not in {"buy", "sell"}:
+            raise SupervisorStoreError("supervisor_authority_invalid")
+        result.append(
+            {
+                "order_id": order_id,
+                "fingerprint": fingerprint,
+                "side": side,
+                "quantity": quantity,
+            }
+        )
+    if (
+        len({row["order_id"] for row in result}) != len(result)
+        or len({row["fingerprint"] for row in result}) != len(result)
+    ):
+        raise SupervisorStoreError("supervisor_authority_invalid")
+    return sorted(result, key=lambda row: row["order_id"])
+
+
+def _open_position_identities(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise SupervisorStoreError("supervisor_authority_invalid")
+    result: list[dict[str, Any]] = []
+    used_fill_ids: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, Mapping):
+            raise SupervisorStoreError("supervisor_authority_invalid")
+        position_id = _identity(
+            raw.get("position_id"),
+            "supervisor_authority_invalid",
+        )
+        trade_id = _identity(
+            raw.get("trade_id"),
+            "supervisor_authority_invalid",
+        )
+        plan_id = _identity(
+            raw.get("strategy_plan_id"),
+            "supervisor_authority_invalid",
+        )
+        plan_version = raw.get("strategy_plan_version")
+        try:
+            entry_price = Decimal(str(raw.get("entry_price")))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise SupervisorStoreError(
+                "supervisor_authority_invalid"
+            ) from exc
+        entry_quantity = _positive_decimal_text(
+            raw.get("entry_quantity"),
+            code="supervisor_authority_invalid",
+        )
+        order_quantity = _positive_decimal_text(
+            raw.get("order_quantity"),
+            code="supervisor_authority_invalid",
+        )
+        if Decimal(entry_quantity) > Decimal(order_quantity):
+            raise SupervisorStoreError("supervisor_authority_invalid")
+        fill_ids = raw.get("entry_fill_ids")
+        if (
+            not isinstance(plan_version, int)
+            or plan_version < 1
+            or not entry_price.is_finite()
+            or entry_price <= 0
+            or not isinstance(fill_ids, list)
+            or not fill_ids
+        ):
+            raise SupervisorStoreError("supervisor_authority_invalid")
+        normalized_fill_ids = [
+            _identity(fill_id, "supervisor_authority_invalid")
+            for fill_id in fill_ids
+        ]
+        if (
+            len(set(normalized_fill_ids)) != len(normalized_fill_ids)
+            or any(fill_id in used_fill_ids for fill_id in normalized_fill_ids)
+        ):
+            raise SupervisorStoreError("supervisor_authority_invalid")
+        used_fill_ids.update(normalized_fill_ids)
+        result.append(
+            {
+                "position_id": position_id,
+                "trade_id": trade_id,
+                "entry_fill_ids": sorted(normalized_fill_ids),
+                "strategy_plan_id": plan_id,
+                "strategy_plan_version": plan_version,
+                "side": _position_side(
+                    raw.get("side"),
+                    code="supervisor_authority_invalid",
+                ),
+                "entry_price": format(entry_price.normalize(), "f"),
+                "entry_quantity": entry_quantity,
+                "order_quantity": order_quantity,
+            }
+        )
+    if (
+        len({row["position_id"] for row in result}) != len(result)
+        or len({row["trade_id"] for row in result}) != len(result)
+    ):
+        raise SupervisorStoreError("supervisor_authority_invalid")
+    return sorted(result, key=lambda row: row["position_id"])
+
+
+def _position_side(value: Any, *, code: str) -> str:
+    side = str(value or "").lower()
+    if side in {"long", "buy"}:
+        return "long"
+    if side in {"short", "sell"}:
+        return "short"
+    raise SupervisorStoreError(code)
+
+
+def _command_position_side(value: Any) -> str:
+    side = str(value or "").lower()
+    if side == "buy":
+        return "long"
+    if side == "sell":
+        return "short"
+    raise SupervisorStoreError("supervisor_authority_invalid")
+
+
+def _positive_decimal_text(value: Any, *, code: str) -> str:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise SupervisorStoreError(code) from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise SupervisorStoreError(code)
+    return format(parsed.normalize(), "f")
 
 
 def _fingerprints(
