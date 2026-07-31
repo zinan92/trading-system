@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services.cloud_health import CloudPaperHealth, _hash_json
+from services.cloud_health import health_severity
 from services.cycle_decision import CycleDecisionLedger
 from services.journal_store import write_json
 
@@ -112,6 +113,15 @@ def test_cloud_health_separates_all_ready_layers(tmp_path: Path) -> None:
     assert result["dashboard_reachable_is_not_system_health"] is True
     assert result["control_actions_executed"] == 0
     assert result["secrets_included"] is False
+    assert result["severity"] == "none"
+    assert all(row["severity"] == "none" for row in result["checks"].values())
+
+
+def test_health_severity_is_explicit_and_unknown_fails_closed() -> None:
+    assert health_severity("daily_self_review_missing_or_incomplete") == "warning"
+    assert health_severity("backup_missing_or_stale") == "warning"
+    assert health_severity("runtime_utilization_insufficient") == "insufficient"
+    assert health_severity("new_unclassified_condition") == "critical"
 
 
 def test_missing_cycle_decision_is_blocked_and_detectable(tmp_path: Path) -> None:
@@ -208,6 +218,52 @@ def test_missing_review_and_backup_are_degraded_not_fabricated_healthy(
     assert result["checks"]["daily_self_review"]["evidence"]["review_status"] == "missing"
     assert result["checks"]["backup"]["status"] == "degraded"
     assert result["checks"]["backup"]["evidence"]["created_at"] is None
+    assert result["checks"]["daily_self_review"]["severity"] == "warning"
+    assert result["checks"]["backup"]["severity"] == "warning"
+    assert result["severity"] == "warning"
+
+
+def test_supervisor_mode_replaces_legacy_cycle_decision_check(
+    tmp_path: Path, monkeypatch
+) -> None:
+    health = _healthy(tmp_path)
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "plans"
+        / "2026-07-28_DAY.json",
+        [
+            {
+                "strategy_plan_id": "active-plan",
+                "cycle_id": "2026-07-28_DAY",
+                "status": "active",
+            }
+        ],
+    )
+    write_json(
+        health.output_root / "dualtrack" / "strategy_control" / "runtime.json",
+        [
+            {
+                "cycle_id": "2026-07-28_DAY",
+                "actual_state": "stopped",
+                "desired_state": "running",
+                "accepted_order_count": 0,
+                "accepted_order_count_known": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "services.cloud_health.dualtrack_config",
+        lambda: {"convergence": {"mode": "supervisor"}},
+    )
+
+    result = health.run()
+
+    assert "supervisor" in result["checks"]
+    assert "cycle_decision" not in result["checks"]
+    assert result["checks"]["supervisor"]["severity"] == "critical"
+    assert result["checks"]["supervisor"]["code"] == "supervisor_observation_missing"
 
 
 def test_scheduler_owner_mismatch_blocks_cloud_health(tmp_path: Path) -> None:

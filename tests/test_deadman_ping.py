@@ -419,6 +419,41 @@ def test_cloud_deadman_uses_layered_health_and_never_persists_url(
     assert '"url"' not in saved
 
 
+def test_cloud_deadman_warning_health_uses_success_endpoint(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root, db, run_date = _healthy_root(tmp_path)
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        return _Response()
+
+    result = ExternalDeadmanPing(
+        root,
+        db,
+        url="https://hc-ping.example/deadman",
+        opener=opener,
+        cloud_health_provider=lambda: {
+            "status": "degraded",
+            "severity": "warning",
+            "incidents": [
+                {
+                    "stage": "daily_self_review",
+                    "code": "daily_self_review_missing_or_incomplete",
+                    "severity": "warning",
+                }
+            ],
+        },
+    ).run(run_date)
+
+    assert result["status"] == "sent"
+    assert result["ping"]["target_kind"] == "success"
+    assert calls and "/fail" not in calls[0]
+
+
 def test_deadman_ping_cli_loads_deadman_url_from_live_env(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.delenv("TRADING_ORCHESTRATOR_DEADMAN_URL", raising=False)
     monkeypatch.delenv("TRADING_ORCHESTRATOR_DEADMAN_POSITION_URL", raising=False)

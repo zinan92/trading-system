@@ -22,6 +22,60 @@ TICK_MAX_AGE_SECONDS = 180.0
 DATA_MAX_AGE_SECONDS = 180.0
 BACKUP_MAX_AGE_SECONDS = 36 * 60 * 60
 
+# This is an explicit, fail-closed severity contract.  A newly introduced
+# machine code is critical until it is deliberately classified here.
+HEALTH_SEVERITY_BY_CODE = {
+    # Non-blocking observability / ramp states.
+    "daily_self_review_missing_or_incomplete": "warning",
+    "backup_missing_or_stale": "warning",
+    "runtime_utilization_below_target": "warning",
+    "runtime_utilization_insufficient": "insufficient",
+    "supervisor_backing_off": "none",
+    "supervisor_probing": "none",
+    "supervisor_not_required": "none",
+    # Healthy evidence.
+    "datafeed_fresh": "none",
+    "live_tick_fresh": "none",
+    "execution_runtime_ready": "none",
+    "cycle_decision_ready": "none",
+    "cycle_decision_recorded": "none",
+    "supervisor_observation_fresh": "none",
+    "supervisor_attempt_fresh": "none",
+    "supervisor_running": "none",
+    "reconciliation_pass": "none",
+    "daily_self_review_current": "none",
+    "backup_current": "none",
+    "scheduler_owner_pass": "none",
+    "source_sha_known": "none",
+    # Structural/runtime blockers.  Unknown codes also use this severity.
+    "datafeed_probe_failed": "critical",
+    "datafeed_latest_timestamp_missing": "critical",
+    "datafeed_stale": "critical",
+    "live_tick_heartbeat_missing": "critical",
+    "live_tick_stale": "critical",
+    "execution_runtime_missing": "critical",
+    "execution_runtime_unresolved": "critical",
+    "cycle_decision_missing": "critical",
+    "cycle_decision_invalid": "critical",
+    "cycle_decision_stalled_after_plan_activation": "critical",
+    "reconciliation_not_applicable_without_cycle_snapshot": "critical",
+    "reconciliation_not_pass": "critical",
+    "scheduler_owner_mismatch": "critical",
+    "source_sha_unknown": "critical",
+    "supervisor_observation_missing": "critical",
+    "supervisor_observation_stale": "critical",
+    "supervisor_attempt_missing": "critical",
+    "supervisor_attempt_stale": "critical",
+    "supervisor_episode_exhausted": "critical",
+    "supervisor_read_model_unavailable": "critical",
+}
+
+
+def health_severity(code: str) -> str:
+    """Return the explicit severity for a code; unknown is fail-closed."""
+
+    return HEALTH_SEVERITY_BY_CODE.get(str(code), "critical")
+
 
 def _parse_ts(value: Any) -> datetime | None:
     if not value:
@@ -56,6 +110,7 @@ def _check(
         "stage": stage,
         "status": status,
         "code": code,
+        "severity": health_severity(code),
         "summary": summary,
         "next_action": next_action,
         "evidence": evidence or {},
@@ -92,7 +147,11 @@ class CloudPaperHealth:
             "datafeed": self._datafeed(observed),
             "live_tick": self._live_tick(observed),
             "execution": self._execution(),
-            "cycle_decision": self._cycle_decision(observed),
+            **(
+                {"supervisor": self._supervisor(observed)}
+                if self._supervisor_mode()
+                else {"cycle_decision": self._cycle_decision(observed)}
+            ),
             "reconciliation": self._reconciliation(),
             "daily_self_review": self._daily_review(observed),
             "backup": self._backup(observed),
@@ -111,11 +170,12 @@ class CloudPaperHealth:
                 "stage": row["stage"],
                 "status": row["status"],
                 "code": row["code"],
+                "severity": row["severity"],
                 "summary": row["summary"],
                 "next_action": row["next_action"],
             }
             for row in checks.values()
-            if row["status"] != "ready"
+            if row["status"] != "ready" or row["severity"] != "none"
         ]
         payload = {
             "schema_version": "cloud-paper-health-v1",
@@ -123,6 +183,16 @@ class CloudPaperHealth:
             "paper_only": True,
             "checked_at": observed.isoformat(),
             "status": status,
+            "severity": self._overall_severity(checks),
+            "critical_incidents": [
+                row for row in incidents if row["severity"] == "critical"
+            ],
+            "warning_incidents": [
+                row for row in incidents if row["severity"] == "warning"
+            ],
+            "insufficient_conditions": [
+                row for row in incidents if row["severity"] == "insufficient"
+            ],
             "dashboard_reachable_is_not_system_health": True,
             "checks": checks,
             "incidents": incidents,
@@ -135,6 +205,154 @@ class CloudPaperHealth:
                 [payload],
             )
         return payload
+
+    def _supervisor_mode(self) -> bool:
+        convergence = dualtrack_config().get("convergence")
+        return isinstance(convergence, dict) and convergence.get("mode") == "supervisor"
+
+    def _overall_severity(self, checks: dict[str, dict[str, Any]]) -> str:
+        severities = {
+            row["severity"]
+            for row in checks.values()
+            if row.get("status") != "ready" or row.get("severity") != "none"
+        }
+        if "critical" in severities:
+            return "critical"
+        if "warning" in severities:
+            return "warning"
+        if "insufficient" in severities:
+            return "insufficient"
+        return "none"
+
+    def _supervisor(self, now: datetime) -> dict[str, Any]:
+        """Health for the exclusive Supervisor convergence mode."""
+
+        runtime = _latest(
+            self.output_root / "dualtrack" / "strategy_control" / "runtime.json"
+        )
+        cycle_id = str(runtime.get("cycle_id") or cycle_window(now).cycle_id)
+        plans_path = (
+            self.output_root
+            / "dualtrack"
+            / "strategy_control"
+            / "plans"
+            / f"{cycle_id}.json"
+        )
+        active_plans = [
+            row for row in load_json(plans_path)
+            if isinstance(row, dict) and row.get("status") == "active"
+        ]
+        active_plan = active_plans[-1] if active_plans else {}
+        running = (
+            runtime.get("cycle_id") == cycle_id
+            and runtime.get("actual_state") == "running"
+        )
+        if not active_plan or running:
+            return _check(
+                "supervisor",
+                "ready",
+                code="supervisor_not_required" if not active_plan else "supervisor_running",
+                summary=(
+                    "No active plan requires Supervisor convergence."
+                    if not active_plan
+                    else "Supervisor runtime is running for the active plan."
+                ),
+                next_action="No action.",
+                evidence={"cycle_id": cycle_id, "active_plan": bool(active_plan)},
+            )
+        try:
+            from services.paper_supervisor_read_model import build_paper_supervisor_read_model
+
+            model = build_paper_supervisor_read_model(
+                self.output_root,
+                cycle_id=cycle_id,
+                as_of=now,
+            )
+        except Exception as exc:  # noqa: BLE001 - health fails closed.
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_read_model_unavailable",
+                summary=f"Supervisor read-model is unavailable: {type(exc).__name__}.",
+                next_action="Restore Supervisor observations before creating any control request.",
+                evidence={"cycle_id": cycle_id},
+            )
+        current = model.get("current_cycle") if isinstance(model.get("current_cycle"), dict) else {}
+        last_observed = _parse_ts(current.get("last_observed_at"))
+        last_attempt = current.get("last_attempt") if isinstance(current.get("last_attempt"), dict) else {}
+        attempted_at = _parse_ts(last_attempt.get("observed_at"))
+        observation_age = (now - last_observed).total_seconds() if last_observed else None
+        attempt_age = (now - attempted_at).total_seconds() if attempted_at else None
+        episode = current.get("episode") if isinstance(current.get("episode"), dict) else {}
+        blocker = episode.get("blocker") if isinstance(episode.get("blocker"), dict) else {}
+        if episode.get("alert_required") is True or str(blocker.get("machine_code") or "") in {
+            "dangerous_start_attempt_cap_reached",
+            "clean_refusal_observation_cap_reached",
+            "episode_short_budget_exhausted",
+        }:
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_episode_exhausted",
+                summary="Supervisor retry episode is exhausted and requires attention.",
+                next_action="Review the immutable Supervisor attempt history; do not retry blindly.",
+                evidence={"cycle_id": cycle_id, "blocker": blocker, "episode": episode},
+            )
+        if last_observed is None or observation_age is None or observation_age > 300:
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_observation_missing" if last_observed is None else "supervisor_observation_stale",
+                summary="Supervisor has not produced a fresh observation within 300 seconds.",
+                next_action="Inspect the Supervisor/live-tick scheduler and preserve control state.",
+                evidence={"cycle_id": cycle_id, "age_seconds": observation_age},
+            )
+        if attempted_at is None or attempt_age is None or attempt_age > 300:
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_attempt_missing" if attempted_at is None else "supervisor_attempt_stale",
+                summary="Supervisor has not attempted convergence within 300 seconds.",
+                next_action="Inspect the Supervisor episode and current active plan; do not create a manual start.",
+                evidence={"cycle_id": cycle_id, "age_seconds": attempt_age},
+            )
+        mode = str(episode.get("mode") or "")
+        if mode == "backing_off":
+            return _check(
+                "supervisor", "ready", code="supervisor_backing_off",
+                summary="Supervisor is in an explicit transient backoff.",
+                next_action="Wait for the recorded next probe; no manual retry.",
+                evidence={"cycle_id": cycle_id, "episode": episode},
+            )
+        if mode == "probing":
+            return _check(
+                "supervisor", "ready", code="supervisor_probing",
+                summary="Supervisor is probing a transient condition.",
+                next_action="Wait for the recorded probe; no manual retry.",
+                evidence={"cycle_id": cycle_id, "episode": episode},
+            )
+        utilization = model.get("utilization") if isinstance(model.get("utilization"), dict) else {}
+        window = (utilization.get("windows") or {}).get("24h") if isinstance(utilization.get("windows"), dict) else {}
+        if isinstance(window, dict) and window.get("evidence_status") == "insufficient":
+            return _check(
+                "supervisor", "ready", code="runtime_utilization_insufficient",
+                summary="The first complete 24-hour runtime utilization window has not formed.",
+                next_action="Continue collecting Supervisor running evidence.",
+                evidence={"cycle_id": cycle_id, "utilization": window},
+            )
+        if isinstance(window, dict) and float(window.get("conservative_percentage") or 0) < 85:
+            return _check(
+                "supervisor", "degraded", code="runtime_utilization_below_target",
+                summary="Conservative Supervisor runtime utilization is below 85%.",
+                next_action="Review the running-evidence gaps; this is warning-only and does not fail dead-man.",
+                evidence={"cycle_id": cycle_id, "utilization": window},
+            )
+        return _check(
+            "supervisor", "ready", code="supervisor_observation_fresh",
+            summary="Supervisor observation and attempt cadence are fresh.",
+            next_action="No action.",
+            evidence={"cycle_id": cycle_id, "observation_age_seconds": observation_age, "attempt_age_seconds": attempt_age},
+        )
 
     def _datafeed(self, now: datetime) -> dict[str, Any]:
         try:
