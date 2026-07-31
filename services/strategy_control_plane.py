@@ -23,12 +23,16 @@ from typing import Any, Callable
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dca_execution_lifecycle import DcaPaperLifecycle
 from services.dca_plan import (
+    build_dca_entry_commands,
     build_dca_preview,
     build_dca_strategy_plan,
     dca_preview_id,
 )
 from services.dualtrack_clock import parse_utc
 from services.dualtrack_config import dualtrack_config
+from services.dualtrack_execution_contract import (
+    ImmutableFillGuardError,
+)
 from services.dualtrack_store import DualTrackPlanStore
 from services.control_audit import append_control_event, build_control_event, read_last_control_event
 from services.cycle_risk_envelope import CycleRiskEnvelopeStore
@@ -51,6 +55,8 @@ from services.grid_range_adjustment import (
     range_adjustment_steps,
 )
 from services.journal_store import load_json, write_json
+from services.paper_supervisor_identity import build_start_intent_contract
+from services.paper_supervisor_store import PaperSupervisorStore
 from services.production_accounting import normalize_nautilus_snapshot_for_accounting
 from services.risk_policy_composition import (
     build_risk_decision_store,
@@ -1268,6 +1274,21 @@ class StrategyControlPlane:
     ) -> dict[str, Any]:
         """Freeze one server-built Paper candidate without creating a plan/order."""
 
+        supervisor_attempt_id = str(
+            payload.get("supervisor_attempt_id") or ""
+        ).strip()
+        if supervisor_attempt_id:
+            pending = PaperSupervisorStore(
+                self.output_root
+            ).unfinished_pre_intent(cycle_id)
+            if (
+                pending is None
+                or str(pending.get("attempt_id") or "")
+                != supervisor_attempt_id
+            ):
+                raise ValueError(
+                    "supervisor_pre_intent_attempt_invalid"
+                )
         current = self.active_plan(cycle_id)
         strategy_type = str(payload.get("strategy_type") or "grid").lower()
         if not current and strategy_type != "dca":
@@ -1335,6 +1356,37 @@ class StrategyControlPlane:
                 now=self._authorization_clock(),
             )
         prepared_at = _timestamp(now)
+        if preview.get("strategy_type") == "dca":
+            future_version = self._next_plan_version(cycle_id)
+            future_plan = build_dca_strategy_plan(
+                preview,
+                strategy_plan_id=_plan_id(
+                    cycle_id,
+                    future_version,
+                    preview["preview_id"],
+                ),
+                version=future_version,
+                locked_at=prepared_at,
+            )
+            intent_commands = build_dca_entry_commands(
+                future_plan,
+                timestamp=prepared_at,
+            )
+        else:
+            future_plan = self._plan_from_preview(
+                current,
+                preview,
+                now=prepared_at,
+            )
+            intent_commands = build_plan_grid_entry_commands(
+                future_plan,
+                timestamp=prepared_at,
+            )
+        start_intent_contract = build_start_intent_contract(
+            plan=future_plan,
+            commands=intent_commands,
+            pre_start_plan=current,
+        )
         record = {
             "schema_version": PREPARED_START_SCHEMA,
             "cycle_id": cycle_id,
@@ -1354,6 +1406,10 @@ class StrategyControlPlane:
             "execution_adapter_name": str(getattr(adapter, "name", "")),
             "market_snapshot": canonical_market_risk_state(market),
             "preview": preview,
+            "start_intent_contract": start_intent_contract,
+            "supervisor_attempt_id": (
+                supervisor_attempt_id or None
+            ),
         }
         prepared_start_id = self._prepared_start_content_id(record)
         record["prepared_start_id"] = prepared_start_id
@@ -1366,6 +1422,10 @@ class StrategyControlPlane:
             ],
             "expires_at": record["expires_at"],
             "preview": preview,
+            "start_intent_contract": start_intent_contract,
+            "supervisor_attempt_id": (
+                supervisor_attempt_id or None
+            ),
             "side_effects": {
                 "strategy_plan_written": False,
                 "orders_created": 0,
@@ -1619,6 +1679,8 @@ class StrategyControlPlane:
                 "execution_adapter_name",
                 "market_snapshot",
                 "preview",
+                "start_intent_contract",
+                "supervisor_attempt_id",
             )
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -2071,6 +2133,23 @@ class StrategyControlPlane:
                     now=now,
                     actor=actor,
                 )
+            except ImmutableFillGuardError as exc:
+                if str(action or "").lower() not in {
+                    "preview",
+                    "preview_range",
+                }:
+                    self._audit_control(
+                        cycle_id,
+                        action,
+                        payload,
+                        actor=actor,
+                        result="rejected",
+                        error="immutable_fill_guard_triggered",
+                        now=now,
+                    )
+                raise ValueError(
+                    "immutable_fill_guard_triggered"
+                ) from exc
             except ValueError as exc:
                 # A rejected mutation is still an operator action and must
                 # stay attributable; the original rejection is re-raised.
@@ -2219,6 +2298,22 @@ class StrategyControlPlane:
                 ),
             }
         if action == "start":
+            prepared_start_id = str(
+                body.get("prepared_start_id") or ""
+            ).strip()
+            if prepared_start_id:
+                self._validate_supervisor_prepared_attempt(
+                    cycle_id,
+                    prepared_start_id=prepared_start_id,
+                    request_attempt_id=str(
+                        body.get("supervisor_attempt_id") or ""
+                    ).strip(),
+                )
+                self._spend_prepared_start(
+                    cycle_id,
+                    prepared_start_id=prepared_start_id,
+                    now=now,
+                )
             if (
                 str((actor or {}).get("type") or "") == "scheduler"
                 and not str(body.get("cycle_risk_envelope_id") or "")
@@ -2384,6 +2479,90 @@ class StrategyControlPlane:
             }
         raise ValueError("unsupported production control action")
 
+    def _validate_supervisor_prepared_attempt(
+        self,
+        cycle_id: str,
+        *,
+        prepared_start_id: str,
+        request_attempt_id: str,
+    ) -> None:
+        if self._prepared_start_consumption_path(
+            prepared_start_id
+        ).exists():
+            raise ValueError("prepared_start_id_already_spent")
+        prepared = self._load_prepared_start(
+            cycle_id,
+            prepared_start_id,
+        )
+        prepared_attempt_id = str(
+            prepared.get("supervisor_attempt_id") or ""
+        )
+        if not prepared_attempt_id:
+            if request_attempt_id:
+                raise ValueError(
+                    "supervisor_pre_intent_attempt_invalid"
+                )
+            return
+        if request_attempt_id != prepared_attempt_id:
+            raise ValueError(
+                "supervisor_pre_intent_attempt_invalid"
+            )
+        projection = PaperSupervisorStore(
+            self.output_root
+        ).current_state(cycle_id)
+        pre_attempt = next(
+            (
+                row
+                for row in projection.get(
+                    "pre_intent_attempts",
+                    [],
+                )
+                if isinstance(row, dict)
+                and str(row.get("attempt_id") or "")
+                == prepared_attempt_id
+            ),
+            None,
+        )
+        start_attempt = next(
+            (
+                row
+                for row in projection.get("attempts", [])
+                if isinstance(row, dict)
+                and str(row.get("attempt_id") or "")
+                == prepared_attempt_id
+            ),
+            None,
+        )
+        intent_contract = dict(
+            prepared.get("start_intent_contract") or {}
+        )
+        prepared_preview_id = str(
+            dict(prepared.get("preview") or {}).get("preview_id")
+            or ""
+        )
+        if (
+            pre_attempt is None
+            or pre_attempt.get("terminal_result") != "start_intent"
+            or pre_attempt.get("prepare_succeeded_sequence") is None
+            or start_attempt is None
+            or start_attempt.get("terminal_result") is not None
+            or str(start_attempt.get("prepared_start_id") or "")
+            != prepared_start_id
+            or str(start_attempt.get("preview_id") or "")
+            != prepared_preview_id
+            or start_attempt.get("plan_identity")
+            != intent_contract.get("plan_identity")
+            or start_attempt.get("pre_start_plan_identity")
+            != intent_contract.get("pre_start_plan_identity")
+            or start_attempt.get("expected_order_count")
+            != intent_contract.get("expected_order_count")
+            or start_attempt.get("expected_order_fingerprints")
+            != intent_contract.get("expected_order_fingerprints")
+        ):
+            raise ValueError(
+                "supervisor_pre_intent_attempt_invalid"
+            )
+
     def _start(
         self,
         cycle_id: str,
@@ -2513,6 +2692,17 @@ class StrategyControlPlane:
             )
         timestamp = _timestamp(now)
         commands = build_plan_grid_entry_commands(adjusted, timestamp=timestamp)
+        if prepared is not None:
+            actual_intent_contract = build_start_intent_contract(
+                plan=adjusted,
+                commands=commands,
+                pre_start_plan=current,
+            )
+            if (
+                actual_intent_contract
+                != prepared.get("start_intent_contract")
+            ):
+                raise ValueError("prepared_start_changed")
         manual_override = None
         confirmation = dict(preview.get("manual_confirmation") or {})
         risk_market = market
@@ -2889,6 +3079,20 @@ class StrategyControlPlane:
             version=version,
             locked_at=timestamp,
         )
+        if prepared is not None:
+            actual_intent_contract = build_start_intent_contract(
+                plan=adjusted,
+                commands=build_dca_entry_commands(
+                    adjusted,
+                    timestamp=timestamp,
+                ),
+                pre_start_plan=current,
+            )
+            if (
+                actual_intent_contract
+                != prepared.get("start_intent_contract")
+            ):
+                raise ValueError("prepared_start_changed")
         if envelope_verification is not None:
             envelope_verification = self.risk_envelopes.bind_execution_plan(
                 envelope_verification,
@@ -5465,6 +5669,83 @@ class StrategyControlPlane:
 
     def _prepared_starts_path(self, cycle_id: str) -> Path:
         return self.root / "prepared_starts" / f"{cycle_id}.json"
+
+    def _spend_prepared_start(
+        self,
+        cycle_id: str,
+        *,
+        prepared_start_id: str,
+        now: str | None,
+    ) -> None:
+        """Atomically make a public prepared-start capability one-shot."""
+
+        directory = self.root / "prepared_start_consumptions"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = self._prepared_start_consumption_path(
+            prepared_start_id
+        )
+        payload = {
+            "schema_version": "prepared-start-consumption-v1",
+            "cycle_id": str(cycle_id),
+            "prepared_start_id": prepared_start_id,
+            "consumed_at": _timestamp(now),
+            "reuse_allowed": False,
+        }
+        encoded = (
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+            os.write(descriptor, encoded)
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = -1
+            directory_descriptor = os.open(
+                directory,
+                os.O_RDONLY,
+            )
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        except FileExistsError as exc:
+            raise ValueError(
+                "prepared_start_id_already_spent"
+            ) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    def _prepared_start_consumption_path(
+        self,
+        prepared_start_id: str,
+    ) -> Path:
+        suffix = prepared_start_id.removeprefix("prepared-start-")
+        if (
+            not prepared_start_id.startswith("prepared-start-")
+            or len(suffix) != 16
+            or any(
+                character not in "0123456789abcdef"
+                for character in suffix
+            )
+        ):
+            raise ValueError("prepared_start_id_invalid")
+        return (
+            self.root
+            / "prepared_start_consumptions"
+            / f"{prepared_start_id}.json"
+        )
 
     def _write_dca_risk_decision(
         self,

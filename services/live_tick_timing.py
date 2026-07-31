@@ -94,7 +94,14 @@ class LiveTickTimingSession:
                 }
             )
 
-    def finish(self, *, status: str, error_type: str | None = None) -> dict[str, Any]:
+    def finish(
+        self,
+        *,
+        status: str,
+        error_type: str | None = None,
+        control_actions_executed: int = 0,
+        control_action_scope: str = "timing_instrumentation_only",
+    ) -> dict[str, Any]:
         ended_monotonic_ns = self.monotonic_ns()
         ended_at = _utc(self.wall_now())
         total_ms = _milliseconds(
@@ -143,8 +150,10 @@ class LiveTickTimingSession:
                 max(0.0, total_ms - phase_sum_ms),
                 3,
             ),
-            "control_actions_executed": 0,
-            "control_action_scope": "timing_instrumentation_only",
+            "control_actions_executed": int(
+                control_actions_executed
+            ),
+            "control_action_scope": str(control_action_scope),
             "metadata_status": "pass" if not metadata_errors else "invalid",
             "metadata_errors": metadata_errors,
             "error_type": str(error_type) if error_type else None,

@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
+import time
 from copy import deepcopy
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
@@ -42,6 +45,7 @@ from services.cloud_service_boot import CloudPaperServiceBootGate
 from services.cycle_decision import CycleDecisionCoordinator
 from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.live_tick_timing import LiveTickTimingSession
+from services.paper_supervisor import PaperSupervisor
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
@@ -56,6 +60,50 @@ class LiveTickPhaseFailure(RuntimeError):
         self.phase = phase
         self.next_action = next_action
         self.cause = cause
+
+
+LIVE_TICK_HARD_TIMEOUT_SECONDS = 52.0
+LIVE_TICK_HARD_EXIT_CODE = 124
+LIVE_TICK_HARD_DEADLINE_ENV = (
+    "GRIDMIND_LIVE_TICK_HARD_DEADLINE_MONOTONIC"
+)
+
+
+@contextmanager
+def live_tick_hard_watchdog(
+    seconds: float = LIVE_TICK_HARD_TIMEOUT_SECONDS,
+):
+    """Keep recovery, fsync and lease release inside the systemd margin."""
+
+    if seconds <= 0:
+        raise ValueError("live_tick_hard_timeout_invalid")
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("live_tick_hard_watchdog_requires_main_thread")
+    prior_deadline = os.environ.get(LIVE_TICK_HARD_DEADLINE_ENV)
+    deadline = time.monotonic() + float(seconds)
+    stopped = threading.Event()
+
+    def hard_exit() -> None:
+        remaining = max(0.0, deadline - time.monotonic())
+        if not stopped.wait(remaining):
+            os._exit(LIVE_TICK_HARD_EXIT_CODE)
+
+    watchdog = threading.Thread(
+        target=hard_exit,
+        name="live-tick-hard-watchdog",
+        daemon=True,
+    )
+    os.environ[LIVE_TICK_HARD_DEADLINE_ENV] = str(deadline)
+    watchdog.start()
+    try:
+        yield deadline
+    finally:
+        stopped.set()
+        watchdog.join(timeout=1.0)
+        if prior_deadline is None:
+            os.environ.pop(LIVE_TICK_HARD_DEADLINE_ENV, None)
+        else:
+            os.environ[LIVE_TICK_HARD_DEADLINE_ENV] = prior_deadline
 
 
 def _parse_execution_time(value: Any) -> datetime | None:
@@ -796,7 +844,7 @@ class DualTrackCycleRunner:
             )
             # The start gate consumes this receipt. Write it only after all
             # work that makes an accepted Paper order executable has completed.
-            timing.measure(
+            heartbeat = timing.measure(
                 "heartbeat",
                 lambda: self._write_runner_state(
                     window.cycle_id,
@@ -805,7 +853,21 @@ class DualTrackCycleRunner:
                     observed_at=now,
                 ),
             )
-            if bool((self.config.get("cycle_decision") or {}).get("enabled")):
+            convergence_mode = self._convergence_mode()
+            if convergence_mode == "paper_supervisor":
+                cycle_decision = timing.measure(
+                    "cycle_decision",
+                    lambda: self._live_tick_phase(
+                        "cycle_decision",
+                        "Inspect the current Paper Supervisor receipt; never replay a spent prepared start.",
+                        lambda: self._ensure_paper_supervisor(
+                            window.cycle_id,
+                            now=now,
+                            heartbeat=heartbeat,
+                        ),
+                    ),
+                )
+            elif convergence_mode == "legacy_cycle_decision":
                 cycle_decision = timing.measure(
                     "cycle_decision",
                     lambda: self._live_tick_phase(
@@ -817,18 +879,31 @@ class DualTrackCycleRunner:
                         ),
                     ),
                 )
-            else:
+            elif convergence_mode == "disabled":
                 cycle_decision = timing.measure(
                     "cycle_decision",
                     lambda: {
                         "status": "disabled",
-                        "reason": "cycle_decision_orchestration_disabled",
+                        "reason": "cycle_convergence_disabled",
                     },
                 )
+            else:  # pragma: no cover - guarded by _convergence_mode.
+                raise ValueError("supervisor_configuration_invalid")
         except Exception as exc:
             timing.finish(status="failed", error_type=type(exc).__name__)
             raise
-        timing.finish(status="success")
+        timing.finish(
+            status="success",
+            control_actions_executed=int(
+                cycle_decision.get(
+                    "control_actions_executed",
+                    0,
+                )
+                if isinstance(cycle_decision, dict)
+                else 0
+            ),
+            control_action_scope=convergence_mode,
+        )
         return {
             "event": "live_tick",
             "as_of": now.isoformat(),
@@ -840,6 +915,139 @@ class DualTrackCycleRunner:
             "ledger_daily_count": len(ledger.get("daily") or []),
             "cycle_decision": cycle_decision,
         }
+
+    def _convergence_mode(self) -> str:
+        convergence = self.config.get("convergence")
+        if convergence is None:
+            return (
+                "legacy_cycle_decision"
+                if bool(
+                    (self.config.get("cycle_decision") or {}).get(
+                        "enabled"
+                    )
+                )
+                else "disabled"
+            )
+        if not isinstance(convergence, dict):
+            raise ValueError("supervisor_configuration_invalid")
+        mode = str(convergence.get("mode") or "")
+        if mode not in {
+            "legacy_cycle_decision",
+            "paper_supervisor",
+            "disabled",
+        }:
+            raise ValueError("supervisor_configuration_invalid")
+        legacy_enabled = bool(
+            (self.config.get("cycle_decision") or {}).get("enabled")
+        )
+        if (
+            mode == "paper_supervisor"
+            and legacy_enabled
+        ) or (
+            mode == "legacy_cycle_decision"
+            and not legacy_enabled
+        ) or (
+            mode == "disabled"
+            and legacy_enabled
+        ):
+            raise ValueError("supervisor_configuration_invalid")
+        return mode
+
+    def _ensure_paper_supervisor(
+        self,
+        cycle_id: str,
+        *,
+        now: datetime,
+        heartbeat: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run one state-driven pass through public Paper controls only."""
+
+        from pipelines.dashboard_server import (
+            build_strategy_console_control_response,
+            build_strategy_console_production_history,
+        )
+
+        convergence = dict(self.config.get("convergence") or {})
+        provider_timeout_seconds = int(
+            convergence.get("provider_timeout_seconds") or 25
+        )
+        attempt_deadline_seconds = int(
+            convergence.get("attempt_deadline_seconds") or 45
+        )
+        if (
+            provider_timeout_seconds != 25
+            or attempt_deadline_seconds != 45
+        ):
+            raise ValueError("supervisor_configuration_invalid")
+        plane = StrategyControlPlane(self.output_root)
+        execution = self.execution
+        as_of = now.isoformat()
+        actor = {
+            "type": "scheduler",
+            "id": "paper-supervisor",
+            "source": "paper_supervisor",
+        }
+
+        def invoke(
+            action: str,
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            return build_strategy_console_control_response(
+                {
+                    **dict(payload),
+                    "cycle_id": cycle_id,
+                    "as_of": as_of,
+                    "action": action,
+                },
+                output_root=self.output_root,
+                actor=actor,
+                recommendation_timeout_seconds=(
+                    provider_timeout_seconds
+                    if action == "refresh_recommendation"
+                    else None
+                ),
+            )
+
+        def accounting_reconciliation() -> str:
+            snapshot = execution.snapshot(cycle_id)
+            mark = (
+                dict(snapshot.get("mark") or {})
+                if isinstance(snapshot.get("mark"), dict)
+                else {}
+            )
+            history = build_strategy_console_production_history(
+                output_root=self.output_root,
+                mark_price=mark.get("price"),
+                mark_fresh=mark.get("fresh") is True,
+                authoritative_engine=str(
+                    getattr(execution, "name", "nautilus_paper")
+                ),
+            )
+            accounting = dict(
+                history.get("accounting_snapshot") or {}
+            )
+            reconciliation = dict(
+                accounting.get("reconciliation") or {}
+            )
+            return (
+                "pass"
+                if reconciliation.get("status") == "pass"
+                and not list(reconciliation.get("issues") or [])
+                else "drift"
+            )
+
+        return PaperSupervisor(
+            self.output_root,
+            plane=plane,
+            execution=execution,
+            control=invoke,
+            accounting_reconciliation=accounting_reconciliation,
+            attempt_deadline_seconds=attempt_deadline_seconds,
+        ).converge_once(
+            cycle_id,
+            observed_at=as_of,
+            heartbeat=heartbeat,
+        )
 
     def _ensure_cycle_decision(
         self,
@@ -1981,11 +2189,18 @@ class DualTrackCycleRunner:
         detail: dict[str, Any],
         *,
         observed_at: str | datetime | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         path = self.output_root / "dualtrack" / "runner" / f"{cycle_id}.json"
         rows = load_json(path)
-        rows.append({"ts": parse_utc(observed_at).isoformat(), "cycle_id": cycle_id, "event": event, "detail": detail})
+        row = {
+            "ts": parse_utc(observed_at).isoformat(),
+            "cycle_id": cycle_id,
+            "event": event,
+            "detail": detail,
+        }
+        rows.append(row)
         write_json(path, rows)
+        return row
 
     def _frozen_or_freeze_trend_gate(self, cycle_id: str, *, as_of: str | datetime | None = None) -> bool:
         frozen = self.machine.frozen_trend_gate_armed(cycle_id)
@@ -2301,7 +2516,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - thin C
         if args.event == "auto":
             payload = runner.auto(as_of=as_of)
         elif args.event == "live-tick":
-            payload = runner.live_tick(as_of=as_of)
+            with live_tick_hard_watchdog():
+                payload = runner.live_tick(as_of=as_of)
         elif args.event == "sync-obsidian-plan":
             payload = runner.sync_obsidian_human_plans(
                 args.cycle_id or None,

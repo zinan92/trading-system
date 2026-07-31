@@ -336,6 +336,8 @@ def test_order_reports_keep_pending_entries_and_only_materialized_protection() -
             "quantity": 0.123,
             "requested_price": 4000.0,
             "requested_quantity": 0.123456,
+            "sl": 3990.0,
+            "tp": 4010.0,
             "strategy_plan_id": "plan-1",
             "strategy_plan_version": 3,
         },

@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -101,6 +102,54 @@ def _authority(
             list(FINGERPRINTS)
             if fingerprints is None and running
             else list(fingerprints or [])
+        ),
+        accepted_order_identities=(
+            [
+                {
+                    "order_id": f"order-{index}",
+                    "fingerprint": fingerprint,
+                    "side": "buy",
+                    "quantity": "1",
+                }
+                for index, fingerprint in enumerate(
+                    list(FINGERPRINTS)
+                    if fingerprints is None and running
+                    else list(fingerprints or [])
+                )
+            ]
+        ),
+        authorized_order_identities=(
+            [
+                {
+                    "order_id": f"order-{index}",
+                    "fingerprint": fingerprint,
+                    "side": "buy",
+                    "quantity": "1",
+                }
+                for index, fingerprint in enumerate(
+                    list(FINGERPRINTS)
+                    if fingerprints is None and running
+                    else list(fingerprints or [])
+                )
+            ]
+        ),
+        open_position_identities=(
+            [
+                {
+                    "position_id": f"position-{index}",
+                    "trade_id": f"order-{index}",
+                    "entry_fill_ids": [f"fill-{index}"],
+                    "strategy_plan_id": PLAN["strategy_plan_id"],
+                    "strategy_plan_version": (
+                        PLAN["strategy_plan_version"]
+                    ),
+                    "side": "long",
+                    "entry_price": "100",
+                    "entry_quantity": "1",
+                    "order_quantity": "1",
+                }
+                for index in range(positions)
+            ]
         ),
         open_position_count=positions,
         reconciliation=(
@@ -297,6 +346,112 @@ def test_unfinished_intent_recovers_executed_only_from_all_exact_authorities(
     ] == "executed"
 
 
+def test_unfinished_intent_recovers_exact_immediate_fill_as_executed(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        _intent(lease)
+    authority = replace(
+        _authority(running=True, fingerprints=FINGERPRINTS[:2]),
+        authorized_order_identities=[
+            {
+                "order_id": f"order-{index}",
+                "fingerprint": fingerprint,
+                "side": "buy",
+                "quantity": "1",
+            }
+            for index, fingerprint in enumerate(FINGERPRINTS)
+        ],
+        open_position_identities=[
+            {
+                "position_id": "position-2",
+                "trade_id": "order-2",
+                "entry_fill_ids": ["fill-2"],
+                "strategy_plan_id": PLAN["strategy_plan_id"],
+                "strategy_plan_version": PLAN[
+                    "strategy_plan_version"
+                ],
+                "side": "long",
+                "entry_price": "100",
+                "entry_quantity": "1",
+                "order_quantity": "1",
+            }
+        ],
+        open_position_count=1,
+    )
+
+    with store.try_lease(CYCLE, holder_id="owner-b") as lease:
+        assert lease is not None
+        result = lease.recover_unfinished_intent(authority)
+
+    assert result["resolution"] == "executed"
+    assert result["orders_created_by_recovery"] == 0
+
+
+def test_unfinished_intent_never_ignores_an_extra_open_position(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        _intent(lease)
+
+    with store.try_lease(CYCLE, holder_id="owner-b") as lease:
+        assert lease is not None
+        result = lease.recover_unfinished_intent(
+            _authority(running=True, positions=1)
+        )
+
+    assert result["resolution"] == "control_outcome_unknown"
+    assert result["machine_code"] == "control_outcome_unknown"
+
+
+def test_unfinished_intent_rejects_position_direction_authority_mismatch(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        _intent(lease)
+    authority = replace(
+        _authority(running=True, fingerprints=FINGERPRINTS[:2]),
+        authorized_order_identities=[
+            {
+                "order_id": f"order-{index}",
+                "fingerprint": fingerprint,
+                "side": "buy",
+                "quantity": "1",
+            }
+            for index, fingerprint in enumerate(FINGERPRINTS)
+        ],
+        open_position_identities=[
+            {
+                "position_id": "position-2",
+                "trade_id": "order-2",
+                "entry_fill_ids": ["fill-2"],
+                "strategy_plan_id": PLAN["strategy_plan_id"],
+                "strategy_plan_version": PLAN[
+                    "strategy_plan_version"
+                ],
+                "side": "short",
+                "entry_price": "100",
+                "entry_quantity": "1",
+                "order_quantity": "1",
+            }
+        ],
+        open_position_count=1,
+    )
+
+    with store.try_lease(CYCLE, holder_id="owner-b") as lease:
+        assert lease is not None
+        result = lease.recover_unfinished_intent(authority)
+
+    assert result["resolution"] == "control_outcome_unknown"
+    assert result["machine_code"] == "control_outcome_unknown"
+
+
 def test_proven_zero_order_rejection_is_clean_but_never_replays(
     tmp_path: Path,
 ) -> None:
@@ -326,6 +481,55 @@ def test_proven_zero_order_rejection_is_clean_but_never_replays(
         "orders_created_by_recovery": 0,
     }
     assert len(result["authority_digest"]) == 64
+
+
+def test_dca_clean_rejection_allows_exactly_empty_pre_start_plan(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    dca_plan = {
+        **PLAN,
+        "strategy_type": "dca",
+        "direction": "long",
+    }
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        lease.record_start_intent(
+            attempt_id="attempt-dca-1",
+            preview_id=PREVIEW,
+            prepared_start_id=PREPARED,
+            plan_identity=dca_plan,
+            pre_start_plan_identity=None,
+            expected_order_fingerprints=FINGERPRINTS,
+        )
+    authority = StartAuthoritySnapshot(
+        cycle_id=CYCLE,
+        active_plan={},
+        runtime={
+            "actual_state": "stopped",
+            "desired_state": "stopped",
+            "strategy_plan_id": None,
+            "strategy_plan_version": None,
+            "preview_id": None,
+            "prepared_start_id": None,
+        },
+        accepted_order_fingerprints=[],
+        open_position_count=0,
+        reconciliation={"execution": "ok", "accounting": "pass"},
+        control_events=[
+            _audit(
+                result="rejected",
+                error="prepared_start_market_moved",
+            )
+        ],
+    )
+
+    with store.try_lease(CYCLE, holder_id="owner-b") as lease:
+        assert lease is not None
+        result = lease.recover_unfinished_intent(authority)
+
+    assert result["resolution"] == "clean_rejection"
+    assert result["orders_created_by_recovery"] == 0
 
 
 @pytest.mark.parametrize(
@@ -536,3 +740,152 @@ with store.try_lease({CYCLE!r}, holder_id=f"worker-{{os.getpid()}}") as lease:
         "start_intent",
         "start_result",
     ]
+
+
+def test_observation_append_rejects_deleted_middle_link(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        for index in range(3):
+            store.append_observation(
+                lease,
+                {"status": "healthy", "sequence": index + 1},
+            )
+    path = (
+        store.root
+        / "observations"
+        / f"{CYCLE}.jsonl"
+    )
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text(
+        "\n".join([lines[0], lines[2]]) + "\n",
+        encoding="utf-8",
+    )
+
+    with store.try_lease(CYCLE, holder_id="owner-b") as lease:
+        assert lease is not None
+        with pytest.raises(
+            SupervisorStoreError,
+            match="attempt_store_corrupt",
+        ):
+            store.append_observation(
+                lease,
+                {"status": "healthy", "sequence": 4},
+            )
+
+
+def test_episode_checkpoint_rejects_deleted_observation_tail(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    state = {"cycle_id": CYCLE, "mode": "ready"}
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        state = store.commit_episode_observation(
+            lease,
+            state=state,
+            payload={"status": "healthy", "sequence": 1},
+        )
+        store.commit_episode_observation(
+            lease,
+            state=state,
+            payload={"status": "healthy", "sequence": 2},
+        )
+    path = store.root / "observations" / f"{CYCLE}.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text(lines[0] + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        SupervisorStoreError,
+        match="attempt_store_corrupt",
+    ):
+        store.episode_state(CYCLE)
+
+
+def test_episode_recovers_append_when_checkpoint_write_crashes(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    original_write = store.write_episode_state
+    store.write_episode_state = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        OSError("simulated checkpoint crash")
+    )
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        with pytest.raises(OSError, match="simulated checkpoint crash"):
+            store.commit_episode_observation(
+                lease,
+                state={
+                    "cycle_id": CYCLE,
+                    "mode": "probing",
+                    "episode": {
+                        "consecutive_transient_failures": 5,
+                    },
+                },
+                payload={"status": "backing_off"},
+            )
+    store.write_episode_state = original_write
+
+    recovered = store.episode_state(CYCLE)
+
+    assert recovered is not None
+    assert recovered["mode"] == "probing"
+    assert (
+        recovered["episode"]["consecutive_transient_failures"]
+        == 5
+    )
+    assert recovered["last_observation_sha256"]
+
+
+def test_prepared_start_id_is_spent_across_cycles(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        _intent(lease)
+    next_cycle = "2026-07-31_NIGHT"
+    with store.try_lease(next_cycle, holder_id="owner-b") as lease:
+        assert lease is not None
+        with pytest.raises(
+            SupervisorStoreError,
+            match="prepared_start_id_already_spent",
+        ):
+            lease.record_start_intent(
+                attempt_id="attempt-2",
+                preview_id="grid-preview-2",
+                prepared_start_id=PREPARED,
+                plan_identity=PLAN,
+                expected_order_fingerprints=FINGERPRINTS,
+            )
+
+
+def test_recovery_rejects_receipt_ids_not_bound_to_authoritative_commands(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        _intent(lease)
+    authority = _authority(running=True)
+    forged = replace(
+        authority,
+        accepted_order_identities=[
+            {
+                "order_id": f"forged-{index}",
+                "fingerprint": fingerprint,
+                "side": "buy",
+                "quantity": "1",
+            }
+            for index, fingerprint in enumerate(FINGERPRINTS)
+        ],
+    )
+
+    with store.try_lease(CYCLE, holder_id="owner-b") as lease:
+        assert lease is not None
+        result = lease.recover_unfinished_intent(forged)
+
+    assert result is not None
+    assert result["resolution"] == "control_outcome_unknown"

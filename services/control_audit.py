@@ -155,6 +155,41 @@ def read_control_events(output_root: Path) -> list[dict[str, Any]]:
     )
 
 
+def read_control_events_strict(
+    output_root: Path,
+) -> list[dict[str, Any]]:
+    """Read the complete audit or fail closed on any malformed row."""
+
+    directory = Path(output_root) / _EVENTS_SUBDIR
+    if not directory.is_dir():
+        return []
+    events: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.jsonl")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise ValueError("attempt_store_corrupt") from exc
+        for line in lines:
+            if not line.strip():
+                raise ValueError("attempt_store_corrupt")
+            try:
+                row = json.loads(line)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise ValueError("attempt_store_corrupt") from exc
+            if (
+                not isinstance(row, dict)
+                or row.get("schema_version") != SCHEMA_VERSION
+                or _event_time(row) is None
+            ):
+                raise ValueError("attempt_store_corrupt")
+            events.append(row)
+    return sorted(
+        events,
+        key=lambda row: _event_time(row)
+        or datetime.min.replace(tzinfo=timezone.utc),
+    )
+
+
 def build_runtime_utilization(
     output_root: Path,
     *,

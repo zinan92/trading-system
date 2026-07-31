@@ -1,5 +1,112 @@
 # Decision Log
 
+## Paper Supervisor Converges From State Through Public Controls (Issue #466)
+
+Date: 2026-07-31
+
+### Decision
+
+- Run one Paper Supervisor convergence pass in the existing live-tick process,
+  strictly after the complete natural heartbeat has been persisted. Validate
+  the exact cycle, `live_tick_heartbeat` event, runner identity,
+  `ledger_refreshed=true`, non-future timestamp and 180-second freshness before
+  any control action.
+- Use one enumerated `convergence.mode` as the exclusive scheduler selector.
+  `paper_supervisor` cannot coexist with enabled legacy cycle decision;
+  contradictory or unknown configuration fails with
+  `supervisor_configuration_invalid` and calls neither coordinator.
+- Reuse only the public recommendation, plan-lock, `prepare_start` and `start`
+  paths. The Supervisor may read the configured execution adapter's snapshot
+  and reconciliation, but never calls an adapter mutation or a private control
+  method. Existing market, tick, prior-cycle, accounting, risk, manual
+  confirmation and immutable-fill gates remain authoritative.
+- Extend the public prepared-start receipt with a content-addressed intent
+  contract containing both the exact pre-start plan identity and expected
+  post-start plan identity plus the planned order fingerprints. This allows
+  the same durable intent to prove either a complete accepted start or a clean
+  zero-order rejection without guessing across the Grid plan-version change.
+- Persist per-cycle episode state and hash-linked observations beside #464's
+  start event chain. Every public start is preceded by append+fsync intent;
+  a rejected or interrupted call is resolved from strict control audit,
+  persisted runtime, exact execution fingerprints and both reconciliations.
+  The spent prepared identity is never replayed.
+- Treat typed heartbeats and pre-intent attempts as replayable WAL facts, not
+  checkpoint-only state. Fresh and missing heartbeats are appended before
+  episode projection. Every create/prepare attempt has one durable reservation
+  that advances to the same-id start intent or one exact terminal; crash
+  recovery appends one idempotent abandonment before charging one transient
+  failure. Prepared capabilities are bound to that attempt and cannot be used
+  after abandonment.
+- Bind accepted order receipt IDs to the authoritative Nautilus command
+  fingerprints. Missing/duplicate order IDs, conflicting control audits,
+  unverified replacement orders, and open positions without unique
+  position/trade/fill IDs, exact plan/version, direction, fill-weighted entry
+  price, command/order/fill quantity bounds and entry-command ancestry are
+  structural identity conflicts. Only
+  entry commands participate in start authority; target/stop/flatten commands
+  cannot invalidate or impersonate the N/N entry set.
+- Give the CLI live-tick an independent 52-second daemon watchdog. The
+  Supervisor soft deadline is the earlier of its 45-second budget and five
+  seconds before that hard deadline; the hard watchdog remains armed through
+  exception cleanup, recovery, observation fsync and lease release.
+- Keep current repository deployment configuration on
+  `legacy_cycle_decision`. This story supplies the integration path and
+  tests; #469 changes Cloud mode only after #463 provider readiness and
+  #467/#468 observability/alert work are complete.
+
+### Gotchas
+
+- Grid public start creates the next StrategyPlan version. A market-moved
+  rejection leaves the old active version untouched, while success activates
+  the new version. Recording only one plan identity made clean rejection
+  indistinguishable from an unknown outcome; the prepared intent now freezes
+  both identities.
+- `runtime_state()` is a presentation-oriented current-cycle view and omits
+  fields needed for uncertain-start recovery. Supervisor authority uses the
+  public `persisted_runtime_state()` plus exact active plan, never a Dashboard
+  projection.
+- Existing tick health accepted any latest runner row with a fresh timestamp.
+  That was too weak for convergence: a close/auto event, wrong cycle, partial
+  detail or future timestamp now creates zero Supervisor controls.
+- A structural blocker must not become a replacement absorbing state, but
+  clearing is code-specific and evidence-specific. Reconciliation, exposure,
+  heartbeat and policy blockers have exact read-only rechecks; an attended
+  running state alone never clears a blocker. Unknown/partial outcomes, order
+  identity conflicts and per-cycle caps remain non-clearable automatically.
+- A hash chain without an external tail anchor cannot detect deletion of its
+  final lines. The episode checkpoint therefore names the exact observation
+  tail, while each observation embeds the prior checkpoint state. Append-first
+  crash recovery is deterministic; middle or tail truncation fails closed.
+- A soft SIGALRM cannot also serve as the hard watchdog: a control cleanup may
+  catch the soft exception before the context restores the prior handler. The
+  hard deadline uses a separate daemon thread and direct nonzero process exit,
+  leaving SIGALRM exclusively for interruptible cleanup.
+- The timing receipt now reports Supervisor control-action count and selected
+  convergence scope instead of always claiming zero. The historical phase name
+  remains `cycle_decision` for receipt compatibility; the returned payload and
+  scope identify the selected implementation.
+- This merge does not prove the Cloud provider, health/dead-man migration,
+  deployment or 48-hour acceptance. Current production behavior remains on the
+  legacy mode until a later release story passes all existing SHA and boot
+  gates.
+- #413 remains an explicit boundary: Supervisor does not adopt a carried
+  cross-cycle open position. Such a position fails closed until the separate
+  takeover contract supplies immutable handoff lineage; this PR does not add
+  an exemption.
+
+### Verification
+
+- Focused Supervisor, store, episode, control-plane, DCA, risk-envelope,
+  live-tick, Nautilus immutable-fill, control-audit and timing suites.
+- Tests cover missing rollover evidence, no-plan creation, active-plan/stopped
+  recovery, market-moved with new preview/prepared identities, exact running
+  adoption, lease contention, pre-intent deadline, structural reconciliation,
+  structural recheck, old-cycle runtime, partial/future heartbeat and exclusive
+  scheduler mode. Adversarial cases cover partial-order deadline cleanup,
+  missing/duplicate receipt IDs, false re-arm lineage, conflicting audits,
+  cross-cycle prepared reuse, WAL crash replay, observation-tail truncation,
+  orphan prepared capabilities and a nested soft/hard deadline stall.
+
 ## Supervisor Stays in the Natural Live-Tick Process (Issue #461)
 
 Date: 2026-07-31

@@ -157,13 +157,28 @@ def test_dca_prepare_is_read_only_and_start_requires_exact_risk_acknowledgement(
             now="2026-07-22T16:01:00+00:00",
         )
 
+    # Any public start call spends its prepared capability, even a clean
+    # rejection.  A corrected acknowledgement must bind a fresh preparation.
+    prepared = plane.control(
+        CYCLE_ID,
+        "prepare_start",
+        _payload(),
+        market=_market(),
+        account={"equity": 10_000.0},
+        now="2026-07-22T16:01:01+00:00",
+    )
+    start_payload = {
+        **_payload(),
+        "prepared_start_id": prepared["prepared_start_id"],
+        "expected_preview_id": prepared["preview"]["preview_id"],
+    }
     started = plane.control(
         CYCLE_ID,
         "start",
         {**start_payload, "risk_acknowledgements": _ack(prepared["preview"])},
         market=_market(),
         account={"equity": 10_000.0},
-        now="2026-07-22T16:01:00+00:00",
+        now="2026-07-22T16:01:02+00:00",
     )
     assert started["runtime"]["strategy_type"] == "dca"
     assert started["created_orders"] == 3
@@ -172,16 +187,21 @@ def test_dca_prepare_is_read_only_and_start_requires_exact_risk_acknowledgement(
         "one_active_order_required"
     ] is True
     assert started["risk_decision"]["scope"] == "paper_only"
-    repeated = plane.control(
-        CYCLE_ID,
-        "start",
-        {**start_payload, "risk_acknowledgements": _ack(prepared["preview"])},
-        market=_market(),
-        account={"equity": 10_000.0},
-        now="2026-07-22T16:02:00+00:00",
-    )
-    assert repeated["idempotent"] is True
-    assert repeated["created_orders"] == 0
+    with pytest.raises(
+        ValueError,
+        match="prepared_start_id_already_spent",
+    ):
+        plane.control(
+            CYCLE_ID,
+            "start",
+            {
+                **start_payload,
+                "risk_acknowledgements": _ack(prepared["preview"]),
+            },
+            market=_market(),
+            account={"equity": 10_000.0},
+            now="2026-07-22T16:02:00+00:00",
+        )
 
 
 def test_dca_prepared_start_freezes_risk_envelope_identity(
