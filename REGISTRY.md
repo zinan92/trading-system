@@ -4,6 +4,36 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-31)
+- Supervisor 已完成分阶段 Cloud Paper 部署，但 48 小时验收尚未开始/尚未通过：
+  当前 Cloud source 为 `main@1f6a3fd58f673949edee5c57636987fe6f32e678`
+  （PR #498，含 #497 当前周期健康选择修复）。第一阶段 #494 部署
+  `0de65294421502aae640667f7898465677a4eddc` 保持
+  `legacy_cycle_decision`；第二阶段 #496 部署
+  `82a66a3df88cf8077ed972a4787a73c1edf288d7` 翻转为精确的
+  `convergence.mode=paper_supervisor` + `cycle_decision.enabled=false`。
+  两阶段均通过 Cloud Paper preflight、source SHA/tree、boot gate；当前
+  五个 Cloud timer（live-tick、dead-man、24h-report、self-review、backup）
+  均 enabled/active，read-model HTTP 200，Paper-only/live=false。
+- 激活后首次真实 Supervisor tick 在 5 分钟内为当前
+  `2026-07-31_DAY` 写入独立 attempt/observation；控制审计为一次
+  `prepare_start` rejected，机器码 `risk_envelope_missing`，按显式白名单
+  判为 structural，0 control actions、0 open orders、0 open positions、无
+  `control_outcome_unknown`。旧 CycleDecisionCoordinator 未被调用；当前
+  cycle 的终态是 `blocked-structural`，不是运行成功。
+- #444 backup 根因已证实为历史 root 创建的两个 `0600` 文件，不是
+  `ReadWritePaths` 或 unit 漂移；已在同一 `gridmind-backup.service`
+  （User/Group=`gridmind`）下修复属主并成功生成/校验
+  `backup-20260731T100551Z-6346d5ae`，manifest SHA256
+  `6500c382d84280dfc7fbbf59a6ba692aba264927e6189aa90a86447c04abe41e`。
+  dead-man 已端到端收到 critical fail：`fail_sent`、`delivered=true`、
+  HTTP 200；critical 同时包含 Supervisor structural blocker 与
+  2026-07-29 权威 Paper snapshot 过期导致的 execution unknown，均保持
+  fail-closed，不能把 warning 自复盘缺失当 critical。
+- 激活前基线已另存为
+  `/var/lib/gridmind/outputs/cloud/baseline/activation-20260731T110013Z.json`
+  （措辞为“激活前已观测到，后续用于归因对比；不作因果断言。”）。
+  48 小时运行率时钟不宣称通过：当前结构性风险信封缺失与权威执行快照
+  过期需先由人工按既有闸门处理；不得盲目重试或回滚。
 - #467 已在代码中完成、尚未部署或启用：每个 Supervisor tick 先以
   append+fsync 持久化唯一 claim，所有 heartbeat/pre-intent/start/terminal
   记录绑定该 claim；同一 fresh tick 重放只返回原 observation，claim 后崩溃
