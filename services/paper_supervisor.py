@@ -38,6 +38,9 @@ from services.paper_supervisor_identity import (
     open_position_identities,
     order_fingerprint,
 )
+from services.paper_supervisor_evidence import (
+    draft_running_evidence,
+)
 from services.paper_supervisor_store import (
     PaperSupervisorStore,
     StartAuthoritySnapshot,
@@ -109,6 +112,100 @@ class PaperSupervisor:
                     status="lease_held",
                     control_actions=0,
                 )
+            health = validate_complete_tick_heartbeat(
+                heartbeat,
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+            )
+            heartbeat_digest = _digest(dict(heartbeat or {}))
+            health = {
+                **dict(health),
+                "heartbeat_digest": heartbeat_digest,
+            }
+            source_tick_key, trust = self._source_tick_identity(
+                cycle_id,
+                health=health,
+            )
+            pending_tick = self.store.unfinished_tick(cycle_id)
+            if pending_tick is not None:
+                lease.resume_tick(pending_tick)
+                recovery_heartbeat = self._claim_heartbeat(
+                    pending_tick
+                )
+                if (
+                    str(
+                        pending_tick.get("source_tick_key") or ""
+                    )
+                    == source_tick_key
+                    and str(
+                        pending_tick.get("heartbeat_digest") or ""
+                    )
+                    != heartbeat_digest
+                ):
+                    state = self.store.episode_state(cycle_id)
+                    if state is None:
+                        state = self.episodes.new_cycle(
+                            cycle_id,
+                            observed_at=str(
+                                pending_tick.get("claimed_at")
+                                or observed_at
+                            ),
+                        )
+                    state = self._reconcile_operational_wal(
+                        state,
+                        cycle_id=cycle_id,
+                    )
+                    state, _ = self._reconcile_terminal_outcomes(
+                        state,
+                        cycle_id=cycle_id,
+                    )
+                    return self._structural(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        machine_code="attempt_store_corrupt",
+                        heartbeat=recovery_heartbeat,
+                    )
+                return self._recover_unfinished_tick(
+                    lease,
+                    pending_tick,
+                    cycle_id=cycle_id,
+                    observed_at=observed_at,
+                    heartbeat=recovery_heartbeat,
+                    started=started,
+                )
+            existing_observation = self.store.observation_for_tick(
+                cycle_id,
+                source_tick_key,
+            )
+            if existing_observation is not None:
+                claim = dict(
+                    (
+                        existing_observation.get("payload") or {}
+                    ).get("tick_claim")
+                    or {}
+                )
+                if claim.get("heartbeat_digest") != heartbeat_digest:
+                    return self._result(
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        status="blocked_structural",
+                        machine_code="attempt_store_corrupt",
+                        classification=STRUCTURAL,
+                        control_actions=0,
+                        heartbeat=health,
+                    )
+                return self._result_from_observation(
+                    existing_observation
+                )
+            lease.claim_tick(
+                source_tick_key=source_tick_key,
+                heartbeat_digest=heartbeat_digest,
+                trust=trust,
+                claimed_at=self.store.now().isoformat(),
+                heartbeat_recorded_at=health.get("recorded_at"),
+            )
             state = self.store.episode_state(cycle_id)
             if state is None:
                 state = self.episodes.new_cycle(
@@ -116,6 +213,10 @@ class PaperSupervisor:
                     observed_at=observed_at,
                 )
             try:
+                state = self._reconcile_operational_wal(
+                    state,
+                    cycle_id=cycle_id,
+                )
                 state, replayed_terminal_outcomes = (
                     self._reconcile_terminal_outcomes(
                         state,
@@ -142,15 +243,6 @@ class PaperSupervisor:
                     ),
                     observed_at=observed_at,
                 )
-            state = self._reconcile_operational_wal(
-                state,
-                cycle_id=cycle_id,
-            )
-            health = validate_complete_tick_heartbeat(
-                heartbeat,
-                cycle_id=cycle_id,
-                observed_at=observed_at,
-            )
             heartbeat_status = (
                 "fresh"
                 if health["status"] == "ready"
@@ -172,7 +264,7 @@ class PaperSupervisor:
                 ),
                 reason=str(health.get("reason") or "complete"),
                 heartbeat_recorded_at=health.get("recorded_at"),
-                heartbeat_digest=_digest(dict(heartbeat or {})),
+                heartbeat_digest=heartbeat_digest,
             )
             state = self._reconcile_operational_wal(
                 state,
@@ -234,7 +326,10 @@ class PaperSupervisor:
             )
             try:
                 with self._attempt_deadline(started):
-                    authority = self._authority(cycle_id)
+                    authority = self._authority(
+                        cycle_id,
+                        heartbeat=health,
+                    )
             except SupervisorAttemptDeadline as exc:
                 return self._classify_before_intent(
                     lease,
@@ -286,7 +381,27 @@ class PaperSupervisor:
                             heartbeat=health,
                             rechecked=True,
                         ),
+                        authority=authority,
                     )
+                # A recheck may clear the reason for a structural block, but
+                # it must not also create a new start intent in this tick.
+                # Persist the clearance as its own terminal observation; the
+                # next independently claimed fresh heartbeat can then begin a
+                # normal convergence attempt.
+                return self._finish(
+                    lease,
+                    state,
+                    self._result(
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        status="structural_cleared",
+                        terminal_status="structural_cleared",
+                        control_actions=0,
+                        heartbeat=health,
+                        rechecked=True,
+                    ),
+                    authority=authority,
+                )
             persisted_cycle_id = str(runtime.get("cycle_id") or "")
             if (
                 persisted_cycle_id
@@ -306,6 +421,7 @@ class PaperSupervisor:
                         "previous_cycle_paper_state_unresolved"
                     ),
                     heartbeat=health,
+                    authority=authority,
                 )
             if self._runtime_is_running(runtime):
                 try:
@@ -335,6 +451,7 @@ class PaperSupervisor:
                     observed_at=observed_at,
                     machine_code="existing_exposure_conflict",
                     heartbeat=health,
+                    authority=authority,
                 )
             if not self._reconciliation_exact(authority):
                 return self._structural(
@@ -344,6 +461,7 @@ class PaperSupervisor:
                     observed_at=observed_at,
                     machine_code="ledger_reconciliation_drift",
                     heartbeat=health,
+                    authority=authority,
                 )
             if not self.episodes.attempt_is_due(
                 state,
@@ -362,6 +480,7 @@ class PaperSupervisor:
                             state.get("episode") or {}
                         ).get("next_attempt_at"),
                     ),
+                    authority=authority,
                 )
 
             request: dict[str, Any]
@@ -484,6 +603,7 @@ class PaperSupervisor:
                     heartbeat=health,
                     preview_id=preview_id,
                     prepared_start_id=prepared_start_id,
+                    authority=authority,
                 )
             if self._deadline_exceeded(started):
                 return self._pre_intent_deadline(
@@ -501,12 +621,18 @@ class PaperSupervisor:
                 "expected_preview_id": preview_id,
                 "supervisor_attempt_id": attempt_id,
             }
+            post_authority: StartAuthoritySnapshot | None = None
+
             def operation() -> Mapping[str, Any]:
+                nonlocal post_authority
                 response = self.control("start", start_payload)
-                post = self._authority(cycle_id)
+                post_authority = self._authority(
+                    cycle_id,
+                    heartbeat=health,
+                )
                 exact = self._start_response_exact(
                     response,
-                    post,
+                    post_authority,
                     intent_contract=intent_contract,
                     preview_id=preview_id,
                     prepared_start_id=prepared_start_id,
@@ -524,7 +650,10 @@ class PaperSupervisor:
             try:
                 with self._attempt_deadline(started):
                     with production_mutation_lock(self.output_root):
-                        fresh = self._authority(cycle_id)
+                        fresh = self._authority(
+                            cycle_id,
+                            heartbeat=health,
+                        )
                         fresh_blocker = (
                             self._pre_intent_authority_blocker(
                                 fresh,
@@ -541,6 +670,7 @@ class PaperSupervisor:
                                 heartbeat=health,
                                 preview_id=preview_id,
                                 prepared_start_id=prepared_start_id,
+                                authority=fresh,
                             )
                         state, guard = (
                             self.episodes.guard_start_intent(
@@ -568,6 +698,7 @@ class PaperSupervisor:
                                     control_actions=0,
                                     heartbeat=health,
                                 ),
+                                authority=fresh,
                             )
                         terminal = lease.execute_start(
                             attempt_id=attempt_id,
@@ -647,6 +778,7 @@ class PaperSupervisor:
                         preview_id=preview_id,
                         prepared_start_id=prepared_start_id,
                     ),
+                    authority=post_authority,
                 )
             return self._finish(
                 lease,
@@ -665,7 +797,251 @@ class PaperSupervisor:
                         "expected_order_count"
                     ],
                 ),
+                authority=post_authority,
             )
+
+    @staticmethod
+    def _source_tick_identity(
+        cycle_id: str,
+        *,
+        health: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        recorded_at = str(health.get("recorded_at") or "")
+        if health.get("status") == "ready" and recorded_at:
+            digest = hashlib.sha256(
+                f"{cycle_id}|{recorded_at}".encode("utf-8")
+            ).hexdigest()
+            return f"supervisor-tick-{digest}", "fresh"
+        return (
+            f"supervisor-tick-ambiguous-{uuid.uuid4().hex}",
+            "ambiguous",
+        )
+
+    @staticmethod
+    def _claim_heartbeat(claim: Mapping[str, Any]) -> dict[str, Any]:
+        """Use durable claim facts when finishing a crashed tick.
+
+        A later live tick must never be written into the observation that
+        closes an older claim.  A legacy claim without its original heartbeat
+        timestamp is deliberately unknown rather than reconstructed.
+        """
+
+        recorded_at = claim.get("heartbeat_recorded_at")
+        digest = str(claim.get("heartbeat_digest") or "")
+        trust = str(claim.get("trust") or "")
+        return {
+            "status": (
+                "ready"
+                if trust == "fresh" and recorded_at and digest
+                else "unknown"
+            ),
+            "machine_code": None,
+            "cycle_id": None,
+            "recorded_at": recorded_at,
+            "age_seconds": None,
+            "complete": False,
+            "heartbeat_digest": digest or _digest({}),
+            "recovered_from_tick_claim": True,
+        }
+
+    @staticmethod
+    def _result_from_observation(
+        observation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = dict(observation.get("payload") or {})
+        for key in (
+            "episode",
+            "episode_snapshot",
+            "episode_events_delta",
+            "episode_state",
+            "wal_anchor",
+            "tick_claim",
+            "running_evidence",
+        ):
+            payload.pop(key, None)
+        return payload
+
+    def _recover_unfinished_tick(
+        self,
+        lease,
+        claim: Mapping[str, Any],
+        *,
+        cycle_id: str,
+        observed_at: str,
+        heartbeat: Mapping[str, Any],
+        started: float,
+    ) -> dict[str, Any]:
+        """Finish one claimed tick without starting a second attempt."""
+
+        state = self.store.episode_state(cycle_id)
+        if state is None:
+            state = self.episodes.new_cycle(
+                cycle_id,
+                observed_at=str(claim.get("claimed_at") or observed_at),
+            )
+        state = self._reconcile_operational_wal(
+            state,
+            cycle_id=cycle_id,
+        )
+        state, _ = self._reconcile_terminal_outcomes(
+            state,
+            cycle_id=cycle_id,
+        )
+        unfinished = self.store.unfinished_intent(cycle_id)
+        if unfinished is not None:
+            return self._recover_unfinished(
+                lease,
+                state,
+                unfinished=unfinished,
+                observed_at=observed_at,
+                heartbeat=heartbeat,
+                started=started,
+            )
+        pending_pre = self.store.unfinished_pre_intent(cycle_id)
+        if pending_pre is not None:
+            lease.abandon_pre_intent(
+                attempt_id=str(pending_pre["attempt_id"]),
+                observed_at=observed_at,
+            )
+        state = self._reconcile_operational_wal(
+            state,
+            cycle_id=cycle_id,
+        )
+        projection = self.store.current_state(cycle_id)
+        tick_key = str(claim.get("source_tick_key") or "")
+        attempts = [
+            dict(row)
+            for row in projection.get("attempts") or []
+            if isinstance(row, Mapping)
+            and str(
+                row.get("recovery_source_tick_key")
+                or row.get("source_tick_key")
+                or ""
+            )
+            == tick_key
+        ]
+        pre_attempts = [
+            dict(row)
+            for row in projection.get("pre_intent_attempts") or []
+            if isinstance(row, Mapping)
+            and str(
+                row.get("recovery_source_tick_key")
+                or row.get("source_tick_key")
+                or ""
+            )
+            == tick_key
+        ]
+        if len(attempts) > 1 or len(pre_attempts) > 1:
+            raise ValueError("attempt_store_corrupt")
+        if attempts:
+            attempt = attempts[0]
+            terminal = str(attempt.get("terminal_result") or "")
+            if terminal in {"accepted", "executed"}:
+                authority = self._authority(
+                    cycle_id,
+                    heartbeat=heartbeat,
+                )
+                return self._finish(
+                    lease,
+                    state,
+                    self._result(
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        status=(
+                            "executed"
+                            if terminal == "accepted"
+                            else "healthy"
+                        ),
+                        terminal_status=(
+                            "executed"
+                            if terminal == "accepted"
+                            else "adopted_existing"
+                        ),
+                        control_actions=0,
+                        heartbeat=heartbeat,
+                        recovered_attempt_id=attempt.get(
+                            "attempt_id"
+                        ),
+                        attempt_id=attempt.get("attempt_id"),
+                        preview_id=attempt.get("preview_id"),
+                        prepared_start_id=attempt.get(
+                            "prepared_start_id"
+                        ),
+                        expected_order_count=attempt.get(
+                            "expected_order_count"
+                        ),
+                    ),
+                    authority=authority,
+                )
+            if terminal == "clean_rejection":
+                classified = classify_blocker(
+                    control_code=attempt.get(
+                        "terminal_machine_code"
+                    )
+                )
+                return self._finish(
+                    lease,
+                    state,
+                    self._result(
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        status=str(
+                            state.get("mode") or "backing_off"
+                        ),
+                        machine_code=classified["machine_code"],
+                        classification=classified["classification"],
+                        control_actions=0,
+                        heartbeat=heartbeat,
+                        recovered_attempt_id=attempt.get("attempt_id"),
+                    ),
+                )
+            return self._structural(
+                lease,
+                state,
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+                machine_code=(
+                    str(attempt.get("terminal_machine_code") or "")
+                    if terminal == "unknown"
+                    else "control_outcome_unknown"
+                )
+                or "control_outcome_unknown",
+                heartbeat=heartbeat,
+            )
+        if pre_attempts:
+            pre = pre_attempts[0]
+            classification = pre.get("terminal_classification")
+            machine_code = pre.get("terminal_machine_code")
+            status = (
+                "blocked_structural"
+                if classification == STRUCTURAL
+                else str(state.get("mode") or "backing_off")
+            )
+            return self._finish(
+                lease,
+                state,
+                self._result(
+                    cycle_id=cycle_id,
+                    observed_at=observed_at,
+                    status=status,
+                    machine_code=machine_code,
+                    classification=classification,
+                    control_actions=0,
+                    heartbeat=heartbeat,
+                    recovered_attempt_id=pre.get("attempt_id"),
+                ),
+            )
+        return self._finish(
+            lease,
+            state,
+            self._result(
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+                status="recovered_no_action",
+                control_actions=0,
+                heartbeat=heartbeat,
+            ),
+        )
 
     def _create_plan(
         self,
@@ -764,7 +1140,12 @@ class PaperSupervisor:
             }
         return request
 
-    def _authority(self, cycle_id: str) -> StartAuthoritySnapshot:
+    def _authority(
+        self,
+        cycle_id: str,
+        *,
+        heartbeat: Mapping[str, Any] | None = None,
+    ) -> StartAuthoritySnapshot:
         with production_mutation_lock(self.output_root):
             plan = self.plane.active_plan(cycle_id) or {}
             runtime = self.plane.persisted_runtime_state()
@@ -785,6 +1166,17 @@ class PaperSupervisor:
                 else {}
             )
             position_identities = open_position_identities(snapshot)
+            running_evidence = self._running_evidence_for_snapshot(
+                cycle_id=cycle_id,
+                plan=plan,
+                runtime=runtime,
+                snapshot=snapshot,
+                reconciliation={
+                    "execution": "ok" if execution_ok else "drift",
+                    "accounting": accounting,
+                },
+                heartbeat=heartbeat,
+            )
             return StartAuthoritySnapshot(
                 cycle_id=cycle_id,
                 active_plan=plan_identity,
@@ -815,7 +1207,478 @@ class PaperSupervisor:
                 control_events=read_control_events_strict(
                     self.output_root
                 ),
+                running_evidence=running_evidence,
             )
+
+    def _running_evidence_for_snapshot(
+        self,
+        *,
+        cycle_id: str,
+        plan: Mapping[str, Any],
+        runtime: Mapping[str, Any],
+        snapshot: Mapping[str, Any],
+        reconciliation: Mapping[str, Any],
+        heartbeat: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        evidence_at = self.store.now().isoformat()
+        health = dict(heartbeat or {})
+        heartbeat_digest = str(
+            health.get("heartbeat_digest") or _digest({})
+        )
+        plan_identity = self._plan_identity(plan)
+        if not plan_identity:
+            return draft_running_evidence(
+                cycle_id=cycle_id,
+                evidence_at=evidence_at,
+                heartbeat_recorded_at=health.get("recorded_at"),
+                heartbeat_digest=heartbeat_digest,
+                authority_status="unknown",
+                plan_identity=None,
+                runtime=None,
+                reconciliation=None,
+            )
+        runtime_evidence = {
+            "cycle_id": str(runtime.get("cycle_id") or ""),
+            "strategy_plan_id": str(
+                runtime.get("strategy_plan_id") or ""
+            ),
+            "strategy_plan_version": int(
+                runtime.get("strategy_plan_version") or 0
+            ),
+            "desired_state": str(
+                runtime.get("desired_state") or "stopped"
+            ),
+            "actual_state": str(
+                runtime.get("actual_state") or "stopped"
+            ),
+            "accepted_order_count": int(
+                runtime.get("accepted_order_count") or 0
+            ),
+        }
+        expected_slots: list[dict[str, Any]] = []
+        current_slots: list[dict[str, Any]] = []
+        try:
+            expected = self._plan_fingerprints(
+                plan,
+                observed_at=evidence_at,
+            )
+            commands = self._authoritative_entry_command_rows(
+                cycle_id=cycle_id,
+                plan=plan_identity,
+            )
+            command_by_id = {
+                row["command_id"]: row for row in commands
+            }
+            initial_by_fingerprint = {
+                row["fingerprint"]: row
+                for row in commands
+                if row["generation"] == 1
+                and row["fingerprint"] in set(expected)
+            }
+            if (
+                len(initial_by_fingerprint) != len(expected)
+                or set(initial_by_fingerprint) != set(expected)
+            ):
+                raise ValueError(
+                    "execution_receipt_identity_invalid"
+                )
+            expected_slots = sorted(
+                (
+                    {
+                        "slot_id": row["slot_id"],
+                        "initial_command_id": row["command_id"],
+                        "expected_fingerprint": fingerprint,
+                        "authorized_commands": [
+                            self._running_evidence_command(
+                                candidate
+                            )
+                            for candidate in sorted(
+                                (
+                                    candidate
+                                    for candidate in commands
+                                    if candidate["slot_id"]
+                                    == row["slot_id"]
+                                ),
+                                key=lambda candidate: int(
+                                    candidate["generation"]
+                                ),
+                            )
+                        ],
+                    }
+                    for fingerprint, row in (
+                        initial_by_fingerprint.items()
+                    )
+                ),
+                key=lambda row: row["slot_id"],
+            )
+            lifecycle = (
+                build_grid_lifecycle_evidence(
+                    self.output_root,
+                    cycle_id=cycle_id,
+                    execution_snapshot=snapshot,
+                    reconciliation={
+                        "status": reconciliation.get("execution")
+                    },
+                )
+                if plan_identity["strategy_type"] == "grid"
+                else {}
+            )
+            accepted = accepted_order_identities(snapshot)
+            positions = open_position_identities(snapshot)
+            representatives: list[dict[str, Any]] = []
+            for row in accepted:
+                command = command_by_id.get(row["order_id"])
+                if (
+                    command is None
+                    or row["fingerprint"]
+                    != command["fingerprint"]
+                    or row["side"] != command["side"]
+                    or row["quantity"] != command["quantity"]
+                ):
+                    raise ValueError(
+                        "execution_receipt_identity_invalid"
+                    )
+                representatives.append(
+                    self._slot_representative(
+                        command=command,
+                        commands=commands,
+                        lifecycle=lifecycle,
+                        representative_kind="accepted_order",
+                        representative_id=row["order_id"],
+                        position=None,
+                    )
+                )
+            for row in positions:
+                command = command_by_id.get(row["trade_id"])
+                if (
+                    command is None
+                    or row["strategy_plan_id"]
+                    != plan_identity["strategy_plan_id"]
+                    or row["strategy_plan_version"]
+                    != plan_identity["strategy_plan_version"]
+                ):
+                    raise ValueError(
+                        "execution_receipt_identity_invalid"
+                    )
+                representatives.append(
+                    self._slot_representative(
+                        command=command,
+                        commands=commands,
+                        lifecycle=lifecycle,
+                        representative_kind="open_position",
+                        representative_id=row["trade_id"],
+                        position={
+                            "trade_id": row["trade_id"],
+                            "strategy_plan_id": row[
+                                "strategy_plan_id"
+                            ],
+                            "strategy_plan_version": row[
+                                "strategy_plan_version"
+                            ],
+                            "side": row["side"],
+                            "order_quantity": row[
+                                "order_quantity"
+                            ],
+                        },
+                    )
+                )
+            current_slots = sorted(
+                representatives,
+                key=lambda row: (
+                    row["slot_id"],
+                    row["representative_id"],
+                ),
+            )
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+        ):
+            expected_slots = []
+            current_slots = []
+        return draft_running_evidence(
+            cycle_id=cycle_id,
+            evidence_at=evidence_at,
+            heartbeat_recorded_at=health.get("recorded_at"),
+            heartbeat_digest=heartbeat_digest,
+            authority_status="available",
+            plan_identity=plan_identity,
+            runtime=runtime_evidence,
+            expected_slots=expected_slots,
+            current_slots=current_slots,
+            reconciliation={
+                "execution": str(
+                    reconciliation.get("execution") or "drift"
+                ),
+                "accounting": str(
+                    reconciliation.get("accounting") or "drift"
+                ),
+            },
+        )
+
+    def _authoritative_entry_command_rows(
+        self,
+        *,
+        cycle_id: str,
+        plan: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        commands_path = (
+            self.output_root
+            / "dualtrack"
+            / "nautilus_authoritative"
+            / "commands"
+            / f"{cycle_id}.json"
+        )
+        rows = json.loads(commands_path.read_text(encoding="utf-8"))
+        if not isinstance(rows, list):
+            raise ValueError("execution_receipt_identity_invalid")
+        selected: list[dict[str, Any]] = []
+        for raw in rows:
+            command = (
+                raw.get("command")
+                if isinstance(raw, Mapping)
+                else None
+            )
+            if (
+                not isinstance(command, Mapping)
+                or str(command.get("event") or "entry").lower()
+                != "entry"
+                or str(command.get("strategy_plan_id") or "")
+                != str(plan.get("strategy_plan_id") or "")
+                or int(
+                    command.get("strategy_plan_version") or 0
+                )
+                != int(plan.get("strategy_plan_version") or 0)
+            ):
+                continue
+            command_id = str(raw.get("command_id") or "")
+            side = str(command.get("side") or "").lower()
+            if not command_id or side not in {"buy", "sell"}:
+                raise ValueError(
+                    "execution_receipt_identity_invalid"
+                )
+            generation = int(command.get("grid_generation") or 1)
+            slot_id = str(
+                command.get("grid_line_id") or command_id
+            )
+            selected.append(
+                {
+                    "command_id": command_id,
+                    "fingerprint": order_fingerprint(command),
+                    "side": side,
+                    "quantity": _positive_number_text(
+                        command.get("quantity")
+                        or command.get("contracts")
+                    ),
+                    "price": _positive_number_text(
+                        command.get("price")
+                    ),
+                    "generation": generation,
+                    "slot_id": slot_id,
+                    "rearm_of_order_id": (
+                        str(command.get("rearm_of_order_id") or "")
+                        or None
+                    ),
+                    "economics": {
+                        "event": "entry",
+                        "symbol": str(command.get("symbol") or ""),
+                        "order_type": str(
+                            command.get("order_type") or ""
+                        ).lower(),
+                        "notional": _positive_number_text(
+                            command.get("notional")
+                        ),
+                        "sl": _positive_number_text(
+                            command.get("sl")
+                        ),
+                        "tp": _optional_positive_number_text(
+                            command.get("tp")
+                        ),
+                        "strategy_plan_id": str(
+                            command.get("strategy_plan_id") or ""
+                        ),
+                        "strategy_plan_version": int(
+                            command.get(
+                                "strategy_plan_version"
+                            )
+                            or 0
+                        ),
+                    },
+                }
+            )
+        ids = [row["command_id"] for row in selected]
+        if len(ids) != len(set(ids)):
+            raise ValueError("execution_receipt_identity_invalid")
+        self._validate_authoritative_rearm_topology(selected)
+        return selected
+
+    @staticmethod
+    def _validate_authoritative_rearm_topology(
+        commands: list[dict[str, Any]],
+    ) -> None:
+        """Reject descendants that try to escape their initial Grid slot."""
+
+        by_id = {row["command_id"]: row for row in commands}
+        generations_by_slot: dict[str, set[int]] = {}
+        for row in commands:
+            slot_id = str(row["slot_id"])
+            generation = int(row["generation"])
+            parent_id = row.get("rearm_of_order_id")
+            if generation < 1:
+                raise ValueError("execution_receipt_identity_invalid")
+            if generation == 1:
+                if parent_id is not None:
+                    raise ValueError("execution_receipt_identity_invalid")
+            else:
+                parent = by_id.get(str(parent_id or ""))
+                if (
+                    parent is None
+                    or int(parent["generation"]) != generation - 1
+                    or str(parent["slot_id"]) != slot_id
+                    or parent["side"] != row["side"]
+                    or parent["quantity"] != row["quantity"]
+                    or parent["price"] != row["price"]
+                    or parent["economics"] != row["economics"]
+                ):
+                    raise ValueError("execution_receipt_identity_invalid")
+            seen = generations_by_slot.setdefault(slot_id, set())
+            if generation in seen:
+                raise ValueError("execution_receipt_identity_invalid")
+            seen.add(generation)
+        for generations in generations_by_slot.values():
+            if generations != set(range(1, max(generations) + 1)):
+                raise ValueError("execution_receipt_identity_invalid")
+
+    @staticmethod
+    def _running_evidence_command(
+        command: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "command_id": str(command["command_id"]),
+            "fingerprint": str(command["fingerprint"]),
+            "side": str(command["side"]),
+            "quantity": str(command["quantity"]),
+            "price": str(command["price"]),
+            "generation": int(command["generation"]),
+            "economics": dict(command["economics"]),
+        }
+
+    @staticmethod
+    def _slot_representative(
+        *,
+        command: Mapping[str, Any],
+        commands: list[dict[str, Any]],
+        lifecycle: Mapping[str, Any],
+        representative_kind: str,
+        representative_id: str,
+        position: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        slot_id = str(command["slot_id"])
+        generation = int(command["generation"])
+        slot_commands = [
+            row for row in commands if row["slot_id"] == slot_id
+        ]
+        max_generation = max(
+            int(row["generation"]) for row in slot_commands
+        )
+        if generation != max_generation:
+            raise ValueError("execution_receipt_identity_invalid")
+        lineage = sorted(
+            (
+                row for row in slot_commands
+            ),
+            key=lambda row: int(row["generation"]),
+        )
+        if [row["generation"] for row in lineage] != list(
+            range(1, generation + 1)
+        ):
+            raise ValueError("execution_receipt_identity_invalid")
+        root = lineage[0]
+        if any(
+            row["side"] != root["side"]
+            or row["quantity"] != root["quantity"]
+            or row["price"] != root["price"]
+            or row["economics"] != root["economics"]
+            for row in lineage[1:]
+        ):
+            raise ValueError("execution_receipt_identity_invalid")
+        packages = {
+            (
+                str(row.get("line_id") or ""),
+                int(row.get("generation") or 0),
+            ): dict(row)
+            for row in lifecycle.get("lines") or []
+            if isinstance(row, Mapping)
+        }
+        ancestry: list[dict[str, Any]] = []
+        for index, row in enumerate(lineage):
+            if index == 0:
+                ancestry.append(
+                    {
+                        "generation": 1,
+                        "command_id": row["command_id"],
+                        "rearm_of_order_id": None,
+                        "lifecycle_status": "initial",
+                        "reorder_order_id": None,
+                    }
+                )
+                continue
+            previous = lineage[index - 1]
+            package = packages.get(
+                (slot_id, int(previous["generation"]))
+            )
+            if (
+                row.get("rearm_of_order_id")
+                != previous["command_id"]
+                or package is None
+                or package.get("status")
+                != "completed_rearmed"
+                or str(
+                    (package.get("reorder") or {}).get(
+                        "order_id"
+                    )
+                    or ""
+                )
+                != row["command_id"]
+            ):
+                raise ValueError(
+                    "execution_receipt_identity_invalid"
+                )
+            ancestry[-1]["lifecycle_status"] = (
+                "completed_rearmed"
+            )
+            ancestry[-1]["reorder_order_id"] = row[
+                "command_id"
+            ]
+            ancestry.append(
+                {
+                    "generation": int(row["generation"]),
+                    "command_id": row["command_id"],
+                    "rearm_of_order_id": row.get(
+                        "rearm_of_order_id"
+                    ),
+                    "lifecycle_status": "active",
+                    "reorder_order_id": None,
+                }
+            )
+        return {
+            "slot_id": slot_id,
+            "representative_kind": representative_kind,
+            "representative_id": representative_id,
+            "command": {
+                "command_id": command["command_id"],
+                "fingerprint": command["fingerprint"],
+                "side": command["side"],
+                "quantity": command["quantity"],
+                "price": command["price"],
+                "generation": generation,
+                "economics": dict(command["economics"]),
+            },
+            "ancestry": ancestry,
+            "position": dict(position) if position else None,
+        }
 
     def _adopt_or_block(
         self,
@@ -984,6 +1847,7 @@ class PaperSupervisor:
                 observed_at=observed_at,
                 machine_code="order_identity_conflict",
                 heartbeat=heartbeat,
+                authority=authority,
             )
         return self._finish(
             lease,
@@ -997,6 +1861,7 @@ class PaperSupervisor:
                 heartbeat=heartbeat,
                 expected_order_count=len(expected),
             ),
+            authority=authority,
         )
 
     def _recover_unfinished(
@@ -1026,7 +1891,10 @@ class PaperSupervisor:
             # snapshot between read and recovery fsync.
             with self._attempt_deadline(started):
                 with production_mutation_lock(self.output_root):
-                    authority = self._authority(cycle_id)
+                    authority = self._authority(
+                        cycle_id,
+                        heartbeat=heartbeat,
+                    )
                     resolution = lease.recover_unfinished_intent(
                         authority
                     )
@@ -1086,6 +1954,7 @@ class PaperSupervisor:
                         "attempt_id"
                     ),
                 ),
+                authority=authority,
             )
         if resolution["resolution"] == "clean_rejection":
             classified = classify_blocker(
@@ -1118,6 +1987,7 @@ class PaperSupervisor:
                         "attempt_id"
                     ),
                 ),
+                authority=authority,
             )
         state = self.episodes.record_dangerous_outcome(
             state,
@@ -1144,6 +2014,7 @@ class PaperSupervisor:
                     "attempt_id"
                 ),
             ),
+            authority=authority,
         )
 
     def _classify_before_intent(
@@ -1313,6 +2184,7 @@ class PaperSupervisor:
         observed_at: str,
         machine_code: str,
         heartbeat: Mapping[str, Any],
+        authority: StartAuthoritySnapshot | None = None,
         **detail: Any,
     ) -> dict[str, Any]:
         classified = classify_blocker(control_code=machine_code)
@@ -1348,6 +2220,7 @@ class PaperSupervisor:
                 heartbeat=heartbeat,
                 **detail,
             ),
+            authority=authority,
         )
 
     def _finish(
@@ -1355,6 +2228,8 @@ class PaperSupervisor:
         lease,
         state: dict[str, Any],
         result: dict[str, Any],
+        *,
+        authority: StartAuthoritySnapshot | None = None,
     ) -> dict[str, Any]:
         pending = self.store.unfinished_pre_intent(
             str(result["cycle_id"])
@@ -1371,6 +2246,33 @@ class PaperSupervisor:
                 state,
                 cycle_id=str(result["cycle_id"]),
             )
+        running_evidence = (
+            dict(authority.running_evidence)
+            if (
+                authority is not None
+                and isinstance(
+                    authority.running_evidence,
+                    Mapping,
+                )
+            )
+            else draft_running_evidence(
+                cycle_id=str(result["cycle_id"]),
+                evidence_at=self.store.now().isoformat(),
+                heartbeat_recorded_at=dict(
+                    result.get("heartbeat") or {}
+                ).get("recorded_at"),
+                heartbeat_digest=str(
+                    dict(result.get("heartbeat") or {}).get(
+                        "heartbeat_digest"
+                    )
+                    or _digest({})
+                ),
+                authority_status="unknown",
+                plan_identity=None,
+                runtime=None,
+                reconciliation=None,
+            )
+        )
         self.store.commit_episode_observation(
             lease,
             state=state,
@@ -1389,6 +2291,7 @@ class PaperSupervisor:
                         "alert_required"
                     ),
                 },
+                "running_evidence": running_evidence,
             },
         )
         return result
@@ -2202,3 +3105,9 @@ def _positive_number_text(value: Any) -> str:
     if not parsed.is_finite() or parsed <= 0:
         raise ValueError("execution_receipt_identity_invalid")
     return format(parsed.normalize(), "f")
+
+
+def _optional_positive_number_text(value: Any) -> str | None:
+    if value in {None, ""}:
+        return None
+    return _positive_number_text(value)

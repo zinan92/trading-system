@@ -12721,3 +12721,67 @@ auditable datafeed port; broker execution remains a separate port.
   envelope and `risk_confirmation_required`, A-to-B prepared-envelope
   rejection, pre-activation proposal-digest conflict, and Python/browser DCA
   smart-fill parity.
+
+# 2026-07-31 — Supervisor observations are the only runtime proof (Issue #467)
+
+## Decision
+
+- Every convergence tick first appends and fsyncs a unique `tick_claimed`
+  record. All heartbeat, pre-intent, start-intent and terminal rows bind that
+  claim. A repeated fresh tick returns its original immutable observation;
+  an unfinished claim is recovered or abandoned without issuing a new start.
+- A terminal observation binds the exact event-WAL tail and tick-claim
+  sequence/hash. The episode payload is a bounded snapshot plus incremental
+  event delta, so the append-only chain remains recoverable without copying the
+  entire episode history into every row.
+- `RunningEvidenceV1` stores primitives, not a trusted boolean. The store owns
+  `persisted_at`, recomputes `running_proven` on write, and the reader recomputes
+  it again from exact cycle/plan/runtime identity, fresh heartbeat, both
+  reconciliations, logical slot bijection and complete Grid re-arm ancestry.
+- Rolling 24h/7d utilization reads only Supervisor observation evidence.
+  Running time is counted only between adjacent observations at most 120
+  seconds apart when both endpoints independently prove the same cycle, plan
+  and logical slot set. Missing, unknown, cross-cycle, stale or unproven
+  intervals count as zero. There is no head/tail or control-event
+  extrapolation.
+- A window remains `insufficient` until it has a real head anchor, a tail no
+  older than 120 seconds, no interior evidence gap and no corrupt source
+  chain. The conservative zero accounting remains visible for diagnosis, but
+  no percentage is promoted as complete before those conditions hold.
+- The canonical read-model and Dashboard expose the current cycle attempt
+  count and complete immutable event/attempt/observation history. This surface
+  is read-only and has no control endpoint.
+
+## Gotchas
+
+- A crashed tick is completed only against its original durable claim facts.
+  A later fresh heartbeat is never imported into that observation; missing
+  original heartbeat facts are explicitly `unknown` rather than reconstructed.
+  Recovery never calls `start`.
+- A structural recheck that clears its blocker records a zero-action
+  `structural_cleared` observation and returns. Only the next independently
+  claimed fresh tick may create a new start intent.
+- Likewise, a pre-intent reservation left by a crash may be abandoned by a
+  later claimed tick. Requiring the old and new claim IDs to match would turn a
+  safe crash recovery into a structural store failure.
+- Existing accepted-order count alone does not prove the strategy is running.
+  Grid slots can move from an initial order to a re-arm order or open position;
+  proof therefore follows the complete command ancestry back to one unique
+  initial slot and rejects duplicates or identity gaps.
+- A control audit saying `actual_state=running` is an action receipt, not
+  continuous runtime evidence. The old control-event utilization projector was
+  removed rather than retained as a fallback.
+- This story does not change health severity, activate the Supervisor, deploy
+  Cloud code or satisfy the 48-hour acceptance criterion.
+
+## Verification
+
+- Focused evidence, store, convergence and utilization suites cover forged
+  proof rejection, stale heartbeat/persist lag, wrong-plan positions,
+  stale/economically changed re-arms, same-tick idempotency,
+  claim-without-observation recovery, no second start, corrupt or deleted
+  observation fail-closed behavior, zero-valued gaps and the explicit
+  prohibition on control-event extrapolation.
+- A real Chromium test opens the Supervisor tab and verifies all attempt,
+  preview, prepared-start and observation-chain rows are visible. Screenshot:
+  [`docs/evidence/issue-467/issue-467-supervisor-history.png`](docs/evidence/issue-467/issue-467-supervisor-history.png).

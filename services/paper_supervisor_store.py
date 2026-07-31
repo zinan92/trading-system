@@ -13,6 +13,7 @@ import json
 import os
 import socket
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -20,6 +21,12 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
+
+from services.paper_supervisor_evidence import (
+    RunningEvidenceError,
+    finalize_running_evidence,
+    validate_running_evidence,
+)
 
 
 EVENT_SCHEMA_VERSION = "paper-supervisor-convergence-event-v1"
@@ -29,6 +36,7 @@ AUTHORITY_SCHEMA_VERSION = "paper-supervisor-start-authority-v1"
 OBSERVATION_SCHEMA_VERSION = "paper-supervisor-observation-v1"
 _EVENT_TYPES = frozenset(
     {
+        "tick_claimed",
         "typed_heartbeat_observed",
         "pre_intent_attempt_started",
         "pre_intent_prepare_succeeded",
@@ -39,6 +47,7 @@ _EVENT_TYPES = frozenset(
         "recovery_result",
     }
 )
+_TICK_TRUST = frozenset({"fresh", "ambiguous"})
 _RESULTS = frozenset({"accepted", "rejected", "unknown"})
 _RECOVERY_RESULTS = frozenset(
     {"executed", "clean_rejection", "control_outcome_unknown"}
@@ -48,6 +57,10 @@ _PRE_INTENT_RESULTS = frozenset(
 )
 _CYCLE_SUFFIXES = ("_DAY", "_NIGHT")
 _UNSET = object()
+MAX_OBSERVATION_LINE_BYTES = 1_048_576
+MAX_OBSERVATIONS_PER_CYCLE = 10_000
+MAX_OBSERVATION_CYCLE_BYTES = 256 * 1024 * 1024
+STABLE_READ_ATTEMPTS = 3
 
 
 class SupervisorStoreError(RuntimeError):
@@ -72,6 +85,7 @@ class StartAuthoritySnapshot:
     accepted_order_identities: Sequence[Mapping[str, str]] = ()
     authorized_order_identities: Sequence[Mapping[str, str]] = ()
     open_position_identities: Sequence[Mapping[str, Any]] = ()
+    running_evidence: Mapping[str, Any] | None = None
     schema_version: str = AUTHORITY_SCHEMA_VERSION
 
     def as_dict(self) -> dict[str, Any]:
@@ -95,6 +109,11 @@ class StartAuthoritySnapshot:
             "open_position_count": self.open_position_count,
             "reconciliation": dict(self.reconciliation),
             "control_events": [dict(row) for row in self.control_events],
+            "running_evidence": (
+                dict(self.running_evidence)
+                if isinstance(self.running_evidence, Mapping)
+                else None
+            ),
         }
 
 
@@ -155,6 +174,9 @@ class PaperSupervisorStore:
                 holder_id=holder,
                 acquired_at=_utc(self.now()).isoformat(),
                 lock_inode=int(os.fstat(descriptor).st_ino),
+                source_tick_key=None,
+                source_tick_claim_sequence=None,
+                source_tick_claim_sha256=None,
             )
             self._write_lease_projection(lease, status="held")
             try:
@@ -176,10 +198,9 @@ class PaperSupervisorStore:
         path = self._events_path(cycle)
         if not path.exists():
             return []
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            raise SupervisorStoreError("attempt_store_corrupt") from exc
+        if path.is_symlink() or not path.is_file():
+            raise SupervisorStoreError("attempt_store_corrupt")
+        lines = _stable_jsonl_lines(path)
         events: list[dict[str, Any]] = []
         previous_hash: str | None = None
         for expected_sequence, line in enumerate(lines, start=1):
@@ -200,15 +221,104 @@ class PaperSupervisorStore:
         _project(events, cycle_id=cycle)
         return events
 
-    def current_state(self, cycle_id: str) -> dict[str, Any]:
-        """Return deterministic state; reject a divergent projection."""
+    def read_cycle_snapshot(
+        self,
+        cycle_id: str,
+    ) -> dict[str, Any]:
+        """Return one mutually consistent event/observation/state prefix."""
 
         cycle = _cycle_id(cycle_id)
-        events = self.events(cycle)
-        projected = _project(events, cycle_id=cycle)
-        path = self._state_path(cycle)
+        for _attempt in range(STABLE_READ_ATTEMPTS):
+            observations: list[dict[str, Any]] | None = None
+            events = self.events(cycle)
+            event_tail = _event_tail_identity(events)
+            try:
+                observations = self._observations(
+                    cycle,
+                    events=events,
+                )
+                observation_tail = _observation_tail_identity(
+                    observations
+                )
+                self._validate_state_projection(
+                    cycle,
+                    events=events,
+                )
+                self._validate_episode_checkpoint(
+                    cycle,
+                    observations=observations,
+                )
+            except SupervisorStoreError:
+                if self._snapshot_tails_changed(
+                    cycle,
+                    event_tail=event_tail,
+                    observation_tail=(
+                        _observation_tail_identity(observations)
+                        if observations is not None
+                        else None
+                    ),
+                ):
+                    time.sleep(0.005)
+                    continue
+                raise
+            if self._snapshot_tails_changed(
+                cycle,
+                event_tail=event_tail,
+                observation_tail=observation_tail,
+            ):
+                time.sleep(0.005)
+                continue
+            return {
+                "cycle_id": cycle,
+                "events": events,
+                "state": _project(events, cycle_id=cycle),
+                "observations": observations,
+            }
+        raise SupervisorStoreError("attempt_store_busy")
+
+    def _snapshot_tails_changed(
+        self,
+        cycle_id: str,
+        *,
+        event_tail: tuple[int, str | None],
+        observation_tail: tuple[int, str | None] | None,
+    ) -> bool:
+        """Detect any append while a whole snapshot was being read."""
+
+        events = self.events(cycle_id)
+        if _event_tail_identity(events) != event_tail:
+            return True
+        try:
+            observations = self._observations(
+                cycle_id,
+                events=events,
+            )
+        except SupervisorStoreError:
+            # A writer may have appended an event and its anchored
+            # observation between these two reads.  Re-check the event tail
+            # before treating the cross-prefix validation error as corruption.
+            if _event_tail_identity(self.events(cycle_id)) != event_tail:
+                return True
+            raise
+        return (
+            observation_tail is None
+            or _observation_tail_identity(observations)
+            != observation_tail
+        )
+
+    def _validate_state_projection(
+        self,
+        cycle_id: str,
+        *,
+        events: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Keep a truncated WAL from masquerading as an empty history."""
+
+        path = self._state_path(cycle_id)
         if not path.exists():
-            return projected
+            return
+        if path.is_symlink() or not path.is_file():
+            raise SupervisorStoreError("attempt_store_corrupt")
         try:
             stored = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, TypeError) as exc:
@@ -216,9 +326,172 @@ class PaperSupervisorStore:
         _validate_stored_state(
             stored,
             events=events,
-            cycle_id=cycle,
+            cycle_id=cycle_id,
+        )
+
+    def _validate_episode_checkpoint(
+        self,
+        cycle_id: str,
+        *,
+        observations: Sequence[Mapping[str, Any]],
+    ) -> None:
+        path = self._episode_path(cycle_id)
+        if not path.exists():
+            return
+        if path.is_symlink() or not path.is_file():
+            raise SupervisorStoreError("attempt_store_corrupt")
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            raise SupervisorStoreError("attempt_store_corrupt") from exc
+        if (
+            not isinstance(stored, dict)
+            or str(stored.get("cycle_id") or "") != cycle_id
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
+        anchor = str(
+            stored.get("last_observation_sha256") or ""
+        )
+        hashes = {
+            str(row.get("observation_sha256") or "")
+            for row in observations
+        }
+        if anchor and anchor not in hashes:
+            raise SupervisorStoreError("attempt_store_corrupt")
+
+    @staticmethod
+    def project_event_prefix(
+        cycle_id: str,
+        events: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Validate and project a caller-selected immutable event prefix."""
+
+        cycle = _cycle_id(cycle_id)
+        previous_hash: str | None = None
+        rows: list[dict[str, Any]] = []
+        for expected_sequence, raw in enumerate(events, start=1):
+            row = _json_object(raw, "attempt_store_corrupt")
+            _validate_event(
+                row,
+                cycle_id=cycle,
+                expected_sequence=expected_sequence,
+                previous_hash=previous_hash,
+            )
+            rows.append(row)
+            previous_hash = str(row["event_sha256"])
+        return _project(rows, cycle_id=cycle)
+
+    def current_state(self, cycle_id: str) -> dict[str, Any]:
+        """Return deterministic state; reject a divergent projection."""
+
+        cycle = _cycle_id(cycle_id)
+        events = self.events(cycle)
+        projected = _project(events, cycle_id=cycle)
+        self._validate_state_projection(
+            cycle,
+            events=events,
         )
         return projected
+
+    def observations(
+        self,
+        cycle_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return one complete, strictly validated observation chain."""
+
+        return self._observations(cycle_id)
+
+    def observation_cycle_ids(self) -> list[str]:
+        """Return stable observation filenames; reject aliases and symlinks."""
+
+        directory = self.root / "observations"
+        if not directory.exists():
+            return []
+        if not directory.is_dir() or directory.is_symlink():
+            raise SupervisorStoreError("attempt_store_corrupt")
+        previous: tuple[str, ...] | None = None
+        for _attempt in range(STABLE_READ_ATTEMPTS):
+            try:
+                entries = tuple(
+                    sorted(
+                        path.name
+                        for path in directory.iterdir()
+                    )
+                )
+            except OSError as exc:
+                raise SupervisorStoreError(
+                    "attempt_store_corrupt"
+                ) from exc
+            if previous is not None and entries == previous:
+                break
+            previous = entries
+            time.sleep(0.005)
+        else:
+            raise SupervisorStoreError("attempt_store_busy")
+        cycle_ids: list[str] = []
+        for name in previous or ():
+            path = directory / name
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or not name.endswith(".jsonl")
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            cycle = _cycle_id(name[:-6])
+            if name != f"{cycle}.jsonl":
+                raise SupervisorStoreError("attempt_store_corrupt")
+            cycle_ids.append(cycle)
+        return cycle_ids
+
+    def observation_for_tick(
+        self,
+        cycle_id: str,
+        source_tick_key: str,
+    ) -> dict[str, Any] | None:
+        key = _identity(
+            source_tick_key,
+            "supervisor_tick_key_invalid",
+        )
+        matches = [
+            row
+            for row in self._observations(cycle_id)
+            if str(
+                ((row.get("payload") or {}).get("tick_claim") or {}).get(
+                    "source_tick_key"
+                )
+                or ""
+            )
+            == key
+        ]
+        if len(matches) > 1:
+            raise SupervisorStoreError("attempt_store_corrupt")
+        return dict(matches[0]) if matches else None
+
+    def unfinished_tick(
+        self,
+        cycle_id: str,
+    ) -> dict[str, Any] | None:
+        """Join WAL claims to terminal observations without mutating either."""
+
+        state = self.current_state(cycle_id)
+        observations = self._observations(cycle_id)
+        terminal_claims = {
+            int(claim["claim_sequence"])
+            for row in observations
+            for claim in [
+                dict((row.get("payload") or {}).get("tick_claim") or {})
+            ]
+            if isinstance(claim.get("claim_sequence"), int)
+        }
+        unfinished = [
+            dict(row)
+            for row in state.get("tick_claims") or []
+            if int(row.get("claim_sequence") or 0)
+            not in terminal_claims
+        ]
+        if len(unfinished) > 1:
+            raise SupervisorStoreError("attempt_store_corrupt")
+        return unfinished[0] if unfinished else None
 
     def unfinished_intent(self, cycle_id: str) -> dict[str, Any] | None:
         state = self.current_state(cycle_id)
@@ -257,13 +530,6 @@ class PaperSupervisorStore:
             ):
                 raise SupervisorStoreError("attempt_store_corrupt")
             return stored
-        tail = observations[-1]
-        tail_hash = str(tail["observation_sha256"])
-        if (
-            stored is not None
-            and stored.get("last_observation_sha256") == tail_hash
-        ):
-            return stored
         stored_anchor = (
             str(stored.get("last_observation_sha256") or "")
             if stored is not None
@@ -274,18 +540,11 @@ class PaperSupervisorStore:
         }
         if stored_anchor and stored_anchor not in chain_hashes:
             raise SupervisorStoreError("attempt_store_corrupt")
-        embedded = (tail.get("payload") or {}).get("episode_state")
-        if (
-            not isinstance(embedded, dict)
-            or str(embedded.get("cycle_id") or "") != cycle
-            or str(embedded.get("last_observation_sha256") or "")
-            != str(tail.get("previous_observation_sha256") or "")
-        ):
-            raise SupervisorStoreError("attempt_store_corrupt")
-        return {
-            **embedded,
-            "last_observation_sha256": tail_hash,
-        }
+        return _reconstruct_episode_state(
+            cycle_id=cycle,
+            stored=stored,
+            observations=observations,
+        )
 
     def write_episode_state(
         self,
@@ -318,8 +577,9 @@ class PaperSupervisorStore:
         """Append the authority first, then checkpoint its exact tail.
 
         If the process dies between these writes, ``episode_state`` recovers
-        the state embedded in the append-only observation.  A truncated tail
-        can no longer look valid because the checkpoint names its exact hash.
+        the compact snapshot plus event delta embedded in the append-only
+        observation.  A truncated tail can no longer look valid because the
+        checkpoint names its exact hash.
         """
 
         lease._require_active(self)
@@ -339,6 +599,76 @@ class PaperSupervisorStore:
             != current_tail
         ):
             raise SupervisorStoreError("attempt_store_corrupt")
+        events = self.events(lease.cycle_id)
+        wal_anchor = {
+            "event_sequence": len(events),
+            "event_sha256": (
+                str(events[-1]["event_sha256"])
+                if events
+                else None
+            ),
+        }
+        claim = None
+        if lease.source_tick_key is not None:
+            claim_sequence = lease.source_tick_claim_sequence
+            if (
+                not isinstance(claim_sequence, int)
+                or claim_sequence < 1
+                or claim_sequence > len(events)
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            claim_event = events[claim_sequence - 1]
+            if (
+                claim_event.get("event_type") != "tick_claimed"
+                or str(
+                    (claim_event.get("payload") or {}).get(
+                        "source_tick_key"
+                    )
+                    or ""
+                )
+                != lease.source_tick_key
+                or str(claim_event.get("event_sha256") or "")
+                != lease.source_tick_claim_sha256
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            claim = {
+                "source_tick_key": lease.source_tick_key,
+                "claim_sequence": claim_sequence,
+                "claim_event_sha256": (
+                    lease.source_tick_claim_sha256
+                ),
+                "heartbeat_digest": (
+                    claim_event.get("payload") or {}
+                ).get("heartbeat_digest"),
+                "heartbeat_recorded_at": (
+                    claim_event.get("payload") or {}
+                ).get("heartbeat_recorded_at"),
+                "trust": (
+                    claim_event.get("payload") or {}
+                ).get("trust"),
+            }
+        prior_event_count = _observation_episode_event_count(
+            observations[-1] if observations else None
+        )
+        episode_events = episode.get("events", [])
+        if (
+            not isinstance(episode_events, list)
+            or prior_event_count < 0
+            or prior_event_count > len(episode_events)
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
+        episode_snapshot = {
+            key: value
+            for key, value in episode.items()
+            if key not in {"events", "last_observation_sha256"}
+        }
+        episode_snapshot["event_count"] = len(episode_events)
+        episode_snapshot["event_tail_digest"] = (
+            str(episode_events[-1].get("event_digest") or "")
+            if episode_events
+            else None
+        )
+        episode_events_delta = episode_events[prior_event_count:]
         observation = self.append_observation(
             lease,
             {
@@ -346,7 +676,10 @@ class PaperSupervisorStore:
                     payload,
                     "supervisor_event_payload_invalid",
                 ),
-                "episode_state": episode,
+                "wal_anchor": wal_anchor,
+                "tick_claim": claim,
+                "episode_snapshot": episode_snapshot,
+                "episode_events_delta": episode_events_delta,
             },
         )
         committed = {
@@ -371,6 +704,21 @@ class PaperSupervisorStore:
             "supervisor_event_payload_invalid",
         )
         recorded_at = _utc(self.now()).isoformat()
+        if "running_evidence" in detail:
+            try:
+                detail["running_evidence"] = (
+                    finalize_running_evidence(
+                        _json_object(
+                            detail["running_evidence"],
+                            "supervisor_event_payload_invalid",
+                        ),
+                        persisted_at=recorded_at,
+                    )
+                )
+            except RunningEvidenceError as exc:
+                raise SupervisorStoreError(
+                    "supervisor_event_payload_invalid"
+                ) from exc
         path = (
             self.root
             / "observations"
@@ -378,9 +726,12 @@ class PaperSupervisorStore:
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         observations = self._observations(lease.cycle_id)
+        if len(observations) >= MAX_OBSERVATIONS_PER_CYCLE:
+            raise SupervisorStoreError("attempt_store_capacity_exceeded")
         previous = observations[-1] if observations else None
         observation = {
             "schema_version": OBSERVATION_SCHEMA_VERSION,
+            "sequence": len(observations) + 1,
             "observation_id": f"supervisor-observation-{uuid.uuid4().hex}",
             "recorded_at": recorded_at,
             "cycle_id": lease.cycle_id,
@@ -394,9 +745,23 @@ class PaperSupervisorStore:
         }
         observation["observation_sha256"] = _digest(observation)
         line = _canonical(observation) + "\n"
+        encoded = line.encode("utf-8")
+        existing_size = path.stat().st_size if path.exists() else 0
+        if (
+            len(encoded) > MAX_OBSERVATION_LINE_BYTES
+            or existing_size + len(encoded)
+            > MAX_OBSERVATION_CYCLE_BYTES
+        ):
+            raise SupervisorStoreError("attempt_store_capacity_exceeded")
         try:
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
+            descriptor = os.open(
+                path,
+                os.O_CREAT | os.O_APPEND | os.O_WRONLY,
+                0o600,
+            )
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "ab") as handle:
+                handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
             _fsync_directory(path.parent)
@@ -416,6 +781,8 @@ class PaperSupervisorStore:
     def _observations(
         self,
         cycle_id: str,
+        *,
+        events: Sequence[Mapping[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Validate one bounded 12h cycle chain."""
 
@@ -423,15 +790,22 @@ class PaperSupervisorStore:
         path = self.root / "observations" / f"{cycle}.jsonl"
         if not path.exists():
             return []
+        if path.is_symlink() or not path.is_file():
+            raise SupervisorStoreError("attempt_store_corrupt")
         previous: dict[str, Any] | None = None
         observations: list[dict[str, Any]] = []
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            raise SupervisorStoreError("attempt_store_corrupt") from exc
-        for line in lines:
-            if not line.strip():
-                raise SupervisorStoreError("attempt_store_corrupt")
+        lines = _stable_jsonl_lines(path)
+        if len(lines) > MAX_OBSERVATIONS_PER_CYCLE:
+            raise SupervisorStoreError("attempt_store_capacity_exceeded")
+        event_rows = (
+            [dict(row) for row in events]
+            if events is not None
+            else self.events(cycle)
+        )
+        source_tick_keys: set[str] = set()
+        prior_episode_event_count = 0
+        prior_episode_event_tail: str | None = None
+        for expected_sequence, line in enumerate(lines, start=1):
             try:
                 row = json.loads(line)
             except (json.JSONDecodeError, TypeError) as exc:
@@ -455,7 +829,7 @@ class PaperSupervisorStore:
                     row.get("lease_id"),
                     "attempt_store_corrupt",
                 )
-                _json_object(
+                payload = _json_object(
                     row.get("payload"),
                     "attempt_store_corrupt",
                 )
@@ -471,6 +845,7 @@ class PaperSupervisorStore:
             if (
                 row.get("schema_version")
                 != OBSERVATION_SCHEMA_VERSION
+                or row.get("sequence") != expected_sequence
                 or not str(
                     row.get("observation_id") or ""
                 ).startswith("supervisor-observation-")
@@ -489,6 +864,81 @@ class PaperSupervisorStore:
                 )
             ):
                 raise SupervisorStoreError("attempt_store_corrupt")
+            running_evidence = payload.get("running_evidence")
+            if running_evidence is not None:
+                try:
+                    validated_evidence = validate_running_evidence(
+                        _json_object(
+                            running_evidence,
+                            "attempt_store_corrupt",
+                        )
+                    )
+                except RunningEvidenceError as exc:
+                    raise SupervisorStoreError(
+                        "attempt_store_corrupt"
+                    ) from exc
+                if (
+                    validated_evidence["cycle_id"] != cycle
+                    or validated_evidence["persisted_at"]
+                    != _utc(_parse_timestamp(row["recorded_at"])).isoformat()
+                ):
+                    raise SupervisorStoreError(
+                        "attempt_store_corrupt"
+                    )
+            wal_anchor = payload.get("wal_anchor")
+            tick_claim = payload.get("tick_claim")
+            if wal_anchor is not None:
+                anchor = _json_object(
+                    wal_anchor,
+                    "attempt_store_corrupt",
+                )
+                _validate_wal_anchor(anchor, event_rows)
+            if tick_claim is not None:
+                claim = _json_object(
+                    tick_claim,
+                    "attempt_store_corrupt",
+                )
+                _validate_tick_claim_anchor(
+                    claim,
+                    events=event_rows,
+                    wal_anchor=wal_anchor,
+                )
+                key = str(claim["source_tick_key"])
+                if key in source_tick_keys:
+                    raise SupervisorStoreError(
+                        "attempt_store_corrupt"
+                    )
+                source_tick_keys.add(key)
+            if payload.get("episode_snapshot") is not None:
+                (
+                    prior_episode_event_count,
+                    prior_episode_event_tail,
+                ) = _validate_episode_observation_payload(
+                    payload,
+                    previous_count=prior_episode_event_count,
+                    previous_tail=prior_episode_event_tail,
+                )
+            elif payload.get("episode_state") is not None:
+                legacy_episode = _json_object(
+                    payload.get("episode_state"),
+                    "attempt_store_corrupt",
+                )
+                legacy_events = legacy_episode.get("events")
+                if not isinstance(legacy_events, list):
+                    raise SupervisorStoreError(
+                        "attempt_store_corrupt"
+                    )
+                prior_episode_event_count = len(legacy_events)
+                prior_episode_event_tail = (
+                    str(
+                        (legacy_events[-1] or {}).get(
+                            "event_digest"
+                        )
+                        or ""
+                    )
+                    if legacy_events
+                    else None
+                )
             previous = row
             observations.append(row)
         return observations
@@ -500,6 +950,7 @@ class PaperSupervisorStore:
         event_type: str,
         attempt_id: str,
         payload: Mapping[str, Any],
+        bind_tick: bool = True,
     ) -> dict[str, Any]:
         lease._require_active(self)
         if event_type not in _EVENT_TYPES:
@@ -510,16 +961,36 @@ class PaperSupervisorStore:
         )
         projected = self.current_state(lease.cycle_id)
         events = self.events(lease.cycle_id)
+        tick_key = None
+        if bind_tick and lease.source_tick_key is not None:
+            tick_key = _identity(
+                lease.source_tick_key,
+                "supervisor_tick_claim_missing",
+            )
+        elif bind_tick and projected.get("tick_claims"):
+            raise SupervisorStoreError(
+                "supervisor_tick_claim_missing"
+            )
         self._validate_transition(
             projected,
             event_type=event_type,
             attempt_id=attempt,
             payload=payload,
+            source_tick_key=tick_key,
         )
         canonical_payload = _json_object(
             payload,
             "supervisor_event_payload_invalid",
         )
+        if tick_key is not None:
+            if (
+                canonical_payload.get("source_tick_key")
+                not in {None, tick_key}
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_tick_claim_mismatch"
+                )
+            canonical_payload["source_tick_key"] = tick_key
         _validate_event_payload(
             event_type,
             canonical_payload,
@@ -534,6 +1005,9 @@ class PaperSupervisorStore:
             "attempt_id": attempt,
             "recorded_at": _utc(self.now()).isoformat(),
             "lease_id": lease.lease_id,
+            "source_tick_key": (
+                canonical_payload.get("source_tick_key")
+            ),
             "previous_event_sha256": (
                 events[-1]["event_sha256"] if events else None
             ),
@@ -605,6 +1079,7 @@ class PaperSupervisorStore:
         event_type: str,
         attempt_id: str,
         payload: Mapping[str, Any],
+        source_tick_key: str | None,
     ) -> None:
         attempts = [
             row
@@ -632,7 +1107,57 @@ class PaperSupervisorStore:
             ),
             None,
         )
+        if event_type == "tick_claimed":
+            key = _identity(
+                payload.get("source_tick_key"),
+                "supervisor_tick_key_invalid",
+            )
+            if (
+                source_tick_key is not None
+                or attempt_id != key
+                or any(
+                    str(row.get("source_tick_key") or "") == key
+                    for row in state.get("tick_claims") or []
+                    if isinstance(row, Mapping)
+                )
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_tick_claim_reused"
+                )
+            return
+        if source_tick_key is None:
+            tick_key = None
+        else:
+            tick_key = _identity(
+                source_tick_key,
+                "supervisor_tick_claim_missing",
+            )
+        if tick_key is None:
+            claim = None
+        else:
+            claim = next(
+                (
+                    row
+                    for row in state.get("tick_claims") or []
+                    if isinstance(row, Mapping)
+                    and str(row.get("source_tick_key") or "")
+                    == tick_key
+                ),
+                None,
+            )
+        if tick_key is not None and claim is None:
+            raise SupervisorStoreError(
+                "supervisor_tick_claim_missing"
+            )
         if event_type == "typed_heartbeat_observed":
+            if tick_key is not None and any(
+                str(row.get("source_tick_key") or "") == tick_key
+                for row in state.get("typed_heartbeats", [])
+                if isinstance(row, Mapping)
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_tick_attempt_reused"
+                )
             if any(
                 str(row.get("observation_id") or "") == attempt_id
                 for row in state.get("typed_heartbeats", [])
@@ -643,6 +1168,13 @@ class PaperSupervisorStore:
                 )
             return
         if event_type == "pre_intent_attempt_started":
+            if tick_key is not None and any(
+                str(row.get("source_tick_key") or "") == tick_key
+                for row in pre_attempts
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_tick_attempt_reused"
+                )
             if pre_existing is not None or existing is not None:
                 raise SupervisorStoreError(
                     "supervisor_attempt_id_reused"
@@ -666,6 +1198,16 @@ class PaperSupervisorStore:
                     "supervisor_attempt_already_resolved"
                 )
             if (
+                tick_key is not None
+                and event_type != "pre_intent_attempt_abandoned"
+                and pre_existing.get("source_tick_key") is not None
+                and pre_existing.get("source_tick_key")
+                != tick_key
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_tick_claim_mismatch"
+                )
+            if (
                 event_type == "pre_intent_prepare_succeeded"
                 and pre_existing.get("prepare_succeeded_sequence")
                 is not None
@@ -675,6 +1217,13 @@ class PaperSupervisorStore:
                 )
             return
         if event_type == "start_intent":
+            if tick_key is not None and any(
+                str(row.get("source_tick_key") or "") == tick_key
+                for row in attempts
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_tick_attempt_reused"
+                )
             if state.get("unfinished_intent"):
                 raise SupervisorStoreError(
                     "unfinished_start_intent_requires_recovery"
@@ -687,6 +1236,15 @@ class PaperSupervisorStore:
             ):
                 raise SupervisorStoreError(
                     "supervisor_attempt_already_resolved"
+                )
+            if (
+                tick_key is not None
+                and pre_existing is not None
+                and pre_existing.get("source_tick_key")
+                != tick_key
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_tick_claim_mismatch"
                 )
             prepared_id = _identity(
                 payload.get("prepared_start_id"),
@@ -704,6 +1262,14 @@ class PaperSupervisorStore:
             raise SupervisorStoreError("supervisor_attempt_missing")
         if existing.get("terminal_result") is not None:
             raise SupervisorStoreError("supervisor_attempt_already_resolved")
+        if (
+            tick_key is not None
+            and event_type != "recovery_result"
+            and existing.get("source_tick_key") != tick_key
+        ):
+            raise SupervisorStoreError(
+                "supervisor_tick_claim_mismatch"
+            )
         if event_type == "start_result":
             if str(payload.get("result") or "") not in _RESULTS:
                 raise SupervisorStoreError(
@@ -795,6 +1361,9 @@ class SupervisorLease:
         holder_id: str,
         acquired_at: str,
         lock_inode: int,
+        source_tick_key: str | None,
+        source_tick_claim_sequence: int | None,
+        source_tick_claim_sha256: str | None,
     ) -> None:
         self._store = store
         self._descriptor = descriptor
@@ -803,7 +1372,80 @@ class SupervisorLease:
         self.holder_id = holder_id
         self.acquired_at = acquired_at
         self.lock_inode = lock_inode
+        self.source_tick_key = source_tick_key
+        self.source_tick_claim_sequence = source_tick_claim_sequence
+        self.source_tick_claim_sha256 = source_tick_claim_sha256
         self._active = True
+
+    def claim_tick(
+        self,
+        *,
+        source_tick_key: str,
+        heartbeat_digest: str,
+        trust: str,
+        claimed_at: str,
+        heartbeat_recorded_at: str | None = None,
+    ) -> dict[str, Any]:
+        if self.source_tick_key is not None:
+            raise SupervisorStoreError(
+                "supervisor_tick_claim_already_bound"
+            )
+        if self._store.unfinished_tick(self.cycle_id) is not None:
+            raise SupervisorStoreError(
+                "unfinished_tick_requires_recovery"
+            )
+        event = self._store._append(
+            self,
+            event_type="tick_claimed",
+            attempt_id=source_tick_key,
+            payload={
+                "source_tick_key": source_tick_key,
+                "heartbeat_digest": heartbeat_digest,
+                "heartbeat_recorded_at": heartbeat_recorded_at,
+                "trust": trust,
+                "claimed_at": claimed_at,
+            },
+            bind_tick=False,
+        )
+        self._bind_claim(event)
+        return event
+
+    def resume_tick(
+        self,
+        claim: Mapping[str, Any],
+    ) -> None:
+        if self.source_tick_key is not None:
+            raise SupervisorStoreError(
+                "supervisor_tick_claim_already_bound"
+            )
+        row = _json_object(claim, "attempt_store_corrupt")
+        sequence = row.get("claim_sequence")
+        event_hash = row.get("claim_event_sha256")
+        if (
+            not isinstance(sequence, int)
+            or sequence < 1
+            or not isinstance(event_hash, str)
+            or len(event_hash) != 64
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
+        self.source_tick_key = _identity(
+            row.get("source_tick_key"),
+            "attempt_store_corrupt",
+        )
+        self.source_tick_claim_sequence = sequence
+        self.source_tick_claim_sha256 = event_hash
+
+    def _bind_claim(self, event: Mapping[str, Any]) -> None:
+        payload = _json_object(
+            event.get("payload"),
+            "attempt_store_corrupt",
+        )
+        self.source_tick_key = _identity(
+            payload.get("source_tick_key"),
+            "attempt_store_corrupt",
+        )
+        self.source_tick_claim_sequence = int(event["sequence"])
+        self.source_tick_claim_sha256 = str(event["event_sha256"])
 
     def record_typed_heartbeat(
         self,
@@ -1289,6 +1931,7 @@ def _project(
     *,
     cycle_id: str,
 ) -> dict[str, Any]:
+    tick_claims: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
     pre_intent_attempts: list[dict[str, Any]] = []
@@ -1299,6 +1942,29 @@ def _project(
         event_type = str(event.get("event_type") or "")
         attempt_id = str(event.get("attempt_id") or "")
         payload = dict(event.get("payload") or {})
+        source_tick_key = payload.get("source_tick_key")
+        if event_type == "tick_claimed":
+            if any(
+                row["source_tick_key"] == source_tick_key
+                for row in tick_claims
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            tick_claims.append(
+                {
+                    "source_tick_key": source_tick_key,
+                    "heartbeat_digest": payload.get(
+                        "heartbeat_digest"
+                    ),
+                    "heartbeat_recorded_at": payload.get(
+                        "heartbeat_recorded_at"
+                    ),
+                    "trust": payload.get("trust"),
+                    "claimed_at": payload.get("claimed_at"),
+                    "claim_sequence": event["sequence"],
+                    "claim_event_sha256": event["event_sha256"],
+                }
+            )
+            continue
         if event_type == "typed_heartbeat_observed":
             if any(
                 row["observation_id"] == attempt_id
@@ -1310,6 +1976,7 @@ def _project(
                     "observation_id": attempt_id,
                     "sequence": event["sequence"],
                     "event_sha256": event["event_sha256"],
+                    "source_tick_key": source_tick_key,
                     **payload,
                 }
             )
@@ -1323,6 +1990,7 @@ def _project(
                 "started_event_sha256": event["event_sha256"],
                 "observed_at": payload["observed_at"],
                 "phase_scope": payload["phase_scope"],
+                "source_tick_key": source_tick_key,
                 "prepare_succeeded_sequence": None,
                 "prepare_succeeded_event_sha256": None,
                 "terminal_result": None,
@@ -1338,6 +2006,11 @@ def _project(
                 row is None
                 or row["terminal_result"] is not None
                 or row["prepare_succeeded_sequence"] is not None
+                or (
+                    row.get("source_tick_key") is not None
+                    and row.get("source_tick_key")
+                    != source_tick_key
+                )
             ):
                 raise SupervisorStoreError("attempt_store_corrupt")
             row["prepare_succeeded_sequence"] = event["sequence"]
@@ -1351,7 +2024,17 @@ def _project(
             "pre_intent_attempt_abandoned",
         }:
             row = pre_by_id.get(attempt_id)
-            if row is None or row["terminal_result"] is not None:
+            if (
+                row is None
+                or row["terminal_result"] is not None
+                or (
+                    event_type != "pre_intent_attempt_abandoned"
+                    and
+                    row.get("source_tick_key") is not None
+                    and row.get("source_tick_key")
+                    != source_tick_key
+                )
+            ):
                 raise SupervisorStoreError("attempt_store_corrupt")
             row.update(
                 {
@@ -1368,6 +2051,8 @@ def _project(
                     "terminal_event_sha256": event["event_sha256"],
                 }
             )
+            if event_type == "pre_intent_attempt_abandoned":
+                row["recovery_source_tick_key"] = source_tick_key
             continue
         if event_type == "start_intent":
             if attempt_id in by_id:
@@ -1391,6 +2076,7 @@ def _project(
                 "expected_order_fingerprints": payload.get(
                     "expected_order_fingerprints"
                 ),
+                "source_tick_key": source_tick_key,
                 "terminal_result": None,
                 "terminal_event_type": None,
                 "terminal_sequence": None,
@@ -1400,7 +2086,14 @@ def _project(
             spent.append(prepared_id)
             pre = pre_by_id.get(attempt_id)
             if pre is not None:
-                if pre["terminal_result"] is not None:
+                if (
+                    pre["terminal_result"] is not None
+                    or (
+                        pre.get("source_tick_key") is not None
+                        and pre.get("source_tick_key")
+                        != source_tick_key
+                    )
+                ):
                     raise SupervisorStoreError("attempt_store_corrupt")
                 pre.update(
                     {
@@ -1417,7 +2110,17 @@ def _project(
                 )
             continue
         row = by_id.get(attempt_id)
-        if row is None or row.get("terminal_result") is not None:
+        if (
+            row is None
+            or row.get("terminal_result") is not None
+            or (
+                event_type != "recovery_result"
+                and
+                row.get("source_tick_key") is not None
+                and row.get("source_tick_key")
+                != source_tick_key
+            )
+        ):
             raise SupervisorStoreError("attempt_store_corrupt")
         row["terminal_result"] = (
             payload.get("result")
@@ -1432,6 +2135,8 @@ def _project(
         row["terminal_response_digest"] = payload.get("response_digest")
         row["terminal_sequence"] = event["sequence"]
         row["terminal_recorded_at"] = event["recorded_at"]
+        if event_type == "recovery_result":
+            row["recovery_source_tick_key"] = source_tick_key
     unfinished = next(
         (
             {
@@ -1479,6 +2184,7 @@ def _project(
         "cycle_id": cycle_id,
         "last_sequence": len(events),
         "last_event_sha256": last_hash,
+        "tick_claims": tick_claims,
         "attempt_count": len(attempts),
         "attempts": attempts,
         "pre_intent_attempts": pre_intent_attempts,
@@ -1540,6 +2246,11 @@ def _validate_event(
     _identity(event.get("attempt_id"), "attempt_store_corrupt")
     _parse_timestamp(event.get("recorded_at"))
     payload = _json_object(event.get("payload"), "attempt_store_corrupt")
+    source_tick_key = event.get("source_tick_key")
+    if source_tick_key is not None:
+        _identity(source_tick_key, "attempt_store_corrupt")
+    if payload.get("source_tick_key") != source_tick_key:
+        raise SupervisorStoreError("attempt_store_corrupt")
     _validate_event_payload(
         str(event["event_type"]),
         payload,
@@ -1585,6 +2296,17 @@ def _validate_event_payload(
     code: str,
 ) -> None:
     try:
+        if event_type == "tick_claimed":
+            if payload.get("trust") not in _TICK_TRUST:
+                raise SupervisorStoreError(code)
+            _identity(payload.get("source_tick_key"), code)
+            _required_digest(payload.get("heartbeat_digest"), code=code)
+            if payload.get("heartbeat_recorded_at") is not None:
+                _parse_timestamp(payload.get("heartbeat_recorded_at"))
+            _parse_timestamp(payload.get("claimed_at"))
+            return
+        if payload.get("source_tick_key") is not None:
+            _identity(payload.get("source_tick_key"), code)
         if event_type == "typed_heartbeat_observed":
             _parse_timestamp(payload.get("observed_at"))
             if payload.get("status") not in {"fresh", "missing"}:
@@ -1983,6 +2705,338 @@ def _parse_timestamp(value: Any) -> datetime:
     if parsed.tzinfo is None:
         raise SupervisorStoreError("attempt_store_corrupt")
     return parsed.astimezone(timezone.utc)
+
+
+def _event_tail_identity(
+    events: Sequence[Mapping[str, Any]],
+) -> tuple[int, str | None]:
+    return (
+        len(events),
+        str(events[-1].get("event_sha256") or "")
+        if events
+        else None,
+    )
+
+
+def _observation_tail_identity(
+    observations: Sequence[Mapping[str, Any]],
+) -> tuple[int, str | None]:
+    return (
+        len(observations),
+        str(observations[-1].get("observation_sha256") or "")
+        if observations
+        else None,
+    )
+
+
+def _stable_jsonl_lines(path: Path) -> list[str]:
+    """Read one immutable prefix, retrying a concurrently appended tail."""
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    for _attempt in range(STABLE_READ_ATTEMPTS):
+        descriptor = -1
+        try:
+            descriptor = os.open(path, flags)
+            before = os.fstat(descriptor)
+            if before.st_size > MAX_OBSERVATION_CYCLE_BYTES:
+                raise SupervisorStoreError(
+                    "attempt_store_capacity_exceeded"
+                )
+            remaining = before.st_size
+            chunks: list[bytes] = []
+            while remaining:
+                chunk = os.read(descriptor, min(65_536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            after = os.fstat(descriptor)
+        except OSError as exc:
+            raise SupervisorStoreError("attempt_store_corrupt") from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        raw = b"".join(chunks)
+        if (
+            remaining == 0
+            and before.st_size == after.st_size
+            and (not raw or raw.endswith(b"\n"))
+        ):
+            try:
+                lines = raw.decode("utf-8").splitlines()
+            except UnicodeDecodeError as exc:
+                raise SupervisorStoreError(
+                    "attempt_store_corrupt"
+                ) from exc
+            if any(
+                not line
+                or len(line.encode("utf-8"))
+                > MAX_OBSERVATION_LINE_BYTES
+                for line in lines
+            ):
+                raise SupervisorStoreError(
+                    "attempt_store_capacity_exceeded"
+                )
+            return lines
+        time.sleep(0.005)
+    raise SupervisorStoreError("attempt_store_busy")
+
+
+def _validate_wal_anchor(
+    anchor: Mapping[str, Any],
+    events: Sequence[Mapping[str, Any]],
+) -> None:
+    if set(anchor) != {"event_sequence", "event_sha256"}:
+        raise SupervisorStoreError("attempt_store_corrupt")
+    sequence = anchor.get("event_sequence")
+    event_hash = anchor.get("event_sha256")
+    if (
+        not isinstance(sequence, int)
+        or sequence < 0
+        or sequence > len(events)
+        or (sequence == 0 and event_hash is not None)
+        or (
+            sequence > 0
+            and (
+                not isinstance(event_hash, str)
+                or event_hash
+                != str(events[sequence - 1].get("event_sha256") or "")
+            )
+        )
+    ):
+        raise SupervisorStoreError("attempt_store_corrupt")
+
+
+def _validate_tick_claim_anchor(
+    claim: Mapping[str, Any],
+    *,
+    events: Sequence[Mapping[str, Any]],
+    wal_anchor: Any,
+) -> None:
+    if set(claim) != {
+        "source_tick_key",
+        "claim_sequence",
+        "claim_event_sha256",
+        "heartbeat_digest",
+        "heartbeat_recorded_at",
+        "trust",
+    }:
+        raise SupervisorStoreError("attempt_store_corrupt")
+    key = _identity(
+        claim.get("source_tick_key"),
+        "attempt_store_corrupt",
+    )
+    sequence = claim.get("claim_sequence")
+    if (
+        not isinstance(sequence, int)
+        or sequence < 1
+        or sequence > len(events)
+        or claim.get("trust") not in _TICK_TRUST
+    ):
+        raise SupervisorStoreError("attempt_store_corrupt")
+    _required_digest(
+        claim.get("claim_event_sha256"),
+        code="attempt_store_corrupt",
+    )
+    _required_digest(
+        claim.get("heartbeat_digest"),
+        code="attempt_store_corrupt",
+    )
+    if claim.get("heartbeat_recorded_at") is not None:
+        _parse_timestamp(claim.get("heartbeat_recorded_at"))
+    event = events[sequence - 1]
+    payload = _json_object(
+        event.get("payload"),
+        "attempt_store_corrupt",
+    )
+    if (
+        event.get("event_type") != "tick_claimed"
+        or event.get("event_sha256")
+        != claim["claim_event_sha256"]
+        or payload.get("source_tick_key") != key
+        or payload.get("heartbeat_digest")
+        != claim["heartbeat_digest"]
+        or payload.get("heartbeat_recorded_at")
+        != claim["heartbeat_recorded_at"]
+        or payload.get("trust") != claim["trust"]
+    ):
+        raise SupervisorStoreError("attempt_store_corrupt")
+    anchor = _json_object(wal_anchor, "attempt_store_corrupt")
+    if int(anchor.get("event_sequence") or 0) < sequence:
+        raise SupervisorStoreError("attempt_store_corrupt")
+
+
+def _validate_episode_observation_payload(
+    payload: Mapping[str, Any],
+    *,
+    previous_count: int,
+    previous_tail: str | None,
+) -> tuple[int, str | None]:
+    snapshot = _json_object(
+        payload.get("episode_snapshot"),
+        "attempt_store_corrupt",
+    )
+    delta = payload.get("episode_events_delta")
+    if not isinstance(delta, list):
+        raise SupervisorStoreError("attempt_store_corrupt")
+    event_count = snapshot.get("event_count")
+    tail = snapshot.get("event_tail_digest")
+    if (
+        not isinstance(event_count, int)
+        or event_count < previous_count
+        or event_count != previous_count + len(delta)
+        or (
+            tail is not None
+            and not isinstance(tail, str)
+        )
+    ):
+        raise SupervisorStoreError("attempt_store_corrupt")
+    running_tail = previous_tail
+    for sequence, raw in enumerate(
+        delta,
+        start=previous_count + 1,
+    ):
+        event = _json_object(raw, "attempt_store_corrupt")
+        if event.get("sequence") != sequence:
+            raise SupervisorStoreError("attempt_store_corrupt")
+        supplied = str(event.get("event_digest") or "")
+        if supplied != _digest(
+            {
+                key: value
+                for key, value in event.items()
+                if key != "event_digest"
+            }
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
+        running_tail = supplied
+    if (
+        (event_count == 0 and tail is not None)
+        or (event_count > 0 and tail != running_tail)
+    ):
+        raise SupervisorStoreError("attempt_store_corrupt")
+    return event_count, running_tail
+
+
+def _observation_episode_event_count(
+    observation: Mapping[str, Any] | None,
+) -> int:
+    if observation is None:
+        return 0
+    payload = _json_object(
+        observation.get("payload"),
+        "attempt_store_corrupt",
+    )
+    if payload.get("episode_snapshot") is not None:
+        snapshot = _json_object(
+            payload["episode_snapshot"],
+            "attempt_store_corrupt",
+        )
+        count = snapshot.get("event_count")
+        if not isinstance(count, int) or count < 0:
+            raise SupervisorStoreError("attempt_store_corrupt")
+        return count
+    if payload.get("episode_state") is None:
+        return 0
+    legacy = _json_object(
+        payload.get("episode_state"),
+        "attempt_store_corrupt",
+    )
+    events = legacy.get("events")
+    if not isinstance(events, list):
+        raise SupervisorStoreError("attempt_store_corrupt")
+    return len(events)
+
+
+def _reconstruct_episode_state(
+    *,
+    cycle_id: str,
+    stored: Mapping[str, Any] | None,
+    observations: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    state = (
+        _json_object(stored, "attempt_store_corrupt")
+        if stored is not None
+        else None
+    )
+    anchor = (
+        str(state.get("last_observation_sha256") or "")
+        if state is not None
+        else ""
+    )
+    start_index = 0
+    if anchor:
+        start_index = next(
+            (
+                index + 1
+                for index, row in enumerate(observations)
+                if str(row.get("observation_sha256") or "")
+                == anchor
+            ),
+            -1,
+        )
+        if start_index < 0:
+            raise SupervisorStoreError("attempt_store_corrupt")
+        anchored = observations[start_index - 1]
+        anchored_count = _observation_episode_event_count(anchored)
+        stored_events = state.get("events")
+        if (
+            not isinstance(stored_events, list)
+            or len(stored_events) != anchored_count
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
+    for row in observations[start_index:]:
+        payload = _json_object(
+            row.get("payload"),
+            "attempt_store_corrupt",
+        )
+        legacy = payload.get("episode_state")
+        if legacy is not None:
+            embedded = _json_object(
+                legacy,
+                "attempt_store_corrupt",
+            )
+            if str(
+                embedded.get("last_observation_sha256") or ""
+            ) != str(row.get("previous_observation_sha256") or ""):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            state = embedded
+        else:
+            snapshot = _json_object(
+                payload.get("episode_snapshot"),
+                "attempt_store_corrupt",
+            )
+            delta = payload.get("episode_events_delta")
+            if not isinstance(delta, list):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            prior_events = (
+                list(state.get("events") or [])
+                if state is not None
+                else []
+            )
+            if len(prior_events) + len(delta) != snapshot.get(
+                "event_count"
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            rebuilt = {
+                key: value
+                for key, value in snapshot.items()
+                if key not in {"event_count", "event_tail_digest"}
+            }
+            rebuilt["events"] = [*prior_events, *delta]
+            state = rebuilt
+        if (
+            not isinstance(state, dict)
+            or str(state.get("cycle_id") or "") != cycle_id
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
+        state["last_observation_sha256"] = str(
+            row["observation_sha256"]
+        )
+    if state is None:
+        raise SupervisorStoreError("attempt_store_corrupt")
+    return state
 
 
 def _utc(value: datetime) -> datetime:
