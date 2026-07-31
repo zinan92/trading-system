@@ -2,108 +2,95 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from services.trading_system_read_model import (
-    project_trading_system_read_model,
-)
 from services.control_audit import (
     append_control_event,
     build_control_event,
     build_runtime_utilization,
 )
+from services.trading_system_read_model import (
+    project_trading_system_read_model,
+)
 
 
-def _event(
-    output_root: Path,
-    *,
-    ts: str,
-    state: str,
-    result: str = "accepted",
+def test_control_audit_cannot_invent_runtime_utilization(
+    tmp_path: Path,
 ) -> None:
     append_control_event(
-        output_root,
+        tmp_path,
         build_control_event(
             cycle_id="2026-07-29_DAY",
-            action="start" if state == "running" else "stop",
+            action="start",
             actor=None,
             payload={},
-            result=result,
+            result="accepted",
             error=None,
-            runtime={"actual_state": state, "desired_state": state},
-            now=ts,
+            runtime={
+                "actual_state": "running",
+                "desired_state": "running",
+            },
+            now="2026-07-29T02:00:00Z",
         ),
     )
 
-
-def test_runtime_utilization_counts_only_proven_running_intervals(
-    tmp_path: Path,
-) -> None:
-    _event(tmp_path, ts="2026-07-28T00:00:00Z", state="stopped")
-    _event(tmp_path, ts="2026-07-29T02:00:00Z", state="running")
-    _event(tmp_path, ts="2026-07-29T08:00:00Z", state="stopped")
-    _event(
-        tmp_path,
-        ts="2026-07-29T09:00:00Z",
-        state="running",
-        result="rejected",
-    )
-
     result = build_runtime_utilization(
         tmp_path,
         as_of="2026-07-29T12:00:00Z",
     )
 
-    day = result["windows"]["24h"]
-    assert day["evidence_status"] == "complete"
-    assert day["running_seconds"] == 6 * 3600
-    assert day["percentage"] == 25.0
-    assert day["ending_state"] == "stopped"
-
-
-def test_runtime_utilization_extends_current_running_state_to_as_of(
-    tmp_path: Path,
-) -> None:
-    _event(tmp_path, ts="2026-07-20T00:00:00Z", state="stopped")
-    _event(tmp_path, ts="2026-07-29T06:00:00Z", state="running")
-
-    result = build_runtime_utilization(
-        tmp_path,
-        as_of="2026-07-29T12:00:00Z",
-    )
-
-    assert result["windows"]["24h"]["percentage"] == 25.0
-    assert result["windows"]["7d"]["running_seconds"] == 6 * 3600
-
-
-def test_runtime_utilization_does_not_invent_missing_boundary_state(
-    tmp_path: Path,
-) -> None:
-    _event(tmp_path, ts="2026-07-29T06:00:00Z", state="running")
-
-    result = build_runtime_utilization(
-        tmp_path,
-        as_of="2026-07-29T12:00:00Z",
-    )
-
+    assert result["source"] == "paper_supervisor_running_evidence"
     assert result["windows"]["24h"]["evidence_status"] == "insufficient"
     assert result["windows"]["24h"]["percentage"] is None
     assert result["windows"]["7d"]["percentage"] is None
+    assert (
+        result["interval_policy"]["control_event_extrapolation"]
+        is False
+    )
 
 
-def test_runtime_utilization_reaches_read_model_and_dashboard() -> None:
+def test_runtime_utilization_and_supervisor_reach_read_model() -> None:
     utilization = {
-        "schema_version": "strategy-runtime-utilization-v1",
+        "schema_version": "strategy-runtime-utilization-v2",
+        "source": "paper_supervisor_running_evidence",
         "windows": {
-            "24h": {"evidence_status": "complete", "percentage": 25.0},
-            "7d": {"evidence_status": "complete", "percentage": 50.0},
+            "24h": {
+                "evidence_status": "complete",
+                "percentage": 90.0,
+            },
+            "7d": {
+                "evidence_status": "insufficient",
+                "percentage": None,
+            },
         },
     }
+    supervisor = {
+        "schema_version": "paper-supervisor-read-model-v1",
+        "status": "available",
+        "current_cycle": {
+            "attempt_count": 2,
+            "history": {"observations": [{"sequence": 1}]},
+        },
+        "utilization": utilization,
+    }
     projected = project_trading_system_read_model(
-        {"runtime": {}, "runtime_utilization": utilization}
+        {
+            "runtime": {},
+            "runtime_utilization": utilization,
+            "paper_supervisor": supervisor,
+        }
     ).to_dict()
-    assert projected["runtime"]["utilization"] == utilization
 
+    assert projected["runtime"]["utilization"] == utilization
+    assert projected["runtime"]["supervisor"] == supervisor
+
+
+def test_dashboard_shows_supervisor_utilization_and_history() -> None:
     html = (
-        Path(__file__).resolve().parents[1] / "dashboard-gridmind.html"
+        Path(__file__).resolve().parents[1]
+        / "dashboard-gridmind.html"
     ).read_text(encoding="utf-8")
+
     assert '["策略运行占比",runtimeUtilizationText(runtime)]' in html
     assert '`24h ${value("24h")} / 7d ${value("7d")}`' in html
+    assert 'data-tab="supervisor"' in html
+    assert 'data-panel="supervisor"' in html
+    assert "renderSupervisor(data)" in html

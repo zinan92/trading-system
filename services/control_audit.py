@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -195,75 +195,16 @@ def build_runtime_utilization(
     *,
     as_of: str | datetime | None = None,
 ) -> dict[str, Any]:
-    """Project proven strategy-running time over rolling 24h and 7d windows."""
+    """Compatibility wrapper over Supervisor observation evidence."""
 
-    end = _parse_time(as_of) or datetime.now(timezone.utc)
-    accepted = [
-        row
-        for row in read_control_events(output_root)
-        if str(row.get("result") or "") == "accepted"
-        and str((row.get("runtime_after") or {}).get("actual_state") or "")
-    ]
-    return {
-        "schema_version": "strategy-runtime-utilization-v1",
-        "as_of": end.isoformat(),
-        "source": "strategy_control_events",
-        "windows": {
-            "24h": _runtime_window(accepted, end=end, hours=24),
-            "7d": _runtime_window(accepted, end=end, hours=24 * 7),
-        },
-    }
-
-
-def _runtime_window(
-    events: list[dict[str, Any]],
-    *,
-    end: datetime,
-    hours: int,
-) -> dict[str, Any]:
-    start = end - timedelta(hours=hours)
-    seed = next(
-        (row for row in reversed(events) if (_event_time(row) or end) <= start),
-        None,
+    from services.paper_supervisor_read_model import (
+        build_paper_supervisor_utilization,
     )
-    window_seconds = float((end - start).total_seconds())
-    if seed is None:
-        return {
-            "evidence_status": "insufficient",
-            "running_seconds": None,
-            "window_seconds": window_seconds,
-            "percentage": None,
-            "window_start": start.isoformat(),
-            "window_end": end.isoformat(),
-        }
-    state = str((seed.get("runtime_after") or {}).get("actual_state") or "")
-    cursor = start
-    running_seconds = 0.0
-    transitions = 0
-    for row in events:
-        timestamp = _event_time(row)
-        if timestamp is None or timestamp <= start or timestamp > end:
-            continue
-        if state == "running":
-            running_seconds += (timestamp - cursor).total_seconds()
-        cursor = timestamp
-        state = str(
-            (row.get("runtime_after") or {}).get("actual_state") or state
-        )
-        transitions += 1
-    if state == "running":
-        running_seconds += (end - cursor).total_seconds()
-    running_seconds = max(0.0, running_seconds)
-    return {
-        "evidence_status": "complete",
-        "running_seconds": round(running_seconds, 3),
-        "window_seconds": window_seconds,
-        "percentage": round(100.0 * running_seconds / window_seconds, 2),
-        "window_start": start.isoformat(),
-        "window_end": end.isoformat(),
-        "transition_count": transitions,
-        "ending_state": state,
-    }
+
+    return build_paper_supervisor_utilization(
+        output_root,
+        as_of=as_of,
+    )
 
 
 def _event_time(row: dict[str, Any]) -> datetime | None:

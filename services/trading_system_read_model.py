@@ -144,6 +144,9 @@ def project_trading_system_read_model(
     runtime["cycle_decision"] = _json_copy(
         _mapping(source.get("cycle_decision"))
     )
+    runtime["supervisor"] = _json_copy(
+        _mapping(source.get("paper_supervisor"))
+    )
     strategy_summary = _project_strategy_summary(plan, completeness_issues)
     broker_view = _json_copy(_mapping(broker))
     if not broker_view:

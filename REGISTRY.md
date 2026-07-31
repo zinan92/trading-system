@@ -4,6 +4,21 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-07-31)
+- #467 已在代码中完成、尚未部署或启用：每个 Supervisor tick 先以
+  append+fsync 持久化唯一 claim，所有 heartbeat/pre-intent/start/terminal
+  记录绑定该 claim；同一 fresh tick 重放只返回原 observation，claim 后崩溃
+  会先零控制调用收口，不能产生第二套订单。每条 observation 锚定精确 WAL
+  tail 与 claim hash，并保存可增量恢复的 episode snapshot/delta。
+  `RunningEvidenceV1` 由 store 写入时间并在写/读两端重算，只在完整心跳、
+  周期/计划/runtime 身份、双层对账、逻辑格位 N/N 与 Grid re-arm ancestry
+  全部精确时证明 running。24h/7d 运行率只累计间隔 ≤120 秒且两端证明同一
+  周期/计划/格位的相邻观测；缺失、未知、跨周期与首尾未证明均计 0，控制
+  审计不得外推。首个完整窗口前保持 `insufficient`。canonical read-model
+  与 Dashboard Supervisor 页公开本周期完整 attempt/start/observation
+  不可变历史且无控制入口。浏览器证据见
+  [`docs/evidence/issue-467/issue-467-supervisor-history.png`](docs/evidence/issue-467/issue-467-supervisor-history.png)。
+  本票不改 health 分级、不切换 convergence mode、不部署 Cloud，也不构成
+  48 小时验收。
 - #466 已在代码中接通、尚未启用或部署：状态驱动的 Paper Supervisor 只在
   同一自然 live-tick 完成 lifecycle、保护单、计划同步、盘中处理、账本重建
   并持久化完整 heartbeat 后执行一次收敛。唯一 `convergence.mode` 使它与
@@ -109,8 +124,8 @@
   Cloud `/usr/local/bin/codex` 仍是依赖 Mac 文件交换的 attended bridge，
   不能在 Mac 关机时完成 recommendation。不得擅自复用个人 Key、把密钥写入
   Git/日志或假称无人值守 provider 已就绪。
-- #467/#468 从 #466 的 append-only observations 投影 Supervisor read-model、
-  保守 24h/7d 运行率、健康分级和每日不可变自复盘；同一 mode 必须把旧
+- #468 从 #467 的 append-only read-model 与保守运行率继续实现健康分级和
+  每日不可变自复盘；同一 mode 必须把旧
   cycle-decision health 机械替换掉。运行率首个完整 24h 前显示
   `insufficient`，低于 85% 只 warning，不驱动 dead-man fail；structural、
   300 秒无观察/尝试和 episode exhausted 才 critical。

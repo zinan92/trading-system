@@ -16,7 +16,7 @@ from services.control_audit import (
     append_control_event,
     build_control_event,
 )
-from services.paper_supervisor import PaperSupervisor
+from services.paper_supervisor import PaperSupervisor, _digest
 from services.paper_supervisor_classifier import classify_blocker
 from services.paper_supervisor_store import PaperSupervisorStore
 from services.dualtrack_execution_adapter import (
@@ -559,9 +559,17 @@ def test_cleared_reconciliation_blocker_resumes_without_old_command_replay(
         observed_at=later.isoformat(),
         heartbeat=_heartbeat(later),
     )
+    third_at = later + timedelta(seconds=61)
+    third = supervisor.converge_once(
+        CYCLE,
+        observed_at=third_at.isoformat(),
+        heartbeat=_heartbeat(third_at),
+    )
 
     assert first["machine_code"] == "ledger_reconciliation_drift"
-    assert second["status"] == "executed"
+    assert second["status"] == "structural_cleared"
+    assert second["control_actions_executed"] == 0
+    assert third["status"] == "executed"
     assert control.calls == ["prepare_start", "start"]
 
 
@@ -1351,6 +1359,63 @@ def test_fresh_authority_change_before_intent_creates_zero_orders(
     assert supervisor.execution.orders == []
 
 
+def test_authoritative_rearm_topology_rejects_cross_slot_and_economic_drift() -> None:
+    base = {
+        "command_id": "command-1",
+        "fingerprint": "a" * 64,
+        "side": "buy",
+        "quantity": "1",
+        "price": "4000",
+        "generation": 1,
+        "slot_id": "slot-a",
+        "rearm_of_order_id": None,
+        "economics": {
+            "event": "entry",
+            "symbol": "GOLD",
+            "order_type": "limit",
+            "notional": "4000",
+            "sl": "3900",
+            "tp": "4100",
+            "strategy_plan_id": "plan-1",
+            "strategy_plan_version": 1,
+        },
+    }
+    hidden_cross_slot = {
+        **base,
+        "command_id": "command-2",
+        "fingerprint": "b" * 64,
+        "generation": 2,
+        "slot_id": "slot-b",
+        "rearm_of_order_id": "command-1",
+    }
+    with pytest.raises(
+        ValueError,
+        match="execution_receipt_identity_invalid",
+    ):
+        PaperSupervisor._validate_authoritative_rearm_topology(
+            [base, hidden_cross_slot]
+        )
+
+    changed_protection = {
+        **base,
+        "command_id": "command-2",
+        "fingerprint": "c" * 64,
+        "generation": 2,
+        "rearm_of_order_id": "command-1",
+        "economics": {
+            **base["economics"],
+            "tp": "9000",
+        },
+    }
+    with pytest.raises(
+        ValueError,
+        match="execution_receipt_identity_invalid",
+    ):
+        PaperSupervisor._validate_authoritative_rearm_topology(
+            [base, changed_protection]
+        )
+
+
 def test_legacy_config_without_convergence_uses_legacy_fallback(
     tmp_path: Path,
 ) -> None:
@@ -1778,3 +1843,92 @@ def test_crashed_fresh_heartbeat_wal_clears_missing_continuity(
         result["machine_code"]
         == "execution_tick_heartbeat_temporarily_missing"
     )
+
+
+def test_same_fresh_tick_returns_original_observation_without_second_start(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, _ = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    supervisor.store.now = lambda: T0
+    heartbeat = _heartbeat()
+
+    first = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=heartbeat,
+    )
+    repeated = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=heartbeat,
+    )
+
+    assert first == repeated
+    assert first["status"] == "executed"
+    assert control.calls.count("start") == 1
+    assert len(supervisor.store.observations(CYCLE)) == 1
+    projection = supervisor.store.current_state(CYCLE)
+    assert len(projection["tick_claims"]) == 1
+    assert len(projection["attempts"]) == 1
+
+
+def test_claim_without_observation_recovers_before_later_tick_can_start(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, _ = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    supervisor.store.now = lambda: T0
+    heartbeat = _heartbeat()
+    health = validate_complete_tick_heartbeat(
+        heartbeat,
+        cycle_id=CYCLE,
+        observed_at=T0.isoformat(),
+    )
+    heartbeat_digest = _digest(dict(heartbeat))
+    health = {**health, "heartbeat_digest": heartbeat_digest}
+    source_tick_key, trust = supervisor._source_tick_identity(
+        CYCLE,
+        health=health,
+    )
+    with supervisor.store.try_lease(
+        CYCLE,
+        holder_id="crashed-after-claim",
+    ) as lease:
+        assert lease is not None
+        lease.claim_tick(
+            source_tick_key=source_tick_key,
+            heartbeat_digest=heartbeat_digest,
+            trust=trust,
+            claimed_at=T0.isoformat(),
+            heartbeat_recorded_at=T0.isoformat(),
+        )
+
+    recovered = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=heartbeat,
+    )
+    later = T0 + timedelta(seconds=61)
+    executed = supervisor.converge_once(
+        CYCLE,
+        observed_at=later.isoformat(),
+        heartbeat=_heartbeat(later),
+    )
+
+    assert recovered["status"] == "recovered_no_action"
+    assert recovered["control_actions_executed"] == 0
+    assert executed["status"] == "executed"
+    assert control.calls.count("start") == 1
+    recovered_observation = supervisor.store.observations(CYCLE)[0]
+    recovered_heartbeat = dict(
+        (recovered_observation.get("payload") or {}).get(
+            "heartbeat"
+        )
+        or {}
+    )
+    assert recovered_heartbeat["recorded_at"] == T0.isoformat()

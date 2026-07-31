@@ -70,7 +70,9 @@ from services.journal_store import load_json
 from services.production_accounting import build_production_accounting_history
 from services.replay_state import ReplayState
 from services.tiger_venue_status import TigerVenueStatus
-from services.control_audit import build_runtime_utilization
+from services.paper_supervisor_read_model import (
+    build_paper_supervisor_read_model,
+)
 from services.trading_system_read_model import (
     project_market_read_model,
     project_trading_system_read_model,
@@ -1154,7 +1156,14 @@ def _assemble_strategy_console_snapshot(
     cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
     cycle_id = str(cycle["cycle_id"])
     control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
-    runtime_utilization = build_runtime_utilization(output, as_of=as_of)
+    paper_supervisor = build_paper_supervisor_read_model(
+        output,
+        cycle_id=cycle_id,
+        as_of=as_of,
+    )
+    runtime_utilization = dict(
+        paper_supervisor.get("utilization") or {}
+    )
     market_symbol, market_timeframe = _dashboard_market_identity()
     market = build_dualtrack_market_bars_response(
         symbol=market_symbol,
@@ -1219,6 +1228,7 @@ def _assemble_strategy_console_snapshot(
         "cycle": cycle,
         **control,
         "runtime_utilization": runtime_utilization,
+        "paper_supervisor": paper_supervisor,
         "market": market,
         "production_execution": {
             **execution,
