@@ -92,8 +92,16 @@ def _healthy(tmp_path: Path) -> CloudPaperHealth:
     )
 
 
-def test_cloud_health_separates_all_ready_layers(tmp_path: Path) -> None:
+def _force_legacy_mode(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "services.cloud_health.dualtrack_config",
+        lambda: {"convergence": {"mode": "legacy_cycle_decision"}},
+    )
+
+
+def test_cloud_health_separates_all_ready_layers(tmp_path: Path, monkeypatch) -> None:
     health = _healthy(tmp_path)
+    _force_legacy_mode(monkeypatch)
 
     result = health.run()
 
@@ -124,8 +132,11 @@ def test_health_severity_is_explicit_and_unknown_fails_closed() -> None:
     assert health_severity("new_unclassified_condition") == "critical"
 
 
-def test_missing_cycle_decision_is_blocked_and_detectable(tmp_path: Path) -> None:
+def test_missing_cycle_decision_is_blocked_and_detectable(
+    tmp_path: Path, monkeypatch
+) -> None:
     health = _healthy(tmp_path)
+    _force_legacy_mode(monkeypatch)
     health.output_root.joinpath(
         "dualtrack",
         "strategy_control",
@@ -140,9 +151,10 @@ def test_missing_cycle_decision_is_blocked_and_detectable(tmp_path: Path) -> Non
 
 
 def test_active_plan_stopped_past_deadline_is_detected_for_clock_cycle(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     health = _healthy(tmp_path)
+    _force_legacy_mode(monkeypatch)
     health.output_root.joinpath(
         "dualtrack",
         "strategy_control",
@@ -188,8 +200,11 @@ def test_active_plan_stopped_past_deadline_is_detected_for_clock_cycle(
     assert decision["evidence"]["plan_age_seconds"] == 600
 
 
-def test_stale_tick_is_blocked_with_stage_and_next_action(tmp_path: Path) -> None:
+def test_stale_tick_is_blocked_with_stage_and_next_action(
+    tmp_path: Path, monkeypatch
+) -> None:
     health = _healthy(tmp_path)
+    _force_legacy_mode(monkeypatch)
     write_json(
         health.output_root / "dualtrack" / "runner" / "2026-07-28_DAY.json",
         [{"event": "live_tick_heartbeat", "ts": "2026-07-28T01:40:00+00:00"}],
@@ -203,9 +218,10 @@ def test_stale_tick_is_blocked_with_stage_and_next_action(tmp_path: Path) -> Non
 
 
 def test_missing_review_and_backup_are_degraded_not_fabricated_healthy(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     health = _healthy(tmp_path)
+    _force_legacy_mode(monkeypatch)
     (
         health.output_root / "dualtrack" / "daily_self_reviews" / "current.json"
     ).unlink()
@@ -255,7 +271,7 @@ def test_supervisor_mode_replaces_legacy_cycle_decision_check(
     )
     monkeypatch.setattr(
         "services.cloud_health.dualtrack_config",
-        lambda: {"convergence": {"mode": "supervisor"}},
+        lambda: {"convergence": {"mode": "paper_supervisor"}},
     )
 
     result = health.run()
@@ -266,8 +282,11 @@ def test_supervisor_mode_replaces_legacy_cycle_decision_check(
     assert result["checks"]["supervisor"]["code"] == "supervisor_observation_missing"
 
 
-def test_scheduler_owner_mismatch_blocks_cloud_health(tmp_path: Path) -> None:
+def test_scheduler_owner_mismatch_blocks_cloud_health(
+    tmp_path: Path, monkeypatch
+) -> None:
     health = _healthy(tmp_path)
+    _force_legacy_mode(monkeypatch)
     write_json(
         health.output_root / "cloud" / "scheduler_ownership" / "current.json",
         [{"status": "active", "active_owner_id": "local-mac", "epoch": 3}],
@@ -281,8 +300,11 @@ def test_scheduler_owner_mismatch_blocks_cloud_health(tmp_path: Path) -> None:
     assert owner["evidence"]["active_owner_id"] == "local-mac"
 
 
-def test_datafeed_probe_failure_is_bounded_and_secret_free(tmp_path: Path) -> None:
+def test_datafeed_probe_failure_is_bounded_and_secret_free(
+    tmp_path: Path, monkeypatch
+) -> None:
     health = _healthy(tmp_path)
+    _force_legacy_mode(monkeypatch)
     health.latest_market_provider = lambda: (_ for _ in ()).throw(
         RuntimeError("https://secret.invalid/token")
     )

@@ -208,7 +208,10 @@ class CloudPaperHealth:
 
     def _supervisor_mode(self) -> bool:
         convergence = dualtrack_config().get("convergence")
-        return isinstance(convergence, dict) and convergence.get("mode") == "supervisor"
+        return (
+            isinstance(convergence, dict)
+            and convergence.get("mode") == "paper_supervisor"
+        )
 
     def _overall_severity(self, checks: dict[str, dict[str, Any]]) -> str:
         severities = {
