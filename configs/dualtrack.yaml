@@ -34,7 +34,7 @@
     "terminal_deadline_seconds": 300
   },
   "convergence": {
-    "mode": "supervisor",
+    "mode": "paper_supervisor",
     "provider_timeout_seconds": 25,
     "attempt_deadline_seconds": 45
   },

@@ -12786,6 +12786,24 @@ auditable datafeed port; broker execution remains a separate port.
   preview, prepared-start and observation-chain rows are visible. Screenshot:
   [`docs/evidence/issue-467/issue-467-supervisor-history.png`](docs/evidence/issue-467/issue-467-supervisor-history.png).
 
+# 2026-07-31 — Correct Supervisor activation enum (Issue #487)
+
+## Decision
+
+- The implementation's closed convergence enum is `paper_supervisor`.  The
+  earlier activation release used the invalid shorthand `supervisor`, was
+  rejected by the runner configuration gate, and was rolled back after
+  authoritative evidence proved zero orders, zero positions, and no unknown
+  control outcome.
+- This PR changes only the activation enum and keeps legacy mode as the
+  deployed rollback target until the new SHA passes all gates.
+
+## Gotchas
+
+- Configuration prose may say “Supervisor mode”, but the persisted contract is
+  exact and case-sensitive: `paper_supervisor`; any other value is a structural
+  configuration failure.
+
 # 2026-07-31 — Paper Supervisor activation configuration (Issue #485)
 
 ## Decision
