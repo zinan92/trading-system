@@ -282,6 +282,35 @@ def test_supervisor_mode_replaces_legacy_cycle_decision_check(
     assert result["checks"]["supervisor"]["code"] == "supervisor_observation_missing"
 
 
+def test_supervisor_health_uses_current_cycle_when_runtime_is_stale(
+    tmp_path: Path, monkeypatch
+) -> None:
+    health = _healthy(tmp_path)
+    _force_legacy_mode(monkeypatch)
+    monkeypatch.setattr(
+        "services.cloud_health.dualtrack_config",
+        lambda: {"convergence": {"mode": "paper_supervisor"}},
+    )
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "plans"
+        / "2026-07-28_DAY.json",
+        [{"cycle_id": "2026-07-28_DAY", "status": "active"}],
+    )
+    write_json(
+        health.output_root / "dualtrack" / "strategy_control" / "runtime.json",
+        [{"cycle_id": "2026-07-27_NIGHT", "actual_state": "stopped"}],
+    )
+
+    result = health.run()
+
+    supervisor = result["checks"]["supervisor"]
+    assert supervisor["evidence"]["cycle_id"] == "2026-07-28_DAY"
+    assert supervisor["code"] == "supervisor_observation_missing"
+
+
 def test_scheduler_owner_mismatch_blocks_cloud_health(
     tmp_path: Path, monkeypatch
 ) -> None:
