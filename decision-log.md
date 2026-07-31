@@ -12817,6 +12817,21 @@ auditable datafeed port; broker execution remains a separate port.
   runner. Without this correction, activation would leave the legacy health
   check active and misclassify Supervisor observations.
 
+# 2026-07-31 — Phase-1 legacy-safe deployment release (Issue #493)
+
+## Decision
+
+- The current Supervisor code is staged with the explicit legacy pair
+  `convergence.mode=legacy_cycle_decision` and `cycle_decision.enabled=true`.
+- This release is intentionally non-activating: it verifies deployment, SHA
+  ownership and boot behavior before the independent activation config release.
+
+## Gotchas
+
+- There is no separate `paper_supervisor_enabled` runtime flag in the current
+  contract. The mode pair is the activation switch, so phase one must encode
+  the legacy pair rather than silently deploying an already-active main.
+
 # 2026-07-31 — Correct Supervisor activation enum (Issue #487)
 
 ## Decision

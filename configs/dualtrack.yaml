@@ -29,12 +29,12 @@
     "paper_grid": "paper_grid_risk"
   },
   "cycle_decision": {
-    "enabled": false,
+    "enabled": true,
     "provider_timeout_seconds": 30,
     "terminal_deadline_seconds": 300
   },
   "convergence": {
-    "mode": "paper_supervisor",
+    "mode": "legacy_cycle_decision",
     "provider_timeout_seconds": 25,
     "attempt_deadline_seconds": 45
   },
