@@ -12832,6 +12832,22 @@ auditable datafeed port; broker execution remains a separate port.
   contract. The mode pair is the activation switch, so phase one must encode
   the legacy pair rather than silently deploying an already-active main.
 
+# 2026-07-31 — Phase-2 Paper Supervisor activation release (Issue #495)
+
+## Decision
+
+- After phase-one deployment evidence, activation uses the independent exact
+  pair `convergence.mode=paper_supervisor` and `cycle_decision.enabled=false`.
+- The 48-hour soak clock starts only after the post-activation five-minute
+  authoritative convergence check passes; this release itself is not runtime
+  proof.
+
+## Gotchas
+
+- A failed convergence is not grounds for a blind rollback. Runtime, order
+  snapshot and control audit must prove zero orders, zero positions and no
+  `control_outcome_unknown` before reverting this config release.
+
 # 2026-07-31 — Correct Supervisor activation enum (Issue #487)
 
 ## Decision
