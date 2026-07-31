@@ -12786,6 +12786,22 @@ auditable datafeed port; broker execution remains a separate port.
   preview, prepared-start and observation-chain rows are visible. Screenshot:
   [`docs/evidence/issue-467/issue-467-supervisor-history.png`](docs/evidence/issue-467/issue-467-supervisor-history.png).
 
+# 2026-07-31 — Complete exclusive activation contract (Issue #489)
+
+## Decision
+
+- Supervisor activation requires both exact `convergence.mode=paper_supervisor`
+  and `cycle_decision.enabled=false`.  Leaving the legacy coordinator enabled
+  is a structural configuration conflict and must be rejected before a tick.
+- The prior activation attempt was rolled back before any control request; the
+  deployed target remains the known-good legacy release until this SHA passes
+  preflight and boot gates.
+
+## Gotchas
+
+- A mode label alone is not an activation switch.  The runner validates the
+  mutually exclusive pair and fail-closes when both coordinators are enabled.
+
 # 2026-07-31 — Correct Supervisor activation enum (Issue #487)
 
 ## Decision
