@@ -60,6 +60,7 @@ _DCA_FIELDS = (
     "min_additions",
     "max_additions",
 )
+_UNBOUNDED = "unbounded"
 _PLAN_SHAPE_FIELDS = (
     "direction",
     "style",
@@ -118,6 +119,7 @@ class CycleRiskEnvelopeStore:
             strategy_type,
             payload.get("limits"),
             code="outer_strategy_policy_invalid",
+            allow_unbounded_grid_count=True,
         )
         policy_id = _required_text(payload.get("policy_id"), "outer_strategy_policy_invalid")
         version = _positive_int(payload.get("version"), "outer_strategy_policy_invalid")
@@ -835,6 +837,7 @@ class CycleRiskEnvelopeStore:
             str(policy["strategy_type"]),
             policy.get("limits"),
             code="outer_strategy_policy_invalid",
+            allow_unbounded_grid_count=True,
         )
         authorized_at = _utc_timestamp(
             policy.get("authorized_at"),
@@ -1086,7 +1089,24 @@ def _compare_preview(limits: Mapping[str, Any], values: Mapping[str, Decimal], s
             ("additions", "<=", "max_additions"),
         )
     for field, operator, limit_key in checks:
-        observed, limit = values[field], _decimal(limits.get(limit_key), "risk_envelope_authorization_invalid")
+        observed = values[field]
+        raw_limit = limits.get(limit_key)
+        if (
+            strategy_type == "grid"
+            and limit_key == "max_grid_count"
+            and raw_limit == _UNBOUNDED
+        ):
+            rows.append(
+                {
+                    "field": field,
+                    "operator": "unbounded",
+                    "authorized_limit": _UNBOUNDED,
+                    "observed_value": str(observed),
+                    "pass": True,
+                }
+            )
+            continue
+        limit = _decimal(raw_limit, "risk_envelope_authorization_invalid")
         passed = observed <= limit if operator == "<=" else observed >= limit
         rows.append({"field": field, "operator": operator, "authorized_limit": str(limit), "observed_value": str(observed), "pass": passed})
     return rows
@@ -1120,8 +1140,24 @@ def _compare_outer_policy(
     )
     outer_limits = outer.get("limits") if isinstance(outer.get("limits"), Mapping) else {}
     for field in (_GRID_FIELDS if strategy_type == "grid" else _DCA_FIELDS):
-        outer_value = _decimal(outer_limits.get(field), "outer_strategy_policy_invalid")
+        raw_outer_value = outer_limits.get(field)
         inner_value = _decimal(inner.get(field), "risk_envelope_authorization_invalid")
+        if (
+            strategy_type == "grid"
+            and field == "max_grid_count"
+            and raw_outer_value == _UNBOUNDED
+        ):
+            rows.append(
+                {
+                    "field": field,
+                    "operator": "unbounded",
+                    "authorized_limit": _UNBOUNDED,
+                    "observed_value": str(inner_value),
+                    "pass": True,
+                }
+            )
+            continue
+        outer_value = _decimal(raw_outer_value, "outer_strategy_policy_invalid")
         minimum = field.startswith("min_")
         passed = inner_value >= outer_value if minimum else inner_value <= outer_value
         rows.append({"field": field, "operator": ">=" if minimum else "<=", "authorized_limit": str(outer_value), "observed_value": str(inner_value), "pass": passed})
@@ -1133,30 +1169,31 @@ def _canonical_limits(
     source: Any,
     *,
     code: str,
+    allow_unbounded_grid_count: bool = False,
 ) -> dict[str, str]:
     if not isinstance(source, Mapping):
         raise CycleRiskEnvelopeError(code)
     fields = _GRID_FIELDS if strategy_type == "grid" else _DCA_FIELDS
     if set(source) != set(fields):
         raise CycleRiskEnvelopeError(code)
-    limits = {
-        field: str(_decimal(source.get(field), code))
-        for field in fields
-    }
-    if _decimal(
-        limits[
-            "min_grid_count"
-            if strategy_type == "grid"
-            else "min_additions"
-        ],
-        code,
-    ) > _decimal(
-        limits[
-            "max_grid_count"
-            if strategy_type == "grid"
-            else "max_additions"
-        ],
-        code,
+    limits: dict[str, str] = {}
+    for field in fields:
+        raw_value = source.get(field)
+        if (
+            strategy_type == "grid"
+            and field == "max_grid_count"
+            and raw_value == _UNBOUNDED
+        ):
+            if not allow_unbounded_grid_count:
+                raise CycleRiskEnvelopeError(code)
+            limits[field] = _UNBOUNDED
+            continue
+        limits[field] = str(_decimal(raw_value, code))
+    min_field = "min_grid_count" if strategy_type == "grid" else "min_additions"
+    max_field = "max_grid_count" if strategy_type == "grid" else "max_additions"
+    if (
+        limits[max_field] != _UNBOUNDED
+        and _decimal(limits[min_field], code) > _decimal(limits[max_field], code)
     ):
         raise CycleRiskEnvelopeError(code)
     return limits
@@ -1614,6 +1651,7 @@ def _validate_policy_registry(rows: list[dict[str, Any]]) -> None:
                 strategy_type,
                 row.get("limits"),
                 code="outer_strategy_policy_invalid",
+                allow_unbounded_grid_count=True,
             )
             authorized_at = _utc_timestamp(
                 row.get("authorized_at"),

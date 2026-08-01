@@ -156,6 +156,21 @@ The envelope adds a boundary; it never replaces existing manual confirmation.
 Facts digests, acknowledgements and risk confirmations cannot be reused,
 synthesized or forged.
 
+### Explicit unbounded Grid count (Issue #501 amendment)
+
+For a Park-authored Grid outer policy, `limits.max_grid_count` may be the
+exact string `unbounded` when Park intentionally chooses not to impose an
+independent Grid-count ceiling.  This is an explicit policy value, not a
+missing field or a fallback.  The policy digest and persisted comparison row
+retain `operator=unbounded`, `authorized_limit=unbounded`, and `pass=true`
+when the AI envelope is compared with the outer policy.  The AI-generated
+cycle envelope itself remains numeric and therefore still has an exact fresh
+preview comparison.
+Any other non-numeric value, omission, or malformed sentinel remains
+`outer_strategy_policy_invalid` (fail-closed).  The remaining limits,
+authoritative plan/order cardinality checks, execution risk policy, dangerous
+start cap, and all existing safety gates remain unchanged.
+
 ## Durable concurrency and start ordering
 
 The store is append-only and crash-safe:
