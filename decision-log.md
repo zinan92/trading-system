@@ -12933,6 +12933,30 @@ auditable datafeed port; broker execution remains a separate port.
   `insufficient_conditions` entry while the overall status remains healthy;
   this keeps the condition visible without generating soak-start noise.
 
+# 2026-08-01 — Explicit unbounded Grid policy count (Issue #501)
+
+## Decision
+
+- A Park-authored Grid outer policy may explicitly set
+  `limits.max_grid_count` to the exact sentinel `unbounded` when the intended
+  boundary is no independent maximum Grid count.
+- The sentinel is canonicalized and included in the immutable policy digest;
+  the outer-policy comparison persists an `unbounded` operator row with
+  `pass=true`.  The AI-generated cycle envelope remains numeric and retains
+  exact fresh-preview comparisons.
+- This does not remove the independent leverage, per-grid notional, full-depth
+  loss, plan/order identity, execution-policy, dangerous-start, or existing
+  safety gates.  Unknown, missing, or any other non-numeric value remains
+  `outer_strategy_policy_invalid`.
+
+## Gotchas
+
+- `unbounded` is an explicit Park authorization, not a default for omitted
+  data.  AI cannot introduce it, and DCA limits remain numeric.
+- The full-depth loss boundary is still a concrete immutable value (for this
+  request, the AUM snapshot taken at authorization); it is not a live or
+  implicit expression.
+
 ## Verification
 
 - `python3 -m pytest -q tests/test_cloud_health.py tests/test_deadman_ping.py`

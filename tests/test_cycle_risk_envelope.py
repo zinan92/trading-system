@@ -532,6 +532,110 @@ def test_policy_registry_rejects_corrupt_unselected_and_duplicate_rows(
         store.outer_policy(policy["policy_id"], policy["version"])
 
 
+def test_outer_grid_policy_supports_explicit_unbounded_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    writer = CycleRiskEnvelopeStore(tmp_path)
+    policy = writer.authorize_outer_policy(
+        payload=_outer_policy_payload(
+            limits=_limits(
+                max_full_depth_loss="10068.18",
+                min_grid_count="0",
+                max_grid_count="unbounded",
+            )
+        ),
+        actor=actor,
+        now="2026-08-01T01:00:00+00:00",
+    )
+    binding = writer.bind_supervisor_outer_policy(
+        payload=_binding_payload(policy),
+        actor=actor,
+        now="2026-08-01T01:01:00+00:00",
+    )
+    store = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding["binding_id"],
+            "binding_version": binding["binding_version"],
+            "binding_digest": binding["binding_digest"],
+        },
+    )
+
+    envelope = store.authorize_envelope(
+        cycle_id="2026-07-30_DAY",
+        plan=_plan(),
+        payload={
+            "authorization_kind": (
+                "ai_policy_within_preapproved_strategy_boundary"
+            ),
+            "limits": _limits(
+                max_full_depth_loss="100",
+                min_grid_count="10",
+                max_grid_count="100",
+            ),
+        },
+        actor=None,
+        now="2026-08-01T01:02:00+00:00",
+    )
+
+    comparison = next(
+        row
+        for row in envelope["outer_policy_comparisons"]
+        if row["field"] == "max_grid_count"
+    )
+    assert comparison == {
+        "field": "max_grid_count",
+        "operator": "unbounded",
+        "authorized_limit": "unbounded",
+        "observed_value": "100",
+        "pass": True,
+    }
+    assert policy["limits"]["max_grid_count"] == "unbounded"
+
+
+def test_unknown_grid_count_sentinel_remains_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    store = CycleRiskEnvelopeStore(tmp_path)
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_invalid",
+    ):
+        store.authorize_outer_policy(
+            payload=_outer_policy_payload(
+                limits=_limits(max_grid_count="unlimited")
+            ),
+            actor=actor,
+            now="2026-08-01T01:00:00+00:00",
+        )
+
+
+def test_ai_envelope_cannot_introduce_unbounded_grid_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _policy, _binding = _bound_store(tmp_path, monkeypatch)
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="risk_envelope_authorization_invalid",
+    ):
+        store.authorize_envelope(
+            cycle_id="2026-07-30_DAY",
+            plan=_plan(),
+            payload={
+                "authorization_kind": (
+                    "ai_policy_within_preapproved_strategy_boundary"
+                ),
+                "limits": _limits(max_grid_count="unbounded"),
+            },
+            actor=None,
+            now="2026-08-01T01:02:00+00:00",
+        )
+
 def test_concurrent_policy_writes_keep_one_immutable_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
