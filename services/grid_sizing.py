@@ -266,6 +266,10 @@ def preview_id(preview: dict[str, Any]) -> str:
         "range": preview.get("range"),
         "grid": preview.get("grid"),
         "orders": preview.get("orders"),
+        # Supervisor refreshes carry a per-attempt nonce so a rebuilt
+        # execution preview cannot accidentally reuse the prior prepared
+        # capability even when its frozen economic geometry is unchanged.
+        "supervisor_preview_nonce": preview.get("supervisor_preview_nonce"),
         "solver": {
             "mode": solver.get("mode"),
             "locked": solver.get("locked"),

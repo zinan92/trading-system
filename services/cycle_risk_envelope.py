@@ -521,7 +521,21 @@ class CycleRiskEnvelopeStore:
             )
         source_proposal = envelope.get("source_proposal")
         if isinstance(source_proposal, Mapping):
-            if (
+            # The source proposal identifies the immutable AI candidate that
+            # produced the cycle envelope.  An already-active Grid plan may
+            # be prepared against a newly rebuilt execution preview (for
+            # example after a transient market move).  That fresh preview
+            # intentionally has a new id/facts digest; its identity is bound
+            # below by the exact numeric comparisons and the later derived
+            # execution-plan receipt.  DCA retains exact execution-shape
+            # identity, and no-plan candidate verification still requires the
+            # source proposal preview to match exactly.
+            active_grid_plan = (
+                bool(plan)
+                and _strategy_type(plan) == "grid"
+                and str(envelope.get("strategy_type") or "") == "grid"
+            )
+            if not active_grid_plan and (
                 str(source_proposal.get("preview_id") or "")
                 != str(preview.get("preview_id") or "")
                 or str(source_proposal.get("preview_digest") or "")

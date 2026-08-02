@@ -5201,6 +5201,52 @@ def test_abandoned_supervisor_attempt_cannot_use_orphan_prepared_start(
     )
 
 
+def test_supervisor_rebuilds_distinct_preview_identity_per_attempt(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    payload = adaptive_grid_payload()
+    store = PaperSupervisorStore(output)
+
+    def prepare(attempt_id: str, now: str) -> dict:
+        with store.try_lease(cycle_id, holder_id=attempt_id) as lease:
+            assert lease is not None
+            lease.record_pre_intent_started(
+                attempt_id=attempt_id,
+                observed_at=now,
+                phase_scope="create_or_prepare",
+            )
+            prepared = plane.control(
+                cycle_id,
+                "prepare_start",
+                {
+                    **payload,
+                    "supervisor_attempt_id": attempt_id,
+                },
+                market=market(close=4_137.44),
+                account=account_context(),
+                now=now,
+            )
+            lease.abandon_pre_intent(
+                attempt_id=attempt_id,
+                observed_at=now,
+            )
+            return prepared
+
+    first = prepare("supervisor-attempt-1", "2026-07-05T01:40:00+00:00")
+    second = prepare("supervisor-attempt-2", "2026-07-05T01:41:00+00:00")
+
+    assert first["preview"]["preview_id"] != second["preview"]["preview_id"]
+    assert first["prepared_start_id"] != second["prepared_start_id"]
+
+
 def test_supervisor_attempt_cannot_start_a_second_prepared_capability(
     tmp_path: Path,
 ) -> None:

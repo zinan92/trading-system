@@ -1338,6 +1338,17 @@ class StrategyControlPlane:
             account=account,
             now=now,
         )
+        if (
+            supervisor_attempt_id
+            and str(payload.get("strategy_type") or "grid").lower()
+            == "grid"
+        ):
+            # A Supervisor retry freezes the active plan's economic geometry
+            # but must still produce a new preview identity.  The nonce is
+            # audit metadata only; all market, range, risk and order gates
+            # below remain authoritative and exact.
+            preview["supervisor_preview_nonce"] = supervisor_attempt_id
+            preview["preview_id"] = _grid_preview_id(preview)
         if requested_envelope_id:
             candidate_proposal = (
                 self._candidate_proposal_for_envelope(
