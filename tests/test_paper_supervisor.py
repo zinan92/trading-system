@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -441,6 +442,70 @@ def test_active_grid_request_freezes_geometry_for_fresh_supervisor_preview() -> 
         "notional_mode": "manual",
     }
     assert request["risk_budget"] == {"leverage": 10}
+
+
+@pytest.mark.parametrize("verification_passes", [True, False])
+def test_stale_plan_identity_blocker_rechecks_exact_envelope_gate(
+    tmp_path: Path,
+    verification_passes: bool,
+) -> None:
+    calls: list[dict] = []
+
+    class FakeRiskEnvelopes:
+        def verify_candidate_plan_identity(self, **kwargs: dict) -> None:
+            calls.append(kwargs)
+            if not verification_passes:
+                raise ValueError("plan_identity_conflict")
+
+    plan = {
+        "cycle_id": CYCLE,
+        "strategy_plan_id": "strategy-plan-current",
+        "version": 3,
+        "cycle_risk_envelope_id": "envelope-current",
+        "direction": "neutral",
+        "strategy_type": "grid",
+    }
+    plane = SimpleNamespace(risk_envelopes=FakeRiskEnvelopes())
+    supervisor = PaperSupervisor(
+        tmp_path / "outputs",
+        plane=plane,
+        execution=object(),
+        control=lambda *_args, **_kwargs: {},
+        accounting_reconciliation=lambda: "pass",
+    )
+    state = supervisor.episodes.new_cycle(CYCLE, observed_at=T0)
+    state = supervisor.episodes.record_structural_blocker(
+        state,
+        classification=classify_blocker(
+            control_code="plan_identity_conflict"
+        ),
+        observed_at=T0,
+    )
+    authority = SimpleNamespace(
+        cycle_id=CYCLE,
+        active_plan=plan,
+        accepted_order_fingerprints=(),
+        open_position_count=0,
+        reconciliation={"execution": "ok", "accounting": "pass"},
+    )
+
+    updated, cleared = supervisor._recheck_structural(
+        state,
+        authority=authority,
+        observed_at=(T0 + timedelta(minutes=1)).isoformat(),
+    )
+
+    assert cleared is verification_passes
+    assert calls and calls[0]["envelope_authorization_id"] == "envelope-current"
+    assert calls[0]["plan"] == plan
+    assert calls[0]["now"] == (T0 + timedelta(minutes=1)).isoformat()
+    assert updated["mode"] == (
+        "ready" if verification_passes else "blocked_structural"
+    )
+    if verification_passes:
+        assert updated["blocker"] is None
+    else:
+        assert updated["blocker"]["machine_code"] == "plan_identity_conflict"
 
 
 def test_missing_rollover_event_and_absent_plan_converge_from_state(

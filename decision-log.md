@@ -13104,3 +13104,30 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Added regression coverage for a distinct fresh Grid preview within exact
   envelope fields and for an out-of-bound fresh numeric value.
+
+# 2026-08-02 — Recheck a stale plan-identity blocker after safe release recovery (#511)
+
+## Decision
+
+- A previously recorded `plan_identity_conflict` may be cleared only by a
+  fresh recheck of the existing candidate-plan/envelope identity verifier.
+- Clearance additionally requires the current authoritative snapshot to have
+  exact execution/accounting reconciliation and zero accepted orders/open
+  positions. The clearance observation performs no control action and never
+  replays a prepared start.
+- Any missing verifier, envelope id, exposure, reconciliation drift, or verifier
+  exception remains structural and alerting (fail closed).
+
+## Gotchas
+
+- A deployment can fix the cause of a structural identity rejection after the
+  old episode has already become blocked. Without an explicit, evidence-bound
+  recheck, that historical result becomes a new absorbing state.
+- This recheck does not validate or authorize a fresh preview; the normal next
+  tick still runs the unchanged preview, prepared-start, market, risk, and
+  start-intent gates.
+
+## Verification
+
+- `python3 -m pytest -q tests/test_paper_supervisor.py` (49 passed).
+- `python3 -m ruff check services/paper_supervisor.py tests/test_paper_supervisor.py`.

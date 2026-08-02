@@ -2166,6 +2166,46 @@ class PaperSupervisor:
                     "cycle_risk_envelope_id"
                 )
             )
+        elif machine_code == "plan_identity_conflict":
+            # A release can fix the exact preview/plan identity check after a
+            # prior deployment has already persisted this structural result.
+            # Recheck the same immutable candidate-plan gate before allowing
+            # the next fresh heartbeat to attempt convergence.  This is
+            # deliberately narrower than clearing the blocker from presence
+            # of a plan: the authoritative snapshot must still be clean and
+            # the existing envelope verifier must pass without mutation.
+            plan = dict(authority.active_plan or {})
+            envelope_id = str(
+                plan.get("cycle_risk_envelope_id") or ""
+            )
+            risk_envelopes = getattr(
+                self.plane,
+                "risk_envelopes",
+                None,
+            )
+            verify_candidate = getattr(
+                risk_envelopes,
+                "verify_candidate_plan_identity",
+                None,
+            )
+            if (
+                plan
+                and envelope_id
+                and not self._has_exposure(authority)
+                and self._reconciliation_exact(authority)
+                and callable(verify_candidate)
+            ):
+                try:
+                    verify_candidate(
+                        cycle_id=authority.cycle_id,
+                        envelope_authorization_id=envelope_id,
+                        plan=plan,
+                        now=observed_at,
+                    )
+                except Exception:  # noqa: BLE001 - fail closed on any mismatch.
+                    cleared = False
+                else:
+                    cleared = True
         elif machine_code == "supervisor_configuration_invalid":
             # Reaching this pass proves the unique mode and fixed budgets were
             # accepted by the scheduler composition.
