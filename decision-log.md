@@ -13045,3 +13045,28 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 - `python3 -m pytest -q tests/test_cloud_ai_provider.py tests/test_cloud_service_boot.py tests/test_paper_supervisor_episode.py tests/test_paper_supervisor_contract_v2.py` (33 passed).
+
+# 2026-08-02 — Live-tick Codex state write boundary (Issue #507)
+
+## Decision
+
+- Keep `ProtectSystem=strict` and the existing `/var/lib/gridmind` boundary.
+  Add only `/opt/gridmind/.codex` to `ReadWritePaths` for the Paper
+  `gridmind-live-tick.service`, because the authenticated Codex CLI updates
+  its local state database and installation marker during a provider call.
+- Do not grant this path to Dashboard, datafeed, gateway, tunnel, report,
+  review, backup, or dead-man services.
+
+## Gotchas
+
+- A readiness smoke outside systemd can pass while the real live-tick unit
+  fails: `ProtectSystem=strict` turns the Codex state database open into
+  `EROFS`.  The production verification must use the same unit sandbox.
+- The writable path is the dedicated provider state directory only; broad
+  `/opt/gridmind` write access or removal of the protection would weaken the
+  Paper service boundary.
+
+## Verification
+
+- Focused renderer and provider/supervisor contract tests must pass before
+  installing the changed unit.

@@ -158,6 +158,7 @@ Requires=gridmind-datafeed.service
 [Service]
 Type=oneshot
 {common}
+ReadWritePaths=/opt/gridmind/.codex
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service dualtrack-live-tick
 ExecStart={p.app_python} -m pipelines.dualtrack_cycle_runner --event live-tick
 TimeoutStartSec=55""",
