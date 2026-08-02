@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import subprocess
 
 from services.cloud_ai_provider import CloudAIProviderReadiness, _digest, _sha256
 from services.journal_store import write_json
+from pipelines.cloud_ai_provider_readiness import _auth_status_ready
 
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
@@ -87,3 +89,30 @@ def test_provider_readiness_fails_closed_when_executable_changes(tmp_path: Path)
 
     assert result["ok"] is False
     assert result["blocker"] == "cloud_ai_provider_executable_changed"
+
+
+def test_provider_auth_accepts_success_on_stderr_but_remains_fail_closed() -> None:
+    assert _auth_status_ready(
+        subprocess.CompletedProcess(
+            args=["codex", "login", "status"],
+            returncode=0,
+            stdout="",
+            stderr="Logged in using ChatGPT\n",
+        )
+    ) is True
+    assert _auth_status_ready(
+        subprocess.CompletedProcess(
+            args=["codex", "login", "status"],
+            returncode=1,
+            stdout="Logged in using ChatGPT\n",
+            stderr="",
+        )
+    ) is False
+    assert _auth_status_ready(
+        subprocess.CompletedProcess(
+            args=["codex", "login", "status"],
+            returncode=0,
+            stdout="",
+            stderr="permission denied\n",
+        )
+    ) is False
