@@ -50,6 +50,12 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     assert "pipelines.cloud_service_boot --service dualtrack-live-tick" in rendered[
         "gridmind-live-tick.service"
     ]
+    assert "ReadWritePaths=/opt/gridmind/.codex" in rendered[
+        "gridmind-live-tick.service"
+    ]
+    assert "ReadWritePaths=/opt/gridmind/.codex" not in rendered[
+        "gridmind-dashboard.service"
+    ]
     assert "pipelines.cloud_daily_self_review" in rendered[
         "gridmind-daily-self-review.service"
     ]
