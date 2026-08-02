@@ -102,7 +102,7 @@ def run(*, output_root: Path | None = None, repo_root: Path = ROOT) -> dict[str,
             check=False,
             env=env,
         )
-        if login.returncode != 0 or "logged in" not in (login.stdout or "").lower():
+        if not _auth_status_ready(login):
             raise ProviderReadinessFailure("strategy_recommendation_provider_auth_not_ready")
         receipt["provider"]["auth_status"] = "logged_in"
 
@@ -191,6 +191,20 @@ def _valid_response(value: dict[str, Any]) -> bool:
 
 def _safe_line(value: str) -> str:
     return str(value).strip().splitlines()[0][:200]
+
+
+def _auth_status_ready(result: subprocess.CompletedProcess[str]) -> bool:
+    """Accept the CLI's status stream without weakening its exit-code gate.
+
+    Codex CLI currently writes the successful human-readable login status to
+    stderr.  Both streams are intentionally inspected, while a non-zero exit
+    remains a hard failure and missing text remains fail-closed.
+    """
+
+    if result.returncode != 0:
+        return False
+    combined = "\n".join((str(result.stdout or ""), str(result.stderr or ""))).lower()
+    return "logged in" in combined
 
 
 def build_parser() -> argparse.ArgumentParser:

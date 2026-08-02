@@ -13023,3 +13023,25 @@ auditable datafeed port; broker execution remains a separate port.
   (26 passed).
 - `python3 -m pytest -q tests/test_cloud_*.py tests/test_paper_supervisor_read_model.py tests/test_trading_system_read_model.py`
   (114 passed).
+
+# 2026-08-02 — Codex provider auth stream compatibility (Issue #505)
+
+## Decision
+
+- Treat a zero-exit `codex login status` response containing `logged in` in
+  either stdout or stderr as authenticated.  Codex CLI currently emits the
+  successful human-readable status on stderr in the Cloud runtime.
+- Keep the nonzero-exit and missing-status paths fail-closed.  The readiness
+  receipt still requires the exact source/tree attestation, executable digest,
+  response contract, and side-effect-free provider contract.
+
+## Gotchas
+
+- Checking stdout alone creates a false structural blocker even when the
+  provider is authenticated; accepting any text without a zero exit would
+  weaken the auth gate.  Both streams must be combined only after the exit
+  code passes.
+
+## Verification
+
+- `python3 -m pytest -q tests/test_cloud_ai_provider.py tests/test_cloud_service_boot.py tests/test_paper_supervisor_episode.py tests/test_paper_supervisor_contract_v2.py` (33 passed).
