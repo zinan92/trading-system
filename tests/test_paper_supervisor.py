@@ -405,6 +405,44 @@ def test_market_moved_uses_fresh_preview_and_prepared_start_then_recovers(
     assert control.intent_seen_before_start is True
 
 
+def test_active_grid_request_freezes_geometry_for_fresh_supervisor_preview() -> None:
+    plan = {
+        "cycle_id": CYCLE,
+        "strategy_plan_id": "strategy-plan-current",
+        "version": 3,
+        "strategy_type": "grid",
+        "direction": "neutral",
+        "style": "steady",
+        "range": {
+            "low": 3900,
+            "high": 4200,
+            "scope": "full",
+            "split_price": 4050,
+            "source_envelope": {"low": 3900, "high": 4200},
+        },
+        "grid": {
+            "count": 38,
+            "mode": "arithmetic",
+            "notional_per_grid": 5000,
+            "notional_mode": "auto",
+            "out_of_range": "exit_only",
+            "leverage": 10,
+        },
+    }
+
+    request = PaperSupervisor._request_from_plan(plan)
+
+    assert request["range"] == plan["range"]
+    assert request["grid"] == {
+        "count": 38,
+        "mode": "arithmetic",
+        "notional_per_grid": 5000,
+        "out_of_range": "exit_only",
+        "notional_mode": "manual",
+    }
+    assert request["risk_budget"] == {"leverage": 10}
+
+
 def test_missing_rollover_event_and_absent_plan_converge_from_state(
     tmp_path: Path,
 ) -> None:

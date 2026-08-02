@@ -343,6 +343,87 @@ def test_ai_candidate_envelope_is_persisted_before_plan_and_binds_later_plan(
     )
 
 
+def test_active_grid_envelope_accepts_distinct_fresh_execution_preview(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _policy, _binding = _bound_store(tmp_path, monkeypatch)
+    proposal = _ai_proposal()
+    source_preview = _preview()
+    envelope = store.authorize_ai_candidate_envelope(
+        cycle_id="2026-07-30_DAY",
+        proposal=proposal,
+        preview=source_preview,
+        now="2026-07-30T01:02:00+00:00",
+    )
+    plan = {
+        **proposal,
+        "strategy_plan_id": "strategy-plan-ai-boundary",
+        "version": 1,
+        "source_proposal_ids": [proposal["proposal_id"]],
+    }
+    fresh_preview = {
+        **_preview(),
+        "preview_id": "grid-preview-rebuilt",
+        "market": {"latest_close": "4050.00"},
+    }
+
+    verified = store.verify_preview(
+        cycle_id="2026-07-30_DAY",
+        plan=plan,
+        envelope_authorization_id=envelope["envelope_authorization_id"],
+        preview=fresh_preview,
+        now="2026-07-30T01:03:00+00:00",
+    )
+
+    assert verified["passed"] is True
+    assert verified["preview_id"] == "grid-preview-rebuilt"
+    assert verified["preview_facts_digest"] != envelope["source_proposal"][
+        "preview_digest"
+    ]
+    assert verified["authorized_source_plan"]["source_proposal"][
+        "preview_id"
+    ] == source_preview["preview_id"]
+    assert all(row["pass"] for row in verified["comparisons"])
+
+
+def test_active_grid_fresh_preview_still_fails_exact_numeric_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _policy, _binding = _bound_store(tmp_path, monkeypatch)
+    proposal = _ai_proposal()
+    envelope = store.authorize_ai_candidate_envelope(
+        cycle_id="2026-07-30_DAY",
+        proposal=proposal,
+        preview=_preview(),
+        now="2026-07-30T01:02:00+00:00",
+    )
+    plan = {
+        **proposal,
+        "strategy_plan_id": "strategy-plan-ai-boundary",
+        "version": 1,
+        "source_proposal_ids": [proposal["proposal_id"]],
+    }
+
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="risk_envelope_preview_out_of_bounds",
+    ):
+        store.verify_preview(
+            cycle_id="2026-07-30_DAY",
+            plan=plan,
+            envelope_authorization_id=envelope[
+                "envelope_authorization_id"
+            ],
+            preview={
+                **_preview(grid__notional_per_grid="50.0000001"),
+                "preview_id": "grid-preview-rebuilt",
+            },
+            now="2026-07-30T01:03:00+00:00",
+        )
+
+
 def test_control_plane_locks_the_exact_candidate_envelope_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

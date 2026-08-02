@@ -13070,3 +13070,37 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused renderer and provider/supervisor contract tests must pass before
   installing the changed unit.
+
+# 2026-08-02 — Active Grid envelopes permit a fresh execution preview (#509)
+
+## Decision
+
+- Keep the AI cycle envelope's immutable source proposal, active-plan identity,
+  Park outer-policy binding, and exact numeric comparisons unchanged.
+- When an active Grid plan is already bound to an AI candidate envelope,
+  `prepare_start` may verify a newly rebuilt execution preview with a distinct
+  `preview_id` and facts digest. The fresh preview is still checked for exact
+  strategy type/direction and every envelope field; the derived execution plan
+  is linked and verified before any order submission.
+- DCA execution-shape identity and no-plan candidate verification continue to
+  require the source proposal preview identity exactly. Human envelopes are
+  unchanged.
+
+## Gotchas
+
+- The source proposal preview is provenance for the immutable cycle candidate;
+  it is not the authorization to reuse stale market facts. A fresh Grid
+  execution preview must carry its own id/digest and cannot inherit a prior
+  facts digest or acknowledgement.
+- Supervisor refreshes keep the active plan's frozen Grid geometry and add a
+  per-attempt preview nonce; a changed market mark is still checked by the
+  existing prepared-start market gate.
+- This is not a tolerance: a changed numeric field that falls outside the
+  immutable envelope still fails closed as `risk_envelope_preview_out_of_bounds`.
+- No plan, runtime, order, position, control-audit or historical fill is
+  rewritten by this change.
+
+## Verification
+
+- Added regression coverage for a distinct fresh Grid preview within exact
+  envelope fields and for an out-of-bound fresh numeric value.

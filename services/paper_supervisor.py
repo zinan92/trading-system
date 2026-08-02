@@ -1140,6 +1140,41 @@ class PaperSupervisor:
             request["risk_budget"] = {
                 "leverage": risk.get("leverage")
             }
+        else:
+            # Starting an already-selected Grid plan must refresh the trusted
+            # market facts without silently recalculating its economic
+            # geometry.  This keeps the immutable cycle envelope exact while
+            # still allowing each Supervisor attempt to receive a new
+            # preview/prepared identity.
+            grid = dict(plan.get("grid") or {})
+            request["range"] = {
+                key: plan.get("range", {}).get(key)
+                for key in (
+                    "low",
+                    "high",
+                    "scope",
+                    "split_price",
+                    "source_envelope",
+                )
+                if isinstance(plan.get("range"), Mapping)
+                and plan.get("range", {}).get(key) is not None
+            }
+            request["grid"] = {
+                key: grid.get(key)
+                for key in (
+                    "count",
+                    "mode",
+                    "notional_per_grid",
+                    "out_of_range",
+                )
+                if grid.get(key) is not None
+            }
+            # Preserve the plan's current per-grid amount instead of
+            # re-sizing from a moving account balance during a retry.
+            if grid.get("notional_per_grid") is not None:
+                request["grid"]["notional_mode"] = "manual"
+            if grid.get("leverage") is not None:
+                request["risk_budget"] = {"leverage": grid["leverage"]}
         return request
 
     def _authority(
