@@ -1,5 +1,37 @@
 # Decision Log
 
+## Server-local unattended Paper provider (Issue #463)
+
+Date: 2026-08-02
+
+### Decision
+
+- Cloud Paper uses the official Codex CLI as the server-local recommendation
+  provider.  The `gridmind` service account owns its host-only `CODEX_HOME`;
+  the Mac file bridge is not consulted by the production command.
+- A source-bound readiness receipt is required before every Cloud live-tick
+  boot.  It proves executable identity, authentication status, bounded timeout,
+  and the JSON proposal contract without persisting prompts, responses,
+  tokens, or exchange credentials.
+- Provider timeout/transport/failure results are explicit transient whitelist
+  entries and use the existing episode backoff. Missing, malformed,
+  unauthenticated, or invalid-output provider states remain structural.
+- An older `unknown_blocker` episode may clear only when the same cycle has a
+  typed provider failure after the block and the current source-bound provider
+  readiness receipt passes.  No historical state is rewritten and no control
+  request is replayed during clearance.
+
+### Gotchas
+
+- The official CLI must be installed and authenticated as `gridmind`; a
+  successful smoke run as `root` is not provider readiness evidence.
+- The readiness receipt is tied to both source SHA and source tree SHA.  A
+  source release or provider wrapper change requires a new receipt before the
+  next live-tick boot.
+- The provider is proposal-only.  Existing Park outer-policy, risk-envelope,
+  preview, manual confirmation, prepared-start, and public-control gates
+  remain authoritative; a provider response alone cannot create an order.
+
 ## Project-owned operating records (Issue #502)
 
 Date: 2026-08-02

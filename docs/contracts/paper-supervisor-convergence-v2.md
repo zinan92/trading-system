@@ -50,10 +50,10 @@ Missing, non-positive or inconsistent cardinality is structural; the
 Supervisor never repairs an identity or count mismatch by adding, cancelling
 or replacing orders.
 
-## Exact blocker classifier v2
+## Exact blocker classifier v3
 
 The machine-readable source is
-`docs/contracts/paper-supervisor-blocker-v2.json`. Classification uses exact
+`docs/contracts/paper-supervisor-blocker-v3.json`. Classification uses exact
 typed evidence and exact machine-code equality only. Substring, prefix, regex,
 exception prose and free-text matching are forbidden.
 
@@ -70,6 +70,9 @@ An unlisted, malformed or newly observed code is always
 | `execution_tick_heartbeat_temporarily_missing` | Wait for a fresh complete tick; promote after ten continuous minutes as specified below. |
 | `upstream_data_source_transient_failure` | Probe the external source, then start a wholly fresh sequence. |
 | `supervisor_attempt_deadline_before_intent` | Local Supervisor budget ended strictly before durable `start_intent`; schedule a fresh attempt. |
+| `strategy_recommendation_provider_timeout` | The bounded server-local provider timed out before any control intent; retry through the episode budget. |
+| `strategy_recommendation_provider_unavailable` | The server-local provider transport failed before any control intent; retry through the episode budget. |
+| `strategy_recommendation_provider_failed` | The provider returned a typed failure before any control intent; retry through the episode budget. |
 
 `supervisor_attempt_deadline_before_intent` is local resource pressure.
 `upstream_data_source_transient_failure` requires independent typed evidence of
@@ -106,6 +109,12 @@ timeout exception.
 | `risk_policy_rejected` | Existing risk policy rejected or could not produce a current valid decision. |
 | `trusted_market_provenance_invalid` | Market provenance, identity or payload is structurally invalid. |
 | `supervisor_configuration_invalid` | Required classifier, schedule or integration configuration is invalid. |
+| `strategy_recommendation_provider_missing` | The configured server-local provider executable is absent. |
+| `strategy_recommendation_provider_not_executable` | The configured provider cannot execute. |
+| `strategy_recommendation_provider_invalid_output` | The provider did not return the required JSON proposal contract. |
+| `strategy_recommendation_provider_command_invalid` | The provider command configuration is malformed. |
+| `strategy_recommendation_provider_timeout_invalid` | The provider timeout configuration is invalid. |
+| `strategy_recommendation_provider_auth_not_ready` | Server-local provider authentication is not ready. |
 | `dangerous_start_attempt_cap_reached` | A third dangerous start intent would exceed the per-cycle cap of two. |
 | `clean_refusal_observation_cap_reached` | A forty-ninth proven-clean refusal would exceed the logic-runaway guard. |
 | `unknown_blocker` | Fail-closed result for every unclassified or malformed condition. |
@@ -137,6 +146,16 @@ The v2 amendment is exhaustive:
 - preserve every other code and its v1 classification exactly.
 
 No other addition, removal, rename or semantic change is authorized.
+
+### Issue #463 provider amendment
+
+The v3 whitelist formally adds the typed provider outcomes introduced by the
+server-local unattended provider story.  Timeout, transport-unavailable and
+provider-failed outcomes are transient and use the existing bounded episode
+retry path.  Missing, non-executable, malformed-command, invalid-timeout,
+invalid-output and unauthenticated-provider outcomes are structural.  No
+unclassified text is matched and the default remains `unknown_blocker` /
+structural.
 
 ## Immutable Park outer policy
 
