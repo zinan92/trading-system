@@ -12,23 +12,29 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-07-31)
-- Supervisor 已完成分阶段 Cloud Paper 部署，但 48 小时验收尚未开始/尚未通过：
-  当前 Cloud source 为 `main@1f6a3fd58f673949edee5c57636987fe6f32e678`
-  （PR #498，含 #497 当前周期健康选择修复）。第一阶段 #494 部署
-  `0de65294421502aae640667f7898465677a4eddc` 保持
-  `legacy_cycle_decision`；第二阶段 #496 部署
-  `82a66a3df88cf8077ed972a4787a73c1edf288d7` 翻转为精确的
-  `convergence.mode=paper_supervisor` + `cycle_decision.enabled=false`。
-  两阶段均通过 Cloud Paper preflight、source SHA/tree、boot gate；当前
-  五个 Cloud timer（live-tick、dead-man、24h-report、self-review、backup）
-  均 enabled/active，read-model HTTP 200，Paper-only/live=false。
-- 激活后首次真实 Supervisor tick 在 5 分钟内为当前
-  `2026-07-31_DAY` 写入独立 attempt/observation；控制审计为一次
-  `prepare_start` rejected，机器码 `risk_envelope_missing`，按显式白名单
-  判为 structural，0 control actions、0 open orders、0 open positions、无
-  `control_outcome_unknown`。旧 CycleDecisionCoordinator 未被调用；当前
-  cycle 的终态是 `blocked-structural`，不是运行成功。
+## 现在在哪里(2026-08-02)
+- Cloud Paper Supervisor 已按分阶段流程部署并启用。当前 app/live-tick
+  source 为 `main@eb2408088b34318d248d15b3c52d222635d6a531`，tree
+  `c1eb574d2b90051c7ce9abae046621b9d824d798`；provider readiness、preflight
+  与当前 live-tick/dashboard boot gate 均为 `pass`，Paper-only=`true`、
+  provider orders/production mutation/exchange credentials 均为 `false`。
+- 云端自然 tick 在 2026-08-02 21:00 北京时间边界由 Supervisor 自动收敛：
+  当前 `2026-08-02_NIGHT`、计划
+  `strategy-plan-2026-08-02_NIGHT-2-96ed5413` v2，38/38 accepted orders，
+  runtime=`running/running`，heartbeat=`ready/fresh`，执行与会计对账通过。
+  首次启动只产生一条 `start_intent`；后续 tick 均为
+  `healthy/adopted_existing`，无重复控制动作、无不确定结果。
+- 当前五个 Cloud timer（live-tick、dead-man、24h-report、self-review、
+  backup）均 `enabled/active`；datafeed、dashboard、access gateway、
+  cloudflared 及 live-tick timer 均 active；read-model 与 cloud-health
+  均 HTTP 200。Dashboard 当前进程 cwd 精确落在上述 release。
+- cloud-health 当前为 `degraded/warning`，唯一公开 warning 是
+  `daily_self_review_missing_or_incomplete`；无 critical incidents。运行率
+  窗口从本次真实 Supervisor 启动开始，首个完整窗口前保持
+  `insufficient`，不把历史停机区间计入本次验收。
+- 本次真实运行是上线证据，不是 48 小时验收完成证据。验收仍要求连续
+  48 小时保守运行率 ≥85%、三个真实周期边界（含一次 21:00）以及一次
+  完整 transient 自动恢复审计链；在证据形成前不得声称完成。
 - #444 backup 根因已证实为历史 root 创建的两个 `0600` 文件，不是
   `ReadWritePaths` 或 unit 漂移；已在同一 `gridmind-backup.service`
   （User/Group=`gridmind`）下修复属主并成功生成/校验
@@ -41,9 +47,9 @@
 - 激活前基线已另存为
   `/var/lib/gridmind/outputs/cloud/baseline/activation-20260731T110013Z.json`
   （措辞为“激活前已观测到，后续用于归因对比；不作因果断言。”）。
-  48 小时运行率时钟不宣称通过：当前结构性风险信封缺失与权威执行快照
-  过期需先由人工按既有闸门处理；不得盲目重试或回滚。
-- #467 已在代码中完成、尚未部署或启用：每个 Supervisor tick 先以
+  该基线不计入本次 48 小时运行率；当前 NIGHT 周期已在同一安全路径下
+  运行，历史 blocked/过期快照只保留为不可变审计事实，不重试、不回写。
+- #467 已部署并在当前 Cloud Paper Supervisor 中生效：每个 Supervisor tick 先以
   append+fsync 持久化唯一 claim，所有 heartbeat/pre-intent/start/terminal
   记录绑定该 claim；同一 fresh tick 重放只返回原 observation，claim 后崩溃
   会先零控制调用收口，不能产生第二套订单。每条 observation 锚定精确 WAL
@@ -56,13 +62,13 @@
   与 Dashboard Supervisor 页公开本周期完整 attempt/start/observation
   不可变历史且无控制入口。浏览器证据见
   [`docs/evidence/issue-467/issue-467-supervisor-history.png`](docs/evidence/issue-467/issue-467-supervisor-history.png)。
-  本票不改 health 分级、不切换 convergence mode、不部署 Cloud，也不构成
-  48 小时验收。
-- #466 已在代码中接通、尚未启用或部署：状态驱动的 Paper Supervisor 只在
+  本票的实现与真实 Cloud 运行证据均不替代 48 小时验收。
+- #466 已接入当前 Cloud natural tick 并生效：状态驱动的 Paper Supervisor 只在
   同一自然 live-tick 完成 lifecycle、保护单、计划同步、盘中处理、账本重建
   并持久化完整 heartbeat 后执行一次收敛。唯一 `convergence.mode` 使它与
-  legacy CycleDecisionCoordinator 机械互斥；当前生产配置仍保持
-  `legacy_cycle_decision`。Supervisor 只调用公开推荐/计划锁/
+  legacy CycleDecisionCoordinator 机械互斥；当前生产配置为
+  `paper_supervisor`，legacy CycleDecisionCoordinator 在该 mode 下不调用。
+  Supervisor 只调用公开推荐/计划锁/
   `prepare_start`/`start`，执行器只读 snapshot/reconcile；没有私有下单路径。
   `prepare_start` 现在内容寻址地绑定 start 前/后计划身份与精确订单
   fingerprints；#464 lease 会在公开 start 前 append+fsync intent。干净拒绝
@@ -78,11 +84,12 @@
   fresh/missing heartbeat 与 pre-intent reservation 已进入同一哈希 WAL，
   checkpoint 按 sequence 重放，尾部截断 fail-closed；崩溃产生的 orphan
   prepared token 无法调用 start。45s soft deadline 之外另有独立 52s
-  process watchdog，覆盖控制清理、恢复、fsync 与 lease release。该 PR 不提供 #463 云端 AI
-  provider、不迁移 health/read-model/dead-man，也不构成 48 小时验收。
+  process watchdog，覆盖控制清理、恢复、fsync 与 lease release。云端 provider
+  readiness、health/read-model/dead-man 已按当前 release 验证；仍不构成
+  48 小时验收。
   可复验矩阵见
   [`docs/evidence/issue-466-paper-supervisor-integration-2026-07-31.md`](docs/evidence/issue-466-paper-supervisor-integration-2026-07-31.md)。
-- #461 已实测并选择拓扑，尚未部署 Supervisor：同一 Cloud host、owner
+- #461 已实测并选择拓扑，当前沿用同一 Cloud host、owner
   epoch 3、clean `742c49f` 的 1,281 个自然成功 tick 跨过
   `DAY→NIGHT→DAY` 两个真实北京时间边界。基础 tick 工作 p99=1.785s、
   max=2.610s，在 55s unit 超时与 45s Supervisor 预算之间仍分别保留
@@ -90,16 +97,17 @@
   timer，并把 AI 子预算从 30s 压到 25s；完整 tick 心跳仍必须先成功持久化。
   原始输入哈希、分阶段分位数和 unit 合同见
   [`docs/evidence/issue-461-cloud-live-tick-latency-2026-07-31.md`](docs/evidence/issue-461-cloud-live-tick-latency-2026-07-31.md)。
-- #465 已实现但尚未接入或部署：Paper Supervisor 的纯状态机以精确白名单
+- #465 已接入当前 Cloud Paper Supervisor：纯状态机以精确白名单
   区分 transient/structural；五次短退避失败后告警并转为每 30 分钟持续
   probe，不把预算耗尽变成周期终止。未知/部分执行结果使用每周期 cap=2 的
   危险预算；只有 runtime、权威订单快照、控制审计共同证明零订单的拒绝才
   使用独立 cap=48（40 时 warning）的观察预算。心跳连续缺失超过十分钟才
   升级 `execution_tick_scheduler_down`；结构性解除只恢复此前观察调度，
-  不重放命令。新周期预算完全重置。该模块尚未调用控制面或创建订单。
-- #464 已实现但尚未接入或部署：Paper Supervisor 现在有独立的 append+fsync 哈希事件链、原子状态投影和稳定 inode 的非阻塞单飞锁；任何 `prepared_start_id` 在 `start_intent` 落盘后永久作废。响应丢失只在 active plan、runtime、精确订单 fingerprints、双层对账与 append-only 控制审计全部一致时收口为 `executed` 或可分类的零订单干净拒绝，其余一律 `control_outcome_unknown`，恢复过程零控制调用。该模块尚未连接自然 tick、Dashboard 或 Nautilus，不代表 Supervisor 已上线。
+  不重放命令。新周期预算完全重置。当前 NIGHT 已在同一 lease 下完成一次
+  正常 `prepare_start → start`，随后只读收敛为 `adopted_existing`，未创建第二套订单。
+- #464 已接入当前 Cloud Paper Supervisor：现在有独立的 append+fsync 哈希事件链、原子状态投影和稳定 inode 的非阻塞单飞锁；任何 `prepared_start_id` 在 `start_intent` 落盘后永久作废。响应丢失只在 active plan、runtime、精确订单 fingerprints、双层对账与 append-only 控制审计全部一致时收口为 `executed` 或可分类的零订单干净拒绝，其余一律 `control_outcome_unknown`，恢复过程零控制调用。
 - #476 将 full-schedule 测试所断言的 attended Paper Nautilus runtime 改为显式 fixture，并新增缺少 runtime path 时不得凭空生成授权环境的反例；这是测试基线修复，不改变 scheduler、unit、云端运行状态或任何交易路径。
-- #462 已实现但尚未部署：Paper Supervisor 的 AI 授权只能嵌套在 Park 通过
+- #462 已部署并绑定当前 Cloud Paper Supervisor：AI 授权只能嵌套在 Park 通过
   Cloudflare Access 显式签发并不可变持久化的外层策略内；Gateway、
   Dashboard 与策略写入边界逐层复验签名 assertion，本机伪造邮箱/transport
   字段不能取得 Park 权限。Supervisor 只绑定精确 policy/binding
@@ -113,18 +121,23 @@
   冲突或越界均在订单前 fail-closed。此实现未触碰任何 live/真钱路径，也未放宽
   现有行情、心跳、对账、人工确认或成交守卫。
 - Cloud Paper 当前部署为
-  `main@742c49fd1079c5a70ea710d9ba781f36483cf8bb`（#474 自然 tick
-  分阶段计时）。24h-report 与 dead-man 的规范 timer
-  `gridmind-daily-24h.timer` / `gridmind-deadman-ping.timer` 均 enabled +
-  active；24h timer 下一次触发为 2026-07-31 09:03 北京时间，dead-man
-  为精确 `OnUnitInactiveSec=300` cadence。dead-man 于
-  2026-07-30 12:49 北京时间自然取得外部端点 HTTP 200 的 `fail_sent`
-  回执。daily-24h 服务仍因不可变 `2026-07-28_NIGHT` 周期包缺失而失败，
-  该 structural blocker 不得通过补造历史证据掩盖。
-- 今日新鲜 AI 建议 `ai-eval-4272ba2b41ca4382` 已经完整安全路径启动为中性稳健 Grid：StrategyPlan=`strategy-plan-2026-07-29_DAY-2-52d364d4` v2，38/38 委托创建并接受、38 条 lifecycle armed。当前仍为同一计划，runtime=`running`；已有 1 个当前计划真实 entry fill、1 个带 TP/SL 的 Paper 空头持仓与 37 张剩余委托，execution reconciliation=`ok`、canonical accounting=`pass`。2026-07-28 DAY 的 3 笔成交不计入今日计划证据。
+  `main@eb2408088b34318d248d15b3c52d222635d6a531`（#512，含 stale
+  `plan_identity_conflict` 的只读结构性重检）。24h-report、dead-man、
+  live-tick、self-review、backup 五个规范 timer 均 enabled + active；
+  dead-man 近次自然投递为 `fail_sent severity=normal configured=true`，
+  systemd exit=0。daily-self-review 当前按 #468 分级为 warning，不驱动
+  dead-man critical；历史缺失证据仍不可伪造或回写。
+- 2026-08-02 NIGHT 的 AI Grid 计划已完整走过风险闸与 Paper 执行路径：
+  `strategy-plan-2026-08-02_NIGHT-2-96ed5413` v2，38/38 委托 accepted、
+  38 条 lifecycle armed，当前尚无 fills/positions，execution reconciliation=`ok`、
+  canonical accounting=`pass`。accepted 委托不得冒充成交证据。
 - #416/#417 已修复生产执行到派生日账本的长期断链：`2026-07-28_DAY` 现为 3 trades / 6 fills / `-7.47319148 USD`，来源为验证通过的终态 StrategyCyclePackage；原始 fills/trades/周期包未改写。NAV 与基于账本计数的复盘/推广聚合必须使用重建后的派生账本，既有终态复盘和 Shadow 原始证据保持不可变。
 - #406/#418、#407/#419、#420/#421 与 #422/#423 已部署：Cloud dead-man 使用当前 Paper 权威执行快照且未知仍 fail-closed；正式 Dashboard 诊断和策略控制台均返回 200；公网探针正确区分 Cloudflare Access 登录页；Linux Cloud preflight 对 29 个活动运行时文件执行 macOS 路径门禁且零违规。#424/#425 进一步把晚到行情保留为 `late_ignored`，防止重放回写既有 fill；当前 fill 时间仍保持 `2026-07-29T02:41:00Z`。
-- Cloud soak 仍未终态通过：第一份可证明完整 Cloud 北京自然日的 `report_date=2026-07-29` 日报/自复盘只能在 2026-07-30 01:10 后验收。当前 cloud-health 因 2026-07-28 自复盘不完整显示 degraded；这不是行情、tick、执行或对账故障，也不得降低完整自然日门槛。完整任务验收见 [`docs/evidence/cloud-paper-recovery-2026-07-29.md`](docs/evidence/cloud-paper-recovery-2026-07-29.md)。
+- Cloud soak 尚未终态通过：当前 cloud-health 因历史 daily self-review 不完整显示
+  `degraded/warning`，不是行情、tick、执行或对账 critical；首个完整 24h 窗口前
+  运行率保持 `insufficient`，不得把部署前停机区间计入新验收，也不得降低完整
+  自复盘与 transient 自动恢复门槛。完整任务验收仍见
+  [`docs/evidence/cloud-paper-recovery-2026-07-29.md`](docs/evidence/cloud-paper-recovery-2026-07-29.md)。
 - 默认测试基线已与已合并合同重新对齐（#401）：Completion Audit 的 full/focus 调度标签包含 24 小时报表，Standard K-line 空十字线标签不再占位，Cloud 备份/预检的只读 SQLite seam 被精确登记；手工 Paper 订单仍由服务端风险事实裁决，最大计划损失保持 advisory，杠杆超限等硬闸保持 fail-closed。
 - Cloud M6a 已实现：部署 manifest 锁定 trading-system/datafeed 的精确 SHA 且不携带密钥或激活 scheduler；切换前机械要求 Paper stopped、0 已接受委托、0 开放持仓、execution reconciliation 通过、备份验证、Cloud preflight 同 SHA 通过且 Cloud tick 禁用。正向切换只能 `local active -> paused -> cloud active`，失败后双端 tick 保持禁用；rollback 只接受更高 epoch 的 paused 状态再恢复 local owner。
 - Cloud M5 已实现：公网链路固定为 `Cloudflare Access -> loopback 8766 allowlist gateway -> loopback 8765 Dashboard`，8100/8765 不公开暴露；gateway 只转发精确页面/API，控制请求必须通过 Access JWT 与操作者邮箱校验。`/api/trading-system/cloud-health` 分开报告行情、live-tick、执行、对账、每日复盘、备份、scheduler owner 与部署 SHA，Dashboard 生产状态卡显示 Cloud 7×24 总结；dead-man 的持久化回执不再包含 URL/token。
@@ -159,22 +172,25 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- #463 需要 Park 显式授权一枚独立、最小权限的云端 AI provider Key；当前
-  Cloud `/usr/local/bin/codex` 仍是依赖 Mac 文件交换的 attended bridge，
-  不能在 Mac 关机时完成 recommendation。不得擅自复用个人 Key、把密钥写入
-  Git/日志或假称无人值守 provider 已就绪。
-- #468 从 #467 的 append-only read-model 与保守运行率继续实现健康分级和
-  每日不可变自复盘；同一 mode 必须把旧
-  cycle-decision health 机械替换掉。运行率首个完整 24h 前显示
-  `insufficient`，低于 85% 只 warning，不驱动 dead-man fail；structural、
-  300 秒无观察/尝试和 episode exhausted 才 critical。
-- #469/#470 才能按 release runbook 与 SHA/boot gates 切换 Cloud
-  `convergence.mode=paper_supervisor` 并开始真实验收。唯一完成证据仍是连续
-  48 小时保守运行率 ≥85%、三个真实周期边界（含一次 21:00）且有一次完整
-  真实 transient 自动恢复审计链；合并或测试全绿均不等于完成。
-- #455：24h-report 在正确时序的补跑中发现 `2026-07-28_NIGHT` 已验证策略周期包缺失。先查其不可变权威 provenance；不得伪造、重写或补造历史 fills/trades/周期包。该 structural blocker 继续由已恢复的 dead-man 对外告警。
-- 只读监测当前 `strategy-plan-2026-07-29_DAY-2-52d364d4` 的 TP/SL/循环生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改 StrategyPlan。现有 1 个真实 fill 已满足 #408 的“当前计划成交证据”，后续 accepted/armed 仍不得冒充新增成交。
-- 继续 Cloud soak 至首个完整北京自然日闭环：2026-07-30 01:10 后要求 `report_date=2026-07-29` 的终态日报与完整自复盘，再连同 tick coverage、tick failures、备份、dead-man、服务、行情、owner epoch 3 与 Mac jobs unloaded 做终态验收；任何 unknown 都不算通过，不启用 Mac failback。
+- Cloud provider readiness 已由服务器上的 Paper-only Codex runtime 通过，
+  不依赖 Park 的 Mac 开机；继续保留当前 source/provider SHA 绑定与 boot gate，
+  不把任何密钥写入 Git、日志或报告。
+- #468 的健康分级已在当前 release 生效：运行率首个完整 24h 前为
+  `insufficient`，低于 85% 只 warning；structural、超过 300 秒无观察/尝试、
+  episode exhausted 才 critical。daily self-review 缺失同样是 warning。
+- 继续 Cloud soak。唯一完成证据仍为连续 48 小时保守运行率 ≥85%、三个真实
+  周期边界（含一次 21:00）且有一次完整真实 transient 自动恢复审计链；合并、
+  部署、read-model 200 或测试全绿均不等于完成。
+- #455：历史 `2026-07-28_NIGHT` 周期包缺失继续按不可变 provenance 跟踪；不得伪造、
+  重写或补造历史 fills/trades/周期包。它不改变当前 NIGHT 的安全运行状态，
+  也不允许用猜测性重试掩盖历史事实。
+- 只读监测当前 `strategy-plan-2026-08-02_NIGHT-2-96ed5413` 的 TP/SL、循环
+  生命周期、tick、行情与双层对账；不得重复启动、停止、撤单、平仓或修改
+  StrategyPlan。当前 38 个 accepted/armed 委托不冒充成交，后续 fills 只认
+  Nautilus 权威执行与对账证据。
+- 继续 Cloud soak 至首个完整北京自然日闭环，再连同 tick coverage、tick failures、
+  备份、dead-man、服务、行情、owner epoch 与 Mac jobs unloaded 做终态验收；任何
+  unknown 都不算通过，不启用 Mac failback。
 - 监测自然 tick 单次耗时和 `late_ignored` 数量；如果再发生 timeout、不可变成交回归或执行/会计对账漂移，按独立缺陷 Issue fail-closed 处理，不得重放控制动作。
 - #440 完成 #415 的执行终态返工：`plan active` 不再等于决策完成；每个周期须在 5 分钟内进入 `executed / blocked / adopted_existing`。已有 AI 计划直接走正常 `prepare_start → 风险闸 → start`，不重复跑 AI；成功必须正数 N/N 委托且 runtime=`running/running`，其余情况留下机器码、原因与下一步且同周期不重试。真钱/live 仍需 Park 本人 `park-approved`。
 - #442 补齐自动周期阻塞的操作者说明：机器码与人类原因/下一步分离；已知安全拒绝给出具体 no-replay 动作，未知异常不把原始详情投影到 read-model。2026-07-29 NIGHT 的既有 blocked 决策保持不可变，未发生第二次 start。
