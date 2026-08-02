@@ -1,5 +1,33 @@
 # Decision Log
 
+## Project-owned operating records (Issue #502)
+
+Date: 2026-08-02
+
+### Decision
+
+- Keep the project’s stable intent in `NORTH_STAR.md`, its current state in
+  `REGISTRY.md`, and material dated deltas in `daily/`.
+- Keep `AGENTS.md` as the execution contract and retain this decision log for
+  durable rationale and gotchas; neither document is replaced by a daily note.
+
+### Why
+
+- A replacement agent needs one project-local entry point without re-creating
+  previously approved foundations or confusing an old daily record with the
+  current state.
+
+### Evidence
+
+- `NORTH_STAR.md`, `.park-os/onboard.json`, and the dated-record template were
+  added in the scoped onboarding change for Issue #502.
+
+### Gotchas
+
+- This onboarding change does not alter Paper runtime, a scheduler, credentials,
+  or any live/real-money boundary. A green documentation PR is not operational
+  acceptance.
+
 ## Paper Supervisor Converges From State Through Public Controls (Issue #466)
 
 Date: 2026-07-31
