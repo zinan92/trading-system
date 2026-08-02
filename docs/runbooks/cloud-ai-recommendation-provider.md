@@ -20,6 +20,29 @@ Stable failure codes:
 - `strategy_recommendation_provider_failed`
 - `strategy_recommendation_provider_invalid_output`
 
+## Server-local unattended provider
+
+For the unattended Cloud Paper path, install the official Codex CLI release
+for the host architecture and keep its authentication state in a host-only
+directory owned by `gridmind` (mode `0700`, with the auth file mode `0600`).
+The deployed command must be the repository wrapper
+`tools/cloud_codex_provider_wrapper.sh`, installed as `/usr/local/bin/codex`.
+The wrapper sets `HOME` and `CODEX_HOME` to `/opt/gridmind` and
+`/opt/gridmind/.codex` and then execs the pinned `/opt/gridmind/bin/codex`
+binary.  It never reads the Mac exchange directory.
+
+Provider readiness is a separate, source-bound receipt.  Before enabling or
+restarting the live-tick timer, run the Cloud readiness pipeline as `gridmind`.
+It must prove the executable/version, `codex login status`, the bounded
+recommendation command, and the JSON response contract.  The receipt records
+only boolean/status facts and the deployed source SHA/tree; it never records
+the prompt, response, access token, or other secret.  The live-tick boot gate
+rejects a missing, expired, failed, or source-mismatched readiness receipt.
+
+The provider remains proposal-only: a provider success creates no plan, order,
+position, fill, or risk authorization until the existing outer-policy,
+preview, confirmation, and public-control gates all pass.
+
 ## Credential-free attended bridge
 
 For an attended Paper window, Cloud may configure:

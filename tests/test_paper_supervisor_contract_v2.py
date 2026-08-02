@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-convergence-v2.md"
-VOCABULARY_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-blocker-v2.json"
+VOCABULARY_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-blocker-v3.json"
 
 
 def _vocabulary() -> dict:

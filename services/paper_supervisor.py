@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from services.control_audit import read_control_events_strict
+from services.cloud_ai_provider import CloudAIProviderReadiness, RECOVERABLE_PROVIDER_CODES
 from services.dca_plan import build_dca_entry_commands
 from services.paper_supervisor_classifier import (
     STRUCTURAL,
@@ -50,6 +51,7 @@ from services.strategy_plan_execution import (
 )
 from services.strategy_control_plane import production_mutation_lock
 from services.grid_lifecycle_evidence import build_grid_lifecycle_evidence
+from services.journal_store import load_json
 
 
 SUPERVISOR_SCHEMA_VERSION = "paper-supervisor-convergence-v1"
@@ -2144,6 +2146,15 @@ class PaperSupervisor:
                 cleared = True
             except Exception:  # noqa: BLE001 - exact blocker remains active.
                 cleared = False
+        elif machine_code == "unknown_blocker":
+            # Older deployments classified a provider timeout fail-closed as
+            # unknown_blocker.  Clear that exact historical scene only when
+            # the same cycle has a typed provider failure after the block and
+            # a fresh source-bound provider readiness receipt now passes.
+            cleared = self._provider_failure_cleared(
+                authority.cycle_id,
+                blocked_at=str(blocker.get("blocked_at") or ""),
+            )
         updated = self.episodes.recheck_structural_blocker(
             state,
             machine_code=machine_code,
@@ -2151,6 +2162,34 @@ class PaperSupervisor:
             observed_at=observed_at,
         )
         return updated, cleared
+
+    def _provider_failure_cleared(self, cycle_id: str, *, blocked_at: str) -> bool:
+        readiness = CloudAIProviderReadiness(self.output_root).verify()
+        if readiness.get("ok") is not True:
+            return False
+        root = (
+            self.output_root
+            / "dualtrack"
+            / "strategy_control"
+            / "evaluations"
+            / str(cycle_id)
+        )
+        evaluations: list[dict[str, Any]] = []
+        for path in sorted(root.glob("*.json")):
+            try:
+                rows = load_json(path)
+            except Exception:  # noqa: BLE001 - malformed evidence stays blocked.
+                continue
+            if rows and isinstance(rows[-1], dict):
+                evaluations.append(rows[-1])
+        if not evaluations:
+            return False
+        latest = max(evaluations, key=lambda row: str(row.get("evaluated_at") or ""))
+        if str(latest.get("evaluated_at") or "") < str(blocked_at or ""):
+            return False
+        error = str((latest.get("output") or {}).get("error") or "")
+        code = error.split(":", 1)[0]
+        return code in RECOVERABLE_PROVIDER_CODES
 
     def _pre_intent_deadline(
         self,

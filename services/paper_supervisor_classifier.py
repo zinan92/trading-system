@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 
-CLASSIFIER_VERSION = "paper-supervisor-blocker-v2"
+CLASSIFIER_VERSION = "paper-supervisor-blocker-v3"
 TRANSIENT = "transient"
 STRUCTURAL = "structural"
 
@@ -23,6 +23,9 @@ TRANSIENT_MACHINE_CODES = frozenset(
         "execution_tick_heartbeat_temporarily_missing",
         "upstream_data_source_transient_failure",
         "supervisor_attempt_deadline_before_intent",
+        "strategy_recommendation_provider_timeout",
+        "strategy_recommendation_provider_unavailable",
+        "strategy_recommendation_provider_failed",
     }
 )
 STRUCTURAL_MACHINE_CODES = frozenset(
@@ -53,6 +56,12 @@ STRUCTURAL_MACHINE_CODES = frozenset(
         "risk_policy_rejected",
         "trusted_market_provenance_invalid",
         "supervisor_configuration_invalid",
+        "strategy_recommendation_provider_missing",
+        "strategy_recommendation_provider_not_executable",
+        "strategy_recommendation_provider_invalid_output",
+        "strategy_recommendation_provider_command_invalid",
+        "strategy_recommendation_provider_timeout_invalid",
+        "strategy_recommendation_provider_auth_not_ready",
         "dangerous_start_attempt_cap_reached",
         "clean_refusal_observation_cap_reached",
         "unknown_blocker",
@@ -62,6 +71,9 @@ STRUCTURAL_MACHINE_CODES = frozenset(
 _EXACT_TRANSIENT = {
     "prepared_start_market_moved": "prepared_start_market_moved",
     "prepared_start_expired": "prepared_start_expired",
+    "strategy_recommendation_provider_timeout": "strategy_recommendation_provider_timeout",
+    "strategy_recommendation_provider_unavailable": "strategy_recommendation_provider_unavailable",
+    "strategy_recommendation_provider_failed": "strategy_recommendation_provider_failed",
 }
 _EXACT_STRUCTURAL = {
     "prepared_start_changed": "prepared_start_identity_changed",
@@ -73,6 +85,12 @@ _EXACT_STRUCTURAL = {
     "outer_strategy_policy_expired": "outer_strategy_policy_expired",
     "outer_strategy_policy_invalid": "outer_strategy_policy_invalid",
     "outer_strategy_policy_envelope_out_of_bounds": "outer_strategy_policy_envelope_out_of_bounds",
+    "strategy_recommendation_provider_missing": "strategy_recommendation_provider_missing",
+    "strategy_recommendation_provider_not_executable": "strategy_recommendation_provider_not_executable",
+    "strategy_recommendation_provider_invalid_output": "strategy_recommendation_provider_invalid_output",
+    "strategy_recommendation_provider_command_invalid": "strategy_recommendation_provider_command_invalid",
+    "strategy_recommendation_provider_timeout_invalid": "strategy_recommendation_provider_timeout_invalid",
+    "strategy_recommendation_provider_auth_not_ready": "strategy_recommendation_provider_auth_not_ready",
 }
 _TEMPORARY_SOURCE_FAILURES = {
     "upstream_timeout",
