@@ -1,5 +1,14 @@
 # trading-system
 
+## Operating documents (2026-08-02)
+
+- Stable intent and completion evidence: [`NORTH_STAR.md`](NORTH_STAR.md).
+- Current handoff snapshot: this file (`REGISTRY.md`); do not duplicate its
+  history in the North Star.
+- Material daily deltas: [`daily/`](daily/), using
+  [`daily/YYYY-MM-DD.md`](daily/YYYY-MM-DD.md) as the format template.
+- Durable rationale and traps: [`decision-log.md`](decision-log.md).
+
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 

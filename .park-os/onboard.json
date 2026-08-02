@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "project": {
+    "project_id": "trading-system",
+    "codex_project": "trading-system",
+    "repository": "zinan92/trading-system",
+    "local_path": "/Users/wendy/work/trading-system",
+    "tokenrouter_group": "trading-system",
+    "project_registry": "REGISTRY.md",
+    "state_authority": "project_registry",
+    "lifecycle": "active"
+  },
+  "created_by": "park-os onboard"
+}
