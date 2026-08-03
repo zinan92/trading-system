@@ -13527,3 +13527,35 @@ auditable datafeed port; broker execution remains a separate port.
   one is made when the Supervisor tab is opened.
 - The Dashboard, read-model, Cloud-health, dead-man and Supervisor regression
   matrix passes without changing any control or execution path.
+
+# 2026-08-03 — Bound lease-held Supervisor append validation (#546)
+
+## Decision
+
+- Under the existing exclusive process lease, validate the complete immutable
+  event and observation chains once, then retain their exact projected prefix
+  for that lease only. Every event/observation append still validates its
+  transition, payload, sequence, previous hash and new digest before fsync.
+- Bind the lease-local prefix to the exact inode, byte size and mtime of both
+  JSONL files. Before every append, reject any out-of-band tail change as
+  `attempt_store_corrupt`; after fsync, advance the identity and projection.
+- Discard the cache when the lease exits. Unattended/full read-model readers
+  continue to validate complete histories, and a new lease always starts from
+  a complete validation. No cache crosses cycles, processes or leases.
+
+## Gotchas
+
+- A process lock prevents compliant concurrent writers, but it does not prove
+  the files were unchanged by an out-of-band actor. Exact file identity checks
+  are still required before each append.
+- Caching only observations is insufficient: each normal tick appends several
+  WAL events, and the old path projected the entire WAL twice per event.
+- The compact projection is write-session authority only. It is never exposed
+  as a shortcut for full audit/history reads and never authorizes a control.
+
+## Verification
+
+- A 500-observation regression proves the first lease append reads the JSONL
+  history once and a second append performs no additional full-history read.
+- An injected out-of-band tail append is rejected before the next write.
+- The complete Supervisor store/episode/evidence/read-model matrix passes.

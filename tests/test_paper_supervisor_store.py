@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import services.paper_supervisor_store as supervisor_store_module
 from services.paper_supervisor_store import (
     PaperSupervisorStore,
     StartAuthoritySnapshot,
@@ -999,3 +1000,56 @@ def test_recovery_rejects_receipt_ids_not_bound_to_authoritative_commands(
 
     assert result is not None
     assert result["resolution"] == "control_outcome_unknown"
+
+
+def test_lease_append_validates_history_once_then_uses_exact_tail(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="seed") as lease:
+        assert lease is not None
+        for sequence in range(500):
+            store.append_observation(
+                lease,
+                {"status": "healthy", "seed_sequence": sequence + 1},
+            )
+
+    reads = 0
+    real_read = supervisor_store_module._stable_jsonl_lines
+
+    def counted_read(path: Path) -> list[str]:
+        nonlocal reads
+        reads += 1
+        return real_read(path)
+
+    monkeypatch.setattr(
+        supervisor_store_module,
+        "_stable_jsonl_lines",
+        counted_read,
+    )
+    with store.try_lease(CYCLE, holder_id="bounded") as lease:
+        assert lease is not None
+        store.append_observation(lease, {"status": "healthy"})
+        reads_after_first_append = reads
+        store.append_observation(lease, {"status": "healthy"})
+
+    assert reads_after_first_append == 1
+    assert reads == reads_after_first_append
+
+
+def test_lease_append_rejects_out_of_band_tail_change(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="owner") as lease:
+        assert lease is not None
+        store.append_observation(lease, {"status": "healthy"})
+        path = store.root / "observations" / f"{CYCLE}.jsonl"
+        with path.open("ab") as handle:
+            handle.write(b"{}\n")
+        with pytest.raises(
+            SupervisorStoreError,
+            match="attempt_store_corrupt",
+        ):
+            store.append_observation(lease, {"status": "healthy"})
