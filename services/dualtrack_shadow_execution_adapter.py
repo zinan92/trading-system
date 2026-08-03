@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from services.dualtrack_execution_contract import canonical_market_event
 from services.journal_store import load_json, write_json
 
 
@@ -36,6 +37,10 @@ class ShadowingExecutionEngineAdapter:
         self.shadow = shadow
         self.blocker = str(blocker or "")
         self.name = str(authoritative.name)
+
+    @property
+    def market_event_batch_capable(self) -> bool:
+        return callable(getattr(self.authoritative, "process_market_events", None))
 
     def submit_order(self, command: dict[str, Any]) -> dict[str, Any]:
         shadow_command = dict(command)
@@ -82,6 +87,33 @@ class ShadowingExecutionEngineAdapter:
     def process_market_event(self, event: dict[str, Any]) -> dict[str, Any]:
         result = self.authoritative.process_market_event(event)
         self._mirror("process_market_event", event)
+        return result
+
+    def process_market_events(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Batch authority first, then mirror without changing its result."""
+
+        if not events:
+            raise ValueError("market event batch is empty")
+        normalized = [canonical_market_event(event) for event in events]
+        cycle_ids = {str(event.get("cycle_id") or "") for event in normalized}
+        event_ids = [str(event.get("event_id") or "") for event in normalized]
+        if len(cycle_ids) != 1 or "" in cycle_ids:
+            raise ValueError("market event batch mixes cycles")
+        if "" in event_ids or len(event_ids) != len(set(event_ids)):
+            raise ValueError("market event batch identity is invalid")
+        authoritative_batch = getattr(
+            self.authoritative,
+            "process_market_events",
+            None,
+        )
+        if callable(authoritative_batch):
+            result = authoritative_batch([dict(event) for event in events])
+        else:
+            result = self._process_authoritative_events_fallback(events)
+        self._mirror_market_events(events)
         return result
 
     def settled_market_event_ids(self, cycle_id: str) -> frozenset[str]:
@@ -374,6 +406,69 @@ class ShadowingExecutionEngineAdapter:
             **base,
             "status": "ok",
             "shadow_result_status": str(result.get("status") or result.get("state") or "ok"),
+        })
+
+    def _process_authoritative_events_fallback(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {"status": "ok", "triggered": []}
+        triggered: list[dict[str, Any]] = []
+        accepted_limit_fills: list[dict[str, Any]] = []
+        for event in events:
+            result = self.authoritative.process_market_event(dict(event))
+            triggered.extend(result.get("triggered") or [])
+            accepted_limit_fills.extend(result.get("accepted_limit_fills") or [])
+        return {
+            **result,
+            "status": "triggered" if triggered else str(result.get("status") or "ok"),
+            "triggered": triggered,
+            "accepted_limit_fills": accepted_limit_fills,
+            "accepted_limit_fill_count": len(accepted_limit_fills),
+        }
+
+    def _mirror_market_events(self, events: list[dict[str, Any]]) -> None:
+        cycle_ids = {str(event.get("cycle_id") or "") for event in events}
+        event_ids = [str(event.get("event_id") or "") for event in events]
+        cycle_id = next(iter(cycle_ids)) if len(cycle_ids) == 1 else ""
+        base = {
+            "schema_version": "dualtrack-nautilus-shadow-runtime-v1",
+            "cycle_id": cycle_id,
+            "operation": "process_market_events",
+            "identity": f"{event_ids[0]}..{event_ids[-1]}" if event_ids else "",
+            "event_ids": event_ids,
+            "event_count": len(events),
+            "authoritative_engine": self.name,
+            "shadow_engine": str(getattr(self.shadow, "name", "nautilus_paper")),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "authoritative_unchanged": True,
+        }
+        if self.shadow is None:
+            self._record({
+                **base,
+                "status": "blocked",
+                "blocker": self.blocker or "shadow_unavailable",
+            })
+            return
+        try:
+            shadow_batch = getattr(self.shadow, "process_market_events", None)
+            if callable(shadow_batch):
+                shadow_result = shadow_batch([dict(event) for event in events])
+            else:
+                shadow_result = {"status": "ok"}
+                for event in events:
+                    shadow_result = self.shadow.process_market_event(dict(event))
+        except Exception as exc:
+            self._record({**base, "status": "error", "error": str(exc)[-1000:]})
+            return
+        self._record({
+            **base,
+            "status": "ok",
+            "shadow_result_status": str(
+                shadow_result.get("status")
+                or shadow_result.get("state")
+                or "ok"
+            ),
         })
 
     def _record(self, row: dict[str, Any]) -> None:

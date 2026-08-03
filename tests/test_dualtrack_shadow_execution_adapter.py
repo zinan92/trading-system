@@ -14,6 +14,7 @@ class FakeAdapter:
         self.failure = failure
         self.commands: list[dict] = []
         self.events: list[dict] = []
+        self.batches: list[list[dict]] = []
         self.processed_ids: set[str] = set()
         self.persisted_ids: set[str] = set()
         self.flush_count = 0
@@ -33,6 +34,14 @@ class FakeAdapter:
             self.persisted_ids.add(event_id)
             self.processed_ids.add(event_id)
         return {"status": "ok", "event_id": event.get("event_id")}
+
+    def process_market_events(self, events: list[dict]) -> dict:
+        self.batches.append([dict(event) for event in events])
+        results = [self.process_market_event(event) for event in events]
+        return {
+            "status": "ok",
+            "event_ids": [str(result.get("event_id") or "") for result in results],
+        }
 
     def processed_market_event_ids(self, _cycle_id: str) -> frozenset[str]:
         return frozenset(self.processed_ids)
@@ -134,6 +143,54 @@ def test_shadow_failure_is_visible_without_failing_authoritative_result(tmp_path
     assert rows[-1]["error"] == "shadow event failed"
     assert rows[-1]["authoritative_engine"] == "legacy_paper"
     assert rows[-1]["shadow_engine"] == "nautilus_paper"
+
+
+def test_batch_mirrors_once_without_changing_authoritative_result(tmp_path: Path) -> None:
+    authoritative = FakeAdapter("legacy_paper")
+    shadow = FakeAdapter("nautilus_paper")
+    adapter = ShadowingExecutionEngineAdapter(
+        tmp_path / "outputs",
+        authoritative=authoritative,
+        shadow=shadow,
+    )
+    events = [_event(), {**_event(), "event_id": "market-2"}]
+
+    result = adapter.process_market_events(events)
+
+    assert result == {"status": "ok", "event_ids": ["market-1", "market-2"]}
+    assert authoritative.batches == [events]
+    assert shadow.batches == [events]
+    rows = load_json(
+        tmp_path / "outputs" / "dualtrack" / "nautilus_shadow_runtime" / "2026-07-16_DAY.json"
+    )
+    assert len(rows) == 1
+    assert rows[0]["operation"] == "process_market_events"
+    assert rows[0]["event_ids"] == ["market-1", "market-2"]
+    assert rows[0]["authoritative_unchanged"] is True
+
+
+def test_shadow_batch_failure_is_visible_without_changing_authoritative_result(
+    tmp_path: Path,
+) -> None:
+    authoritative = FakeAdapter("legacy_paper")
+    shadow = FakeAdapter("nautilus_paper", failure="event")
+    adapter = ShadowingExecutionEngineAdapter(
+        tmp_path / "outputs",
+        authoritative=authoritative,
+        shadow=shadow,
+    )
+    events = [_event(), {**_event(), "event_id": "market-2"}]
+
+    result = adapter.process_market_events(events)
+
+    assert result == {"status": "ok", "event_ids": ["market-1", "market-2"]}
+    assert authoritative.processed_ids == {"market-1", "market-2"}
+    rows = load_json(
+        tmp_path / "outputs" / "dualtrack" / "nautilus_shadow_runtime" / "2026-07-16_DAY.json"
+    )
+    assert rows[-1]["operation"] == "process_market_events"
+    assert rows[-1]["status"] == "error"
+    assert rows[-1]["error"] == "shadow event failed"
 
 
 def test_settled_event_ids_require_authority_and_shadow_handoff(

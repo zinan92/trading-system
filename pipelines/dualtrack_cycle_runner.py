@@ -1981,14 +1981,10 @@ class DualTrackCycleRunner:
         processed_events = 0
         execution_invocation_count = 0
         reused_processed_event_count = 0
-        for event in events:
-            processed_events += 1
-            if event["event_id"] in settled_event_ids:
-                reused_processed_event_count += 1
-                continue
-            execution_invocation_count += 1
-            dca_terminal = False
-            if dca_active:
+        if dca_active:
+            for event in events:
+                processed_events += 1
+                execution_invocation_count += 1
                 dca_result = control.advance_dca_market_event(
                     cycle_id,
                     event,
@@ -1999,14 +1995,47 @@ class DualTrackCycleRunner:
                     "dca_lifecycle": dict(dca_result.get("state") or {}),
                     "target_submission": dca_result.get("target_submission"),
                 }
+                triggered.extend(last_sweep.get("triggered") or [])
+                accepted_limit_fills.extend(last_sweep.get("accepted_limit_fills") or [])
                 if str((dca_result.get("runtime") or {}).get("actual_state") or "") == "stopped":
-                    dca_terminal = True
-            else:
-                last_sweep = self.execution.process_market_event(event)
-            triggered.extend(last_sweep.get("triggered") or [])
-            accepted_limit_fills.extend(last_sweep.get("accepted_limit_fills") or [])
-            if dca_terminal:
-                break
+                    break
+        else:
+            processed_events = len(events)
+            pending_events = [
+                event
+                for event in events
+                if event["event_id"] not in settled_event_ids
+            ]
+            reused_processed_event_count = len(events) - len(pending_events)
+            if pending_events:
+                batch_processor = getattr(
+                    self.execution,
+                    "process_market_events",
+                    None,
+                )
+                if (
+                    getattr(
+                        self.execution,
+                        "market_event_batch_capable",
+                        False,
+                    )
+                    is True
+                    and callable(batch_processor)
+                ):
+                    execution_invocation_count = 1
+                    last_sweep = batch_processor(pending_events)
+                    triggered.extend(last_sweep.get("triggered") or [])
+                    accepted_limit_fills.extend(
+                        last_sweep.get("accepted_limit_fills") or []
+                    )
+                else:
+                    for event in pending_events:
+                        execution_invocation_count += 1
+                        last_sweep = self.execution.process_market_event(event)
+                        triggered.extend(last_sweep.get("triggered") or [])
+                        accepted_limit_fills.extend(
+                            last_sweep.get("accepted_limit_fills") or []
+                        )
         flush_shadow = getattr(self.execution, "flush_shadow", None)
         shadow_flush = flush_shadow(cycle_id) if callable(flush_shadow) else None
         return {

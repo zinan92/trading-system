@@ -32,6 +32,7 @@ class NautilusExecutionAdapter:
     """Event-sourced, paper-only Nautilus adapter with durable normalized state."""
 
     name = "nautilus_paper"
+    market_event_batch_capable = True
 
     def __init__(
         self,
@@ -439,6 +440,93 @@ class NautilusExecutionAdapter:
             }
         result = self.flush(cycle_id)
         return {**result, "event_id": event_id}
+
+    def process_market_events(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Durably append one ordered Paper batch and flush it exactly once."""
+
+        if not events:
+            raise ValueError("Nautilus market event batch is empty")
+        normalized_events = [canonical_market_event(event) for event in events]
+        cycle_ids = {
+            str(event.get("cycle_id") or "")
+            for event in normalized_events
+        }
+        if len(cycle_ids) != 1 or "" in cycle_ids:
+            raise ValueError("Nautilus market event batch mixes cycles")
+        cycle_id = next(iter(cycle_ids))
+        normalized_events.sort(key=_market_event_sort_key)
+        event_ids = [
+            str(event.get("event_id") or "")
+            for event in normalized_events
+        ]
+        if "" in event_ids or len(set(event_ids)) != len(event_ids):
+            raise ValueError("Nautilus market event batch identity is invalid")
+        for event in normalized_events:
+            if not event.get("provider"):
+                raise ValueError("Nautilus market event provider is required")
+            if not event.get("instrument_id"):
+                raise ValueError("Nautilus market event instrument_id is required")
+
+        processed_ids = self.processed_market_event_ids(cycle_id)
+        path = self._events_path(cycle_id)
+        rows = load_json(path)
+        persisted_ids = {
+            str(row.get("event_id") or "")
+            for row in rows
+            if isinstance(row, dict)
+        }
+        changed = False
+        for event in normalized_events:
+            event_id = str(event["event_id"])
+            if event_id in processed_ids or event_id in persisted_ids:
+                continue
+            rows.append(event)
+            persisted_ids.add(event_id)
+            changed = True
+        if changed:
+            rows.sort(key=_market_event_sort_key)
+            write_json(path, rows)
+
+        unresolved_ids = [
+            event_id
+            for event_id in event_ids
+            if event_id not in processed_ids
+        ]
+        if not unresolved_ids:
+            return {
+                "status": "idempotent",
+                "cycle_id": cycle_id,
+                "event_ids": event_ids,
+                "requested_event_count": len(event_ids),
+                "unresolved_event_count": 0,
+                "snapshot": self.snapshot(cycle_id),
+            }
+        if self.defer_replay:
+            all_processed_ids = self.processed_market_event_ids(cycle_id)
+            return {
+                "status": "queued",
+                "cycle_id": cycle_id,
+                "event_ids": event_ids,
+                "requested_event_count": len(event_ids),
+                "unresolved_event_count": len(unresolved_ids),
+                "pending_event_count": sum(
+                    1
+                    for row in rows
+                    if str(row.get("event_id") or "")
+                    not in all_processed_ids
+                ),
+            }
+        result = self.flush(cycle_id)
+        return {
+            **result,
+            "cycle_id": cycle_id,
+            "event_ids": event_ids,
+            "requested_event_count": len(event_ids),
+            "unresolved_event_count": len(unresolved_ids),
+        }
 
     def processed_market_event_ids(self, cycle_id: str) -> frozenset[str]:
         """Return exact terminal event identities from durable engine evidence.

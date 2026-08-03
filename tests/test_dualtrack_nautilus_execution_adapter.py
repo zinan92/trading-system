@@ -673,6 +673,129 @@ def test_persisted_but_unprocessed_event_is_not_settled(tmp_path: Path) -> None:
     assert adapter.settled_market_event_ids(CYCLE_ID) == frozenset()
 
 
+def test_market_event_batch_appends_in_order_and_flushes_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+    )
+    original_flush = adapter.flush
+    flushes: list[str] = []
+
+    def counted_flush(cycle_id: str) -> dict:
+        flushes.append(cycle_id)
+        return original_flush(cycle_id)
+
+    monkeypatch.setattr(adapter, "flush", counted_flush)
+    later = _grid_market_event(2, 4010.0)
+    earlier = _grid_market_event(1, 4000.0)
+
+    result = adapter.process_market_events([later, earlier])
+
+    assert flushes == [CYCLE_ID]
+    assert result["event_ids"] == [earlier["event_id"], later["event_id"]]
+    assert [
+        row["event_id"]
+        for row in load_json(adapter.root / "events" / f"{CYCLE_ID}.json")
+    ] == [earlier["event_id"], later["event_id"]]
+    assert adapter.processed_market_event_ids(CYCLE_ID) == frozenset(
+        {earlier["event_id"], later["event_id"]}
+    )
+
+
+def test_market_event_batch_rejects_identity_errors_before_write(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+    )
+    first = _grid_market_event(1, 4000.0)
+
+    with pytest.raises(ValueError, match="mixes cycles"):
+        adapter.process_market_events([
+            first,
+            {**_grid_market_event(2, 4010.0), "cycle_id": "2026-07-10_NIGHT"},
+        ])
+    with pytest.raises(ValueError, match="identity is invalid"):
+        adapter.process_market_events([first, dict(first)])
+
+    assert not (adapter.root / "events" / f"{CYCLE_ID}.json").exists()
+
+
+def test_market_event_batch_closes_persisted_unprocessed_crash_gap(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: _candidate(CYCLE_ID),
+        defer_replay=True,
+    )
+    first = _grid_market_event(1, 4000.0)
+    second = _grid_market_event(2, 4010.0)
+    assert adapter.process_market_event(first)["status"] == "queued"
+    adapter.defer_replay = False
+
+    result = adapter.process_market_events([first, second])
+
+    assert result["status"] == "replayed"
+    assert result["unresolved_event_count"] == 2
+    assert adapter.processed_market_event_ids(CYCLE_ID) == frozenset(
+        {first["event_id"], second["event_id"]}
+    )
+
+
+def test_market_event_batch_preserves_grid_rearm_lifecycle(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+
+    def replay(_preflight: Path, input_path: Path, output_path: Path) -> dict:
+        return _completed_grid_replay(input_path, output_path)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=replay,
+    )
+    adapter.submit_order(_grid_command())
+
+    result = adapter.process_market_events([
+        _grid_market_event(index, price)
+        for index, price in enumerate(
+            (4000.0, 4010.0, 4000.0, 4010.0),
+            start=1,
+        )
+    ])
+
+    assert result["snapshot"]["rearms"] == 2
+    assert [
+        row["event"]
+        for row in result["snapshot"]["fills"]
+    ] == ["entry", "target", "entry", "target"]
+    assert adapter.reconcile(CYCLE_ID)["status"] == "ok"
+
+
 def test_authoritative_grid_does_not_rearm_after_plan_cancel(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
