@@ -572,6 +572,107 @@ def test_authoritative_grid_rearms_same_price_for_two_complete_cycles(tmp_path: 
     assert restarted.reconcile(CYCLE_ID)["status"] == "ok"
 
 
+def test_market_event_identity_evidence_is_exact_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: {},
+        defer_replay=True,
+    )
+    event_ids = ["event-1", "event-2", "event-3"]
+    write_json(
+        adapter.root / "events" / f"{CYCLE_ID}.json",
+        [
+            {"cycle_id": CYCLE_ID, "event_id": event_id}
+            for event_id in event_ids
+        ],
+    )
+    write_json(
+        adapter.root / "processed_events" / f"{CYCLE_ID}.json",
+        [
+            {
+                "cycle_id": CYCLE_ID,
+                "event_id": "event-1",
+                "disposition": "accepted",
+            },
+            {
+                "cycle_id": CYCLE_ID,
+                "event_id": "event-3",
+                "disposition": "late_ignored",
+            },
+        ],
+    )
+
+    assert adapter.persisted_market_event_ids(CYCLE_ID) == frozenset(event_ids)
+    assert adapter.processed_market_event_ids(CYCLE_ID) == frozenset(
+        {"event-1", "event-3"}
+    )
+    assert "event-2" not in adapter.settled_market_event_ids(CYCLE_ID)
+
+    write_json(
+        adapter.root / "processed_events" / f"{CYCLE_ID}.json",
+        [
+            {
+                "cycle_id": CYCLE_ID,
+                "event_id": "event-1",
+                "disposition": "unknown",
+            }
+        ],
+    )
+    with pytest.raises(
+        ValueError,
+        match="processed_market_event_disposition_invalid",
+    ):
+        adapter.processed_market_event_ids(CYCLE_ID)
+
+    write_json(
+        adapter.root / "processed_events" / f"{CYCLE_ID}.json",
+        [
+            {
+                "cycle_id": CYCLE_ID,
+                "event_id": "event-not-persisted",
+                "disposition": "accepted",
+            }
+        ],
+    )
+    with pytest.raises(
+        ValueError,
+        match="processed_market_event_missing_persisted_event",
+    ):
+        adapter.processed_market_event_ids(CYCLE_ID)
+
+
+def test_persisted_but_unprocessed_event_is_not_settled(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=lambda *_args: {},
+        defer_replay=True,
+    )
+    event = _grid_market_event(1, 4000.0)
+
+    queued = adapter.process_market_event(event)
+
+    assert queued["status"] == "queued"
+    assert adapter.persisted_market_event_ids(CYCLE_ID) == frozenset(
+        {event["event_id"]}
+    )
+    assert adapter.processed_market_event_ids(CYCLE_ID) == frozenset()
+    assert adapter.settled_market_event_ids(CYCLE_ID) == frozenset()
+
+
 def test_authoritative_grid_does_not_rearm_after_plan_cancel(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"

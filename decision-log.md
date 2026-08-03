@@ -13559,3 +13559,55 @@ auditable datafeed port; broker execution remains a separate port.
   history once and a second append performs no additional full-history read.
 - An injected out-of-band tail append is rejected before the next write.
 - The complete Supervisor store/episode/evidence/read-model matrix passes.
+
+# 2026-08-03 — Bound repeated Paper protective-event work (#548)
+
+## Decision
+
+- Keep every existing protective sweep and trusted-completed-bar check, but
+  reuse an event only when its exact ID has a terminal `accepted` or
+  `late_ignored` row in the authoritative Nautilus processed-event journal.
+  The complete processed set must also be a subset of the exact persisted
+  event set. Persisted events without terminal processing evidence remain
+  pending.
+- When the configured execution adapter includes the non-authoritative
+  Nautilus shadow, reuse only the intersection of authoritative terminal IDs
+  and event IDs durably handed to the shadow. A crash between authoritative
+  processing and shadow handoff therefore retries the missing shadow handoff
+  instead of silently losing it.
+- Use exact set membership, not a timestamp watermark. Non-contiguous evidence
+  cannot hide a missing middle event. Malformed, duplicated, wrong-cycle or
+  unknown-disposition evidence raises and fails the tick closed.
+- Do not apply this reuse to an active DCA lifecycle. DCA state advancement is
+  independently durable and retains the existing per-event ordering even when
+  the execution engine has already observed the market event.
+
+## Gotchas
+
+- An event being present in `events/*.json` proves receipt, not execution. Only
+  `processed_events/*.json` with an explicit terminal disposition can suppress
+  another authoritative call.
+- The shadow is not trading authority, but ignoring its crash gap would make
+  comparison evidence silently incomplete. Intersection semantics provide
+  catch-up without writing duplicate shadow runtime rows every minute.
+- `processed_events` in the sweep result remains the number of trusted,
+  completed events considered for protection. Separate
+  `execution_invocation_count` and `reused_processed_event_count` fields expose
+  the bounded work without changing that historical meaning.
+- No event, fill, trade, snapshot, control audit or cycle package is rewritten;
+  the optimization reads existing append-only identity evidence only.
+
+## Verification
+
+- Adapter regressions cover exact/non-contiguous processed identities,
+  `late_ignored`, malformed disposition fail-closed behavior, and a persisted
+  but unprocessed crash gap.
+- Wrapper coverage proves a missing shadow handoff is excluded from the reused
+  set and becomes reusable only after the handoff succeeds.
+- Runner coverage proves exact old events produce no execution invocation, a
+  missing middle event still runs once, and active DCA ignores engine-only
+  reuse evidence.
+- The Nautilus, shadow, protective-sweep, DCA, Supervisor and runtime
+  integration matrix passes 173 tests; Ruff passes. Production acceptance
+  still requires five consecutive natural Cloud ticks with p95 below 10
+  seconds and max below 20 seconds.

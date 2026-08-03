@@ -84,6 +84,34 @@ class ShadowingExecutionEngineAdapter:
         self._mirror("process_market_event", event)
         return result
 
+    def settled_market_event_ids(self, cycle_id: str) -> frozenset[str]:
+        """Return events settled by authority and durably handed to shadow.
+
+        The shadow is non-authoritative, but intersecting its persisted event
+        identities preserves crash-gap catch-up without repeatedly mirroring
+        every old event on every tick.  Missing verification capabilities fail
+        closed to an empty reusable set.
+        """
+
+        authoritative_resolver = getattr(
+            self.authoritative,
+            "processed_market_event_ids",
+            None,
+        )
+        if not callable(authoritative_resolver):
+            return frozenset()
+        authoritative_ids = frozenset(authoritative_resolver(cycle_id))
+        if self.shadow is None:
+            return authoritative_ids
+        shadow_resolver = getattr(
+            self.shadow,
+            "persisted_market_event_ids",
+            None,
+        )
+        if not callable(shadow_resolver):
+            return frozenset()
+        return authoritative_ids & frozenset(shadow_resolver(cycle_id))
+
     def snapshot(
         self,
         cycle_id: str,
