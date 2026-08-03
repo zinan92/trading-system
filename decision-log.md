@@ -13195,3 +13195,36 @@ auditable datafeed port; broker execution remains a separate port.
   remain fresh, no control action/order was taken, and the system dead-man
   delivered its fail endpoint with HTTP 200; the current cycle remains safely
   blocked until a new authorized, capacity-valid plan exists.
+
+# 2026-08-03 — Bound Dashboard read-model concurrency without caching (#520)
+
+## Decision
+
+- Coalesce overlapping, byte-identical
+  `/api/trading-system/read-model` query strings into one in-flight build.
+  Followers wait for and reuse that build's result or exception.
+- Remove every flight immediately when its build finishes. There is no TTL or
+  completed-result cache, so the reload after start/stop/cancel always starts a
+  new authoritative read-model build.
+- Replace the unbounded `ThreadingHTTPServer` with a bounded variant. It takes a
+  semaphore slot before `ThreadingMixIn` creates a handler thread; the default
+  maximum is four, while excess connections wait in the listening socket queue.
+
+## Gotchas
+
+- Acquiring a semaphore inside `process_request_thread` would cap active work
+  but still create an unbounded number of waiting Python threads. The slot must
+  be acquired in `process_request`, before thread creation.
+- A completed-result cache would make an attended control action appear
+  unresponsive. Single-flight deliberately has no freshness window and needs no
+  control-path invalidation.
+- Failure must wake every follower and remove the flight. Otherwise one failed
+  read-model build can become a permanent local absorbing state.
+- This concurrency guard does not optimize or change any individual read-model
+  data source, control action, Paper runtime, order, position, or safety gate.
+
+## Verification
+
+- Added focused regression coverage for one-build fan-in, post-control fresh
+  reload, failed-flight cleanup, positive concurrency configuration, and a real
+  loopback HTTP queue with a measured handler-thread ceiling.

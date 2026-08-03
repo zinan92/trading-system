@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Hashable, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 from services.run_date import utc_run_date
@@ -101,6 +101,9 @@ _TIMEFRAME_PATTERN = re.compile(r"^\d+[mhdMHD]$")
 _DASHBOARD_DATAFEED_TIMEOUT_SECONDS = 2.0
 
 
+_DASHBOARD_MAX_CONCURRENT_REQUESTS = 4
+
+
 _DASHBOARD_RECENT_ACTIVITY_LIMIT = 80
 
 
@@ -120,6 +123,89 @@ _CLOUDFLARED_LOG = ROOT / "outputs" / "cloudflared.log"
 
 
 _DUALTRACK_POST_ENDPOINTS = {"/api/dualtrack/plan", "/api/dualtrack/orders", "/api/dualtrack/verdict"}
+
+
+class _SingleFlightCall:
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.result: Any = None
+        self.error: BaseException | None = None
+
+
+class KeyedSingleFlight:
+    """Coalesce overlapping calls without retaining a completed result."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls: dict[Hashable, _SingleFlightCall] = {}
+
+    def run(self, key: Hashable, compute: Callable[[], Any]) -> Any:
+        with self._lock:
+            call = self._calls.get(key)
+            if call is None:
+                call = _SingleFlightCall()
+                self._calls[key] = call
+                leader = True
+            else:
+                leader = False
+
+        if leader:
+            try:
+                result = compute()
+            except BaseException as exc:
+                with self._lock:
+                    call.error = exc
+                    self._calls.pop(key, None)
+                    call.done.set()
+                raise
+            with self._lock:
+                call.result = result
+                self._calls.pop(key, None)
+                call.done.set()
+            return result
+
+        call.done.wait()
+        if call.error is not None:
+            raise call.error
+        return call.result
+
+
+_TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT = KeyedSingleFlight()
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """Bound handler threads; the listening socket queues excess clients."""
+
+    request_queue_size = 64
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        request_handler_class: type[SimpleHTTPRequestHandler],
+        *,
+        max_concurrent_requests: int = _DASHBOARD_MAX_CONCURRENT_REQUESTS,
+    ) -> None:
+        if max_concurrent_requests <= 0:
+            raise ValueError("max_concurrent_requests must be positive")
+        self.max_concurrent_requests = max_concurrent_requests
+        self._request_slots = threading.BoundedSemaphore(max_concurrent_requests)
+        super().__init__(server_address, request_handler_class)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        # Acquire before ThreadingMixIn creates a thread. Acquiring inside
+        # process_request_thread would still permit an unbounded thread storm.
+        self._request_slots.acquire()
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 _CONNECTOR_ATTENDED_SWITCH_REVIEW_ENDPOINT_SAFETY = {
@@ -343,13 +429,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self._write_error(400, "strategy_console_unavailable", str(exc))
 
     def _handle_trading_system_read_model(self, query: str) -> None:
-        params = parse_qs(query)
         try:
             self._write_json(
                 200,
-                build_trading_system_read_model_response(
-                    as_of=(params.get("as_of") or [None])[0],
-                ),
+                build_trading_system_read_model_response_singleflight(query),
             )
         except ValueError as exc:
             self._write_error(400, "trading_system_read_model_unavailable", str(exc))
@@ -936,6 +1019,22 @@ def build_trading_system_read_model_response(
         generated_at=parse_utc(as_of).isoformat(),
     ).to_dict()
     return _compact_dashboard_read_model_payload(payload)
+
+
+def build_trading_system_read_model_response_singleflight(
+    query: str,
+    *,
+    single_flight: KeyedSingleFlight | None = None,
+) -> dict:
+    """Build once for overlapping identical requests, with no result cache."""
+
+    params = parse_qs(query)
+    as_of = (params.get("as_of") or [None])[0]
+    flight = single_flight or _TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT
+    return flight.run(
+        ("trading-system-read-model", query),
+        lambda: build_trading_system_read_model_response(as_of=as_of),
+    )
 
 
 def build_daily_self_review_response(
@@ -3883,7 +3982,7 @@ def main() -> None:
             flush=True,
         )
         raise SystemExit(PAPER_SERVICE_BOOT_BLOCKED_EXIT_CODE)
-    server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
+    server = BoundedThreadingHTTPServer((args.host, args.port), DashboardHandler)
     print(f"Dashboard server: http://{args.host}:{args.port}/dashboard-v4.html")
     print(f"Dashboard API: http://{args.host}:{args.port}/api/dashboard?date={utc_run_date()}")
     _start_code_reload_watcher()
