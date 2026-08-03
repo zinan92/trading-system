@@ -13325,3 +13325,40 @@ auditable datafeed port; broker execution remains a separate port.
 - The repository-wide run still exposes 11 existing macOS launchd schedule
   installer failures in `tests/test_schedule_manager.py`; neither that module
   nor its tests differ from `origin/main`, and #528 does not use that path.
+
+# 2026-08-03 — Bind Cloud dead-man routing to Cloud-native liveness (#532)
+
+## Decision
+
+- When a complete `cloud-paper-health-v1` result proves Cloud mode, Paper-only,
+  zero control side effects, no secret inclusion, an explicit severity, every
+  required health layer, and one convergence layer, use that result as the
+  dead-man liveness authority.
+- Keep legacy `SystemVitals.always_on` visible in the receipt, but do not let a
+  missing local `runner_status/current.json` drive `/fail` in that verified
+  Cloud topology.  That file belongs to the retired local runner and is not a
+  Cloud systemd heartbeat.
+- Record the selected authority, whether legacy liveness applied, and the exact
+  failure-signal sources.  Existing exposure severity, schedule-runtime checks,
+  and Cloud critical severity remain independent fail signals.
+
+## Gotchas
+
+- `GRIDMIND_RUNTIME_MODE=cloud` alone is not authority.  Environment text is
+  insufficient to suppress a fail signal; the full Cloud health schema and
+  required check rows must validate first.
+- A warning-only Cloud health result may use the success endpoint, but a
+  missing, malformed, partial, unknown-severity, non-Paper, or side-effectful
+  result is not authoritative and remains fail-closed.
+- Do not delete or rewrite legacy always-on evidence.  Local/non-Cloud runtimes
+  still use it exactly as before, and Cloud receipts retain it for diagnosis.
+- Cloud health remains responsible for fresh live-tick, Supervisor,
+  reconciliation, scheduler owner, source SHA, datafeed and backup evidence;
+  this change does not reclassify or weaken any of those checks.
+
+## Verification
+
+- Focused tests cover authoritative Cloud warning with absent legacy runner,
+  Cloud critical, incomplete Cloud health, and unchanged local legacy failure.
+- The dead-man/Cloud-health/system-vitals/systemd/dashboard upstream matrix
+  passed 130 tests; Ruff and `git diff --check` passed.

@@ -5,6 +5,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from services.deadman_ping import ExternalDeadmanPing
 from services.journal_store import load_json, write_json
 
@@ -64,6 +66,34 @@ def _healthy_root(tmp_path: Path) -> tuple[Path, Path, str]:
         "suspected_naked_position": False,
     }])
     return root, db, run_date
+
+
+def _authoritative_cloud_health(*, severity: str = "warning") -> dict:
+    checks = {
+        name: {"status": "ready", "severity": "none", "code": f"{name}_ready"}
+        for name in (
+            "datafeed",
+            "live_tick",
+            "execution",
+            "supervisor",
+            "reconciliation",
+            "daily_self_review",
+            "backup",
+            "scheduler_ownership",
+            "source",
+        )
+    }
+    return {
+        "schema_version": "cloud-paper-health-v1",
+        "runtime_mode": "cloud",
+        "paper_only": True,
+        "status": "blocked" if severity == "critical" else "degraded",
+        "severity": severity,
+        "checks": checks,
+        "control_actions_executed": 0,
+        "secrets_included": False,
+        "incidents": [],
+    }
 
 
 def _cloud_paper_snapshot(
@@ -425,6 +455,8 @@ def test_cloud_deadman_warning_health_uses_success_endpoint(
 ):
     root, db, run_date = _healthy_root(tmp_path)
     monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    (root / "runner_status" / "current.json").unlink()
+    (root / "strategies" / "summary_current.json").unlink()
     calls = []
 
     def opener(request, timeout):
@@ -436,22 +468,75 @@ def test_cloud_deadman_warning_health_uses_success_endpoint(
         db,
         url="https://hc-ping.example/deadman",
         opener=opener,
-        cloud_health_provider=lambda: {
-            "status": "degraded",
-            "severity": "warning",
-            "incidents": [
-                {
-                    "stage": "daily_self_review",
-                    "code": "daily_self_review_missing_or_incomplete",
-                    "severity": "warning",
-                }
-            ],
-        },
+        cloud_health_provider=lambda: _authoritative_cloud_health(),
     ).run(run_date)
 
     assert result["status"] == "sent"
     assert result["ping"]["target_kind"] == "success"
+    assert result["always_on"]["status"] == "BLOCKED_ALWAYS_ON_STALE"
+    assert result["liveness_authority"] == "cloud_health"
+    assert result["ping"]["legacy_always_on_applicable"] is False
+    assert result["failure_signal_sources"] == []
     assert calls and "/fail" not in calls[0]
+
+
+def test_cloud_deadman_critical_health_still_uses_fail_endpoint(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root, db, run_date = _healthy_root(tmp_path)
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        return _Response()
+
+    result = ExternalDeadmanPing(
+        root,
+        db,
+        url="https://hc-ping.example/deadman",
+        opener=opener,
+        cloud_health_provider=lambda: _authoritative_cloud_health(
+            severity="critical"
+        ),
+    ).run(run_date)
+
+    assert result["status"] == "fail_sent"
+    assert result["liveness_authority"] == "cloud_health"
+    assert result["failure_signal_sources"] == ["cloud_health"]
+    assert calls and "/fail?" in calls[0]
+
+
+def test_cloud_deadman_incomplete_health_remains_fail_closed(
+    tmp_path: Path,
+    monkeypatch,
+):
+    root, db, run_date = _healthy_root(tmp_path)
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        return _Response()
+
+    incomplete = _authoritative_cloud_health()
+    incomplete["checks"].pop("reconciliation")
+    result = ExternalDeadmanPing(
+        root,
+        db,
+        url="https://hc-ping.example/deadman",
+        opener=opener,
+        cloud_health_provider=lambda: incomplete,
+    ).run(run_date)
+
+    assert result["status"] == "fail_sent"
+    assert result["liveness_authority"] == (
+        "legacy_always_on_and_cloud_health_fail_closed"
+    )
+    assert result["ping"]["legacy_always_on_applicable"] is True
+    assert "cloud_health" in result["failure_signal_sources"]
+    assert calls and "/fail?" in calls[0]
 
 
 def test_deadman_ping_cli_loads_deadman_url_from_live_env(tmp_path: Path, monkeypatch, capsys):
