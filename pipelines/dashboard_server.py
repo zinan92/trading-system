@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Hashable, Optional
+from typing import Any, Callable, Hashable, Mapping, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 from services.run_date import utc_run_date
@@ -1532,6 +1532,7 @@ def build_strategy_console_control_response(
     recommendation_provider=None,
     recommendation_timeout_seconds: int | None = None,
     actor: dict | None = None,
+    _frozen_grid_diagnostic: bool = False,
 ) -> dict:
     output = _dualtrack_output_root(output_root)
     cycle_id = str(payload.get("cycle_id") or cycle_window(payload.get("as_of")).cycle_id)
@@ -1573,6 +1574,11 @@ def build_strategy_console_control_response(
             timeframe="1m",
             limit=240,
             as_of=payload.get("as_of"),
+            end=(
+                payload.get("as_of")
+                if _frozen_grid_diagnostic
+                else None
+            ),
         ))
     if not safe_control and not isinstance(trusted_market.get("strategy_timeframes"), dict):
         required = ("1d", "4h") if action != "refresh_recommendation" else ("1d", "4h", "1h", "15m")
@@ -1582,7 +1588,13 @@ def build_strategy_console_control_response(
         )
     trusted_account = account
     preview_account = trusted_account
-    if trusted_account is None and not safe_control:
+    if trusted_account is None and _frozen_grid_diagnostic:
+        # A historical pre-intent replay must not reconstruct today's account
+        # and present it as point-in-time evidence.  The control plane sizes
+        # this diagnostic from the immutable equity captured by the plan.
+        trusted_account = {}
+        preview_account = trusted_account
+    elif trusted_account is None and not safe_control:
         history = build_strategy_console_production_history(
             output_root=output,
             mark_price=trusted_market.get("latest_close"),
@@ -1646,6 +1658,17 @@ def build_strategy_console_control_response(
             "execution_account_source": "authoritative_execution_snapshot",
         }
     plane = StrategyControlPlane(output)
+    if _frozen_grid_diagnostic:
+        diagnostic_market = _trusted_historical_diagnostic_market(
+            trusted_market,
+            as_of=str(payload.get("as_of") or ""),
+        )
+        return plane.diagnose_frozen_grid_request(
+            cycle_id,
+            payload,
+            market=diagnostic_market,
+            account=trusted_account or {},
+        )
     if action == "refresh_recommendation":
         plane.verify_supervisor_outer_policy()
         contexts = dict(trusted_market.get("strategy_timeframes") or {})
@@ -1789,6 +1812,38 @@ def build_strategy_console_control_response(
         now=payload.get("as_of"),
         actor=actor,
     )
+
+
+def _trusted_historical_diagnostic_market(
+    market: Mapping[str, Any],
+    *,
+    as_of: str,
+) -> dict[str, Any]:
+    """Re-anchor an exact historical page for read-only diagnosis only."""
+
+    candidate = dict(market)
+    checked_at = parse_utc(as_of)
+    latest_at = parse_utc(str(candidate.get("latest_timestamp") or ""))
+    age_seconds = (checked_at - latest_at).total_seconds()
+    if (
+        candidate.get("status") not in {"ready", "derived"}
+        or candidate.get("is_synthetic") is not False
+        or candidate.get("trusted_history") is not True
+        or candidate.get("historical_page") is not True
+        or not str(candidate.get("provider") or "").strip()
+        or age_seconds < 0
+        or age_seconds > 180
+    ):
+        raise ValueError("trusted_market_provenance_invalid")
+    candidate["fresh"] = True
+    candidate["historical_diagnostic"] = {
+        "as_of": checked_at.isoformat(),
+        "latest_timestamp": latest_at.isoformat(),
+        "age_seconds": age_seconds,
+        "future_bars_forbidden": True,
+        "mutation_authority": False,
+    }
+    return candidate
 
 
 def _deterministic_dca_candidate_payload(

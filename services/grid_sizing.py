@@ -55,6 +55,22 @@ class AdaptiveGridInputError(ValueError):
         self.evidence = dict(evidence)
 
 
+class GridPreviewInfeasibleError(ValueError):
+    """A typed, side-effect-free explanation for a rejected Grid candidate.
+
+    This type is deliberately not a Supervisor classification.  The sizing
+    layer cannot know whether a split price or envelope is authorized; the
+    control plane must prove that identity before translating the evidence
+    into any retryable machine code.
+    """
+
+    code = "grid_preview_infeasible"
+
+    def __init__(self, message: str, evidence: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.evidence = dict(evidence)
+
+
 def _floor_quantity(value: float, config: dict[str, Any]) -> float:
     settings = dict(config.get("execution_contract") or {})
     increment = Decimal(str(settings.get("quantity_increment") or "0.00000001"))
@@ -495,9 +511,37 @@ def build_grid_preview(
         if allow_unsafe_manual_preview and first_candidate is not None:
             selected = first_candidate
         else:
-            raise ValueError(
+            message = (
                 f"no grid between {min_count} and {max_count} levels can deliver "
                 f"planned net profit of {min_net_profit_target:.2f} USD per grid within {leverage:g}x capacity"
+            )
+            if first_candidate is None:
+                raise ValueError(message)
+            reasons = []
+            if first_candidate["capital_budget_exceeded"]:
+                reasons.append("capital_capacity_exceeded")
+            if not first_candidate["profit_target_met"]:
+                reasons.append("profit_target_not_met")
+            raise GridPreviewInfeasibleError(
+                message,
+                {
+                    "reasons": reasons,
+                    "latest_close": latest,
+                    "requested_count": int(requested_count),
+                    "notional_mode": notional_mode,
+                    "requested_notional_per_grid": requested_notional,
+                    "side_counts": dict(first_candidate["side_counts"]),
+                    "max_side_notional": float(
+                        first_candidate["max_side_notional"]
+                    ),
+                    "capital_budget": float(capital_budget),
+                    "minimum_planned_net_profit_usd": float(
+                        min(first_candidate["net_profits"])
+                    ),
+                    "minimum_net_profit_target_usd": float(
+                        min_net_profit_target
+                    ),
+                },
             )
 
     count = int(selected["count"])

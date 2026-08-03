@@ -408,6 +408,67 @@ def test_market_moved_uses_fresh_preview_and_prepared_start_then_recovers(
     assert control.intent_seen_before_start is True
 
 
+def test_frozen_grid_market_move_is_transient_before_start_intent(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = FakePlane()
+    execution = FakeExecution()
+    underlying = FakePublicControl(
+        output,
+        plane,
+        execution,
+        start_outcomes=["accepted"],
+    )
+    prepare_calls = 0
+
+    class FrozenMarketMove(ValueError):
+        code = "frozen_grid_preview_market_moved"
+
+    def control(action: str, payload: dict) -> dict:
+        nonlocal prepare_calls
+        if action == "prepare_start":
+            prepare_calls += 1
+            if prepare_calls == 1:
+                raise FrozenMarketMove(
+                    "human prose must not drive classification"
+                )
+        return underlying(action, payload)
+
+    supervisor = PaperSupervisor(
+        output,
+        plane=plane,
+        execution=execution,
+        control=control,
+        accounting_reconciliation=lambda: "pass",
+    )
+    supervisor.store.now = lambda: T0
+    first = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+
+    assert first["status"] == "backing_off"
+    assert first["machine_code"] == (
+        "frozen_grid_preview_market_moved"
+    )
+    assert supervisor.store.current_state(CYCLE)["attempt_count"] == 0
+    assert underlying.prepare_ids == []
+    assert underlying.start_ids == []
+
+    recovered_at = T0 + timedelta(seconds=61)
+    supervisor.store.now = lambda: recovered_at
+    second = supervisor.converge_once(
+        CYCLE,
+        observed_at=recovered_at.isoformat(),
+        heartbeat=_heartbeat(recovered_at),
+    )
+    assert second["status"] == "executed"
+    assert underlying.prepare_ids == ["prepared-1"]
+    assert underlying.start_ids == ["prepared-1"]
+
+
 def test_active_grid_request_freezes_geometry_for_fresh_supervisor_preview() -> None:
     plan = {
         "cycle_id": CYCLE,
@@ -527,6 +588,7 @@ def test_stale_plan_identity_blocker_rechecks_exact_envelope_gate(
         cycle_id=CYCLE,
         active_plan=plan,
         accepted_order_fingerprints=(),
+        authorized_order_identities=(),
         open_position_count=0,
         reconciliation={"execution": "ok", "accounting": "pass"},
     )
@@ -548,6 +610,278 @@ def test_stale_plan_identity_blocker_rechecks_exact_envelope_gate(
         assert updated["blocker"] is None
     else:
         assert updated["blocker"]["machine_code"] == "plan_identity_conflict"
+
+
+def test_legacy_unknown_clean_pre_intent_rechecks_without_control_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cycle_id = CYCLE
+    attempt_id = "supervisor-attempt-legacy"
+    full_plan = {
+        "cycle_id": cycle_id,
+        "strategy_plan_id": "strategy-plan-current",
+        "version": 1,
+        "strategy_type": "grid",
+        "direction": "neutral",
+        "style": "steady",
+        "cycle_risk_envelope_id": "envelope-current",
+        "range": {
+            "low": 3900.0,
+            "high": 4200.0,
+            "scope": "neutral_side",
+            "split_price": 4050.0,
+            "source_envelope": {"low": 3900.0, "high": 4200.0},
+        },
+        "grid": {
+            "count": 38,
+            "mode": "arithmetic",
+            "notional_per_grid": 5000.0,
+            "leverage": 10,
+        },
+    }
+    diagnostic_calls: list[dict] = []
+    plane = SimpleNamespace(
+        active_plan=lambda _cycle_id: deepcopy(full_plan)
+    )
+    supervisor = PaperSupervisor(
+        tmp_path / "outputs",
+        plane=plane,
+        execution=object(),
+        control=lambda *_args, **_kwargs: pytest.fail(
+            "structural recheck must execute zero controls"
+        ),
+        accounting_reconciliation=lambda: "pass",
+        pre_intent_diagnostic=lambda payload, diagnostic_as_of: (
+            diagnostic_calls.append(
+                {
+                    "payload": deepcopy(payload),
+                    "as_of": diagnostic_as_of,
+                }
+            )
+            or {
+                "status": "blocked",
+                "code": "frozen_grid_preview_market_moved",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_provider_failure_cleared",
+        lambda *_args, **_kwargs: False,
+    )
+    projection = {
+        "pre_intent_attempts": [
+            {
+                "attempt_id": attempt_id,
+                "terminal_observed_at": T0.isoformat(),
+                "terminal_machine_code": "unknown_blocker",
+                "terminal_result": "structural",
+                "prepare_succeeded_sequence": None,
+            }
+        ],
+        "attempts": [],
+        "unfinished_intent": None,
+    }
+    monkeypatch.setattr(
+        supervisor.store,
+        "current_state",
+        lambda _cycle_id: deepcopy(projection),
+    )
+    state = supervisor.episodes.new_cycle(
+        cycle_id,
+        observed_at=T0,
+    )
+    state = supervisor.episodes.record_structural_blocker(
+        state,
+        classification=classify_blocker(
+            control_code="unclassified legacy sentence"
+        ),
+        observed_at=T0,
+    )
+    authority = SimpleNamespace(
+        cycle_id=cycle_id,
+        active_plan=supervisor._plan_identity(full_plan),
+        runtime={
+            "desired_state": "stopped",
+            "actual_state": "stopped",
+            "accepted_order_count": 0,
+        },
+        accepted_order_fingerprints=(),
+        authorized_order_identities=(),
+        open_position_count=0,
+        reconciliation={"execution": "ok", "accounting": "pass"},
+        control_events=(
+            {
+                "schema_version": "strategy-control-event-v1",
+                "ts": T0.isoformat(),
+                "cycle_id": cycle_id,
+                "action": "prepare_start",
+                "request": {"supervisor_attempt_id": attempt_id},
+                "result": "rejected",
+                # Deliberately unrelated prose: clearance must not inspect it.
+                "error": "arbitrary historical words",
+            },
+        ),
+    )
+
+    updated, cleared = supervisor._recheck_structural(
+        state,
+        authority=authority,
+        observed_at=(T0 + timedelta(minutes=1)).isoformat(),
+    )
+
+    assert cleared is True
+    assert updated["mode"] == "ready"
+    assert updated["blocker"] is None
+    assert len(diagnostic_calls) == 1
+    assert diagnostic_calls[0]["payload"]["cycle_risk_envelope_id"] == (
+        "envelope-current"
+    )
+    assert diagnostic_calls[0]["as_of"] == T0.isoformat()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "attempt_mismatch",
+        "duplicate_audit",
+        "accepted_audit",
+        "start_intent",
+        "runtime_orders",
+        "exposure",
+        "reconciliation",
+        "authorized_orders",
+        "currently_feasible",
+        "unknown_diagnostic",
+    ],
+)
+def test_legacy_unknown_recheck_stays_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    attempt_id = "supervisor-attempt-legacy"
+    plan = {
+        "cycle_id": CYCLE,
+        "strategy_plan_id": "strategy-plan-current",
+        "version": 1,
+        "strategy_type": "grid",
+        "direction": "neutral",
+        "style": "steady",
+        "cycle_risk_envelope_id": "envelope-current",
+        "range": {"low": 100, "high": 120, "split_price": 110},
+        "grid": {
+            "count": 38,
+            "mode": "arithmetic",
+            "notional_per_grid": 100,
+            "leverage": 10,
+        },
+    }
+    supervisor = PaperSupervisor(
+        tmp_path / "outputs",
+        plane=SimpleNamespace(
+            active_plan=lambda _cycle_id: deepcopy(plan)
+        ),
+        execution=object(),
+        control=lambda *_args, **_kwargs: pytest.fail(
+            "structural recheck must execute zero controls"
+        ),
+        accounting_reconciliation=lambda: "pass",
+        pre_intent_diagnostic=(
+            (
+                lambda _payload, _as_of: (_ for _ in ()).throw(
+                    ValueError("other")
+                )
+            )
+            if mutation == "unknown_diagnostic"
+            else (
+                (lambda _payload, _as_of: {"status": "feasible", "code": None})
+                if mutation == "currently_feasible"
+                else lambda _payload, _as_of: {
+                    "status": "blocked",
+                    "code": "frozen_grid_preview_market_moved",
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_provider_failure_cleared",
+        lambda *_args, **_kwargs: False,
+    )
+    projection = {
+        "pre_intent_attempts": [
+            {
+                "attempt_id": attempt_id,
+                "terminal_observed_at": T0.isoformat(),
+                "terminal_machine_code": "unknown_blocker",
+                "terminal_result": "structural",
+                "prepare_succeeded_sequence": None,
+            }
+        ],
+        "attempts": [],
+        "unfinished_intent": None,
+    }
+    if mutation == "start_intent":
+        projection["attempts"] = [{"attempt_id": attempt_id}]
+    monkeypatch.setattr(
+        supervisor.store,
+        "current_state",
+        lambda _cycle_id: deepcopy(projection),
+    )
+    state = supervisor.episodes.record_structural_blocker(
+        supervisor.episodes.new_cycle(CYCLE, observed_at=T0),
+        classification=classify_blocker(control_code="legacy unknown"),
+        observed_at=T0,
+    )
+    audit = {
+        "ts": T0.isoformat(),
+        "cycle_id": CYCLE,
+        "action": "prepare_start",
+        "request": {
+            "supervisor_attempt_id": (
+                "different"
+                if mutation == "attempt_mismatch"
+                else attempt_id
+            )
+        },
+        "result": (
+            "accepted" if mutation == "accepted_audit" else "rejected"
+        ),
+        "error": "anything",
+    }
+    audits = [audit, deepcopy(audit)] if mutation == "duplicate_audit" else [audit]
+    authority = SimpleNamespace(
+        cycle_id=CYCLE,
+        active_plan=supervisor._plan_identity(plan),
+        runtime={
+            "desired_state": "stopped",
+            "actual_state": "stopped",
+            "accepted_order_count": 1 if mutation == "runtime_orders" else 0,
+        },
+        accepted_order_fingerprints=("order",) if mutation == "exposure" else (),
+        authorized_order_identities=(
+            ({"order_id": "authorized"},)
+            if mutation == "authorized_orders"
+            else ()
+        ),
+        open_position_count=0,
+        reconciliation={
+            "execution": "drift" if mutation == "reconciliation" else "ok",
+            "accounting": "pass",
+        },
+        control_events=audits,
+    )
+
+    updated, cleared = supervisor._recheck_structural(
+        state,
+        authority=authority,
+        observed_at=(T0 + timedelta(minutes=1)).isoformat(),
+    )
+    assert cleared is False
+    assert updated["mode"] == "blocked_structural"
+    assert updated["blocker"]["machine_code"] == "unknown_blocker"
 
 
 def test_missing_rollover_event_and_absent_plan_converge_from_state(

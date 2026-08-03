@@ -1360,12 +1360,21 @@ def test_dca_ai_candidate_verifies_before_plan_creation_then_binds_execution(
 def test_classifier_is_closed_and_tick_dead_after_ten_minutes() -> None:
     assert classify_blocker(control_code="prepared_start_market_moved")["classification"] == TRANSIENT
     assert classify_blocker(
+        control_code="frozen_grid_preview_market_moved"
+    )["classification"] == TRANSIENT
+    assert classify_blocker(
+        control_code=(
+            "no grid between 30 and 70 levels can deliver planned net "
+            "profit of 10.00 USD per grid within 10x capacity"
+        )
+    )["machine_code"] == "unknown_blocker"
+    assert classify_blocker(
         evidence={"tick_health": "missing", "tick_episode_seconds": 600}
     )["machine_code"] == "execution_tick_heartbeat_temporarily_missing"
     assert classify_blocker(
         evidence={"tick_health": "missing", "tick_episode_seconds": 601}
     ) == {
-            "classifier_version": "paper-supervisor-blocker-v3",
+            "classifier_version": "paper-supervisor-blocker-v4",
         "machine_code": "execution_tick_scheduler_down",
         "classification": STRUCTURAL,
         "raw_control_code": None,

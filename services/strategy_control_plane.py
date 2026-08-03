@@ -18,7 +18,7 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from services.execution_plugin_composition import build_configured_execution_engine_adapter
 from services.dca_execution_lifecycle import DcaPaperLifecycle
@@ -39,6 +39,7 @@ from services.cycle_risk_envelope import CycleRiskEnvelopeStore
 from services.grid_sizing import (
     AdaptiveGridInputError,
     GRID_STYLES,
+    GridPreviewInfeasibleError,
     build_grid_preview,
     number_or as _number_or,
     preview_id as _grid_preview_id,
@@ -83,6 +84,17 @@ _CONTROL_LOCK = threading.RLock()
 _PROCESS_LOCK_STATE = threading.local()
 MANUAL_RANGE_RISK_ACK_SCHEMA = "grid-range-risk-ack-v1"
 PREPARED_START_SCHEMA = "strategy-prepared-start-v1"
+
+
+class StrategyControlMachineError(ValueError):
+    """A stable control-plane code with typed, non-prose evidence."""
+
+    def __init__(self, code: str, evidence: Mapping[str, Any]) -> None:
+        super().__init__(code)
+        self.code = str(code)
+        self.evidence = dict(evidence)
+
+
 PREPARED_START_TTL_SECONDS = 300
 DCA_RISK_ACK_SCHEMA = "dca-risk-ack-v1"
 PAPER_EXECUTION_TICK_MAX_AGE_SECONDS = 180
@@ -1021,6 +1033,202 @@ class StrategyControlPlane:
         # the control plane owns only locking, persistence and runtime state.
         return build_grid_preview(cycle_id, payload, market=market, account=account, config=self.config)
 
+    @staticmethod
+    def _frozen_grid_request_from_plan(
+        plan: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        grid = dict(plan.get("grid") or {})
+        range_spec = dict(plan.get("range") or {})
+        request: dict[str, Any] = {
+            "direction": plan.get("direction"),
+            "style": plan.get("style"),
+            "strategy_type": plan.get("strategy_type") or "grid",
+            "cycle_risk_envelope_id": plan.get(
+                "cycle_risk_envelope_id"
+            ),
+            "range": {
+                key: range_spec.get(key)
+                for key in (
+                    "low",
+                    "high",
+                    "scope",
+                    "split_price",
+                    "source_envelope",
+                )
+                if range_spec.get(key) is not None
+            },
+            "grid": {
+                key: grid.get(key)
+                for key in (
+                    "count",
+                    "mode",
+                    "notional_per_grid",
+                    "out_of_range",
+                )
+                if grid.get(key) is not None
+            },
+        }
+        if grid.get("notional_per_grid") is not None:
+            request["grid"]["notional_mode"] = "manual"
+        if grid.get("leverage") is not None:
+            request["risk_budget"] = {
+                "leverage": grid["leverage"]
+            }
+        return request
+
+    def diagnose_frozen_grid_request(
+        self,
+        cycle_id: str,
+        payload: Mapping[str, Any],
+        *,
+        market: Mapping[str, Any],
+        account: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Classify one exact frozen Grid request without persisting state.
+
+        A sizing failure is retryable only after the control plane proves the
+        request came from the immutable active plan and remains inside the
+        exact Park/AI authorization chain.  The function does not write a
+        prepared capability, control audit, plan, order, or position.
+        """
+
+        del account
+        body = dict(payload)
+        for transport_key in (
+            "supervisor_attempt_id",
+            "cycle_id",
+            "as_of",
+            "action",
+        ):
+            body.pop(transport_key, None)
+        plan = dict(self.active_plan(cycle_id) or {})
+        expected = self._frozen_grid_request_from_plan(plan)
+        if (
+            not plan
+            or body != expected
+            or str(plan.get("strategy_type") or "grid").lower()
+            != "grid"
+            or str(plan.get("direction") or "").lower()
+            != "neutral"
+        ):
+            raise ValueError("plan_identity_conflict")
+        grid = dict(body.get("grid") or {})
+        range_spec = dict(body.get("range") or {})
+        risk_spec = dict(plan.get("risk_budget") or {})
+        if (
+            str(grid.get("notional_mode") or "") != "manual"
+            or int(grid.get("count") or 0) <= 0
+            or float(grid.get("notional_per_grid") or 0) <= 0
+        ):
+            raise ValueError("grid_preview_infeasible")
+        split_price = float(range_spec.get("split_price") or 0)
+        low = float(range_spec.get("low") or 0)
+        high = float(range_spec.get("high") or 0)
+        current_price = float(market.get("latest_close") or 0)
+        if not (low <= current_price <= high and low <= split_price <= high):
+            raise ValueError("grid_preview_infeasible")
+        try:
+            authorized_equity = float(risk_spec.get("equity"))
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "risk_envelope_authorization_invalid"
+            ) from error
+        if not math.isfinite(authorized_equity) or authorized_equity <= 0:
+            raise ValueError("risk_envelope_authorization_invalid")
+        # The immutable active plan is the point-in-time sizing authority.
+        # Current production history can change after the rejected attempt and
+        # must not be used to manufacture a historical classification.  The
+        # normal later prepare still rechecks the then-current account.
+        diagnostic_account = {"equity": authorized_equity}
+
+        self.verify_supervisor_outer_policy()
+        envelope_id = str(body.get("cycle_risk_envelope_id") or "")
+        if not envelope_id:
+            raise ValueError("risk_envelope_missing")
+
+        split_market = dict(market)
+        split_market["latest_close"] = split_price
+        split_preview = build_grid_preview(
+            cycle_id,
+            body,
+            market=split_market,
+            account=diagnostic_account,
+            config=self.config,
+        )
+        self.risk_envelopes.verify_preview(
+            cycle_id=cycle_id,
+            plan=plan,
+            envelope_authorization_id=envelope_id,
+            preview=split_preview,
+            now=self._authorization_clock(),
+        )
+
+        try:
+            current_preview = build_grid_preview(
+                cycle_id,
+                body,
+                market=dict(market),
+                account=diagnostic_account,
+                config=self.config,
+            )
+        except GridPreviewInfeasibleError as error:
+            evidence = dict(error.evidence)
+            if evidence.get("reasons") != [
+                "capital_capacity_exceeded"
+            ]:
+                raise
+            return {
+                "status": "blocked",
+                "code": "frozen_grid_preview_market_moved",
+                "active_plan_identity": {
+                    "strategy_plan_id": plan.get(
+                        "strategy_plan_id"
+                    ),
+                    "version": plan.get("version"),
+                    "cycle_risk_envelope_id": envelope_id,
+                },
+                "split_price": split_price,
+                "current_price": current_price,
+                "split_side_counts": {
+                    side: sum(
+                        1
+                        for order in split_preview.get("orders") or []
+                        if str(order.get("side") or "") == side
+                    )
+                    for side in ("buy", "sell")
+                },
+                "current_side_counts": dict(
+                    evidence.get("side_counts") or {}
+                ),
+                "current_max_side_notional": evidence.get(
+                    "max_side_notional"
+                ),
+                "capital_budget": evidence.get(
+                    "capital_budget"
+                ),
+            }
+        self.risk_envelopes.verify_preview(
+            cycle_id=cycle_id,
+            plan=plan,
+            envelope_authorization_id=envelope_id,
+            preview=current_preview,
+            now=self._authorization_clock(),
+        )
+        return {
+            "status": "feasible",
+            "code": None,
+            "active_plan_identity": {
+                "strategy_plan_id": plan.get("strategy_plan_id"),
+                "version": plan.get("version"),
+                "cycle_risk_envelope_id": envelope_id,
+            },
+            "split_price": split_price,
+            "current_price": current_price,
+            "current_preview_id": current_preview.get(
+                "preview_id"
+            ),
+        }
+
     def _adaptive_start_preview(
         self,
         cycle_id: str,
@@ -1331,13 +1539,33 @@ class StrategyControlPlane:
             raise ValueError(
                 "new grid start requires zero accepted orders and zero open positions"
             )
-        preview = self._adaptive_start_preview(
-            cycle_id,
-            payload,
-            market=market,
-            account=account,
-            now=now,
-        )
+        try:
+            preview = self._adaptive_start_preview(
+                cycle_id,
+                payload,
+                market=market,
+                account=account,
+                now=now,
+            )
+        except GridPreviewInfeasibleError as error:
+            if not supervisor_attempt_id:
+                raise
+            diagnostic = self.diagnose_frozen_grid_request(
+                cycle_id,
+                payload,
+                market=market,
+                account=account,
+            )
+            if (
+                diagnostic.get("status") == "blocked"
+                and diagnostic.get("code")
+                == "frozen_grid_preview_market_moved"
+            ):
+                raise StrategyControlMachineError(
+                    "frozen_grid_preview_market_moved",
+                    diagnostic,
+                ) from error
+            raise
         if (
             supervisor_attempt_id
             and str(payload.get("strategy_type") or "grid").lower()
@@ -2165,7 +2393,31 @@ class StrategyControlPlane:
                 # A rejected mutation is still an operator action and must
                 # stay attributable; the original rejection is re-raised.
                 if str(action or "").lower() not in {"preview", "preview_range"}:
-                    self._audit_control(cycle_id, action, payload, actor=actor, result="rejected", error=str(exc), now=now)
+                    rejection_evidence = (
+                        {"typed_rejection": dict(exc.evidence)}
+                        if isinstance(
+                            exc,
+                            StrategyControlMachineError,
+                        )
+                        else None
+                    )
+                    self._audit_control(
+                        cycle_id,
+                        action,
+                        payload,
+                        actor=actor,
+                        result="rejected",
+                        error=(
+                            exc.code
+                            if isinstance(
+                                exc,
+                                StrategyControlMachineError,
+                            )
+                            else str(exc)
+                        ),
+                        evidence=rejection_evidence,
+                        now=now,
+                    )
                 raise
             if str(action or "").lower() not in {"preview", "preview_range"}:
                 evidence: dict[str, Any] = {}

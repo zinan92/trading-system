@@ -53,6 +53,30 @@ def account() -> dict:
     return {"equity": 10_000.0}
 
 
+def frozen_production_grid_request() -> dict:
+    return {
+        "direction": "neutral",
+        "style": "steady",
+        "range": {
+            "low": 3903.5986,
+            "high": 4226.6814,
+            "scope": "neutral_side",
+            "split_price": 4065.14,
+            "source_envelope": {
+                "low": 3903.5986,
+                "high": 4226.6814,
+            },
+        },
+        "grid": {
+            "count": 38,
+            "mode": "arithmetic",
+            "notional_per_grid": 5265.97,
+            "notional_mode": "manual",
+        },
+        "risk_budget": {"leverage": 10},
+    }
+
+
 def test_average_true_range_known_value() -> None:
     bars = [
         {"high": 12.0, "low": 10.0, "close": 11.0},
@@ -61,6 +85,45 @@ def test_average_true_range_known_value() -> None:
     ]
     # TR for bar2 = max(2, |13-11|, |11-11|) = 2; bar3 = max(2, |14-12|, |12-12|) = 2
     assert grid_sizing.average_true_range(bars, period=2) == pytest.approx(2.0)
+
+
+def test_frozen_grid_capacity_shift_is_typed_without_becoming_transient(
+    tmp_path: Path,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    payload = frozen_production_grid_request()
+
+    split = grid_sizing.build_grid_preview(
+        "2026-08-03_DAY",
+        payload,
+        market=market(close=4065.14),
+        account={"equity": 10005.35},
+        config=plane.config,
+    )
+    assert split["risk"]["max_simultaneous_same_side_levels"] == 19
+    assert split["risk"]["profit_target_met"] is True
+
+    with pytest.raises(
+        grid_sizing.GridPreviewInfeasibleError
+    ) as captured:
+        grid_sizing.build_grid_preview(
+            "2026-08-03_DAY",
+            payload,
+            market=market(close=4071.19),
+            account={"equity": 10005.35},
+            config=plane.config,
+        )
+    assert captured.value.code == "grid_preview_infeasible"
+    assert captured.value.evidence["reasons"] == [
+        "capital_capacity_exceeded"
+    ]
+    assert captured.value.evidence["side_counts"] == {
+        "buy": 20,
+        "sell": 18,
+    }
+    assert captured.value.evidence["max_side_notional"] > (
+        captured.value.evidence["capital_budget"]
+    )
 
 
 def test_average_true_range_requires_history() -> None:

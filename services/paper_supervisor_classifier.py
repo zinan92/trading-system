@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 
-CLASSIFIER_VERSION = "paper-supervisor-blocker-v3"
+CLASSIFIER_VERSION = "paper-supervisor-blocker-v4"
 TRANSIENT = "transient"
 STRUCTURAL = "structural"
 
@@ -26,6 +26,7 @@ TRANSIENT_MACHINE_CODES = frozenset(
         "strategy_recommendation_provider_timeout",
         "strategy_recommendation_provider_unavailable",
         "strategy_recommendation_provider_failed",
+        "frozen_grid_preview_market_moved",
     }
 )
 STRUCTURAL_MACHINE_CODES = frozenset(

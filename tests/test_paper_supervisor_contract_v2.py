@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-convergence-v2.md"
-VOCABULARY_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-blocker-v3.json"
+VOCABULARY_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-blocker-v4.json"
 
 
 def _vocabulary() -> dict:
@@ -71,6 +71,21 @@ def test_v2_amendment_records_every_approved_change() -> None:
             "to": "clean_refusal_observation_budget_warning",
             "classification": "event",
         },
+    ]
+
+    assert vocabulary["amendments_from_v3"] == [
+        {
+            "change": "add",
+            "to": "frozen_grid_preview_market_moved",
+            "classification": "transient",
+            "reason": (
+                "An exact frozen neutral Grid request that passed at its "
+                "authorized split may retry when only the current "
+                "venue-rounded single-side capital count became infeasible "
+                "before start_intent; all plan, envelope and safety gates "
+                "remain unchanged."
+            ),
+        }
     ]
 
 
