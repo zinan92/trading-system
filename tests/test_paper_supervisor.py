@@ -204,6 +204,7 @@ class FakePublicControl:
         self.prepare_ids: list[str] = []
         self.start_ids: list[str] = []
         self.calls: list[str] = []
+        self.prepare_payloads: list[dict] = []
         self.prepared: dict[str, dict] = {}
         self.intent_seen_before_start = False
 
@@ -226,6 +227,7 @@ class FakePublicControl:
                 },
             }
         if action == "prepare_start":
+            self.prepare_payloads.append(deepcopy(payload))
             sequence = len(self.prepare_ids) + 1
             preview_id = f"preview-{sequence}"
             prepared_id = f"prepared-{sequence}"
@@ -442,6 +444,46 @@ def test_active_grid_request_freezes_geometry_for_fresh_supervisor_preview() -> 
         "notional_mode": "manual",
     }
     assert request["risk_budget"] == {"leverage": 10}
+
+
+def test_convergence_builds_existing_plan_request_from_full_plan_not_identity(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    expected_range = {
+        "low": 90.0,
+        "high": 110.0,
+        "scope": "full",
+        "split_price": 100.0,
+        "source_envelope": {"low": 90.0, "high": 110.0},
+    }
+    plane.plan["range"] = expected_range
+    plane.plan["grid"].update(
+        {
+            "mode": "arithmetic",
+            "notional_per_grid": 100.0,
+            "out_of_range": "exit_only",
+            "leverage": 10,
+        }
+    )
+    supervisor.store.now = lambda: T0
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(),
+    )
+
+    assert result["status"] == "executed"
+    payload = control.prepare_payloads[0]
+    assert payload["cycle_risk_envelope_id"] == "envelope-1"
+    assert payload["range"] == expected_range
+    assert payload["grid"]["count"] == 3
+    assert payload["grid"]["notional_per_grid"] == 100.0
+    assert payload["risk_budget"] == {"leverage": 10}
 
 
 @pytest.mark.parametrize("verification_passes", [True, False])

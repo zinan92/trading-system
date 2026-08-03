@@ -517,7 +517,35 @@ class PaperSupervisor:
                         ),
                     )
             else:
-                request = self._request_from_plan(plan)
+                # ``StartAuthoritySnapshot.active_plan`` intentionally carries
+                # only the immutable identity fields.  It is not the economic
+                # plan and must never be used to build a start request: doing
+                # so silently drops the envelope, range, and grid geometry.
+                # Re-read the full active plan and require its identity to
+                # match the authority snapshot before asking the public
+                # control plane to prepare anything.
+                full_plan = self.plane.active_plan(cycle_id) or {}
+                if not full_plan:
+                    return self._structural(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        machine_code="active_plan_missing",
+                        heartbeat=health,
+                        authority=authority,
+                    )
+                if self._plan_identity(full_plan) != plan:
+                    return self._structural(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        machine_code="plan_identity_conflict",
+                        heartbeat=health,
+                        authority=authority,
+                    )
+                request = self._request_from_plan(full_plan)
 
             if self._deadline_exceeded(started):
                 return self._pre_intent_deadline(
