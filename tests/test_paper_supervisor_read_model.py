@@ -14,6 +14,8 @@ from services.paper_supervisor_evidence import (
 )
 from services.paper_supervisor_read_model import (
     _utilization_window,
+    build_paper_supervisor_history_response,
+    build_paper_supervisor_polling_summary,
     build_paper_supervisor_read_model,
     build_paper_supervisor_utilization,
 )
@@ -393,6 +395,95 @@ def test_current_cycle_exposes_complete_immutable_history(
             "machine_code": "attempt_store_corrupt",
         }
     ]
+
+
+def test_polling_summary_reads_only_checkpointed_tail_and_history_is_explicit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = PaperSupervisorStore(tmp_path, now=lambda: AS_OF)
+    with store.try_lease(CYCLE, holder_id="bounded-poll-test") as lease:
+        assert lease is not None
+        lease.claim_tick(
+            source_tick_key=f"{CYCLE}:heartbeat:bounded",
+            heartbeat_digest="d" * 64,
+            trust="fresh",
+            claimed_at=AS_OF.isoformat(),
+        )
+        lease.record_pre_intent_started(
+            attempt_id="supervisor-attempt-bounded",
+            observed_at=AS_OF.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        lease.record_pre_intent_finished(
+            attempt_id="supervisor-attempt-bounded",
+            result="transient",
+            machine_code="prepared_start_market_moved",
+            classification="transient",
+            observed_at=AS_OF.isoformat(),
+        )
+        store.commit_episode_observation(
+            lease,
+            state={
+                "cycle_id": CYCLE,
+                "mode": "backing_off",
+                "episode": {
+                    "episode_id": "episode-bounded",
+                    "next_attempt_at": (AS_OF + timedelta(minutes=5)).isoformat(),
+                },
+                "budgets": {"clean_refusal_observations": 1},
+                "events": [],
+                "blocker": None,
+                "alert_required": False,
+            },
+            payload={
+                "status": "backing_off",
+                "observed_at": AS_OF.isoformat(),
+                "machine_code": "prepared_start_market_moved",
+                "classification": "transient",
+            },
+        )
+
+    monkeypatch.setattr(
+        PaperSupervisorStore,
+        "read_cycle_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("polling must not scan immutable history")
+        ),
+    )
+    summary = build_paper_supervisor_polling_summary(
+        tmp_path,
+        cycle_id=CYCLE,
+        as_of=AS_OF,
+        count_summary={"attempt_count": 1, "start_intent_count": 0},
+    )
+
+    assert summary["status"] == "available"
+    assert summary["current_cycle"]["attempt_count"] == 1
+    assert summary["current_cycle"]["history"] == {
+        "status": "available_on_demand",
+        "complete": False,
+        "endpoint": "/api/trading-system/supervisor-history",
+        "cycle_id": CYCLE,
+        "event_count": 3,
+        "observation_count": 1,
+        "tail_observation_sha256": summary["current_cycle"]["history"][
+            "tail_observation_sha256"
+        ],
+    }
+
+    monkeypatch.undo()
+    response = build_paper_supervisor_history_response(
+        tmp_path,
+        cycle_id=CYCLE,
+        as_of=AS_OF,
+    )
+    assert response["completeness"]["status"] == "complete"
+    assert response["completeness"]["event_count"] == 3
+    assert response["completeness"]["observation_count"] == 1
+    assert len(
+        response["supervisor"]["current_cycle"]["history"]["events"]
+    ) == 3
 
 
 def test_corrupt_observation_is_explicitly_unavailable(

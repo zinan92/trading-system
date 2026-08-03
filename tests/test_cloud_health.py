@@ -348,6 +348,8 @@ def test_running_runtime_does_not_hide_supervisor_structural_blocker(
         "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
         lambda *_args, **_kwargs: {
             "current_cycle": {
+                "attempt_count": 4,
+                "start_intent_count": 1,
                 "last_observed_at": "2026-07-28T01:59:00+00:00",
                 "last_attempt": {
                     "observed_at": "2026-07-28T01:59:00+00:00",
@@ -412,6 +414,8 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
         "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
         lambda *_args, **_kwargs: {
             "current_cycle": {
+                "attempt_count": 4,
+                "start_intent_count": 1,
                 "last_observed_at": "2026-07-28T01:59:00+00:00",
                 "last_attempt": {
                     "observed_at": "2026-07-28T01:59:00+00:00",
@@ -439,6 +443,12 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
     assert supervisor["status"] == "ready"
     assert supervisor["code"] == "supervisor_running"
     assert supervisor["severity"] == "none"
+    assert supervisor["evidence"]["current_cycle_summary"][
+        "attempt_count"
+    ] == 4
+    assert supervisor["evidence"]["runtime_utilization"]["windows"][
+        "24h"
+    ]["conservative_percentage"] == 90
 
 
 def test_scheduler_owner_mismatch_blocks_cloud_health(

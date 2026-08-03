@@ -13478,3 +13478,52 @@ auditable datafeed port; broker execution remains a separate port.
   Cloud critical, incomplete Cloud health, and unchanged local legacy failure.
 - The dead-man/Cloud-health/system-vitals/systemd/dashboard upstream matrix
   passed 130 tests; Ruff and `git diff --check` passed.
+
+# 2026-08-03 — Bound the Dashboard polling read-model and lazy-load Supervisor audit (#538)
+
+## Decision
+
+- Keep the default five-second Dashboard read-model free of unbounded
+  Supervisor history scans. It reads only the latest observation line and the
+  compact episode checkpoint, verifies the observation's own SHA-256 and the
+  checkpoint's exact tail anchor, and publishes a bounded current-cycle
+  summary. A missing or mismatched anchor remains explicitly unavailable.
+- Preserve every immutable event and observation. Expose the complete,
+  deterministically ordered attempt, start-intent and observation history at
+  the explicit read-only
+  `/api/trading-system/supervisor-history?cycle_id=...` endpoint, with counts
+  and tail hashes. The Supervisor tab fetches this endpoint only when opened.
+- Continue to use no TTL cache. Normal polling and full-audit reads each retain
+  single-flight coalescing, while start/stop/cancel continue to advance the
+  normal read generation before and after control so the immediate reload
+  sees authoritative new state.
+- Persist the already-computed utilization and current-cycle count summary in
+  Cloud health evidence. Normal Dashboard polling consumes that bounded
+  evidence instead of recomputing seven days of Supervisor observations every
+  five seconds.
+
+## Gotchas
+
+- Removing large arrays only after building the full Supervisor model does not
+  bound CPU, disk reads or memory. The full history builder must not run on the
+  normal polling path at all.
+- A latest JSONL line is not sufficient by itself. The polling projection is
+  usable only when its digest is valid and the atomically written episode
+  checkpoint names that exact digest; uncertainty fails closed and never
+  becomes control authority.
+- A completed single-flight result is not cached. Full audit may be expensive,
+  but it is an attended, explicit read and cannot delay every five-second
+  status poll.
+- Runtime utilization in the polling view may lag the latest natural Cloud
+  health timer by one interval. It remains conservative evidence and never
+  authorizes trading.
+
+## Verification
+
+- Added coverage proving the polling summary does not invoke a full cycle
+  snapshot, contains no history arrays, and the explicit endpoint returns the
+  complete counts, rows and chain-tail hashes.
+- Browser coverage proves no full-audit request occurs on page load and exactly
+  one is made when the Supervisor tab is opened.
+- The Dashboard, read-model, Cloud-health, dead-man and Supervisor regression
+  matrix passes without changing any control or execution path.

@@ -13,6 +13,14 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
+- #537 已部署到 Cloud Paper 精确 source
+  `main@cdaadafd09c0835109170f075a67848c48fe7b30`：Cloud health 不再因
+  runtime=`running` 提前跳过 Supervisor，运行中出现 structural episode
+  仍会 fail-closed 并驱动 dead-man critical。#538 正在把默认五秒 Dashboard
+  read-model 改为哈希锚定的有界 Supervisor 摘要，并将完整不可变审计移到
+  点击 Supervisor 标签后才读取的独立只读接口；不使用 TTL、不改控制路径、
+  不删除或压缩任何历史。部署后必须以公网 200、p95<5s、响应体积、CPU/RSS/
+  线程和零 502 现场证据收口。
 - #542 已部署到 Cloud Paper 精确 source
   `main@e910774573307ea975db9f100201ad3574b5f23c`，tree
   `c7c222e94e2a27f3731f3ff34f1c81139d2ed2b9`。19:48 CST 的第一拍自然

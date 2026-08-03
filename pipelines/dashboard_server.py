@@ -71,7 +71,8 @@ from services.production_accounting import build_production_accounting_history
 from services.replay_state import ReplayState
 from services.tiger_venue_status import TigerVenueStatus
 from services.paper_supervisor_read_model import (
-    build_paper_supervisor_read_model,
+    build_paper_supervisor_history_response,
+    build_paper_supervisor_polling_summary,
 )
 from services.trading_system_read_model import (
     project_market_read_model,
@@ -184,6 +185,7 @@ class KeyedSingleFlight:
 
 
 _TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT = KeyedSingleFlight()
+_SUPERVISOR_HISTORY_SINGLE_FLIGHT = KeyedSingleFlight()
 
 
 class BoundedThreadingHTTPServer(ThreadingHTTPServer):
@@ -327,6 +329,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/trading-system/read-model":
             self._handle_trading_system_read_model(parsed.query)
             return
+        if parsed.path == "/api/trading-system/supervisor-history":
+            self._handle_supervisor_history(parsed.query)
+            return
         if parsed.path == "/api/trading-system/ai-evaluation-receipt":
             self._handle_ai_evaluation_receipt(parsed.query)
             return
@@ -456,6 +461,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             )
         except ValueError as exc:
             self._write_error(400, "trading_system_read_model_unavailable", str(exc))
+
+    def _handle_supervisor_history(self, query: str) -> None:
+        try:
+            self._write_json(
+                200,
+                build_supervisor_history_response_singleflight(query),
+            )
+        except ValueError as exc:
+            self._write_error(400, "supervisor_history_unavailable", str(exc))
 
     def _handle_ai_evaluation_receipt(self, query: str) -> None:
         params = parse_qs(query)
@@ -1057,6 +1071,44 @@ def build_trading_system_read_model_response_singleflight(
     )
 
 
+def build_supervisor_history_response(
+    *,
+    output_root: Path | None = None,
+    cycle_id: str,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    output = _dualtrack_output_root(output_root)
+    if not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("cycle_id contains invalid characters")
+    return build_paper_supervisor_history_response(
+        output,
+        cycle_id=cycle_id,
+        as_of=as_of,
+    )
+
+
+def build_supervisor_history_response_singleflight(
+    query: str,
+    *,
+    single_flight: KeyedSingleFlight | None = None,
+) -> dict[str, Any]:
+    """Coalesce overlapping explicit full-audit reads without caching."""
+
+    params = parse_qs(query)
+    cycle_id = str((params.get("cycle_id") or [""])[0]).strip()
+    as_of = (params.get("as_of") or [None])[0]
+    if not cycle_id or not _CYCLE_ID_PATTERN.match(cycle_id):
+        raise ValueError("cycle_id contains invalid characters")
+    flight = single_flight or _SUPERVISOR_HISTORY_SINGLE_FLIGHT
+    return flight.run(
+        ("supervisor-history", cycle_id, as_of),
+        lambda: build_supervisor_history_response(
+            cycle_id=cycle_id,
+            as_of=as_of,
+        ),
+    )
+
+
 def build_daily_self_review_response(
     *,
     output_root: Path | None = None,
@@ -1275,10 +1327,19 @@ def _assemble_strategy_console_snapshot(
     cycle = build_dualtrack_cycle_current_response(output_root=output, as_of=as_of)
     cycle_id = str(cycle["cycle_id"])
     control = StrategyControlPlane(output).read_model(cycle_id, as_of=as_of)
-    paper_supervisor = build_paper_supervisor_read_model(
+    cloud_health = _load_current_cloud_health(output)
+    supervisor_evidence = dict(
+        ((cloud_health.get("checks") or {}).get("supervisor") or {}).get(
+            "evidence"
+        )
+        or {}
+    )
+    paper_supervisor = build_paper_supervisor_polling_summary(
         output,
         cycle_id=cycle_id,
         as_of=as_of,
+        utilization=supervisor_evidence.get("runtime_utilization"),
+        count_summary=supervisor_evidence.get("current_cycle_summary"),
     )
     runtime_utilization = dict(
         paper_supervisor.get("utilization") or {}
@@ -1334,13 +1395,6 @@ def _assemble_strategy_console_snapshot(
         load_strategy_shadow_runs_for_cycles(output, closed_cycle_ids)
     )
     safe_repair_queue = SafeRepairQueue(output).read_model()
-    cloud_health = {}
-    try:
-        rows = load_json(output / "cloud" / "health" / "current.json")
-        if rows and isinstance(rows[-1], dict):
-            cloud_health = dict(rows[-1])
-    except (OSError, ValueError):
-        cloud_health = {}
     cycle_decision = CycleDecisionLedger(output).read(cycle_id) or {}
     return {
         "schema_version": "strategy-production-console-v1",
@@ -1393,6 +1447,16 @@ def _assemble_strategy_console_snapshot(
             "runtime_actual_state": True,
         },
     }
+
+
+def _load_current_cloud_health(output_root: Path) -> dict[str, Any]:
+    try:
+        rows = load_json(output_root / "cloud" / "health" / "current.json")
+        if rows and isinstance(rows[-1], dict):
+            return dict(rows[-1])
+    except (OSError, ValueError):
+        pass
+    return {}
 
 
 def _latest_review_cycle_id(ledger: dict[str, Any], packages: list[dict[str, Any]]) -> str:

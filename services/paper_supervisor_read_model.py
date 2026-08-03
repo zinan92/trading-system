@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,201 @@ from services.paper_supervisor_store import (
 SUPERVISOR_READ_MODEL_SCHEMA_VERSION = "paper-supervisor-read-model-v1"
 RUNTIME_UTILIZATION_SCHEMA_VERSION = "strategy-runtime-utilization-v2"
 MAX_OBSERVATION_INTERVAL_SECONDS = 120
+SUPERVISOR_POLLING_SUMMARY_SCHEMA_VERSION = (
+    "paper-supervisor-polling-summary-v1"
+)
+SUPERVISOR_HISTORY_RESPONSE_SCHEMA_VERSION = (
+    "paper-supervisor-history-response-v1"
+)
+_MAX_POLLING_EPISODE_BYTES = 2 * 1024 * 1024
+_MAX_POLLING_OBSERVATION_BYTES = 2 * 1024 * 1024
+
+
+def build_paper_supervisor_polling_summary(
+    output_root: Path,
+    *,
+    cycle_id: str,
+    as_of: str | datetime | None = None,
+    utilization: Mapping[str, Any] | None = None,
+    count_summary: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Read a bounded, checkpoint-anchored Supervisor tail for polling.
+
+    This projection is observational only.  It deliberately does not walk the
+    append-only event or observation histories; those remain available from
+    ``build_paper_supervisor_history_response``.
+    """
+
+    observed = _utc(as_of)
+    utilization_summary = (
+        dict(utilization) if isinstance(utilization, Mapping) else {}
+    )
+    root = (
+        Path(output_root)
+        / "dualtrack"
+        / "supervisor"
+        / "convergence"
+    )
+    episode_path = root / "episodes" / f"{cycle_id}.json"
+    observation_path = root / "observations" / f"{cycle_id}.jsonl"
+    if not episode_path.exists() and not observation_path.exists():
+        current = _polling_unavailable_cycle(cycle_id)
+        current["status"] = "not_started"
+        return {
+            "schema_version": SUPERVISOR_POLLING_SUMMARY_SCHEMA_VERSION,
+            "as_of": observed.isoformat(),
+            "source": "paper_supervisor_checkpointed_tail",
+            "classifier_version": CLASSIFIER_VERSION,
+            "status": "not_started",
+            "current_cycle": current,
+            "utilization": utilization_summary,
+            "source_errors": [],
+            "history_query": _history_query(cycle_id),
+            "read_only": True,
+            "command_authority": False,
+        }
+    try:
+        episode = _bounded_json_object(
+            episode_path,
+            max_bytes=_MAX_POLLING_EPISODE_BYTES,
+        )
+        tail = _bounded_jsonl_tail(
+            observation_path,
+            max_bytes=_MAX_POLLING_OBSERVATION_BYTES,
+        )
+        if str(episode.get("cycle_id") or "") != cycle_id:
+            raise ValueError("attempt_store_corrupt")
+        _validate_polling_observation_tail(tail, cycle_id=cycle_id)
+        if _timestamp(tail.get("recorded_at")) > observed:
+            raise ValueError("supervisor_polling_as_of_precedes_tail")
+        tail_hash = str(tail.get("observation_sha256") or "")
+        if str(episode.get("last_observation_sha256") or "") != tail_hash:
+            raise ValueError("attempt_store_corrupt")
+        payload = _polling_mapping(tail.get("payload"), required=True)
+        snapshot = _polling_mapping(payload.get("episode_snapshot"))
+        wal_anchor = _polling_mapping(payload.get("wal_anchor"))
+        episode_identity = _polling_mapping(episode.get("episode"))
+        episode_blocker = _polling_mapping(episode.get("blocker"))
+        snapshot_blocker = _polling_mapping(snapshot.get("blocker"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "schema_version": SUPERVISOR_POLLING_SUMMARY_SCHEMA_VERSION,
+            "as_of": observed.isoformat(),
+            "source": "paper_supervisor_checkpointed_tail",
+            "classifier_version": CLASSIFIER_VERSION,
+            "status": "unavailable",
+            "current_cycle": _polling_unavailable_cycle(cycle_id),
+            "utilization": utilization_summary,
+            "source_errors": [
+                {
+                    "cycle_id": cycle_id,
+                    "machine_code": _safe_machine_code(exc),
+                }
+            ],
+            "history_query": _history_query(cycle_id),
+            "read_only": True,
+            "command_authority": False,
+        }
+
+    blocker = episode_blocker or snapshot_blocker
+    counts = dict(count_summary) if isinstance(count_summary, Mapping) else {}
+    event_sequence = wal_anchor.get("event_sequence")
+    current = {
+        "cycle_id": cycle_id,
+        "status": "available",
+        "attempt_count": _nonnegative_int_or_none(counts.get("attempt_count")),
+        "start_intent_count": _nonnegative_int_or_none(
+            counts.get("start_intent_count")
+        ),
+        "last_observed_at": tail.get("recorded_at"),
+        "last_result": {
+            "status": payload.get("status"),
+            "terminal_status": payload.get("terminal_status"),
+            "machine_code": payload.get("machine_code"),
+            "classification": payload.get("classification"),
+            "observed_at": payload.get("observed_at"),
+            "preview_id": payload.get("preview_id"),
+            "prepared_start_id": payload.get("prepared_start_id"),
+        },
+        "last_attempt": counts.get("last_attempt"),
+        "episode": {
+            "mode": episode.get("mode") or snapshot.get("mode"),
+            "episode_id": episode_identity.get("episode_id"),
+            "next_attempt_at": episode_identity.get("next_attempt_at"),
+            "budgets": episode.get("budgets") or snapshot.get("budgets"),
+            "blocker": blocker or None,
+            "alert_required": episode.get("alert_required"),
+        },
+        "history": {
+            "status": "available_on_demand",
+            "complete": False,
+            "endpoint": "/api/trading-system/supervisor-history",
+            "cycle_id": cycle_id,
+            "event_count": _nonnegative_int_or_none(event_sequence),
+            "observation_count": _nonnegative_int_or_none(
+                tail.get("sequence")
+            ),
+            "tail_observation_sha256": tail.get("observation_sha256"),
+        },
+    }
+    return {
+        "schema_version": SUPERVISOR_POLLING_SUMMARY_SCHEMA_VERSION,
+        "as_of": observed.isoformat(),
+        "source": "paper_supervisor_checkpointed_tail",
+        "classifier_version": CLASSIFIER_VERSION,
+        "status": "available",
+        "current_cycle": current,
+        "utilization": utilization_summary,
+        "source_errors": [],
+        "history_query": _history_query(cycle_id),
+        "read_only": True,
+        "command_authority": False,
+    }
+
+
+def build_paper_supervisor_history_response(
+    output_root: Path,
+    *,
+    cycle_id: str,
+    as_of: str | datetime | None = None,
+) -> dict[str, Any]:
+    """Return the complete immutable audit projection on explicit request."""
+
+    model = build_paper_supervisor_read_model(
+        output_root,
+        cycle_id=cycle_id,
+        as_of=as_of,
+    )
+    current = dict(model.get("current_cycle") or {})
+    history = dict(current.get("history") or {})
+    observations = list(history.get("observations") or [])
+    events = list(history.get("events") or [])
+    return {
+        "schema_version": SUPERVISOR_HISTORY_RESPONSE_SCHEMA_VERSION,
+        "cycle_id": cycle_id,
+        "as_of": model.get("as_of"),
+        "completeness": {
+            "status": (
+                "complete" if model.get("status") != "unavailable" else "unavailable"
+            ),
+            "deterministic_order": True,
+            "event_count": history.get("event_count"),
+            "observation_count": history.get("observation_count"),
+            "attempt_count": current.get("attempt_count"),
+            "start_intent_count": current.get("start_intent_count"),
+            "event_tail_sha256": (
+                events[-1].get("event_sha256") if events else None
+            ),
+            "observation_tail_sha256": (
+                observations[-1].get("observation_sha256")
+                if observations
+                else None
+            ),
+        },
+        "supervisor": model,
+        "read_only": True,
+        "command_authority": False,
+    }
 
 
 def build_paper_supervisor_read_model(
@@ -91,6 +288,127 @@ def build_paper_supervisor_utilization(
         end=end,
         source_errors=[],
     )
+
+
+def _bounded_json_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("attempt_store_corrupt")
+    stat_before = path.stat()
+    if stat_before.st_size <= 0 or stat_before.st_size > max_bytes:
+        raise ValueError("attempt_store_corrupt")
+    raw = path.read_bytes()
+    stat_after = path.stat()
+    if (
+        stat_before.st_ino != stat_after.st_ino
+        or stat_before.st_size != stat_after.st_size
+        or stat_before.st_mtime_ns != stat_after.st_mtime_ns
+    ):
+        raise ValueError("attempt_store_corrupt")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("attempt_store_corrupt")
+    return value
+
+
+def _polling_mapping(
+    value: Any,
+    *,
+    required: bool = False,
+) -> dict[str, Any]:
+    if value is None and not required:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("attempt_store_corrupt")
+    return dict(value)
+
+
+def _bounded_jsonl_tail(path: Path, *, max_bytes: int) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("attempt_store_corrupt")
+    stat_before = path.stat()
+    if stat_before.st_size <= 0:
+        raise ValueError("attempt_store_corrupt")
+    with path.open("rb") as handle:
+        start = max(0, stat_before.st_size - max_bytes - 1)
+        handle.seek(start)
+        raw = handle.read(max_bytes + 1)
+    stat_after = path.stat()
+    if (
+        stat_before.st_ino != stat_after.st_ino
+        or stat_before.st_size != stat_after.st_size
+        or stat_before.st_mtime_ns != stat_after.st_mtime_ns
+    ):
+        raise ValueError("attempt_store_corrupt")
+    if start:
+        boundary = raw.find(b"\n")
+        if boundary < 0:
+            raise ValueError("attempt_store_corrupt")
+        raw = raw[boundary + 1 :]
+    lines = raw.splitlines()
+    if not lines:
+        raise ValueError("attempt_store_corrupt")
+    value = json.loads(lines[-1])
+    if not isinstance(value, dict):
+        raise ValueError("attempt_store_corrupt")
+    return value
+
+
+def _validate_polling_observation_tail(
+    row: Mapping[str, Any],
+    *,
+    cycle_id: str,
+) -> None:
+    supplied = str(row.get("observation_sha256") or "")
+    unsigned = {
+        key: value
+        for key, value in row.items()
+        if key != "observation_sha256"
+    }
+    expected = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        row.get("schema_version") != "paper-supervisor-observation-v1"
+        or str(row.get("cycle_id") or "") != cycle_id
+        or not isinstance(row.get("sequence"), int)
+        or int(row.get("sequence") or 0) < 1
+        or not isinstance(row.get("payload"), dict)
+        or supplied != expected
+    ):
+        raise ValueError("attempt_store_corrupt")
+
+
+def _polling_unavailable_cycle(cycle_id: str) -> dict[str, Any]:
+    current = _unavailable_current_cycle(cycle_id)
+    current["history"] = {
+        **_history_query(cycle_id),
+        "status": "available_on_demand",
+        "complete": False,
+    }
+    return current
+
+
+def _history_query(cycle_id: str) -> dict[str, Any]:
+    return {
+        "endpoint": "/api/trading-system/supervisor-history",
+        "cycle_id": cycle_id,
+        "method": "GET",
+    }
+
+
+def _nonnegative_int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _current_cycle_projection(
