@@ -19,7 +19,12 @@ from services.paper_supervisor_heartbeat import (
 )
 
 
-RUNNING_EVIDENCE_SCHEMA_VERSION = "paper-supervisor-running-evidence-v1"
+RUNNING_EVIDENCE_SCHEMA_V1 = "paper-supervisor-running-evidence-v1"
+RUNNING_EVIDENCE_SCHEMA_V2 = "paper-supervisor-running-evidence-v2"
+RUNNING_EVIDENCE_SCHEMA_VERSION = RUNNING_EVIDENCE_SCHEMA_V2
+_SUPPORTED_SCHEMA_VERSIONS = frozenset(
+    {RUNNING_EVIDENCE_SCHEMA_V1, RUNNING_EVIDENCE_SCHEMA_V2}
+)
 MAX_EVIDENCE_PERSIST_LAG_SECONDS = 120
 _AUTHORITY_STATUSES = frozenset({"available", "unknown"})
 _REPRESENTATIVE_KINDS = frozenset({"accepted_order", "open_position"})
@@ -86,6 +91,8 @@ def finalize_running_evidence(
     if forbidden.intersection(payload):
         raise RunningEvidenceError("running_evidence_store_fields_forbidden")
     _validate_draft_shape(payload)
+    if payload.get("schema_version") != RUNNING_EVIDENCE_SCHEMA_VERSION:
+        raise RunningEvidenceError("running_evidence_schema_not_current")
     payload["persisted_at"] = _utc_text(persisted_at)
     payload["expected_slot_digest"] = _digest(payload["expected_slots"])
     proven = _recompute(payload)
@@ -195,7 +202,7 @@ def _validate_draft_shape(payload: Mapping[str, Any]) -> None:
         not isinstance(payload, Mapping)
         or set(payload) - allowed
         or payload.get("schema_version")
-        != RUNNING_EVIDENCE_SCHEMA_VERSION
+        not in _SUPPORTED_SCHEMA_VERSIONS
         or payload.get("authority_status") not in _AUTHORITY_STATUSES
     ):
         raise RunningEvidenceError("running_evidence_invalid")
@@ -255,6 +262,11 @@ def _recompute(payload: Mapping[str, Any]) -> bool:
             for row in current
             if row["representative_kind"] == "open_position"
         ]
+        accepted_count_basis = (
+            len(accepted_ids)
+            if payload["schema_version"] == RUNNING_EVIDENCE_SCHEMA_V1
+            else len(expected_ids)
+        )
         plan_exact = (
             runtime["cycle_id"] == payload["cycle_id"]
             and runtime["strategy_plan_id"]
@@ -266,7 +278,7 @@ def _recompute(payload: Mapping[str, Any]) -> bool:
             # Runtime records the cardinality accepted by the start action.
             # Filled slots remain part of that exact set while their current
             # representative is an open position instead of an open order.
-            and runtime["accepted_order_count"] == len(expected_ids)
+            and runtime["accepted_order_count"] == accepted_count_basis
         )
         slots_exact = (
             bool(expected_ids)
