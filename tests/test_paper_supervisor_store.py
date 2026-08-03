@@ -16,6 +16,11 @@ from services.paper_supervisor_store import (
     StartAuthoritySnapshot,
     SupervisorStoreError,
 )
+from services.paper_supervisor_evidence import (
+    RUNNING_EVIDENCE_SCHEMA_V1,
+    RUNNING_EVIDENCE_SCHEMA_V2,
+    draft_running_evidence,
+)
 
 
 CYCLE = "2026-07-30_DAY"
@@ -40,6 +45,64 @@ def _store(tmp_path: Path) -> PaperSupervisorStore:
         now=lambda: NOW,
         hostname=lambda: "cloud-paper-1",
         pid=lambda: 42,
+    )
+
+
+def _running_evidence_draft() -> dict:
+    command = {
+        "command_id": "order-0",
+        "fingerprint": FINGERPRINTS[0],
+        "side": "buy",
+        "quantity": "1",
+        "price": "100",
+        "generation": 1,
+        "economics": {
+            "event": "entry",
+            "symbol": "GOLD",
+            "order_type": "limit",
+            "notional": "100",
+            "sl": "90",
+            "tp": "110",
+            "strategy_plan_id": PLAN["strategy_plan_id"],
+            "strategy_plan_version": PLAN["strategy_plan_version"],
+        },
+    }
+    return draft_running_evidence(
+        cycle_id=CYCLE,
+        evidence_at=NOW.isoformat(),
+        heartbeat_recorded_at=NOW.isoformat(),
+        heartbeat_digest="b" * 64,
+        authority_status="available",
+        plan_identity=PLAN,
+        runtime={
+            "cycle_id": CYCLE,
+            "strategy_plan_id": PLAN["strategy_plan_id"],
+            "strategy_plan_version": PLAN["strategy_plan_version"],
+            "desired_state": "running",
+            "actual_state": "running",
+            "accepted_order_count": 1,
+        },
+        expected_slots=[{
+            "slot_id": "slot-1",
+            "initial_command_id": "order-0",
+            "expected_fingerprint": FINGERPRINTS[0],
+            "authorized_commands": [command],
+        }],
+        current_slots=[{
+            "slot_id": "slot-1",
+            "representative_kind": "accepted_order",
+            "representative_id": "order-0",
+            "command": command,
+            "ancestry": [{
+                "generation": 1,
+                "command_id": "order-0",
+                "rearm_of_order_id": None,
+                "lifecycle_status": "initial",
+                "reorder_order_id": None,
+            }],
+            "position": None,
+        }],
+        reconciliation={"execution": "ok", "accounting": "pass"},
     )
 
 
@@ -753,11 +816,7 @@ def test_observation_append_rejects_deleted_middle_link(
                 lease,
                 {"status": "healthy", "sequence": index + 1},
             )
-    path = (
-        store.root
-        / "observations"
-        / f"{CYCLE}.jsonl"
-    )
+    path = store.root / "observations" / f"{CYCLE}.jsonl"
     lines = path.read_text(encoding="utf-8").splitlines()
     path.write_text(
         "\n".join([lines[0], lines[2]]) + "\n",
@@ -774,6 +833,57 @@ def test_observation_append_rejects_deleted_middle_link(
                 lease,
                 {"status": "healthy", "sequence": 4},
             )
+
+
+def test_observation_chain_reads_mixed_v1_and_v2_running_evidence(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="owner-a") as lease:
+        assert lease is not None
+        first = store.append_observation(
+            lease,
+            {"running_evidence": _running_evidence_draft()},
+        )
+
+    path = store.root / "observations" / f"{CYCLE}.jsonl"
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    legacy["payload"]["running_evidence"]["schema_version"] = (
+        RUNNING_EVIDENCE_SCHEMA_V1
+    )
+    legacy["observation_sha256"] = hashlib.sha256(
+        json.dumps(
+            {
+                key: value
+                for key, value in legacy.items()
+                if key != "observation_sha256"
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    path.write_text(
+        json.dumps(legacy, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with store.try_lease(CYCLE, holder_id="owner-b") as lease:
+        assert lease is not None
+        second = store.append_observation(
+            lease,
+            {"running_evidence": _running_evidence_draft()},
+        )
+
+    rows = store.observations(CYCLE)
+    assert first["sequence"] == 1
+    assert second["sequence"] == 2
+    assert rows[0]["payload"]["running_evidence"]["schema_version"] == (
+        RUNNING_EVIDENCE_SCHEMA_V1
+    )
+    assert rows[1]["payload"]["running_evidence"]["schema_version"] == (
+        RUNNING_EVIDENCE_SCHEMA_V2
+    )
 
 
 def test_episode_checkpoint_rejects_deleted_observation_tail(

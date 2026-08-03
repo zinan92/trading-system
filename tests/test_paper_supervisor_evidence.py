@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from services.paper_supervisor_evidence import (
+    RUNNING_EVIDENCE_SCHEMA_V1,
+    RUNNING_EVIDENCE_SCHEMA_V2,
     RunningEvidenceError,
     draft_running_evidence,
     finalize_running_evidence,
@@ -218,8 +222,66 @@ def test_running_proof_accepts_filled_slot_as_exact_open_position() -> None:
         persisted_at=T0.isoformat(),
     )
 
+    assert evidence["schema_version"] == RUNNING_EVIDENCE_SCHEMA_V2
     assert evidence["running_proven"] is True
-    assert evidence["proof_status"] == "proven"
+
+
+def test_legacy_v1_filled_slot_keeps_its_original_derivation() -> None:
+    draft = _draft()
+    current = draft["current_slots"][0]
+    current["representative_kind"] = "open_position"
+    current["representative_id"] = "command-1"
+    current["position"] = {
+        "trade_id": "command-1",
+        "strategy_plan_id": PLAN_ID,
+        "strategy_plan_version": 1,
+        "side": "long",
+        "order_quantity": "1",
+    }
+    # This is the exact v1 interpretation: only currently accepted open
+    # orders contributed to the persisted accepted-order count.
+    draft["runtime"]["accepted_order_count"] = 0
+    draft["schema_version"] = RUNNING_EVIDENCE_SCHEMA_V1
+    draft["persisted_at"] = T0.isoformat()
+    draft["expected_slot_digest"] = hashlib.sha256(
+        json.dumps(
+            draft["expected_slots"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    draft["running_proven"] = True
+    draft["proof_status"] = "proven"
+
+    assert validate_running_evidence(draft) == draft
+
+    forged = deepcopy(draft)
+    forged["runtime"]["accepted_order_count"] = 1
+    with pytest.raises(RunningEvidenceError, match="running_evidence_invalid"):
+        validate_running_evidence(forged)
+
+
+def test_unknown_evidence_schema_fails_closed() -> None:
+    evidence = finalize_running_evidence(
+        _draft(),
+        persisted_at=T0.isoformat(),
+    )
+    evidence["schema_version"] = "paper-supervisor-running-evidence-v999"
+
+    with pytest.raises(RunningEvidenceError, match="running_evidence_invalid"):
+        validate_running_evidence(evidence)
+
+
+def test_writer_refuses_to_emit_legacy_v1_evidence() -> None:
+    draft = _draft()
+    draft["schema_version"] = RUNNING_EVIDENCE_SCHEMA_V1
+
+    with pytest.raises(
+        RunningEvidenceError,
+        match="running_evidence_schema_not_current",
+    ):
+        finalize_running_evidence(draft, persisted_at=T0.isoformat())
 
 
 def test_running_proof_requires_latest_authorized_rearm_with_same_economics() -> None:

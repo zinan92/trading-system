@@ -1,5 +1,35 @@
 # Decision Log
 
+## Version immutable running-evidence derivations (Issue #540)
+
+Date: 2026-08-03
+
+### Decision
+
+- A sealed running-evidence schema version owns both its persisted shape and
+  its exact derived-proof formula. Validators dispatch on that explicit
+  version; deploying a corrected formula must never reinterpret immutable
+  evidence written under an older version.
+- Existing `paper-supervisor-running-evidence-v1` remains readable and is
+  verified with the original current-open-order count rule. New evidence is
+  written as `paper-supervisor-running-evidence-v2` and verifies the persisted
+  start-accepted count against the full authorized logical-slot cardinality.
+- Unknown versions, forged derived fields, invalid hashes, and mismatched
+  identities continue to fail closed. Writers may emit only the current v2
+  schema; v1 support is read-only compatibility.
+
+### Gotchas
+
+- Changing a validator while retaining the same schema version converts valid
+  historical proof into an apparent `attempt_store_corrupt` event. The bytes
+  can be intact and the hash chain valid; the incompatibility is still a
+  production-stopping defect because every read revalidates derived fields.
+- Historical rows must not be rewritten to make a new validator happy. Mixed
+  v1/v2 observation chains are expected and remain independently verifiable.
+- Compatibility is not a fallback to the looser interpretation. Each known
+  version has one exact formula, and an unknown version has no formula and is
+  rejected.
+
 ## Filled Grid slots retain their accepted start identity (Issue #536)
 
 Date: 2026-08-03

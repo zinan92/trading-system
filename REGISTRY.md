@@ -13,6 +13,11 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
+- #536 的首次 Cloud 自然 tick 暴露 #540 schema 兼容缺口：部署版本用修正后的
+  逻辑重验不可变 v1 running evidence，因派生结果不同而 fail-closed 为
+  `attempt_store_corrupt`；未发生控制动作、第二套订单或历史改写。#540 将 v1
+  原规则固化为只读验证，并只用 v2 写入修正后的逻辑槽位规则；Cloud 自然
+  tick 恢复与原订单/持仓集合不变仍须由本票部署证据确认。
 - 2026-08-03 18:51 CST，当前 DAY Grid 的一个已授权 entry order 自然成交并
   成为 open position；执行与会计对账继续通过，runtime 仍为
   `running/running`，本次转换未产生第二次 start 或其他控制动作。该现场暴露
