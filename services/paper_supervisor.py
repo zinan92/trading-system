@@ -41,6 +41,7 @@ from services.paper_supervisor_identity import (
 )
 from services.paper_supervisor_evidence import (
     draft_running_evidence,
+    finalize_running_evidence,
 )
 from services.paper_supervisor_store import (
     PaperSupervisorStore,
@@ -2250,6 +2251,8 @@ class PaperSupervisor:
                     cleared = False
                 else:
                     cleared = True
+        elif machine_code == "order_identity_conflict":
+            cleared = self._sealed_running_identity_exact(authority)
         elif machine_code == "supervisor_configuration_invalid":
             # Reaching this pass proves the unique mode and fixed budgets were
             # accepted by the scheduler composition.
@@ -2288,6 +2291,39 @@ class PaperSupervisor:
             observed_at=observed_at,
         )
         return updated, cleared
+
+    def _sealed_running_identity_exact(
+        self,
+        authority: StartAuthoritySnapshot,
+    ) -> bool:
+        """Recheck the same sealed slot identity without a control action."""
+
+        try:
+            evidence = finalize_running_evidence(
+                dict(authority.running_evidence or {}),
+                persisted_at=self.store.now().isoformat(),
+            )
+            runtime = dict(authority.runtime)
+            preview_id = str(runtime.get("preview_id") or "")
+            prepared_start_id = str(
+                runtime.get("prepared_start_id") or ""
+            )
+            supervisor_started = bool(preview_id or prepared_start_id)
+            matching_audits = self._matching_start_audits(
+                authority,
+                preview_id=preview_id,
+                prepared_start_id=prepared_start_id,
+            )
+            audit_exact = (
+                len(matching_audits) == 1
+                and matching_audits[0].get("result") == "accepted"
+                and matching_audits[0].get("error") in {None, ""}
+                if supervisor_started
+                else True
+            )
+            return bool(evidence["running_proven"] and audit_exact)
+        except (KeyError, TypeError, ValueError):
+            return False
 
     def _legacy_clean_pre_intent_cleared(
         self,

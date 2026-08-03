@@ -13,22 +13,26 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
-- #536 的首次 Cloud 自然 tick 暴露 #540 schema 兼容缺口：部署版本用修正后的
-  逻辑重验不可变 v1 running evidence，因派生结果不同而 fail-closed 为
-  `attempt_store_corrupt`；未发生控制动作、第二套订单或历史改写。#540 将 v1
-  原规则固化为只读验证，并只用 v2 写入修正后的逻辑槽位规则；Cloud 自然
-  tick 恢复与原订单/持仓集合不变仍须由本票部署证据确认。
+- #540 已部署到 Cloud Paper 精确 clean source
+  `main@f727401da65db2f7fbbe8b2bbbed4c7d103ccbf8`，tree
+  `97ca748db11dded2eda4634dd1503e9090e839ca`。部署前 393 条不可变 DAY
+  observation 全部按原 v1 公式通过；部署后首个自然 tick 成功写入 v2 并完整
+  结束，`attempt_store_corrupt` 已消失，未改写历史、未执行控制动作。该 tick
+  同时证明 v2 running evidence 为 `proven`（38 个授权槽位 = 37 accepted + 1
+  exact open position），但既有 structural episode 仍粘滞为
+  `order_identity_conflict`，因此 #542 正在补充该精确码的零控制 recheck；在
+  自然 tick 留下 `structural_cleared` 与后续 `adopted_existing` 前不能称恢复。
 - 2026-08-03 18:51 CST，当前 DAY Grid 的一个已授权 entry order 自然成交并
   成为 open position；执行与会计对账继续通过，runtime 仍为
   `running/running`，本次转换未产生第二次 start 或其他控制动作。该现场暴露
   #536：Supervisor 把 start 时接受的 38 个逻辑槽位误与成交后的 37 个 open
   orders 比较，因而错误记录 `order_identity_conflict`。#536 将计数改为与 38
   个授权槽位比较，同时继续逐槽要求“accepted order 或 exact open position”
-  唯一代表，所有指纹、计划、成交谱系与双层对账闸保持 fail-closed；Cloud
-  部署与自然 tick 清障证据仍待本票合并后取得。
+  唯一代表，所有指纹、计划、成交谱系与双层对账闸保持 fail-closed。检测修复
+  已部署且 v2 证明通过；既有粘滞 structural 状态的清障由 #542 独立完成。
 - 当前 Cloud Paper source 为
-  `main@94b14bff38f5f965f93237959abb02473437bdc3`，tree
-  `f864b93fa379b58dc89321e15c2ff9682012bfad`。#532 已让完整可校验的
+  `main@f727401da65db2f7fbbe8b2bbbed4c7d103ccbf8`，tree
+  `97ca748db11dded2eda4634dd1503e9090e839ca`。#532 已让完整可校验的
   Cloud-native health 成为 dead-man 的 liveness authority；2026-08-03
   18:23:34 CST 的自然 timer 实际投递 `success`、HTTP 200，
   `failure_signal=false`、`failure_signal_sources=[]`。warning-only 的

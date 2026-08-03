@@ -1,5 +1,33 @@
 # Decision Log
 
+## Recheck exact order identity without replay (Issue #542)
+
+Date: 2026-08-03
+
+### Decision
+
+- Add only the exact machine code `order_identity_conflict` to structural
+  recheck. Clearance requires a freshly rebuilt, sealed v2 running-evidence
+  proof plus the exact single accepted start audit bound to the persisted
+  preview and prepared-start identities.
+- A successful recheck records `structural_cleared` with zero controls and
+  stops that tick. Only the next independently claimed fresh tick may enter
+  normal adoption, where the existing execution identity checks run again.
+- Missing or unproven evidence, conflicting start audits, any slot/position
+  identity mismatch, or reconciliation drift leaves the structural episode
+  unchanged and alerting.
+
+### Gotchas
+
+- Fixing the detector does not clear a blocker already persisted by an older
+  deployment. Structural state is intentionally sticky and every clearable
+  code needs an explicit, fail-closed recheck branch.
+- `running_proven=true` is not inferred from `running/running` or from counts.
+  It is recomputed from immutable plan/runtime identity, every authorized slot
+  representative, position lineage, heartbeat and both reconciliations.
+- A clearance tick is not an adoption tick and never replays `start`; this
+  separation is what preserves prepared-start one-shot semantics.
+
 ## Version immutable running-evidence derivations (Issue #540)
 
 Date: 2026-08-03
