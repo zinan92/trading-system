@@ -108,6 +108,39 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
             },
         },
     }
+    full_supervisor = deepcopy(model["runtime"]["supervisor"])
+    model["runtime"]["supervisor"] = {
+        **{
+            key: value
+            for key, value in full_supervisor.items()
+            if key != "current_cycle"
+        },
+        "schema_version": "paper-supervisor-polling-summary-v1",
+        "current_cycle": {
+            **{
+                key: value
+                for key, value in full_supervisor["current_cycle"].items()
+                if key != "history"
+            },
+            "history": {
+                "status": "available_on_demand",
+                "complete": False,
+                "endpoint": "/api/trading-system/supervisor-history",
+                "cycle_id": "2026-07-18_DAY",
+                "event_count": 5,
+                "observation_count": 2,
+            },
+        },
+    }
+    history_response = {
+        "schema_version": "paper-supervisor-history-response-v1",
+        "cycle_id": "2026-07-18_DAY",
+        "completeness": {"status": "complete"},
+        "supervisor": full_supervisor,
+        "read_only": True,
+        "command_authority": False,
+    }
+    history_requests: list[str] = []
     browser_errors: list[str] = []
 
     def fulfill_json(route, payload: dict) -> None:
@@ -144,6 +177,13 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
             lambda route: fulfill_json(route, model),
         )
         page.route(
+            "**/api/trading-system/supervisor-history?*",
+            lambda route: (
+                history_requests.append(route.request.url),
+                fulfill_json(route, history_response),
+            )[-1],
+        )
+        page.route(
             "**/api/dualtrack/market/bars?*",
             lambda route: fulfill_json(
                 route,
@@ -154,12 +194,15 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
             f"{origin}/dashboard-gridmind.html",
             wait_until="load",
         )
+        assert history_requests == []
         page.locator('[data-tab="supervisor"]').click()
 
         panel = page.locator('[data-panel="supervisor"]')
         panel.get_by_text(
             "Paper Supervisor · 2026-07-18_DAY"
         ).wait_for()
+        panel.get_by_text("preview-old", exact=True).wait_for()
+        assert len(history_requests) == 1
         assert panel.get_by_text(
             "prepared_start_market_moved",
             exact=True,
