@@ -311,6 +311,136 @@ def test_supervisor_health_uses_current_cycle_when_runtime_is_stale(
     assert supervisor["code"] == "supervisor_observation_missing"
 
 
+def test_running_runtime_does_not_hide_supervisor_structural_blocker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    health = _healthy(tmp_path)
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "plans"
+        / "2026-07-28_DAY.json",
+        [{
+            "cycle_id": "2026-07-28_DAY",
+            "strategy_plan_id": "active-plan",
+            "status": "active",
+        }],
+    )
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "runtime.json",
+        [{
+            "cycle_id": "2026-07-28_DAY",
+            "actual_state": "running",
+            "desired_state": "running",
+            "accepted_order_count": 38,
+        }],
+    )
+    monkeypatch.setattr(
+        "services.cloud_health.dualtrack_config",
+        lambda: {"convergence": {"mode": "paper_supervisor"}},
+    )
+    monkeypatch.setattr(
+        "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
+        lambda *_args, **_kwargs: {
+            "current_cycle": {
+                "last_observed_at": "2026-07-28T01:59:00+00:00",
+                "last_attempt": {
+                    "observed_at": "2026-07-28T01:59:00+00:00",
+                },
+                "episode": {
+                    "mode": "blocked_structural",
+                    "alert_required": True,
+                    "blocker": {
+                        "machine_code": "ledger_reconciliation_drift",
+                        "classification": "structural",
+                    },
+                },
+            },
+            "utilization": {"windows": {}},
+        },
+    )
+
+    result = health.run()
+
+    supervisor = result["checks"]["supervisor"]
+    assert result["status"] == "blocked"
+    assert result["severity"] == "critical"
+    assert supervisor["code"] == "supervisor_structural_blocker"
+    assert supervisor["severity"] == "critical"
+    assert supervisor["evidence"]["runtime_running"] is True
+    assert (
+        supervisor["evidence"]["blocker_machine_code"]
+        == "ledger_reconciliation_drift"
+    )
+
+
+def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    health = _healthy(tmp_path)
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "plans"
+        / "2026-07-28_DAY.json",
+        [{"cycle_id": "2026-07-28_DAY", "status": "active"}],
+    )
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "runtime.json",
+        [{
+            "cycle_id": "2026-07-28_DAY",
+            "actual_state": "running",
+            "desired_state": "running",
+            "accepted_order_count": 38,
+        }],
+    )
+    monkeypatch.setattr(
+        "services.cloud_health.dualtrack_config",
+        lambda: {"convergence": {"mode": "paper_supervisor"}},
+    )
+    monkeypatch.setattr(
+        "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
+        lambda *_args, **_kwargs: {
+            "current_cycle": {
+                "last_observed_at": "2026-07-28T01:59:00+00:00",
+                "last_attempt": {
+                    "observed_at": "2026-07-28T01:59:00+00:00",
+                },
+                "episode": {
+                    "mode": "ready",
+                    "alert_required": False,
+                    "blocker": None,
+                },
+            },
+            "utilization": {
+                "windows": {
+                    "24h": {
+                        "evidence_status": "complete",
+                        "conservative_percentage": 90,
+                    }
+                }
+            },
+        },
+    )
+
+    result = health.run()
+
+    supervisor = result["checks"]["supervisor"]
+    assert supervisor["status"] == "ready"
+    assert supervisor["code"] == "supervisor_running"
+    assert supervisor["severity"] == "none"
+
+
 def test_scheduler_owner_mismatch_blocks_cloud_health(
     tmp_path: Path, monkeypatch
 ) -> None:

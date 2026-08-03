@@ -1,5 +1,34 @@
 # Decision Log
 
+## Runtime running never masks Supervisor structural health (Issue #537)
+
+Date: 2026-08-03
+
+### Decision
+
+- With an active current-cycle plan, Cloud health always reads the Supervisor
+  model before declaring the runtime healthy. `running` is execution state,
+  not proof that the convergence supervisor has no structural blocker.
+- An episode in `blocked_structural` maps to the explicit critical health code
+  `supervisor_structural_blocker`; evidence retains the underlying Supervisor
+  machine code for diagnosis. Dead-man therefore uses its fail endpoint even
+  when the persisted execution runtime still says `running`.
+- Healthy `supervisor_running` is emitted only after the Supervisor model is
+  readable, episode mode is valid, observations and attempts are fresh, no
+  blocker/episode alert is active, and utilization ramp/severity is evaluated.
+
+### Gotchas
+
+- Execution can keep managing already-created Paper orders while Supervisor is
+  structurally blocked from further convergence. Those facts can coexist;
+  collapsing them into one green runtime bit silences the only external alert.
+- `alert_required` is not synonymous with episode exhaustion. Structural
+  blockers retain their own explicit health code; probe/short-budget attention
+  remains `supervisor_episode_exhausted`.
+- Missing or unknown episode modes fail closed as
+  `supervisor_episode_invalid`; new health codes remain critical until
+  explicitly classified.
+
 ## Recheck exact order identity without replay (Issue #542)
 
 Date: 2026-08-03

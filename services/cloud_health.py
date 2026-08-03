@@ -66,7 +66,9 @@ HEALTH_SEVERITY_BY_CODE = {
     "supervisor_observation_stale": "critical",
     "supervisor_attempt_missing": "critical",
     "supervisor_attempt_stale": "critical",
+    "supervisor_structural_blocker": "critical",
     "supervisor_episode_exhausted": "critical",
+    "supervisor_episode_invalid": "critical",
     "supervisor_read_model_unavailable": "critical",
 }
 
@@ -254,18 +256,14 @@ class CloudPaperHealth:
             runtime.get("cycle_id") == cycle_id
             and runtime.get("actual_state") == "running"
         )
-        if not active_plan or running:
+        if not active_plan:
             return _check(
                 "supervisor",
                 "ready",
-                code="supervisor_not_required" if not active_plan else "supervisor_running",
-                summary=(
-                    "No active plan requires Supervisor convergence."
-                    if not active_plan
-                    else "Supervisor runtime is running for the active plan."
-                ),
+                code="supervisor_not_required",
+                summary="No active plan requires Supervisor convergence.",
                 next_action="No action.",
-                evidence={"cycle_id": cycle_id, "active_plan": bool(active_plan)},
+                evidence={"cycle_id": cycle_id, "active_plan": False},
             )
         try:
             from services.paper_supervisor_read_model import build_paper_supervisor_read_model
@@ -292,6 +290,22 @@ class CloudPaperHealth:
         attempt_age = (now - attempted_at).total_seconds() if attempted_at else None
         episode = current.get("episode") if isinstance(current.get("episode"), dict) else {}
         blocker = episode.get("blocker") if isinstance(episode.get("blocker"), dict) else {}
+        mode = str(episode.get("mode") or "")
+        blocker_code = str(blocker.get("machine_code") or "")
+        if mode == "blocked_structural":
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_structural_blocker",
+                summary="Supervisor has an active structural blocker and requires attention.",
+                next_action="Inspect the immutable blocker and authoritative runtime; do not retry blindly.",
+                evidence={
+                    "cycle_id": cycle_id,
+                    "runtime_running": running,
+                    "blocker_machine_code": blocker_code or None,
+                    "blocker": blocker,
+                },
+            )
         if episode.get("alert_required") is True or str(blocker.get("machine_code") or "") in {
             "dangerous_start_attempt_cap_reached",
             "clean_refusal_observation_cap_reached",
@@ -323,7 +337,15 @@ class CloudPaperHealth:
                 next_action="Inspect the Supervisor episode and current active plan; do not create a manual start.",
                 evidence={"cycle_id": cycle_id, "age_seconds": attempt_age},
             )
-        mode = str(episode.get("mode") or "")
+        if mode not in {"ready", "backing_off", "probing"}:
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_episode_invalid",
+                summary="Supervisor episode mode is missing or invalid.",
+                next_action="Preserve the episode and restore a valid Supervisor read model.",
+                evidence={"cycle_id": cycle_id, "mode": mode or None},
+            )
         if mode == "backing_off":
             return _check(
                 "supervisor", "ready", code="supervisor_backing_off",
@@ -355,8 +377,12 @@ class CloudPaperHealth:
                 evidence={"cycle_id": cycle_id, "utilization": window},
             )
         return _check(
-            "supervisor", "ready", code="supervisor_observation_fresh",
-            summary="Supervisor observation and attempt cadence are fresh.",
+            "supervisor", "ready", code=("supervisor_running" if running else "supervisor_observation_fresh"),
+            summary=(
+                "Supervisor runtime is running and convergence evidence is fresh."
+                if running
+                else "Supervisor observation and attempt cadence are fresh."
+            ),
             next_action="No action.",
             evidence={"cycle_id": cycle_id, "observation_age_seconds": observation_age, "attempt_age_seconds": attempt_age},
         )
