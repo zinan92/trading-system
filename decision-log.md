@@ -13228,3 +13228,34 @@ auditable datafeed port; broker execution remains a separate port.
 - Added focused regression coverage for one-build fan-in, post-control fresh
   reload, failed-flight cleanup, positive concurrency configuration, and a real
   loopback HTTP queue with a measured handler-thread ceiling.
+
+# 2026-08-03 — Isolate post-control reloads from older read-model flights (#522)
+
+## Decision
+
+- Advance the read-model single-flight generation immediately before and in a
+  `finally` block immediately after every accepted strategy-console control
+  request.
+- Key read-model flights by that generation in addition to the request query.
+  Requests started before, during, and after control therefore cannot share a
+  build across those state-transition boundaries.
+- Keep older flights running for their existing callers. No result is cached,
+  cancelled, rewritten, or served to a later generation.
+
+## Gotchas
+
+- Single-flight has no TTL, but a flight can still be stale relative to a
+  concurrent control action if the post-control reload joins a build that
+  observed pre-control state.
+- Advancing only before control is insufficient: an automatic poll can start
+  during the control action, observe an intermediate state, and still capture
+  the post-control reload. The generation must advance on both sides.
+- The second advance belongs in `finally` so an exception cannot leave later
+  reads attached to the control-window generation.
+
+## Verification
+
+- Added a deterministic three-generation race covering a pre-control flight, a
+  during-control flight, and a fresh post-control reload.
+- Added handler-level coverage proving the order is
+  `advance -> control -> advance`.
