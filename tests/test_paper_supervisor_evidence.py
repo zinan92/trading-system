@@ -200,6 +200,28 @@ def test_running_proof_rejects_position_from_another_plan() -> None:
     assert evidence["running_proven"] is False
 
 
+def test_running_proof_accepts_filled_slot_as_exact_open_position() -> None:
+    draft = _draft()
+    current = draft["current_slots"][0]
+    current["representative_kind"] = "open_position"
+    current["representative_id"] = "command-1"
+    current["position"] = {
+        "trade_id": "command-1",
+        "strategy_plan_id": PLAN_ID,
+        "strategy_plan_version": 1,
+        "side": "long",
+        "order_quantity": "1",
+    }
+
+    evidence = finalize_running_evidence(
+        draft,
+        persisted_at=T0.isoformat(),
+    )
+
+    assert evidence["running_proven"] is True
+    assert evidence["proof_status"] == "proven"
+
+
 def test_running_proof_requires_latest_authorized_rearm_with_same_economics() -> None:
     draft = _draft()
     expected = draft["expected_slots"][0]["authorized_commands"]

@@ -1905,8 +1905,12 @@ class PaperSupervisor:
                 == plan["strategy_plan_id"]
                 and int(runtime.get("strategy_plan_version") or 0)
                 == plan["strategy_plan_version"]
+                # Persisted runtime counts the start-accepted logical slots.
+                # A later fill changes one slot's current representative from
+                # an accepted order to an open position; it does not remove
+                # that slot from the accepted start set.
                 and int(runtime.get("accepted_order_count") or 0)
-                == len(accepted)
+                == len(expected)
                 and len(accepted) + len(position_identities)
                 == len(expected)
             )

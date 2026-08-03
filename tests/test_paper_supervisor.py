@@ -1352,7 +1352,9 @@ def test_running_adoption_allows_historical_rearm_but_requires_current_n_of_n(
             "state": "cancelled",
         }
     )
-    plane.runtime["accepted_order_count"] = 2
+    # Runtime preserves the three logical slots accepted at start even though
+    # one slot is now represented by an open position.
+    plane.runtime["accepted_order_count"] = 3
     later = T0 + timedelta(seconds=61)
 
     adopted = supervisor.converge_once(
