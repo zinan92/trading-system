@@ -1,5 +1,34 @@
 # Decision Log
 
+## Filled Grid slots retain their accepted start identity (Issue #536)
+
+Date: 2026-08-03
+
+### Decision
+
+- `runtime.accepted_order_count` records the exact logical slot cardinality
+  accepted by the successful start action. A later fill changes one slot's
+  current representative from an accepted order to an open position; it does
+  not subtract that slot from the accepted start set.
+- Supervisor adoption and sealed running evidence therefore compare the
+  persisted accepted count with the exact expected slot count. They separately
+  require every slot to have exactly one current authorized representative,
+  either an accepted entry order or an open position with exact fill lineage.
+- Fingerprints, plan version, side, quantity, rearm ancestry, start audit, and
+  execution/accounting reconciliation remain exact and fail-closed.
+
+### Gotchas
+
+- `accepted_order_count` is not the same metric as the current
+  `open_order_count`. After a normal entry fill, `38 accepted at start` and
+  `37 open orders + 1 open position` are simultaneously correct.
+- Treating only currently open orders as the accepted set creates a false
+  `order_identity_conflict` immediately after the first valid fill. Treating a
+  position as an additional slot would create the opposite error. Slot identity
+  must deduplicate the order-to-position transition by immutable command ID.
+- This correction does not authorize cross-cycle position adoption and does
+  not relax any immutable-fill or reconciliation guard.
+
 ## Server-local unattended Paper provider (Issue #463)
 
 Date: 2026-08-02

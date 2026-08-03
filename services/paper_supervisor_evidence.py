@@ -263,7 +263,10 @@ def _recompute(payload: Mapping[str, Any]) -> bool:
             == plan["strategy_plan_version"]
             and runtime["desired_state"] == "running"
             and runtime["actual_state"] == "running"
-            and runtime["accepted_order_count"] == len(accepted_ids)
+            # Runtime records the cardinality accepted by the start action.
+            # Filled slots remain part of that exact set while their current
+            # representative is an open position instead of an open order.
+            and runtime["accepted_order_count"] == len(expected_ids)
         )
         slots_exact = (
             bool(expected_ids)
