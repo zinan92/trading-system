@@ -32,10 +32,12 @@ def build_paper_supervisor_read_model(
     end = _utc(as_of)
     store = PaperSupervisorStore(Path(output_root))
     source_errors: list[dict[str, str]] = []
+    observation_cache: dict[str, list[dict[str, Any]]] = {}
     try:
         snapshot = store.read_cycle_snapshot(cycle_id)
         events = list(snapshot["events"])
         observations = list(snapshot["observations"])
+        observation_cache[cycle_id] = observations
         current = _current_cycle_projection(
             store=store,
             cycle_id=cycle_id,
@@ -56,6 +58,7 @@ def build_paper_supervisor_read_model(
         store,
         end=end,
         source_errors=source_errors,
+        observation_cache=observation_cache,
     )
     return {
         "schema_version": SUPERVISOR_READ_MODEL_SCHEMA_VERSION,
@@ -236,7 +239,9 @@ def _build_utilization(
     *,
     end: datetime,
     source_errors: list[dict[str, str]],
+    observation_cache: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
+    observation_cache = observation_cache or {}
     windows: dict[str, Any] = {}
     for label, hours in (("24h", 24), ("7d", 24 * 7)):
         start = end - timedelta(hours=hours)
@@ -245,11 +250,14 @@ def _build_utilization(
         window_errors: list[dict[str, str]] = []
         for expected_cycle_id in cycle_ids:
             try:
-                observations.extend(
-                    store.read_cycle_snapshot(expected_cycle_id)[
-                        "observations"
-                    ]
-                )
+                if expected_cycle_id in observation_cache:
+                    rows = observation_cache[expected_cycle_id]
+                else:
+                    rows = store.read_cycle_observation_snapshot(
+                        expected_cycle_id
+                    )
+                    observation_cache[expected_cycle_id] = rows
+                observations.extend(rows)
             except (OSError, SupervisorStoreError, ValueError) as exc:
                 window_errors.append(
                     {

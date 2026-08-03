@@ -401,6 +401,50 @@ class PaperSupervisorStore:
 
         return self._observations(cycle_id)
 
+    def read_cycle_observation_snapshot(
+        self,
+        cycle_id: str,
+    ) -> list[dict[str, Any]]:
+        """Read one stable, validated observation prefix for utilization.
+
+        Utilization only needs the immutable event/observation chains.  The
+        full ``read_cycle_snapshot`` additionally re-reads and validates the
+        projected state and episode checkpoint, which is required for current
+        cycle control health but needlessly repeats the expensive history
+        validation for every historical cycle in a utilization window.
+
+        Event and observation files are each read as stable JSONL prefixes,
+        and their sizes are checked again before returning.  If either file
+        grows during the cross-file read, retry so an observation can never be
+        validated against a partial event prefix.  The event chain and every
+        observation payload remain fully validated by ``events`` and
+        ``_observations``; this method only omits state/episode projection
+        checks that are outside utilization's evidence boundary.
+        """
+
+        cycle = _cycle_id(cycle_id)
+        events_path = self._events_path(cycle)
+        observations_path = (
+            self.root / "observations" / f"{cycle}.jsonl"
+        )
+        for _attempt in range(STABLE_READ_ATTEMPTS):
+            event_size_before = _file_size(events_path)
+            observation_size_before = _file_size(observations_path)
+            events = self.events(cycle)
+            observations = self._observations(
+                cycle,
+                events=events,
+            )
+            if (
+                _file_size(events_path) != event_size_before
+                or _file_size(observations_path)
+                != observation_size_before
+            ):
+                time.sleep(0.005)
+                continue
+            return observations
+        raise SupervisorStoreError("attempt_store_busy")
+
     def observation_cycle_ids(self) -> list[str]:
         """Return stable observation filenames; reject aliases and symlinks."""
 
@@ -2782,6 +2826,15 @@ def _stable_jsonl_lines(path: Path) -> list[str]:
             return lines
         time.sleep(0.005)
     raise SupervisorStoreError("attempt_store_busy")
+
+
+def _file_size(path: Path) -> int:
+    """Return a regular file's size, treating a missing chain as empty."""
+
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
 
 
 def _validate_wal_anchor(
