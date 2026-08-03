@@ -13160,3 +13160,38 @@ auditable datafeed port; broker execution remains a separate port.
 - `PYTHONPATH=. uv run --with pytest pytest -q tests/test_paper_supervisor.py tests/test_paper_supervisor_contract_v2.py` (55 passed).
 - `PYTHONPATH=. uv run --with pytest pytest -q tests/test_cloud_health.py tests/test_paper_supervisor_read_model.py tests/test_strategy_control_plane.py tests/test_cycle_risk_envelope.py` (157 passed).
 - `gitleaks detect --no-banner --redact --source .` (no leaks found).
+
+# 2026-08-03 — Size new Supervisor plans from current authoritative Paper equity (#518)
+
+## Decision
+
+- Keep historical production accounting in the AI recommendation context, but
+  never use its all-history equity to size a new Paper execution plan.
+- For `refresh_recommendation` without an explicit account, read the current
+  cycle from the configured authoritative execution adapter and use the first
+  positive finite value among `equity`, `ending_cash`, and `starting_cash` for
+  the preview and proposal risk budget.
+- If the authoritative snapshot has no positive finite account value, fail
+  closed with `authoritative_execution_account_missing`; there is no fallback
+  to historical equity and no plan/order/control mutation.
+
+## Gotchas
+
+- The 2026-08-03 DAY plan was generated from historical equity `10005.35` but
+  the fresh Nautilus cycle had authoritative equity `10000.00`; its fixed
+  `5265.97` per-grid notional therefore exceeded the configured 10x capacity.
+  The existing risk rejection was correct and remains immutable evidence.
+- This change affects future recommendation sizing only. It does not rewrite
+  the active plan, alter the outer Park policy, recalculate an existing
+  envelope, retry a blocked start, or touch fills, trades, positions, or live
+  paths.
+- The regression test supplies a deterministic feasible range so it tests the
+  account-authority hand-off rather than duplicating grid geometry coverage.
+
+## Verification
+
+- `PYTHONPATH=. uv run --with pytest pytest -q tests/test_strategy_recommendation_api.py tests/test_paper_supervisor.py tests/test_strategy_control_plane.py tests/test_grid_sizing.py` (196 passed).
+- Cloud validation before this un-deployed change: Supervisor observations
+  remain fresh, no control action/order was taken, and the system dead-man
+  delivered its fail endpoint with HTTP 200; the current cycle remains safely
+  blocked until a new authorized, capacity-valid plan exists.

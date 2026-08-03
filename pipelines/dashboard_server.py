@@ -1462,6 +1462,7 @@ def build_strategy_console_control_response(
             timeframes=required,
         )
     trusted_account = account
+    preview_account = trusted_account
     if trusted_account is None and not safe_control:
         history = build_strategy_console_production_history(
             output_root=output,
@@ -1473,10 +1474,11 @@ def build_strategy_console_control_response(
             "accounting_snapshot": dict(history.get("accounting_snapshot") or {}),
         }
     if action == "refresh_recommendation" and account is None:
-        execution_snapshot = build_configured_execution_engine_adapter(
+        execution_adapter = build_configured_execution_engine_adapter(
             output,
             config=dualtrack_config(),
-        ).snapshot(cycle_id)
+        )
+        execution_snapshot = execution_adapter.snapshot(cycle_id)
         trusted_account = {
             **dict(trusted_account or {}),
             "execution": {
@@ -1491,6 +1493,38 @@ def build_strategy_console_control_response(
                     if str(row.get("state") or "").lower() == "accepted"
                 ],
             },
+        }
+        # Historical production accounting remains part of the AI context,
+        # but it is not the authority for sizing a new Paper cycle.  The
+        # execution adapter may have reset the cycle to its configured
+        # starting cash (or may have realised/marked a current position),
+        # so using the all-history equity here can produce a plan that the
+        # authoritative engine rejects at prepare_start.  Use the current
+        # execution snapshot for deterministic sizing and fail closed if it
+        # does not expose a positive account value; never silently fall back
+        # to historical equity for order sizing.
+        execution_account = dict(execution_snapshot.get("account") or {})
+        execution_equity = 0.0
+        for field in ("equity", "ending_cash", "starting_cash"):
+            try:
+                candidate = float(execution_account.get(field))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(candidate) and candidate > 0:
+                execution_equity = candidate
+                break
+        if execution_equity <= 0:
+            raise ValueError("authoritative_execution_account_missing")
+        preview_account = {
+            **dict(trusted_account),
+            "equity": execution_equity,
+            "ending_cash": execution_account.get(
+                "ending_cash", execution_equity
+            ),
+            "starting_cash": execution_account.get(
+                "starting_cash", execution_equity
+            ),
+            "execution_account_source": "authoritative_execution_snapshot",
         }
     plane = StrategyControlPlane(output)
     if action == "refresh_recommendation":
@@ -1543,7 +1577,7 @@ def build_strategy_console_control_response(
             cycle_id,
             preview_payload,
             market=trusted_market,
-            account=trusted_account,
+            account=preview_account,
         )
         if preview.get("strategy_type") == "dca":
             proposal_range: dict[str, Any] = {}
