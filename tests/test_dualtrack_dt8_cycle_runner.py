@@ -1172,6 +1172,7 @@ def test_live_tick_routes_trusted_market_event_through_execution_adapter(tmp_pat
 
     class FakeExecutionAdapter:
         name = "fake"
+        market_event_batch_capable = True
 
         def snapshot(self, cycle_id: str, **kwargs) -> dict:
             return {"positions": [{"status": "open", "remaining_units": 1.0}]}
@@ -1215,9 +1216,11 @@ def test_live_tick_reuses_only_exact_settled_protective_events(
         [100.0, 101.0, 102.0],
     )
     invoked: list[str] = []
+    batches: list[list[str]] = []
 
     class FakeExecutionAdapter:
         name = "fake"
+        market_event_batch_capable = True
 
         def snapshot(self, cycle_id: str, **kwargs) -> dict:
             return {
@@ -1243,6 +1246,12 @@ def test_live_tick_reuses_only_exact_settled_protective_events(
             invoked.append(str(event["event_id"]))
             return {"status": "ok", "triggered": []}
 
+        def process_market_events(self, events: list[dict]) -> dict:
+            event_ids = [str(event["event_id"]) for event in events]
+            batches.append(event_ids)
+            invoked.extend(event_ids)
+            return {"status": "ok", "triggered": []}
+
         def flush_shadow(self, cycle_id: str) -> dict:
             return {"status": "replayed", "cycle_id": cycle_id}
 
@@ -1265,6 +1274,9 @@ def test_live_tick_reuses_only_exact_settled_protective_events(
     assert invoked == [
         "2026-07-05_DAY:1m:2026-07-05T01:01:00+00:00"
     ]
+    assert batches == [[
+        "2026-07-05_DAY:1m:2026-07-05T01:01:00+00:00"
+    ]]
     assert result["processed_events"] == 3
     assert result["execution_invocation_count"] == 1
     assert result["reused_processed_event_count"] == 2
@@ -1285,6 +1297,7 @@ def test_live_tick_does_not_reuse_engine_evidence_for_dca_lifecycle(
 
     class FakeExecutionAdapter:
         name = "fake"
+        market_event_batch_capable = True
 
         def snapshot(self, cycle_id: str, **kwargs) -> dict:
             return {
@@ -1302,6 +1315,9 @@ def test_live_tick_does_not_reuse_engine_evidence_for_dca_lifecycle(
             return frozenset(
                 {f"{cycle_id}:1m:2026-07-05T01:00:00+00:00"}
             )
+
+        def process_market_events(self, events: list[dict]) -> dict:
+            raise AssertionError("DCA must remain on its per-event lifecycle path")
 
         def flush_shadow(self, cycle_id: str) -> dict:
             return {"status": "replayed", "cycle_id": cycle_id}
@@ -1355,6 +1371,67 @@ def test_live_tick_does_not_reuse_engine_evidence_for_dca_lifecycle(
     assert advanced == [
         "2026-07-05_DAY:1m:2026-07-05T01:00:00+00:00"
     ]
+    assert result["execution_invocation_count"] == 1
+    assert result["reused_processed_event_count"] == 0
+
+
+def test_live_tick_batches_multiple_new_grid_events_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = tmp_path / "market_data.db"
+    output = tmp_path / "outputs"
+    _seed_bars(
+        MarketStore(db),
+        datetime(2026, 7, 5, 1, 0, tzinfo=timezone.utc),
+        [100.0, 101.0, 102.0],
+    )
+    batches: list[list[str]] = []
+
+    class FakeExecutionAdapter:
+        name = "fake"
+        market_event_batch_capable = True
+
+        def snapshot(self, cycle_id: str, **kwargs) -> dict:
+            return {
+                "positions": [],
+                "orders": [{
+                    "state": "accepted",
+                    "event": "entry",
+                    "order_type": "limit",
+                    "ts": "2026-07-05T01:00:30+00:00",
+                }],
+            }
+
+        def settled_market_event_ids(self, cycle_id: str) -> frozenset[str]:
+            return frozenset()
+
+        def process_market_events(self, events: list[dict]) -> dict:
+            batches.append([str(event["event_id"]) for event in events])
+            return {"status": "ok", "triggered": []}
+
+    monkeypatch.setattr(
+        cycle_runner_module,
+        "build_configured_execution_engine_adapter",
+        lambda *args, **kwargs: FakeExecutionAdapter(),
+    )
+    runner = DualTrackCycleRunner(
+        output_root=output,
+        market_db=db,
+        config=TEST_CONFIG,
+    )
+
+    result = runner._sweep_active_human_protective_exits(
+        "2026-07-05_DAY",
+        now=parse_utc("2026-07-05T01:03:00+00:00"),
+    )
+
+    assert batches == [[
+        "2026-07-05_DAY:1m:2026-07-05T01:00:00+00:00",
+        "2026-07-05_DAY:1m:2026-07-05T01:01:00+00:00",
+        "2026-07-05_DAY:1m:2026-07-05T01:02:00+00:00",
+    ]]
+    assert result["processed_events"] == 3
     assert result["execution_invocation_count"] == 1
     assert result["reused_processed_event_count"] == 0
 

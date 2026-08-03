@@ -13611,3 +13611,61 @@ auditable datafeed port; broker execution remains a separate port.
   integration matrix passes 173 tests; Ruff passes. Production acceptance
   still requires five consecutive natural Cloud ticks with p95 below 10
   seconds and max below 20 seconds.
+
+# 2026-08-03 — Batch new Paper protective events once (#550)
+
+## Decision
+
+- Add an explicit `market_event_batch_capable` contract. Only adapters which
+  affirm that capability may receive more than one completed Grid event per
+  invocation; legacy and fake adapters retain the existing sequential path.
+- Canonicalize and validate the complete batch before writing any event. The
+  batch must contain one cycle, unique non-empty event IDs, trusted non-synthetic
+  data, and complete provider/instrument identity. Events are ordered by their
+  canonical event timestamp, appended durably once, then passed through the
+  existing Nautilus `flush` exactly once.
+- A persisted but unprocessed crash-gap event remains unresolved and joins the
+  next batch. Exact processed evidence remains the only skip authority; no
+  timestamp watermark or inferred success is introduced.
+- Keep DCA on `advance_dca_market_event` one event at a time. Batch processing
+  applies only to the Grid protective sweep under the existing production
+  mutation lock.
+- Mirror one authoritative batch to the non-authoritative shadow as one batch
+  when supported, or safely per event when the shadow lacks the capability.
+  The authoritative result remains the return value and shadow failure remains
+  evidence rather than production control flow.
+
+## Gotchas
+
+- One call to `flush` can intentionally execute several internal deterministic
+  replay passes while Grid rearm commands converge. The bounded contract is one
+  full event-history flush per newly observed batch, not one internal pass.
+- Merely adding a `process_market_events` method is not capability evidence.
+  The explicit boolean prevents wrappers around legacy adapters from silently
+  changing their ordering semantics.
+- Batch input must be validated as a whole before a sequential compatibility
+  fallback; otherwise a malformed second event could arrive after the first
+  event was already persisted.
+- Cloud releases use `/opt/gridmind/src/trading-system`, not the stale legacy
+  `/opt/gridmind/current` link. Release verification must resolve the exact
+  systemd `WorkingDirectory` before drawing a SHA conclusion.
+- Provider readiness advances the global exact-SHA receipt. During #549 release
+  this made one old-SHA timer boot fail closed before the source link switched;
+  it executed no runner or control action. Future releases must run readiness
+  and preflight immediately after a natural tick, then switch the source link
+  before the next timer without disabling or manually invoking the timer.
+
+## Verification
+
+- Unit coverage proves chronological append, one batch invocation for multiple
+  new Grid bars, whole-batch identity rejection before write, persisted crash
+  gap recovery, shadow batch/error behavior, exact settled-event reuse, and DCA
+  exclusion.
+- A real isolated Nautilus 1.230.0 runtime comparison proves sequential and
+  batch execution produce identical orders, fills, positions, reconciliation,
+  and Grid lifecycle for entry, target, same-price rearm, and a later entry.
+- The Nautilus, shadow, protective-sweep, DCA, Supervisor and runtime
+  integration matrix passes 181 tests; Ruff passes.
+  Production acceptance remains five consecutive natural Cloud ticks after
+  deployment with p95 below 10 seconds, max below 20 seconds, zero control
+  actions, resolved runtime/reconciliation, and a natural dead-man delivery.

@@ -184,6 +184,65 @@ def _event(index: int, *, price: float, low: float, high: float) -> dict:
     }
 
 
+def test_real_runtime_grid_batch_is_identical_to_sequential_replay(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "2026-07-10_DAY"
+    command = {
+        "cycle_id": cycle_id,
+        "ts": "2026-07-10T01:00:10+00:00",
+        "side": "buy",
+        "event": "entry",
+        "order_type": "limit",
+        "price": 100.0,
+        "quantity": 1.0,
+        "sl": 95.0,
+        "tp": 101.0,
+        "source": "strategy_production_console",
+        "source_fill_id": "strategy-grid:plan-runtime-batch:preview-1-buy",
+        "strategy_plan_id": "plan-runtime-batch",
+        "strategy_plan_version": 1,
+    }
+    events = [
+        _event(0, price=100.0, low=99.0, high=100.5),
+        _event(1, price=101.0, low=100.0, high=101.5),
+        _event(2, price=100.0, low=99.0, high=100.5),
+        _event(3, price=101.0, low=100.0, high=101.5),
+    ]
+
+    def adapter_at(path: Path) -> NautilusExecutionAdapter:
+        return NautilusExecutionAdapter(
+            path,
+            nautilus_python=RUNTIME,
+            storage_namespace="nautilus_authoritative",
+            preflight_path=_runtime_preflight(tmp_path),
+        )
+
+    sequential = adapter_at(tmp_path / "sequential")
+    sequential.submit_order(command)
+    for event in events:
+        sequential.process_market_event(event)
+
+    batch = adapter_at(tmp_path / "batch")
+    batch.submit_order(command)
+    batch.process_market_events(events)
+
+    sequential_snapshot = sequential.snapshot(cycle_id)
+    batch_snapshot = batch.snapshot(cycle_id)
+    comparable_sequential = deepcopy(sequential_snapshot)
+    comparable_batch = deepcopy(batch_snapshot)
+    comparable_sequential["grid_lifecycle"].pop("audit_path", None)
+    comparable_batch["grid_lifecycle"].pop("audit_path", None)
+    assert comparable_batch == comparable_sequential
+    assert batch.reconcile(cycle_id) == sequential.reconcile(cycle_id)
+    assert load_json(
+        batch.output_root / "dualtrack" / "grid_lifecycle" / f"{cycle_id}_nautilus.json"
+    ) == load_json(
+        sequential.output_root / "dualtrack" / "grid_lifecycle" / f"{cycle_id}_nautilus.json"
+    )
+    assert batch_snapshot["rearms"] == 2
+
+
 def test_real_runtime_cancels_pending_order_and_flattens_exact_hedged_position(tmp_path: Path) -> None:
     adapter = NautilusExecutionAdapter(
         tmp_path / "outputs",

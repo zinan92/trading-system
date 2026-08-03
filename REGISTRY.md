@@ -13,17 +13,15 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
-- #538/#545 已把 Cloud Dashboard 默认 read-model 从约 27 秒、约 6 MB
-  降到 1.08–2.08 秒、约 589 KB；公网恢复为 Cloudflare Access 302，Dashboard
-  本地读取持续 HTTP 200，主机 load 约 0.3、可用内存约 1.0 GiB、swap=0。
-  #546/#547 已部署精确 clean source
-  `main@8daa0f4e51036f35e1ee79fa62c55955053f7858`，把 Supervisor
-  `cycle_decision` 从约 14.5 秒降至约 2.7 秒，前三个自然 tick 总耗时为
-  10.25/9.77/9.74 秒且控制动作均为 0。现场随后捕获一轮 26.74 秒 tick，
-  唯一突增阶段是 `protective_sweep=21.87s`：它每分钟重新把当前周期全部
-  已处理 K 线送入权威引擎与 shadow audit。#548 正在用逐事件终态证据消除
-  该重复工作；只持久未处理、证据缺失/损坏及 DCA 生命周期一律不跳过，
-  所有保护单与行情安全闸保持原语义。
+- Cloud Paper 当前精确运行 `main@274d6100d64a7267890cc7073bebac12f53c4a48`
+  （#549），NIGHT Grid 为 `running/running`，38 个授权订单槽位中 1 个已成交为
+  open position，其余继续挂单，账本与执行对账均为 `ok`，Supervisor 为
+  `healthy/adopted_existing`。#549 已把旧 K 线按逐事件终态证据安全复用，但
+  自然 timer 的约 72 秒有效间隔会让一轮同时出现 2 根新 1m K 线，首两轮仍各
+  触发两次完整 Nautilus 回放，总耗时 10.56/11.41 秒。#550 正在把同一锁内的
+  新 Grid 事件按时间顺序一次落盘、一次回放；DCA 继续逐事件，缺失/损坏证据、
+  未处理 crash gap、行情信任闸和不可变成交守卫均保持 fail-closed。Dashboard
+  本地 read-model 为 HTTP 200，公网 Cloudflare Access 为 302，隧道 active。
 - #537 已部署到 Cloud Paper 精确 source
   `main@cdaadafd09c0835109170f075a67848c48fe7b30`：Cloud health 不再因
   runtime=`running` 提前跳过 Supervisor，运行中出现 structural episode
@@ -249,10 +247,10 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- 从 #528 的真实自动启动证据继续观察 Cloud soak；当前
-  `2026-08-03_DAY` 为 `running/running`、38/38 accepted，后续 tick 已证明
-  `adopted_existing` 且无第二套订单。继续监测 Dashboard RSS/线程/OOM、tick、
-  行情、生命周期和双层对账，不得用本次恢复冒充 48 小时验收完成。
+- 完成 #550 的 review/merge 与精确 SHA Cloud Paper 发布；发布后只认五个连续
+  自然 tick 的 timing receipt，要求 p95 <10 秒、max <20 秒、控制动作=0、
+  runtime/reconciliation 持续 resolved，并观察 dead-man 自然投递。不得手动触发
+  live tick、dead-man 或任何 start/stop/cancel 来制造验收证据。
 - Cloud provider readiness 已由服务器上的 Paper-only Codex runtime 通过，
   不依赖 Park 的 Mac 开机；继续保留当前 source/provider SHA 绑定与 boot gate，
   不把任何密钥写入 Git、日志或报告。
