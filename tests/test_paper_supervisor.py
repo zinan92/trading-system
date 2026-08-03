@@ -1367,6 +1367,98 @@ def test_running_adoption_allows_historical_rearm_but_requires_current_n_of_n(
     assert adopted["status"] == "healthy"
 
 
+def test_exact_filled_slot_clears_persisted_order_identity_blocker(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    clock = {"now": T0}
+    supervisor.store.now = lambda: clock["now"]
+    first = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(),
+    )
+    assert first["status"] == "executed"
+
+    execution = supervisor.execution
+    execution.orders[0]["state"] = "filled"
+    execution.positions = [{
+        "position_id": "position-order-0",
+        "trade_id": "order-0",
+        "status": "open",
+        "side": "long",
+        "remaining_units": 1.0,
+        "entry_price": 100.0,
+        "strategy_plan_id": plane.plan["strategy_plan_id"],
+        "strategy_plan_version": plane.plan["version"],
+    }]
+    execution.fills = [{
+        "fill_id": "fill-order-0",
+        "order_id": "order-0",
+        "trade_id": "order-0",
+        "event": "entry",
+        "side": "buy",
+        "price": 100.0,
+        "quantity": 1.0,
+        "strategy_plan_id": plane.plan["strategy_plan_id"],
+        "strategy_plan_version": plane.plan["version"],
+    }]
+    # Start accepted three logical slots; one is now represented by the
+    # exact open position and two remain accepted entry orders.
+    plane.runtime["accepted_order_count"] = 3
+
+    state = supervisor.store.episode_state(CYCLE)
+    assert state is not None
+    blocked_at = T0 + timedelta(seconds=30)
+    blocked = supervisor.episodes.record_structural_blocker(
+        state,
+        classification=classify_blocker(
+            control_code="order_identity_conflict"
+        ),
+        observed_at=blocked_at,
+    )
+    with supervisor.store.try_lease(
+        CYCLE,
+        holder_id="persist-false-blocker",
+    ) as lease:
+        assert lease is not None
+        supervisor.store.commit_episode_observation(
+            lease,
+            state=blocked,
+            payload={
+                "status": "blocked_structural",
+                "machine_code": "order_identity_conflict",
+                "classification": "structural",
+                "control_actions_executed": 0,
+            },
+        )
+
+    clearing_at = T0 + timedelta(seconds=61)
+    clock["now"] = clearing_at
+    cleared = supervisor.converge_once(
+        CYCLE,
+        observed_at=clearing_at.isoformat(),
+        heartbeat=_heartbeat(clearing_at),
+    )
+    adopted_at = clearing_at + timedelta(seconds=61)
+    clock["now"] = adopted_at
+    adopted = supervisor.converge_once(
+        CYCLE,
+        observed_at=adopted_at.isoformat(),
+        heartbeat=_heartbeat(adopted_at),
+    )
+
+    assert cleared["status"] == "structural_cleared"
+    assert cleared["control_actions_executed"] == 0
+    assert adopted["status"] == "healthy"
+    assert adopted["terminal_status"] == "adopted_existing"
+    assert adopted["control_actions_executed"] == 0
+    assert control.calls == ["prepare_start", "start"]
+
+
 @pytest.mark.parametrize("fill_trade_id", [None, "different-order"])
 def test_running_adoption_requires_exact_open_position_entry_fill_lineage(
     tmp_path: Path,
