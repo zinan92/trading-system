@@ -13,6 +13,13 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
+- #538/#545 已把 Cloud Dashboard 默认 read-model 从约 27 秒、约 6 MB
+  降到 1.08–2.08 秒、约 589 KB；当前页面所需核心事实仍为同一 DAY 计划、
+  runtime running、38 accepted、0 position、对账 ok，完整 Supervisor 审计
+  改为点击标签后按需读取。发布现场同时证明更深的 #546：随历史增长，
+  lease 内每个 WAL/observation 写入仍重复全量校验，导致自然 live-tick 达
+  41 秒并有一拍撞 52 秒 watchdog。#546 正在将全量校验收敛为每 lease 一次，
+  后续每次 append 以精确 inode/size/mtime 与链尾增量验证；历史和安全闸不变。
 - #537 已部署到 Cloud Paper 精确 source
   `main@cdaadafd09c0835109170f075a67848c48fe7b30`：Cloud health 不再因
   runtime=`running` 提前跳过 Supervisor，运行中出现 structural episode

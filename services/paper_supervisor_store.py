@@ -140,6 +140,7 @@ class PaperSupervisorStore:
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.hostname = hostname or socket.gethostname
         self.pid = pid or os.getpid
+        self._lease_cache: dict[str, Any] | None = None
 
     @contextmanager
     def try_lease(
@@ -180,8 +181,17 @@ class PaperSupervisorStore:
             )
             self._write_lease_projection(lease, status="held")
             try:
+                self._lease_cache = {
+                    "lease_id": lease.lease_id,
+                    "cycle_id": cycle,
+                    "initialized": False,
+                    "initializing": False,
+                    "episode_loaded": False,
+                    "episode": None,
+                }
                 yield lease
             finally:
+                self._lease_cache = None
                 lease._active = False
                 self._write_lease_projection(lease, status="released")
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -195,6 +205,9 @@ class PaperSupervisorStore:
         """Read and validate the complete event chain."""
 
         cycle = _cycle_id(cycle_id)
+        cache = self._cache_for_cycle(cycle)
+        if cache is not None:
+            return list(cache["events"])
         path = self._events_path(cycle)
         if not path.exists():
             return []
@@ -274,6 +287,38 @@ class PaperSupervisorStore:
                 "state": _project(events, cycle_id=cycle),
                 "observations": observations,
             }
+        raise SupervisorStoreError("attempt_store_busy")
+
+    def _read_lease_snapshot(self, cycle_id: str) -> dict[str, Any]:
+        """Validate each immutable chain once under the exclusive writer lease."""
+
+        cycle = _cycle_id(cycle_id)
+        event_path = self._events_path(cycle)
+        observation_path = self.root / "observations" / f"{cycle}.jsonl"
+        for _attempt in range(STABLE_READ_ATTEMPTS):
+            before = (
+                _file_identity(event_path),
+                _file_identity(observation_path),
+            )
+            events = self.events(cycle)
+            observations = self._observations(cycle, events=events)
+            self._validate_state_projection(cycle, events=events)
+            self._validate_episode_checkpoint(
+                cycle,
+                observations=observations,
+            )
+            after = (
+                _file_identity(event_path),
+                _file_identity(observation_path),
+            )
+            if before == after:
+                return {
+                    "cycle_id": cycle,
+                    "events": events,
+                    "state": _project(events, cycle_id=cycle),
+                    "observations": observations,
+                }
+            time.sleep(0.005)
         raise SupervisorStoreError("attempt_store_busy")
 
     def _snapshot_tails_changed(
@@ -385,6 +430,9 @@ class PaperSupervisorStore:
         """Return deterministic state; reject a divergent projection."""
 
         cycle = _cycle_id(cycle_id)
+        cache = self._cache_for_cycle(cycle)
+        if cache is not None:
+            return dict(cache["state"])
         events = self.events(cycle)
         projected = _project(events, cycle_id=cycle)
         self._validate_state_projection(
@@ -554,6 +602,10 @@ class PaperSupervisorStore:
         """Read or recover the episode anchored to the observation chain."""
 
         cycle = _cycle_id(cycle_id)
+        cache = self._cache_for_cycle(cycle)
+        if cache is not None and cache.get("episode_loaded"):
+            episode = cache.get("episode")
+            return dict(episode) if isinstance(episode, Mapping) else None
         path = self._episode_path(cycle)
         stored: dict[str, Any] | None = None
         if path.exists():
@@ -573,6 +625,9 @@ class PaperSupervisorStore:
                 "last_observation_sha256"
             ):
                 raise SupervisorStoreError("attempt_store_corrupt")
+            if cache is not None:
+                cache["episode"] = stored
+                cache["episode_loaded"] = True
             return stored
         stored_anchor = (
             str(stored.get("last_observation_sha256") or "")
@@ -584,11 +639,15 @@ class PaperSupervisorStore:
         }
         if stored_anchor and stored_anchor not in chain_hashes:
             raise SupervisorStoreError("attempt_store_corrupt")
-        return _reconstruct_episode_state(
+        result = _reconstruct_episode_state(
             cycle_id=cycle,
             stored=stored,
             observations=observations,
         )
+        if cache is not None:
+            cache["episode"] = result
+            cache["episode_loaded"] = True
+        return result
 
     def write_episode_state(
         self,
@@ -610,6 +669,10 @@ class PaperSupervisorStore:
             self._episode_path(lease.cycle_id),
             payload,
         )
+        cache = self._cache_for_lease(lease)
+        if cache is not None:
+            cache["episode"] = dict(payload)
+            cache["episode_loaded"] = True
 
     def commit_episode_observation(
         self,
@@ -770,6 +833,12 @@ class PaperSupervisorStore:
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         observations = self._observations(lease.cycle_id)
+        cache = self._cache_for_lease(lease)
+        if (
+            cache is not None
+            and _file_identity(path) != cache.get("observation_identity")
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
         if len(observations) >= MAX_OBSERVATIONS_PER_CYCLE:
             raise SupervisorStoreError("attempt_store_capacity_exceeded")
         previous = observations[-1] if observations else None
@@ -811,6 +880,9 @@ class PaperSupervisorStore:
             _fsync_directory(path.parent)
         except OSError as exc:
             raise SupervisorStoreError("attempt_store_corrupt") from exc
+        if cache is not None:
+            cache["observations"] = [*observations, observation]
+            cache["observation_identity"] = _file_identity(path)
         return observation
 
     def _last_observation(
@@ -831,6 +903,9 @@ class PaperSupervisorStore:
         """Validate one bounded 12h cycle chain."""
 
         cycle = _cycle_id(cycle_id)
+        cache = self._cache_for_cycle(cycle)
+        if cache is not None:
+            return list(cache["observations"])
         path = self.root / "observations" / f"{cycle}.jsonl"
         if not path.exists():
             return []
@@ -987,6 +1062,45 @@ class PaperSupervisorStore:
             observations.append(row)
         return observations
 
+    def _cache_for_cycle(self, cycle_id: str) -> dict[str, Any] | None:
+        cache = self._lease_cache
+        if cache is None or str(cache.get("cycle_id") or "") != cycle_id:
+            return None
+        if not cache.get("initialized"):
+            if cache.get("initializing"):
+                return None
+            cache["initializing"] = True
+            try:
+                snapshot = self._read_lease_snapshot(cycle_id)
+            finally:
+                cache["initializing"] = False
+            cache.update(
+                {
+                    "events": list(snapshot["events"]),
+                    "state": dict(snapshot["state"]),
+                    "observations": list(snapshot["observations"]),
+                    "event_identity": _file_identity(
+                        self._events_path(cycle_id)
+                    ),
+                    "observation_identity": _file_identity(
+                        self.root
+                        / "observations"
+                        / f"{cycle_id}.jsonl"
+                    ),
+                    "initialized": True,
+                }
+            )
+        return cache
+
+    def _cache_for_lease(
+        self,
+        lease: SupervisorLease,
+    ) -> dict[str, Any] | None:
+        cache = self._cache_for_cycle(lease.cycle_id)
+        if cache is None or cache.get("lease_id") != lease.lease_id:
+            return None
+        return cache
+
     def _append(
         self,
         lease: SupervisorLease,
@@ -1058,6 +1172,13 @@ class PaperSupervisorStore:
             "payload": canonical_payload,
         }
         event["event_sha256"] = _digest(event)
+        cache = self._cache_for_lease(lease)
+        if (
+            cache is not None
+            and _file_identity(self._events_path(lease.cycle_id))
+            != cache.get("event_identity")
+        ):
+            raise SupervisorStoreError("attempt_store_corrupt")
         self._append_event_line(lease.cycle_id, event)
         updated_events = [*events, event]
         updated_state = _project(
@@ -1065,6 +1186,12 @@ class PaperSupervisorStore:
             cycle_id=lease.cycle_id,
         )
         self._write_state(lease.cycle_id, updated_state)
+        if cache is not None:
+            cache["events"] = updated_events
+            cache["state"] = updated_state
+            cache["event_identity"] = _file_identity(
+                self._events_path(lease.cycle_id)
+            )
         return event
 
     def _spend_prepared_start_global(
@@ -2835,6 +2962,18 @@ def _file_size(path: Path) -> int:
         return path.stat().st_size
     except FileNotFoundError:
         return 0
+
+
+def _file_identity(path: Path) -> tuple[int, int, int] | None:
+    """Return exact regular-file identity without following a symlink."""
+
+    try:
+        stat = path.lstat()
+    except FileNotFoundError:
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise SupervisorStoreError("attempt_store_corrupt")
+    return (int(stat.st_ino), int(stat.st_size), int(stat.st_mtime_ns))
 
 
 def _validate_wal_anchor(
