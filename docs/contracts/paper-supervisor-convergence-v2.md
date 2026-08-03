@@ -50,10 +50,10 @@ Missing, non-positive or inconsistent cardinality is structural; the
 Supervisor never repairs an identity or count mismatch by adding, cancelling
 or replacing orders.
 
-## Exact blocker classifier v3
+## Exact blocker classifier v4
 
 The machine-readable source is
-`docs/contracts/paper-supervisor-blocker-v3.json`. Classification uses exact
+`docs/contracts/paper-supervisor-blocker-v4.json`. Classification uses exact
 typed evidence and exact machine-code equality only. Substring, prefix, regex,
 exception prose and free-text matching are forbidden.
 
@@ -73,6 +73,7 @@ An unlisted, malformed or newly observed code is always
 | `strategy_recommendation_provider_timeout` | The bounded server-local provider timed out before any control intent; retry through the episode budget. |
 | `strategy_recommendation_provider_unavailable` | The server-local provider transport failed before any control intent; retry through the episode budget. |
 | `strategy_recommendation_provider_failed` | The provider returned a typed failure before any control intent; retry through the episode budget. |
+| `frozen_grid_preview_market_moved` | Retry a fresh identity only when the exact authorized frozen neutral Grid remains profit-valid and the current trusted mark alone shifts venue-rounded side count beyond the unchanged inner capital budget before `start_intent`. |
 
 `supervisor_attempt_deadline_before_intent` is local resource pressure.
 `upstream_data_source_transient_failure` requires independent typed evidence of

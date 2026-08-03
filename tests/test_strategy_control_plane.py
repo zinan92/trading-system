@@ -107,6 +107,177 @@ def account_context(equity: float = 10_000.0) -> dict:
     return {"equity": equity, "ending_cash": equity, "accounting_snapshot": snapshot}
 
 
+def test_frozen_grid_market_move_translation_requires_exact_active_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    cycle_id = "2026-08-03_DAY"
+    plan = {
+        "cycle_id": cycle_id,
+        "strategy_plan_id": "strategy-plan-current",
+        "version": 1,
+        "strategy_type": "grid",
+        "direction": "neutral",
+        "style": "steady",
+        "cycle_risk_envelope_id": "envelope-current",
+        "range": {
+            "low": 3903.5986,
+            "high": 4226.6814,
+            "scope": "neutral_side",
+            "split_price": 4065.14,
+            "source_envelope": {
+                "low": 3903.5986,
+                "high": 4226.6814,
+            },
+        },
+        "grid": {
+            "count": 38,
+            "mode": "arithmetic",
+            "notional_per_grid": 5265.97,
+            "leverage": 10,
+        },
+        "risk_budget": {"equity": 10005.35},
+    }
+    request = plane._frozen_grid_request_from_plan(plan)
+    verified: list[str] = []
+    monkeypatch.setattr(
+        plane,
+        "active_plan",
+        lambda _cycle_id: dict(plan),
+    )
+    monkeypatch.setattr(
+        plane,
+        "verify_supervisor_outer_policy",
+        lambda: {"passed": True},
+    )
+    monkeypatch.setattr(
+        plane.risk_envelopes,
+        "verify_preview",
+        lambda **_kwargs: verified.append("verified"),
+    )
+
+    moved = plane.diagnose_frozen_grid_request(
+        cycle_id,
+        request,
+        market=market(close=4071.19),
+        account=account_context(10005.35),
+    )
+    assert moved["status"] == "blocked"
+    assert moved["code"] == "frozen_grid_preview_market_moved"
+    assert moved["current_side_counts"] == {"buy": 20, "sell": 18}
+    assert moved["current_max_side_notional"] > moved["capital_budget"]
+
+    recovered = plane.diagnose_frozen_grid_request(
+        cycle_id,
+        request,
+        market=market(close=4067.29),
+        account=account_context(10005.35),
+    )
+    assert recovered["status"] == "feasible"
+    assert recovered["code"] is None
+    assert len(verified) == 3
+
+    tampered = deepcopy(request)
+    tampered["grid"]["notional_per_grid"] = 5265.96
+    with pytest.raises(ValueError, match="plan_identity_conflict"):
+        plane.diagnose_frozen_grid_request(
+            cycle_id,
+            tampered,
+            market=market(close=4071.19),
+            account=account_context(10005.35),
+        )
+
+
+def test_frozen_grid_diagnostic_rejects_outside_range_and_bad_split(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plane = StrategyControlPlane(tmp_path / "outputs")
+    cycle_id = "2026-08-03_DAY"
+    plan = {
+        "cycle_id": cycle_id,
+        "strategy_plan_id": "strategy-plan-current",
+        "version": 1,
+        "strategy_type": "grid",
+        "direction": "neutral",
+        "style": "steady",
+        "cycle_risk_envelope_id": "envelope-current",
+        "range": {
+            "low": 3903.5986,
+            "high": 4226.6814,
+            "scope": "neutral_side",
+            "split_price": 4065.14,
+            "source_envelope": {
+                "low": 3903.5986,
+                "high": 4226.6814,
+            },
+        },
+        "grid": {
+            "count": 38,
+            "mode": "arithmetic",
+            "notional_per_grid": 5265.97,
+            "leverage": 10,
+        },
+        "risk_budget": {"equity": 10005.35},
+    }
+    request = plane._frozen_grid_request_from_plan(plan)
+    monkeypatch.setattr(
+        plane,
+        "active_plan",
+        lambda _cycle_id: dict(plan),
+    )
+    monkeypatch.setattr(
+        plane,
+        "verify_supervisor_outer_policy",
+        lambda: {"passed": True},
+    )
+    monkeypatch.setattr(
+        plane.risk_envelopes,
+        "verify_preview",
+        lambda **_kwargs: None,
+    )
+
+    with pytest.raises(ValueError, match="grid_preview_infeasible"):
+        plane.diagnose_frozen_grid_request(
+            cycle_id,
+            request,
+            market=market(close=4300.0),
+            account=account_context(10005.35),
+        )
+
+    plan["risk_budget"]["equity"] = 9000.0
+    with pytest.raises(
+        strategy_control_plane_module.GridPreviewInfeasibleError
+    ) as bad_split:
+        plane.diagnose_frozen_grid_request(
+            cycle_id,
+            request,
+            market=market(close=4071.19),
+            account=account_context(10005.35),
+        )
+    assert "capital_capacity_exceeded" in (
+        bad_split.value.evidence["reasons"]
+    )
+
+    plan["risk_budget"]["equity"] = 10005.35
+    plane.config["strategy_grid"][
+        "min_net_profit_per_grid_usd"
+    ] = 100.0
+    with pytest.raises(
+        strategy_control_plane_module.GridPreviewInfeasibleError
+    ) as profit_failure:
+        plane.diagnose_frozen_grid_request(
+            cycle_id,
+            request,
+            market=market(close=4071.19),
+            account=account_context(10005.35),
+        )
+    assert "profit_target_not_met" in (
+        profit_failure.value.evidence["reasons"]
+    )
+
+
 def safe_grid(direction: str = "neutral", style: str = "steady") -> dict:
     return {
         "direction": direction,

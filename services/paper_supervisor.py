@@ -75,6 +75,13 @@ class PaperSupervisor:
         execution: Any,
         control: Callable[[str, dict[str, Any]], dict[str, Any]],
         accounting_reconciliation: Callable[[], str],
+        pre_intent_diagnostic: (
+            Callable[
+                [dict[str, Any], str],
+                Mapping[str, Any],
+            ]
+            | None
+        ) = None,
         store: PaperSupervisorStore | None = None,
         episode_machine: SupervisorEpisodeMachine | None = None,
         monotonic: Callable[[], float] | None = None,
@@ -87,6 +94,7 @@ class PaperSupervisor:
         self.execution = execution
         self.control = control
         self.accounting_reconciliation = accounting_reconciliation
+        self.pre_intent_diagnostic = pre_intent_diagnostic
         self.store = store or PaperSupervisorStore(self.output_root)
         self.episodes = episode_machine or SupervisorEpisodeMachine()
         self.monotonic = monotonic or time.monotonic
@@ -2101,7 +2109,11 @@ class PaperSupervisor:
                 }
             )
             if deadline_exceeded
-            else classify_blocker(control_code=str(exc))
+            else classify_blocker(
+                control_code=str(
+                    getattr(exc, "code", str(exc))
+                )
+            )
         )
         pending = self.store.unfinished_pre_intent(cycle_id)
         if pending is not None:
@@ -2258,6 +2270,13 @@ class PaperSupervisor:
                 authority.cycle_id,
                 blocked_at=str(blocker.get("blocked_at") or ""),
             )
+            if not cleared:
+                cleared = self._legacy_clean_pre_intent_cleared(
+                    authority,
+                    blocked_at=str(
+                        blocker.get("blocked_at") or ""
+                    ),
+                )
         updated = self.episodes.recheck_structural_blocker(
             state,
             machine_code=machine_code,
@@ -2265,6 +2284,125 @@ class PaperSupervisor:
             observed_at=observed_at,
         )
         return updated, cleared
+
+    def _legacy_clean_pre_intent_cleared(
+        self,
+        authority: StartAuthoritySnapshot,
+        *,
+        blocked_at: str,
+    ) -> bool:
+        """Recheck one legacy unknown without reading its error prose."""
+
+        if not callable(self.pre_intent_diagnostic):
+            return False
+        runtime = dict(authority.runtime)
+        if (
+            self._has_exposure(authority)
+            or bool(authority.authorized_order_identities)
+            or not self._reconciliation_exact(authority)
+            or int(runtime.get("accepted_order_count") or 0) != 0
+            or str(runtime.get("desired_state") or "stopped")
+            != "stopped"
+            or str(runtime.get("actual_state") or "stopped")
+            != "stopped"
+        ):
+            return False
+        try:
+            projection = self.store.current_state(
+                authority.cycle_id
+            )
+        except Exception:  # noqa: BLE001 - malformed WAL stays blocked.
+            return False
+        historical = [
+            dict(row)
+            for row in projection.get("pre_intent_attempts") or []
+            if isinstance(row, Mapping)
+            and str(row.get("terminal_observed_at") or "")
+            == blocked_at
+            and str(row.get("terminal_machine_code") or "")
+            == "unknown_blocker"
+            and str(row.get("terminal_result") or "")
+            == "structural"
+            and row.get("prepare_succeeded_sequence") is None
+        ]
+        if len(historical) != 1:
+            return False
+        attempt_id = str(historical[0].get("attempt_id") or "")
+        if not attempt_id:
+            return False
+        if any(
+            str(row.get("attempt_id") or "") == attempt_id
+            for row in projection.get("attempts") or []
+            if isinstance(row, Mapping)
+        ):
+            return False
+        unfinished_intent = projection.get("unfinished_intent")
+        if isinstance(unfinished_intent, Mapping):
+            return False
+        if any(
+            str(row.get("terminal_result") or "")
+            in {"unknown", "control_outcome_unknown"}
+            or str(row.get("terminal_machine_code") or "")
+            in {
+                "control_outcome_unknown",
+                "partial_execution_or_cleanup_required",
+            }
+            for row in projection.get("attempts") or []
+            if isinstance(row, Mapping)
+        ):
+            return False
+
+        matching_prepare = []
+        related_controls = []
+        for raw in authority.control_events:
+            if not isinstance(raw, Mapping):
+                continue
+            request = raw.get("request")
+            if not isinstance(request, Mapping):
+                continue
+            if (
+                str(raw.get("cycle_id") or "")
+                != authority.cycle_id
+                or str(request.get("supervisor_attempt_id") or "")
+                != attempt_id
+            ):
+                continue
+            related_controls.append(dict(raw))
+            if (
+                str(raw.get("action") or "") == "prepare_start"
+                and str(raw.get("ts") or "") == blocked_at
+                and str(raw.get("result") or "") == "rejected"
+            ):
+                matching_prepare.append(dict(raw))
+        if (
+            len(matching_prepare) != 1
+            or len(related_controls) != 1
+        ):
+            return False
+
+        full_plan = dict(
+            self.plane.active_plan(authority.cycle_id) or {}
+        )
+        if (
+            not full_plan
+            or self._plan_identity(full_plan)
+            != dict(authority.active_plan)
+        ):
+            return False
+        try:
+            diagnostic = dict(
+                self.pre_intent_diagnostic(
+                    self._request_from_plan(full_plan),
+                    blocked_at,
+                )
+            )
+        except Exception:  # noqa: BLE001 - diagnostic failures stay blocked.
+            return False
+        return (
+            diagnostic.get("status") == "blocked"
+            and diagnostic.get("code")
+            == "frozen_grid_preview_market_moved"
+        )
 
     def _provider_failure_cleared(self, cycle_id: str, *, blocked_at: str) -> bool:
         readiness = CloudAIProviderReadiness(self.output_root).verify()

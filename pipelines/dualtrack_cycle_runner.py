@@ -1036,12 +1036,29 @@ class DualTrackCycleRunner:
                 else "drift"
             )
 
+        def pre_intent_diagnostic(
+            payload: dict[str, Any],
+            diagnostic_as_of: str,
+        ) -> dict[str, Any]:
+            return build_strategy_console_control_response(
+                {
+                    **dict(payload),
+                    "cycle_id": cycle_id,
+                    "as_of": diagnostic_as_of,
+                    "action": "preview",
+                },
+                output_root=self.output_root,
+                actor=actor,
+                _frozen_grid_diagnostic=True,
+            )
+
         return PaperSupervisor(
             self.output_root,
             plane=plane,
             execution=execution,
             control=invoke,
             accounting_reconciliation=accounting_reconciliation,
+            pre_intent_diagnostic=pre_intent_diagnostic,
             attempt_deadline_seconds=attempt_deadline_seconds,
         ).converge_once(
             cycle_id,

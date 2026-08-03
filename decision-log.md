@@ -13259,3 +13259,69 @@ auditable datafeed port; broker execution remains a separate port.
   during-control flight, and a fresh post-control reload.
 - Added handler-level coverage proving the order is
   `advance -> control -> advance`.
+
+# 2026-08-03 — Recover a frozen Grid from a pre-intent market capacity shift (#528)
+
+## Decision
+
+- Preserve the frozen active Grid plan and every existing safety gate.  The
+  sizing layer now reports structured infeasibility evidence, but only the
+  control plane may translate it to
+  `frozen_grid_preview_market_moved` after proving the request is the exact
+  active `neutral + fixed count + manual notional` plan, its Park outer policy
+  and AI envelope remain valid, the current mark is inside the frozen range,
+  the authorized split remains feasible, and the current failure reason is
+  exactly venue-rounded single-side capital capacity.
+- Add that exact code to blocker vocabulary v4 as transient.  The Supervisor
+  reads the typed exception code rather than prose and follows the existing
+  episode backoff/probe path before any `start_intent` exists.
+- A legacy `unknown_blocker` from this clean pre-intent phase may be cleared
+  only after exact WAL-to-control-audit attribution by cycle, blocker time and
+  `supervisor_attempt_id`, proof of one rejected prepare and no accepted or
+  uncertain intent, stopped runtime with zero accepted orders, zero exposure,
+  exact reconciliation, unchanged plan identity, zero authoritative command
+  identities, and a side-effect-free typed replay at the historical blocker
+  timestamp which itself returns the exact market-move code.  Current
+  feasibility alone cannot clear an old unknown.  The clearing tick performs
+  zero controls; a later fresh tick runs the normal prepare/start path.
+
+## Gotchas
+
+- Park's 20x policy is an outer permission ceiling, not permission to rewrite
+  this cycle's 9.9969x inner envelope or the configured 10x Grid limit.  This
+  change does not consume unused outer-policy headroom.
+- `split_price` alone is not authority.  The pure sizing module cannot classify
+  a failure as retryable; active-plan, envelope and outer-policy identity must
+  be proven by the control plane first.
+- The old capacity sentence remains ordinary exception prose and therefore
+  still classifies as `unknown_blocker`.  No substring, regex or exact prose
+  matching was added.
+- Historical rechecks request a trusted history page with `end=blocked_at`,
+  reject future, untrusted, synthetic or older-than-180-second cutoff bars,
+  and size only from the immutable plan's authorized equity.  A normal live
+  snapshot or today's reconstructed production account cannot masquerade as
+  point-in-time evidence.
+- A one-shot `gridmind-live-tick.service` is normally inactive between timer
+  firings; scheduler health belongs to its active timer and fresh completed
+  heartbeat.  The Cloudflare unit is `gridmind-cloudflared.service`, not the
+  legacy `cloudflared.service` name.
+- No prepared capability, control audit, plan, runtime, order, position, fill,
+  trade or historical episode record is rewritten by the diagnostic or legacy
+  recheck.
+
+## Verification
+
+- Focused regression covers the observed 2026-08-03 geometry: feasible at
+  4065.14, exact capital-only typed rejection at the historical 4071.19 mark
+  (20/18 levels), and
+  feasible again at 4067.29.
+- Negative cases cover request/plan mismatch, price outside the frozen range,
+  infeasible split, profit failure, prose-only errors, duplicate/mismatched or
+  accepted audit, prior start intent, uncertain diagnostic, nonzero runtime or
+  exposure, and reconciliation drift.
+- The final Supervisor/control-plane/dashboard regression matrix passed 390
+  tests.  Ruff, `git diff --check`, and gitleaks passed; an independent L-level
+  code review reported no remaining blocking finding.
+- The repository-wide run still exposes 11 existing macOS launchd schedule
+  installer failures in `tests/test_schedule_manager.py`; neither that module
+  nor its tests differ from `origin/main`, and #528 does not use that path.

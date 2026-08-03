@@ -2,6 +2,8 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 import pipelines.dashboard_server as dashboard_server
 from pipelines.dashboard_server import (
     build_ops_status_contract,
@@ -22,6 +24,131 @@ ORAL_MARKET_VIEW = (
     "计划只做空，反弹到 EMA50 附近出现顶分型入场，止损放顶分型高点。"
     "观点有效 4 小时，价格偏离 0.8% 失效，上破 4100 后停止使用。"
 )
+
+
+def test_historical_diagnostic_market_forbids_future_or_untrusted_bars() -> None:
+    base = {
+        "status": "ready",
+        "fresh": False,
+        "is_synthetic": False,
+        "provider": "binance_usdm_futures",
+        "trusted_history": True,
+        "historical_page": True,
+        "latest_timestamp": "2026-08-03T05:01:00+00:00",
+    }
+    trusted = dashboard_server._trusted_historical_diagnostic_market(
+        base,
+        as_of="2026-08-03T05:01:48+00:00",
+    )
+    assert trusted["fresh"] is True
+    assert trusted["historical_diagnostic"] == {
+        "as_of": "2026-08-03T05:01:48+00:00",
+        "latest_timestamp": "2026-08-03T05:01:00+00:00",
+        "age_seconds": 48.0,
+        "future_bars_forbidden": True,
+        "mutation_authority": False,
+    }
+
+    for mutation in (
+        {"latest_timestamp": "2026-08-03T05:02:00+00:00"},
+        {"latest_timestamp": "2026-08-03T04:58:00+00:00"},
+        {"trusted_history": False},
+        {"historical_page": False},
+        {"is_synthetic": True},
+    ):
+        with pytest.raises(
+            ValueError,
+            match="trusted_market_provenance_invalid",
+        ):
+            dashboard_server._trusted_historical_diagnostic_market(
+                {**base, **mutation},
+                as_of="2026-08-03T05:01:48+00:00",
+            )
+
+
+def test_internal_frozen_grid_diagnostic_requests_exact_historical_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    historical = {
+        "status": "ready",
+        "fresh": False,
+        "is_synthetic": False,
+        "provider": "binance_usdm_futures",
+        "trusted_history": True,
+        "historical_page": True,
+        "latest_close": 4071.19,
+        "latest_timestamp": "2026-08-03T05:01:00+00:00",
+        "bars": [{}] * 15,
+        "strategy_timeframes": {"1d": {}, "4h": {}},
+    }
+
+    def market_response(**kwargs):
+        captured["market_request"] = dict(kwargs)
+        return dict(historical)
+
+    class FakePlane:
+        def __init__(self, _output):
+            pass
+
+        def diagnose_frozen_grid_request(
+            self,
+            cycle_id,
+            payload,
+            *,
+            market,
+            account,
+        ):
+            captured.update(
+                {
+                    "cycle_id": cycle_id,
+                    "payload": dict(payload),
+                    "market": dict(market),
+                    "account": dict(account),
+                }
+            )
+            return {
+                "status": "blocked",
+                "code": "frozen_grid_preview_market_moved",
+            }
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_dualtrack_market_bars_response",
+        market_response,
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_strategy_console_production_history",
+        lambda **_kwargs: pytest.fail(
+            "historical diagnostic must not reconstruct the current account"
+        ),
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "StrategyControlPlane",
+        FakePlane,
+    )
+    as_of = "2026-08-03T05:01:48+00:00"
+    result = dashboard_server.build_strategy_console_control_response(
+        {
+            "cycle_id": "2026-08-03_DAY",
+            "as_of": as_of,
+            "action": "preview",
+            "strategy_type": "grid",
+        },
+        output_root=tmp_path / "outputs",
+        _frozen_grid_diagnostic=True,
+    )
+
+    assert result["code"] == "frozen_grid_preview_market_moved"
+    assert captured["market_request"]["end"] == as_of
+    assert captured["market"]["fresh"] is True
+    assert captured["market"]["latest_timestamp"] == (
+        "2026-08-03T05:01:00+00:00"
+    )
+    assert captured["account"] == {}
 
 
 def test_loopback_control_actor_rejects_forgeable_email_header(
