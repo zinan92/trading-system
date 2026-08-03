@@ -240,6 +240,161 @@ def test_refresh_recommendation_saves_ai_proposal_without_mutating_production(
     assert not (output / "dualtrack" / "orders" / f"{cycle_id}_human.json").exists()
 
 
+def test_refresh_sizing_uses_current_authoritative_execution_equity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Historical PnL must not make a fresh Nautilus cycle over-size itself."""
+
+    output = tmp_path / "outputs"
+    _bind_outer_policy(output, monkeypatch, direction="neutral")
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_strategy_console_production_history",
+        lambda **_: {
+            "account": {"equity": 10_005.35, "ending_cash": 10_005.35},
+            "accounting_snapshot": {"status": "pass"},
+        },
+    )
+
+    class _AuthoritativeSnapshot:
+        name = "nautilus_paper"
+
+        def snapshot(self, cycle_id: str) -> dict:
+            return {
+                "cycle_id": cycle_id,
+                "engine": self.name,
+                "account": {
+                    "starting_cash": 10_000.0,
+                    "ending_cash": 10_000.0,
+                    "equity": 10_000.0,
+                },
+                "orders": [],
+                "positions": [],
+            }
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: _AuthoritativeSnapshot(),
+    )
+
+    # Keep this regression focused on the account authority hand-off.  The
+    # recommendation geometry is covered by the grid-sizing suite; provide a
+    # deterministic feasible range here so a market fixture change cannot hide
+    # a sizing-source regression behind the unrelated profit-target solver.
+    original_preview = StrategyControlPlane.preview
+    preview_accounts: list[dict] = []
+
+    def preview_with_fixed_test_geometry(
+        self,
+        cycle_id,
+        payload=None,
+        *,
+        market,
+        account=None,
+    ):
+        preview_accounts.append(dict(account or {}))
+        return original_preview(
+            self,
+            cycle_id,
+            {
+                **dict(payload or {}),
+                "range": {"low": 3600.0, "high": 4500.0},
+                "grid": {"count": 30},
+            },
+            market=market,
+            account=account,
+        )
+
+    monkeypatch.setattr(
+        StrategyControlPlane,
+        "preview",
+        preview_with_fixed_test_geometry,
+    )
+
+    result = build_strategy_console_control_response(
+        {
+            "cycle_id": "2026-07-05_DAY",
+            "action": "refresh_recommendation",
+            "as_of": "2026-07-05T02:00:00+00:00",
+        },
+        output_root=output,
+        market=_market(),
+        recommendation_provider=lambda _prompt: {
+            "direction": "neutral",
+            "style": "steady",
+            "rationale": "D1 与 4H 走弱。",
+            "key_levels": [4040, 4080],
+            "ai_self_assessment": 6,
+            "evidence_used": ["D1", "4H"],
+        },
+    )
+
+    assert result["preview"]["risk"]["equity"] == 10_000.0
+    assert result["proposal"]["risk_budget"]["equity"] == 10_000.0
+    assert result["preview"]["grid"]["notional_mode"] == "auto"
+    assert (
+        preview_accounts[0]["execution_account_source"]
+        == "authoritative_execution_snapshot"
+    )
+
+
+def test_refresh_sizing_fails_closed_without_authoritative_execution_equity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    _bind_outer_policy(output, monkeypatch, direction="neutral")
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_strategy_console_production_history",
+        lambda **_: {
+            "account": {"equity": 10_005.35},
+            "accounting_snapshot": {"status": "pass"},
+        },
+    )
+
+    class _MissingAuthoritativeAccount:
+        name = "nautilus_paper"
+
+        def snapshot(self, cycle_id: str) -> dict:
+            return {
+                "cycle_id": cycle_id,
+                "engine": self.name,
+                "account": {},
+                "orders": [],
+                "positions": [],
+            }
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: _MissingAuthoritativeAccount(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="authoritative_execution_account_missing",
+    ):
+        build_strategy_console_control_response(
+            {
+                "cycle_id": "2026-07-05_DAY",
+                "action": "refresh_recommendation",
+                "as_of": "2026-07-05T02:00:00+00:00",
+            },
+            output_root=output,
+            market=_market(),
+            recommendation_provider=lambda _prompt: pytest.fail(
+                "provider must not run without an authoritative account"
+            ),
+        )
+
+    assert not list(
+        (output / "dualtrack" / "strategy_control").glob("**/*proposal*")
+    )
+
+
 def test_refresh_provider_failure_never_promotes_legacy_ai_proposal(
     tmp_path: Path,
     monkeypatch,
