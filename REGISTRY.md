@@ -13,6 +13,16 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
+- 当前 Cloud Paper source 为
+  `main@94b14bff38f5f965f93237959abb02473437bdc3`，tree
+  `f864b93fa379b58dc89321e15c2ff9682012bfad`。#532 已让完整可校验的
+  Cloud-native health 成为 dead-man 的 liveness authority；2026-08-03
+  18:23:34 CST 的自然 timer 实际投递 `success`、HTTP 200，
+  `failure_signal=false`、`failure_signal_sources=[]`。warning-only 的
+  `daily_self_review_missing_or_incomplete` 不再因服务器不生成旧本机 runner
+  心跳而误送 `/fail`；Cloud critical/不完整 health、调度失败和暴露不确定性仍
+  fail-closed。完整证据见
+  [`docs/evidence/issue-532-cloud-deadman-success-2026-08-03.md`](docs/evidence/issue-532-cloud-deadman-success-2026-08-03.md)。
 - #528 已部署到 Cloud Paper 的精确 clean source
   `main@66b832df6bea81cecdfa3d28ef74735736493bb8`，tree
   `a271a2deb832f8422fc613d124656cba966bb710`。Supervisor v4 在第一个自然
@@ -198,10 +208,6 @@
   `2026-08-03_DAY` 为 `running/running`、38/38 accepted，后续 tick 已证明
   `adopted_existing` 且无第二套订单。继续监测 Dashboard RSS/线程/OOM、tick、
   行情、生命周期和双层对账，不得用本次恢复冒充 48 小时验收完成。
-- 单独修复 dead-man 的旧 `always_on` runner 心跳规则：Cloud-native live-tick、
-  Supervisor 与 cloud-health 均 ready 时，缺失的本机 legacy runner 文件不应
-  继续把 warning-only 状态送往 fail 端点；修复不得削弱真正的 Cloud tick、
-  Supervisor、对账或 structural critical 告警。
 - Cloud provider readiness 已由服务器上的 Paper-only Codex runtime 通过，
   不依赖 Park 的 Mac 开机；继续保留当前 source/provider SHA 绑定与 boot gate，
   不把任何密钥写入 Git、日志或报告。
