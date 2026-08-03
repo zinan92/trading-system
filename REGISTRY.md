@@ -12,7 +12,19 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-02)
+## 现在在哪里(2026-08-03)
+- Dashboard 并发防护已部署到 Cloud Paper：当前 source 为
+  `main@7b37c116513a837f69c83344548a07c1360fe7f7`，tree
+  `b554dc9552836602a523ce0ebf460cb91aa2be59`。内核历史证据确认旧
+  Dashboard 进程在 1.6 GiB 主机上增长到 `1,119,512 KiB` anonymous RSS
+  后被 OOM kill，并继发 cloudflared/SSH 不可用；不是行情、订单或
+  Supervisor 控制动作造成。#520/#522 以无 TTL 的 keyed single-flight、4 个
+  worker 上限及控制前后 generation fence 修复该故障链。云端 4 个并发
+  read-model 请求均在 17.70–17.73s 返回相同 HTTP 200，线程从 2 升至 6 后
+  回落至 2，RSS 峰值约 220 MiB 后回落；公网为正常 Cloudflare Access 302，
+  不再是 530/1033。发布前后 Paper 保持当前周期计划 active、runtime stopped、
+  0 委托、0 持仓、双层对账通过；未调用 start/stop/cancel。完整证据见
+  [`docs/evidence/issue-520-dashboard-concurrency-cloud-release-2026-08-03.md`](docs/evidence/issue-520-dashboard-concurrency-cloud-release-2026-08-03.md)。
 - Cloud Paper Supervisor 已按分阶段流程部署并启用。当前 app/live-tick
   source 为 `main@eb2408088b34318d248d15b3c52d222635d6a531`，tree
   `c1eb574d2b90051c7ce9abae046621b9d824d798`；provider readiness、preflight
@@ -172,6 +184,11 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- 继续观察 Dashboard 在真实浏览器轮询下的 RSS、线程与 OOM 记录；P0 并发
+  故障链已修复，但当前 `2026-08-03_DAY` 仍为 Supervisor
+  `blocked_structural/unknown_blocker`、runtime stopped。它是独立安全阻塞，
+  不得用本次 Dashboard 修复冒充交易恢复，也不得绕过闸门启动。48 小时 soak
+  仍未开始或完成。
 - Cloud provider readiness 已由服务器上的 Paper-only Codex runtime 通过，
   不依赖 Park 的 Mac 开机；继续保留当前 source/provider SHA 绑定与 boot gate，
   不把任何密钥写入 Git、日志或报告。
