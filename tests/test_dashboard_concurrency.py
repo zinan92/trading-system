@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler
 from urllib.request import urlopen
@@ -82,6 +83,90 @@ def test_completed_read_model_flight_does_not_hide_control_state_change(monkeypa
     assert before_control["runtime"] == "stopped"
     assert after_control["runtime"] == "running"
     assert build_count == 2
+
+
+def test_control_generations_isolate_pre_control_and_during_control_flights(monkeypatch) -> None:
+    flight = dashboard_server.KeyedSingleFlight()
+    authoritative_state = {"runtime": "stopped"}
+    pre_control_started = threading.Event()
+    during_control_started = threading.Event()
+    release_old_flights = threading.Event()
+    build_count = 0
+
+    def fake_build(*, as_of=None):
+        nonlocal build_count
+        build_count += 1
+        observed = authoritative_state["runtime"]
+        if observed == "stopped":
+            pre_control_started.set()
+            assert release_old_flights.wait(timeout=3)
+        elif observed == "starting":
+            during_control_started.set()
+            assert release_old_flights.wait(timeout=3)
+        return {"runtime": observed, "as_of": as_of}
+
+    def load():
+        return dashboard_server.build_trading_system_read_model_response_singleflight(
+            "",
+            single_flight=flight,
+        )
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_trading_system_read_model_response",
+        fake_build,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        pre_control = executor.submit(load)
+        assert pre_control_started.wait(timeout=3)
+
+        flight.advance_generation()
+        authoritative_state["runtime"] = "starting"
+        during_control = executor.submit(load)
+        assert during_control_started.wait(timeout=3)
+
+        authoritative_state["runtime"] = "running"
+        flight.advance_generation()
+        post_control = load()
+        release_old_flights.set()
+
+        assert pre_control.result(timeout=3)["runtime"] == "stopped"
+        assert during_control.result(timeout=3)["runtime"] == "starting"
+
+    assert post_control["runtime"] == "running"
+    assert build_count == 3
+
+
+def test_strategy_control_advances_read_model_generation_before_and_after(monkeypatch) -> None:
+    events = []
+
+    class GenerationSpy:
+        def advance_generation(self):
+            events.append("advance")
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "_TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT",
+        GenerationSpy(),
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "_dualtrack_mutation_request_allowed",
+        lambda _host, _origin: True,
+    )
+
+    handler = object.__new__(dashboard_server.DashboardHandler)
+    handler.path = "/api/strategy-console/control"
+    handler.headers = {"Host": "127.0.0.1:8765", "Origin": "http://127.0.0.1:8765"}
+    handler._handle_strategy_console_control = types.MethodType(
+        lambda _self: events.append("control"),
+        handler,
+    )
+
+    handler.do_POST()
+
+    assert events == ["advance", "control", "advance"]
 
 
 def test_failed_flight_is_removed_for_a_later_request() -> None:

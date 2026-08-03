@@ -138,6 +138,19 @@ class KeyedSingleFlight:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._calls: dict[Hashable, _SingleFlightCall] = {}
+        self._generation = 0
+
+    def advance_generation(self) -> int:
+        """Isolate later callers without cancelling already-running calls."""
+
+        with self._lock:
+            self._generation += 1
+            return self._generation
+
+    def run_in_current_generation(self, key: Hashable, compute: Callable[[], Any]) -> Any:
+        with self._lock:
+            generation = self._generation
+        return self.run((generation, key), compute)
 
     def run(self, key: Hashable, compute: Callable[[], Any]) -> Any:
         with self._lock:
@@ -411,7 +424,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             if not _dualtrack_mutation_request_allowed(str(self.headers.get("Host") or ""), str(self.headers.get("Origin") or "")):
                 self._write_error(403, "strategy_console_origin_blocked", "strategy-console writes require the same local origin")
                 return
-            self._handle_strategy_console_control()
+            # A read-model build already in flight may have observed state from
+            # before this control action. Isolate both the control window and
+            # the post-control reload without retaining or invalidating data.
+            _TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT.advance_generation()
+            try:
+                self._handle_strategy_console_control()
+            finally:
+                _TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT.advance_generation()
             return
         self._write_error(404, "not_found", "unknown POST endpoint")
 
@@ -1031,7 +1051,7 @@ def build_trading_system_read_model_response_singleflight(
     params = parse_qs(query)
     as_of = (params.get("as_of") or [None])[0]
     flight = single_flight or _TRADING_SYSTEM_READ_MODEL_SINGLE_FLIGHT
-    return flight.run(
+    return flight.run_in_current_generation(
         ("trading-system-read-model", query),
         lambda: build_trading_system_read_model_response(as_of=as_of),
     )
