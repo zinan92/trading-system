@@ -13,6 +13,16 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
+- #528 已部署到 Cloud Paper 的精确 clean source
+  `main@66b832df6bea81cecdfa3d28ef74735736493bb8`，tree
+  `a271a2deb832f8422fc613d124656cba966bb710`。Supervisor v4 在第一个自然
+  tick 以 0 控制动作清除 2026-08-03 DAY 的已知 pre-intent
+  `unknown_blocker`，下一独立自然 tick 使用全新 preview/prepared identity
+  唯一启动，当前计划 `strategy-plan-2026-08-03_DAY-2-ffb31483` v2、runtime
+  `running/running`、38/38 唯一 accepted orders、0 unknown、0 positions、
+  reconciliation=`ok`；后续自然 tick 为 `healthy/adopted_existing` 且 0
+  控制动作。完整证据见
+  [`docs/evidence/issue-528-frozen-grid-recovery-cloud-release-2026-08-03.md`](docs/evidence/issue-528-frozen-grid-recovery-cloud-release-2026-08-03.md)。
 - Dashboard 并发防护已部署到 Cloud Paper：当前 source 为
   `main@7b37c116513a837f69c83344548a07c1360fe7f7`，tree
   `b554dc9552836602a523ce0ebf460cb91aa2be59`。内核历史证据确认旧
@@ -184,11 +194,14 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- 继续观察 Dashboard 在真实浏览器轮询下的 RSS、线程与 OOM 记录；P0 并发
-  故障链已修复，但当前 `2026-08-03_DAY` 仍为 Supervisor
-  `blocked_structural/unknown_blocker`、runtime stopped。它是独立安全阻塞，
-  不得用本次 Dashboard 修复冒充交易恢复，也不得绕过闸门启动。48 小时 soak
-  仍未开始或完成。
+- 从 #528 的真实自动启动证据继续观察 Cloud soak；当前
+  `2026-08-03_DAY` 为 `running/running`、38/38 accepted，后续 tick 已证明
+  `adopted_existing` 且无第二套订单。继续监测 Dashboard RSS/线程/OOM、tick、
+  行情、生命周期和双层对账，不得用本次恢复冒充 48 小时验收完成。
+- 单独修复 dead-man 的旧 `always_on` runner 心跳规则：Cloud-native live-tick、
+  Supervisor 与 cloud-health 均 ready 时，缺失的本机 legacy runner 文件不应
+  继续把 warning-only 状态送往 fail 端点；修复不得削弱真正的 Cloud tick、
+  Supervisor、对账或 structural critical 告警。
 - Cloud provider readiness 已由服务器上的 Paper-only Codex runtime 通过，
   不依赖 Park 的 Mac 开机；继续保留当前 source/provider SHA 绑定与 boot gate，
   不把任何密钥写入 Git、日志或报告。
