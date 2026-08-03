@@ -245,6 +245,46 @@ def test_control_events_never_create_running_utilization(
     )
 
 
+def test_utilization_uses_observation_snapshot_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "services.paper_supervisor_read_model._cycle_ids_for_window",
+        lambda _start, _end: [CYCLE],
+    )
+
+    def read_observation_snapshot(
+        _store: PaperSupervisorStore,
+        cycle_id: str,
+    ) -> list[dict]:
+        calls.append(cycle_id)
+        return []
+
+    monkeypatch.setattr(
+        PaperSupervisorStore,
+        "read_cycle_observation_snapshot",
+        read_observation_snapshot,
+    )
+    monkeypatch.setattr(
+        PaperSupervisorStore,
+        "read_cycle_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("utilization must not build full cycle snapshots")
+        ),
+    )
+
+    result = build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+    )
+
+    assert calls == [CYCLE]
+    assert result["windows"]["24h"]["evidence_status"] == "insufficient"
+
+
 def test_current_cycle_exposes_complete_immutable_history(
     tmp_path: Path,
 ) -> None:
