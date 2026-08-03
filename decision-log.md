@@ -13131,3 +13131,32 @@ auditable datafeed port; broker execution remains a separate port.
 
 - `python3 -m pytest -q tests/test_paper_supervisor.py` (49 passed).
 - `python3 -m ruff check services/paper_supervisor.py tests/test_paper_supervisor.py`.
+
+# 2026-08-03 — Build Supervisor requests from the full active plan (#516)
+
+## Decision
+
+- Keep `StartAuthoritySnapshot.active_plan` identity-only.  It is the
+  authority comparison record, not an economic plan payload.
+- Before an existing-plan `prepare_start`, re-read the full active
+  `StrategyPlan` and require its normalized identity to match the authority
+  snapshot.  Only then copy the envelope, range, grid geometry, and leverage
+  into the public control request.
+- If the full plan is missing or its identity changes between reads, record
+  `active_plan_missing` or `plan_identity_conflict` as structural and perform
+  zero control actions.
+
+## Gotchas
+
+- The old code passed the identity-only snapshot to `_request_from_plan`.
+  That silently produced an empty range/grid and null envelope; the existing
+  `risk_envelope_missing` gate correctly rejected it, but every cycle became
+  stuck in a clear/block loop.
+- This fix does not reconstruct or authorize a plan, loosen envelope checks,
+  reuse prepared starts, or alter any historical execution record.
+
+## Verification
+
+- `PYTHONPATH=. uv run --with pytest pytest -q tests/test_paper_supervisor.py tests/test_paper_supervisor_contract_v2.py` (55 passed).
+- `PYTHONPATH=. uv run --with pytest pytest -q tests/test_cloud_health.py tests/test_paper_supervisor_read_model.py tests/test_strategy_control_plane.py tests/test_cycle_risk_envelope.py` (157 passed).
+- `gitleaks detect --no-banner --redact --source .` (no leaks found).
