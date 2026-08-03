@@ -13,6 +13,15 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
+- #542 已部署到 Cloud Paper 精确 source
+  `main@e910774573307ea975db9f100201ad3574b5f23c`，tree
+  `c7c222e94e2a27f3731f3ff34f1c81139d2ed2b9`。19:48 CST 的第一拍自然
+  tick 写入 `structural_cleared`，19:49 的下一独立 tick 写入
+  `healthy/adopted_existing`；两拍均 v2 proof=`proven`、控制动作=0，始终为
+  38 个逻辑槽位（37 accepted + 1 exact open position）、1 条 start intent /
+  result、0 stop/cancel、unknown=0、对账通过。#537 正在修复 Cloud health
+  曾被 runtime=`running` 提前短路、因而看不到 Supervisor structural 的告警
+  漏洞；#538 仍负责 Dashboard 轮询 502。
 - #540 已部署到 Cloud Paper 精确 clean source
   `main@f727401da65db2f7fbbe8b2bbbed4c7d103ccbf8`，tree
   `97ca748db11dded2eda4634dd1503e9090e839ca`。部署前 393 条不可变 DAY
