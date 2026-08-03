@@ -46,6 +46,18 @@ def _parse_ts(value: Any) -> datetime | None:
 
 _MAX_RECONCILIATION_AGE_SECONDS = 600.0
 _FUTURE_SKEW_SECONDS = 120.0
+_CLOUD_HEALTH_SCHEMA = "cloud-paper-health-v1"
+_CLOUD_HEALTH_SEVERITIES = frozenset({"none", "insufficient", "warning", "critical"})
+_CLOUD_HEALTH_REQUIRED_CHECKS = frozenset({
+    "datafeed",
+    "live_tick",
+    "execution",
+    "reconciliation",
+    "daily_self_review",
+    "backup",
+    "scheduler_ownership",
+    "source",
+})
 
 
 class ExternalDeadmanPing:
@@ -108,6 +120,8 @@ class ExternalDeadmanPing:
             "schedule_runtime": schedule_runtime,
             "cloud_health": cloud_health,
             "ping": ping,
+            "liveness_authority": ping.get("liveness_authority"),
+            "failure_signal_sources": list(ping.get("failure_signal_sources") or []),
             "note": "External dead-man alert is triggered by missed pings outside this runtime host.",
         }
         write_json(self.output_root / "deadman_ping" / "current.json", [payload])
@@ -130,17 +144,40 @@ class ExternalDeadmanPing:
         *,
         dry_run: bool,
     ) -> dict:
+        cloud_health_authoritative = self._cloud_health_authoritative(cloud_health)
+        legacy_always_on_applicable = not cloud_health_authoritative
+        always_on_failed = (
+            legacy_always_on_applicable and self._always_on_blocked(vitals)
+        )
+        schedule_failed = self._schedule_runtime_failed(schedule_runtime)
+        cloud_failed = self._cloud_health_failed(cloud_health)
+        failure_signal_sources = [
+            source
+            for source, failed in (
+                ("legacy_always_on", always_on_failed),
+                ("schedule_runtime", schedule_failed),
+                ("cloud_health", cloud_failed),
+            )
+            if failed
+        ]
+        routing_evidence = {
+            "liveness_authority": (
+                "cloud_health"
+                if cloud_health_authoritative
+                else "legacy_always_on_and_cloud_health_fail_closed"
+            ),
+            "cloud_health_authoritative": cloud_health_authoritative,
+            "legacy_always_on_applicable": legacy_always_on_applicable,
+            "failure_signal_sources": failure_signal_sources,
+        }
         if not url:
             return {
                 "status": "not_configured",
                 "delivered": False,
                 "message": "TRADING_ORCHESTRATOR_DEADMAN_URL is not configured",
+                **routing_evidence,
             }
-        failure_signal = (
-            self._always_on_blocked(vitals)
-            or self._schedule_runtime_failed(schedule_runtime)
-            or self._cloud_health_failed(cloud_health)
-        )
+        failure_signal = bool(failure_signal_sources)
         target_url = self._healthchecks_fail_url(url) if failure_signal else url
         full_url = self._url_with_query(
             target_url,
@@ -161,6 +198,7 @@ class ExternalDeadmanPing:
                 "failure_signal": failure_signal,
                 "success_ping": not failure_signal,
                 "message": "dry run; ping not sent",
+                **routing_evidence,
             }
         try:
             request = urllib.request.Request(full_url, method="GET")
@@ -175,6 +213,7 @@ class ExternalDeadmanPing:
                     "failure_signal": failure_signal,
                     "success_ping": not failure_signal,
                     "message": self._ping_message(ok=ok, failure_signal=failure_signal),
+                    **routing_evidence,
                 }
         except (OSError, urllib.error.URLError, TimeoutError) as exc:
             return {
@@ -184,6 +223,7 @@ class ExternalDeadmanPing:
                 "failure_signal": failure_signal,
                 "success_ping": not failure_signal,
                 "message": f"dead-man request failed: {type(exc).__name__}",
+                **routing_evidence,
             }
 
     def _cloud_health(self) -> dict:
@@ -213,6 +253,10 @@ class ExternalDeadmanPing:
 
     @staticmethod
     def _cloud_health_failed(cloud_health: dict) -> bool:
+        if str(cloud_health.get("runtime_mode") or "").lower() == "cloud":
+            if not ExternalDeadmanPing._cloud_health_authoritative(cloud_health):
+                return True
+            return str(cloud_health.get("severity") or "") == "critical"
         # Cloud health may be degraded for warning-only observability items
         # (including the first incomplete utilization window).  Only the
         # explicit critical severity drives the external /fail endpoint.
@@ -224,6 +268,38 @@ class ExternalDeadmanPing:
             "healthy",
             "not_applicable",
         }
+
+    @staticmethod
+    def _cloud_health_authoritative(cloud_health: dict) -> bool:
+        if (
+            cloud_health.get("schema_version") != _CLOUD_HEALTH_SCHEMA
+            or str(cloud_health.get("runtime_mode") or "").lower() != "cloud"
+            or cloud_health.get("paper_only") is not True
+            or cloud_health.get("control_actions_executed") != 0
+            or cloud_health.get("secrets_included") is not False
+            or str(cloud_health.get("severity") or "")
+            not in _CLOUD_HEALTH_SEVERITIES
+        ):
+            return False
+        checks = cloud_health.get("checks")
+        if not isinstance(checks, dict):
+            return False
+        if not _CLOUD_HEALTH_REQUIRED_CHECKS.issubset(checks):
+            return False
+        convergence_checks = {"supervisor", "cycle_decision"} & set(checks)
+        if not convergence_checks:
+            return False
+        for name in _CLOUD_HEALTH_REQUIRED_CHECKS | convergence_checks:
+            row = checks.get(name)
+            if (
+                not isinstance(row, dict)
+                or not str(row.get("status") or "")
+                or not str(row.get("code") or "")
+                or str(row.get("severity") or "")
+                not in _CLOUD_HEALTH_SEVERITIES
+            ):
+                return False
+        return True
 
     def _always_on_blocked(self, vitals: dict) -> bool:
         always_on = vitals.get("always_on") if isinstance(vitals.get("always_on"), dict) else {}
