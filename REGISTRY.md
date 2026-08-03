@@ -14,12 +14,16 @@
 
 ## 现在在哪里(2026-08-03)
 - #538/#545 已把 Cloud Dashboard 默认 read-model 从约 27 秒、约 6 MB
-  降到 1.08–2.08 秒、约 589 KB；当前页面所需核心事实仍为同一 DAY 计划、
-  runtime running、38 accepted、0 position、对账 ok，完整 Supervisor 审计
-  改为点击标签后按需读取。发布现场同时证明更深的 #546：随历史增长，
-  lease 内每个 WAL/observation 写入仍重复全量校验，导致自然 live-tick 达
-  41 秒并有一拍撞 52 秒 watchdog。#546 正在将全量校验收敛为每 lease 一次，
-  后续每次 append 以精确 inode/size/mtime 与链尾增量验证；历史和安全闸不变。
+  降到 1.08–2.08 秒、约 589 KB；公网恢复为 Cloudflare Access 302，Dashboard
+  本地读取持续 HTTP 200，主机 load 约 0.3、可用内存约 1.0 GiB、swap=0。
+  #546/#547 已部署精确 clean source
+  `main@8daa0f4e51036f35e1ee79fa62c55955053f7858`，把 Supervisor
+  `cycle_decision` 从约 14.5 秒降至约 2.7 秒，前三个自然 tick 总耗时为
+  10.25/9.77/9.74 秒且控制动作均为 0。现场随后捕获一轮 26.74 秒 tick，
+  唯一突增阶段是 `protective_sweep=21.87s`：它每分钟重新把当前周期全部
+  已处理 K 线送入权威引擎与 shadow audit。#548 正在用逐事件终态证据消除
+  该重复工作；只持久未处理、证据缺失/损坏及 DCA 生命周期一律不跳过，
+  所有保护单与行情安全闸保持原语义。
 - #537 已部署到 Cloud Paper 精确 source
   `main@cdaadafd09c0835109170f075a67848c48fe7b30`：Cloud health 不再因
   runtime=`running` 提前跳过 Supervisor，运行中出现 structural episode

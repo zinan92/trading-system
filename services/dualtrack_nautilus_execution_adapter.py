@@ -440,6 +440,38 @@ class NautilusExecutionAdapter:
         result = self.flush(cycle_id)
         return {**result, "event_id": event_id}
 
+    def processed_market_event_ids(self, cycle_id: str) -> frozenset[str]:
+        """Return exact terminal event identities from durable engine evidence.
+
+        This is deliberately not a timestamp watermark.  A missing,
+        malformed, duplicated, or non-terminal row must not let a caller skip
+        an event whose execution outcome is unresolved.
+        """
+
+        processed_ids = _verified_market_event_ids(
+            load_json(self._processed_events_path(cycle_id)),
+            cycle_id=cycle_id,
+            evidence_kind="processed",
+        )
+        persisted_ids = self.persisted_market_event_ids(cycle_id)
+        if not processed_ids.issubset(persisted_ids):
+            raise ValueError("processed_market_event_missing_persisted_event")
+        return processed_ids
+
+    def persisted_market_event_ids(self, cycle_id: str) -> frozenset[str]:
+        """Return exact event identities durably present in this namespace."""
+
+        return _verified_market_event_ids(
+            load_json(self._events_path(cycle_id)),
+            cycle_id=cycle_id,
+            evidence_kind="persisted",
+        )
+
+    def settled_market_event_ids(self, cycle_id: str) -> frozenset[str]:
+        """Expose the authoritative terminal set when no wrapper is present."""
+
+        return self.processed_market_event_ids(cycle_id)
+
     def last_market_event(self, cycle_id: str) -> dict[str, Any] | None:
         """Return the latest persisted canonical paper event without replaying it."""
 
@@ -1466,6 +1498,34 @@ def _order_receipt(row: dict[str, Any]) -> dict[str, Any]:
         command.get("requested_quantity") or command.get("quantity") or 0.0
     )
     return receipt
+
+
+def _verified_market_event_ids(
+    rows: list[dict[str, Any]],
+    *,
+    cycle_id: str,
+    evidence_kind: str,
+) -> frozenset[str]:
+    if evidence_kind not in {"persisted", "processed"}:
+        raise ValueError("market_event_evidence_kind_invalid")
+    verified: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError(f"{evidence_kind}_market_event_row_invalid")
+        if str(row.get("cycle_id") or "") != str(cycle_id):
+            raise ValueError(f"{evidence_kind}_market_event_cycle_mismatch")
+        event_id = str(row.get("event_id") or "")
+        if not event_id:
+            raise ValueError(f"{evidence_kind}_market_event_id_missing")
+        if event_id in verified:
+            raise ValueError(f"{evidence_kind}_market_event_duplicate")
+        if evidence_kind == "processed" and str(row.get("disposition") or "") not in {
+            "accepted",
+            "late_ignored",
+        }:
+            raise ValueError("processed_market_event_disposition_invalid")
+        verified.add(event_id)
+    return frozenset(verified)
 
 
 def _market_event_sort_key(row: dict[str, Any]) -> str:

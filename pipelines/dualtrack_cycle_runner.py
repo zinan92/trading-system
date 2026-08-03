@@ -1809,6 +1809,14 @@ class DualTrackCycleRunner:
             "accepted_limit_fills": accepted_limit_fills,
             "accepted_limit_fill_count": len(accepted_limit_fills),
             "processed_events": sum(int(result.get("processed_events") or 0) for _, result in results),
+            "execution_invocation_count": sum(
+                int(result.get("execution_invocation_count") or 0)
+                for _, result in results
+            ),
+            "reused_processed_event_count": sum(
+                int(result.get("reused_processed_event_count") or 0)
+                for _, result in results
+            ),
             "source": next((str(result.get("source") or "") for _, result in reversed(results) if result.get("source")), ""),
             "source_cycle_ids": [cycle_id for cycle_id, _ in results],
             "cycles": [
@@ -1955,9 +1963,30 @@ class DualTrackCycleRunner:
             and runtime.get("strategy_type") == "dca"
             and runtime.get("actual_state") == "running"
         )
+        settled_event_ids: frozenset[str] = frozenset()
+        if not dca_active:
+            settled_resolver = getattr(
+                self.execution,
+                "settled_market_event_ids",
+                None,
+            )
+            if callable(settled_resolver):
+                resolved = settled_resolver(cycle_id)
+                if not isinstance(resolved, (set, frozenset)) or any(
+                    not isinstance(event_id, str) or not event_id
+                    for event_id in resolved
+                ):
+                    raise ValueError("settled_market_event_evidence_invalid")
+                settled_event_ids = frozenset(resolved)
         processed_events = 0
+        execution_invocation_count = 0
+        reused_processed_event_count = 0
         for event in events:
             processed_events += 1
+            if event["event_id"] in settled_event_ids:
+                reused_processed_event_count += 1
+                continue
+            execution_invocation_count += 1
             dca_terminal = False
             if dca_active:
                 dca_result = control.advance_dca_market_event(
@@ -1987,6 +2016,8 @@ class DualTrackCycleRunner:
             "accepted_limit_fills": accepted_limit_fills,
             "accepted_limit_fill_count": len(accepted_limit_fills),
             "processed_events": processed_events,
+            "execution_invocation_count": execution_invocation_count,
+            "reused_processed_event_count": reused_processed_event_count,
             "first_event_ts": events[0].get("event_started_at") or events[0].get("ts_event"),
             "last_event_ts": events[processed_events - 1].get("event_started_at") or events[processed_events - 1].get("ts_event"),
             "source": events[processed_events - 1]["source"],

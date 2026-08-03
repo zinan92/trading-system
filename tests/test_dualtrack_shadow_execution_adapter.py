@@ -14,6 +14,8 @@ class FakeAdapter:
         self.failure = failure
         self.commands: list[dict] = []
         self.events: list[dict] = []
+        self.processed_ids: set[str] = set()
+        self.persisted_ids: set[str] = set()
         self.flush_count = 0
 
     def submit_order(self, command: dict) -> dict:
@@ -26,7 +28,17 @@ class FakeAdapter:
         self.events.append(dict(event))
         if self.failure == "event":
             raise RuntimeError("shadow event failed")
+        event_id = str(event.get("event_id") or "")
+        if event_id:
+            self.persisted_ids.add(event_id)
+            self.processed_ids.add(event_id)
         return {"status": "ok", "event_id": event.get("event_id")}
+
+    def processed_market_event_ids(self, _cycle_id: str) -> frozenset[str]:
+        return frozenset(self.processed_ids)
+
+    def persisted_market_event_ids(self, _cycle_id: str) -> frozenset[str]:
+        return frozenset(self.persisted_ids)
 
     def snapshot(self, cycle_id: str, **_kwargs) -> dict:
         return {
@@ -122,6 +134,32 @@ def test_shadow_failure_is_visible_without_failing_authoritative_result(tmp_path
     assert rows[-1]["error"] == "shadow event failed"
     assert rows[-1]["authoritative_engine"] == "legacy_paper"
     assert rows[-1]["shadow_engine"] == "nautilus_paper"
+
+
+def test_settled_event_ids_require_authority_and_shadow_handoff(
+    tmp_path: Path,
+) -> None:
+    authoritative = FakeAdapter("legacy_paper")
+    shadow = FakeAdapter("nautilus_paper")
+    authoritative.processed_ids.update({"market-1", "market-2"})
+    shadow.persisted_ids.add("market-1")
+    adapter = ShadowingExecutionEngineAdapter(
+        tmp_path / "outputs",
+        authoritative=authoritative,
+        shadow=shadow,
+    )
+
+    assert adapter.settled_market_event_ids("2026-07-16_DAY") == frozenset(
+        {"market-1"}
+    )
+
+    second = {**_event(), "event_id": "market-2"}
+    adapter.process_market_event(second)
+
+    assert shadow.events == [second]
+    assert adapter.settled_market_event_ids("2026-07-16_DAY") == frozenset(
+        {"market-1", "market-2"}
+    )
 
 
 def test_missing_shadow_runtime_is_explicit_but_authoritative_stays_available(tmp_path: Path) -> None:
