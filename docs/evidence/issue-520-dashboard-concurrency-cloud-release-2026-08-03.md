@@ -100,8 +100,10 @@ The pre- and post-release authoritative read-model facts matched:
 
 After release, Dashboard, access gateway, cloudflared, and datafeed were active;
 all five Cloud timers were active. Public HTTPS returned the expected Cloudflare
-Access `302` challenge rather than Cloudflare `530/1033`, proving that the tunnel
-was reachable without bypassing Access.
+Access `302` challenge rather than the previously observed Cloudflare `530/1033`;
+this proves edge and Access routing only. Tunnel connectivity is independently
+proved by cloudflared registering four QUIC connections and recording no new
+connection errors after the release.
 
 ## Remaining boundary
 
