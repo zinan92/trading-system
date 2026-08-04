@@ -13,6 +13,17 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-04)
+- #565 introduces an immutable `paper-strategy-policy-boundary-v2` for an
+  explicit, canonical Paper Grid direction set. The existing v1
+  `direction=neutral` meaning and every prior record/digest remain unchanged;
+  v2 persists membership comparison rows and still rejects DCA, numeric
+  overflow, malformed direction sets, forged actors, and unknown schemas before
+  plan/order creation. V2 accepts no caller-supplied limits or expiry: it copies
+  both from the current exact v1 binding and persists that immutable inheritance
+  proof. Policy/binding authoring no longer depends on unrelated
+  market/account reads, but code availability is not authorization or
+  activation: the Cloud remains on its exact v1 binding until Park-authenticated
+  v2 append plus a separate SHA/boot-gated configuration release.
 - #560 已部署为精确 clean
   `main@3a9d06d5e870597dc319ce9a2b97fc9f8ad49ea3`，tree
   `d41fa1f8bf24d6b6afd5b9e8895bc92b757e7705`。Cloud preflight、provider
