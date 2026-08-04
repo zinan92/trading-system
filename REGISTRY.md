@@ -12,7 +12,20 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-03)
+## 现在在哪里(2026-08-04)
+- 2026-08-04 DAY 的部署前 Cloud Paper 基线为 Grid
+  `strategy-plan-2026-08-04_DAY-2-2060ce1e` v2、runtime=`running/running`、
+  34 个 accepted orders + 2 个 exact open positions = 36 个授权逻辑格位，
+  100 fills、行情 `ready/fresh/trusted`、双层对账通过，Supervisor 为
+  `adopted_existing` 且无 blocker；五个 timer 均 enabled/active。本轮没有
+  调用任何交易控制。
+- #556 的精确 Supervisor history allowlist 已合入
+  `main@c67ae67b39b658d9d5f6c71011bd98b899f19156`，但尚未部署。云端只读实测
+  证明单补 allowlist 仍会失败：完整当前周期审计为 11,822,632 bytes，现网
+  8,000,000-byte 网关会截断；当前实现还额外重算 24h/7d utilization，耗时
+  98.379s，而完整当前周期链校验与投影仅 7.006s。#558 正在保留全部不可变
+  history 与哈希的前提下移除这次无关重算，并只给精确 history GET 独立的
+  90s/64MiB 信封；其他读取、控制闸、订单、持仓与 live 路径均不变。
 - 2026-08-04 11:59 CST 的 authenticated Dashboard 只读核验确认当前 DAY
   Grid 仍为 `running`，36 个逻辑格位由 35 个 accepted orders 与 1 个 exact
   open position 唯一代表，行情为实时可信，Supervisor 为

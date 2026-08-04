@@ -1,5 +1,40 @@
 # Decision Log
 
+## Complete Supervisor history gets a narrow transport envelope (Issue #558)
+
+Date: 2026-08-04
+
+### Decision
+
+- Keep `/api/trading-system/supervisor-history` as the complete immutable
+  current-cycle audit surface. Explicit history reads validate and return every
+  event, observation, pre-intent attempt and start attempt with the existing
+  hashes; they no longer rebuild the unrelated rolling 24-hour/7-day
+  utilization projection.
+- Version that narrower payload honestly as
+  `paper-supervisor-history-response-v2`, containing
+  `paper-supervisor-current-cycle-audit-v1`. The normal read model retains its
+  utilization projection and existing schema.
+- Give only the exact authenticated history GET a 90-second/64-MiB upstream
+  envelope. Every other GET remains at 20 seconds/8,000,000 bytes. Read one byte
+  beyond the selected cap and return an explicit 502 on overflow, so a partial
+  JSON document can never be forwarded as a successful response.
+
+### Gotchas
+
+- The production current-cycle audit itself took 6.946 seconds to validate and
+  project, while rebuilding utilization took 98.379 seconds. Raising the global
+  timeout would hide the accidental extra work and weaken every read path.
+- The same production response was 11,822,632 bytes uncompressed but 793,314
+  bytes with gzip. Compression helps the public hop only after the gateway has
+  read the complete loopback response, so the upstream byte cap must still fit
+  the uncompressed body.
+- Adding the route to the allowlist alone changes the observed failure from 404
+  to timeout or truncation. Route authorization, bounded computation and
+  complete transport are three separate acceptance conditions.
+- This decision does not delete, compact or rewrite any historical audit row,
+  and it does not touch control, Paper execution or live-money paths.
+
 ## Runtime running never masks Supervisor structural health (Issue #537)
 
 Date: 2026-08-03

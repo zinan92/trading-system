@@ -133,7 +133,7 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
         },
     }
     history_response = {
-        "schema_version": "paper-supervisor-history-response-v1",
+        "schema_version": "paper-supervisor-history-response-v2",
         "cycle_id": "2026-07-18_DAY",
         "completeness": {"status": "complete"},
         "supervisor": full_supervisor,
