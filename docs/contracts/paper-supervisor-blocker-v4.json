@@ -5,6 +5,15 @@
     "machine_code": "unknown_blocker",
     "classification": "structural"
   },
+  "typed_evidence": {
+    "recommendation_provider_failure": {
+      "exception_type": "RecommendationProviderError",
+      "exception_code_field": "code",
+      "receipt_schema": "strategy-ai-evaluation-v2",
+      "receipt_code_path": "output.machine_code",
+      "legacy_text_recovery_allowed": false
+    }
+  },
   "transient": [
     "prepared_start_market_moved",
     "prepared_start_expired",

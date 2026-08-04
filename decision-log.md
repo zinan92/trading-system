@@ -13907,3 +13907,43 @@ auditable datafeed port; broker execution remains a separate port.
   and rejection-tombstone identity reuse.
 - The clearance tick executes zero control actions. A later fresh tick creates
   one new proposal/preview/prepared-start chain and one exact order set.
+
+# 2026-08-05 — Preserve recommendation provider codes end to end (#567)
+
+## Decision
+
+- Treat only `RecommendationProviderError.code` as typed provider evidence.
+  Persist that exact value separately from human-readable error text at
+  `strategy-ai-evaluation-v2.output.machine_code` before re-raising the same
+  exception through the Dashboard/control boundary.
+- Feed the unchanged code into the existing exact Supervisor whitelist. The
+  three already-approved transient provider codes keep the existing episode
+  backoff/probe behavior; no classifier entry or retry budget changes.
+- Make the legacy `unknown_blocker` provider recheck read only and typed. It
+  requires a current source-bound provider-readiness receipt and a later failed
+  evaluation receipt whose explicit machine code is on the exact recoverable
+  set. Missing or malformed evidence stays blocked.
+
+## Gotchas
+
+- `RecommendationProviderError` subclasses `RuntimeError`; a broad runtime
+  catch placed first silently removes `.code` and turns a known transient into
+  `unknown_blocker`. The typed catch must precede every compatibility wrapper.
+- An error string beginning with a known code is still prose. Splitting on a
+  colon, matching a substring, or accepting a regex would let provider wording
+  select retry authority and violate the fail-closed classifier contract.
+- Recording `error_type=RecommendationProviderError` is not sufficient. The
+  stable code needs its own receipt field so text can change without changing
+  classification and legacy text-only receipts remain visibly untyped.
+- A fifth provider failure is an alert and a transition to 30-minute probing,
+  not a terminal structural blocker. It still occurs before `start_intent` and
+  creates no plan or order.
+
+## Verification
+
+- Focused tests vary human detail under one stable typed code, embed known code
+  words in an untyped runtime error, reject empty/unknown codes and legacy
+  text-only receipts, and prove exact typed legacy recheck behavior.
+- Five consecutive typed provider timeouts reach `probing` with the existing
+  `episode_short_budget_exhausted` alert while plan/control/order side effects
+  and durable start-intent count remain zero.

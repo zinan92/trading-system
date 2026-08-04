@@ -2954,9 +2954,19 @@ class PaperSupervisor:
         latest = max(evaluations, key=lambda row: str(row.get("evaluated_at") or ""))
         if str(latest.get("evaluated_at") or "") < str(blocked_at or ""):
             return False
-        error = str((latest.get("output") or {}).get("error") or "")
-        code = error.split(":", 1)[0]
-        return code in RECOVERABLE_PROVIDER_CODES
+        output = latest.get("output")
+        if (
+            latest.get("schema_version")
+            != "strategy-ai-evaluation-v2"
+            or latest.get("status") != "failed"
+            or not isinstance(output, Mapping)
+        ):
+            return False
+        code = output.get("machine_code")
+        return (
+            isinstance(code, str)
+            and code in RECOVERABLE_PROVIDER_CODES
+        )
 
     def _pre_intent_deadline(
         self,

@@ -195,6 +195,11 @@ class StrategyRecommendationService:
             receipt["output"] = {
                 "raw_model_response": self._last_raw_model_response,
                 "error_type": type(exc).__name__,
+                "machine_code": (
+                    exc.code
+                    if isinstance(exc, RecommendationProviderError)
+                    else None
+                ),
                 "error": str(exc),
             }
             self.persist_receipt(receipt)
@@ -252,7 +257,6 @@ class StrategyRecommendationService:
         net_move = abs(closes[-1] - closes[0])
         path = sum(abs(right - left) for left, right in zip(closes, closes[1:]))
         efficiency = net_move / path if path else 0.0
-        recent = bars[-20:]
         recent_closes = closes[-20:]
         recent_move = abs(recent_closes[-1] - recent_closes[0])
         recent_path = sum(abs(right - left) for left, right in zip(recent_closes, recent_closes[1:]))

@@ -80,6 +80,17 @@ An unlisted, malformed or newly observed code is always
 an external provider failure. They are never inferred from the same generic
 timeout exception.
 
+Recommendation-provider classification has one typed chain. The provider
+raises `RecommendationProviderError.code`; the failed
+`strategy-ai-evaluation-v2` receipt persists the same exact value at
+`output.machine_code`; the Dashboard/control boundary preserves the exception;
+and the Supervisor submits that exact code to the whitelist. Changing human
+error text cannot change classification. A plain `RuntimeError`, a missing or
+malformed code, and a legacy receipt containing only `output.error` are never
+parsed or promoted: they remain `unknown_blocker`/structural. The legacy
+structural recheck likewise consumes only the typed receipt field plus a valid
+source-bound provider-readiness receipt and executes no AI or control action.
+
 ### Structural whitelist
 
 | Exact code | Meaning |

@@ -60,7 +60,10 @@ from services.risk_port import (
     normalize_manual_order_command,
     require_risk_permission,
 )
-from services.strategy_recommendation import StrategyRecommendationService
+from services.strategy_recommendation import (
+    RecommendationProviderError,
+    StrategyRecommendationService,
+)
 from services.strategy_shadow import load_strategy_shadow_runs, load_strategy_shadow_runs_for_cycles
 from services.strategy_shadow_promotion import evaluate_grid_shadow_promotion
 from services.safe_repair_queue import SafeRepairQueue
@@ -524,6 +527,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         try:
             payload = self._read_json_body(max_bytes=64_000)
             self._write_json(200, build_strategy_console_control_response(payload, actor=self._control_actor()))
+        except RecommendationProviderError as exc:
+            self._write_error(
+                503,
+                exc.code or "unknown_blocker",
+                str(exc),
+            )
         except ValueError as exc:
             self._write_error(400, "invalid_strategy_console_control", str(exc))
 
@@ -1785,6 +1794,11 @@ def build_strategy_console_control_response(
                 review=review,
                 now=payload.get("as_of"),
             )
+        except RecommendationProviderError:
+            # Preserve the typed provider code for the in-process Supervisor
+            # classifier and for the HTTP boundary above.  Only this explicit
+            # exception type is eligible for a provider machine code.
+            raise
         except (OSError, RuntimeError) as exc:
             # Return a structured fail-closed API error instead of dropping the
             # browser connection. Production state remains untouched.

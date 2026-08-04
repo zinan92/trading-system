@@ -46,6 +46,7 @@ from tests.test_strategy_control_plane import (
     proposal,
 )
 from services.strategy_control_plane import StrategyControlPlane
+from services.strategy_recommendation import RecommendationProviderError
 
 
 CYCLE = "2026-07-30_DAY"
@@ -2017,6 +2018,204 @@ def test_missing_rollover_event_and_absent_plan_converge_from_state(
         / "dualtrack"
         / "rollover"
     ).exists()
+
+
+def test_typed_provider_timeout_reaches_probe_mode_without_side_effects(
+    tmp_path: Path,
+) -> None:
+    supervisor, _control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan = {}
+    plane.runtime.update(
+        {
+            "strategy_plan_id": None,
+            "strategy_plan_version": None,
+        }
+    )
+    calls: list[str] = []
+    details = iter(
+        [
+            "first timeout text",
+            "second wording",
+            "third wording",
+            "fourth wording",
+            "fifth wording",
+        ]
+    )
+
+    def provider_failure(action: str, _payload: dict) -> dict:
+        calls.append(action)
+        assert action == "refresh_recommendation"
+        raise RecommendationProviderError(
+            "strategy_recommendation_provider_timeout",
+            next(details),
+        )
+
+    supervisor.control = provider_failure
+    observed_at = T0
+    supervisor.store.now = lambda: observed_at
+    for index in range(5):
+        result = supervisor.converge_once(
+            CYCLE,
+            observed_at=observed_at.isoformat(),
+            heartbeat=_heartbeat(observed_at),
+        )
+        assert result["machine_code"] == (
+            "strategy_recommendation_provider_timeout"
+        )
+        assert result["classification"] == "transient"
+        assert result["control_actions_executed"] == 0
+        state = supervisor.store.episode_state(CYCLE)
+        assert state is not None
+        if index < 4:
+            assert state["mode"] == "backing_off"
+            observed_at = datetime.fromisoformat(
+                state["episode"]["next_attempt_at"]
+            )
+
+    assert state["mode"] == "probing"
+    assert state["alert_required"] is True
+    assert state["episode"]["consecutive_transient_failures"] == 5
+    assert state["events"][-1]["event_label"] == (
+        "episode_short_budget_exhausted"
+    )
+    assert calls == ["refresh_recommendation"] * 5
+    assert supervisor.store.current_state(CYCLE)["attempt_count"] == 0
+    assert supervisor.execution.orders == []
+    assert plane.active_plan(CYCLE) == {}
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError(
+            "strategy_recommendation_provider_timeout: untyped prose"
+        ),
+        RecommendationProviderError(
+            "",
+            "strategy_recommendation_provider_timeout",
+        ),
+    ],
+    ids=["untyped-known-words", "malformed-typed-code"],
+)
+def test_untyped_or_malformed_provider_failure_stays_structural(
+    tmp_path: Path,
+    failure: BaseException,
+) -> None:
+    supervisor, _control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan = {}
+    plane.runtime.update(
+        {
+            "strategy_plan_id": None,
+            "strategy_plan_version": None,
+        }
+    )
+    calls: list[str] = []
+
+    def fail(action: str, _payload: dict) -> dict:
+        calls.append(action)
+        raise failure
+
+    supervisor.control = fail
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+
+    assert result["status"] == "blocked_structural"
+    assert result["machine_code"] == "unknown_blocker"
+    assert result["control_actions_executed"] == 0
+    assert calls == ["refresh_recommendation"]
+    assert supervisor.store.current_state(CYCLE)["attempt_count"] == 0
+    assert supervisor.execution.orders == []
+    assert plane.active_plan(CYCLE) == {}
+
+
+@pytest.mark.parametrize(
+    ("receipt", "expected"),
+    [
+        (
+            {
+                "schema_version": "strategy-ai-evaluation-v2",
+                "status": "failed",
+                "output": {
+                    "machine_code": (
+                        "strategy_recommendation_provider_timeout"
+                    ),
+                    "error": "completely unrelated human text",
+                },
+            },
+            True,
+        ),
+        (
+            {
+                "schema_version": "strategy-ai-evaluation-v2",
+                "status": "failed",
+                "output": {
+                    "error": (
+                        "strategy_recommendation_provider_timeout: legacy prose"
+                    )
+                },
+            },
+            False,
+        ),
+        (
+            {
+                "schema_version": "strategy-ai-evaluation-v2",
+                "status": "failed",
+                "output": {
+                    "machine_code": "not_on_the_whitelist",
+                    "error": "strategy_recommendation_provider_timeout",
+                },
+            },
+            False,
+        ),
+    ],
+    ids=["typed", "legacy-prose-only", "unknown-code"],
+)
+def test_provider_recheck_consumes_only_typed_receipt_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    receipt: dict,
+    expected: bool,
+) -> None:
+    supervisor, _control, _plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    evaluated_at = (T0 + timedelta(seconds=1)).isoformat()
+    stored = {
+        "evaluation_id": "ai-eval-provider-recheck",
+        "cycle_id": CYCLE,
+        "evaluated_at": evaluated_at,
+        **deepcopy(receipt),
+    }
+    path = (
+        tmp_path
+        / "outputs"
+        / "dualtrack"
+        / "strategy_control"
+        / "evaluations"
+        / CYCLE
+        / "provider-recheck.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([stored]), encoding="utf-8")
+    monkeypatch.setattr(
+        "services.paper_supervisor.CloudAIProviderReadiness.verify",
+        lambda _self: {"ok": True},
+    )
+
+    assert supervisor._provider_failure_cleared(
+        CYCLE,
+        blocked_at=T0.isoformat(),
+    ) is expected
 
 
 @pytest.mark.parametrize(
