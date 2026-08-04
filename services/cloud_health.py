@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import os
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from services.datafeed_market_repository import DatafeedMarketRepository
 from services.cycle_decision import CycleDecisionLedger
+from services.datafeed_market_repository import DatafeedMarketRepository
 from services.dualtrack_clock import cycle_window
 from services.dualtrack_config import dualtrack_config
 from services.journal_store import load_json, write_json
-
 
 BJ_TZ = ZoneInfo("Asia/Shanghai")
 TICK_MAX_AGE_SECONDS = 180.0
@@ -266,12 +265,15 @@ class CloudPaperHealth:
                 evidence={"cycle_id": cycle_id, "active_plan": False},
             )
         try:
-            from services.paper_supervisor_read_model import build_paper_supervisor_read_model
+            from services.paper_supervisor_read_model import (
+                build_paper_supervisor_read_model,
+            )
 
             model = build_paper_supervisor_read_model(
                 self.output_root,
                 cycle_id=cycle_id,
                 as_of=now,
+                persist_utilization_index=True,
             )
         except Exception as exc:  # noqa: BLE001 - health fails closed.
             return _check(

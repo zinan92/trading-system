@@ -3,11 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.cloud_health import CloudPaperHealth, _hash_json
-from services.cloud_health import health_severity
+from services.cloud_health import CloudPaperHealth, _hash_json, health_severity
 from services.cycle_decision import CycleDecisionLedger
 from services.journal_store import write_json
-
 
 NOW = datetime(2026, 7, 28, 2, 0, tzinfo=timezone.utc)
 SHA = "a" * 40
@@ -410,9 +408,11 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
         "services.cloud_health.dualtrack_config",
         lambda: {"convergence": {"mode": "paper_supervisor"}},
     )
-    monkeypatch.setattr(
-        "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
-        lambda *_args, **_kwargs: {
+    read_model_calls: list[dict] = []
+
+    def supervisor_read_model(*_args, **kwargs) -> dict:
+        read_model_calls.append(dict(kwargs))
+        return {
             "current_cycle": {
                 "attempt_count": 4,
                 "start_intent_count": 1,
@@ -434,7 +434,11 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
                     }
                 }
             },
-        },
+        }
+
+    monkeypatch.setattr(
+        "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
+        supervisor_read_model,
     )
 
     result = health.run()
@@ -449,6 +453,13 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
     assert supervisor["evidence"]["runtime_utilization"]["windows"][
         "24h"
     ]["conservative_percentage"] == 90
+    assert read_model_calls == [
+        {
+            "cycle_id": "2026-07-28_DAY",
+            "as_of": NOW,
+            "persist_utilization_index": True,
+        }
+    ]
 
 
 def test_scheduler_owner_mismatch_blocks_cloud_health(

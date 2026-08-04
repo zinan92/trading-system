@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -21,7 +23,7 @@ from services.paper_supervisor_read_model import (
     build_paper_supervisor_utilization,
 )
 from services.paper_supervisor_store import PaperSupervisorStore
-
+from services.paper_supervisor_utilization_index import _compact_points
 
 UTC = timezone.utc
 AS_OF = datetime(2026, 7, 31, 12, tzinfo=UTC)
@@ -159,6 +161,43 @@ def _rows(
     return rows
 
 
+def _seed_utilization_cycle(
+    output_root: Path,
+    *observed_at: datetime,
+) -> Path:
+    clock = [observed_at[0]]
+    store = PaperSupervisorStore(output_root, now=lambda: clock[0])
+    with store.try_lease(CYCLE, holder_id="utilization-index-seed") as lease:
+        assert lease is not None
+        for observed in observed_at:
+            clock[0] = observed
+            finalized = _evidence(observed)
+            store.append_observation(
+                lease,
+                {
+                    "running_evidence": {
+                        key: value
+                        for key, value in finalized.items()
+                        if key
+                        not in {
+                            "persisted_at",
+                            "running_proven",
+                            "proof_status",
+                            "expected_slot_digest",
+                        }
+                    }
+                },
+            )
+    return (
+        output_root
+        / "dualtrack"
+        / "supervisor"
+        / "convergence"
+        / "utilization_indexes"
+        / f"{CYCLE}.json"
+    )
+
+
 def test_utilization_counts_only_adjacent_same_cycle_proof() -> None:
     start = AS_OF - timedelta(hours=24)
     result = _utilization_window(
@@ -212,6 +251,51 @@ def test_incomplete_window_stays_insufficient_without_head_extrapolation() -> No
     assert result["percentage"] is None
     assert result["conservative_percentage"] < 100
     assert "window_head_missing" in result["insufficient_reasons"]
+
+
+def test_compact_points_preserve_complete_gap_and_regression_results() -> None:
+    start = AS_OF - timedelta(minutes=10)
+    complete = _rows(start, AS_OF)
+    gap = _rows(start, AS_OF)
+    del gap[3]
+    regression = _rows(start, AS_OF)
+    regression[3]["payload"]["running_evidence"] = _evidence(
+        start + timedelta(minutes=3)
+    )
+
+    for rows in (complete, gap, regression):
+        full = _utilization_window(
+            rows,
+            start=start,
+            end=AS_OF,
+            source_errors=[],
+        )
+        compact = _utilization_window(
+            _compact_points(CYCLE, rows),
+            start=start,
+            end=AS_OF,
+            source_errors=[],
+        )
+        assert compact == full
+
+    assert _utilization_window(
+        _compact_points(CYCLE, complete),
+        start=start,
+        end=AS_OF,
+        source_errors=[],
+    )["evidence_status"] == "complete"
+    assert "interior_evidence_gap" in _utilization_window(
+        _compact_points(CYCLE, gap),
+        start=start,
+        end=AS_OF,
+        source_errors=[],
+    )["insufficient_reasons"]
+    assert "evidence_time_regression" in _utilization_window(
+        _compact_points(CYCLE, regression),
+        start=start,
+        end=AS_OF,
+        source_errors=[],
+    )["insufficient_reasons"]
 
 
 def test_control_events_never_create_running_utilization(
@@ -286,6 +370,215 @@ def test_utilization_uses_observation_snapshot_reader(
 
     assert calls == [CYCLE]
     assert result["windows"]["24h"]["evidence_status"] == "insufficient"
+
+
+def test_source_bound_utilization_index_matches_full_rebuild_and_reuses(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    index_path = _seed_utilization_cycle(
+        tmp_path,
+        AS_OF - timedelta(minutes=4),
+        AS_OF - timedelta(minutes=2),
+        AS_OF,
+    )
+    monkeypatch.setattr(
+        supervisor_read_model_module,
+        "_cycle_ids_for_window",
+        lambda _start, _end: [CYCLE],
+    )
+
+    uncached = build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+    )
+    first = build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+        persist_utilization_index=True,
+    )
+
+    assert first == uncached
+    stored = json.loads(index_path.read_text(encoding="utf-8"))
+    assert stored["source_identity"]["observations"]["present"] is True
+    assert len(stored["source_identity"]["observations"]["sha256"]) == 64
+    assert "authorized_commands" not in index_path.read_text(
+        encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        PaperSupervisorStore,
+        "read_cycle_observation_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact source-bound index must be reused")
+        ),
+    )
+    second = build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+        persist_utilization_index=True,
+    )
+
+    assert second == uncached
+
+
+def test_utilization_index_rebuilds_after_source_or_index_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    index_path = _seed_utilization_cycle(
+        tmp_path,
+        AS_OF - timedelta(minutes=4),
+        AS_OF - timedelta(minutes=2),
+    )
+    monkeypatch.setattr(
+        supervisor_read_model_module,
+        "_cycle_ids_for_window",
+        lambda _start, _end: [CYCLE],
+    )
+    build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+        persist_utilization_index=True,
+    )
+    original_reader = PaperSupervisorStore.read_cycle_observation_snapshot
+    reads: list[str] = []
+
+    def counted_reader(
+        store: PaperSupervisorStore,
+        cycle_id: str,
+    ) -> list[dict]:
+        reads.append(cycle_id)
+        return original_reader(store, cycle_id)
+
+    monkeypatch.setattr(
+        PaperSupervisorStore,
+        "read_cycle_observation_snapshot",
+        counted_reader,
+    )
+    clock = [AS_OF]
+    store = PaperSupervisorStore(tmp_path, now=lambda: clock[0])
+    with store.try_lease(CYCLE, holder_id="utilization-index-append") as lease:
+        assert lease is not None
+        finalized = _evidence(AS_OF)
+        store.append_observation(
+            lease,
+            {
+                "running_evidence": {
+                    key: value
+                    for key, value in finalized.items()
+                    if key
+                    not in {
+                        "persisted_at",
+                        "running_proven",
+                        "proof_status",
+                        "expected_slot_digest",
+                    }
+                }
+            },
+        )
+
+    changed = build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+        persist_utilization_index=True,
+    )
+    assert reads == [CYCLE]
+    assert changed["windows"]["24h"]["observation_count"] == 3
+
+    index_path.write_text('{"truncated":', encoding="utf-8")
+    rebuilt = build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+        persist_utilization_index=True,
+    )
+    assert reads == [CYCLE, CYCLE]
+    assert rebuilt == changed
+    assert json.loads(index_path.read_text(encoding="utf-8"))[
+        "schema_version"
+    ] == "paper-supervisor-utilization-index-v1"
+
+
+def test_utilization_index_never_hides_corrupt_authoritative_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _seed_utilization_cycle(
+        tmp_path,
+        AS_OF - timedelta(minutes=2),
+        AS_OF,
+    )
+    monkeypatch.setattr(
+        supervisor_read_model_module,
+        "_cycle_ids_for_window",
+        lambda _start, _end: [CYCLE],
+    )
+    build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+        persist_utilization_index=True,
+    )
+    observations_path = (
+        tmp_path
+        / "dualtrack"
+        / "supervisor"
+        / "convergence"
+        / "observations"
+        / f"{CYCLE}.jsonl"
+    )
+    original = observations_path.read_text(encoding="utf-8")
+    observations_path.write_text(
+        original.replace('"running_proven":true', '"running_proven":false', 1),
+        encoding="utf-8",
+    )
+
+    result = build_paper_supervisor_utilization(
+        tmp_path,
+        as_of=AS_OF,
+        persist_utilization_index=True,
+    )
+
+    assert result["windows"]["24h"]["evidence_status"] == "insufficient"
+    assert result["windows"]["24h"]["source_errors"] == [
+        {
+            "cycle_id": CYCLE,
+            "machine_code": "attempt_store_corrupt",
+        }
+    ]
+
+
+def test_concurrent_utilization_index_builders_publish_one_valid_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    index_path = _seed_utilization_cycle(
+        tmp_path,
+        AS_OF - timedelta(minutes=4),
+        AS_OF - timedelta(minutes=2),
+        AS_OF,
+    )
+    monkeypatch.setattr(
+        supervisor_read_model_module,
+        "_cycle_ids_for_window",
+        lambda _start, _end: [CYCLE],
+    )
+
+    def build() -> dict:
+        return build_paper_supervisor_utilization(
+            tmp_path,
+            as_of=AS_OF,
+            persist_utilization_index=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _value: build(), range(4)))
+
+    assert all(result == results[0] for result in results)
+    stored = json.loads(index_path.read_text(encoding="utf-8"))
+    assert stored["schema_version"] == (
+        "paper-supervisor-utilization-index-v1"
+    )
+    assert len(stored["points"]) == 3
 
 
 def test_current_cycle_exposes_complete_immutable_history(

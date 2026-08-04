@@ -19,13 +19,22 @@
   100 fills、行情 `ready/fresh/trusted`、双层对账通过，Supervisor 为
   `adopted_existing` 且无 blocker；五个 timer 均 enabled/active。本轮没有
   调用任何交易控制。
-- #556 的精确 Supervisor history allowlist 已合入
-  `main@c67ae67b39b658d9d5f6c71011bd98b899f19156`，但尚未部署。云端只读实测
-  证明单补 allowlist 仍会失败：完整当前周期审计为 11,822,632 bytes，现网
-  8,000,000-byte 网关会截断；当前实现还额外重算 24h/7d utilization，耗时
-  98.379s，而完整当前周期链校验与投影仅 7.006s。#558 正在保留全部不可变
-  history 与哈希的前提下移除这次无关重算，并只给精确 history GET 独立的
-  90s/64MiB 信封；其他读取、控制闸、订单、持仓与 live 路径均不变。
+- #558/#559 已部署为精确 clean
+  `main@58fd8753261ca06df7c21e9c4c237978176039a9`：普通 read-model 为
+  HTTP 200 / 2.134s / 581,972 bytes，完整当前周期 Supervisor 审计为
+  HTTP 200 / 8.505s，解压后 14,521,254 bytes，938/938 events、234/234
+  observations、234 attempts、1 start intent，且不再重算 utilization。
+  部署前后 2026-08-04 DAY 仍为同一 Grid plan v2、`running/running`、
+  34 accepted open orders + 2 exact open positions = 36 个逻辑格位、100 fills、
+  行情 fresh/trusted、执行与会计对账通过、控制审计均为 354。
+- #559 发布后继续只读验证发现独立的 #560：Cloud health 每次仍对 7 天
+  4,187 条 Supervisor observation 重做完整运行率投影，现网耗时 90.989s；
+  近期单周期 observation 文件已增长到 32.96 MiB，而 dead-man service 的
+  硬超时仅 30s，因此公网 health 与唯一外部告警都会超时。#560 正在加入由
+  event/observation 完整 SHA-256 绑定的可丢弃紧凑索引；缓存 miss 仍完整验签，
+  任一源字节或索引变化都回源重建，24h/7d 保守算法、不可变历史、交易控制与
+  全部安全闸均不变。未拿到 Cloud HTTP 200、dead-man 实投递及 Paper 前后
+  逐字段一致证据前，不得称该问题完成。
 - 2026-08-04 11:59 CST 的 authenticated Dashboard 只读核验确认当前 DAY
   Grid 仍为 `running`，36 个逻辑格位由 35 个 accepted orders 与 1 个 exact
   open position 唯一代表，行情为实时可信，Supervisor 为
