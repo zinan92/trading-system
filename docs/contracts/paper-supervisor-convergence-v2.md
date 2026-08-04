@@ -191,6 +191,56 @@ Any other non-numeric value, omission, or malformed sentinel remains
 authoritative plan/order cardinality checks, execution risk policy, dangerous
 start cap, and all existing safety gates remain unchanged.
 
+### Explicit Paper Grid direction set (Issue #565 amendment)
+
+Park may append an immutable `paper-strategy-policy-boundary-v2` whose
+`allowed_directions` is a non-empty canonical subset of `long`, `neutral`, and
+`short`. The persisted order is always `long`, then `neutral`, then `short`;
+duplicates, reordered values, scalar values, wildcards, unknown values, an
+empty set, or a v2 record that also contains the v1 `direction` field are
+`outer_strategy_policy_invalid`.
+
+The v1 schema remains an exact single-direction authorization. In particular,
+v1 `direction=neutral` never means all directions and no v1 record, digest,
+binding, envelope, or verification receipt is rewritten. A registry may retain
+both versions, but each row is validated against its own exact schema and one
+invalid row fails the entire registry closed.
+
+The v2 direction comparison is persisted as an explicit membership decision:
+
+```json
+{
+  "field": "direction",
+  "operator": "in",
+  "authorized_limit": ["long", "neutral", "short"],
+  "observed_value": "long",
+  "pass": true
+}
+```
+
+This amendment is Paper Grid only. The candidate envelope still records one
+actual direction, Grid remains the exact strategy type, and DCA/live/real-money
+paths receive no authorization. Every numeric limit, expiry, comparison, market
+trust check, heartbeat check, reconciliation check, manual confirmation,
+prepared-start identity, immutable-fill guard, SHA gate, and boot gate remains
+unchanged.
+
+Policy and binding authoring continue through the verified Park Cloudflare
+Access actor chain. Those two exact authorization actions do not require market
+or account reads because they cannot create a plan or order; all other control
+actions keep their existing data and safety preconditions. Writing a v2 policy
+or binding does not activate it. Activation still requires an exact
+id/version/digest selector in a separate configuration release, with no
+`latest` lookup or fallback.
+
+The v2 authoring request does not accept new `limits` or `expires_at` values.
+It loads the current exact v1 binding, requires an unexpired Paper Grid policy,
+copies its canonical limits and expiry byte-for-byte, and persists that source
+binding/policy id, version, schema and digest in `inherited_from`. Binding v2
+rechecks the same inheritance against the still-current exact v1 selector.
+Missing, stale, changed, corrupt, widened or shortened inheritance fails before
+either append. Only `allowed_directions` may differ.
+
 ## Durable concurrency and start ordering
 
 The store is append-only and crash-safe:

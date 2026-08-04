@@ -22,7 +22,11 @@ from services.cloud_access_gateway import authenticated_access_identity
 from services.journal_store import load_json, write_json
 
 
-OUTER_POLICY_SCHEMA = "paper-strategy-policy-boundary-v1"
+OUTER_POLICY_SCHEMA_V1 = "paper-strategy-policy-boundary-v1"
+OUTER_POLICY_SCHEMA_V2 = "paper-strategy-policy-boundary-v2"
+# Backward-compatible import for callers and tests that name the original
+# single-direction schema.  New records select v2 explicitly in their payload.
+OUTER_POLICY_SCHEMA = OUTER_POLICY_SCHEMA_V1
 OUTER_POLICY_BINDING_SCHEMA = "paper-supervisor-policy-binding-v1"
 ENVELOPE_SCHEMA = "cycle-risk-envelope-v1"
 AUTHORIZATION_KINDS = {
@@ -61,6 +65,7 @@ _DCA_FIELDS = (
     "max_additions",
 )
 _UNBOUNDED = "unbounded"
+_DIRECTION_ORDER = ("long", "neutral", "short")
 _PLAN_SHAPE_FIELDS = (
     "direction",
     "style",
@@ -114,43 +119,110 @@ class CycleRiskEnvelopeStore:
         """Persist a Park-explicit outer strategy boundary exactly once."""
 
         actor_row = _park_actor(actor)
+        schema_version = str(
+            payload.get("schema_version") or OUTER_POLICY_SCHEMA_V1
+        ).strip()
+        v1_fields = {
+            "policy_id",
+            "version",
+            "strategy_type",
+            "direction",
+            "summary",
+            "expires_at",
+            "limits",
+        }
+        v2_fields = {
+            "schema_version",
+            "policy_id",
+            "version",
+            "strategy_type",
+            "allowed_directions",
+            "summary",
+        }
+        if schema_version == OUTER_POLICY_SCHEMA_V1:
+            if frozenset(payload) not in {
+                frozenset(v1_fields),
+                frozenset(v1_fields | {"schema_version"}),
+            }:
+                raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        elif schema_version == OUTER_POLICY_SCHEMA_V2:
+            if set(payload) != v2_fields:
+                raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        else:
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
         strategy_type = _strategy_type(payload)
-        limits = _canonical_limits(
-            strategy_type,
-            payload.get("limits"),
-            code="outer_strategy_policy_invalid",
-            allow_unbounded_grid_count=True,
-        )
+        allowed_directions: list[str] | None = None
+        if (
+            schema_version == OUTER_POLICY_SCHEMA_V2
+            and strategy_type != "grid"
+        ):
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        if schema_version == OUTER_POLICY_SCHEMA_V2:
+            allowed_directions = _allowed_directions(
+                payload.get("allowed_directions"),
+                "outer_strategy_policy_invalid",
+            )
         policy_id = _required_text(payload.get("policy_id"), "outer_strategy_policy_invalid")
         version = _positive_int(payload.get("version"), "outer_strategy_policy_invalid")
         authorized_at = _utc_timestamp(
             self.authorization_clock() if self.authorization_clock else now,
             "outer_strategy_policy_invalid",
         )
-        expires_at = _utc_timestamp(
-            _required_text(
-                payload.get("expires_at"),
+        inherited_from: dict[str, Any] | None = None
+        if schema_version == OUTER_POLICY_SCHEMA_V1:
+            limits = _canonical_limits(
+                strategy_type,
+                payload.get("limits"),
+                code="outer_strategy_policy_invalid",
+                allow_unbounded_grid_count=True,
+            )
+            expires_at = _utc_timestamp(
+                _required_text(
+                    payload.get("expires_at"),
+                    "outer_strategy_policy_invalid",
+                ),
                 "outer_strategy_policy_invalid",
-            ),
-            "outer_strategy_policy_invalid",
-        )
+            )
+        else:
+            source_binding, source_policy = self._load_bound_outer_policy(
+                at=authorized_at
+            )
+            if (
+                source_policy.get("schema_version")
+                != OUTER_POLICY_SCHEMA_V1
+                or str(source_policy.get("strategy_type") or "")
+                != "grid"
+            ):
+                raise CycleRiskEnvelopeError(
+                    "outer_strategy_policy_invalid"
+                )
+            limits = dict(source_policy["limits"])
+            expires_at = str(source_policy["expires_at"])
+            inherited_from = _outer_policy_inheritance_reference(
+                source_binding,
+                source_policy,
+            )
         if _parse_timestamp(expires_at) <= _parse_timestamp(authorized_at):
             raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
         record = {
-            "schema_version": OUTER_POLICY_SCHEMA,
+            "schema_version": schema_version,
             "policy_id": policy_id,
             "version": version,
             "strategy_type": strategy_type,
-            "direction": _direction(
-                payload.get("direction"),
-                "outer_strategy_policy_invalid",
-            ),
             "summary": _required_text(payload.get("summary"), "outer_strategy_policy_invalid"),
             "limits": limits,
             "authorized_at": authorized_at,
             "expires_at": expires_at,
             "actor": actor_row,
         }
+        if schema_version == OUTER_POLICY_SCHEMA_V1:
+            record["direction"] = _direction(
+                payload.get("direction"),
+                "outer_strategy_policy_invalid",
+            )
+        else:
+            record["allowed_directions"] = allowed_directions
+            record["inherited_from"] = inherited_from
         record["policy_digest"] = _digest(record)
         path = self.policy_root / f"{_safe_filename(policy_id)}.json"
         return _append_immutable_record(
@@ -206,6 +278,22 @@ class CycleRiskEnvelopeStore:
         if policy["policy_digest"] != policy_digest:
             raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
         self._require_policy_current(policy, at=bound_at)
+        if policy.get("schema_version") == OUTER_POLICY_SCHEMA_V2:
+            current_binding, current_policy = (
+                self._load_bound_outer_policy(at=bound_at)
+            )
+            if (
+                current_policy.get("schema_version")
+                != OUTER_POLICY_SCHEMA_V1
+                or policy.get("inherited_from")
+                != _outer_policy_inheritance_reference(
+                    current_binding,
+                    current_policy,
+                )
+            ):
+                raise CycleRiskEnvelopeError(
+                    "outer_strategy_policy_invalid"
+                )
         record = {
             "schema_version": OUTER_POLICY_BINDING_SCHEMA,
             "binding_id": binding_id,
@@ -830,8 +918,12 @@ class CycleRiskEnvelopeStore:
         )
         if policy is None:
             raise CycleRiskEnvelopeError("outer_strategy_policy_missing")
+        schema_version = str(policy.get("schema_version") or "")
         if (
-            policy.get("schema_version") != OUTER_POLICY_SCHEMA
+            schema_version not in {
+                OUTER_POLICY_SCHEMA_V1,
+                OUTER_POLICY_SCHEMA_V2,
+            }
             or policy.get("policy_digest")
             != _digest(
                 {
@@ -842,13 +934,86 @@ class CycleRiskEnvelopeStore:
             )
         ):
             raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
-        _strategy_type(policy, "outer_strategy_policy_invalid")
-        _direction(
-            policy.get("direction"),
+        strategy_type = _strategy_type(
+            policy,
             "outer_strategy_policy_invalid",
         )
+        if schema_version == OUTER_POLICY_SCHEMA_V1:
+            _direction(
+                policy.get("direction"),
+                "outer_strategy_policy_invalid",
+            )
+        else:
+            if strategy_type != "grid":
+                raise CycleRiskEnvelopeError(
+                    "outer_strategy_policy_invalid"
+                )
+            _allowed_directions(
+                policy.get("allowed_directions"),
+                "outer_strategy_policy_invalid",
+            )
+            inherited_from = _validate_policy_inheritance_reference(
+                policy.get("inherited_from")
+            )
+            source_binding = self._load_binding_exact(
+                binding_id=inherited_from["binding_id"],
+                binding_version=inherited_from["binding_version"],
+            )
+            if (
+                source_binding["binding_digest"]
+                != inherited_from["binding_digest"]
+                or source_binding["policy_id"]
+                != inherited_from["policy_id"]
+                or source_binding["policy_version"]
+                != inherited_from["policy_version"]
+                or source_binding["policy_digest"]
+                != inherited_from["policy_digest"]
+            ):
+                raise CycleRiskEnvelopeError(
+                    "outer_strategy_policy_invalid"
+                )
+            source_rows = _rows(
+                self.policy_root
+                / f"{_safe_filename(inherited_from['policy_id'])}.json"
+            )
+            _validate_policy_registry(source_rows)
+            source_row = next(
+                (
+                    row
+                    for row in source_rows
+                    if row.get("policy_id")
+                    == inherited_from["policy_id"]
+                    and row.get("version")
+                    == inherited_from["policy_version"]
+                ),
+                None,
+            )
+            if (
+                source_row is None
+                or source_row.get("schema_version")
+                != OUTER_POLICY_SCHEMA_V1
+            ):
+                raise CycleRiskEnvelopeError(
+                    "outer_strategy_policy_invalid"
+                )
+            source_policy = self._load_outer_policy_exact(
+                policy_id=inherited_from["policy_id"],
+                version=inherited_from["policy_version"],
+            )
+            if (
+                source_policy["policy_digest"]
+                != inherited_from["policy_digest"]
+                or source_policy["limits"] != policy.get("limits")
+                or source_policy["expires_at"]
+                != policy.get("expires_at")
+                or source_policy["strategy_type"]
+                != policy.get("strategy_type")
+            ):
+                raise CycleRiskEnvelopeError(
+                    "outer_strategy_policy_invalid"
+                )
         _canonical_limits(
-            str(policy["strategy_type"]),
+            strategy_type,
             policy.get("limits"),
             code="outer_strategy_policy_invalid",
             allow_unbounded_grid_count=True,
@@ -1133,25 +1298,55 @@ def _compare_outer_policy(
     strategy_type: str,
     direction: str,
 ) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    rows.extend(
-        [
-            {
-                "field": "strategy_type",
-                "operator": "==",
-                "authorized_limit": str(outer.get("strategy_type") or ""),
-                "observed_value": strategy_type,
-                "pass": str(outer.get("strategy_type") or "") == strategy_type,
-            },
+    outer_strategy_type = _strategy_type(
+        outer,
+        "outer_strategy_policy_invalid",
+    )
+    rows: list[dict[str, Any]] = [
+        {
+            "field": "strategy_type",
+            "operator": "==",
+            "authorized_limit": outer_strategy_type,
+            "observed_value": strategy_type,
+            "pass": outer_strategy_type == strategy_type,
+        }
+    ]
+    schema_version = str(outer.get("schema_version") or "")
+    if schema_version == OUTER_POLICY_SCHEMA_V1:
+        authorized_direction = _direction(
+            outer.get("direction"),
+            "outer_strategy_policy_invalid",
+        )
+        rows.append(
             {
                 "field": "direction",
                 "operator": "==",
-                "authorized_limit": str(outer.get("direction") or ""),
+                "authorized_limit": authorized_direction,
                 "observed_value": direction,
-                "pass": str(outer.get("direction") or "") == direction,
-            },
-        ]
-    )
+                "pass": authorized_direction == direction,
+            }
+        )
+    elif schema_version == OUTER_POLICY_SCHEMA_V2:
+        allowed_directions = _allowed_directions(
+            outer.get("allowed_directions"),
+            "outer_strategy_policy_invalid",
+        )
+        rows.append(
+            {
+                "field": "direction",
+                "operator": "in",
+                "authorized_limit": allowed_directions,
+                "observed_value": direction,
+                "pass": direction in allowed_directions,
+            }
+        )
+    else:
+        raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+    # A strategy mismatch is already a clean out-of-bound result.  Do not try
+    # to interpret Grid limit keys as DCA keys (or vice versa), which would
+    # incorrectly turn a valid policy into an invalid-policy error.
+    if outer_strategy_type != strategy_type:
+        return rows
     outer_limits = outer.get("limits") if isinstance(outer.get("limits"), Mapping) else {}
     for field in (_GRID_FIELDS if strategy_type == "grid" else _DCA_FIELDS):
         raw_outer_value = outer_limits.get(field)
@@ -1277,6 +1472,21 @@ def _outer_policy_reference(
         "binding_version": binding["binding_version"],
         "binding_digest": binding["binding_digest"],
         "bound_at": binding["bound_at"],
+    }
+
+
+def _outer_policy_inheritance_reference(
+    binding: Mapping[str, Any],
+    policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "binding_id": binding["binding_id"],
+        "binding_version": binding["binding_version"],
+        "binding_digest": binding["binding_digest"],
+        "policy_id": policy["policy_id"],
+        "policy_version": policy["version"],
+        "policy_digest": policy["policy_digest"],
+        "policy_schema_version": policy["schema_version"],
     }
 
 
@@ -1608,7 +1818,7 @@ def _validate_start_verification_registry(
 
 def _validate_policy_registry(rows: list[dict[str, Any]]) -> None:
     identities: set[tuple[str, int]] = set()
-    expected_fields = {
+    v1_fields = {
         "schema_version",
         "policy_id",
         "version",
@@ -1621,8 +1831,20 @@ def _validate_policy_registry(rows: list[dict[str, Any]]) -> None:
         "actor",
         "policy_digest",
     }
+    v2_fields = (v1_fields - {"direction"}) | {
+        "allowed_directions",
+        "inherited_from",
+    }
     for row in rows:
         try:
+            schema_version = str(row.get("schema_version") or "")
+            expected_fields = (
+                v1_fields
+                if schema_version == OUTER_POLICY_SCHEMA_V1
+                else v2_fields
+                if schema_version == OUTER_POLICY_SCHEMA_V2
+                else set()
+            )
             if set(row) != expected_fields:
                 raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
             policy_id = _required_text(
@@ -1638,8 +1860,7 @@ def _validate_policy_registry(rows: list[dict[str, Any]]) -> None:
                 raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
             identities.add(identity)
             if (
-                row.get("schema_version") != OUTER_POLICY_SCHEMA
-                or row.get("policy_digest")
+                row.get("policy_digest")
                 != _digest(
                     {
                         key: value
@@ -1653,10 +1874,23 @@ def _validate_policy_registry(rows: list[dict[str, Any]]) -> None:
                 row,
                 "outer_strategy_policy_invalid",
             )
-            _direction(
-                row.get("direction"),
-                "outer_strategy_policy_invalid",
-            )
+            if schema_version == OUTER_POLICY_SCHEMA_V1:
+                _direction(
+                    row.get("direction"),
+                    "outer_strategy_policy_invalid",
+                )
+            else:
+                if strategy_type != "grid":
+                    raise CycleRiskEnvelopeError(
+                        "outer_strategy_policy_invalid"
+                    )
+                _allowed_directions(
+                    row.get("allowed_directions"),
+                    "outer_strategy_policy_invalid",
+                )
+                _validate_policy_inheritance_reference(
+                    row.get("inherited_from")
+                )
             _required_text(
                 row.get("summary"),
                 "outer_strategy_policy_invalid",
@@ -1856,6 +2090,59 @@ def _direction(value: Any, code: str) -> str:
     if rendered not in {"long", "short", "neutral"}:
         raise CycleRiskEnvelopeError(code)
     return rendered
+
+
+def _allowed_directions(value: Any, code: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise CycleRiskEnvelopeError(code)
+    rendered = [_direction(item, code) for item in value]
+    if len(rendered) != len(set(rendered)):
+        raise CycleRiskEnvelopeError(code)
+    canonical = [
+        direction
+        for direction in _DIRECTION_ORDER
+        if direction in rendered
+    ]
+    if rendered != canonical:
+        raise CycleRiskEnvelopeError(code)
+    return rendered
+
+
+def _validate_policy_inheritance_reference(value: Any) -> dict[str, Any]:
+    code = "outer_strategy_policy_invalid"
+    expected_fields = {
+        "binding_id",
+        "binding_version",
+        "binding_digest",
+        "policy_id",
+        "policy_version",
+        "policy_digest",
+        "policy_schema_version",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise CycleRiskEnvelopeError(code)
+    reference = {
+        "binding_id": _required_text(value.get("binding_id"), code),
+        "binding_version": _positive_int(
+            value.get("binding_version"), code
+        ),
+        "binding_digest": _required_digest(
+            value.get("binding_digest"), code
+        ),
+        "policy_id": _required_text(value.get("policy_id"), code),
+        "policy_version": _positive_int(
+            value.get("policy_version"), code
+        ),
+        "policy_digest": _required_digest(
+            value.get("policy_digest"), code
+        ),
+        "policy_schema_version": _required_text(
+            value.get("policy_schema_version"), code
+        ),
+    }
+    if reference["policy_schema_version"] != OUTER_POLICY_SCHEMA_V1:
+        raise CycleRiskEnvelopeError(code)
+    return reference
 
 
 def _binding_ref_from_environment() -> dict[str, Any] | None:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import pipelines.dashboard_server as dashboard_server
 import services.cycle_risk_envelope as risk_envelope_module
 from services.cycle_risk_envelope import CycleRiskEnvelopeError, CycleRiskEnvelopeStore
 from services.paper_supervisor_classifier import STRUCTURAL, TRANSIENT, classify_blocker
@@ -120,6 +121,18 @@ def _outer_policy_payload(**overrides: object) -> dict:
         "summary": "Park-approved Grid policy boundary",
         "expires_at": "2026-08-30T01:00:00+00:00",
         "limits": _limits(max_notional_per_grid="60"),
+        **overrides,
+    }
+
+
+def _outer_policy_v2_payload(**overrides: object) -> dict:
+    return {
+        "schema_version": "paper-strategy-policy-boundary-v2",
+        "policy_id": "park-grid-policy",
+        "version": 2,
+        "strategy_type": "grid",
+        "allowed_directions": ["long", "neutral", "short"],
+        "summary": "Park-approved Paper Grid direction set",
         **overrides,
     }
 
@@ -298,6 +311,419 @@ def test_ai_envelope_must_be_nested_inside_human_policy(tmp_path: Path, monkeypa
             preview=_preview(),
             now=policy["expires_at"],
         )
+
+
+def test_outer_policy_v2_allows_only_explicit_grid_direction_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    writer = CycleRiskEnvelopeStore(tmp_path)
+    policy_v1 = writer.authorize_outer_policy(
+        payload=_outer_policy_payload(),
+        actor=actor,
+        now="2026-07-30T01:00:00+00:00",
+    )
+    binding_v1 = writer.bind_supervisor_outer_policy(
+        payload=_binding_payload(policy_v1),
+        actor=actor,
+        now="2026-07-30T01:01:00+00:00",
+    )
+    v2_writer = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v1["binding_id"],
+            "binding_version": binding_v1["binding_version"],
+            "binding_digest": binding_v1["binding_digest"],
+        },
+    )
+    policy_v2 = v2_writer.authorize_outer_policy(
+        payload=_outer_policy_v2_payload(),
+        actor=actor,
+        now="2026-07-31T01:00:00+00:00",
+    )
+    binding_v2 = v2_writer.bind_supervisor_outer_policy(
+        payload=_binding_payload(
+            policy_v2,
+            binding_version=2,
+            summary="Bind Paper Supervisor to Park Grid policy v2",
+        ),
+        actor=actor,
+        now="2026-07-31T01:01:00+00:00",
+    )
+    store = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v2["binding_id"],
+            "binding_version": binding_v2["binding_version"],
+            "binding_digest": binding_v2["binding_digest"],
+        },
+    )
+
+    policy_rows = json.loads(
+        (
+            tmp_path
+            / "dualtrack"
+            / "supervisor"
+            / "risk_envelopes"
+            / "outer_strategy_policies"
+            / "park-grid-policy.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert policy_rows == [policy_v1, policy_v2]
+    assert policy_v1["schema_version"] == (
+        "paper-strategy-policy-boundary-v1"
+    )
+    assert policy_v1["direction"] == "neutral"
+    assert "allowed_directions" not in policy_v1
+    assert policy_v2["allowed_directions"] == [
+        "long",
+        "neutral",
+        "short",
+    ]
+    assert policy_v2["limits"] == policy_v1["limits"]
+    assert policy_v2["expires_at"] == policy_v1["expires_at"]
+    assert policy_v2["inherited_from"] == {
+        "binding_id": binding_v1["binding_id"],
+        "binding_version": binding_v1["binding_version"],
+        "binding_digest": binding_v1["binding_digest"],
+        "policy_id": policy_v1["policy_id"],
+        "policy_version": policy_v1["version"],
+        "policy_digest": policy_v1["policy_digest"],
+        "policy_schema_version": policy_v1["schema_version"],
+    }
+
+    for direction in ("long", "neutral", "short"):
+        preview = {
+            **_preview(),
+            "direction": direction,
+            "preview_id": f"grid-preview-v2-{direction}",
+        }
+        proposal = {
+            **_ai_proposal(),
+            "proposal_id": f"proposal-v2-{direction}",
+            "direction": direction,
+            "preview_id": preview["preview_id"],
+        }
+        envelope = store.authorize_ai_candidate_envelope(
+            cycle_id="2026-07-30_DAY",
+            proposal=proposal,
+            preview=preview,
+            now="2026-07-31T01:02:00+00:00",
+        )
+        assert envelope["strategy_plan_id"] is None
+        comparison = next(
+            row
+            for row in envelope["outer_policy_comparisons"]
+            if row["field"] == "direction"
+        )
+        assert comparison == {
+            "field": "direction",
+            "operator": "in",
+            "authorized_limit": ["long", "neutral", "short"],
+            "observed_value": direction,
+            "pass": True,
+        }
+    assert StrategyControlPlane(tmp_path).active_plan(
+        "2026-07-30_DAY"
+    ) is None
+
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_envelope_out_of_bounds",
+    ):
+        store.authorize_envelope(
+            cycle_id="2026-07-30_DAY",
+            plan={**_plan(), "direction": "long"},
+            payload={
+                "authorization_kind": (
+                    "ai_policy_within_preapproved_strategy_boundary"
+                ),
+                "limits": _limits(
+                    max_notional_per_grid="60.0000001"
+                ),
+            },
+            actor=None,
+            now="2026-07-31T01:02:00+00:00",
+        )
+
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_envelope_out_of_bounds",
+    ):
+        store.authorize_envelope(
+            cycle_id="2026-07-30_DAY",
+            plan=_dca_plan(),
+            payload={
+                "authorization_kind": (
+                    "ai_policy_within_preapproved_strategy_boundary"
+                ),
+                "limits": _dca_limits(),
+            },
+            actor=None,
+            now="2026-07-31T01:02:00+00:00",
+        )
+
+    policy_rows[1]["limits"]["max_actual_leverage"] = "999"
+    policy_rows[1]["policy_digest"] = risk_envelope_module._digest(
+        {
+            key: value
+            for key, value in policy_rows[1].items()
+            if key != "policy_digest"
+        }
+    )
+    (
+        tmp_path
+        / "dualtrack"
+        / "supervisor"
+        / "risk_envelopes"
+        / "outer_strategy_policies"
+        / "park-grid-policy.json"
+    ).write_text(json.dumps(policy_rows), encoding="utf-8")
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_invalid",
+    ):
+        store.outer_policy(
+            policy_v2["policy_id"],
+            policy_v2["version"],
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        {"allowed_directions": []},
+        {"allowed_directions": "long"},
+        {"allowed_directions": ["long", "long"]},
+        {"allowed_directions": ["neutral", "long"]},
+        {"allowed_directions": ["long", "sideways"]},
+        {"allowed_directions": ["*"]},
+        {"direction": "neutral"},
+        {"limits": _limits(max_actual_leverage="999")},
+        {"limits": _limits(max_full_depth_loss="999999")},
+        {"limits": _limits(max_notional_per_grid="999999")},
+        {"limits": _limits(min_grid_count="0")},
+        {"limits": _limits(max_grid_count="999")},
+        {"expires_at": "2026-08-29T01:00:00+00:00"},
+        {"expires_at": "2027-08-30T01:00:00+00:00"},
+        {"schema_version": "paper-strategy-policy-boundary-v3"},
+    ),
+)
+def test_outer_policy_v2_rejects_noncanonical_or_mixed_direction_sets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: dict,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    writer = CycleRiskEnvelopeStore(tmp_path)
+    policy_v1 = writer.authorize_outer_policy(
+        payload=_outer_policy_payload(),
+        actor=actor,
+        now="2026-07-30T01:00:00+00:00",
+    )
+    binding_v1 = writer.bind_supervisor_outer_policy(
+        payload=_binding_payload(policy_v1),
+        actor=actor,
+        now="2026-07-30T01:01:00+00:00",
+    )
+    store = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v1["binding_id"],
+            "binding_version": binding_v1["binding_version"],
+            "binding_digest": binding_v1["binding_digest"],
+        },
+    )
+    payload = _outer_policy_v2_payload()
+    payload.update(mutation)
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_invalid",
+    ):
+        store.authorize_outer_policy(
+            payload=payload,
+            actor=actor,
+            now="2026-07-31T01:00:00+00:00",
+        )
+
+
+def test_outer_policy_v2_requires_the_current_exact_v1_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    writer = CycleRiskEnvelopeStore(tmp_path)
+    policy_v1 = writer.authorize_outer_policy(
+        payload=_outer_policy_payload(),
+        actor=actor,
+        now="2026-07-30T01:00:00+00:00",
+    )
+    policy_path = (
+        tmp_path
+        / "dualtrack"
+        / "supervisor"
+        / "risk_envelopes"
+        / "outer_strategy_policies"
+        / "park-grid-policy.json"
+    )
+    before = policy_path.read_bytes()
+
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_missing",
+    ):
+        writer.authorize_outer_policy(
+            payload=_outer_policy_v2_payload(),
+            actor=actor,
+            now="2026-07-31T01:00:00+00:00",
+        )
+    assert policy_path.read_bytes() == before
+
+    binding_v1 = writer.bind_supervisor_outer_policy(
+        payload=_binding_payload(policy_v1),
+        actor=actor,
+        now="2026-07-30T01:01:00+00:00",
+    )
+    invalid_binding_store = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v1["binding_id"],
+            "binding_version": binding_v1["binding_version"],
+            "binding_digest": "0" * 64,
+        },
+    )
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_invalid",
+    ):
+        invalid_binding_store.authorize_outer_policy(
+            payload=_outer_policy_v2_payload(),
+            actor=actor,
+            now="2026-07-31T01:00:00+00:00",
+        )
+    assert policy_path.read_bytes() == before
+
+
+def test_policy_authorization_api_skips_market_and_account_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(
+            "policy authorization must not read market or account state"
+        )
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_dualtrack_market_bars_response",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_strategy_timeframes_response",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_strategy_console_production_history",
+        forbidden,
+    )
+    output = tmp_path / "outputs"
+    plane_class = dashboard_server.StrategyControlPlane
+    trusted_now = "2026-07-31T01:00:00+00:00"
+    monkeypatch.setattr(
+        dashboard_server,
+        "StrategyControlPlane",
+        lambda root: plane_class(
+            root,
+            authorization_clock=lambda: trusted_now,
+        ),
+    )
+    policy_v1_result = (
+        dashboard_server.build_strategy_console_control_response(
+            {
+                "cycle_id": "2026-07-30_DAY",
+                "action": "authorize_outer_strategy_policy",
+                "as_of": "2020-01-01T00:00:00+00:00",
+                **_outer_policy_payload(),
+            },
+            output_root=output,
+            actor=actor,
+        )
+    )
+    policy_v1 = policy_v1_result["outer_strategy_policy"]
+    binding_v1_result = (
+        dashboard_server.build_strategy_console_control_response(
+            {
+                "cycle_id": "2026-07-30_DAY",
+                "action": "bind_supervisor_outer_strategy_policy",
+                "as_of": "2020-01-01T00:00:00+00:00",
+                **_binding_payload(policy_v1),
+            },
+            output_root=output,
+            actor=actor,
+        )
+    )
+    binding_v1 = binding_v1_result[
+        "outer_strategy_policy_binding"
+    ]
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_ID",
+        binding_v1["binding_id"],
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_VERSION",
+        str(binding_v1["binding_version"]),
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_DIGEST",
+        binding_v1["binding_digest"],
+    )
+    policy_result = dashboard_server.build_strategy_console_control_response(
+        {
+            "cycle_id": "2026-07-30_DAY",
+            "action": "authorize_outer_strategy_policy",
+            "as_of": "2020-01-01T00:00:00+00:00",
+            **_outer_policy_v2_payload(),
+        },
+        output_root=output,
+        actor=actor,
+    )
+    policy = policy_result["outer_strategy_policy"]
+    binding_result = dashboard_server.build_strategy_console_control_response(
+        {
+            "cycle_id": "2026-07-30_DAY",
+            "action": "bind_supervisor_outer_strategy_policy",
+            "as_of": "2030-01-01T00:00:00+00:00",
+            **_binding_payload(
+                policy,
+                binding_version=2,
+                summary="Bind Paper Supervisor to Park Grid policy v2",
+            ),
+        },
+        output_root=output,
+        actor=actor,
+    )
+
+    assert policy["schema_version"] == (
+        "paper-strategy-policy-boundary-v2"
+    )
+    assert policy_v1["authorized_at"] == trusted_now
+    assert policy["authorized_at"] == trusted_now
+    assert policy["limits"] == policy_v1["limits"]
+    assert policy["expires_at"] == policy_v1["expires_at"]
+    assert binding_result["outer_strategy_policy_binding"][
+        "policy_digest"
+    ] == policy["policy_digest"]
+    plane = StrategyControlPlane(output)
+    assert plane.active_plan("2026-07-30_DAY") is None
+    execution_root = output / "dualtrack" / "execution"
+    assert not execution_root.exists() or not list(
+        execution_root.rglob("*")
+    )
 
 
 def test_ai_candidate_envelope_is_persisted_before_plan_and_binds_later_plan(

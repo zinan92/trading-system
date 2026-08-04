@@ -1603,6 +1603,30 @@ def build_strategy_console_control_response(
     if not _CYCLE_ID_PATTERN.match(cycle_id):
         raise ValueError("expected YYYY-MM-DD_DAY or YYYY-MM-DD_NIGHT")
     action = str(payload.get("action") or "").lower()
+    policy_authorization_actions = {
+        "authorize_outer_strategy_policy",
+        "bind_supervisor_outer_strategy_policy",
+    }
+    if action in policy_authorization_actions:
+        # Park's immutable policy authorization is an identity-bound domain
+        # mutation, not a market decision.  Requiring market/account assembly
+        # here can prevent human authorization during the exact upstream
+        # outage that the boundary is meant to govern.  Only these two exact
+        # actions bypass unrelated reads; the control plane still verifies the
+        # signed actor, appends immutable audit evidence, and creates no plan or
+        # order side effects.
+        domain_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"action", "cycle_id", "as_of"}
+        }
+        return StrategyControlPlane(output).control(
+            cycle_id,
+            action,
+            domain_payload,
+            now=payload.get("as_of"),
+            actor=actor,
+        )
     safe_control = action in {"stop", "cancel_all", "suspend_entries"}
     # The chart selector is display-only. Production planning always receives
     # the fixed 1m execution tape. Grid geometry needs only D1/4H; the AI

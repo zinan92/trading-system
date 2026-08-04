@@ -13792,3 +13792,60 @@ auditable datafeed port; broker execution remains a separate port.
 - Cloud release evidence must compare plan, orders, positions, runtime and
   reconciliation before and after the exact main SHA and record zero control
   actions.
+
+# 2026-08-04 — Version the Park outer policy for explicit Paper Grid directions (#565)
+
+## Decision
+
+- Keep `paper-strategy-policy-boundary-v1` as an immutable exact
+  single-direction contract. Add `paper-strategy-policy-boundary-v2` with a
+  required canonical `allowed_directions` set; Park's approved set for the
+  activation story is exactly `long`, `neutral`, and `short`.
+- Do not accept v2 limits or expiry from the request. Copy both from the current
+  exact v1 binding and persist the complete source binding/policy identity in
+  `inherited_from`; recheck that inheritance again when v2 is bound.
+- Restrict v2 to Paper Grid. The AI still proposes one concrete direction and
+  must persist a field-level `operator=in` comparison against the exact bound
+  policy. DCA, live, and real-money paths receive no new authority.
+- Validate every v1/v2 registry row against its own exact field set and digest.
+  Preserve exact binding id/version/digest selection; never choose latest or
+  fall back to another policy.
+- Route only `authorize_outer_strategy_policy` and
+  `bind_supervisor_outer_strategy_policy` around unrelated market/account
+  assembly. The control plane still verifies Park's signed Cloudflare actor,
+  appends immutable control evidence, and creates no plan or orders.
+- Deploy dual-read code before appending or activating v2. The existing v1
+  binding therefore remains behaviorally authoritative until a separate
+  attended configuration release passes the boot/SHA and zero-uncertain-state
+  gates.
+
+## Gotchas
+
+- Reinterpreting v1 `neutral` as a wildcard would silently broaden every
+  historical authorization. Schema v2 is required precisely to avoid that.
+- A list is not automatically canonical: empty, duplicate, reordered,
+  wildcard, unknown, scalar, and mixed `direction`/`allowed_directions` forms
+  all fail closed.
+- A strategy-type mismatch must be reported as a clean out-of-bound candidate,
+  not as a corrupt outer policy. Numeric fields are compared only after the
+  exact strategy type matches.
+- A successful policy or binding write is not activation evidence and must not
+  start the 48-hour acceptance clock. The exact selector still lives in the
+  configuration release and services must reload it through the existing
+  runbook.
+- Treat human identity as necessary but not sufficient for scope. Even Park's
+  authenticated request cannot widen, shorten, or extend the inherited numeric
+  and expiry boundary through this direction-only schema migration.
+- This story does not repair the separate structural-recheck, typed-provider,
+  or Cloud-health defects tracked by #566, #567, and #568.
+
+## Verification
+
+- Focused tests prove v1/v2 coexistence without mutating the v1 record or
+  digest; `long`, `neutral`, and `short` each pass v2 membership and persist the
+  complete authorized set.
+- Adversarial tests reject DCA, numeric overflow, malformed direction sets,
+  unknown schemas, and mixed v1/v2 fields before plan/order creation.
+- The public authorization path is tested with every market/timeframe/account
+  read replaced by a hard failure; both exact Park mutations still append their
+  immutable records and leave runtime, plans, and execution untouched.
