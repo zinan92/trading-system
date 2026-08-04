@@ -25,7 +25,10 @@ SUPERVISOR_POLLING_SUMMARY_SCHEMA_VERSION = (
     "paper-supervisor-polling-summary-v1"
 )
 SUPERVISOR_HISTORY_RESPONSE_SCHEMA_VERSION = (
-    "paper-supervisor-history-response-v1"
+    "paper-supervisor-history-response-v2"
+)
+SUPERVISOR_CURRENT_CYCLE_AUDIT_SCHEMA_VERSION = (
+    "paper-supervisor-current-cycle-audit-v1"
 )
 _MAX_POLLING_EPISODE_BYTES = 2 * 1024 * 1024
 _MAX_POLLING_OBSERVATION_BYTES = 2 * 1024 * 1024
@@ -181,12 +184,23 @@ def build_paper_supervisor_history_response(
 ) -> dict[str, Any]:
     """Return the complete immutable audit projection on explicit request."""
 
-    model = build_paper_supervisor_read_model(
-        output_root,
+    end = _utc(as_of)
+    current, source_errors, _observation_cache = _read_current_cycle(
+        PaperSupervisorStore(Path(output_root)),
         cycle_id=cycle_id,
-        as_of=as_of,
+        as_of=end,
     )
-    current = dict(model.get("current_cycle") or {})
+    model = {
+        "schema_version": SUPERVISOR_CURRENT_CYCLE_AUDIT_SCHEMA_VERSION,
+        "as_of": end.isoformat(),
+        "source": "paper_supervisor_observations",
+        "classifier_version": CLASSIFIER_VERSION,
+        "status": "unavailable" if source_errors else current["status"],
+        "current_cycle": current,
+        "source_errors": source_errors,
+        "read_only": True,
+        "command_authority": False,
+    }
     history = dict(current.get("history") or {})
     observations = list(history.get("observations") or [])
     events = list(history.get("events") or [])
@@ -217,7 +231,6 @@ def build_paper_supervisor_history_response(
         "command_authority": False,
     }
 
-
 def build_paper_supervisor_read_model(
     output_root: Path,
     *,
@@ -228,28 +241,11 @@ def build_paper_supervisor_read_model(
 
     end = _utc(as_of)
     store = PaperSupervisorStore(Path(output_root))
-    source_errors: list[dict[str, str]] = []
-    observation_cache: dict[str, list[dict[str, Any]]] = {}
-    try:
-        snapshot = store.read_cycle_snapshot(cycle_id)
-        events = list(snapshot["events"])
-        observations = list(snapshot["observations"])
-        observation_cache[cycle_id] = observations
-        current = _current_cycle_projection(
-            store=store,
-            cycle_id=cycle_id,
-            events=events,
-            observations=observations,
-            as_of=end,
-        )
-    except (OSError, SupervisorStoreError, ValueError) as exc:
-        source_errors.append(
-            {
-                "cycle_id": cycle_id,
-                "machine_code": _safe_machine_code(exc),
-            }
-        )
-        current = _unavailable_current_cycle(cycle_id)
+    current, source_errors, observation_cache = _read_current_cycle(
+        store,
+        cycle_id=cycle_id,
+        as_of=end,
+    )
 
     utilization = _build_utilization(
         store,
@@ -274,6 +270,42 @@ def build_paper_supervisor_read_model(
         "command_authority": False,
     }
 
+
+def _read_current_cycle(
+    store: PaperSupervisorStore,
+    *,
+    cycle_id: str,
+    as_of: datetime,
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, str]],
+    dict[str, list[dict[str, Any]]],
+]:
+    """Read and validate one cycle without rebuilding rolling utilization."""
+
+    source_errors: list[dict[str, str]] = []
+    observation_cache: dict[str, list[dict[str, Any]]] = {}
+    try:
+        snapshot = store.read_cycle_snapshot(cycle_id)
+        events = list(snapshot["events"])
+        observations = list(snapshot["observations"])
+        observation_cache[cycle_id] = observations
+        current = _current_cycle_projection(
+            store=store,
+            cycle_id=cycle_id,
+            events=events,
+            observations=observations,
+            as_of=as_of,
+        )
+    except (OSError, SupervisorStoreError, ValueError) as exc:
+        source_errors.append(
+            {
+                "cycle_id": cycle_id,
+                "machine_code": _safe_machine_code(exc),
+            }
+        )
+        current = _unavailable_current_cycle(cycle_id)
+    return current, source_errors, observation_cache
 
 def build_paper_supervisor_utilization(
     output_root: Path,

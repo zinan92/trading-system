@@ -34,6 +34,13 @@ ACCESS_AUDIT_PATH = Path(
 )
 READ_TIMEOUT = float(os.getenv("GOLDBOT_UPSTREAM_READ_TIMEOUT", "20"))
 CONTROL_TIMEOUT = float(os.getenv("GOLDBOT_UPSTREAM_CONTROL_TIMEOUT", "90"))
+READ_MAX_BYTES = int(os.getenv("GOLDBOT_UPSTREAM_READ_MAX_BYTES", "8000000"))
+SUPERVISOR_HISTORY_TIMEOUT = float(
+    os.getenv("GOLDBOT_SUPERVISOR_HISTORY_TIMEOUT", "90")
+)
+SUPERVISOR_HISTORY_MAX_BYTES = int(
+    os.getenv("GOLDBOT_SUPERVISOR_HISTORY_MAX_BYTES", str(64 * 1024 * 1024))
+)
 ROOT_REDIRECT = "/dashboard-v5.html"
 
 ALLOW_EXACT = frozenset(
@@ -76,6 +83,15 @@ _AUDIT_LOCK = threading.Lock()
 
 def _is_allowed(path: str) -> bool:
     return ".." not in path and path in ALLOW_EXACT
+
+
+def _upstream_envelope(method: str, path: str) -> tuple[float, int]:
+    """Return the exact timeout/body envelope for one upstream request."""
+
+    if method == "GET" and path == "/api/trading-system/supervisor-history":
+        return SUPERVISOR_HISTORY_TIMEOUT, SUPERVISOR_HISTORY_MAX_BYTES
+    timeout = CONTROL_TIMEOUT if method == "POST" else READ_TIMEOUT
+    return timeout, READ_MAX_BYTES
 
 
 def _validated_access_claims(headers: Any) -> dict[str, Any] | None:
@@ -255,7 +271,8 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
         request_headers: dict[str, str] | None = None,
         audit: dict[str, Any] | None = None,
     ) -> None:
-        timeout = CONTROL_TIMEOUT if method == "POST" else READ_TIMEOUT
+        path = urlparse(target).path
+        timeout, max_bytes = _upstream_envelope(method, path)
         try:
             with urlopen(
                 Request(
@@ -266,7 +283,26 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
                 ),
                 timeout=timeout,
             ) as response:
-                response_body = response.read(8_000_000)
+                response_body = response.read(max_bytes + 1)
+                if len(response_body) > max_bytes:
+                    if audit:
+                        _write_audit(
+                            {
+                                **audit,
+                                "result": "upstream_response_too_large",
+                                "status": 502,
+                            }
+                        )
+                    self._send_json(
+                        502,
+                        {
+                            "error": "upstream_response_too_large",
+                            "message": (
+                                "后台只读响应超过安全上限，未转发不完整数据。"
+                            ),
+                        },
+                    )
+                    return
                 status = int(response.status)
                 headers = response.headers
         except HTTPError as exc:

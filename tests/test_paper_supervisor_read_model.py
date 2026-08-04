@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import services.paper_supervisor_read_model as supervisor_read_model_module
 from services.control_audit import (
     append_control_event,
     build_control_event,
@@ -473,10 +474,22 @@ def test_polling_summary_reads_only_checkpointed_tail_and_history_is_explicit(
     }
 
     monkeypatch.undo()
+    monkeypatch.setattr(
+        supervisor_read_model_module,
+        "_build_utilization",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "explicit current-cycle history must not rebuild utilization"
+            )
+        ),
+    )
     response = build_paper_supervisor_history_response(
         tmp_path,
         cycle_id=CYCLE,
         as_of=AS_OF,
+    )
+    assert response["schema_version"] == (
+        "paper-supervisor-history-response-v2"
     )
     assert response["completeness"]["status"] == "complete"
     assert response["completeness"]["event_count"] == 3
@@ -484,6 +497,10 @@ def test_polling_summary_reads_only_checkpointed_tail_and_history_is_explicit(
     assert len(
         response["supervisor"]["current_cycle"]["history"]["events"]
     ) == 3
+    assert response["supervisor"]["schema_version"] == (
+        "paper-supervisor-current-cycle-audit-v1"
+    )
+    assert "utilization" not in response["supervisor"]
 
 
 def test_corrupt_observation_is_explicitly_unavailable(
