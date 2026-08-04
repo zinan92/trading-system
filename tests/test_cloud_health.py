@@ -1,22 +1,32 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from services.cloud_health import CloudPaperHealth, _hash_json, health_severity
 from services.cycle_decision import CycleDecisionLedger
+from services.deadman_ping import ExternalDeadmanPing
 from services.journal_store import write_json
 
 NOW = datetime(2026, 7, 28, 2, 0, tzinfo=timezone.utc)
+CYCLE_START = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
+CYCLE_ID = "2026-07-28_DAY"
 SHA = "a" * 40
 
 
-def _healthy(tmp_path: Path) -> CloudPaperHealth:
+def _healthy(
+    tmp_path: Path,
+    *,
+    now: datetime = NOW,
+) -> CloudPaperHealth:
     output = tmp_path / "outputs"
     backup = tmp_path / "backups"
+    fresh_at = (now - timedelta(minutes=1)).isoformat()
     write_json(
         output / "dualtrack" / "runner" / "2026-07-28_DAY.json",
-        [{"event": "live_tick_heartbeat", "ts": "2026-07-28T01:59:00+00:00"}],
+        [{"event": "live_tick_heartbeat", "ts": fresh_at}],
     )
     write_json(
         output / "dualtrack" / "strategy_control" / "runtime.json",
@@ -72,7 +82,7 @@ def _healthy(tmp_path: Path) -> CloudPaperHealth:
             {
                 "status": "pass",
                 "backup_id": "backup-20260728T013000Z-safe",
-                "created_at": "2026-07-28T01:30:00+00:00",
+                "created_at": (now - timedelta(minutes=30)).isoformat(),
                 "manifest_hash": "manifest-hash",
             }
         ],
@@ -82,9 +92,9 @@ def _healthy(tmp_path: Path) -> CloudPaperHealth:
         backup_root=backup,
         owner_id="cloud-primary",
         deployed_sha=SHA,
-        now=lambda: NOW,
+        now=lambda: now,
         latest_market_provider=lambda: {
-            "timestamp": "2026-07-28T01:59:00+00:00",
+            "timestamp": fresh_at,
             "provider": "binance_usdm_futures",
         },
     )
@@ -94,6 +104,118 @@ def _force_legacy_mode(monkeypatch) -> None:
     monkeypatch.setattr(
         "services.cloud_health.dualtrack_config",
         lambda: {"convergence": {"mode": "legacy_cycle_decision"}},
+    )
+
+
+def _set_supervisor_runtime(
+    health: CloudPaperHealth,
+    *,
+    cycle_id: str = CYCLE_ID,
+    running: bool = False,
+    with_plan: bool = True,
+) -> None:
+    if with_plan:
+        write_json(
+            health.output_root
+            / "dualtrack"
+            / "strategy_control"
+            / "plans"
+            / f"{cycle_id}.json",
+            [{
+                "cycle_id": cycle_id,
+                "strategy_plan_id": "active-plan",
+                "strategy_plan_version": 2,
+                "version": 2,
+                "status": "active",
+            }],
+        )
+    write_json(
+        health.output_root
+        / "dualtrack"
+        / "strategy_control"
+        / "runtime.json",
+        [{
+            "cycle_id": cycle_id,
+            "strategy_plan_id": "active-plan" if with_plan else None,
+            "strategy_plan_version": 2 if with_plan else None,
+            "desired_state": "running" if running else "stopped",
+            "actual_state": "running" if running else "stopped",
+            "accepted_order_count": 38 if running else 0,
+            "accepted_order_count_known": True,
+        }],
+    )
+
+
+def _supervisor_observation(
+    at: datetime,
+    *,
+    running_proven: bool,
+    status: str = "observed",
+) -> dict:
+    return {
+        "recorded_at": at.isoformat(),
+        "payload": {
+            "status": status,
+            "running_evidence": {
+                "cycle_id": CYCLE_ID,
+                "evidence_at": at.isoformat(),
+                "running_proven": running_proven,
+                "plan_identity": {
+                    "strategy_plan_id": "active-plan",
+                    "strategy_plan_version": 2,
+                },
+                "runtime": {
+                    "strategy_plan_id": "active-plan",
+                    "strategy_plan_version": 2,
+                },
+            },
+        },
+    }
+
+
+def _supervisor_model(
+    at: datetime,
+    *,
+    mode: str = "ready",
+    running_proven: bool = False,
+    alert_required: bool = False,
+    blocker: dict | None = None,
+    observations: list[dict] | None = None,
+    attempt_at: datetime | None = None,
+    utilization: dict | None = None,
+) -> dict:
+    rows = observations or [
+        _supervisor_observation(at, running_proven=running_proven)
+    ]
+    attempt_time = attempt_at or at
+    return {
+        "status": "available",
+        "source_errors": [],
+        "current_cycle": {
+            "cycle_id": CYCLE_ID,
+            "status": "available",
+            "attempt_count": len(rows),
+            "start_intent_count": 0,
+            "last_observed_at": rows[-1]["recorded_at"],
+            "last_attempt": {
+                "observed_at": attempt_time.isoformat(),
+                "result": "no_action",
+            },
+            "episode": {
+                "mode": mode,
+                "alert_required": alert_required,
+                "blocker": blocker,
+            },
+            "history": {"observations": rows},
+        },
+        "utilization": utilization or {"windows": {}},
+    }
+
+
+def _install_supervisor_model(monkeypatch, model: dict) -> None:
+    monkeypatch.setattr(
+        "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
+        lambda *_args, **_kwargs: model,
     )
 
 
@@ -277,7 +399,9 @@ def test_supervisor_mode_replaces_legacy_cycle_decision_check(
     assert "supervisor" in result["checks"]
     assert "cycle_decision" not in result["checks"]
     assert result["checks"]["supervisor"]["severity"] == "critical"
-    assert result["checks"]["supervisor"]["code"] == "supervisor_observation_missing"
+    assert result["checks"]["supervisor"]["code"] == (
+        "supervisor_convergence_stalled"
+    )
 
 
 def test_supervisor_health_uses_current_cycle_when_runtime_is_stale(
@@ -306,7 +430,7 @@ def test_supervisor_health_uses_current_cycle_when_runtime_is_stale(
 
     supervisor = result["checks"]["supervisor"]
     assert supervisor["evidence"]["cycle_id"] == "2026-07-28_DAY"
-    assert supervisor["code"] == "supervisor_observation_missing"
+    assert supervisor["code"] == "supervisor_convergence_stalled"
 
 
 def test_running_runtime_does_not_hide_supervisor_structural_blocker(
@@ -345,7 +469,10 @@ def test_running_runtime_does_not_hide_supervisor_structural_blocker(
     monkeypatch.setattr(
         "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
         lambda *_args, **_kwargs: {
+            "status": "available",
+            "source_errors": [],
             "current_cycle": {
+                "status": "available",
                 "attempt_count": 4,
                 "start_intent_count": 1,
                 "last_observed_at": "2026-07-28T01:59:00+00:00",
@@ -370,7 +497,7 @@ def test_running_runtime_does_not_hide_supervisor_structural_blocker(
     supervisor = result["checks"]["supervisor"]
     assert result["status"] == "blocked"
     assert result["severity"] == "critical"
-    assert supervisor["code"] == "supervisor_structural_blocker"
+    assert supervisor["code"] == "ledger_reconciliation_drift"
     assert supervisor["severity"] == "critical"
     assert supervisor["evidence"]["runtime_running"] is True
     assert (
@@ -384,26 +511,7 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
     monkeypatch,
 ) -> None:
     health = _healthy(tmp_path)
-    write_json(
-        health.output_root
-        / "dualtrack"
-        / "strategy_control"
-        / "plans"
-        / "2026-07-28_DAY.json",
-        [{"cycle_id": "2026-07-28_DAY", "status": "active"}],
-    )
-    write_json(
-        health.output_root
-        / "dualtrack"
-        / "strategy_control"
-        / "runtime.json",
-        [{
-            "cycle_id": "2026-07-28_DAY",
-            "actual_state": "running",
-            "desired_state": "running",
-            "accepted_order_count": 38,
-        }],
-    )
+    _set_supervisor_runtime(health, running=True)
     monkeypatch.setattr(
         "services.cloud_health.dualtrack_config",
         lambda: {"convergence": {"mode": "paper_supervisor"}},
@@ -412,21 +520,10 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
 
     def supervisor_read_model(*_args, **kwargs) -> dict:
         read_model_calls.append(dict(kwargs))
-        return {
-            "current_cycle": {
-                "attempt_count": 4,
-                "start_intent_count": 1,
-                "last_observed_at": "2026-07-28T01:59:00+00:00",
-                "last_attempt": {
-                    "observed_at": "2026-07-28T01:59:00+00:00",
-                },
-                "episode": {
-                    "mode": "ready",
-                    "alert_required": False,
-                    "blocker": None,
-                },
-            },
-            "utilization": {
+        model = _supervisor_model(
+            NOW - timedelta(minutes=1),
+            running_proven=True,
+            utilization={
                 "windows": {
                     "24h": {
                         "evidence_status": "complete",
@@ -434,7 +531,10 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
                     }
                 }
             },
-        }
+        )
+        model["current_cycle"]["attempt_count"] = 4
+        model["current_cycle"]["start_intent_count"] = 1
+        return model
 
     monkeypatch.setattr(
         "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
@@ -460,6 +560,402 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
             "persist_utilization_index": True,
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("age_seconds", "expected_code", "expected_severity"),
+    [
+        (299, "supervisor_converging", "none"),
+        (300, "supervisor_converging", "none"),
+        (301, "supervisor_convergence_stalled", "critical"),
+    ],
+)
+def test_no_plan_stopped_uses_bounded_current_cycle_convergence_clock(
+    tmp_path: Path,
+    monkeypatch,
+    age_seconds: int,
+    expected_code: str,
+    expected_severity: str,
+) -> None:
+    at = CYCLE_START + timedelta(seconds=age_seconds)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False, with_plan=False)
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(at, running_proven=False),
+    )
+
+    supervisor = health._supervisor(at)
+
+    assert supervisor["code"] == expected_code
+    assert supervisor["severity"] == expected_severity
+    assert supervisor["evidence"]["active_plan"] is False
+    assert supervisor["evidence"][
+        "continuous_nonconvergence_age_seconds"
+    ] == age_seconds
+
+
+@pytest.mark.parametrize(
+    ("age_seconds", "expected_code"),
+    [
+        (300, "supervisor_converging"),
+        (301, "supervisor_convergence_stalled"),
+    ],
+)
+def test_active_plan_stopped_uses_same_300_second_boundary(
+    tmp_path: Path,
+    monkeypatch,
+    age_seconds: int,
+    expected_code: str,
+) -> None:
+    at = CYCLE_START + timedelta(seconds=age_seconds)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False)
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(at, running_proven=False),
+    )
+
+    supervisor = health._supervisor(at)
+
+    assert supervisor["code"] == expected_code
+    assert supervisor["evidence"]["active_plan"] is True
+
+
+def test_previous_cycle_running_runtime_does_not_satisfy_current_cycle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    at = CYCLE_START + timedelta(seconds=301)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(
+        health,
+        cycle_id="2026-07-27_NIGHT",
+        running=True,
+        with_plan=False,
+    )
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(at, running_proven=False),
+    )
+
+    supervisor = health._supervisor(at)
+
+    assert supervisor["code"] == "supervisor_convergence_stalled"
+    assert supervisor["evidence"]["runtime_running"] is False
+
+
+def test_fresh_attempts_structural_clearance_and_restart_do_not_reset_clock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    at = CYCLE_START + timedelta(seconds=301)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False)
+    observations = [
+        _supervisor_observation(
+            CYCLE_START + timedelta(seconds=offset),
+            running_proven=False,
+            status="structural_cleared" if offset == 301 else "observed",
+        )
+        for offset in (60, 180, 301)
+    ]
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(
+            at,
+            running_proven=False,
+            observations=observations,
+            attempt_at=at,
+        ),
+    )
+
+    first = health._supervisor(at)
+    restarted = CloudPaperHealth(
+        output_root=health.output_root,
+        backup_root=health.backup_root,
+        owner_id="cloud-primary",
+        deployed_sha=SHA,
+        now=lambda: at,
+        latest_market_provider=health.latest_market_provider,
+    )._supervisor(at)
+
+    assert first["code"] == "supervisor_convergence_stalled"
+    assert restarted["code"] == "supervisor_convergence_stalled"
+    assert first["evidence"]["attempt_age_seconds"] == 0
+    assert first["evidence"][
+        "continuous_nonconvergence_age_seconds"
+    ] == 301
+    assert restarted["evidence"][
+        "continuous_nonconvergence_started_at"
+    ] == CYCLE_START.isoformat()
+
+
+def test_only_matching_running_proof_restarts_nonconvergence_interval(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    at = CYCLE_START + timedelta(minutes=30)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False)
+    proven_at = at - timedelta(seconds=200)
+    observations = [
+        _supervisor_observation(
+            CYCLE_START + timedelta(minutes=1),
+            running_proven=False,
+        ),
+        _supervisor_observation(proven_at, running_proven=True),
+        _supervisor_observation(at, running_proven=False),
+    ]
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(at, observations=observations),
+    )
+
+    matched = health._supervisor(at)
+
+    assert matched["code"] == "supervisor_converging"
+    assert matched["evidence"][
+        "continuous_nonconvergence_started_at"
+    ] == proven_at.isoformat()
+    assert matched["evidence"][
+        "continuous_nonconvergence_age_seconds"
+    ] == 200
+
+    observations[1]["payload"]["running_evidence"]["plan_identity"][
+        "strategy_plan_id"
+    ] = "old-plan"
+    observations[1]["payload"]["running_evidence"]["runtime"][
+        "strategy_plan_id"
+    ] = "old-plan"
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(at, observations=observations),
+    )
+    mismatched = health._supervisor(at)
+    assert mismatched["code"] == "supervisor_convergence_stalled"
+    assert mismatched["evidence"][
+        "continuous_nonconvergence_started_at"
+    ] == CYCLE_START.isoformat()
+
+
+@pytest.mark.parametrize("mode", ["backing_off", "probing"])
+def test_legal_transient_wait_is_noncritical_even_when_attempt_is_old(
+    tmp_path: Path,
+    monkeypatch,
+    mode: str,
+) -> None:
+    at = CYCLE_START + timedelta(minutes=30)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False)
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(
+            at,
+            mode=mode,
+            running_proven=False,
+            attempt_at=CYCLE_START + timedelta(minutes=1),
+        ),
+    )
+
+    supervisor = health._supervisor(at)
+
+    assert supervisor["status"] == "ready"
+    assert supervisor["severity"] == "none"
+    assert supervisor["code"] == f"supervisor_{mode}"
+
+
+def test_probe_attention_is_immediately_critical_with_underlying_code(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    at = CYCLE_START + timedelta(minutes=30)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False)
+    blocker = {
+        "machine_code": "episode_short_budget_exhausted",
+        "classification": "transient",
+    }
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(
+            at,
+            mode="probing",
+            running_proven=False,
+            alert_required=True,
+            blocker=blocker,
+        ),
+    )
+
+    supervisor = health._supervisor(at)
+
+    assert supervisor["status"] == "blocked"
+    assert supervisor["severity"] == "critical"
+    assert supervisor["code"] == "episode_short_budget_exhausted"
+
+
+def test_unknown_probe_blocker_code_fails_closed_without_alert_flag(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    at = CYCLE_START + timedelta(minutes=10)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False)
+    blocker = {
+        "machine_code": "new_unclassified_probe_condition",
+        "classification": "transient",
+    }
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(
+            at,
+            mode="probing",
+            running_proven=False,
+            blocker=blocker,
+        ),
+    )
+
+    supervisor = health._supervisor(at)
+
+    assert supervisor["status"] == "blocked"
+    assert supervisor["severity"] == "critical"
+    assert supervisor["code"] == "new_unclassified_probe_condition"
+
+
+def test_utilization_ramp_is_considered_only_after_running_is_proven(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    at = NOW
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=True)
+    utilization = {
+        "windows": {
+            "24h": {
+                "evidence_status": "insufficient",
+                "conservative_percentage": 0,
+            }
+        }
+    }
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(
+            at - timedelta(minutes=1),
+            running_proven=True,
+            utilization=utilization,
+        ),
+    )
+
+    supervisor = health._supervisor(at)
+
+    assert supervisor["code"] == "runtime_utilization_insufficient"
+    assert supervisor["severity"] == "insufficient"
+
+    _set_supervisor_runtime(health, running=False)
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(
+            at,
+            running_proven=False,
+            utilization=utilization,
+        ),
+    )
+    stopped = health._supervisor(at)
+    assert stopped["code"] == "supervisor_convergence_stalled"
+    assert stopped["severity"] == "critical"
+
+
+def test_missing_corrupt_and_unknown_supervisor_evidence_fail_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    health = _healthy(tmp_path)
+    _set_supervisor_runtime(health, running=False)
+
+    corrupt = {
+        "status": "unavailable",
+        "source_errors": [{"machine_code": "attempt_store_corrupt"}],
+        "current_cycle": {"status": "unavailable"},
+        "utilization": {"windows": {}},
+    }
+    _install_supervisor_model(monkeypatch, corrupt)
+    assert health._supervisor(NOW)["code"] == "attempt_store_corrupt"
+
+    missing = _supervisor_model(NOW)
+    missing["current_cycle"]["history"] = {"observations": []}
+    _install_supervisor_model(monkeypatch, missing)
+    assert health._supervisor(NOW)["code"] == (
+        "supervisor_running_evidence_missing"
+    )
+
+    unknown = _supervisor_model(NOW, mode="new_unknown_mode")
+    _install_supervisor_model(monkeypatch, unknown)
+    assert health._supervisor(NOW)["code"] == "supervisor_episode_invalid"
+
+
+@pytest.mark.parametrize(
+    ("age_seconds", "expected_target", "expected_sources"),
+    [
+        (299, "success", []),
+        (301, "fail", ["cloud_health"]),
+    ],
+)
+def test_real_cloud_health_to_deadman_routes_convergence_and_stall(
+    tmp_path: Path,
+    monkeypatch,
+    age_seconds: int,
+    expected_target: str,
+    expected_sources: list[str],
+) -> None:
+    at = CYCLE_START + timedelta(seconds=age_seconds)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False, with_plan=False)
+    monkeypatch.setattr(
+        "services.cloud_health.dualtrack_config",
+        lambda: {"convergence": {"mode": "paper_supervisor"}},
+    )
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    calls: list[str] = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        return Response()
+
+    service = ExternalDeadmanPing(
+        health.output_root,
+        tmp_path / "unused-market.db",
+        url="https://hc-ping.example/deadman",
+        opener=opener,
+        cloud_health_provider=lambda: health.run(persist=False),
+    )
+    service._vitals = lambda *_args, **_kwargs: {
+        "always_on": {"status": "ok"}
+    }
+    service._schedule_runtime = lambda *_args, **_kwargs: {
+        "status": "active",
+        "runtime_failed_jobs": [],
+    }
+    service._exposure_snapshot = lambda *_args, **_kwargs: {
+        "has_open_position": False,
+        "position_unknown": False,
+    }
+
+    result = service.run("2026-07-28")
+
+    assert result["ping"]["target_kind"] == expected_target
+    assert result["failure_signal_sources"] == expected_sources
+    assert calls
+    assert ("/fail?" in calls[0]) is (expected_target == "fail")
+    assert result["cloud_health"]["control_actions_executed"] == 0
 
 
 def test_scheduler_owner_mismatch_blocks_cloud_health(

@@ -1,5 +1,54 @@
 # Decision Log
 
+## Current-cycle non-convergence is a dead-man condition (Issue #568)
+
+Date: 2026-08-05
+
+### Decision
+
+- Remove the `no active plan -> supervisor_not_required` shortcut. Cloud
+  health now reads current-cycle Supervisor evidence for both no-plan and
+  active-plan states and gives `mode=ready` an exact 300-second convergence
+  window before emitting `supervisor_convergence_stalled / critical`.
+- Derive the continuous non-convergence anchor from immutable evidence: the
+  wall-clock cycle boundary or the latest sealed running proof whose plan and
+  runtime identity exactly match the current authority. Fresh attempts,
+  observations, `structural_cleared`, retries and process restarts cannot reset
+  it.
+- Keep fresh `backing_off` and `probing` non-critical unless the episode asks
+  for attention. Corrupt/unavailable evidence, missing/stale observations,
+  unknown modes, structural blockers and alert-required episodes remain
+  immediate critical conditions and expose the stable underlying machine code.
+- Evaluate utilization ramp/below-target states only after current-cycle
+  running is authoritatively proven. The unchanged Cloud-health severity then
+  drives the real external dead-man success or `/fail` endpoint.
+
+### Gotchas
+
+- Attempt freshness proves activity, not convergence. Using the latest attempt
+  as the timer would make an endlessly failing loop look healthy forever.
+- The 30-minute probe is intentional after short-budget exhaustion. Treating
+  its old attempt timestamp as a scheduler outage would contradict the
+  approved nonterminal recovery design; fresh Supervisor observations remain
+  mandatory during that wait.
+- A persisted runtime string `running` is insufficient. The proof must bind the
+  exact current plan id/version, runtime id/version, orders, heartbeat and both
+  reconciliation authorities through the existing sealed running evidence.
+- This health change is read-only: it creates no plan, control request, order
+  or position and does not edit Supervisor history. Passing tests or deploying
+  it is not the 48-hour acceptance result.
+
+### Verification
+
+- Focused tests cover no-plan, previous-cycle runtime, active-plan/stopped,
+  299/300/301-second boundaries, fresh-attempt oscillation,
+  `structural_cleared`, restart, matching/mismatched running proof, probe with
+  and without attention, utilization ramp, corrupt/unknown evidence and the
+  real `CloudPaperHealth -> ExternalDeadmanPing` endpoint decision.
+- The focused health/read-model/dead-man matrix passes 63 tests. The full local
+  suite passes 2,753 with one skip and retains the exact 11 known macOS
+  launchd schedule-manager baseline failures; no new failure is introduced.
+
 ## Source-bound utilization indexes keep Cloud health bounded (Issue #560)
 
 ### Decision
