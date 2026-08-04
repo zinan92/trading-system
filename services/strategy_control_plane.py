@@ -511,6 +511,7 @@ class StrategyControlPlane:
         *,
         proposal: dict[str, Any],
         preview: dict[str, Any],
+        supervisor_attempt_id: str | None = None,
     ) -> dict[str, Any]:
         """Persist candidate comparisons before the production plan exists."""
 
@@ -518,7 +519,25 @@ class StrategyControlPlane:
             cycle_id=cycle_id,
             proposal=proposal,
             preview=preview,
+            supervisor_attempt_id=supervisor_attempt_id,
             now=self._authorization_clock(),
+        )
+
+    def supervisor_candidate_identity(
+        self,
+        cycle_id: str,
+        *,
+        proposal: dict[str, Any],
+        preview: dict[str, Any],
+        supervisor_attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Canonicalize the candidate before any envelope decision."""
+
+        return self.risk_envelopes.supervisor_candidate_identity(
+            cycle_id=cycle_id,
+            proposal=proposal,
+            preview=preview,
+            supervisor_attempt_id=supervisor_attempt_id,
         )
 
     def _candidate_proposal_for_envelope(
@@ -2529,6 +2548,18 @@ class StrategyControlPlane:
                 "action": action,
                 "outer_strategy_policy_binding": (
                     self.risk_envelopes.bind_supervisor_outer_policy(
+                        payload=body,
+                        actor=actor,
+                        now=self._authorization_clock(),
+                    )
+                ),
+            }
+        if action == "resolve_legacy_outer_policy_rejection":
+            return {
+                "action": action,
+                "legacy_outer_policy_rejection_resolution": (
+                    self.risk_envelopes.authorize_legacy_rejection_resolution(
+                        cycle_id=cycle_id,
                         payload=body,
                         actor=actor,
                         now=self._authorization_clock(),

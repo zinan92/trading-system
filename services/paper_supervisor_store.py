@@ -39,6 +39,7 @@ _EVENT_TYPES = frozenset(
         "tick_claimed",
         "typed_heartbeat_observed",
         "pre_intent_attempt_started",
+        "pre_intent_candidate_observed",
         "pre_intent_prepare_succeeded",
         "pre_intent_attempt_finished",
         "pre_intent_attempt_abandoned",
@@ -1356,6 +1357,7 @@ class PaperSupervisorStore:
                 )
             return
         if event_type in {
+            "pre_intent_candidate_observed",
             "pre_intent_prepare_succeeded",
             "pre_intent_attempt_finished",
             "pre_intent_attempt_abandoned",
@@ -1371,12 +1373,33 @@ class PaperSupervisorStore:
             if (
                 tick_key is not None
                 and event_type != "pre_intent_attempt_abandoned"
+                and not bool(payload.get("recovered_after_crash"))
                 and pre_existing.get("source_tick_key") is not None
                 and pre_existing.get("source_tick_key")
                 != tick_key
             ):
                 raise SupervisorStoreError(
                     "supervisor_tick_claim_mismatch"
+                )
+            if event_type == "pre_intent_candidate_observed":
+                candidate = payload.get("candidate_identity")
+                if (
+                    pre_existing.get("candidate_identity") is not None
+                    or pre_existing.get("prepare_succeeded_sequence")
+                    is not None
+                    or not isinstance(candidate, Mapping)
+                    or candidate.get("supervisor_attempt_id")
+                    != attempt_id
+                ):
+                    raise SupervisorStoreError(
+                        "supervisor_attempt_already_resolved"
+                    )
+            if (
+                payload.get("recovered_after_crash") is True
+                and pre_existing.get("candidate_identity") is None
+            ):
+                raise SupervisorStoreError(
+                    "supervisor_attempt_missing"
                 )
             if (
                 event_type == "pre_intent_prepare_succeeded"
@@ -1668,17 +1691,62 @@ class SupervisorLease:
         machine_code: str | None,
         classification: str | None,
         observed_at: str,
+        evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "result": str(result),
+            "machine_code": machine_code,
+            "classification": classification,
+            "observed_at": str(observed_at),
+        }
+        if isinstance(evidence, Mapping):
+            payload["evidence"] = dict(evidence)
         return self._store._append(
             self,
             event_type="pre_intent_attempt_finished",
             attempt_id=attempt_id,
+            payload=payload,
+        )
+
+    def record_pre_intent_candidate_observed(
+        self,
+        *,
+        attempt_id: str,
+        observed_at: str,
+        candidate_identity: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._store._append(
+            self,
+            event_type="pre_intent_candidate_observed",
+            attempt_id=attempt_id,
             payload={
-                "result": str(result),
-                "machine_code": machine_code,
-                "classification": classification,
                 "observed_at": str(observed_at),
+                "candidate_identity": dict(candidate_identity),
             },
+        )
+
+    def recover_pre_intent_finished(
+        self,
+        *,
+        attempt_id: str,
+        machine_code: str,
+        observed_at: str,
+        evidence: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "result": "structural",
+            "machine_code": str(machine_code),
+            "classification": "structural",
+            "observed_at": str(observed_at),
+            "recovered_after_crash": True,
+        }
+        if isinstance(evidence, Mapping):
+            payload["evidence"] = dict(evidence)
+        return self._store._append(
+            self,
+            event_type="pre_intent_attempt_finished",
+            attempt_id=attempt_id,
+            payload=payload,
         )
 
     def record_pre_intent_prepare_succeeded(
@@ -2171,6 +2239,29 @@ def _project(
             pre_intent_attempts.append(row)
             pre_by_id[attempt_id] = row
             continue
+        if event_type == "pre_intent_candidate_observed":
+            row = pre_by_id.get(attempt_id)
+            if (
+                row is None
+                or row["terminal_result"] is not None
+                or row.get("candidate_identity") is not None
+                or row["prepare_succeeded_sequence"] is not None
+                or (
+                    row.get("source_tick_key") is not None
+                    and row.get("source_tick_key")
+                    != source_tick_key
+                )
+            ):
+                raise SupervisorStoreError("attempt_store_corrupt")
+            row["candidate_observed_sequence"] = event["sequence"]
+            row["candidate_observed_event_sha256"] = event[
+                "event_sha256"
+            ]
+            row["candidate_observed_at"] = payload["observed_at"]
+            row["candidate_identity"] = dict(
+                payload["candidate_identity"]
+            )
+            continue
         if event_type == "pre_intent_prepare_succeeded":
             row = pre_by_id.get(attempt_id)
             if (
@@ -2200,6 +2291,7 @@ def _project(
                 or row["terminal_result"] is not None
                 or (
                     event_type != "pre_intent_attempt_abandoned"
+                    and payload.get("recovered_after_crash") is not True
                     and
                     row.get("source_tick_key") is not None
                     and row.get("source_tick_key")
@@ -2207,21 +2299,27 @@ def _project(
                 )
             ):
                 raise SupervisorStoreError("attempt_store_corrupt")
-            row.update(
-                {
-                    "terminal_result": payload["result"],
-                    "terminal_machine_code": payload.get(
-                        "machine_code"
-                    ),
-                    "terminal_classification": payload.get(
-                        "classification"
-                    ),
-                    "terminal_observed_at": payload["observed_at"],
-                    "terminal_event_type": event_type,
-                    "terminal_sequence": event["sequence"],
-                    "terminal_event_sha256": event["event_sha256"],
-                }
-            )
+            terminal = {
+                "terminal_result": payload["result"],
+                "terminal_machine_code": payload.get(
+                    "machine_code"
+                ),
+                "terminal_classification": payload.get(
+                    "classification"
+                ),
+                "terminal_observed_at": payload["observed_at"],
+                "terminal_event_type": event_type,
+                "terminal_sequence": event["sequence"],
+                "terminal_event_sha256": event["event_sha256"],
+            }
+            if isinstance(payload.get("evidence"), Mapping):
+                terminal["terminal_evidence"] = dict(
+                    payload["evidence"]
+                )
+            if payload.get("recovered_after_crash") is True:
+                terminal["recovered_after_crash"] = True
+                terminal["recovery_source_tick_key"] = source_tick_key
+            row.update(terminal)
             if event_type == "pre_intent_attempt_abandoned":
                 row["recovery_source_tick_key"] = source_tick_key
             continue
@@ -2493,6 +2591,18 @@ def _validate_event_payload(
             if payload.get("phase_scope") != "create_or_prepare":
                 raise SupervisorStoreError(code)
             return
+        if event_type == "pre_intent_candidate_observed":
+            _parse_timestamp(payload.get("observed_at"))
+            expected = {"observed_at", "candidate_identity"}
+            if payload.get("source_tick_key") is not None:
+                expected.add("source_tick_key")
+            if set(payload) != expected:
+                raise SupervisorStoreError(code)
+            _validate_candidate_identity(
+                payload.get("candidate_identity"),
+                code=code,
+            )
+            return
         if event_type == "pre_intent_prepare_succeeded":
             _parse_timestamp(payload.get("observed_at"))
             return
@@ -2513,6 +2623,47 @@ def _validate_event_payload(
                 raise SupervisorStoreError(code)
             else:
                 _identity(machine_code, code)
+            evidence = payload.get("evidence")
+            recovered_after_crash = payload.get(
+                "recovered_after_crash"
+            )
+            if recovered_after_crash is not None:
+                if (
+                    recovered_after_crash is not True
+                    or event_type != "pre_intent_attempt_finished"
+                    or result != "structural"
+                    or classification != "structural"
+                    or machine_code
+                    not in {
+                        "attempt_store_corrupt",
+                        "outer_strategy_policy_envelope_out_of_bounds",
+                    }
+                ):
+                    raise SupervisorStoreError(code)
+                if (
+                    machine_code
+                    == "outer_strategy_policy_envelope_out_of_bounds"
+                    and evidence is None
+                ) or (
+                    machine_code == "attempt_store_corrupt"
+                    and evidence is not None
+                ):
+                    raise SupervisorStoreError(code)
+            if evidence is not None:
+                if (
+                    result != "structural"
+                    or machine_code
+                    != "outer_strategy_policy_envelope_out_of_bounds"
+                    or not isinstance(evidence, Mapping)
+                    or set(evidence)
+                    != {"rejection_id", "rejection_digest"}
+                ):
+                    raise SupervisorStoreError(code)
+                _identity(evidence.get("rejection_id"), code)
+                _required_digest(
+                    evidence.get("rejection_digest"),
+                    code=code,
+                )
             if (
                 event_type == "pre_intent_attempt_abandoned"
                 and (
@@ -2545,6 +2696,71 @@ def _validate_event_payload(
     except SupervisorStoreError as exc:
         raise SupervisorStoreError(code) from exc
     raise SupervisorStoreError(code)
+
+
+def _validate_candidate_identity(
+    value: Any,
+    *,
+    code: str,
+) -> dict[str, Any]:
+    fields = {
+        "supervisor_attempt_id",
+        "proposal_id",
+        "proposal_digest",
+        "preview_id",
+        "preview_digest",
+        "facts_digest",
+        "confirmation_digest",
+        "strategy_type",
+        "direction",
+        "limits",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise SupervisorStoreError(code)
+    row = dict(value)
+    _identity(row.get("supervisor_attempt_id"), code)
+    _identity(row.get("proposal_id"), code)
+    _required_digest(row.get("proposal_digest"), code=code)
+    _identity(row.get("preview_id"), code)
+    _required_digest(row.get("preview_digest"), code=code)
+    if row.get("facts_digest") is not None:
+        _identity(row.get("facts_digest"), code)
+    if row.get("confirmation_digest") is not None:
+        _required_digest(
+            row.get("confirmation_digest"),
+            code=code,
+        )
+    strategy_type = str(row.get("strategy_type") or "")
+    direction = str(row.get("direction") or "")
+    expected_limits = (
+        {
+            "max_actual_leverage",
+            "max_full_depth_loss",
+            "max_notional_per_grid",
+            "min_grid_count",
+            "max_grid_count",
+        }
+        if strategy_type == "grid"
+        else {
+            "max_actual_leverage",
+            "max_full_depth_loss",
+            "max_notional_per_addition",
+            "max_total_possible_notional",
+            "min_additions",
+            "max_additions",
+        }
+        if strategy_type == "dca"
+        else set()
+    )
+    limits = row.get("limits")
+    if (
+        direction not in {"long", "neutral", "short"}
+        or not isinstance(limits, Mapping)
+        or set(limits) != expected_limits
+        or any(not str(item) for item in limits.values())
+    ):
+        raise SupervisorStoreError(code)
+    return row
 
 
 def _validate_intent_payload(payload: Mapping[str, Any]) -> None:

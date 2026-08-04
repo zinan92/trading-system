@@ -203,6 +203,42 @@ def _bound_store(
     return store, policy, binding
 
 
+def _reject_supervisor_candidate(
+    store: CycleRiskEnvelopeStore,
+    *,
+    direction: str = "long",
+    notional_per_grid: str = "50",
+) -> tuple[dict, dict, CycleRiskEnvelopeError]:
+    preview = {
+        **_preview(
+            grid__notional_per_grid=notional_per_grid,
+        ),
+        "direction": direction,
+        "preview_id": "grid-preview-rejected",
+    }
+    proposal = {
+        **_ai_proposal(),
+        "proposal_id": "proposal-ai-rejected",
+        "direction": direction,
+        "preview_id": preview["preview_id"],
+        "grid": dict(preview["grid"]),
+        "risk_budget": dict(preview["risk"]),
+    }
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_envelope_out_of_bounds",
+    ) as caught:
+        store.authorize_ai_candidate_envelope(
+            cycle_id="2026-07-30_DAY",
+            proposal=proposal,
+            preview=preview,
+            supervisor_attempt_id="supervisor-attempt-rejected-1",
+            now="2026-07-30T01:02:00+00:00",
+        )
+    assert caught.value.evidence is not None
+    return proposal, preview, caught.value
+
+
 def test_human_envelope_records_exact_preview_comparisons(tmp_path: Path) -> None:
     store = CycleRiskEnvelopeStore(tmp_path)
     envelope = store.authorize_envelope(
@@ -311,6 +347,377 @@ def test_ai_envelope_must_be_nested_inside_human_policy(tmp_path: Path, monkeypa
             preview=_preview(),
             now=policy["expires_at"],
         )
+
+
+def test_outer_policy_rejection_is_immutable_deny_only_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, policy, binding = _bound_store(tmp_path, monkeypatch)
+    proposal, preview, error = _reject_supervisor_candidate(store)
+
+    evidence = dict(error.evidence or {})
+    receipt = store.outer_policy_rejection(
+        cycle_id="2026-07-30_DAY",
+        rejection_id=evidence["rejection_id"],
+        rejection_digest=evidence["rejection_digest"],
+    )
+
+    assert receipt["authorization_effect"] == "deny_only"
+    assert receipt["passed"] is False
+    assert receipt["candidate"] == {
+        "supervisor_attempt_id": "supervisor-attempt-rejected-1",
+        "proposal_id": proposal["proposal_id"],
+        "proposal_digest": (
+            risk_envelope_module._proposal_plan_digest(proposal)
+        ),
+        "preview_id": preview["preview_id"],
+        "preview_digest": risk_envelope_module._digest(preview),
+        "facts_digest": None,
+        "confirmation_digest": None,
+        "strategy_type": "grid",
+        "direction": "long",
+        "limits": _limits(
+            max_notional_per_grid="50",
+            min_grid_count="10",
+            max_grid_count="10",
+        ),
+    }
+    assert receipt["outer_policy"] == {
+        "policy_id": policy["policy_id"],
+        "version": policy["version"],
+        "policy_digest": policy["policy_digest"],
+        "authorized_at": policy["authorized_at"],
+        "expires_at": policy["expires_at"],
+        "binding_id": binding["binding_id"],
+        "binding_version": binding["binding_version"],
+        "binding_digest": binding["binding_digest"],
+        "bound_at": binding["bound_at"],
+    }
+    assert {row["field"] for row in receipt["comparisons"]} == {
+        "strategy_type",
+        "direction",
+        "max_actual_leverage",
+        "max_full_depth_loss",
+        "max_notional_per_grid",
+        "min_grid_count",
+        "max_grid_count",
+    }
+    assert next(
+        row
+        for row in receipt["comparisons"]
+        if row["field"] == "direction"
+    )["pass"] is False
+    assert not (
+        tmp_path
+        / "dualtrack"
+        / "supervisor"
+        / "risk_envelopes"
+        / "2026-07-30_DAY.json"
+    ).exists()
+
+
+def test_rejected_candidate_clears_only_under_different_sufficient_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    store_v1, _policy_v1, binding_v1 = _bound_store(
+        tmp_path,
+        monkeypatch,
+    )
+    _proposal, _preview_row, error = _reject_supervisor_candidate(
+        store_v1
+    )
+    evidence = dict(error.evidence or {})
+
+    unchanged = store_v1.recheck_outer_policy_rejection(
+        cycle_id="2026-07-30_DAY",
+        rejection_id=evidence["rejection_id"],
+        rejection_digest=evidence["rejection_digest"],
+        at="2026-07-30T01:03:00+00:00",
+    )
+    assert unchanged["binding_changed"] is False
+    assert unchanged["passed"] is False
+
+    v2_writer = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v1["binding_id"],
+            "binding_version": binding_v1["binding_version"],
+            "binding_digest": binding_v1["binding_digest"],
+        },
+    )
+    policy_v2 = v2_writer.authorize_outer_policy(
+        payload=_outer_policy_v2_payload(),
+        actor=actor,
+        now="2026-07-31T01:00:00+00:00",
+    )
+    binding_v2 = v2_writer.bind_supervisor_outer_policy(
+        payload=_binding_payload(
+            policy_v2,
+            binding_version=2,
+            summary="Bind Paper Supervisor to Park policy v2",
+        ),
+        actor=actor,
+        now="2026-07-31T01:01:00+00:00",
+    )
+    store_v2 = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v2["binding_id"],
+            "binding_version": binding_v2["binding_version"],
+            "binding_digest": binding_v2["binding_digest"],
+        },
+    )
+
+    remediated = store_v2.recheck_outer_policy_rejection(
+        cycle_id="2026-07-30_DAY",
+        rejection_id=evidence["rejection_id"],
+        rejection_digest=evidence["rejection_digest"],
+        at="2026-07-31T01:02:00+00:00",
+    )
+
+    assert remediated["binding_changed"] is True
+    assert remediated["passed"] is True
+    assert all(row["pass"] for row in remediated["comparisons"])
+    assert remediated["control_actions_executed"] == 0
+    assert store_v2.verify_outer_policy_recheck_proof(
+        proof=remediated,
+        cycle_id="2026-07-30_DAY",
+        rejection_id=evidence["rejection_id"],
+        rejection_digest=evidence["rejection_digest"],
+    ) == remediated
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "comparisons",
+        "binding_changed",
+        "control_actions",
+        "rejection_identity",
+        "digest",
+    ],
+)
+def test_outer_policy_recheck_proof_rejects_malformed_or_forged_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    store_v1, _policy_v1, binding_v1 = _bound_store(
+        tmp_path,
+        monkeypatch,
+    )
+    _proposal, _preview_row, error = _reject_supervisor_candidate(
+        store_v1
+    )
+    evidence = dict(error.evidence or {})
+    policy_v2 = store_v1.authorize_outer_policy(
+        payload=_outer_policy_v2_payload(),
+        actor=actor,
+        now="2026-07-31T01:00:00+00:00",
+    )
+    binding_v2 = store_v1.bind_supervisor_outer_policy(
+        payload=_binding_payload(
+            policy_v2,
+            binding_version=2,
+            summary="Bind Paper Supervisor to Park policy v2",
+        ),
+        actor=actor,
+        now="2026-07-31T01:01:00+00:00",
+    )
+    store_v2 = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v2["binding_id"],
+            "binding_version": binding_v2["binding_version"],
+            "binding_digest": binding_v2["binding_digest"],
+        },
+    )
+    proof = store_v2.recheck_outer_policy_rejection(
+        cycle_id="2026-07-30_DAY",
+        rejection_id=evidence["rejection_id"],
+        rejection_digest=evidence["rejection_digest"],
+        at="2026-07-31T01:02:00+00:00",
+    )
+    forged = json.loads(json.dumps(proof))
+    if mutation == "comparisons":
+        forged["comparisons"] = []
+    elif mutation == "binding_changed":
+        forged["binding_changed"] = False
+    elif mutation == "control_actions":
+        forged["control_actions_executed"] = 1
+    elif mutation == "rejection_identity":
+        forged["rejection_id"] = "outer-policy-rejection-substitute"
+    else:
+        forged["recheck_digest"] = "0" * 64
+    if mutation != "digest":
+        forged["recheck_digest"] = risk_envelope_module._digest(
+            {
+                key: value
+                for key, value in forged.items()
+                if key != "recheck_digest"
+            }
+        )
+
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="attempt_store_corrupt",
+    ):
+        store_v2.verify_outer_policy_recheck_proof(
+            proof=forged,
+            cycle_id="2026-07-30_DAY",
+            rejection_id=evidence["rejection_id"],
+            rejection_digest=evidence["rejection_digest"],
+        )
+
+
+def test_changed_binding_does_not_clear_numeric_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    store_v1, _policy_v1, binding_v1 = _bound_store(
+        tmp_path,
+        monkeypatch,
+    )
+    _proposal, _preview_row, error = _reject_supervisor_candidate(
+        store_v1,
+        direction="neutral",
+        notional_per_grid="60.0000001",
+    )
+    evidence = dict(error.evidence or {})
+    v2_writer = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v1["binding_id"],
+            "binding_version": binding_v1["binding_version"],
+            "binding_digest": binding_v1["binding_digest"],
+        },
+    )
+    policy_v2 = v2_writer.authorize_outer_policy(
+        payload=_outer_policy_v2_payload(),
+        actor=actor,
+        now="2026-07-31T01:00:00+00:00",
+    )
+    binding_v2 = v2_writer.bind_supervisor_outer_policy(
+        payload=_binding_payload(
+            policy_v2,
+            binding_version=2,
+            summary="Bind Paper Supervisor to Park policy v2",
+        ),
+        actor=actor,
+        now="2026-07-31T01:01:00+00:00",
+    )
+    store_v2 = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref={
+            "binding_id": binding_v2["binding_id"],
+            "binding_version": binding_v2["binding_version"],
+            "binding_digest": binding_v2["binding_digest"],
+        },
+    )
+
+    result = store_v2.recheck_outer_policy_rejection(
+        cycle_id="2026-07-30_DAY",
+        rejection_id=evidence["rejection_id"],
+        rejection_digest=evidence["rejection_digest"],
+        at="2026-07-31T01:02:00+00:00",
+    )
+
+    assert result["binding_changed"] is True
+    assert result["passed"] is False
+    assert next(
+        row
+        for row in result["comparisons"]
+        if row["field"] == "max_notional_per_grid"
+    )["pass"] is False
+
+
+@pytest.mark.parametrize("mutation", ["missing", "digest", "tampered"])
+def test_rejection_evidence_fails_closed_when_not_exact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    store, _policy, _binding = _bound_store(tmp_path, monkeypatch)
+    _proposal, _preview_row, error = _reject_supervisor_candidate(store)
+    evidence = dict(error.evidence or {})
+    rejection_id = evidence["rejection_id"]
+    rejection_digest = evidence["rejection_digest"]
+    if mutation == "missing":
+        rejection_id = "outer-policy-rejection-missing"
+    elif mutation == "digest":
+        rejection_digest = "0" * 64
+    else:
+        path = (
+            tmp_path
+            / "dualtrack"
+            / "supervisor"
+            / "risk_envelopes"
+            / "outer_policy_rejections"
+            / "2026-07-30_DAY.json"
+        )
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        rows[0]["candidate"]["direction"] = "neutral"
+        path.write_text(json.dumps(rows), encoding="utf-8")
+
+    with pytest.raises(CycleRiskEnvelopeError):
+        store.recheck_outer_policy_rejection(
+            cycle_id="2026-07-30_DAY",
+            rejection_id=rejection_id,
+            rejection_digest=rejection_digest,
+            at="2026-07-30T01:03:00+00:00",
+        )
+
+
+def test_legacy_rejection_resolution_requires_verified_park_actor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    store = CycleRiskEnvelopeStore(tmp_path)
+    payload = {
+        "resolution_id": "legacy-resolution-1",
+        "resolution_version": 1,
+        "blocked_at": "2026-07-30T01:02:00+00:00",
+        "machine_code": (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ),
+        "summary": "Park explicitly resolves the receipt-less blocker",
+    }
+
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_invalid",
+    ):
+        store.authorize_legacy_rejection_resolution(
+            cycle_id="2026-07-30_DAY",
+            payload=payload,
+            actor={
+                "email": "park@example.com",
+                "transport": "public_gateway",
+            },
+            now="2026-07-30T01:03:00+00:00",
+        )
+
+    resolution = store.authorize_legacy_rejection_resolution(
+        cycle_id="2026-07-30_DAY",
+        payload=payload,
+        actor=actor,
+        now="2026-07-30T01:03:00+00:00",
+    )
+    loaded = store.legacy_rejection_resolution(
+        cycle_id="2026-07-30_DAY",
+        machine_code=payload["machine_code"],
+        blocked_at=payload["blocked_at"],
+    )
+    assert loaded == resolution
+    assert resolution["authorization_kind"] == (
+        "park_explicit_legacy_structural_resolution"
+    )
 
 
 def test_outer_policy_v2_allows_only_explicit_grid_direction_members(
@@ -707,6 +1114,24 @@ def test_policy_authorization_api_skips_market_and_account_reads(
         output_root=output,
         actor=actor,
     )
+    resolution_result = (
+        dashboard_server.build_strategy_console_control_response(
+            {
+                "cycle_id": "2026-07-30_DAY",
+                "action": "resolve_legacy_outer_policy_rejection",
+                "as_of": "2030-01-01T00:00:00+00:00",
+                "resolution_id": "legacy-resolution-api-1",
+                "resolution_version": 1,
+                "blocked_at": "2026-07-30T01:02:00+00:00",
+                "machine_code": (
+                    "outer_strategy_policy_envelope_out_of_bounds"
+                ),
+                "summary": "Park resolves one receipt-less blocker",
+            },
+            output_root=output,
+            actor=actor,
+        )
+    )
 
     assert policy["schema_version"] == (
         "paper-strategy-policy-boundary-v2"
@@ -718,6 +1143,9 @@ def test_policy_authorization_api_skips_market_and_account_reads(
     assert binding_result["outer_strategy_policy_binding"][
         "policy_digest"
     ] == policy["policy_digest"]
+    assert resolution_result[
+        "legacy_outer_policy_rejection_resolution"
+    ]["authorized_at"] == trusted_now
     plane = StrategyControlPlane(output)
     assert plane.active_plan("2026-07-30_DAY") is None
     execution_root = output / "dualtrack" / "execution"

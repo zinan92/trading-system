@@ -456,6 +456,7 @@ class SupervisorEpisodeMachine:
         *,
         classification: Mapping[str, Any],
         observed_at: str | datetime,
+        evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         current = self._state(state)
         now = _timestamp(observed_at)
@@ -471,11 +472,17 @@ class SupervisorEpisodeMachine:
             raise SupervisorEpisodeError(
                 "supervisor_structural_blocker_requires_recheck"
             )
+        detail: dict[str, Any] = {
+            "automatic_retry_allowed": False,
+        }
+        if isinstance(evidence, Mapping):
+            detail["evidence"] = dict(evidence)
         return self._structural(
             current,
             machine_code=classified["machine_code"],
             observed_at=now,
-            detail={"automatic_retry_allowed": False},
+            detail=detail,
+            blocker_evidence=evidence,
         )
 
     def recheck_structural_blocker(
@@ -485,6 +492,7 @@ class SupervisorEpisodeMachine:
         machine_code: str,
         condition_cleared: bool,
         observed_at: str | datetime,
+        evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Clear only a rechecked exact blocker; never replay a command."""
 
@@ -500,15 +508,18 @@ class SupervisorEpisodeMachine:
                 "supervisor_structural_recheck_identity_invalid"
             )
         if not condition_cleared:
+            detail = {
+                "condition_cleared": False,
+                "control_actions_executed": 0,
+            }
+            if isinstance(evidence, Mapping):
+                detail["evidence"] = dict(evidence)
             return self._event(
                 current,
                 event_type="structural_blocker_rechecked",
                 observed_at=now,
                 machine_code=machine_code,
-                detail={
-                    "condition_cleared": False,
-                    "control_actions_executed": 0,
-                },
+                detail=detail,
             )
         if machine_code in {
             "dangerous_start_attempt_cap_reached",
@@ -525,17 +536,20 @@ class SupervisorEpisodeMachine:
         current["mode"] = resume_mode
         current["blocker"] = None
         current["alert_required"] = resume_mode == "probing"
+        detail = {
+            "condition_cleared": True,
+            "control_actions_executed": 0,
+            "old_command_replayed": False,
+            "resume_mode": resume_mode,
+        }
+        if isinstance(evidence, Mapping):
+            detail["evidence"] = dict(evidence)
         return self._event(
             current,
             event_type="structural_blocker_cleared",
             observed_at=now,
             machine_code=machine_code,
-            detail={
-                "condition_cleared": True,
-                "control_actions_executed": 0,
-                "old_command_replayed": False,
-                "resume_mode": resume_mode,
-            },
+            detail=detail,
         )
 
     def observe_heartbeat(
@@ -726,6 +740,23 @@ class SupervisorEpisodeMachine:
                 raise SupervisorEpisodeError(
                     "supervisor_episode_state_invalid"
                 )
+            evidence = blocker.get("evidence")
+            if evidence is not None and (
+                blocker.get("machine_code")
+                != "outer_strategy_policy_envelope_out_of_bounds"
+                or not isinstance(evidence, dict)
+                or set(evidence)
+                != {"rejection_id", "rejection_digest"}
+                or _identity_or_none(evidence.get("rejection_id"))
+                is None
+                or _digest_or_none(
+                    evidence.get("rejection_digest")
+                )
+                is None
+            ):
+                raise SupervisorEpisodeError(
+                    "supervisor_episode_state_invalid"
+                )
         elif blocker is not None:
             raise SupervisorEpisodeError(
                 "supervisor_episode_state_invalid"
@@ -792,6 +823,7 @@ class SupervisorEpisodeMachine:
         machine_code: str,
         observed_at: datetime,
         detail: Mapping[str, Any],
+        blocker_evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if machine_code not in STRUCTURAL_MACHINE_CODES:
             machine_code = "unknown_blocker"
@@ -814,6 +846,10 @@ class SupervisorEpisodeMachine:
             "automatic_retry_allowed": False,
             "resume_mode": resume_mode,
         }
+        if isinstance(blocker_evidence, Mapping):
+            state["blocker"]["evidence"] = dict(
+                blocker_evidence
+            )
         return self._event(
             state,
             event_type="structural_blocked",

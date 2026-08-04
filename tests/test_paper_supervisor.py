@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,7 +18,15 @@ from services.control_audit import (
     append_control_event,
     build_control_event,
 )
-from services.paper_supervisor import PaperSupervisor, _digest
+from services.cycle_risk_envelope import (
+    CycleRiskEnvelopeError,
+    CycleRiskEnvelopeStore,
+)
+from services.paper_supervisor import (
+    PaperSupervisor,
+    SupervisorAttemptDeadline,
+    _digest,
+)
 from services.paper_supervisor_classifier import classify_blocker
 from services.paper_supervisor_store import PaperSupervisorStore
 from services.dualtrack_execution_adapter import (
@@ -110,8 +119,43 @@ def _commands(plan: dict) -> list[dict]:
     ]
 
 
+def _candidate_identity(
+    attempt_id: str,
+    *,
+    proposal_id: str = "proposal-rejected",
+    proposal_digest: str = "b" * 64,
+    preview_id: str = "preview-rejected",
+    preview_digest: str = "c" * 64,
+    facts_digest: str | None = "facts-rejected",
+    confirmation_digest: str | None = "d" * 64,
+) -> dict:
+    return {
+        "supervisor_attempt_id": attempt_id,
+        "proposal_id": proposal_id,
+        "proposal_digest": proposal_digest,
+        "preview_id": preview_id,
+        "preview_digest": preview_digest,
+        "facts_digest": facts_digest,
+        "confirmation_digest": confirmation_digest,
+        "strategy_type": "grid",
+        "direction": "long",
+        "limits": {
+            "max_actual_leverage": "10",
+            "max_full_depth_loss": "1000",
+            "max_notional_per_grid": "100",
+            "min_grid_count": "10",
+            "max_grid_count": "10",
+        },
+    }
+
+
 class FakePlane:
     def __init__(self) -> None:
+        self.risk_envelopes = SimpleNamespace(
+            find_outer_policy_rejection_for_attempt=(
+                lambda **_kwargs: None
+            )
+        )
         self.plan = _plan(1, preview_id="seed")
         self.runtime = {
             "cycle_id": CYCLE,
@@ -139,11 +183,43 @@ class FakePlane:
         *,
         proposal: dict,
         preview: dict,
+        supervisor_attempt_id: str | None = None,
     ) -> dict:
         assert cycle_id == CYCLE
         assert proposal["proposal_id"] == "proposal-1"
         assert preview["preview_id"] == "recommendation-preview-1"
+        assert str(supervisor_attempt_id).startswith(
+            "supervisor-attempt-"
+        )
         return {"envelope_authorization_id": "envelope-1"}
+
+    def supervisor_candidate_identity(
+        self,
+        cycle_id: str,
+        *,
+        proposal: dict,
+        preview: dict,
+        supervisor_attempt_id: str | None = None,
+    ) -> dict:
+        assert cycle_id == CYCLE
+        return {
+            "supervisor_attempt_id": supervisor_attempt_id,
+            "proposal_id": proposal["proposal_id"],
+            "proposal_digest": _digest(proposal),
+            "preview_id": preview["preview_id"],
+            "preview_digest": _digest(preview),
+            "facts_digest": None,
+            "confirmation_digest": None,
+            "strategy_type": "grid",
+            "direction": "neutral",
+            "limits": {
+                "max_actual_leverage": "10",
+                "max_full_depth_loss": "1000",
+                "max_notional_per_grid": "100",
+                "min_grid_count": "3",
+                "max_grid_count": "3",
+            },
+        }
 
     def lock_production_plan(
         self,
@@ -610,6 +686,1030 @@ def test_stale_plan_identity_blocker_rechecks_exact_envelope_gate(
         assert updated["blocker"] is None
     else:
         assert updated["blocker"]["machine_code"] == "plan_identity_conflict"
+
+
+@pytest.mark.parametrize(
+    ("recheck_passes", "authority_mutation", "expected"),
+    [
+        (True, None, True),
+        (False, None, False),
+        (True, "exposure", False),
+        (True, "reconciliation", False),
+        (True, "unknown_control", False),
+        (True, "active_plan", False),
+    ],
+)
+def test_outer_policy_recheck_uses_bound_rejection_and_clean_authority(
+    tmp_path: Path,
+    recheck_passes: bool,
+    authority_mutation: str | None,
+    expected: bool,
+) -> None:
+    calls: list[dict] = []
+    attempt_id = "supervisor-attempt-policy-rejected"
+    candidate = {
+        "supervisor_attempt_id": attempt_id,
+        "proposal_id": "proposal-rejected",
+        "proposal_digest": "b" * 64,
+        "preview_id": "preview-rejected",
+        "preview_digest": "c" * 64,
+        "facts_digest": "facts-rejected",
+        "confirmation_digest": "d" * 64,
+        "strategy_type": "grid",
+        "direction": "long",
+        "limits": {
+            "max_actual_leverage": "10",
+            "max_full_depth_loss": "1000",
+            "max_notional_per_grid": "100",
+            "min_grid_count": "10",
+            "max_grid_count": "10",
+        },
+    }
+    receipt = {
+        "cycle_id": CYCLE,
+        "rejection_id": "outer-policy-rejection-exact",
+        "rejection_digest": "a" * 64,
+        "machine_code": (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ),
+        "candidate": candidate,
+    }
+
+    class FakeRiskEnvelopes:
+        def outer_policy_rejection_for_attempt(
+            self,
+            **kwargs: dict,
+        ) -> dict:
+            assert kwargs["supervisor_attempt_id"] == attempt_id
+            return deepcopy(receipt)
+
+        def recheck_outer_policy_rejection(
+            self,
+            **kwargs: dict,
+        ) -> dict:
+            calls.append(kwargs)
+            return {
+                "schema_version": (
+                    "paper-supervisor-outer-policy-recheck-v1"
+                ),
+                "rejection_id": kwargs["rejection_id"],
+                "rejection_digest": kwargs["rejection_digest"],
+                "comparisons": [
+                    {
+                        "field": "direction",
+                        "operator": "in",
+                        "authorized_limit": [
+                            "long",
+                            "neutral",
+                            "short",
+                        ],
+                        "observed_value": "long",
+                        "pass": recheck_passes,
+                    }
+                ],
+                "passed": recheck_passes,
+                "control_actions_executed": 0,
+                "recheck_digest": "c" * 64,
+            }
+
+        @staticmethod
+        def verify_outer_policy_recheck_proof(
+            *,
+            proof: dict,
+            **_kwargs: dict,
+        ) -> dict:
+            return deepcopy(proof)
+
+    supervisor = PaperSupervisor(
+        tmp_path / "outputs",
+        plane=SimpleNamespace(
+            risk_envelopes=FakeRiskEnvelopes(),
+            verify_supervisor_outer_policy=lambda: {
+                "status": "verified"
+            },
+        ),
+        execution=object(),
+        control=lambda *_args, **_kwargs: pytest.fail(
+            "structural recheck must execute zero controls"
+        ),
+        accounting_reconciliation=lambda: "pass",
+    )
+    state = supervisor.episodes.record_structural_blocker(
+        supervisor.episodes.new_cycle(CYCLE, observed_at=T0),
+        classification=classify_blocker(
+            control_code=(
+                "outer_strategy_policy_envelope_out_of_bounds"
+            )
+        ),
+        observed_at=T0,
+        evidence={
+            "rejection_id": "outer-policy-rejection-exact",
+            "rejection_digest": "a" * 64,
+        },
+    )
+    projection = {
+        "attempts": (
+            [
+                {
+                    "terminal_result": "control_outcome_unknown",
+                    "terminal_machine_code": (
+                        "control_outcome_unknown"
+                    ),
+                }
+            ]
+            if authority_mutation == "unknown_control"
+            else []
+        ),
+        "unfinished_intent": None,
+        "pre_intent_attempts": [
+            {
+                "attempt_id": attempt_id,
+                "candidate_identity": candidate,
+                "terminal_result": "structural",
+                "terminal_classification": "structural",
+                "terminal_machine_code": (
+                    "outer_strategy_policy_envelope_out_of_bounds"
+                ),
+                "terminal_observed_at": T0.isoformat(),
+                "terminal_evidence": {
+                    "rejection_id": (
+                        "outer-policy-rejection-exact"
+                    ),
+                    "rejection_digest": "a" * 64,
+                },
+            }
+        ],
+    }
+    supervisor.store.current_state = (
+        lambda _cycle_id: deepcopy(projection)
+    )
+    authority = SimpleNamespace(
+        cycle_id=CYCLE,
+        active_plan=(
+            {"strategy_plan_id": "unexpected"}
+            if authority_mutation == "active_plan"
+            else {}
+        ),
+        runtime={
+            "desired_state": "stopped",
+            "actual_state": "stopped",
+            "accepted_order_count": 0,
+        },
+        accepted_order_fingerprints=(
+            ("order",)
+            if authority_mutation == "exposure"
+            else ()
+        ),
+        open_position_count=0,
+        reconciliation={
+            "execution": (
+                "drift"
+                if authority_mutation == "reconciliation"
+                else "ok"
+            ),
+            "accounting": "pass",
+        },
+    )
+
+    updated, cleared = supervisor._recheck_structural(
+        state,
+        authority=authority,
+        observed_at=(T0 + timedelta(minutes=1)).isoformat(),
+    )
+
+    assert cleared is expected
+    assert updated["mode"] == (
+        "ready" if expected else "blocked_structural"
+    )
+    assert len(calls) == (
+        1 if authority_mutation is None else 0
+    )
+    if authority_mutation is None:
+        assert calls[0]["rejection_id"] == (
+            "outer-policy-rejection-exact"
+        )
+        assert calls[0]["rejection_digest"] == "a" * 64
+        assert updated["events"][-1]["detail"]["evidence"][
+            "control_actions_executed"
+        ] == 0
+
+
+def test_outer_policy_rejection_reference_is_bound_into_episode_wal(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan = {}
+    plane.runtime.update(
+        {
+            "strategy_plan_id": None,
+            "strategy_plan_version": None,
+        }
+    )
+    expected_evidence = {
+        "rejection_id": "outer-policy-rejection-wal",
+        "rejection_digest": "a" * 64,
+    }
+    receipt_holder: dict[str, dict] = {}
+
+    class FakeRiskEnvelopes:
+        @staticmethod
+        def find_outer_policy_rejection_for_attempt(
+            **_kwargs: dict,
+        ) -> dict | None:
+            return deepcopy(receipt_holder.get("receipt"))
+
+    plane.risk_envelopes = FakeRiskEnvelopes()
+
+    def reject_candidate(
+        _cycle_id: str,
+        *,
+        proposal: dict,
+        preview: dict,
+        supervisor_attempt_id: str | None = None,
+    ) -> dict:
+        assert proposal["proposal_id"] == "proposal-1"
+        assert preview["preview_id"] == "recommendation-preview-1"
+        assert str(supervisor_attempt_id).startswith(
+            "supervisor-attempt-"
+        )
+        receipt_holder["receipt"] = {
+            "cycle_id": CYCLE,
+            **expected_evidence,
+            "machine_code": (
+                "outer_strategy_policy_envelope_out_of_bounds"
+            ),
+            "candidate": plane.supervisor_candidate_identity(
+                CYCLE,
+                proposal=proposal,
+                preview=preview,
+                supervisor_attempt_id=supervisor_attempt_id,
+            ),
+        }
+        raise CycleRiskEnvelopeError(
+            "outer_strategy_policy_envelope_out_of_bounds",
+            evidence=expected_evidence,
+        )
+
+    plane.authorize_supervisor_ai_envelope = reject_candidate
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(),
+    )
+
+    state = supervisor.store.episode_state(CYCLE)
+    projection = supervisor.store.current_state(CYCLE)
+    assert result["status"] == "blocked_structural"
+    assert result["machine_code"] == (
+        "outer_strategy_policy_envelope_out_of_bounds"
+    )
+    assert state is not None
+    assert state["blocker"]["evidence"] == expected_evidence
+    assert projection["pre_intent_attempts"][0][
+        "terminal_evidence"
+    ] == expected_evidence
+    assert control.calls == ["refresh_recommendation"]
+
+
+@pytest.mark.parametrize(
+    ("receipt_state", "expected_code"),
+    [
+        (
+            "exact",
+            "outer_strategy_policy_envelope_out_of_bounds",
+        ),
+        ("missing", "attempt_store_corrupt"),
+        ("mismatched", "attempt_store_corrupt"),
+    ],
+)
+def test_crash_after_candidate_marker_recovers_without_ai_or_control(
+    tmp_path: Path,
+    receipt_state: str,
+    expected_code: str,
+) -> None:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan = {}
+    plane.runtime.update(
+        {
+            "strategy_plan_id": None,
+            "strategy_plan_version": None,
+            "accepted_order_count": 0,
+        }
+    )
+    attempt_id = "supervisor-attempt-crashed-policy-rejection"
+    candidate = _candidate_identity(attempt_id)
+    risk_store = CycleRiskEnvelopeStore(tmp_path / "outputs")
+    evidence: dict[str, str] | None = None
+    if receipt_state != "missing":
+        receipt_candidate = (
+            {**candidate, "preview_id": "preview-substitute"}
+            if receipt_state == "mismatched"
+            else candidate
+        )
+        comparisons = [
+            {
+                "field": "strategy_type",
+                "operator": "==",
+                "authorized_limit": "grid",
+                "observed_value": "grid",
+                "pass": True,
+            },
+            {
+                "field": "direction",
+                "operator": "==",
+                "authorized_limit": "neutral",
+                "observed_value": "long",
+                "pass": False,
+            },
+            *[
+                {
+                    "field": field,
+                    "operator": (
+                        ">=" if field.startswith("min_") else "<="
+                    ),
+                    "authorized_limit": value,
+                    "observed_value": value,
+                    "pass": True,
+                }
+                for field, value in receipt_candidate["limits"].items()
+            ],
+        ]
+    plane.risk_envelopes = risk_store
+    original_heartbeat = _heartbeat()
+    original_health = validate_complete_tick_heartbeat(
+        original_heartbeat,
+        cycle_id=CYCLE,
+        observed_at=T0.isoformat(),
+    )
+    source_tick_key, trust = supervisor._source_tick_identity(
+        CYCLE,
+        health=original_health,
+    )
+    with supervisor.store.try_lease(
+        CYCLE,
+        holder_id="crashed-policy-owner",
+    ) as lease:
+        assert lease is not None
+        lease.claim_tick(
+            source_tick_key=source_tick_key,
+            heartbeat_digest=_digest(original_heartbeat),
+            trust=trust,
+            claimed_at=T0.isoformat(),
+            heartbeat_recorded_at=original_health.get("recorded_at"),
+        )
+        lease.record_pre_intent_started(
+            attempt_id=attempt_id,
+            observed_at=T0.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        lease.record_pre_intent_candidate_observed(
+            attempt_id=attempt_id,
+            observed_at=T0.isoformat(),
+            candidate_identity=candidate,
+        )
+
+    if receipt_state != "missing":
+        receipt = risk_store._persist_outer_policy_rejection(
+            cycle_id=CYCLE,
+            candidate=receipt_candidate,
+            binding={
+                "binding_id": "paper-supervisor-grid",
+                "binding_version": 1,
+                "binding_digest": "7" * 64,
+                "bound_at": T0.isoformat(),
+            },
+            outer_policy={
+                "policy_id": "park-grid-policy",
+                "version": 1,
+                "policy_digest": "8" * 64,
+                "authorized_at": T0.isoformat(),
+                "expires_at": (
+                    T0 + timedelta(days=30)
+                ).isoformat(),
+            },
+            comparisons=comparisons,
+            rejected_at=T0.isoformat(),
+        )
+        evidence = {
+            "rejection_id": receipt["rejection_id"],
+            "rejection_digest": receipt["rejection_digest"],
+        }
+
+    later = T0 + timedelta(seconds=1)
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=later.isoformat(),
+        heartbeat=_heartbeat(later),
+    )
+
+    assert result["status"] == "blocked_structural"
+    assert result["machine_code"] == expected_code
+    assert result["control_actions_executed"] == 0
+    assert control.calls == []
+    assert supervisor.execution.orders == []
+    projection = supervisor.store.current_state(CYCLE)
+    recovered = projection["pre_intent_attempts"][0]
+    assert recovered["recovered_after_crash"] is True
+    assert recovered["terminal_machine_code"] == expected_code
+    if receipt_state == "exact":
+        assert recovered["terminal_evidence"] == evidence
+    else:
+        assert "terminal_evidence" not in recovered
+
+
+def test_durable_rejection_receipt_overrides_before_intent_deadline(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan = {}
+    plane.runtime.update(
+        {
+            "strategy_plan_id": None,
+            "strategy_plan_version": None,
+            "accepted_order_count": 0,
+        }
+    )
+    evidence = {
+        "rejection_id": "outer-policy-rejection-timeout-race",
+        "rejection_digest": "a" * 64,
+    }
+    receipt_holder: dict[str, dict] = {}
+
+    class FakeRiskEnvelopes:
+        @staticmethod
+        def find_outer_policy_rejection_for_attempt(
+            **_kwargs: dict,
+        ) -> dict | None:
+            return deepcopy(receipt_holder.get("receipt"))
+
+    plane.risk_envelopes = FakeRiskEnvelopes()
+
+    def persist_then_timeout(
+        _cycle_id: str,
+        *,
+        proposal: dict,
+        preview: dict,
+        supervisor_attempt_id: str,
+    ) -> dict:
+        receipt_holder["receipt"] = {
+            "cycle_id": CYCLE,
+            **evidence,
+            "machine_code": (
+                "outer_strategy_policy_envelope_out_of_bounds"
+            ),
+            "candidate": plane.supervisor_candidate_identity(
+                CYCLE,
+                proposal=proposal,
+                preview=preview,
+                supervisor_attempt_id=supervisor_attempt_id,
+            ),
+        }
+        raise SupervisorAttemptDeadline()
+
+    plane.authorize_supervisor_ai_envelope = persist_then_timeout
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(),
+    )
+
+    assert result["status"] == "blocked_structural"
+    assert result["machine_code"] == (
+        "outer_strategy_policy_envelope_out_of_bounds"
+    )
+    assert control.calls == ["refresh_recommendation"]
+    terminal = supervisor.store.current_state(CYCLE)[
+        "pre_intent_attempts"
+    ][0]
+    assert terminal["terminal_evidence"] == evidence
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_marker",
+        "terminal_attempt",
+        "terminal_evidence",
+        "terminal_time",
+        "receipt_candidate",
+        "duplicate_terminal",
+    ],
+)
+def test_outer_policy_recheck_rejects_substituted_wal_linkage(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    supervisor, _control, _plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    attempt_id = "supervisor-attempt-bound-rejection"
+    evidence = {
+        "rejection_id": "outer-policy-rejection-bound",
+        "rejection_digest": "a" * 64,
+    }
+    candidate = _candidate_identity(attempt_id)
+    blocker = {
+        "machine_code": (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ),
+        "blocked_at": T0.isoformat(),
+        "evidence": evidence,
+    }
+    terminal = {
+        "attempt_id": attempt_id,
+        "candidate_identity": candidate,
+        "terminal_result": "structural",
+        "terminal_classification": "structural",
+        "terminal_machine_code": (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ),
+        "terminal_observed_at": T0.isoformat(),
+        "terminal_evidence": evidence,
+    }
+    receipt = {
+        "cycle_id": CYCLE,
+        **evidence,
+        "machine_code": (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ),
+        "candidate": candidate,
+    }
+    if mutation == "missing_marker":
+        terminal.pop("candidate_identity")
+    elif mutation == "terminal_attempt":
+        terminal["attempt_id"] = "supervisor-attempt-substitute"
+    elif mutation == "terminal_evidence":
+        terminal["terminal_evidence"] = {
+            **evidence,
+            "rejection_digest": "f" * 64,
+        }
+    elif mutation == "terminal_time":
+        terminal["terminal_observed_at"] = (
+            T0 + timedelta(seconds=1)
+        ).isoformat()
+    elif mutation == "receipt_candidate":
+        receipt["candidate"] = {
+            **candidate,
+            "preview_id": "preview-substitute",
+        }
+    rows = [terminal]
+    if mutation == "duplicate_terminal":
+        rows.append(deepcopy(terminal))
+    supervisor.store.current_state = lambda _cycle_id: {
+        "pre_intent_attempts": deepcopy(rows)
+    }
+
+    with pytest.raises(ValueError, match="attempt_store_corrupt"):
+        supervisor._bound_outer_policy_rejection(
+            CYCLE,
+            blocker=blocker,
+            loader=lambda **_kwargs: deepcopy(receipt),
+        )
+
+
+def test_receiptless_outer_policy_blocker_requires_exact_park_resolution(
+    tmp_path: Path,
+) -> None:
+    resolution = {"value": None}
+
+    class FakeRiskEnvelopes:
+        def legacy_rejection_resolution(self, **_kwargs: dict):
+            return deepcopy(resolution["value"])
+
+    supervisor = PaperSupervisor(
+        tmp_path / "outputs",
+        plane=SimpleNamespace(
+            risk_envelopes=FakeRiskEnvelopes(),
+            verify_supervisor_outer_policy=lambda: {
+                "status": "verified"
+            },
+        ),
+        execution=object(),
+        control=lambda *_args, **_kwargs: pytest.fail(
+            "legacy recheck must execute zero controls"
+        ),
+        accounting_reconciliation=lambda: "pass",
+    )
+    supervisor.store.current_state = lambda _cycle_id: {
+        "attempts": [],
+        "unfinished_intent": None,
+    }
+    authority = SimpleNamespace(
+        cycle_id=CYCLE,
+        active_plan={},
+        runtime={
+            "desired_state": "stopped",
+            "actual_state": "stopped",
+            "accepted_order_count": 0,
+        },
+        accepted_order_fingerprints=(),
+        open_position_count=0,
+        reconciliation={"execution": "ok", "accounting": "pass"},
+    )
+
+    first_state = supervisor.episodes.record_structural_blocker(
+        supervisor.episodes.new_cycle(CYCLE, observed_at=T0),
+        classification=classify_blocker(
+            control_code=(
+                "outer_strategy_policy_envelope_out_of_bounds"
+            )
+        ),
+        observed_at=T0,
+    )
+    unchanged, first_cleared = supervisor._recheck_structural(
+        first_state,
+        authority=authority,
+        observed_at=(T0 + timedelta(minutes=1)).isoformat(),
+    )
+    assert first_cleared is False
+    assert unchanged["mode"] == "blocked_structural"
+
+    resolution["value"] = {
+        "resolution_id": "park-legacy-resolution-1",
+        "resolution_version": 1,
+        "resolution_digest": "d" * 64,
+    }
+    cleared_state, second_cleared = supervisor._recheck_structural(
+        unchanged,
+        authority=authority,
+        observed_at=(T0 + timedelta(minutes=2)).isoformat(),
+    )
+    assert second_cleared is True
+    assert cleared_state["mode"] == "ready"
+    assert cleared_state["events"][-1]["detail"]["evidence"][
+        "resolution_digest"
+    ] == "d" * 64
+
+
+def test_concurrent_outer_policy_rechecks_persist_one_clearance(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan = {}
+    plane.runtime.update(
+        {
+            "desired_state": "stopped",
+            "actual_state": "stopped",
+            "strategy_plan_id": None,
+            "strategy_plan_version": None,
+            "accepted_order_count": 0,
+        }
+    )
+
+    attempt_id = "supervisor-attempt-concurrent-rejected"
+    evidence = {
+        "rejection_id": "outer-policy-rejection-concurrent",
+        "rejection_digest": "a" * 64,
+    }
+    rejected_candidate = {
+        "supervisor_attempt_id": attempt_id,
+        "proposal_id": "proposal-prior-rejected",
+        "proposal_digest": "b" * 64,
+        "preview_id": "preview-prior-rejected",
+        "preview_digest": "c" * 64,
+        "facts_digest": "facts-prior-rejected",
+        "confirmation_digest": "d" * 64,
+        "strategy_type": "grid",
+        "direction": "long",
+        "limits": {
+            "max_actual_leverage": "10",
+            "max_full_depth_loss": "1000",
+            "max_notional_per_grid": "100",
+            "min_grid_count": "10",
+            "max_grid_count": "10",
+        },
+    }
+    receipt = {
+        "cycle_id": CYCLE,
+        **evidence,
+        "machine_code": (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ),
+        "candidate": rejected_candidate,
+    }
+
+    class FakeRiskEnvelopes:
+        @staticmethod
+        def outer_policy_rejection_for_attempt(**kwargs: dict) -> dict:
+            assert kwargs["supervisor_attempt_id"] == attempt_id
+            return deepcopy(receipt)
+
+        @staticmethod
+        def outer_policy_rejection(**kwargs: dict) -> dict:
+            assert kwargs["rejection_id"] == evidence["rejection_id"]
+            assert kwargs["rejection_digest"] == evidence[
+                "rejection_digest"
+            ]
+            return deepcopy(receipt)
+
+        @staticmethod
+        def recheck_outer_policy_rejection(**kwargs: dict) -> dict:
+            return {
+                "schema_version": (
+                    "paper-supervisor-outer-policy-recheck-v1"
+                ),
+                "rejection_id": kwargs["rejection_id"],
+                "rejection_digest": kwargs["rejection_digest"],
+                "comparisons": [
+                    {
+                        "field": "direction",
+                        "operator": "in",
+                        "authorized_limit": [
+                            "long",
+                            "neutral",
+                            "short",
+                        ],
+                        "observed_value": "long",
+                        "pass": True,
+                    }
+                ],
+                "passed": True,
+                "control_actions_executed": 0,
+                "recheck_digest": "e" * 64,
+            }
+
+        @staticmethod
+        def verify_outer_policy_recheck_proof(
+            *,
+            proof: dict,
+            **_kwargs: dict,
+        ) -> dict:
+            return deepcopy(proof)
+
+    plane.risk_envelopes = FakeRiskEnvelopes()
+    with supervisor.store.try_lease(
+        CYCLE,
+        holder_id="persist-policy-rejection-wal",
+    ) as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id=attempt_id,
+            observed_at=T0.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        lease.record_pre_intent_candidate_observed(
+            attempt_id=attempt_id,
+            observed_at=T0.isoformat(),
+            candidate_identity=rejected_candidate,
+        )
+        lease.record_pre_intent_finished(
+            attempt_id=attempt_id,
+            result="structural",
+            machine_code=(
+                "outer_strategy_policy_envelope_out_of_bounds"
+            ),
+            classification="structural",
+            observed_at=T0.isoformat(),
+            evidence=evidence,
+        )
+    blocked = supervisor._reconcile_operational_wal(
+        supervisor.episodes.new_cycle(CYCLE, observed_at=T0),
+        cycle_id=CYCLE,
+    )
+    with supervisor.store.try_lease(
+        CYCLE,
+        holder_id="persist-policy-blocker",
+    ) as lease:
+        assert lease is not None
+        supervisor.store.commit_episode_observation(
+            lease,
+            state=blocked,
+            payload={
+                "status": "blocked_structural",
+                "machine_code": (
+                    "outer_strategy_policy_envelope_out_of_bounds"
+                ),
+                "classification": "structural",
+                "control_actions_executed": 0,
+            },
+        )
+    later = T0 + timedelta(minutes=1)
+    authority = SimpleNamespace(
+        cycle_id=CYCLE,
+        active_plan={},
+        runtime=deepcopy(plane.runtime),
+        accepted_order_fingerprints=(),
+        open_position_count=0,
+        reconciliation={"execution": "ok", "accounting": "pass"},
+    )
+
+    def recheck(index: int) -> dict:
+        with supervisor.store.try_lease(
+            CYCLE,
+            holder_id=f"concurrent-recheck-{index}",
+        ) as lease:
+            if lease is None:
+                return {"status": "lease_held", "control_actions_executed": 0}
+            current = supervisor.store.episode_state(CYCLE)
+            assert current is not None
+            if current["mode"] != "blocked_structural":
+                return {
+                    "status": "already_cleared",
+                    "control_actions_executed": 0,
+                }
+            updated, cleared = supervisor._recheck_structural(
+                current,
+                authority=authority,
+                observed_at=later.isoformat(),
+            )
+            assert cleared is True
+            supervisor.store.commit_episode_observation(
+                lease,
+                state=updated,
+                payload={
+                    "status": "structural_cleared",
+                    "control_actions_executed": 0,
+                },
+            )
+            return {
+                "status": "structural_cleared",
+                "control_actions_executed": 0,
+            }
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(recheck, range(2)))
+
+    final_state = supervisor.store.episode_state(CYCLE)
+    assert final_state is not None
+    assert sum(
+        event["event_type"] == "structural_blocker_cleared"
+        for event in final_state["events"]
+    ) == 1
+    assert any(
+        result["status"] == "structural_cleared"
+        for result in results
+    )
+    assert all(
+        result["control_actions_executed"] == 0
+        for result in results
+    )
+    assert control.calls == []
+    next_tick = later + timedelta(seconds=61)
+    converged = supervisor.converge_once(
+        CYCLE,
+        observed_at=next_tick.isoformat(),
+        heartbeat=_heartbeat(next_tick),
+    )
+    assert converged["status"] == "executed"
+    assert control.calls == [
+        "refresh_recommendation",
+        "prepare_start",
+        "start",
+    ]
+    assert len(supervisor.execution.orders) == 3
+
+
+@pytest.mark.parametrize(
+    "reused_field",
+    [
+        "proposal_id",
+        "proposal_digest",
+        "preview_id",
+        "preview_digest",
+        "facts_digest",
+        "confirmation_digest",
+    ],
+)
+def test_cleared_rejection_tombstone_blocks_every_old_candidate_identity(
+    tmp_path: Path,
+    reused_field: str,
+) -> None:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan = {}
+    plane.runtime.update(
+        {
+            "desired_state": "stopped",
+            "actual_state": "stopped",
+            "strategy_plan_id": None,
+            "strategy_plan_version": None,
+            "accepted_order_count": 0,
+        }
+    )
+    evidence = {
+        "rejection_id": "outer-policy-rejection-tombstone",
+        "rejection_digest": "a" * 64,
+    }
+    current_candidate = _candidate_identity(
+        "placeholder",
+        proposal_id="proposal-current",
+        proposal_digest="1" * 64,
+        preview_id="preview-current",
+        preview_digest="2" * 64,
+        facts_digest="facts-current",
+        confirmation_digest="3" * 64,
+    )
+    rejected_candidate = _candidate_identity(
+        "supervisor-attempt-prior-rejected",
+        proposal_id="proposal-prior",
+        proposal_digest="4" * 64,
+        preview_id="preview-prior",
+        preview_digest="5" * 64,
+        facts_digest="facts-prior",
+        confirmation_digest="6" * 64,
+    )
+    rejected_candidate[reused_field] = current_candidate[reused_field]
+    receipt = {
+        "cycle_id": CYCLE,
+        **evidence,
+        "machine_code": (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ),
+        "candidate": rejected_candidate,
+    }
+
+    class FakeRiskEnvelopes:
+        @staticmethod
+        def outer_policy_rejection(**_kwargs: dict) -> dict:
+            return deepcopy(receipt)
+
+        @staticmethod
+        def find_outer_policy_rejection_for_attempt(
+            **_kwargs: dict,
+        ) -> None:
+            return None
+
+    plane.risk_envelopes = FakeRiskEnvelopes()
+
+    def current_identity(
+        _cycle_id: str,
+        *,
+        supervisor_attempt_id: str,
+        **_kwargs: dict,
+    ) -> dict:
+        return {
+            **current_candidate,
+            "supervisor_attempt_id": supervisor_attempt_id,
+        }
+
+    plane.supervisor_candidate_identity = current_identity
+    plane.authorize_supervisor_ai_envelope = lambda *_args, **_kwargs: (
+        pytest.fail("rejected candidate must not be authorized again")
+    )
+    cleared = supervisor.episodes.record_structural_blocker(
+        supervisor.episodes.new_cycle(CYCLE, observed_at=T0),
+        classification=classify_blocker(
+            control_code=(
+                "outer_strategy_policy_envelope_out_of_bounds"
+            )
+        ),
+        observed_at=T0,
+        evidence=evidence,
+    )
+    cleared = supervisor.episodes.recheck_structural_blocker(
+        cleared,
+        machine_code=(
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ),
+        condition_cleared=True,
+        observed_at=(T0 + timedelta(seconds=1)).isoformat(),
+        evidence={
+            "schema_version": (
+                "paper-supervisor-outer-policy-recheck-v1"
+            ),
+            **evidence,
+            "passed": True,
+            "control_actions_executed": 0,
+        },
+    )
+    with supervisor.store.try_lease(
+        CYCLE,
+        holder_id="persist-rejection-tombstone",
+    ) as lease:
+        assert lease is not None
+        supervisor.store.write_episode_state(lease, cleared)
+
+    later = T0 + timedelta(seconds=61)
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=later.isoformat(),
+        heartbeat=_heartbeat(later),
+    )
+
+    assert result["status"] == "blocked_structural"
+    assert result["machine_code"] == "plan_identity_conflict"
+    assert result["control_actions_executed"] == 0
+    assert control.calls == ["refresh_recommendation"]
+    assert control.prepare_ids == []
+    assert control.start_ids == []
+    assert supervisor.execution.orders == []
 
 
 def test_legacy_unknown_clean_pre_intent_rechecks_without_control_action(

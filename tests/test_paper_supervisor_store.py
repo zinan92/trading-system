@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -547,6 +547,121 @@ def test_proven_zero_order_rejection_is_clean_but_never_replays(
     assert len(result["authority_digest"]) == 64
 
 
+def test_pre_intent_structural_terminal_preserves_rejection_reference(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    evidence = {
+        "rejection_id": "outer-policy-rejection-exact",
+        "rejection_digest": "a" * 64,
+    }
+    with store.try_lease(CYCLE, holder_id="owner-evidence") as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id="supervisor-attempt-rejected",
+            observed_at=NOW.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        lease.record_pre_intent_finished(
+            attempt_id="supervisor-attempt-rejected",
+            result="structural",
+            machine_code=(
+                "outer_strategy_policy_envelope_out_of_bounds"
+            ),
+            classification="structural",
+            observed_at=NOW.isoformat(),
+            evidence=evidence,
+        )
+
+    projection = store.current_state(CYCLE)
+    assert projection["pre_intent_attempts"] == [
+        {
+            "attempt_id": "supervisor-attempt-rejected",
+            "started_sequence": 1,
+            "started_event_sha256": projection[
+                "pre_intent_attempts"
+            ][0]["started_event_sha256"],
+            "observed_at": NOW.isoformat(),
+            "phase_scope": "create_or_prepare",
+            "source_tick_key": None,
+            "prepare_succeeded_sequence": None,
+            "prepare_succeeded_event_sha256": None,
+            "terminal_result": "structural",
+            "terminal_evidence": evidence,
+            "terminal_sequence": 2,
+            "terminal_machine_code": (
+                "outer_strategy_policy_envelope_out_of_bounds"
+            ),
+            "terminal_classification": "structural",
+            "terminal_observed_at": NOW.isoformat(),
+            "terminal_event_type": "pre_intent_attempt_finished",
+            "terminal_event_sha256": projection[
+                "pre_intent_attempts"
+            ][0]["terminal_event_sha256"],
+        }
+    ]
+
+
+def test_pre_intent_candidate_marker_is_durable_and_crash_recoverable(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    attempt_id = "supervisor-attempt-candidate-marker"
+    candidate = {
+        "supervisor_attempt_id": attempt_id,
+        "proposal_id": "proposal-candidate",
+        "proposal_digest": "b" * 64,
+        "preview_id": "preview-candidate",
+        "preview_digest": "c" * 64,
+        "facts_digest": "facts-candidate",
+        "confirmation_digest": "d" * 64,
+        "strategy_type": "grid",
+        "direction": "long",
+        "limits": {
+            "max_actual_leverage": "10",
+            "max_full_depth_loss": "1000",
+            "max_notional_per_grid": "100",
+            "min_grid_count": "10",
+            "max_grid_count": "10",
+        },
+    }
+    evidence = {
+        "rejection_id": "outer-policy-rejection-candidate",
+        "rejection_digest": "a" * 64,
+    }
+    with store.try_lease(CYCLE, holder_id="marker-owner") as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id=attempt_id,
+            observed_at=NOW.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        lease.record_pre_intent_candidate_observed(
+            attempt_id=attempt_id,
+            observed_at=NOW.isoformat(),
+            candidate_identity=candidate,
+        )
+
+    pending = store.unfinished_pre_intent(CYCLE)
+    assert pending is not None
+    assert pending["candidate_identity"] == candidate
+    recovered_at = NOW + timedelta(seconds=1)
+    with store.try_lease(CYCLE, holder_id="recovery-owner") as lease:
+        assert lease is not None
+        lease.recover_pre_intent_finished(
+            attempt_id=attempt_id,
+            machine_code=(
+                "outer_strategy_policy_envelope_out_of_bounds"
+            ),
+            observed_at=recovered_at.isoformat(),
+            evidence=evidence,
+        )
+
+    recovered = store.current_state(CYCLE)["pre_intent_attempts"][0]
+    assert recovered["candidate_identity"] == candidate
+    assert recovered["terminal_evidence"] == evidence
+    assert recovered["recovered_after_crash"] is True
+    assert store.unfinished_pre_intent(CYCLE) is None
 def test_dca_clean_rejection_allows_exactly_empty_pre_start_plan(
     tmp_path: Path,
 ) -> None:
