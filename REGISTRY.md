@@ -13,6 +13,16 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-03)
+- 2026-08-04 11:59 CST 的 authenticated Dashboard 只读核验确认当前 DAY
+  Grid 仍为 `running`，36 个逻辑格位由 35 个 accepted orders 与 1 个 exact
+  open position 唯一代表，行情为实时可信，Supervisor 为
+  `adopted_existing` 且无 blocker。点击 Supervisor 完整审计时，Cloud
+  Access Gateway 对已由 Dashboard 与 Dashboard Server 共同实现的精确 GET
+  `/api/trading-system/supervisor-history` 返回 404；根因是 gateway
+  `ALLOW_EXACT` 遗漏该只读路径，不是 Supervisor store 丢失。#556 只补这一条
+  exact allowlist 及相邻路径 fail-closed 回归；在精确 main SHA Cloud 发布、
+  authenticated HTTP 200、完整审计可见且 Paper 权威状态前后一致之前，#472
+  仍不得收口。
 - Cloud Paper 当前精确运行 `main@274d6100d64a7267890cc7073bebac12f53c4a48`
   （#549），NIGHT Grid 为 `running/running`，38 个授权订单槽位中 1 个已成交为
   open position，其余继续挂单，账本与执行对账均为 `ok`，Supervisor 为

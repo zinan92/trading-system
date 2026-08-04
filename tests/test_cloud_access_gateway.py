@@ -10,8 +10,11 @@ def test_gateway_allowlist_exposes_only_dashboard_contracts() -> None:
     assert gateway._is_allowed("/dashboard-v5.html")
     assert gateway._is_allowed("/api/trading-system/cloud-health")
     assert gateway._is_allowed("/api/trading-system/daily-self-review")
+    assert gateway._is_allowed("/api/trading-system/supervisor-history")
     assert not gateway._is_allowed("/outputs/dualtrack/strategy_control/runtime.json")
     assert not gateway._is_allowed("/api/trading-system/cloud-health/internal")
+    assert not gateway._is_allowed("/api/trading-system/supervisor-history/internal")
+    assert not gateway._is_allowed("/api/trading-system/supervisor-history/")
     assert not gateway._is_allowed("/../configs/paper.env")
 
 
