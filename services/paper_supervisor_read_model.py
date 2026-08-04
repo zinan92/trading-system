@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,10 @@ from services.paper_supervisor_store import (
     PaperSupervisorStore,
     SupervisorStoreError,
 )
-
+from services.paper_supervisor_utilization_index import (
+    PaperSupervisorUtilizationIndex,
+    compact_running_identity_matches,
+)
 
 SUPERVISOR_READ_MODEL_SCHEMA_VERSION = "paper-supervisor-read-model-v1"
 RUNTIME_UTILIZATION_SCHEMA_VERSION = "strategy-runtime-utilization-v2"
@@ -236,22 +239,40 @@ def build_paper_supervisor_read_model(
     *,
     cycle_id: str,
     as_of: str | datetime | None = None,
+    persist_utilization_index: bool = False,
 ) -> dict[str, Any]:
     """Project immutable Supervisor facts without invoking control behavior."""
 
     end = _utc(as_of)
     store = PaperSupervisorStore(Path(output_root))
+    utilization_index = (
+        PaperSupervisorUtilizationIndex(Path(output_root))
+        if persist_utilization_index
+        else None
+    )
+    source_identity_before = (
+        utilization_index.source_identity(cycle_id)
+        if utilization_index is not None
+        else None
+    )
     current, source_errors, observation_cache = _read_current_cycle(
         store,
         cycle_id=cycle_id,
         as_of=end,
     )
+    source_identity_cache: dict[str, dict[str, Any]] = {}
+    if utilization_index is not None:
+        source_identity_after = utilization_index.source_identity(cycle_id)
+        if source_identity_before == source_identity_after:
+            source_identity_cache[cycle_id] = source_identity_after
 
     utilization = _build_utilization(
         store,
         end=end,
         source_errors=source_errors,
         observation_cache=observation_cache,
+        utilization_index=utilization_index,
+        source_identity_cache=source_identity_cache,
     )
     return {
         "schema_version": SUPERVISOR_READ_MODEL_SCHEMA_VERSION,
@@ -311,6 +332,7 @@ def build_paper_supervisor_utilization(
     output_root: Path,
     *,
     as_of: str | datetime | None = None,
+    persist_utilization_index: bool = False,
 ) -> dict[str, Any]:
     """Compatibility entrypoint for callers that only need utilization."""
 
@@ -319,6 +341,11 @@ def build_paper_supervisor_utilization(
         PaperSupervisorStore(Path(output_root)),
         end=end,
         source_errors=[],
+        utilization_index=(
+            PaperSupervisorUtilizationIndex(Path(output_root))
+            if persist_utilization_index
+            else None
+        ),
     )
 
 
@@ -590,8 +617,12 @@ def _build_utilization(
     end: datetime,
     source_errors: list[dict[str, str]],
     observation_cache: dict[str, list[dict[str, Any]]] | None = None,
+    utilization_index: PaperSupervisorUtilizationIndex | None = None,
+    source_identity_cache: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     observation_cache = observation_cache or {}
+    source_identity_cache = source_identity_cache or {}
+    indexed_observation_cache: dict[str, list[dict[str, Any]]] = {}
     windows: dict[str, Any] = {}
     for label, hours in (("24h", 24), ("7d", 24 * 7)):
         start = end - timedelta(hours=hours)
@@ -600,8 +631,23 @@ def _build_utilization(
         window_errors: list[dict[str, str]] = []
         for expected_cycle_id in cycle_ids:
             try:
-                if expected_cycle_id in observation_cache:
-                    rows = observation_cache[expected_cycle_id]
+                cached_observations = observation_cache.get(
+                    expected_cycle_id
+                )
+                if utilization_index is not None:
+                    rows = indexed_observation_cache.get(expected_cycle_id)
+                    if rows is None:
+                        rows = utilization_index.read_or_build(
+                            store,
+                            expected_cycle_id,
+                            validated_observations=cached_observations,
+                            validated_source_identity=(
+                                source_identity_cache.get(expected_cycle_id)
+                            ),
+                        )
+                        indexed_observation_cache[expected_cycle_id] = rows
+                elif cached_observations is not None:
+                    rows = cached_observations
                 else:
                     rows = store.read_cycle_observation_snapshot(
                         expected_cycle_id
@@ -715,7 +761,7 @@ def _utilization_window(
             if (
                 left.get("running_proven") is True
                 and right.get("running_proven") is True
-                and same_running_identity(left, right)
+                and _same_utilization_identity(left, right)
                 and left.get("cycle_id") == right.get("cycle_id")
             ):
                 running_seconds += clipped_seconds
@@ -791,6 +837,18 @@ def _utilization_window(
         ],
         "source_errors": [dict(row) for row in source_errors],
     }
+
+
+def _same_utilization_identity(
+    left: Mapping[str, Any],
+    right: Mapping[str, Any],
+) -> bool:
+    compact = compact_running_identity_matches(left, right)
+    return (
+        compact
+        if compact is not None
+        else same_running_identity(left, right)
+    )
 
 
 def _cycle_ids_for_window(

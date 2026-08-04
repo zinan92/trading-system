@@ -1,5 +1,56 @@
 # Decision Log
 
+## Source-bound utilization indexes keep Cloud health bounded (Issue #560)
+
+### Decision
+
+- Keep the append-only Supervisor event and observation JSONL files as the
+  only utilization authorities.  After one complete store validation, derive
+  a compact per-cycle index containing only evidence time, proof status and an
+  exact digest of the running identity used by the conservative interval
+  algorithm.
+- Bind every derived index to stable, full-file SHA-256 identities for both
+  the event and observation sources and seal the index itself with a digest.
+  A hit is usable only when schema, cycle, both source identities and the
+  derived digest match exactly.  Otherwise rebuild from the full authorities.
+- Enable persistent indexes only for Cloud health, whose five-minute dead-man
+  caller has a 30-second systemd envelope.  Ordinary read-only callers retain
+  their existing behavior unless they explicitly request the rebuildable
+  performance projection.
+
+### Gotchas
+
+- The earlier utilization-only observation reader fixed redundant state and
+  episode reads, but it still reparsed every full running-evidence payload and
+  revalidated adjacent 36-slot identities.  Normal evidence growth therefore
+  moved the real Cloud cost from 18.8 seconds after #515 to 90.989 seconds for
+  4,187 observations; the design did not remain bounded over time.
+- A TTL, mtime or tail-only cache would let silent source changes reuse stale
+  running evidence.  Full raw-file SHA-256 is cheaper than repeated JSON
+  reconstruction while still detecting an exact byte change anywhere in the
+  immutable authority.
+- The index is a disposable observability projection, not a new source of
+  trading truth.  Atomic replacement and concurrent idempotence prevent a
+  partial index from appearing valid; deleting or corrupting it causes a full
+  rebuild and never edits the source history.
+- `read_only=true` and `command_authority=false` continue to mean no strategy
+  control or authority mutation.  Cloud health may persist this derived index
+  just as it persists its health receipt, but it may not rewrite observations,
+  events, fills, trades, cycle packages or control audit.
+
+### Verification
+
+- Focused tests compare indexed and full utilization byte-for-byte, prove an
+  unchanged source avoids the full observation reader, and cover changed
+  source, corrupt index, corrupt authority and concurrent builders.
+- Cloud-health coverage requires the persistent source-bound index explicitly;
+  missing/unknown intervals remain zero, complete-window ramp behavior and
+  warning-only utilization severity are unchanged.
+- Production completion still requires a source-gated release, read-only
+  backfill, direct and gateway HTTP 200 inside the 30-second envelope, a real
+  delivered dead-man receipt, and field-equivalent Paper authority with zero
+  added control events.
+
 ## Complete Supervisor history gets a narrow transport envelope (Issue #558)
 
 Date: 2026-08-04
