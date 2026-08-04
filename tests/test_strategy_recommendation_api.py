@@ -9,6 +9,7 @@ from pipelines.dashboard_server import build_strategy_console_control_response
 from services.cycle_risk_envelope import CycleRiskEnvelopeStore
 from services.cycle_decision import CycleDecisionCoordinator
 from services.journal_store import load_json, write_json
+from services.strategy_recommendation import RecommendationProviderError
 from services.strategy_control_plane import StrategyControlPlane
 
 
@@ -417,7 +418,7 @@ def test_refresh_provider_failure_never_promotes_legacy_ai_proposal(
     with pytest.raises(
         ValueError,
         match="AI recommendation unavailable",
-    ):
+    ) as raised:
         build_strategy_console_control_response(
             {
                 "cycle_id": cycle_id,
@@ -428,13 +429,63 @@ def test_refresh_provider_failure_never_promotes_legacy_ai_proposal(
             market=_market(),
             account={"equity": 100_000},
             recommendation_provider=lambda _prompt: (
-                (_ for _ in ()).throw(RuntimeError("provider down"))
+                (_ for _ in ()).throw(
+                    RuntimeError(
+                        "strategy_recommendation_provider_timeout: prose only"
+                    )
+                )
             ),
         )
 
+    assert not hasattr(raised.value, "code")
     assert plane.active_plan(cycle_id) is None
     assert plane.proposals(cycle_id) == [legacy]
     assert not plane._plans_path(cycle_id).exists()
+    assert not list((output / "dualtrack" / "orders").glob("*"))
+
+
+def test_refresh_preserves_explicit_typed_provider_code(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    _bind_outer_policy(output, monkeypatch)
+    cycle_id = "2026-07-05_DAY"
+
+    def timed_out(_prompt: str) -> dict:
+        raise RecommendationProviderError(
+            "strategy_recommendation_provider_timeout",
+            "human detail may change without changing classification",
+        )
+
+    with pytest.raises(RecommendationProviderError) as raised:
+        build_strategy_console_control_response(
+            {
+                "cycle_id": cycle_id,
+                "action": "refresh_recommendation",
+                "as_of": "2026-07-05T02:00:00+00:00",
+            },
+            output_root=output,
+            market=_market(),
+            account={"equity": 100_000},
+            recommendation_provider=timed_out,
+        )
+
+    assert raised.value.code == (
+        "strategy_recommendation_provider_timeout"
+    )
+    receipt_path = next(
+        (
+            output
+            / "dualtrack"
+            / "strategy_control"
+            / "evaluations"
+            / cycle_id
+        ).glob("*.json")
+    )
+    receipt = load_json(receipt_path)[-1]
+    assert receipt["output"]["machine_code"] == raised.value.code
+    assert StrategyControlPlane(output).active_plan(cycle_id) is None
     assert not list((output / "dualtrack" / "orders").glob("*"))
 
 

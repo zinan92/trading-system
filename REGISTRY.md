@@ -13,6 +13,14 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-05)
+- #567 preserves recommendation-provider failures as exact typed evidence from
+  `RecommendationProviderError.code` through the immutable failed evaluation
+  receipt, Dashboard/control boundary, Supervisor whitelist, and legacy
+  structural recheck. Untyped prose, missing/malformed codes, and legacy
+  error-only receipts remain `unknown_blocker`/structural; the fifth exact
+  transient failure enters the existing nonterminal probe/alert mode with zero
+  plan, control, or order side effects. This is implementation evidence, not a
+  deployed release or v2 selector activation.
 - #566 binds `outer_strategy_policy_envelope_out_of_bounds` to an immutable,
   deny-only rejected-candidate receipt instead of clearing it merely because a
   policy exists. Recheck is read-only and requires a different exact Park
@@ -24,7 +32,11 @@
   Missing/tampered/legacy evidence remains structural; legacy clearance
   requires a separately signed Park resolution and still executes zero control
   actions. This is implementation evidence, not v2 selector activation or the
-  48-hour acceptance result.
+  48-hour acceptance result. #566 is deployed code-only as exact clean
+  `main@d5dd0715c16de0c00b087e5ef2deabf103ed30b0`, tree
+  `571208d072d73a1788085b9399693fc9ccf227b4`; all release/boot gates passed,
+  the natural live tick adopted the unchanged 36-slot Grid with zero control
+  actions, and the v1 selector remains active.
 - #565 is deployed on Cloud Paper as exact clean
   `main@64e5f7149aa27c639e454e93631f1fbbc4a4c808`, tree
   `ca5d34610f1de83986cb18cee7baae3e6a77abf4`. Candidate preflight, provider
@@ -311,10 +323,9 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Merge and deploy #566 through the exact main SHA/boot gates, then complete
-  #567 typed provider machine-code propagation and #568 current-cycle
-  no-plan/stopped health fail-closed. Do not activate the v2 selector or force
-  stop/cancel while the current Grid has orders or positions.
+- Merge and deploy #567 through the exact main SHA/boot gates, then complete
+  #568 current-cycle no-plan/stopped health fail-closed. Do not activate the v2
+  selector or force stop/cancel while the current Grid has orders or positions.
 - 继续从当前精确 release 进行 48h Supervisor soak；只认保守运行率、三个真实
   周期边界（含 21:00）与真实 transient 自动恢复审计链，不以测试、部署或
   read-model 200 冒充终验。第一个完整 24h 窗口形成前保持 `insufficient`。

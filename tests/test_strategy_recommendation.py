@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from services.strategy_recommendation import LONG_TERM_D1_BARS, StrategyRecommendationService, build_position_first_framework
+from services.strategy_recommendation import (
+    LONG_TERM_D1_BARS,
+    RecommendationProviderError,
+    StrategyRecommendationService,
+    build_position_first_framework,
+)
 
 
 def _bars(timeframe: str, count: int, close: float, span: float) -> list[dict]:
@@ -132,7 +137,59 @@ def test_strategy_recommendation_archives_provider_failure(tmp_path: Path) -> No
     assert len(archives) == 1
     receipt = json.loads(archives[0].read_text(encoding="utf-8"))[0]
     assert receipt["status"] == "failed"
+    assert receipt["output"]["machine_code"] is None
     assert receipt["output"]["error"] == "provider unavailable"
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "socket timed out while waiting for bytes",
+        "operator wording changed completely",
+    ],
+)
+def test_typed_provider_failure_receipt_keeps_code_separate_from_text(
+    tmp_path: Path,
+    detail: str,
+) -> None:
+    def unavailable(_: str) -> dict:
+        raise RecommendationProviderError(
+            "strategy_recommendation_provider_timeout",
+            detail,
+        )
+
+    service = StrategyRecommendationService(
+        tmp_path / "outputs",
+        decision_provider=unavailable,
+    )
+    with pytest.raises(RecommendationProviderError) as raised:
+        service.recommend(
+            "2026-07-05_DAY",
+            strategy_timeframes=_trusted_contexts(),
+            current_plan={},
+            account={},
+            review={},
+        )
+
+    assert raised.value.code == (
+        "strategy_recommendation_provider_timeout"
+    )
+    receipt_path = next(
+        (
+            tmp_path
+            / "outputs"
+            / "dualtrack"
+            / "strategy_control"
+            / "evaluations"
+            / "2026-07-05_DAY"
+        ).glob("*.json")
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))[0]
+    assert receipt["status"] == "failed"
+    assert receipt["output"]["machine_code"] == (
+        "strategy_recommendation_provider_timeout"
+    )
+    assert receipt["output"]["error"].endswith(detail)
 
 
 def _trusted_contexts() -> dict:
@@ -245,6 +302,7 @@ def test_external_provider_failures_have_stable_codes_and_failed_receipts(
     )
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))[0]
     assert receipt["status"] == "failed"
+    assert receipt["output"]["machine_code"] == expected_code
     assert expected_code in receipt["output"]["error"]
 
 
@@ -277,6 +335,9 @@ def test_external_provider_timeout_has_stable_code_and_failed_receipt(
     )
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))[0]
     assert receipt["status"] == "failed"
+    assert receipt["output"]["machine_code"] == (
+        "strategy_recommendation_provider_timeout"
+    )
     assert "strategy_recommendation_provider_timeout" in receipt["output"]["error"]
 
 
