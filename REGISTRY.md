@@ -13,28 +13,27 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-04)
-- 2026-08-04 DAY 的部署前 Cloud Paper 基线为 Grid
+- #560 已部署为精确 clean
+  `main@3a9d06d5e870597dc319ce9a2b97fc9f8ad49ea3`，tree
+  `d41fa1f8bf24d6b6afd5b9e8895bc92b757e7705`。Cloud preflight、provider
+  readiness、Paper predeploy 与七个 boot gate 均绑定该 SHA/tree 并通过；
+  datafeed、Dashboard、Access Gateway、cloudflared 与五个规范 timer 均
+  active/enabled。Cloud health 为 HTTP 200 / 15.937s，低于 dead-man service
+  的 30s 硬超时；15:05 CST 的自然 dead-man tick 已真实投递 HTTP 200，
+  `target_kind=success`、无 critical failure signal。
+- 部署前后 2026-08-04 DAY 始终为同一 Grid
   `strategy-plan-2026-08-04_DAY-2-2060ce1e` v2、runtime=`running/running`、
-  34 个 accepted orders + 2 个 exact open positions = 36 个授权逻辑格位，
-  100 fills、行情 `ready/fresh/trusted`、双层对账通过，Supervisor 为
-  `adopted_existing` 且无 blocker；五个 timer 均 enabled/active。本轮没有
-  调用任何交易控制。
-- #558/#559 已部署为精确 clean
-  `main@58fd8753261ca06df7c21e9c4c237978176039a9`：普通 read-model 为
-  HTTP 200 / 2.134s / 581,972 bytes，完整当前周期 Supervisor 审计为
-  HTTP 200 / 8.505s，解压后 14,521,254 bytes，938/938 events、234/234
-  observations、234 attempts、1 start intent，且不再重算 utilization。
-  部署前后 2026-08-04 DAY 仍为同一 Grid plan v2、`running/running`、
-  34 accepted open orders + 2 exact open positions = 36 个逻辑格位、100 fills、
-  行情 fresh/trusted、执行与会计对账通过、控制审计均为 354。
-- #559 发布后继续只读验证发现独立的 #560：Cloud health 每次仍对 7 天
-  4,187 条 Supervisor observation 重做完整运行率投影，现网耗时 90.989s；
-  近期单周期 observation 文件已增长到 32.96 MiB，而 dead-man service 的
-  硬超时仅 30s，因此公网 health 与唯一外部告警都会超时。#560 正在加入由
-  event/observation 完整 SHA-256 绑定的可丢弃紧凑索引；缓存 miss 仍完整验签，
-  任一源字节或索引变化都回源重建，24h/7d 保守算法、不可变历史、交易控制与
-  全部安全闸均不变。未拿到 Cloud HTTP 200、dead-man 实投递及 Paper 前后
-  逐字段一致证据前，不得称该问题完成。
+  34 个 accepted/open orders + 2 个 exact open positions = 36 个授权逻辑格位、
+  100 raw fills、行情 `ready/fresh/trusted`、执行与会计对账通过，Supervisor 为
+  `adopted_existing` 且无 blocker。orders/positions/fills 的精确摘要与 control
+  audit=354 均未变化；本次发布执行交易控制动作=0。authenticated 公网 Dashboard
+  已显示相同权威状态与完整 Supervisor 历史。
+- #560 只证明 Cloud-health/dead-man 有界恢复，不等于 Supervisor 终验。首个
+  完整 24h 运行率窗口尚未形成，当前 `insufficient` 不参与 critical 判定；
+  连续 48h、保守运行率 ≥85%、三个真实周期边界及一次真实 transient 自愈链
+  仍是未完成的唯一终验。显式完整 Supervisor 历史现为 HTTP 200，但在 306 条
+  observation 时已达 26.745s / 19.0MB；这是独立增长风险，不回写为 #560 失败，
+  也不得靠删减或改写不可变审计解决。
 - 2026-08-04 11:59 CST 的 authenticated Dashboard 只读核验确认当前 DAY
   Grid 仍为 `running`，36 个逻辑格位由 35 个 accepted orders 与 1 个 exact
   open position 唯一代表，行情为实时可信，Supervisor 为
@@ -279,6 +278,12 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- 继续从当前精确 release 进行 48h Supervisor soak；只认保守运行率、三个真实
+  周期边界（含 21:00）与真实 transient 自动恢复审计链，不以测试、部署或
+  read-model 200 冒充终验。第一个完整 24h 窗口形成前保持 `insufficient`。
+- 为显式完整 Supervisor 历史另开有界读取 Story：保留原始不可变历史与完整
+  哈希链，避免当前 26.745s / 19.0MB 响应随每周期 observation 增长再次越过
+  公网信封；不得把该性能工作混入交易控制、Supervisor 分类或安全闸。
 - 完成 #550 的 review/merge 与精确 SHA Cloud Paper 发布；发布后只认五个连续
   自然 tick 的 timing receipt，要求 p95 <10 秒、max <20 秒、控制动作=0、
   runtime/reconciliation 持续 resolved，并观察 dead-man 自然投递。不得手动触发
