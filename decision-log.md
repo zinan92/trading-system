@@ -13849,3 +13849,61 @@ auditable datafeed port; broker execution remains a separate port.
 - The public authorization path is tested with every market/timeframe/account
   read replaced by a hard failure; both exact Park mutations still append their
   immutable records and leave runtime, plans, and execution untouched.
+
+# 2026-08-05 — Bind outer-policy structural rechecks to rejected-candidate evidence (#566)
+
+## Decision
+
+- Persist every Supervisor outer-policy rejection as a separate deny-only,
+  append+fsync receipt before raising the structural machine code. Bind the
+  episode WAL to the receipt's exact id/digest; never infer remediation from
+  policy presence.
+- Recheck the stored candidate against a different current Park binding using
+  the same exact strategy, direction, and numeric comparison function. Require
+  a fresh complete heartbeat, stopped zero-exposure authority, exact dual
+  reconciliation, no active plan, and no unknown/partial control result.
+- Keep the recheck fully read-only. A successful recheck records one clearance
+  observation with zero control actions; only the next independently claimed
+  tick may request a new recommendation and build wholly new identities.
+- Require one signed Park-authenticated immutable resolution for legacy
+  receipt-less blockers. The resolution is bound to cycle/code/blocked_at and
+  cannot authorize a plan, envelope, prepare, start, or order.
+
+## Gotchas
+
+- `verify_supervisor_outer_policy()` proves only that the selected boundary is
+  valid; it says nothing about whether the rejected candidate fits. Using it as
+  the entire recheck silently erased a real structural mismatch.
+- The rejection receipt must not be stored in the cycle-envelope registry. A
+  failed comparison is evidence for denial, not latent authorization that a
+  later tick may reuse.
+- Receipt fsync cannot be followed by an ordinary transient timeout terminal.
+  The pre-authorization candidate WAL marker lets restart and handled-deadline
+  paths join the sole receipt back to its exact attempt without another AI or
+  control call; missing or ambiguous linkage is store corruption, not a retry.
+- Changing a binding is necessary but not sufficient. A new binding that still
+  fails one numeric field remains structural, even if direction membership now
+  passes.
+- Missing or malformed receipt linkage is deliberately not reconstructed from
+  proposal prose or historical error strings. It stays blocked until Park's
+  exact legacy resolution exists.
+- The current recheck attempt itself owns a pre-intent reservation; this is not
+  an unknown control outcome. The no-unknown-control condition instead rejects
+  unfinished start intents and any durable unknown/partial start result.
+- A fresh provider response is not fresh merely because one id changed. Every
+  cleared rejection remains a cycle tombstone across proposal, preview, facts,
+  and confirmation identities; any reuse fails before envelope creation.
+- `pre_intent_candidate_observed` is a forward WAL event. After the first such
+  event exists, rolling the code back to a release that does not recognize it
+  will correctly fail closed on the store; release rollback must preserve the
+  evidence or deploy an explicit compatible reader, never delete the event.
+
+## Verification
+
+- Adversarial coverage proves unchanged policy, changed-but-insufficient
+  policy, numeric overflow, valid remediation, missing/tampered/mismatched
+  evidence, receipt-to-WAL crash recovery, handled timeout races, forged
+  recheck proofs, concurrent rechecks, signed legacy resolution, WAL linkage,
+  and rejection-tombstone identity reuse.
+- The clearance tick executes zero control actions. A later fresh tick creates
+  one new proposal/preview/prepared-start chain and one exact order set.

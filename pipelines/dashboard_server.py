@@ -1606,12 +1606,13 @@ def build_strategy_console_control_response(
     policy_authorization_actions = {
         "authorize_outer_strategy_policy",
         "bind_supervisor_outer_strategy_policy",
+        "resolve_legacy_outer_policy_rejection",
     }
     if action in policy_authorization_actions:
         # Park's immutable policy authorization is an identity-bound domain
         # mutation, not a market decision.  Requiring market/account assembly
         # here can prevent human authorization during the exact upstream
-        # outage that the boundary is meant to govern.  Only these two exact
+        # outage that the boundary is meant to govern.  Only these exact
         # actions bypass unrelated reads; the control plane still verifies the
         # signed actor, appends immutable audit evidence, and creates no plan or
         # order side effects.

@@ -248,6 +248,18 @@ class PaperSupervisor:
                 self.store.unfinished_pre_intent(cycle_id)
             )
             if unfinished_pre_intent is not None:
+                if isinstance(
+                    unfinished_pre_intent.get("candidate_identity"),
+                    Mapping,
+                ):
+                    return self._recover_crashed_candidate_rejection(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        unfinished=unfinished_pre_intent,
+                        observed_at=observed_at,
+                        heartbeat=health,
+                    )
                 lease.abandon_pre_intent(
                     attempt_id=str(
                         unfinished_pre_intent["attempt_id"]
@@ -500,6 +512,8 @@ class PaperSupervisor:
                     with self._attempt_deadline(started):
                         plan, request = self._create_plan(
                             cycle_id,
+                            lease=lease,
+                            attempt_id=attempt_id,
                             observed_at=observed_at,
                         )
                 except SupervisorAttemptDeadline as exc:
@@ -938,6 +952,18 @@ class PaperSupervisor:
             )
         pending_pre = self.store.unfinished_pre_intent(cycle_id)
         if pending_pre is not None:
+            if isinstance(
+                pending_pre.get("candidate_identity"),
+                Mapping,
+            ):
+                return self._recover_crashed_candidate_rejection(
+                    lease,
+                    state,
+                    cycle_id=cycle_id,
+                    unfinished=pending_pre,
+                    observed_at=observed_at,
+                    heartbeat=heartbeat,
+                )
             lease.abandon_pre_intent(
                 attempt_id=str(pending_pre["attempt_id"]),
                 observed_at=observed_at,
@@ -1086,6 +1112,8 @@ class PaperSupervisor:
         self,
         cycle_id: str,
         *,
+        lease,
+        attempt_id: str,
         observed_at: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         self.plane.verify_supervisor_outer_policy()
@@ -1095,10 +1123,33 @@ class PaperSupervisor:
         )
         proposal = dict(evaluation.get("proposal") or {})
         preview = dict(evaluation.get("preview") or {})
+        candidate_identity = self.plane.supervisor_candidate_identity(
+            cycle_id,
+            proposal=proposal,
+            preview=preview,
+            supervisor_attempt_id=attempt_id,
+        )
+        lease.record_pre_intent_candidate_observed(
+            attempt_id=attempt_id,
+            observed_at=observed_at,
+            candidate_identity=candidate_identity,
+        )
+        rejected_candidates = self._cleared_rejected_candidates(
+            cycle_id
+        )
+        if any(
+            self._candidate_identity_reused(
+                candidate_identity,
+                rejected_candidate,
+            )
+            for rejected_candidate in rejected_candidates
+        ):
+            raise ValueError("plan_identity_conflict")
         envelope = self.plane.authorize_supervisor_ai_envelope(
             cycle_id,
             proposal=proposal,
             preview=preview,
+            supervisor_attempt_id=attempt_id,
         )
         envelope_id = str(
             envelope.get("envelope_authorization_id") or ""
@@ -1146,6 +1197,155 @@ class PaperSupervisor:
         elif not plan:
             raise ValueError("active_plan_missing")
         return plan, request
+
+    def _recover_crashed_candidate_rejection(
+        self,
+        lease,
+        state: dict[str, Any],
+        *,
+        cycle_id: str,
+        unfinished: Mapping[str, Any],
+        observed_at: str,
+        heartbeat: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Recover the receipt-to-WAL crash window without another AI call."""
+
+        attempt_id = str(unfinished.get("attempt_id") or "")
+        machine_code = "attempt_store_corrupt"
+        evidence: dict[str, Any] | None = None
+        try:
+            risk_envelopes = self.plane.risk_envelopes
+            load_for_attempt = getattr(
+                risk_envelopes,
+                "outer_policy_rejection_for_attempt",
+            )
+            rejection = dict(
+                load_for_attempt(
+                    cycle_id=cycle_id,
+                    supervisor_attempt_id=attempt_id,
+                )
+            )
+            if (
+                dict(rejection.get("candidate") or {})
+                != dict(unfinished["candidate_identity"])
+                or rejection.get("machine_code")
+                != "outer_strategy_policy_envelope_out_of_bounds"
+            ):
+                raise ValueError("attempt_store_corrupt")
+            evidence = {
+                "rejection_id": str(rejection["rejection_id"]),
+                "rejection_digest": str(
+                    rejection["rejection_digest"]
+                ),
+            }
+            machine_code = (
+                "outer_strategy_policy_envelope_out_of_bounds"
+            )
+        except Exception:  # noqa: BLE001 - missing or ambiguous receipt fails closed.
+            evidence = None
+            machine_code = "attempt_store_corrupt"
+        try:
+            lease.recover_pre_intent_finished(
+                attempt_id=attempt_id,
+                machine_code=machine_code,
+                observed_at=observed_at,
+                evidence=evidence,
+            )
+            state = self._reconcile_operational_wal(
+                state,
+                cycle_id=cycle_id,
+            )
+        except Exception:  # noqa: BLE001 - a torn recovery remains fail closed.
+            return self._result(
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+                status="blocked_structural",
+                machine_code="attempt_store_corrupt",
+                classification=STRUCTURAL,
+                control_actions=0,
+                heartbeat=heartbeat,
+            )
+        return self._finish(
+            lease,
+            state,
+            self._result(
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+                status="blocked_structural",
+                machine_code=machine_code,
+                classification=STRUCTURAL,
+                control_actions=0,
+                heartbeat=heartbeat,
+                recovered_attempt_id=attempt_id,
+            ),
+        )
+
+    def _cleared_rejected_candidates(
+        self,
+        cycle_id: str,
+    ) -> list[dict[str, Any]]:
+        state = self.store.episode_state(cycle_id) or {}
+        risk_envelopes = getattr(self.plane, "risk_envelopes", None)
+        loader = getattr(
+            risk_envelopes,
+            "outer_policy_rejection",
+            None,
+        )
+        rejected: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for event in list(state.get("events") or []):
+            if (
+                not isinstance(event, Mapping)
+                or event.get("event_type")
+                != "structural_blocker_cleared"
+                or event.get("machine_code")
+                != "outer_strategy_policy_envelope_out_of_bounds"
+            ):
+                continue
+            detail = event.get("detail")
+            proof = (
+                dict(detail.get("evidence") or {})
+                if isinstance(detail, Mapping)
+                else {}
+            )
+            rejection_id = str(proof.get("rejection_id") or "")
+            rejection_digest = str(
+                proof.get("rejection_digest") or ""
+            )
+            if not rejection_id or not rejection_digest or not callable(loader):
+                continue
+            identity = (rejection_id, rejection_digest)
+            if identity in seen:
+                continue
+            rejection = dict(
+                loader(
+                    cycle_id=cycle_id,
+                    rejection_id=rejection_id,
+                    rejection_digest=rejection_digest,
+                )
+            )
+            rejected.append(dict(rejection.get("candidate") or {}))
+            seen.add(identity)
+        return rejected
+
+    @staticmethod
+    def _candidate_identity_reused(
+        candidate: Mapping[str, Any],
+        rejected: Mapping[str, Any],
+    ) -> bool:
+        for field in (
+            "proposal_id",
+            "proposal_digest",
+            "preview_id",
+            "preview_digest",
+            "facts_digest",
+            "confirmation_digest",
+        ):
+            current = candidate.get(field)
+            prior = rejected.get(field)
+            if current not in {None, ""} and current == prior:
+                return True
+        return False
 
     @staticmethod
     def _request_from_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -2120,7 +2320,73 @@ class PaperSupervisor:
                 )
             )
         )
+        raw_evidence = getattr(exc, "evidence", None)
+        blocker_evidence = None
         pending = self.store.unfinished_pre_intent(cycle_id)
+        durable_rejection: dict[str, Any] | None = None
+        candidate = (
+            pending.get("candidate_identity")
+            if isinstance(pending, Mapping)
+            else None
+        )
+        if isinstance(candidate, Mapping):
+            try:
+                risk_envelopes = self.plane.risk_envelopes
+                finder = getattr(
+                    risk_envelopes,
+                    "find_outer_policy_rejection_for_attempt",
+                )
+                if not callable(finder):
+                    raise ValueError("attempt_store_corrupt")
+                found = finder(
+                    cycle_id=cycle_id,
+                    supervisor_attempt_id=str(pending["attempt_id"]),
+                )
+                if found is not None:
+                    durable_rejection = dict(found)
+                    if (
+                        dict(
+                            durable_rejection.get("candidate") or {}
+                        )
+                        != dict(candidate)
+                        or durable_rejection.get("machine_code")
+                        != "outer_strategy_policy_envelope_out_of_bounds"
+                    ):
+                        raise ValueError("attempt_store_corrupt")
+            except Exception:  # noqa: BLE001 - ambiguous durable evidence fails closed.
+                classified = classify_blocker(
+                    control_code="attempt_store_corrupt"
+                )
+                durable_rejection = None
+        if durable_rejection is not None:
+            exact_evidence = {
+                "rejection_id": str(
+                    durable_rejection["rejection_id"]
+                ),
+                "rejection_digest": str(
+                    durable_rejection["rejection_digest"]
+                ),
+            }
+            if (
+                isinstance(raw_evidence, Mapping)
+                and dict(raw_evidence) != exact_evidence
+            ):
+                classified = classify_blocker(
+                    control_code="attempt_store_corrupt"
+                )
+            else:
+                classified = classify_blocker(
+                    control_code=(
+                        "outer_strategy_policy_envelope_out_of_bounds"
+                    )
+                )
+                blocker_evidence = exact_evidence
+        elif classified["machine_code"] == (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ):
+            classified = classify_blocker(
+                control_code="attempt_store_corrupt"
+            )
         if pending is not None:
             lease.record_pre_intent_finished(
                 attempt_id=str(pending["attempt_id"]),
@@ -2128,6 +2394,7 @@ class PaperSupervisor:
                 machine_code=classified["machine_code"],
                 classification=classified["classification"],
                 observed_at=observed_at,
+                evidence=blocker_evidence,
             )
             state = self._reconcile_operational_wal(
                 state,
@@ -2144,6 +2411,7 @@ class PaperSupervisor:
                 state,
                 classification=classified,
                 observed_at=observed_at,
+                evidence=blocker_evidence,
             )
         return self._finish(
             lease,
@@ -2175,6 +2443,7 @@ class PaperSupervisor:
             blocker.get("machine_code") or "unknown_blocker"
         )
         cleared = False
+        recheck_evidence: dict[str, Any] | None = None
         if machine_code == "ledger_reconciliation_drift":
             cleared = self._reconciliation_exact(authority)
         elif machine_code == "execution_tick_scheduler_down":
@@ -2261,13 +2530,22 @@ class PaperSupervisor:
             "outer_strategy_policy_missing",
             "outer_strategy_policy_invalid",
             "outer_strategy_policy_expired",
-            "outer_strategy_policy_envelope_out_of_bounds",
         }:
             try:
                 self.plane.verify_supervisor_outer_policy()
                 cleared = True
             except Exception:  # noqa: BLE001 - exact blocker remains active.
                 cleared = False
+        elif machine_code == (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ):
+            cleared, recheck_evidence = (
+                self._outer_policy_rejection_cleared(
+                    authority,
+                    blocker=blocker,
+                    observed_at=observed_at,
+                )
+            )
         elif machine_code == "unknown_blocker":
             # Older deployments classified a provider timeout fail-closed as
             # unknown_blocker.  Clear that exact historical scene only when
@@ -2289,8 +2567,216 @@ class PaperSupervisor:
             machine_code=machine_code,
             condition_cleared=cleared,
             observed_at=observed_at,
+            evidence=recheck_evidence,
         )
         return updated, cleared
+
+    def _outer_policy_rejection_cleared(
+        self,
+        authority: StartAuthoritySnapshot,
+        *,
+        blocker: Mapping[str, Any],
+        observed_at: str,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Read-only recheck of one exact rejected candidate."""
+
+        if not self._outer_policy_recheck_authority_clean(authority):
+            return False, None
+        risk_envelopes = getattr(
+            self.plane,
+            "risk_envelopes",
+            None,
+        )
+        evidence = blocker.get("evidence")
+        if isinstance(evidence, Mapping):
+            load_for_attempt = getattr(
+                risk_envelopes,
+                "outer_policy_rejection_for_attempt",
+                None,
+            )
+            recheck = getattr(
+                risk_envelopes,
+                "recheck_outer_policy_rejection",
+                None,
+            )
+            verify_proof = getattr(
+                risk_envelopes,
+                "verify_outer_policy_recheck_proof",
+                None,
+            )
+            if not all(
+                callable(item)
+                for item in (
+                    load_for_attempt,
+                    recheck,
+                    verify_proof,
+                )
+            ):
+                return False, None
+            try:
+                rejection = self._bound_outer_policy_rejection(
+                    authority.cycle_id,
+                    blocker=blocker,
+                    loader=load_for_attempt,
+                )
+                result = dict(
+                    recheck(
+                        cycle_id=authority.cycle_id,
+                        rejection_id=str(
+                            evidence.get("rejection_id") or ""
+                        ),
+                        rejection_digest=str(
+                            evidence.get("rejection_digest") or ""
+                        ),
+                        at=observed_at,
+                    )
+                )
+                verified = dict(
+                    verify_proof(
+                        proof=result,
+                        cycle_id=authority.cycle_id,
+                        rejection_id=str(
+                            rejection["rejection_id"]
+                        ),
+                        rejection_digest=str(
+                            rejection["rejection_digest"]
+                        ),
+                    )
+                )
+            except Exception:  # noqa: BLE001 - malformed evidence stays blocked.
+                return False, None
+            return verified.get("passed") is True, verified
+
+        legacy_resolution = getattr(
+            risk_envelopes,
+            "legacy_rejection_resolution",
+            None,
+        )
+        if not callable(legacy_resolution):
+            return False, None
+        try:
+            self.plane.verify_supervisor_outer_policy()
+            resolution = legacy_resolution(
+                cycle_id=authority.cycle_id,
+                machine_code=(
+                    "outer_strategy_policy_envelope_out_of_bounds"
+                ),
+                blocked_at=str(blocker.get("blocked_at") or ""),
+            )
+        except Exception:  # noqa: BLE001 - missing/invalid resolution stays blocked.
+            return False, None
+        if not isinstance(resolution, Mapping):
+            return False, None
+        resolution_evidence = {
+            "schema_version": (
+                "paper-supervisor-legacy-policy-recheck-v1"
+            ),
+            "cycle_id": authority.cycle_id,
+            "blocked_at": str(blocker.get("blocked_at") or ""),
+            "resolution_id": resolution.get("resolution_id"),
+            "resolution_version": resolution.get(
+                "resolution_version"
+            ),
+            "resolution_digest": resolution.get(
+                "resolution_digest"
+            ),
+            "control_actions_executed": 0,
+            "passed": True,
+        }
+        resolution_evidence["recheck_digest"] = _digest(
+            resolution_evidence
+        )
+        return True, resolution_evidence
+
+    def _bound_outer_policy_rejection(
+        self,
+        cycle_id: str,
+        *,
+        blocker: Mapping[str, Any],
+        loader: Callable[..., Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Bind one blocker to its unique WAL attempt and rejection receipt."""
+
+        evidence = blocker.get("evidence")
+        if (
+            not isinstance(evidence, Mapping)
+            or set(evidence) != {"rejection_id", "rejection_digest"}
+        ):
+            raise ValueError("attempt_store_corrupt")
+        projection = self.store.current_state(cycle_id)
+        blocked_at = str(blocker.get("blocked_at") or "")
+        matches = [
+            dict(row)
+            for row in projection.get("pre_intent_attempts") or []
+            if isinstance(row, Mapping)
+            and row.get("terminal_result") == "structural"
+            and row.get("terminal_classification") == "structural"
+            and row.get("terminal_machine_code")
+            == "outer_strategy_policy_envelope_out_of_bounds"
+            and row.get("terminal_observed_at") == blocked_at
+            and row.get("terminal_evidence") == dict(evidence)
+            and isinstance(row.get("candidate_identity"), Mapping)
+        ]
+        if len(matches) != 1:
+            raise ValueError("attempt_store_corrupt")
+        attempt = matches[0]
+        rejection = dict(
+            loader(
+                cycle_id=cycle_id,
+                supervisor_attempt_id=str(attempt["attempt_id"]),
+            )
+        )
+        if (
+            rejection.get("cycle_id") != cycle_id
+            or rejection.get("rejection_id")
+            != evidence.get("rejection_id")
+            or rejection.get("rejection_digest")
+            != evidence.get("rejection_digest")
+            or dict(rejection.get("candidate") or {})
+            != dict(attempt["candidate_identity"])
+            or dict(rejection.get("candidate") or {}).get(
+                "supervisor_attempt_id"
+            )
+            != attempt["attempt_id"]
+        ):
+            raise ValueError("attempt_store_corrupt")
+        return rejection
+
+    def _outer_policy_recheck_authority_clean(
+        self,
+        authority: StartAuthoritySnapshot,
+    ) -> bool:
+        runtime = dict(authority.runtime)
+        if (
+            authority.active_plan
+            or self._has_exposure(authority)
+            or not self._reconciliation_exact(authority)
+            or int(runtime.get("accepted_order_count") or 0) != 0
+            or str(runtime.get("desired_state") or "stopped")
+            != "stopped"
+            or str(runtime.get("actual_state") or "stopped")
+            != "stopped"
+        ):
+            return False
+        try:
+            projection = self.store.current_state(
+                authority.cycle_id
+            )
+        except Exception:  # noqa: BLE001 - malformed WAL stays blocked.
+            return False
+        if isinstance(projection.get("unfinished_intent"), Mapping):
+            return False
+        return not any(
+            str(row.get("terminal_result") or "")
+            in {"unknown", "control_outcome_unknown"}
+            or str(row.get("terminal_machine_code") or "")
+            in {
+                "control_outcome_unknown",
+                "partial_execution_or_cleanup_required",
+            }
+            for row in projection.get("attempts") or []
+            if isinstance(row, Mapping)
+        )
 
     def _sealed_running_identity_exact(
         self,
@@ -3166,6 +3652,14 @@ class PaperSupervisor:
                             )
                         ),
                         observed_at=str(payload["observed_at"]),
+                        evidence=(
+                            dict(payload["evidence"])
+                            if isinstance(
+                                payload.get("evidence"),
+                                Mapping,
+                            )
+                            else None
+                        ),
                     )
             state["last_applied_wal_sequence"] = sequence
             cursor = sequence

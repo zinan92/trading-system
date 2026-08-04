@@ -241,6 +241,66 @@ rechecks the same inheritance against the still-current exact v1 selector.
 Missing, stale, changed, corrupt, widened or shortened inheritance fails before
 either append. Only `allowed_directions` may differ.
 
+### Immutable outer-policy rejection evidence (Issue #566 amendment)
+
+`outer_strategy_policy_envelope_out_of_bounds` is sticky. A valid policy or
+binding merely existing is not evidence that the rejected candidate is now in
+bounds. Before raising that exact structural code, a Supervisor attempt must
+append+fsync a deny-only
+`paper-supervisor-outer-policy-rejection-v1` receipt. The receipt has its own
+unique `rejection_id` and digest and records the exact Supervisor attempt,
+proposal id/digest, preview id/digest, canonical candidate strategy,
+direction/limits, exact policy/binding reference, and every field comparison.
+It is not a cycle envelope, has `authorization_effect=deny_only`, and can never
+authorize a plan, prepare, start, or order.
+
+Before the envelope comparison begins, the same attempt appends a
+`pre_intent_candidate_observed` WAL marker containing the canonical proposal,
+preview, facts, confirmation, strategy, direction, and limit identities. This
+closes the receipt-to-WAL crash window: if the process restarts with that marker
+unfinished, it may only join the marker to the sole exact rejection receipt and
+write the missing structural terminal. A missing, duplicate, corrupt, or
+mismatched receipt becomes `attempt_store_corrupt`; neither case may call AI or
+control. A deadline handled after the receipt fsync likewise follows the receipt
+rather than being misclassified as a clean transient deadline. A crash strictly
+before the candidate marker retains the approved pre-intent transient behavior.
+
+The Supervisor episode persists only the exact rejection id/digest reference.
+A structural recheck is read-only and may clear the blocker only when all of
+the following are simultaneously proven:
+
+- the rejection registry and referenced policy/binding are unambiguous,
+  untampered, and digest-exact;
+- exactly one structural WAL terminal has the same attempt id, candidate
+  marker, blocker timestamp, and rejection id/digest as the episode blocker;
+- the current Park selector names a different exact, unexpired binding;
+- the stored candidate passes every current strategy, direction, and numeric
+  comparison without tolerance;
+- the current heartbeat is complete/fresh, runtime is stopped with zero
+  exposure, execution/accounting reconciliation is exact, no active plan is
+  present, and the Supervisor WAL contains no unknown or partial control
+  result.
+
+Missing, corrupt, mismatched, ambiguous, or legacy evidence remains structural
+fail-closed. A receipt-less historical blocker can clear only after Park writes
+one exact, immutable
+`paper-supervisor-legacy-policy-rejection-resolution-v1` through the signed
+Cloudflare Access actor path. That resolution is bound to the exact cycle,
+machine code, and original `blocked_at`; it authorizes only clearing the stale
+structural episode, never a candidate or control action. This third exact Park
+domain mutation, `resolve_legacy_outer_policy_rejection`, may bypass unrelated
+market/account assembly for the same reason as policy/binding authoring: it
+cannot create a plan or order.
+
+The clearing observation records exactly one `structural_cleared` event and
+executes zero AI, plan, prepare, start, or order actions. Only a later,
+independently claimed fresh tick may request a new recommendation and create a
+new proposal, preview, envelope, prepared-start identity, and start intent.
+Every prior cleared rejection remains a tombstone for the rest of the cycle.
+Reusing any rejected proposal id/digest, preview id/digest, facts digest, or
+confirmation digest fails closed before envelope creation. No rejected
+identity, envelope, prepared start, facts digest, or confirmation is reusable.
+
 ## Durable concurrency and start ordering
 
 The store is append-only and crash-safe:

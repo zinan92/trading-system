@@ -29,6 +29,15 @@ OUTER_POLICY_SCHEMA_V2 = "paper-strategy-policy-boundary-v2"
 OUTER_POLICY_SCHEMA = OUTER_POLICY_SCHEMA_V1
 OUTER_POLICY_BINDING_SCHEMA = "paper-supervisor-policy-binding-v1"
 ENVELOPE_SCHEMA = "cycle-risk-envelope-v1"
+OUTER_POLICY_REJECTION_SCHEMA = (
+    "paper-supervisor-outer-policy-rejection-v1"
+)
+OUTER_POLICY_RECHECK_SCHEMA = (
+    "paper-supervisor-outer-policy-recheck-v1"
+)
+LEGACY_REJECTION_RESOLUTION_SCHEMA = (
+    "paper-supervisor-legacy-policy-rejection-resolution-v1"
+)
 AUTHORIZATION_KINDS = {
     "human_explicit",
     "ai_policy_within_preapproved_strategy_boundary",
@@ -82,9 +91,19 @@ _PLAN_SHAPE_FIELDS = (
 class CycleRiskEnvelopeError(ValueError):
     """A stable, fail-closed envelope authorization error."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        evidence: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
+        self.evidence = (
+            dict(evidence)
+            if isinstance(evidence, Mapping)
+            else None
+        )
 
 
 class CycleRiskEnvelopeStore:
@@ -102,6 +121,10 @@ class CycleRiskEnvelopeStore:
         self.policy_root = self.root / "outer_strategy_policies"
         self.binding_root = self.root / "outer_strategy_policy_bindings"
         self.verification_root = self.root / "start_verifications"
+        self.rejection_root = self.root / "outer_policy_rejections"
+        self.legacy_resolution_root = (
+            self.root / "outer_policy_rejection_resolutions"
+        )
         self.supervisor_policy_binding_ref = (
             dict(supervisor_policy_binding_ref)
             if isinstance(supervisor_policy_binding_ref, Mapping)
@@ -386,6 +409,7 @@ class CycleRiskEnvelopeStore:
         cycle_id: str,
         proposal: Mapping[str, Any],
         preview: Mapping[str, Any],
+        supervisor_attempt_id: str | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
         """Authorize an AI candidate before any production plan is written."""
@@ -394,32 +418,16 @@ class CycleRiskEnvelopeStore:
             now,
             "risk_envelope_authorization_invalid",
         )
-        if (
-            str(proposal.get("cycle_id") or "") != str(cycle_id)
-            or str(proposal.get("source") or "") != "ai"
-        ):
-            raise CycleRiskEnvelopeError("plan_identity_conflict")
-        proposal_id = _required_text(
-            proposal.get("proposal_id"),
-            "plan_identity_conflict",
+        candidate = self.supervisor_candidate_identity(
+            cycle_id=cycle_id,
+            proposal=proposal,
+            preview=preview,
+            supervisor_attempt_id=supervisor_attempt_id,
         )
-        strategy_type = _strategy_type(proposal)
-        direction = _direction(
-            proposal.get("direction"),
-            "plan_identity_conflict",
-        )
-        if (
-            _strategy_type(preview) != strategy_type
-            or _direction(
-                preview.get("direction"),
-                "plan_identity_conflict",
-            )
-            != direction
-            or str(proposal.get("preview_id") or "")
-            != str(preview.get("preview_id") or "")
-        ):
-            raise CycleRiskEnvelopeError("plan_identity_conflict")
-        limits = _limits_from_preview(preview, strategy_type)
+        proposal_id = str(candidate["proposal_id"])
+        strategy_type = str(candidate["strategy_type"])
+        direction = str(candidate["direction"])
+        limits = dict(candidate["limits"])
         binding, outer = self._load_bound_outer_policy(at=authorized_at)
         comparisons = _compare_outer_policy(
             outer,
@@ -428,17 +436,32 @@ class CycleRiskEnvelopeStore:
             direction=direction,
         )
         if not all(row["pass"] for row in comparisons):
+            if supervisor_attempt_id:
+                rejection = self._persist_outer_policy_rejection(
+                    cycle_id=cycle_id,
+                    candidate=candidate,
+                    binding=binding,
+                    outer_policy=outer,
+                    comparisons=comparisons,
+                    rejected_at=authorized_at,
+                )
+                raise CycleRiskEnvelopeError(
+                    "outer_strategy_policy_envelope_out_of_bounds",
+                    evidence={
+                        "rejection_id": rejection["rejection_id"],
+                        "rejection_digest": rejection[
+                            "rejection_digest"
+                        ],
+                    },
+                )
             raise CycleRiskEnvelopeError(
                 "outer_strategy_policy_envelope_out_of_bounds"
             )
         source_proposal = {
             "proposal_id": proposal_id,
-            "proposal_digest": _proposal_plan_digest(proposal),
-            "preview_id": _required_text(
-                preview.get("preview_id"),
-                "plan_identity_conflict",
-            ),
-            "preview_digest": _digest(dict(preview)),
+            "proposal_digest": candidate["proposal_digest"],
+            "preview_id": candidate["preview_id"],
+            "preview_digest": candidate["preview_digest"],
             "execution_shape_digest": (
                 _preview_execution_shape_digest(preview)
                 if strategy_type == "dca"
@@ -464,6 +487,480 @@ class CycleRiskEnvelopeStore:
             "outer_policy_comparisons": comparisons,
         }
         return self._persist_envelope(record)
+
+    def supervisor_candidate_identity(
+        self,
+        *,
+        cycle_id: str,
+        proposal: Mapping[str, Any],
+        preview: Mapping[str, Any],
+        supervisor_attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the exact candidate identity persisted before authorization."""
+
+        if (
+            str(proposal.get("cycle_id") or "") != str(cycle_id)
+            or str(proposal.get("source") or "") != "ai"
+        ):
+            raise CycleRiskEnvelopeError("plan_identity_conflict")
+        proposal_id = _required_text(
+            proposal.get("proposal_id"),
+            "plan_identity_conflict",
+        )
+        strategy_type = _strategy_type(proposal)
+        direction = _direction(
+            proposal.get("direction"),
+            "plan_identity_conflict",
+        )
+        if (
+            _strategy_type(preview) != strategy_type
+            or _direction(
+                preview.get("direction"),
+                "plan_identity_conflict",
+            )
+            != direction
+            or str(proposal.get("preview_id") or "")
+            != str(preview.get("preview_id") or "")
+        ):
+            raise CycleRiskEnvelopeError("plan_identity_conflict")
+        confirmation = (
+            dict(preview.get("manual_confirmation") or {})
+            if isinstance(preview.get("manual_confirmation"), Mapping)
+            else {}
+        )
+        facts_digest = str(confirmation.get("facts_digest") or "") or None
+        identity: dict[str, Any] = {
+            "proposal_id": proposal_id,
+            "proposal_digest": _proposal_plan_digest(proposal),
+            "preview_id": _required_text(
+                preview.get("preview_id"),
+                "plan_identity_conflict",
+            ),
+            "preview_digest": _digest(dict(preview)),
+            "facts_digest": facts_digest,
+            "confirmation_digest": (
+                _digest(confirmation) if confirmation else None
+            ),
+            "strategy_type": strategy_type,
+            "direction": direction,
+            "limits": _limits_from_preview(preview, strategy_type),
+        }
+        if supervisor_attempt_id is not None:
+            identity["supervisor_attempt_id"] = _required_text(
+                supervisor_attempt_id,
+                "outer_strategy_policy_invalid",
+            )
+        return identity
+
+    def _persist_outer_policy_rejection(
+        self,
+        *,
+        cycle_id: str,
+        candidate: Mapping[str, Any],
+        binding: Mapping[str, Any],
+        outer_policy: Mapping[str, Any],
+        comparisons: list[dict[str, Any]],
+        rejected_at: str,
+    ) -> dict[str, Any]:
+        """Durably record a deny-only candidate decision before raising."""
+
+        candidate = dict(candidate)
+        if "supervisor_attempt_id" not in candidate:
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        record: dict[str, Any] = {
+            "schema_version": OUTER_POLICY_REJECTION_SCHEMA,
+            "cycle_id": _required_text(
+                cycle_id,
+                "plan_identity_conflict",
+            ),
+            "rejected_at": _utc_timestamp(
+                rejected_at,
+                "outer_strategy_policy_invalid",
+            ),
+            "machine_code": (
+                "outer_strategy_policy_envelope_out_of_bounds"
+            ),
+            "authorization_effect": "deny_only",
+            "candidate": candidate,
+            "outer_policy": _outer_policy_reference(
+                binding,
+                outer_policy,
+            ),
+            "comparisons": [dict(row) for row in comparisons],
+            "passed": False,
+        }
+        record["rejection_id"] = (
+            "outer-policy-rejection-"
+            + _digest(record)[:32]
+        )
+        record["rejection_digest"] = _digest(record)
+        return _append_immutable_record(
+            self.rejection_root
+            / f"{_safe_filename(str(cycle_id))}.json",
+            record=record,
+            identity={"rejection_id": record["rejection_id"]},
+            digest_field="rejection_digest",
+            conflict_code="attempt_store_corrupt",
+            registry_validator=_validate_outer_policy_rejection_registry,
+        )
+
+    def outer_policy_rejection(
+        self,
+        *,
+        cycle_id: str,
+        rejection_id: str,
+        rejection_digest: str,
+    ) -> dict[str, Any]:
+        """Load one exact deny-only decision and reject ambiguity/tampering."""
+
+        rows = _rows(
+            self.rejection_root
+            / f"{_safe_filename(cycle_id)}.json"
+        )
+        _validate_outer_policy_rejection_registry(rows)
+        matches = [
+            row
+            for row in rows
+            if row.get("rejection_id") == rejection_id
+        ]
+        if (
+            len(matches) != 1
+            or matches[0].get("cycle_id") != cycle_id
+            or matches[0].get("rejection_digest")
+            != rejection_digest
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        return dict(matches[0])
+
+    def outer_policy_rejection_for_attempt(
+        self,
+        *,
+        cycle_id: str,
+        supervisor_attempt_id: str,
+    ) -> dict[str, Any]:
+        """Load the sole rejection for one attempt or fail closed."""
+
+        match = self.find_outer_policy_rejection_for_attempt(
+            cycle_id=cycle_id,
+            supervisor_attempt_id=supervisor_attempt_id,
+        )
+        if match is None:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        return match
+
+    def find_outer_policy_rejection_for_attempt(
+        self,
+        *,
+        cycle_id: str,
+        supervisor_attempt_id: str,
+    ) -> dict[str, Any] | None:
+        """Return an optional unique rejection for an in-process outcome join."""
+
+        attempt_id = _required_text(
+            supervisor_attempt_id,
+            "attempt_store_corrupt",
+        )
+        path = self.rejection_root / f"{_safe_filename(cycle_id)}.json"
+        rows = _rows(path) if path.exists() else []
+        _validate_outer_policy_rejection_registry(rows)
+        matches = [
+            dict(row)
+            for row in rows
+            if dict(row.get("candidate") or {}).get(
+                "supervisor_attempt_id"
+            )
+            == attempt_id
+        ]
+        if len(matches) > 1:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        return matches[0] if matches else None
+
+    def recheck_outer_policy_rejection(
+        self,
+        *,
+        cycle_id: str,
+        rejection_id: str,
+        rejection_digest: str,
+        at: str | None = None,
+    ) -> dict[str, Any]:
+        """Compare the stored candidate with a different current binding."""
+
+        checked_at = _utc_timestamp(
+            self.authorization_clock()
+            if self.authorization_clock
+            else at,
+            "outer_strategy_policy_invalid",
+        )
+        rejection = self.outer_policy_rejection(
+            cycle_id=cycle_id,
+            rejection_id=rejection_id,
+            rejection_digest=rejection_digest,
+        )
+        recorded_outer = dict(rejection["outer_policy"])
+        source_binding = self._load_binding_exact(
+            binding_id=str(recorded_outer["binding_id"]),
+            binding_version=int(recorded_outer["binding_version"]),
+        )
+        source_policy = self._load_outer_policy_exact(
+            policy_id=str(recorded_outer["policy_id"]),
+            version=int(recorded_outer["version"]),
+        )
+        if _outer_policy_reference(
+            source_binding,
+            source_policy,
+        ) != recorded_outer:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        current_binding, current_policy = self._load_bound_outer_policy(
+            at=checked_at
+        )
+        candidate = dict(rejection["candidate"])
+        comparisons = _compare_outer_policy(
+            current_policy,
+            candidate["limits"],
+            strategy_type=str(candidate["strategy_type"]),
+            direction=str(candidate["direction"]),
+        )
+        binding_changed = (
+            current_binding["binding_digest"]
+            != source_binding["binding_digest"]
+        )
+        result: dict[str, Any] = {
+            "schema_version": OUTER_POLICY_RECHECK_SCHEMA,
+            "checked_at": checked_at,
+            "cycle_id": cycle_id,
+            "rejection_id": rejection_id,
+            "rejection_digest": rejection_digest,
+            "prior_outer_policy": recorded_outer,
+            "current_outer_policy": _outer_policy_reference(
+                current_binding,
+                current_policy,
+            ),
+            "binding_changed": binding_changed,
+            "comparisons": comparisons,
+            "passed": bool(
+                binding_changed
+                and all(row["pass"] for row in comparisons)
+            ),
+            "control_actions_executed": 0,
+        }
+        result["recheck_digest"] = _digest(result)
+        return result
+
+    def verify_outer_policy_recheck_proof(
+        self,
+        *,
+        proof: Mapping[str, Any],
+        cycle_id: str,
+        rejection_id: str,
+        rejection_digest: str,
+    ) -> dict[str, Any]:
+        """Strictly verify a read-only recheck proof before clearance."""
+
+        expected_fields = {
+            "schema_version",
+            "checked_at",
+            "cycle_id",
+            "rejection_id",
+            "rejection_digest",
+            "prior_outer_policy",
+            "current_outer_policy",
+            "binding_changed",
+            "comparisons",
+            "passed",
+            "control_actions_executed",
+            "recheck_digest",
+        }
+        result = dict(proof)
+        if (
+            set(result) != expected_fields
+            or result.get("schema_version")
+            != OUTER_POLICY_RECHECK_SCHEMA
+            or result.get("cycle_id") != cycle_id
+            or result.get("rejection_id") != rejection_id
+            or result.get("rejection_digest") != rejection_digest
+            or result.get("control_actions_executed") != 0
+            or result.get("recheck_digest")
+            != _digest(
+                {
+                    key: value
+                    for key, value in result.items()
+                    if key != "recheck_digest"
+                }
+            )
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        checked_at = _utc_timestamp(
+            result.get("checked_at"),
+            "attempt_store_corrupt",
+        )
+        rejection = self.outer_policy_rejection(
+            cycle_id=cycle_id,
+            rejection_id=rejection_id,
+            rejection_digest=rejection_digest,
+        )
+        prior = _validate_outer_policy_reference(
+            result.get("prior_outer_policy"),
+            code="attempt_store_corrupt",
+        )
+        current = _validate_outer_policy_reference(
+            result.get("current_outer_policy"),
+            code="attempt_store_corrupt",
+        )
+        if prior != rejection["outer_policy"]:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        prior_binding = self._load_binding_exact(
+            binding_id=str(prior["binding_id"]),
+            binding_version=int(prior["binding_version"]),
+        )
+        prior_policy = self._load_outer_policy_exact(
+            policy_id=str(prior["policy_id"]),
+            version=int(prior["version"]),
+        )
+        if _outer_policy_reference(
+            prior_binding,
+            prior_policy,
+        ) != prior:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        binding, policy = self._load_bound_outer_policy(at=checked_at)
+        if _outer_policy_reference(binding, policy) != current:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        candidate = dict(rejection["candidate"])
+        expected_comparisons = _compare_outer_policy(
+            policy,
+            candidate["limits"],
+            strategy_type=str(candidate["strategy_type"]),
+            direction=str(candidate["direction"]),
+        )
+        binding_changed = (
+            current["binding_digest"] != prior["binding_digest"]
+        )
+        passed = bool(
+            binding_changed
+            and all(row["pass"] for row in expected_comparisons)
+        )
+        if (
+            result.get("binding_changed") is not binding_changed
+            or result.get("comparisons") != expected_comparisons
+            or result.get("passed") is not passed
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        return result
+
+    def authorize_legacy_rejection_resolution(
+        self,
+        *,
+        cycle_id: str,
+        payload: Mapping[str, Any],
+        actor: Mapping[str, Any] | None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist Park's one-time resolution of a receipt-less blocker."""
+
+        expected_fields = {
+            "resolution_id",
+            "resolution_version",
+            "blocked_at",
+            "machine_code",
+            "summary",
+        }
+        if set(payload) != expected_fields:
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+        machine_code = _required_text(
+            payload.get("machine_code"),
+            "outer_strategy_policy_invalid",
+        )
+        if machine_code != (
+            "outer_strategy_policy_envelope_out_of_bounds"
+        ):
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+        authorized_at = _utc_timestamp(
+            self.authorization_clock()
+            if self.authorization_clock
+            else now,
+            "outer_strategy_policy_invalid",
+        )
+        blocked_at = _utc_timestamp(
+            payload.get("blocked_at"),
+            "outer_strategy_policy_invalid",
+        )
+        if _parse_timestamp(blocked_at) > _parse_timestamp(
+            authorized_at
+        ):
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+        record = {
+            "schema_version": LEGACY_REJECTION_RESOLUTION_SCHEMA,
+            "resolution_id": _required_text(
+                payload.get("resolution_id"),
+                "outer_strategy_policy_invalid",
+            ),
+            "resolution_version": _positive_int(
+                payload.get("resolution_version"),
+                "outer_strategy_policy_invalid",
+            ),
+            "cycle_id": _required_text(
+                cycle_id,
+                "outer_strategy_policy_invalid",
+            ),
+            "machine_code": machine_code,
+            "blocked_at": blocked_at,
+            "summary": _required_text(
+                payload.get("summary"),
+                "outer_strategy_policy_invalid",
+            ),
+            "authorization_kind": (
+                "park_explicit_legacy_structural_resolution"
+            ),
+            "authorized_at": authorized_at,
+            "actor": _park_actor(actor),
+        }
+        record["resolution_digest"] = _digest(record)
+        return _append_immutable_record(
+            self.legacy_resolution_root
+            / f"{_safe_filename(cycle_id)}.json",
+            record=record,
+            identity={
+                "resolution_id": record["resolution_id"],
+                "resolution_version": record[
+                    "resolution_version"
+                ],
+            },
+            digest_field="resolution_digest",
+            conflict_code="outer_strategy_policy_invalid",
+            registry_validator=(
+                _validate_legacy_rejection_resolution_registry
+            ),
+        )
+
+    def legacy_rejection_resolution(
+        self,
+        *,
+        cycle_id: str,
+        machine_code: str,
+        blocked_at: str,
+    ) -> dict[str, Any] | None:
+        """Return the sole exact Park resolution or fail on ambiguity."""
+
+        rows = _rows(
+            self.legacy_resolution_root
+            / f"{_safe_filename(cycle_id)}.json"
+        )
+        _validate_legacy_rejection_resolution_registry(rows)
+        matches = [
+            dict(row)
+            for row in rows
+            if row.get("cycle_id") == cycle_id
+            and row.get("machine_code") == machine_code
+            and row.get("blocked_at") == blocked_at
+        ]
+        if len(matches) > 1:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        return matches[0] if matches else None
 
     def authorize_envelope(
         self,
@@ -1814,6 +2311,336 @@ def _validate_start_verification_registry(
             raise CycleRiskEnvelopeError(
                 "risk_envelope_authorization_invalid"
             )
+
+
+def _validate_outer_policy_rejection_registry(
+    rows: list[dict[str, Any]],
+) -> None:
+    identities: set[str] = set()
+    expected_fields = {
+        "schema_version",
+        "rejection_id",
+        "rejection_digest",
+        "cycle_id",
+        "rejected_at",
+        "machine_code",
+        "authorization_effect",
+        "candidate",
+        "outer_policy",
+        "comparisons",
+        "passed",
+    }
+    candidate_fields = {
+        "supervisor_attempt_id",
+        "proposal_id",
+        "proposal_digest",
+        "preview_id",
+        "preview_digest",
+        "facts_digest",
+        "confirmation_digest",
+        "strategy_type",
+        "direction",
+        "limits",
+    }
+    comparison_fields = {
+        "field",
+        "operator",
+        "authorized_limit",
+        "observed_value",
+        "pass",
+    }
+    for row in rows:
+        if (
+            set(row) != expected_fields
+            or row.get("schema_version")
+            != OUTER_POLICY_REJECTION_SCHEMA
+            or row.get("machine_code")
+            != "outer_strategy_policy_envelope_out_of_bounds"
+            or row.get("authorization_effect") != "deny_only"
+            or row.get("passed") is not False
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        rejection_id = _required_text(
+            row.get("rejection_id"),
+            "attempt_store_corrupt",
+        )
+        if rejection_id in identities:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        identities.add(rejection_id)
+        base = {
+            key: value
+            for key, value in row.items()
+            if key not in {"rejection_id", "rejection_digest"}
+        }
+        if rejection_id != (
+            "outer-policy-rejection-" + _digest(base)[:32]
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        if row.get("rejection_digest") != _digest(
+            {
+                key: value
+                for key, value in row.items()
+                if key != "rejection_digest"
+            }
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        _required_text(row.get("cycle_id"), "attempt_store_corrupt")
+        _utc_timestamp(
+            row.get("rejected_at"),
+            "attempt_store_corrupt",
+        )
+        candidate = row.get("candidate")
+        if (
+            not isinstance(candidate, Mapping)
+            or set(candidate) != candidate_fields
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        _required_text(
+            candidate.get("supervisor_attempt_id"),
+            "attempt_store_corrupt",
+        )
+        _required_text(
+            candidate.get("proposal_id"),
+            "attempt_store_corrupt",
+        )
+        _required_digest(
+            candidate.get("proposal_digest"),
+            "attempt_store_corrupt",
+        )
+        _required_text(
+            candidate.get("preview_id"),
+            "attempt_store_corrupt",
+        )
+        _required_digest(
+            candidate.get("preview_digest"),
+            "attempt_store_corrupt",
+        )
+        facts_digest = candidate.get("facts_digest")
+        if facts_digest is not None:
+            _required_text(
+                facts_digest,
+                "attempt_store_corrupt",
+            )
+        confirmation_digest = candidate.get(
+            "confirmation_digest"
+        )
+        if confirmation_digest is not None:
+            _required_digest(
+                confirmation_digest,
+                "attempt_store_corrupt",
+            )
+        strategy_type = _strategy_type(
+            candidate,
+            "attempt_store_corrupt",
+        )
+        _direction(
+            candidate.get("direction"),
+            "attempt_store_corrupt",
+        )
+        limits = _canonical_limits(
+            strategy_type,
+            candidate.get("limits"),
+            code="attempt_store_corrupt",
+        )
+        _validate_outer_policy_reference(
+            row.get("outer_policy"),
+            code="attempt_store_corrupt",
+        )
+        comparisons = row.get("comparisons")
+        if (
+            not isinstance(comparisons, list)
+            or not comparisons
+            or any(
+                not isinstance(comparison, Mapping)
+                or set(comparison) != comparison_fields
+                or not isinstance(comparison.get("pass"), bool)
+                for comparison in comparisons
+            )
+            or all(comparison["pass"] for comparison in comparisons)
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        by_field = {
+            str(comparison.get("field") or ""): comparison
+            for comparison in comparisons
+        }
+        if len(by_field) != len(comparisons):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        strategy_comparison = by_field.get("strategy_type")
+        direction_comparison = by_field.get("direction")
+        if (
+            strategy_comparison is None
+            or direction_comparison is None
+            or strategy_comparison.get("operator") != "=="
+            or strategy_comparison.get("observed_value")
+            != strategy_type
+            or direction_comparison.get("operator")
+            not in {"==", "in"}
+            or direction_comparison.get("observed_value")
+            != candidate.get("direction")
+        ):
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        numeric_fields = set(
+            _GRID_FIELDS if strategy_type == "grid" else _DCA_FIELDS
+        )
+        required_fields = {"strategy_type", "direction"}
+        if strategy_comparison.get("pass") is True:
+            required_fields |= numeric_fields
+        if set(by_field) != required_fields:
+            raise CycleRiskEnvelopeError("attempt_store_corrupt")
+        for field in numeric_fields & set(by_field):
+            comparison = by_field[field]
+            if (
+                comparison.get("observed_value") != limits[field]
+                or comparison.get("operator")
+                not in {"<=", ">=", "unbounded"}
+            ):
+                raise CycleRiskEnvelopeError("attempt_store_corrupt")
+
+
+def _validate_legacy_rejection_resolution_registry(
+    rows: list[dict[str, Any]],
+) -> None:
+    identities: set[tuple[str, int]] = set()
+    blocker_identities: set[tuple[str, str, str]] = set()
+    expected_fields = {
+        "schema_version",
+        "resolution_id",
+        "resolution_version",
+        "resolution_digest",
+        "cycle_id",
+        "machine_code",
+        "blocked_at",
+        "summary",
+        "authorization_kind",
+        "authorized_at",
+        "actor",
+    }
+    actor_fields = {
+        "email",
+        "transport",
+        "subject",
+        "access_issued_at",
+        "access_expires_at",
+        "access_issuer",
+        "access_assertion_digest",
+    }
+    for row in rows:
+        if (
+            set(row) != expected_fields
+            or row.get("schema_version")
+            != LEGACY_REJECTION_RESOLUTION_SCHEMA
+            or row.get("machine_code")
+            != "outer_strategy_policy_envelope_out_of_bounds"
+            or row.get("authorization_kind")
+            != "park_explicit_legacy_structural_resolution"
+        ):
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+        resolution_id = _required_text(
+            row.get("resolution_id"),
+            "outer_strategy_policy_invalid",
+        )
+        version = _positive_int(
+            row.get("resolution_version"),
+            "outer_strategy_policy_invalid",
+        )
+        identity = (resolution_id, version)
+        if identity in identities:
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+        identities.add(identity)
+        cycle_id = _required_text(
+            row.get("cycle_id"),
+            "outer_strategy_policy_invalid",
+        )
+        blocked_at = _utc_timestamp(
+            row.get("blocked_at"),
+            "outer_strategy_policy_invalid",
+        )
+        blocker_identity = (
+            cycle_id,
+            str(row["machine_code"]),
+            blocked_at,
+        )
+        if blocker_identity in blocker_identities:
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+        blocker_identities.add(blocker_identity)
+        authorized_at = _utc_timestamp(
+            row.get("authorized_at"),
+            "outer_strategy_policy_invalid",
+        )
+        if _parse_timestamp(blocked_at) > _parse_timestamp(
+            authorized_at
+        ):
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+        _required_text(
+            row.get("summary"),
+            "outer_strategy_policy_invalid",
+        )
+        actor = row.get("actor")
+        if (
+            not isinstance(actor, Mapping)
+            or set(actor) != actor_fields
+            or actor.get("transport") != "public_gateway"
+        ):
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+        _required_text(
+            actor.get("email"),
+            "outer_strategy_policy_invalid",
+        )
+        _required_digest(
+            actor.get("access_assertion_digest"),
+            "outer_strategy_policy_invalid",
+        )
+        if row.get("resolution_digest") != _digest(
+            {
+                key: value
+                for key, value in row.items()
+                if key != "resolution_digest"
+            }
+        ):
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            )
+
+
+def _validate_outer_policy_reference(
+    value: Any,
+    *,
+    code: str,
+) -> dict[str, Any]:
+    expected_fields = {
+        "policy_id",
+        "version",
+        "policy_digest",
+        "authorized_at",
+        "expires_at",
+        "binding_id",
+        "binding_version",
+        "binding_digest",
+        "bound_at",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise CycleRiskEnvelopeError(code)
+    result = dict(value)
+    _required_text(result.get("policy_id"), code)
+    _positive_int(result.get("version"), code)
+    _required_digest(result.get("policy_digest"), code)
+    _utc_timestamp(result.get("authorized_at"), code)
+    _utc_timestamp(result.get("expires_at"), code)
+    _required_text(result.get("binding_id"), code)
+    _positive_int(result.get("binding_version"), code)
+    _required_digest(result.get("binding_digest"), code)
+    _utc_timestamp(result.get("bound_at"), code)
+    return result
 
 
 def _validate_policy_registry(rows: list[dict[str, Any]]) -> None:

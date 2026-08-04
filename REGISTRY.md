@@ -12,7 +12,29 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-04)
+## 现在在哪里(2026-08-05)
+- #566 binds `outer_strategy_policy_envelope_out_of_bounds` to an immutable,
+  deny-only rejected-candidate receipt instead of clearing it merely because a
+  policy exists. Recheck is read-only and requires a different exact Park
+  binding, every stored candidate comparison passing, fresh/clean zero-exposure
+  authority, exact WAL-attempt/receipt linkage, a strictly verified recheck
+  proof, and no unknown control outcome. A pre-authorization candidate marker
+  closes the receipt-fsync crash window, and every cleared rejection remains a
+  cycle tombstone against proposal/preview/facts/confirmation reuse.
+  Missing/tampered/legacy evidence remains structural; legacy clearance
+  requires a separately signed Park resolution and still executes zero control
+  actions. This is implementation evidence, not v2 selector activation or the
+  48-hour acceptance result.
+- #565 is deployed on Cloud Paper as exact clean
+  `main@64e5f7149aa27c639e454e93631f1fbbc4a4c808`, tree
+  `ca5d34610f1de83986cb18cee7baae3e6a77abf4`. Candidate preflight, provider
+  readiness, predeploy, Dashboard boot, and the next natural live-tick boot all
+  passed for that SHA/tree. The running NIGHT Grid remained 36/36 logical slots
+  (34 accepted orders + 2 positions), reconciliation `ok`, market trusted/fresh,
+  and Supervisor `adopted_existing`; release control actions were zero. The
+  current v1 selector remains authoritative because the cycle has exposure;
+  v2 activation must wait for an exact zero-exposure cycle boundary and a
+  separate config SHA release.
 - #565 introduces an immutable `paper-strategy-policy-boundary-v2` for an
   explicit, canonical Paper Grid direction set. The existing v1
   `direction=neutral` meaning and every prior record/digest remain unchanged;
@@ -289,6 +311,10 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Merge and deploy #566 through the exact main SHA/boot gates, then complete
+  #567 typed provider machine-code propagation and #568 current-cycle
+  no-plan/stopped health fail-closed. Do not activate the v2 selector or force
+  stop/cancel while the current Grid has orders or positions.
 - 继续从当前精确 release 进行 48h Supervisor soak；只认保守运行率、三个真实
   周期边界（含 21:00）与真实 transient 自动恢复审计链，不以测试、部署或
   read-model 200 冒充终验。第一个完整 24h 窗口形成前保持 `insufficient`。
