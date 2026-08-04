@@ -424,6 +424,24 @@ budget and next attempt, dangerous and clean-refusal counters, exact structural
 blocker, policy/envelope verification references, lease, alert and conservative
 24h/7d utilization.
 
+Cloud health always evaluates the wall-clock current cycle, including when no
+active plan exists. `no active plan` and `active plan + stopped` are both
+convergence work; neither may be projected as `supervisor_not_required`.
+While `mode=ready`, health reports `supervisor_converging` through the exact
+300-second boundary and `supervisor_convergence_stalled` only after it. The
+continuous clock starts at the cycle boundary or at the latest matching,
+sealed running proof. Attempts, observations, `structural_cleared`, retries and
+process restarts do not move that anchor. Only authoritative running evidence
+for the exact current plan/runtime identity can end and later restart the
+interval.
+
+Current-cycle corrupt/unavailable evidence, an unknown mode, a structural
+blocker or an alert-required episode is immediately critical. Structural and
+alert incidents retain their stable underlying machine code. A fresh explicit
+`backing_off` or `probing` episode without `alert_required` remains
+non-critical; its scheduled long probe interval is not mistaken for a missing
+attempt. Missing or stale Supervisor observations still fail closed.
+
 Utilization counts only intervals between sufficiently close Supervisor
 observations where both ends prove matching plan, runtime `running`, exact
 orders, fresh complete tick and reconciliation `ok`. Missing or unknown time is
@@ -433,8 +451,8 @@ Control-audit intervals are never used to fill evidence gaps optimistically.
 Critical dead-man failure is limited to:
 
 - structural blocker;
-- no Supervisor attempt for more than 300 seconds while an active plan is
-  stopped and unblocked;
+- current-cycle running not proven for more than 300 continuous seconds,
+  whether the plan is missing or active-and-stopped;
 - no Supervisor observation for more than 300 seconds; or
 - exhausted short episode needing human attention while probe mode continues.
 
@@ -464,7 +482,10 @@ Focused tests must prove:
 8. ten-minute heartbeat promotion, exact outer-policy failures, corrupt store,
    malformed/new codes and all unclassified input fail closed;
 9. conservative utilization gaps, severity ramp and dead-man delivery;
-10. exact Grid N/N order cardinality and read-model audit history.
+10. exact Grid N/N order cardinality and read-model audit history; and
+11. no-plan/active-plan 299/300/301-second health boundaries, immutable
+    non-convergence anchoring, probe exceptions and real Cloud-health to
+    dead-man fail routing.
 
 Passing tests and merging code do not complete the project. Completion requires
 48 continuous Cloud hours with at least 85% conservative strategy utilization,

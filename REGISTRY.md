@@ -13,14 +13,26 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-05)
+- #568 removes the current-cycle `no active plan -> supervisor_not_required`
+  health gap. No-plan and active-plan/stopped states now share an exact
+  300-second convergence window anchored to the cycle boundary or the latest
+  matching sealed running proof; attempts, observations, clearance events and
+  restarts cannot reset it. Stalled, corrupt/unknown, structural and
+  alert-required states drive dead-man critical, while fresh legal
+  backoff/probing and the utilization ramp remain non-critical. This is
+  implementation evidence only; exact-main Cloud deployment and v2 selector
+  activation remain separate.
 - #567 preserves recommendation-provider failures as exact typed evidence from
   `RecommendationProviderError.code` through the immutable failed evaluation
   receipt, Dashboard/control boundary, Supervisor whitelist, and legacy
   structural recheck. Untyped prose, missing/malformed codes, and legacy
   error-only receipts remain `unknown_blocker`/structural; the fifth exact
   transient failure enters the existing nonterminal probe/alert mode with zero
-  plan, control, or order side effects. This is implementation evidence, not a
-  deployed release or v2 selector activation.
+  plan, control, or order side effects. #567 is deployed code-only as exact
+  clean `main@33562a48ae3ee2fcb9f3dcd9942e91151d67a7f1`, tree
+  `207f705f3c8e9ee67a918e9167209daeab5bb184`; the next natural tick adopted
+  the unchanged 36-slot neutral Grid with zero control actions. The v1 selector
+  remains active, so this is not v2 activation or 48-hour acceptance.
 - #566 binds `outer_strategy_policy_envelope_out_of_bounds` to an immutable,
   deny-only rejected-candidate receipt instead of clearing it merely because a
   policy exists. Recheck is read-only and requires a different exact Park
@@ -323,9 +335,10 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Merge and deploy #567 through the exact main SHA/boot gates, then complete
-  #568 current-cycle no-plan/stopped health fail-closed. Do not activate the v2
-  selector or force stop/cancel while the current Grid has orders or positions.
+- Merge and deploy #568 through the exact main SHA/boot gates. Then wait for an
+  exact zero-exposure cycle boundary before Park-authenticated v2 policy/binding
+  append and the separate selector config release; do not force stop/cancel to
+  manufacture that boundary.
 - 继续从当前精确 release 进行 48h Supervisor soak；只认保守运行率、三个真实
   周期边界（含 21:00）与真实 transient 自动恢复审计链，不以测试、部署或
   read-model 200 冒充终验。第一个完整 24h 窗口形成前保持 `insufficient`。

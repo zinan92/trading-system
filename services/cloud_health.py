@@ -20,6 +20,7 @@ BJ_TZ = ZoneInfo("Asia/Shanghai")
 TICK_MAX_AGE_SECONDS = 180.0
 DATA_MAX_AGE_SECONDS = 180.0
 BACKUP_MAX_AGE_SECONDS = 36 * 60 * 60
+SUPERVISOR_MAX_CONVERGENCE_SECONDS = 300.0
 
 # This is an explicit, fail-closed severity contract.  A newly introduced
 # machine code is critical until it is deliberately classified here.
@@ -30,8 +31,8 @@ HEALTH_SEVERITY_BY_CODE = {
     "runtime_utilization_below_target": "warning",
     "runtime_utilization_insufficient": "insufficient",
     "supervisor_backing_off": "none",
+    "supervisor_converging": "none",
     "supervisor_probing": "none",
-    "supervisor_not_required": "none",
     # Healthy evidence.
     "datafeed_fresh": "none",
     "live_tick_fresh": "none",
@@ -68,7 +69,13 @@ HEALTH_SEVERITY_BY_CODE = {
     "supervisor_structural_blocker": "critical",
     "supervisor_episode_exhausted": "critical",
     "supervisor_episode_invalid": "critical",
+    "supervisor_convergence_stalled": "critical",
+    "supervisor_running_evidence_missing": "critical",
     "supervisor_read_model_unavailable": "critical",
+    "attempt_store_busy": "critical",
+    "attempt_store_capacity_exceeded": "critical",
+    "attempt_store_corrupt": "critical",
+    "running_evidence_invalid": "critical",
 }
 
 
@@ -255,15 +262,6 @@ class CloudPaperHealth:
             runtime.get("cycle_id") == cycle_id
             and runtime.get("actual_state") == "running"
         )
-        if not active_plan:
-            return _check(
-                "supervisor",
-                "ready",
-                code="supervisor_not_required",
-                summary="No active plan requires Supervisor convergence.",
-                next_action="No action.",
-                evidence={"cycle_id": cycle_id, "active_plan": False},
-            )
         try:
             from services.paper_supervisor_read_model import (
                 build_paper_supervisor_read_model,
@@ -284,11 +282,61 @@ class CloudPaperHealth:
                 next_action="Restore Supervisor observations before creating any control request.",
                 evidence={"cycle_id": cycle_id},
             )
-        current = model.get("current_cycle") if isinstance(model.get("current_cycle"), dict) else {}
-        utilization = model.get("utilization") if isinstance(model.get("utilization"), dict) else {}
+        source_errors = model.get("source_errors")
+        if (
+            str(model.get("status") or "") == "unavailable"
+            or not isinstance(source_errors, list)
+            or source_errors
+        ):
+            machine_code = self._supervisor_source_error_code(source_errors)
+            return _check(
+                "supervisor",
+                "blocked",
+                code=machine_code,
+                summary="Current-cycle Supervisor evidence is unavailable or corrupt.",
+                next_action=(
+                    "Preserve the Supervisor store and restore readable immutable "
+                    "evidence; do not create a manual start."
+                ),
+                evidence={
+                    "cycle_id": cycle_id,
+                    "active_plan": bool(active_plan),
+                    "source_errors": (
+                        source_errors if isinstance(source_errors, list) else None
+                    ),
+                },
+            )
+        current = (
+            model.get("current_cycle")
+            if isinstance(model.get("current_cycle"), dict)
+            else {}
+        )
+        current_status = str(current.get("status") or "")
+        if current_status not in {"available", "not_started"}:
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_read_model_unavailable",
+                summary="Current-cycle Supervisor evidence has an unknown status.",
+                next_action="Preserve the evidence and restore the read model before any control action.",
+                evidence={
+                    "cycle_id": cycle_id,
+                    "active_plan": bool(active_plan),
+                    "current_cycle_status": current_status or None,
+                },
+            )
+        utilization = (
+            model.get("utilization")
+            if isinstance(model.get("utilization"), dict)
+            else {}
+        )
         summary_evidence = {
             "cycle_id": cycle_id,
+            "active_plan": bool(active_plan),
+            "strategy_plan_id": active_plan.get("strategy_plan_id"),
+            "runtime_running": running,
             "current_cycle_summary": {
+                "status": current_status,
                 "attempt_count": current.get("attempt_count"),
                 "start_intent_count": current.get("start_intent_count"),
                 "last_attempt": current.get("last_attempt"),
@@ -305,15 +353,23 @@ class CloudPaperHealth:
         mode = str(episode.get("mode") or "")
         blocker_code = str(blocker.get("machine_code") or "")
         if mode == "blocked_structural":
+            if not blocker_code:
+                return _check(
+                    "supervisor",
+                    "blocked",
+                    code="supervisor_episode_invalid",
+                    summary="Supervisor structural state is missing its machine code.",
+                    next_action="Preserve the episode and restore its immutable blocker evidence.",
+                    evidence={**summary_evidence, "episode": episode},
+                )
             return _check(
                 "supervisor",
                 "blocked",
-                code="supervisor_structural_blocker",
+                code=blocker_code,
                 summary="Supervisor has an active structural blocker and requires attention.",
                 next_action="Inspect the immutable blocker and authoritative runtime; do not retry blindly.",
                 evidence={
                     **summary_evidence,
-                    "runtime_running": running,
                     "blocker_machine_code": blocker_code or None,
                     "blocker": blocker,
                 },
@@ -326,30 +382,43 @@ class CloudPaperHealth:
             return _check(
                 "supervisor",
                 "blocked",
-                code="supervisor_episode_exhausted",
+                code=blocker_code or "supervisor_episode_exhausted",
                 summary="Supervisor retry episode is exhausted and requires attention.",
                 next_action="Review the immutable Supervisor attempt history; do not retry blindly.",
                 evidence={**summary_evidence, "blocker": blocker, "episode": episode},
             )
-        if last_observed is None or observation_age is None or observation_age > 300:
+        if mode == "ready" and blocker_code:
             return _check(
                 "supervisor",
                 "blocked",
-                code="supervisor_observation_missing" if last_observed is None else "supervisor_observation_stale",
-                summary="Supervisor has not produced a fresh observation within 300 seconds.",
-                next_action="Inspect the Supervisor/live-tick scheduler and preserve control state.",
-                evidence={**summary_evidence, "age_seconds": observation_age},
+                code=blocker_code,
+                summary="Supervisor ready state contains an unexpected blocker code.",
+                next_action="Preserve the episode and restore a coherent classified state.",
+                evidence={**summary_evidence, "blocker": blocker},
             )
-        if attempted_at is None or attempt_age is None or attempt_age > 300:
-            return _check(
-                "supervisor",
-                "blocked",
-                code="supervisor_attempt_missing" if attempted_at is None else "supervisor_attempt_stale",
-                summary="Supervisor has not attempted convergence within 300 seconds.",
-                next_action="Inspect the Supervisor episode and current active plan; do not create a manual start.",
-                evidence={**summary_evidence, "age_seconds": attempt_age},
+        if mode in {"backing_off", "probing"} and blocker_code:
+            from services.paper_supervisor_classifier import (
+                TRANSIENT,
+                TRANSIENT_MACHINE_CODES,
             )
-        if mode not in {"ready", "backing_off", "probing"}:
+
+            if (
+                blocker_code not in TRANSIENT_MACHINE_CODES
+                or str(blocker.get("classification") or "") != TRANSIENT
+            ):
+                return _check(
+                    "supervisor",
+                    "blocked",
+                    code=blocker_code,
+                    summary="Supervisor transient wait contains an unknown blocker code.",
+                    next_action="Preserve the episode and classify the exact machine code before retrying.",
+                    evidence={**summary_evidence, "blocker": blocker},
+                )
+        if current_status == "available" and mode not in {
+            "ready",
+            "backing_off",
+            "probing",
+        }:
             return _check(
                 "supervisor",
                 "blocked",
@@ -357,6 +426,20 @@ class CloudPaperHealth:
                 summary="Supervisor episode mode is missing or invalid.",
                 next_action="Preserve the episode and restore a valid Supervisor read model.",
                 evidence={**summary_evidence, "mode": mode or None},
+            )
+        if current_status == "available" and (
+            last_observed is None
+            or observation_age is None
+            or observation_age < 0
+            or observation_age > SUPERVISOR_MAX_CONVERGENCE_SECONDS
+        ):
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_observation_missing" if last_observed is None else "supervisor_observation_stale",
+                summary="Supervisor has not produced a fresh observation within 300 seconds.",
+                next_action="Inspect the Supervisor/live-tick scheduler and preserve control state.",
+                evidence={**summary_evidence, "age_seconds": observation_age},
             )
         if mode == "backing_off":
             return _check(
@@ -371,6 +454,77 @@ class CloudPaperHealth:
                 summary="Supervisor is probing a transient condition.",
                 next_action="Wait for the recorded probe; no manual retry.",
                 evidence={**summary_evidence, "episode": episode},
+            )
+        latest_running_evidence: dict[str, Any] | None = None
+        latest_running_proof_at: datetime | None = None
+        if current_status == "available":
+            (
+                latest_running_evidence,
+                latest_running_proof_at,
+                evidence_error,
+            ) = self._supervisor_running_proof(
+                current,
+                cycle_id=cycle_id,
+                now=now,
+                active_plan=active_plan,
+                runtime=runtime,
+            )
+            if evidence_error:
+                return _check(
+                    "supervisor",
+                    "blocked",
+                    code=evidence_error,
+                    summary="Current-cycle running evidence is missing or invalid.",
+                    next_action="Preserve the immutable observations and restore valid running evidence.",
+                    evidence=summary_evidence,
+                )
+        running_proven = bool(
+            running
+            and active_plan
+            and latest_running_evidence
+            and latest_running_evidence.get("running_proven") is True
+            and self._supervisor_running_identity_matches(
+                latest_running_evidence,
+                active_plan=active_plan,
+                runtime=runtime,
+            )
+        )
+        if not running_proven:
+            convergence_started_at = max(
+                cycle_window(now).start.astimezone(timezone.utc),
+                latest_running_proof_at
+                or cycle_window(now).start.astimezone(timezone.utc),
+            )
+            convergence_age = max(
+                0.0,
+                (now - convergence_started_at).total_seconds(),
+            )
+            convergence_evidence = {
+                **summary_evidence,
+                "observation_age_seconds": observation_age,
+                "attempt_age_seconds": attempt_age,
+                "continuous_nonconvergence_started_at": (
+                    convergence_started_at.isoformat()
+                ),
+                "continuous_nonconvergence_age_seconds": convergence_age,
+                "max_convergence_seconds": SUPERVISOR_MAX_CONVERGENCE_SECONDS,
+            }
+            if convergence_age <= SUPERVISOR_MAX_CONVERGENCE_SECONDS:
+                return _check(
+                    "supervisor",
+                    "ready",
+                    code="supervisor_converging",
+                    summary="Supervisor is within the bounded current-cycle convergence window.",
+                    next_action="Allow Supervisor to converge; do not issue a manual start.",
+                    evidence=convergence_evidence,
+                )
+            return _check(
+                "supervisor",
+                "blocked",
+                code="supervisor_convergence_stalled",
+                summary="Supervisor has not proven current-cycle running within 300 seconds.",
+                next_action="Inspect Supervisor evidence and preserve the current control state.",
+                evidence=convergence_evidence,
             )
         window = (utilization.get("windows") or {}).get("24h") if isinstance(utilization.get("windows"), dict) else {}
         if isinstance(window, dict) and window.get("evidence_status") == "insufficient":
@@ -388,14 +542,99 @@ class CloudPaperHealth:
                 evidence={**summary_evidence, "utilization": window},
             )
         return _check(
-            "supervisor", "ready", code=("supervisor_running" if running else "supervisor_observation_fresh"),
-            summary=(
-                "Supervisor runtime is running and convergence evidence is fresh."
-                if running
-                else "Supervisor observation and attempt cadence are fresh."
-            ),
+            "supervisor", "ready", code="supervisor_running",
+            summary="Supervisor runtime is running and convergence evidence is fresh.",
             next_action="No action.",
             evidence={**summary_evidence, "observation_age_seconds": observation_age, "attempt_age_seconds": attempt_age},
+        )
+
+    @staticmethod
+    def _supervisor_source_error_code(source_errors: Any) -> str:
+        if isinstance(source_errors, list):
+            for row in source_errors:
+                if isinstance(row, dict) and str(row.get("machine_code") or ""):
+                    return str(row["machine_code"])
+        return "supervisor_read_model_unavailable"
+
+    @staticmethod
+    def _supervisor_running_proof(
+        current: dict[str, Any],
+        *,
+        cycle_id: str,
+        now: datetime,
+        active_plan: dict[str, Any],
+        runtime: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, datetime | None, str | None]:
+        history = current.get("history")
+        if not isinstance(history, dict):
+            return None, None, "supervisor_running_evidence_missing"
+        observations = history.get("observations")
+        if not isinstance(observations, list) or not observations:
+            return None, None, "supervisor_running_evidence_missing"
+        latest: dict[str, Any] | None = None
+        latest_proven_at: datetime | None = None
+        for row in observations:
+            payload = row.get("payload") if isinstance(row, dict) else None
+            evidence = (
+                payload.get("running_evidence")
+                if isinstance(payload, dict)
+                else None
+            )
+            if (
+                not isinstance(evidence, dict)
+                or str(evidence.get("cycle_id") or "") != cycle_id
+                or not isinstance(evidence.get("running_proven"), bool)
+            ):
+                return None, None, "running_evidence_invalid"
+            evidence_at = _parse_ts(evidence.get("evidence_at"))
+            if evidence_at is None or evidence_at > now:
+                return None, None, "running_evidence_invalid"
+            latest = evidence
+            if (
+                evidence["running_proven"] is True
+                and active_plan
+                and CloudPaperHealth._supervisor_running_identity_matches(
+                    evidence,
+                    active_plan=active_plan,
+                    runtime=runtime,
+                )
+            ):
+                latest_proven_at = evidence_at
+        return latest, latest_proven_at, None
+
+    @staticmethod
+    def _supervisor_running_identity_matches(
+        evidence: dict[str, Any],
+        *,
+        active_plan: dict[str, Any],
+        runtime: dict[str, Any],
+    ) -> bool:
+        evidence_plan = evidence.get("plan_identity")
+        evidence_runtime = evidence.get("runtime")
+        if not isinstance(evidence_plan, dict) or not isinstance(
+            evidence_runtime, dict
+        ):
+            return False
+        try:
+            versions = {
+                int(
+                    active_plan.get("version")
+                    or active_plan.get("strategy_plan_version")
+                    or 0
+                ),
+                int(evidence_plan.get("strategy_plan_version") or 0),
+                int(runtime.get("strategy_plan_version") or 0),
+                int(evidence_runtime.get("strategy_plan_version") or 0),
+            }
+        except (TypeError, ValueError):
+            return False
+        return (
+            str(active_plan.get("strategy_plan_id") or "")
+            == str(evidence_plan.get("strategy_plan_id") or "")
+            == str(runtime.get("strategy_plan_id") or "")
+            == str(evidence_runtime.get("strategy_plan_id") or "")
+            and len(versions) == 1
+            and next(iter(versions)) > 0
         )
 
     def _datafeed(self, now: datetime) -> dict[str, Any]:
