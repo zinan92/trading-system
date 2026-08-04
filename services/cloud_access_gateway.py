@@ -48,6 +48,7 @@ ALLOW_EXACT = frozenset(
         "/api/trading-system/read-model",
         "/api/trading-system/cloud-health",
         "/api/trading-system/daily-self-review",
+        "/api/trading-system/supervisor-history",
         "/api/trading-system/ai-evaluation-receipt",
         "/api/dualtrack/market/bars",
     }
