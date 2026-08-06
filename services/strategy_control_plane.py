@@ -59,6 +59,10 @@ from services.grid_range_adjustment import (
     range_adjustment_steps,
 )
 from services.journal_store import load_json, write_json
+from services.cloud_ai_provider import (
+    current_cloud_ai_provider_readiness,
+    validate_provider_readiness_proof,
+)
 from services.paper_supervisor_identity import build_start_intent_contract
 from services.paper_supervisor_store import PaperSupervisorStore
 from services.production_accounting import normalize_nautilus_snapshot_for_accounting
@@ -674,6 +678,12 @@ class StrategyControlPlane:
             "field_sources": sources,
             **{key: selected.get(key) for key in PLAN_FIELDS},
         }
+        if selected.get("provider_readiness") is not None:
+            plan["provider_readiness"] = (
+                validate_provider_readiness_proof(
+                    selected.get("provider_readiness") or {}
+                )
+            )
         if cycle_risk_envelope_id:
             plan["cycle_risk_envelope_id"] = str(
                 cycle_risk_envelope_id
@@ -1609,6 +1619,9 @@ class StrategyControlPlane:
             raise ValueError(
                 "new grid start requires zero accepted orders and zero open positions"
             )
+        provider_readiness = current_cloud_ai_provider_readiness(
+            self.output_root
+        )
         try:
             preview = self._adaptive_start_preview(
                 cycle_id,
@@ -1716,6 +1729,7 @@ class StrategyControlPlane:
             "market_snapshot": canonical_market_risk_state(market),
             "preview": preview,
             "start_intent_contract": start_intent_contract,
+            "provider_readiness": provider_readiness,
             "supervisor_attempt_id": (
                 supervisor_attempt_id or None
             ),
@@ -1732,6 +1746,7 @@ class StrategyControlPlane:
             "expires_at": record["expires_at"],
             "preview": preview,
             "start_intent_contract": start_intent_contract,
+            "provider_readiness": provider_readiness,
             "supervisor_attempt_id": (
                 supervisor_attempt_id or None
             ),
@@ -2463,12 +2478,10 @@ class StrategyControlPlane:
                 # A rejected mutation is still an operator action and must
                 # stay attributable; the original rejection is re-raised.
                 if str(action or "").lower() not in {"preview", "preview_range"}:
+                    typed_evidence = getattr(exc, "evidence", None)
                     rejection_evidence = (
-                        {"typed_rejection": dict(exc.evidence)}
-                        if isinstance(
-                            exc,
-                            StrategyControlMachineError,
-                        )
+                        {"typed_rejection": dict(typed_evidence)}
+                        if isinstance(typed_evidence, Mapping)
                         else None
                     )
                     self._audit_control(
@@ -3012,6 +3025,20 @@ class StrategyControlPlane:
         if pending or open_positions:
             raise ValueError("new grid start requires zero accepted orders and zero open positions")
 
+        current_cloud_ai_provider_readiness(
+            self.output_root,
+            expected_digest=(
+                str(
+                    dict(prepared.get("provider_readiness") or {}).get(
+                        "readiness_digest"
+                    )
+                    or ""
+                )
+                if prepared is not None
+                else None
+            ),
+        )
+
         envelope_verification = None
         if envelope_authorization_id:
             envelope_verification = self.risk_envelopes.verify_preview(
@@ -3414,6 +3441,20 @@ class StrategyControlPlane:
             raise ValueError(
                 "new DCA start requires zero accepted orders and zero open positions"
             )
+
+        current_cloud_ai_provider_readiness(
+            self.output_root,
+            expected_digest=(
+                str(
+                    dict(prepared.get("provider_readiness") or {}).get(
+                        "readiness_digest"
+                    )
+                    or ""
+                )
+                if prepared is not None
+                else None
+            ),
+        )
 
         timestamp = _timestamp(now)
         version = self._next_plan_version(cycle_id)
@@ -7194,6 +7235,13 @@ def normalize_proposal(payload: dict[str, Any], *, now: str | None = None, legac
         "analysis": dict(payload.get("analysis") or {}),
         "prompt_contract": dict(payload.get("prompt_contract") or {}),
         "evaluation_receipt": dict(payload.get("evaluation_receipt") or {}),
+        "provider_readiness": (
+            validate_provider_readiness_proof(
+                payload.get("provider_readiness") or {}
+            )
+            if payload.get("provider_readiness") is not None
+            else None
+        ),
         "preview_id": payload.get("preview_id"),
     }
     proposal["proposal_id"] = str(payload.get("proposal_id") or _proposal_id(proposal))

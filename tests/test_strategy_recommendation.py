@@ -12,6 +12,7 @@ from services.strategy_recommendation import (
     StrategyRecommendationService,
     build_position_first_framework,
 )
+from services.cloud_ai_provider import CloudAIProviderReadinessGateError
 
 
 def _bars(timeframe: str, count: int, close: float, span: float) -> list[dict]:
@@ -139,6 +140,41 @@ def test_strategy_recommendation_archives_provider_failure(tmp_path: Path) -> No
     assert receipt["status"] == "failed"
     assert receipt["output"]["machine_code"] is None
     assert receipt["output"]["error"] == "provider unavailable"
+
+
+def test_readiness_refusal_never_calls_recommendation_provider(
+    tmp_path: Path,
+) -> None:
+    provider_calls = 0
+
+    def provider(_: str) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
+        return {}
+
+    service = StrategyRecommendationService(
+        tmp_path / "outputs",
+        decision_provider=provider,
+        provider_readiness_verifier=lambda: {
+            "ok": False,
+            "blocker": "cloud_ai_provider_readiness_stale",
+        },
+    )
+
+    with pytest.raises(CloudAIProviderReadinessGateError) as raised:
+        service.recommend(
+            "2026-07-05_DAY",
+            strategy_timeframes=_trusted_contexts(),
+            current_plan={},
+            account={},
+            review={},
+        )
+
+    assert raised.value.code == "cloud_ai_provider_readiness_unavailable"
+    assert provider_calls == 0
+    assert not (
+        tmp_path / "outputs" / "dualtrack" / "strategy_control" / "evaluations"
+    ).exists()
 
 
 @pytest.mark.parametrize(

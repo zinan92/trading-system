@@ -24,7 +24,8 @@
     "strategy_recommendation_provider_timeout",
     "strategy_recommendation_provider_unavailable",
     "strategy_recommendation_provider_failed",
-    "frozen_grid_preview_market_moved"
+    "frozen_grid_preview_market_moved",
+    "cloud_ai_provider_readiness_unavailable"
   ],
   "structural": [
     "control_outcome_unknown",
@@ -59,6 +60,7 @@
     "strategy_recommendation_provider_command_invalid",
     "strategy_recommendation_provider_timeout_invalid",
     "strategy_recommendation_provider_auth_not_ready",
+    "cloud_ai_provider_readiness_invalid",
     "dangerous_start_attempt_cap_reached",
     "clean_refusal_observation_cap_reached",
     "unknown_blocker"
@@ -167,6 +169,18 @@
       "to": "frozen_grid_preview_market_moved",
       "classification": "transient",
       "reason": "An exact frozen neutral Grid request that passed at its authorized split may retry when only the current venue-rounded single-side capital count became infeasible before start_intent; all plan, envelope and safety gates remain unchanged."
+    },
+    {
+      "change": "add",
+      "to": "cloud_ai_provider_readiness_unavailable",
+      "classification": "transient",
+      "reason": "A digest-validated missing, stale, changed, or explicitly recoverable provider receipt blocks new AI and entry work while Paper lifecycle continues."
+    },
+    {
+      "change": "add",
+      "to": "cloud_ai_provider_readiness_invalid",
+      "classification": "structural",
+      "reason": "Malformed, source-drifted, executable-drifted, or non-recoverable readiness evidence is fail-closed and requires a read-only clearance observation."
     }
   ]
 }

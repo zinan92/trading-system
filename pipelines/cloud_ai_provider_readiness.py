@@ -154,8 +154,12 @@ def run(*, output_root: Path | None = None, repo_root: Path = ROOT) -> dict[str,
         finally:
             result_path.unlink(missing_ok=True)
         receipt["status"] = "pass"
-    except (ProviderReadinessFailure, OSError, subprocess.TimeoutExpired) as exc:
+    except ProviderReadinessFailure as exc:
         receipt["failure_code"] = str(exc) or "strategy_recommendation_provider_failed"
+    except subprocess.TimeoutExpired:
+        receipt["failure_code"] = "strategy_recommendation_provider_timeout"
+    except OSError:
+        receipt["failure_code"] = "strategy_recommendation_provider_unavailable"
     receipt["readiness_digest"] = _digest(receipt)
     path = output / "cloud" / "provider" / "readiness_current.json"
     write_json(path, [receipt])

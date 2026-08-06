@@ -441,20 +441,6 @@ class CloudPaperHealth:
                 next_action="Inspect the Supervisor/live-tick scheduler and preserve control state.",
                 evidence={**summary_evidence, "age_seconds": observation_age},
             )
-        if mode == "backing_off":
-            return _check(
-                "supervisor", "ready", code="supervisor_backing_off",
-                summary="Supervisor is in an explicit transient backoff.",
-                next_action="Wait for the recorded next probe; no manual retry.",
-                evidence={**summary_evidence, "episode": episode},
-            )
-        if mode == "probing":
-            return _check(
-                "supervisor", "ready", code="supervisor_probing",
-                summary="Supervisor is probing a transient condition.",
-                next_action="Wait for the recorded probe; no manual retry.",
-                evidence={**summary_evidence, "episode": episode},
-            )
         latest_running_evidence: dict[str, Any] | None = None
         latest_running_proof_at: datetime | None = None
         if current_status == "available":
@@ -510,13 +496,25 @@ class CloudPaperHealth:
                 "max_convergence_seconds": SUPERVISOR_MAX_CONVERGENCE_SECONDS,
             }
             if convergence_age <= SUPERVISOR_MAX_CONVERGENCE_SECONDS:
+                wait_code = (
+                    "supervisor_backing_off"
+                    if mode == "backing_off"
+                    else "supervisor_probing"
+                    if mode == "probing"
+                    else "supervisor_converging"
+                )
                 return _check(
                     "supervisor",
                     "ready",
-                    code="supervisor_converging",
-                    summary="Supervisor is within the bounded current-cycle convergence window.",
+                    code=wait_code,
+                    summary=(
+                        "Supervisor is within the bounded current-cycle convergence window."
+                    ),
                     next_action="Allow Supervisor to converge; do not issue a manual start.",
-                    evidence=convergence_evidence,
+                    evidence={
+                        **convergence_evidence,
+                        "episode": episode,
+                    },
                 )
             return _check(
                 "supervisor",

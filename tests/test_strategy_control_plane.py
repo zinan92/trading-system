@@ -12,6 +12,7 @@ from services.dualtrack_config import dualtrack_config as load_test_config
 from services.journal_store import load_json, write_json
 from services.strategy_control_plane import StrategyControlPlane
 import services.strategy_control_plane as strategy_control_plane_module
+from services.cloud_ai_provider import CloudAIProviderReadinessGateError
 from services.paper_supervisor_store import PaperSupervisorStore
 
 
@@ -1068,6 +1069,109 @@ def test_nautilus_paper_start_requires_a_fresh_execution_tick_heartbeat(
         cycle_id,
         now="2026-07-05T01:43:01+00:00",
     )["status"] == "blocked"
+
+
+def test_prepare_start_readiness_refusal_creates_zero_orders(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+
+    def blocked(*_args, **_kwargs):
+        raise CloudAIProviderReadinessGateError(
+            "cloud_ai_provider_readiness_unavailable",
+            readiness_blocker="cloud_ai_provider_readiness_stale",
+        )
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "current_cloud_ai_provider_readiness",
+        blocked,
+    )
+
+    with pytest.raises(CloudAIProviderReadinessGateError):
+        plane.control(
+            cycle_id,
+            "prepare_start",
+            safe_grid(),
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:00+00:00",
+        )
+
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+    assert plane.runtime_state(cycle_id)["actual_state"] == "stopped"
+
+
+def test_start_rechecks_prepared_readiness_before_order_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-05_DAY"
+    plane = StrategyControlPlane(output)
+    saved = plane.upsert_proposal(proposal(cycle_id, "ai"))
+    plane.lock_production_plan(
+        cycle_id,
+        selected_proposal_id=saved["proposal_id"],
+    )
+    proof = {
+        "readiness_digest": "a" * 64,
+        "source_sha": "b" * 40,
+        "source_tree_sha": "c" * 40,
+        "executable_sha256": "d" * 64,
+        "checked_at": "2026-07-05T00:00:00+00:00",
+        "expires_at": "2026-07-06T00:00:00+00:00",
+    }
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "current_cloud_ai_provider_readiness",
+        lambda *_args, **_kwargs: dict(proof),
+    )
+    payload = safe_grid()
+    prepared = plane.control(
+        cycle_id,
+        "prepare_start",
+        payload,
+        market=market(),
+        account=account_context(),
+        now="2026-07-05T01:40:00+00:00",
+    )
+
+    def changed(*_args, **_kwargs):
+        raise CloudAIProviderReadinessGateError(
+            "cloud_ai_provider_readiness_unavailable",
+            readiness_blocker="cloud_ai_provider_readiness_changed",
+        )
+
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "current_cloud_ai_provider_readiness",
+        changed,
+    )
+    with pytest.raises(CloudAIProviderReadinessGateError):
+        plane.control(
+            cycle_id,
+            "start",
+            {
+                **payload,
+                "expected_preview_id": prepared["preview"]["preview_id"],
+                "prepared_start_id": prepared["prepared_start_id"],
+            },
+            market=market(),
+            account=account_context(),
+            now="2026-07-05T01:40:01+00:00",
+        )
+
+    assert build_execution_engine_adapter(output).snapshot(cycle_id)["orders"] == []
+    assert plane.runtime_state(cycle_id)["actual_state"] == "stopped"
 
 
 def test_running_nautilus_runtime_exposes_stale_execution_tick_health(tmp_path: Path) -> None:

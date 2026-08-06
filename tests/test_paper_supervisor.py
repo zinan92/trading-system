@@ -47,6 +47,9 @@ from tests.test_strategy_control_plane import (
 )
 from services.strategy_control_plane import StrategyControlPlane
 from services.strategy_recommendation import RecommendationProviderError
+from services.cloud_ai_provider import (
+    require_cloud_ai_provider_readiness,
+)
 
 
 CYCLE = "2026-07-30_DAY"
@@ -447,6 +450,187 @@ def _supervisor(
         control,
         plane,
     )
+
+
+def _readiness_result(digest: str = "a" * 64) -> dict:
+    return {
+        "ok": True,
+        "readiness_digest": digest,
+        "source_sha": "b" * 40,
+        "source_tree_sha": "c" * 40,
+        "provider": {"executable_sha256": "d" * 64},
+        "checked_at": T0.isoformat(),
+        "expires_at": (T0 + timedelta(hours=24)).isoformat(),
+    }
+
+
+def test_provider_readiness_unavailable_blocks_only_new_entry(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = FakePlane()
+    execution = FakeExecution()
+    control = FakePublicControl(
+        output,
+        plane,
+        execution,
+        start_outcomes=["accepted"],
+    )
+    supervisor = PaperSupervisor(
+        output,
+        plane=plane,
+        execution=execution,
+        control=control,
+        accounting_reconciliation=lambda: "pass",
+        provider_readiness_verifier=lambda: {
+            "ok": False,
+            "blocker": "cloud_ai_provider_readiness_stale",
+        },
+    )
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(),
+    )
+
+    assert result["status"] == "backing_off"
+    assert result["machine_code"] == (
+        "cloud_ai_provider_readiness_unavailable"
+    )
+    assert result["control_actions_executed"] == 0
+    assert control.calls == []
+    assert execution.orders == []
+    assert supervisor.store.unfinished_intent(CYCLE) is None
+
+
+def test_invalid_provider_readiness_is_structural_without_control(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = FakePlane()
+    execution = FakeExecution()
+    control = FakePublicControl(
+        output,
+        plane,
+        execution,
+        start_outcomes=["accepted"],
+    )
+    supervisor = PaperSupervisor(
+        output,
+        plane=plane,
+        execution=execution,
+        control=control,
+        accounting_reconciliation=lambda: "pass",
+        provider_readiness_verifier=lambda: {
+            "ok": False,
+            "blocker": "cloud_ai_provider_readiness_digest_invalid",
+        },
+    )
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(),
+    )
+
+    assert result["status"] == "blocked_structural"
+    assert result["machine_code"] == "cloud_ai_provider_readiness_invalid"
+    assert result["control_actions_executed"] == 0
+    assert control.calls == []
+    assert execution.orders == []
+
+
+def test_changed_readiness_after_prepare_refuses_before_start_intent(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = FakePlane()
+    execution = FakeExecution()
+    underlying = FakePublicControl(
+        output,
+        plane,
+        execution,
+        start_outcomes=["accepted"],
+    )
+    proof = require_cloud_ai_provider_readiness(
+        lambda: _readiness_result("a" * 64)
+    )
+    verifier_calls = 0
+
+    def verifier() -> dict:
+        nonlocal verifier_calls
+        verifier_calls += 1
+        return _readiness_result(
+            "a" * 64 if verifier_calls == 1 else "e" * 64
+        )
+
+    def control(action: str, payload: dict) -> dict:
+        result = underlying(action, payload)
+        if action == "prepare_start":
+            result["provider_readiness"] = proof
+        return result
+
+    supervisor = PaperSupervisor(
+        output,
+        plane=plane,
+        execution=execution,
+        control=control,
+        accounting_reconciliation=lambda: "pass",
+        provider_readiness_verifier=verifier,
+    )
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(),
+    )
+
+    assert result["status"] == "backing_off"
+    assert result["machine_code"] == (
+        "cloud_ai_provider_readiness_unavailable"
+    )
+    assert underlying.calls == ["prepare_start"]
+    assert underlying.start_ids == []
+    assert execution.orders == []
+    assert supervisor.store.unfinished_intent(CYCLE) is None
+
+
+def test_running_authority_is_adopted_without_readiness_lookup(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    first = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(),
+    )
+    assert first["status"] == "executed"
+
+    def forbidden_readiness() -> dict:
+        raise AssertionError("running adoption must not consult provider readiness")
+
+    adopting = PaperSupervisor(
+        supervisor.output_root,
+        plane=plane,
+        execution=supervisor.execution,
+        control=control,
+        accounting_reconciliation=lambda: "pass",
+        store=supervisor.store,
+        provider_readiness_verifier=forbidden_readiness,
+    )
+    at = T0 + timedelta(minutes=1)
+    second = adopting.converge_once(
+        CYCLE,
+        observed_at=at.isoformat(),
+        heartbeat=_heartbeat(at),
+    )
+
+    assert second["terminal_status"] == "adopted_existing"
+    assert control.calls.count("start") == 1
 
 
 def test_market_moved_uses_fresh_preview_and_prepared_start_then_recovers(

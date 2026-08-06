@@ -85,7 +85,27 @@ def test_v2_amendment_records_every_approved_change() -> None:
                 "before start_intent; all plan, envelope and safety gates "
                 "remain unchanged."
             ),
-        }
+        },
+        {
+            "change": "add",
+            "to": "cloud_ai_provider_readiness_unavailable",
+            "classification": "transient",
+            "reason": (
+                "A digest-validated missing, stale, changed, or explicitly "
+                "recoverable provider receipt blocks new AI and entry work "
+                "while Paper lifecycle continues."
+            ),
+        },
+        {
+            "change": "add",
+            "to": "cloud_ai_provider_readiness_invalid",
+            "classification": "structural",
+            "reason": (
+                "Malformed, source-drifted, executable-drifted, or "
+                "non-recoverable readiness evidence is fail-closed and "
+                "requires a read-only clearance observation."
+            ),
+        },
     ]
 
 

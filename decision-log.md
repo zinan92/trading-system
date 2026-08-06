@@ -14088,3 +14088,64 @@ auditable datafeed port; broker execution remains a separate port.
   `ok`, and Supervisor `adopted_existing` after two post-start natural ticks.
 - Authenticated Dashboard independently renders `运行中` and
   `38 笔已接受委托`.
+
+# 2026-08-06 — Isolate Cloud AI readiness from Paper lifecycle (#573)
+
+## Decision
+
+- Remove only the AI-provider readiness receipt from the whole-tick boot gate.
+  A missing or stale receipt now blocks proposal generation and new entry as
+  the exact transient code `cloud_ai_provider_readiness_unavailable`, while an
+  invalid or unverifiable receipt fails closed as the exact structural code
+  `cloud_ai_provider_readiness_invalid`.
+- Keep authoritative runtime, exposure, reconciliation, lifecycle, protective
+  handling, settlement, ledger rebuilding, and tick heartbeat ahead of the
+  proposal gate. An already-running strategy is adopted without consulting AI
+  readiness, so an expiring provider session cannot freeze order protection or
+  make the Supervisor heartbeat lie.
+- Bind the exact readiness digest, source SHA/tree, executable hash, checked
+  time, and expiry into every provider-generated recommendation, machine plan,
+  proposal, locked plan, risk envelope, and prepared start. Recheck the same
+  digest under the production mutation lock immediately before the durable
+  `start_intent`; proof drift remains a clean pre-intent transient refusal with
+  zero orders.
+- Treat provider-readiness non-convergence as warning/noncritical for at most
+  300 seconds. Continued inability to converge becomes the existing critical
+  `supervisor_convergence_stalled` condition; a fresh lifecycle heartbeat never
+  erases that separate alert.
+
+## Gotchas
+
+- A whole-tick boot dependency looked safe but made a renewable AI session an
+  availability dependency for unrelated Paper lifecycle work. Removing that
+  one dependency does not authorize AI or entry: all proposal and entry seams
+  must enforce the same proof independently.
+- Checking readiness only before `prepare_start` leaves a race before order
+  creation. The second check belongs inside the same production mutation lock
+  and before the append+fsync of `start_intent`; a changed digest must never be
+  interpreted as an unknown control outcome.
+- A fresh tick heartbeat and successful convergence are different health
+  facts. Returning healthy early during probe/backoff would hide a provider
+  outage forever, so the continuous 300-second stall calculation must run
+  before any backoff-mode healthy return.
+- Historical proposals and envelopes predate provider-bound proof. Readers
+  retain their exact legacy shapes for immutable history, while every newly
+  generated Cloud artifact must carry the new bounded proof; migration must not
+  rewrite old cycle packages, fills, trades, or control audit.
+- Readiness evidence validation belongs on every normal pre-intent terminal
+  event, not only the crash-recovery branch. Its machine code, classification,
+  blocker, and recoverable failure code must agree exactly before the append is
+  accepted; otherwise malformed audit data could survive even though control
+  execution remained blocked.
+
+## Verification
+
+- Focused tests cover missing, stale, malformed, source/tree/executable drift,
+  recoverable and non-recoverable provider results, exact proof replacement,
+  no provider call on refusal, and no degraded machine-plan fallback.
+- Supervisor and control-plane tests prove zero control calls, zero orders, and
+  zero `start_intent` for stale/invalid/changed proof; running strategies remain
+  adoptable without a readiness lookup.
+- Health tests prove provider unavailability is noncritical at 299 seconds and
+  critical after 301 seconds. Full repository regression, secret scanning,
+  exact-SHA deployment, and Cloud runtime evidence remain release gates.

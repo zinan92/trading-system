@@ -602,6 +602,105 @@ def test_pre_intent_structural_terminal_preserves_rejection_reference(
     ]
 
 
+def test_pre_intent_provider_readiness_evidence_is_strictly_typed(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    evidence = {
+        "readiness_blocker": "cloud_ai_provider_readiness_stale",
+        "checked_at": NOW.isoformat(),
+        "expires_at": (NOW + timedelta(hours=1)).isoformat(),
+    }
+    with store.try_lease(CYCLE, holder_id="provider-evidence") as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id="supervisor-attempt-provider-stale",
+            observed_at=NOW.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        lease.record_pre_intent_finished(
+            attempt_id="supervisor-attempt-provider-stale",
+            result="transient",
+            machine_code="cloud_ai_provider_readiness_unavailable",
+            classification="transient",
+            observed_at=NOW.isoformat(),
+            evidence=evidence,
+        )
+
+    attempt = store.current_state(CYCLE)["pre_intent_attempts"][0]
+    assert attempt["terminal_evidence"] == evidence
+
+
+@pytest.mark.parametrize(
+    ("machine_code", "result", "classification", "evidence"),
+    [
+        (
+            "cloud_ai_provider_readiness_unavailable",
+            "structural",
+            "structural",
+            {"readiness_blocker": "cloud_ai_provider_readiness_missing"},
+        ),
+        (
+            "cloud_ai_provider_readiness_invalid",
+            "structural",
+            "structural",
+            {"readiness_blocker": "cloud_ai_provider_readiness_stale"},
+        ),
+        (
+            "cloud_ai_provider_readiness_unavailable",
+            "transient",
+            "transient",
+            {
+                "readiness_blocker": "cloud_ai_provider_readiness_missing",
+                "unexpected": "not-allowed",
+            },
+        ),
+        (
+            "cloud_ai_provider_readiness_unavailable",
+            "transient",
+            "transient",
+            {
+                "readiness_blocker": "cloud_ai_provider_readiness_not_passing",
+                "failure_code": "strategy_recommendation_provider_auth_not_ready",
+            },
+        ),
+        (
+            "cloud_ai_provider_readiness_invalid",
+            "structural",
+            "structural",
+            {
+                "readiness_blocker": "cloud_ai_provider_readiness_not_passing",
+                "failure_code": "strategy_recommendation_provider_timeout",
+            },
+        ),
+    ],
+)
+def test_pre_intent_provider_readiness_rejects_mismatched_evidence(
+    tmp_path: Path,
+    machine_code: str,
+    result: str,
+    classification: str,
+    evidence: dict[str, str],
+) -> None:
+    store = _store(tmp_path)
+    with store.try_lease(CYCLE, holder_id="provider-invalid") as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id="supervisor-attempt-provider-invalid",
+            observed_at=NOW.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        with pytest.raises(SupervisorStoreError):
+            lease.record_pre_intent_finished(
+                attempt_id="supervisor-attempt-provider-invalid",
+                result=result,
+                machine_code=machine_code,
+                classification=classification,
+                observed_at=NOW.isoformat(),
+                evidence=evidence,
+            )
+
+
 def test_pre_intent_candidate_marker_is_durable_and_crash_recoverable(
     tmp_path: Path,
 ) -> None:

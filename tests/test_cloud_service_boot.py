@@ -69,22 +69,18 @@ def test_cloud_service_boot_blocks_mismatched_source(tmp_path: Path):
     assert result["blocker"] == "cloud_paper_source_sha_mismatch"
 
 
-def test_cloud_service_boot_requires_provider_readiness_for_live_tick(tmp_path: Path):
+def test_cloud_service_boot_keeps_live_tick_independent_of_provider_readiness(
+    tmp_path: Path,
+):
     write_preflight(tmp_path)
 
-    blocked = CloudPaperServiceBootGate(
+    result = CloudPaperServiceBootGate(
         tmp_path,
         source_attestation=attestation,
     ).verify("dualtrack-live-tick")
-    assert blocked["ok"] is False
-    assert blocked["blocker"] == "cloud_ai_provider_readiness_missing"
 
-    passed = CloudPaperServiceBootGate(
-        tmp_path,
-        source_attestation=attestation,
-        provider_readiness=lambda: {"ok": True, "status": "pass"},
-    ).verify("dualtrack-live-tick")
-    assert passed["ok"] is True
+    assert result["ok"] is True
+    assert result["status"] == "pass"
 
 
 def test_cloud_service_boot_blocks_non_allowlisted_service(tmp_path: Path):

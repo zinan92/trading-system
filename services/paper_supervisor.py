@@ -16,7 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from services.control_audit import read_control_events_strict
-from services.cloud_ai_provider import CloudAIProviderReadiness, RECOVERABLE_PROVIDER_CODES
+from services.cloud_ai_provider import (
+    CloudAIProviderReadiness,
+    CloudAIProviderReadinessGateError,
+    RECOVERABLE_PROVIDER_CODES,
+    current_cloud_ai_provider_readiness,
+    validate_provider_readiness_proof,
+)
 from services.dca_plan import build_dca_entry_commands
 from services.paper_supervisor_classifier import (
     STRUCTURAL,
@@ -87,6 +93,9 @@ class PaperSupervisor:
         episode_machine: SupervisorEpisodeMachine | None = None,
         monotonic: Callable[[], float] | None = None,
         attempt_deadline_seconds: int = DEFAULT_ATTEMPT_DEADLINE_SECONDS,
+        provider_readiness_verifier: (
+            Callable[[], Mapping[str, Any]] | None
+        ) = None,
     ) -> None:
         if attempt_deadline_seconds <= 0:
             raise ValueError("supervisor_configuration_invalid")
@@ -102,6 +111,7 @@ class PaperSupervisor:
         self.attempt_deadline_seconds = int(
             attempt_deadline_seconds
         )
+        self.provider_readiness_verifier = provider_readiness_verifier
 
     def converge_once(
         self,
@@ -506,6 +516,24 @@ class PaperSupervisor:
                     authority=authority,
                 )
 
+            try:
+                attempt_readiness = (
+                    current_cloud_ai_provider_readiness(
+                        self.output_root,
+                        verifier=self.provider_readiness_verifier,
+                    )
+                )
+            except CloudAIProviderReadinessGateError as exc:
+                return self._classify_before_intent(
+                    lease,
+                    state,
+                    cycle_id=cycle_id,
+                    observed_at=observed_at,
+                    exc=exc,
+                    heartbeat=health,
+                    deadline_exceeded=False,
+                )
+
             request: dict[str, Any]
             if not plan:
                 try:
@@ -628,6 +656,23 @@ class PaperSupervisor:
                     raise ValueError(
                         "execution_receipt_identity_invalid"
                     )
+                prepared_readiness = (
+                    validate_provider_readiness_proof(
+                        prepared.get("provider_readiness") or {}
+                    )
+                    if attempt_readiness is not None
+                    else None
+                )
+                if (
+                    attempt_readiness is not None
+                    and prepared_readiness != attempt_readiness
+                ):
+                    raise CloudAIProviderReadinessGateError(
+                        "cloud_ai_provider_readiness_unavailable",
+                        readiness_blocker=(
+                            "cloud_ai_provider_readiness_changed"
+                        ),
+                    )
             except Exception as exc:  # noqa: BLE001 - malformed public receipt fails closed.
                 return self._classify_before_intent(
                     lease,
@@ -725,6 +770,20 @@ class PaperSupervisor:
                                 prepared_start_id=prepared_start_id,
                                 authority=fresh,
                             )
+                        current_cloud_ai_provider_readiness(
+                            self.output_root,
+                            verifier=self.provider_readiness_verifier,
+                            expected_digest=(
+                                str(
+                                    (prepared_readiness or {}).get(
+                                        "readiness_digest"
+                                    )
+                                    or ""
+                                )
+                                if attempt_readiness is not None
+                                else None
+                            ),
+                        )
                         state, guard = (
                             self.episodes.guard_start_intent(
                                 state,
@@ -791,6 +850,16 @@ class PaperSupervisor:
                     observed_at=observed_at,
                     heartbeat=health,
                     started=started,
+                )
+            except CloudAIProviderReadinessGateError as exc:
+                return self._classify_before_intent(
+                    lease,
+                    state,
+                    cycle_id=cycle_id,
+                    observed_at=observed_at,
+                    exc=exc,
+                    heartbeat=health,
+                    deadline_exceeded=False,
                 )
             except Exception:  # noqa: BLE001 - outcome is authority, never exception prose.
                 unfinished = self.store.unfinished_intent(cycle_id)
@@ -2387,6 +2456,15 @@ class PaperSupervisor:
             classified = classify_blocker(
                 control_code="attempt_store_corrupt"
             )
+        elif (
+            classified["machine_code"]
+            in {
+                "cloud_ai_provider_readiness_unavailable",
+                "cloud_ai_provider_readiness_invalid",
+            }
+            and isinstance(raw_evidence, Mapping)
+        ):
+            blocker_evidence = dict(raw_evidence)
         if pending is not None:
             lease.record_pre_intent_finished(
                 attempt_id=str(pending["attempt_id"]),
@@ -2535,6 +2613,15 @@ class PaperSupervisor:
                 self.plane.verify_supervisor_outer_policy()
                 cleared = True
             except Exception:  # noqa: BLE001 - exact blocker remains active.
+                cleared = False
+        elif machine_code == "cloud_ai_provider_readiness_invalid":
+            try:
+                current_cloud_ai_provider_readiness(
+                    self.output_root,
+                    verifier=self.provider_readiness_verifier,
+                )
+                cleared = True
+            except Exception:  # noqa: BLE001 - exact readiness remains blocked.
                 cleared = False
         elif machine_code == (
             "outer_strategy_policy_envelope_out_of_bounds"

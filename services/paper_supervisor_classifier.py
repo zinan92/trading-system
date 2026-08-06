@@ -27,6 +27,7 @@ TRANSIENT_MACHINE_CODES = frozenset(
         "strategy_recommendation_provider_unavailable",
         "strategy_recommendation_provider_failed",
         "frozen_grid_preview_market_moved",
+        "cloud_ai_provider_readiness_unavailable",
     }
 )
 STRUCTURAL_MACHINE_CODES = frozenset(
@@ -63,6 +64,7 @@ STRUCTURAL_MACHINE_CODES = frozenset(
         "strategy_recommendation_provider_command_invalid",
         "strategy_recommendation_provider_timeout_invalid",
         "strategy_recommendation_provider_auth_not_ready",
+        "cloud_ai_provider_readiness_invalid",
         "dangerous_start_attempt_cap_reached",
         "clean_refusal_observation_cap_reached",
         "unknown_blocker",
@@ -75,6 +77,7 @@ _EXACT_TRANSIENT = {
     "strategy_recommendation_provider_timeout": "strategy_recommendation_provider_timeout",
     "strategy_recommendation_provider_unavailable": "strategy_recommendation_provider_unavailable",
     "strategy_recommendation_provider_failed": "strategy_recommendation_provider_failed",
+    "cloud_ai_provider_readiness_unavailable": "cloud_ai_provider_readiness_unavailable",
 }
 _EXACT_STRUCTURAL = {
     "prepared_start_changed": "prepared_start_identity_changed",
@@ -92,6 +95,7 @@ _EXACT_STRUCTURAL = {
     "strategy_recommendation_provider_command_invalid": "strategy_recommendation_provider_command_invalid",
     "strategy_recommendation_provider_timeout_invalid": "strategy_recommendation_provider_timeout_invalid",
     "strategy_recommendation_provider_auth_not_ready": "strategy_recommendation_provider_auth_not_ready",
+    "cloud_ai_provider_readiness_invalid": "cloud_ai_provider_readiness_invalid",
 }
 _TEMPORARY_SOURCE_FAILURES = {
     "upstream_timeout",

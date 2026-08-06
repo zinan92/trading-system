@@ -5,6 +5,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from services.cloud_ai_provider import (
+    CloudAIProviderReadinessGateError,
+    current_cloud_ai_provider_readiness,
+)
 from schemas.market_data import Bar
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc
@@ -47,6 +51,9 @@ class DualTrackMachinePlanner:
         newsletter_root: Path | None = None,
         decision_provider: Callable[[str], dict[str, Any]] | None = None,
         proposal_runtime: StrategyProposalRuntime | None = None,
+        provider_readiness_verifier: (
+            Callable[[], dict[str, Any]] | None
+        ) = None,
     ) -> None:
         pipeline_config = load_pipeline_config()
         self.output_root = Path(output_root) if output_root else ROOT / pipeline_config.get("output_root", "outputs")
@@ -69,6 +76,7 @@ class DualTrackMachinePlanner:
                 decision_provider=decision_provider,
             )
         self.proposal = proposal_runtime
+        self.provider_readiness_verifier = provider_readiness_verifier
         self.store = DualTrackPlanStore(self.output_root, config=self.config)
 
     def ensure_plan(
@@ -115,9 +123,14 @@ class DualTrackMachinePlanner:
             newsletter_text=newsletter_text[:MAX_NEWSLETTER_CHARS],
         )
         error = ""
+        provider_readiness: dict[str, Any] | None = None
         try:
             if requires_newsletter and not newsletter_text:
                 raise RuntimeError(f"newsletter_missing:{newsletter_path}")
+            provider_readiness = current_cloud_ai_provider_readiness(
+                self.output_root,
+                verifier=self.provider_readiness_verifier,
+            )
             decision = self.proposal.port.propose(request)
             if not isinstance(decision, dict):
                 raise ValueError("machine decision provider must return a JSON object")
@@ -152,6 +165,10 @@ class DualTrackMachinePlanner:
                 candidate["revision_reason"] = revision_reason
             if replan_context:
                 candidate["replan_context"] = dict(replan_context)
+            if provider_readiness is not None:
+                candidate["provider_readiness"] = dict(
+                    provider_readiness
+                )
             if existing and existing.get("locked_at"):
                 candidate["replaces_locked_at"] = existing["locked_at"]
             sources = list(decision.get("sources") or [])
@@ -163,6 +180,10 @@ class DualTrackMachinePlanner:
                 sources.insert(0, source)
             candidate["sources"] = sources
             normalized = validate_machine_plan(candidate, now=now)
+        except CloudAIProviderReadinessGateError:
+            # Readiness is an entry gate, not an AI opinion.  Never turn its
+            # refusal into a degraded replacement plan.
+            raise
         except Exception as exc:  # noqa: BLE001 - planning failure is persisted and fails closed.
             error = f"{exc.__class__.__name__}: {exc}"
             if existing and force:
@@ -198,6 +219,7 @@ class DualTrackMachinePlanner:
             "volatility_context": volatility_context or {},
             "replan_context": replan_context or {},
             "proposal_plugin": self.proposal.audit_dict(),
+            "provider_readiness": provider_readiness,
             "plan": saved,
         }
         trace_path = self.output_root / "dualtrack" / "planning" / f"{cycle_id}_machine.json"

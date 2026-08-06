@@ -20,6 +20,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from services.cloud_ai_provider import (
+    current_cloud_ai_provider_readiness,
+)
 from services.config_loader import ROOT
 from services.dualtrack_config import dualtrack_config
 from services.journal_store import write_json
@@ -48,11 +51,15 @@ class StrategyRecommendationService:
         *,
         decision_provider: Callable[[str], dict[str, Any]] | None = None,
         provider_timeout_seconds: int | None = None,
+        provider_readiness_verifier: (
+            Callable[[], dict[str, Any]] | None
+        ) = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.config = dualtrack_config()
         self.decision_provider = decision_provider or self._codex_decision
         self.provider_timeout_seconds = provider_timeout_seconds
+        self.provider_readiness_verifier = provider_readiness_verifier
         self._last_raw_model_response: str | None = None
 
     def recommend(
@@ -65,6 +72,10 @@ class StrategyRecommendationService:
         review: dict[str, Any] | None,
         now: str | None = None,
     ) -> dict[str, Any]:
+        provider_readiness = current_cloud_ai_provider_readiness(
+            self.output_root,
+            verifier=self.provider_readiness_verifier,
+        )
         created_at = str(now or datetime.now(timezone.utc).isoformat())
         evaluation_id = f"ai-eval-{uuid.uuid4().hex[:16]}"
         receipt: dict[str, Any] = {
@@ -99,6 +110,8 @@ class StrategyRecommendationService:
                 "orders_allowed": False,
             },
         }
+        if provider_readiness is not None:
+            receipt["provider_readiness"] = dict(provider_readiness)
         prompt = ""
         try:
             contexts = {
@@ -186,6 +199,11 @@ class StrategyRecommendationService:
                     "chart_timeframe_used": False,
                 },
                 "prompt_contract": prompt_contract,
+                "provider_readiness": (
+                    dict(provider_readiness)
+                    if provider_readiness is not None
+                    else None
+                ),
                 "evaluation_receipt": receipt,
             }
         except Exception as exc:

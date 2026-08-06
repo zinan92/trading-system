@@ -740,12 +740,12 @@ def test_only_matching_running_proof_restarts_nonconvergence_interval(
 
 
 @pytest.mark.parametrize("mode", ["backing_off", "probing"])
-def test_legal_transient_wait_is_noncritical_even_when_attempt_is_old(
+def test_legal_transient_wait_is_noncritical_inside_convergence_window(
     tmp_path: Path,
     monkeypatch,
     mode: str,
 ) -> None:
-    at = CYCLE_START + timedelta(minutes=30)
+    at = CYCLE_START + timedelta(seconds=299)
     health = _healthy(tmp_path, now=at)
     _set_supervisor_runtime(health, running=False)
     _install_supervisor_model(
@@ -754,7 +754,7 @@ def test_legal_transient_wait_is_noncritical_even_when_attempt_is_old(
             at,
             mode=mode,
             running_proven=False,
-            attempt_at=CYCLE_START + timedelta(minutes=1),
+            attempt_at=CYCLE_START + timedelta(seconds=60),
         ),
     )
 
@@ -763,6 +763,32 @@ def test_legal_transient_wait_is_noncritical_even_when_attempt_is_old(
     assert supervisor["status"] == "ready"
     assert supervisor["severity"] == "none"
     assert supervisor["code"] == f"supervisor_{mode}"
+
+
+@pytest.mark.parametrize("mode", ["backing_off", "probing"])
+def test_transient_wait_becomes_critical_after_convergence_window(
+    tmp_path: Path,
+    monkeypatch,
+    mode: str,
+) -> None:
+    at = CYCLE_START + timedelta(seconds=301)
+    health = _healthy(tmp_path, now=at)
+    _set_supervisor_runtime(health, running=False)
+    _install_supervisor_model(
+        monkeypatch,
+        _supervisor_model(
+            at,
+            mode=mode,
+            running_proven=False,
+            attempt_at=CYCLE_START + timedelta(seconds=60),
+        ),
+    )
+
+    supervisor = health._supervisor(at)
+
+    assert supervisor["status"] == "blocked"
+    assert supervisor["severity"] == "critical"
+    assert supervisor["code"] == "supervisor_convergence_stalled"
 
 
 def test_probe_attention_is_immediately_critical_with_underlying_code(
