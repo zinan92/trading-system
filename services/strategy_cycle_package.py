@@ -5,21 +5,34 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from services.dualtrack_clock import cycle_window_from_id
-from services.execution_plugin_composition import build_configured_execution_engine_adapter
+from services.execution_plugin_composition import (
+    build_configured_execution_engine_adapter,
+)
 from services.journal_store import load_json, write_json
-from services.strategy_control_plane import StrategyControlPlane, production_mutation_lock
+from services.paper_degradation_events import (
+    PaperDegradationEventStore,
+    PaperDegradationEvidenceError,
+    build_cycle_continuity_evidence,
+    validate_packaged_degradation_evidence,
+)
+from services.strategy_control_plane import (
+    StrategyControlPlane,
+    production_mutation_lock,
+)
 from services.strategy_shadow import load_strategy_shadow_runs
 
 
 # Runtime-evaluated alias: keep 3.9-compatible Optional[...] (PEP 604 unions
 # in a non-annotation position crash under the launchd system Python 3.9).
 ShadowEvidenceBuilder = Callable[[str, Optional[dict[str, Any]], list[dict[str, Any]]], Any]
+STRATEGY_CYCLE_PACKAGE_SCHEMA_V2 = "strategy-cycle-package-v2"
 
 
 class StrategyCyclePackager:
@@ -79,6 +92,7 @@ class StrategyCyclePackager:
                 )
                 write_json(path, [*existing, incident])
                 return incident
+            _validate_package_journal_extensions(existing)
             if "package_hash_mismatch" in set(latest.get("blockers") or []):
                 return latest
             if latest.get("status") == "closed":
@@ -136,10 +150,17 @@ class StrategyCyclePackager:
             if terminal
             else {"status": "skipped", "attempted": False, "reason": "terminal_package_blocked"}
         )
+        degradation = PaperDegradationEventStore(
+            self.output_root
+        ).cycle_evidence(cycle_id)
+        continuity = build_cycle_continuity_evidence(
+            self.output_root,
+            cycle_id,
+        )
         packaged_at = now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         pnl = dict(snapshot.get("pnl") or {})
         payload: dict[str, Any] = {
-            "schema_version": "strategy-cycle-package-v1",
+            "schema_version": STRATEGY_CYCLE_PACKAGE_SCHEMA_V2,
             "cycle_id": cycle_id,
             "status": "closed" if terminal else "blocked",
             "blockers": blockers,
@@ -170,6 +191,19 @@ class StrategyCyclePackager:
             ),
             "strategy_shadows": load_strategy_shadow_runs(self.output_root, cycle_id),
             "shadow_generation": shadow_generation,
+            "degradation_events": degradation["events"],
+            "degradation_event_count": degradation["event_count"],
+            "degradation_events_digest": degradation["events_digest"],
+            "degradation_event_tail_digest": degradation[
+                "tail_event_digest"
+            ],
+            "continuity_transitions": continuity["transitions"],
+            "continuity_transition_count": continuity[
+                "transition_count"
+            ],
+            "continuity_transitions_digest": continuity[
+                "transitions_digest"
+            ],
             "traceability": {
                 "strategy_plan_id": (plan or {}).get("strategy_plan_id"),
                 "strategy_plan_version": (plan or {}).get("version"),
@@ -177,6 +211,8 @@ class StrategyCyclePackager:
                 "fills_linked": all(row.get("strategy_plan_id") not in (None, "") for row in fills),
                 "production_ledger_immutable": True,
                 "cycle_handoff_verified": handoff_verified,
+                "degradation_events_complete": True,
+                "continuity_evidence_complete": True,
             },
             "safety": {
                 "real_orders": False,
@@ -505,6 +541,7 @@ def load_latest_verified_cycle_package(path: Path) -> dict[str, Any]:
             f"; row={failure['source_record_index']}"
             f"; reason={failure['failure_reason']}"
         )
+    _validate_package_journal_extensions(rows)
     latest = rows[-1]
     if not isinstance(latest, dict) or latest.get("status") != "closed":
         raise ValueError(f"strategy cycle package is not terminal: {path}")
@@ -524,6 +561,7 @@ def load_verified_cycle_package_revision(path: Path, package_hash: str) -> dict[
             f"; row={failure['source_record_index']}"
             f"; reason={failure['failure_reason']}"
         )
+    _validate_package_journal_extensions(rows)
     expected = str(package_hash or "")
     matched = next(
         (
@@ -606,3 +644,21 @@ def _package_chain_failure(rows: list[Any]) -> dict[str, Any] | None:
             "expected": expected,
         }
     return None
+
+
+def _validate_package_journal_extensions(rows: list[Any]) -> None:
+    """Keep v1 history readable; require complete evidence in every v2 row."""
+
+    for row in rows:
+        if (
+            not isinstance(row, Mapping)
+            or row.get("schema_version")
+            != STRATEGY_CYCLE_PACKAGE_SCHEMA_V2
+        ):
+            continue
+        try:
+            validate_packaged_degradation_evidence(row)
+        except PaperDegradationEvidenceError as exc:
+            raise ValueError(
+                "strategy cycle package degradation evidence is invalid"
+            ) from exc

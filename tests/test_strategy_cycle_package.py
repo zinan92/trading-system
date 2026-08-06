@@ -3,7 +3,12 @@ from pathlib import Path
 import pytest
 
 from services.journal_store import load_json, write_json
-from services.strategy_cycle_package import StrategyCyclePackager, _hash_payload
+from services.paper_degradation_events import PaperDegradationEventStore
+from services.strategy_cycle_package import (
+    StrategyCyclePackager,
+    _hash_payload,
+    load_latest_verified_cycle_package,
+)
 
 
 def _plan(cycle_id: str) -> dict:
@@ -56,6 +61,13 @@ def test_terminal_package_is_hashed_linked_and_idempotent(tmp_path: Path) -> Non
     assert first["review"]["realized_pnl"] == 3.5
     assert first["traceability"]["orders_linked"] is True
     assert first["traceability"]["fills_linked"] is True
+    assert first["schema_version"] == "strategy-cycle-package-v2"
+    assert first["degradation_events"] == []
+    assert first["degradation_event_count"] == 0
+    assert len(first["degradation_events_digest"]) == 64
+    assert first["continuity_transitions"] == []
+    assert first["continuity_transition_count"] == 0
+    assert first["traceability"]["degradation_events_complete"] is True
     assert len(first["package_hash"]) == 64
     assert len(load_json(output / "dualtrack" / "strategy_cycle_packages" / f"{cycle_id}.json")) == 1
 
@@ -292,6 +304,82 @@ def test_verified_package_listing_excludes_tampered_closed_journals(tmp_path: Pa
 
     assert [row["cycle_id"] for row in packages] == [valid_cycle]
     assert packages[0]["review"]["realized_pnl"] == 3.5
+
+
+def test_terminal_package_embeds_complete_degradation_event_chain(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-02_DAY"
+    _seed_plan(output, cycle_id)
+    event = PaperDegradationEventStore(output).record(
+        event_id="degradation-attempt-1",
+        cycle_id=cycle_id,
+        execution_profile="paper_continuous",
+        bypassed_gate="prepared_start_market_gate",
+        original_machine_code="prepared_start_market_moved",
+        original_reason="price moved",
+        alternative_action="recompute_fresh_preview",
+        occurred_at="2026-07-02T01:04:00+00:00",
+    )
+
+    package = StrategyCyclePackager(
+        output,
+        adapter=TerminalAdapter(),
+    ).package(cycle_id)
+
+    assert package["degradation_events"] == [event]
+    assert package["degradation_event_count"] == 1
+    assert package["degradation_event_tail_digest"] == event["event_digest"]
+    assert load_latest_verified_cycle_package(
+        output
+        / "dualtrack"
+        / "strategy_cycle_packages"
+        / f"{cycle_id}.json"
+    ) == package
+
+
+def test_v2_package_with_missing_referenced_event_fails_closed(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-03_DAY"
+    _seed_plan(output, cycle_id)
+    PaperDegradationEventStore(output).record(
+        event_id="degradation-attempt-1",
+        cycle_id=cycle_id,
+        execution_profile="paper_continuous",
+        bypassed_gate="risk_envelope_gate",
+        original_machine_code="risk_envelope_preview_out_of_bounds",
+        original_reason="proposal exceeded authorized boundary",
+        alternative_action="reprice_from_authoritative_equity",
+        occurred_at="2026-07-03T01:04:00+00:00",
+    )
+    package = StrategyCyclePackager(
+        output,
+        adapter=TerminalAdapter(),
+    ).package(cycle_id)
+    path = (
+        output
+        / "dualtrack"
+        / "strategy_cycle_packages"
+        / f"{cycle_id}.json"
+    )
+    malformed = {**package, "degradation_events": []}
+    malformed["package_hash"] = _hash_payload(
+        {
+            key: value
+            for key, value in malformed.items()
+            if key != "package_hash"
+        }
+    )
+    write_json(path, [malformed])
+
+    with pytest.raises(
+        ValueError,
+        match="degradation evidence is invalid",
+    ):
+        load_latest_verified_cycle_package(path)
 
 
 def test_tampered_historical_revision_latches_integrity_incident(tmp_path: Path) -> None:
