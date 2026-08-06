@@ -36,7 +36,12 @@
   "convergence": {
     "mode": "paper_supervisor",
     "provider_timeout_seconds": 25,
-    "attempt_deadline_seconds": 45
+    "attempt_deadline_seconds": 45,
+    "outer_policy_binding": {
+      "binding_id": "paper-supervisor-grid",
+      "binding_version": 2,
+      "binding_digest": "38e57cb38a01f6d9a3e5b9fcf72a0cb8cd823179841f3dcb012261ab0798dcdb"
+    }
   },
   "market_session": {
     "enabled": false,

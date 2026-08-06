@@ -13996,3 +13996,51 @@ auditable datafeed port; broker execution remains a separate port.
 - Five consecutive typed provider timeouts reach `probing` with the existing
   `episode_short_budget_exhausted` alert while plan/control/order side effects
   and durable start-intent count remain zero.
+
+# 2026-08-06 — Source-bind the standing Paper Grid direction selector (#575)
+
+## Decision
+
+- Persist Park's authenticated Paper Grid v2 policy and binding separately from
+  activation. The exact Cloud selector is `paper-supervisor-grid` version 2,
+  digest `38e57cb38a01f6d9a3e5b9fcf72a0cb8cd823179841f3dcb012261ab0798dcdb`;
+  it authorizes the explicit direction set `long`, `neutral`, and `short` and
+  inherits every numeric limit and the expiry from the immutable v1 policy.
+- Put the selector in the tracked `configs/dualtrack.yaml` convergence section
+  and use it only in the canonical `GRIDMIND_RUNTIME_MODE=cloud` composition.
+  An exact tracked selector takes precedence over stale host environment
+  selector values. A deployment without the tracked field retains the existing
+  environment compatibility path.
+- Validate the tracked selector's exact field set, positive integer version,
+  and lowercase SHA-256 digest before constructing the envelope store. Partial,
+  malformed, or extra-field selectors fail closed as
+  `outer_strategy_policy_invalid`; there is no latest lookup or fallback.
+- Activation is an exact merged-SHA configuration release. The stored
+  out-of-bounds rejection is rechecked read-only against v2; only a later
+  independent natural tick may build a fresh proposal, preview, prepared start,
+  start intent, and one exact order set.
+
+## Gotchas
+
+- Appending a policy and binding does not activate either one. Updating only
+  `/etc/gridmind/paper.env` would recreate an unowned configuration state and
+  is not accepted as a release.
+- The old v1 host selector may remain present for rollback compatibility, but
+  it cannot override the tracked selector in the Cloud composition. Tests must
+  prove this precedence explicitly instead of deleting the old evidence.
+- This v2 record inherits the v1 expiry at `2026-09-01T00:00:00+00:00` and is
+  Grid-only. It removes per-direction/per-cycle approval for the current Paper
+  Grid system, but it is not yet a no-expiry authorization for future strategy
+  types; that broader autonomy contract requires a separate visible story.
+- A five-minute failure is not permission for a blind rollback or duplicate
+  start. First prove authoritative orders, positions, control audit, and
+  unknown-outcome state; preserve the scene if any result is uncertain.
+
+## Verification
+
+- Focused tests prove the tracked v2 selector wins over a valid stale v1 host
+  selector, selects the immutable long/neutral/short policy, and rejects empty,
+  partial, or malformed selectors before any plan or order path.
+- Existing envelope, recommendation, Supervisor, architecture, and Cloud
+  execution-control suites remain unchanged and passing. Runtime proof remains
+  pending the exact-main Cloud release and independent natural convergence.

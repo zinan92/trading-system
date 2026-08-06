@@ -35,7 +35,10 @@ from services.dualtrack_execution_contract import (
 )
 from services.dualtrack_store import DualTrackPlanStore
 from services.control_audit import append_control_event, build_control_event, read_last_control_event
-from services.cycle_risk_envelope import CycleRiskEnvelopeStore
+from services.cycle_risk_envelope import (
+    CycleRiskEnvelopeError,
+    CycleRiskEnvelopeStore,
+)
 from services.grid_sizing import (
     AdaptiveGridInputError,
     GRID_STYLES,
@@ -98,6 +101,50 @@ class StrategyControlMachineError(ValueError):
 PREPARED_START_TTL_SECONDS = 300
 DCA_RISK_ACK_SCHEMA = "dca-risk-ack-v1"
 PAPER_EXECUTION_TICK_MAX_AGE_SECONDS = 180
+
+
+def _cloud_tracked_outer_policy_binding_ref(
+    config: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Select one source-bound Cloud policy binding before host env fallback."""
+
+    if str(os.getenv("GRIDMIND_RUNTIME_MODE") or "").lower() != "cloud":
+        return None
+    convergence = config.get("convergence")
+    if not isinstance(convergence, Mapping) or (
+        "outer_policy_binding" not in convergence
+    ):
+        return None
+    value = convergence.get("outer_policy_binding")
+    expected = {
+        "binding_id",
+        "binding_version",
+        "binding_digest",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+    binding_id = str(value.get("binding_id") or "").strip()
+    binding_version = value.get("binding_version")
+    binding_digest = str(value.get("binding_digest") or "").strip()
+    if (
+        not binding_id
+        or isinstance(binding_version, bool)
+        or not isinstance(binding_version, int)
+        or binding_version <= 0
+        or len(binding_digest) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in binding_digest
+        )
+    ):
+        raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+    return {
+        "binding_id": binding_id,
+        "binding_version": binding_version,
+        "binding_digest": binding_digest,
+    }
+
+
 MANUAL_RANGE_RISK_OVERRIDABLE_BLOCKERS = {
     "candidate_grid_count_out_of_bounds",
     "grid_profit_target_not_met",
@@ -452,8 +499,12 @@ class StrategyControlPlane:
         self._authorization_clock = authorization_clock or (
             lambda: datetime.now(timezone.utc).isoformat()
         )
+        tracked_binding_ref = _cloud_tracked_outer_policy_binding_ref(
+            self.config
+        )
         self.risk_envelopes = CycleRiskEnvelopeStore(
             self.output_root,
+            supervisor_policy_binding_ref=tracked_binding_ref,
             authorization_clock=self._authorization_clock,
         )
 

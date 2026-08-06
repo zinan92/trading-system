@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 import pipelines.dashboard_server as dashboard_server
 import services.cycle_risk_envelope as risk_envelope_module
+import services.strategy_control_plane as strategy_control_plane_module
 from services.cycle_risk_envelope import CycleRiskEnvelopeError, CycleRiskEnvelopeStore
+from services.dualtrack_config import dualtrack_config
 from services.paper_supervisor_classifier import STRUCTURAL, TRANSIENT, classify_blocker
 from services.strategy_control_plane import StrategyControlPlane
 
@@ -1950,6 +1953,120 @@ def test_partial_environment_binding_is_invalid_not_missing(
             actor=None,
             now="2026-07-30T01:02:00+00:00",
         )
+
+
+def test_cloud_tracked_binding_precedes_stale_host_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_v1, _policy_v1, binding_v1 = _bound_store(
+        tmp_path,
+        monkeypatch,
+    )
+    policy_v2 = store_v1.authorize_outer_policy(
+        payload=_outer_policy_v2_payload(),
+        actor=_verified_park_actor(monkeypatch),
+        now="2026-07-31T01:00:00+00:00",
+    )
+    binding_v2 = store_v1.bind_supervisor_outer_policy(
+        payload=_binding_payload(
+            policy_v2,
+            binding_version=2,
+            summary="Bind Paper Supervisor to Park policy v2",
+        ),
+        actor=_verified_park_actor(monkeypatch),
+        now="2026-07-31T01:01:00+00:00",
+    )
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_ID",
+        binding_v1["binding_id"],
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_VERSION",
+        str(binding_v1["binding_version"]),
+    )
+    monkeypatch.setenv(
+        "GRIDMIND_PAPER_SUPERVISOR_POLICY_BINDING_DIGEST",
+        binding_v1["binding_digest"],
+    )
+    config = deepcopy(dualtrack_config())
+    config["convergence"]["outer_policy_binding"] = {
+        "binding_id": binding_v2["binding_id"],
+        "binding_version": binding_v2["binding_version"],
+        "binding_digest": binding_v2["binding_digest"],
+    }
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "dualtrack_config",
+        lambda: config,
+    )
+
+    plane = StrategyControlPlane(
+        tmp_path,
+        authorization_clock=lambda: "2026-07-31T01:02:00+00:00",
+    )
+    verified = plane.verify_supervisor_outer_policy()
+
+    assert verified["binding_version"] == 2
+    selected_policy = plane.risk_envelopes.outer_policy(
+        verified["policy_id"],
+        verified["policy_version"],
+    )
+    assert selected_policy["allowed_directions"] == [
+        "long",
+        "neutral",
+        "short",
+    ]
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        {},
+        {
+            "binding_id": "paper-supervisor-grid",
+            "binding_version": 2,
+        },
+        {
+            "binding_id": "paper-supervisor-grid",
+            "binding_version": 2,
+            "binding_digest": "not-a-digest",
+        },
+    ],
+)
+def test_invalid_cloud_tracked_binding_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selector: dict,
+) -> None:
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    config = deepcopy(dualtrack_config())
+    config["convergence"]["outer_policy_binding"] = selector
+    monkeypatch.setattr(
+        strategy_control_plane_module,
+        "dualtrack_config",
+        lambda: config,
+    )
+
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_invalid",
+    ):
+        StrategyControlPlane(tmp_path)
+
+
+def test_repo_cloud_binding_selector_is_exact_v2_release() -> None:
+    assert dualtrack_config()["convergence"][
+        "outer_policy_binding"
+    ] == {
+        "binding_id": "paper-supervisor-grid",
+        "binding_version": 2,
+        "binding_digest": (
+            "38e57cb38a01f6d9a3e5b9fcf72a0cb"
+            "8cd823179841f3dcb012261ab0798dcdb"
+        ),
+    }
 
 
 def test_policy_rotation_retains_prior_exact_records(
