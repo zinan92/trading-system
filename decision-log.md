@@ -14340,3 +14340,119 @@ auditable datafeed port; broker execution remains a separate port.
   configurations. Heartbeat and trusted-market tests prove zero start calls
   when either hard gate is unavailable. Existing fail-closed Supervisor,
   runner, health, and read-model suites remain unchanged.
+
+# 2026-08-06 — Add bounded Paper recovery adapters without weakening live (#587)
+
+## Decision
+
+- Under `paper_continuous`, rebuild a stopped Grid or DCA from current trusted
+  market facts and the authoritative execution-adapter account. Grid omits
+  the old range and recenters through the existing Grid preview; DCA preserves
+  the verified direction while rebuilding its finite entry ladder around the
+  current mark. Both derive equity
+  only from the first positive finite execution `equity`, `ending_cash`, or
+  `starting_cash` value—the same authority introduced by #519. Historical
+  accounting is never a sizing fallback.
+- Preserve the selected strategy family, direction and bounded shape, then cap
+  Grid per-slot or DCA per-addition notional deterministically by current
+  capital, Park's maximum notional, maximum total DCA notional, maximum actual
+  leverage and full-depth-loss boundary. The normal exact outer policy
+  comparison still authorizes the replacement. If a Grid cap sacrifices
+  the configured Paper profit objective, record a distinct degradation event
+  before proceeding; venue precision, market trust, Paper execution, policy and
+  start-identity checks still run.
+- When the AI provider cannot produce a new judgment, reuse strategy intent
+  only from the current exact plan or the immediately preceding fully verified
+  terminal package. Persist a new current-cycle proposal and fresh
+  attempt-bound preview while explicitly recording `new_ai_judgment=false` and
+  the source plan/package digest. Missing, nonterminal, non-immediate or
+  corrupted package evidence creates no plan or orders and remains eligible for
+  the next five-minute watchdog.
+- Never edit or widen an expired Park policy. In `paper_continuous` only, append
+  a hash-linked 24-hour renewal receipt that binds the exact policy and binding
+  digests, current clean source SHA/tree, `scope=paper_only`,
+  `real_money_eligible=false`, and predecessor receipt. `fail_closed` ignores
+  these receipts and preserves the original expiry refusal.
+- Carry the provider-fallback fact inside the prepared-start content identity
+  and require the same Supervisor attempt at start. Every candidate/provider/
+  lower-profit/DCA carry capability also carries exact immutable degradation
+  event id+digest references; the control plane reloads the validated same-
+  cycle journal, proves the exact attempt-specific gate/action event predates
+  prepare, and freezes the references into the prepared-start identity. Public Dashboard controls
+  instantiate `fail_closed`; only the runner passes the already-resolved,
+  proven-Paper profile into candidate, prepare and start composition.
+
+## Gotchas
+
+- A new preview id cannot be obtained by merely calling `prepare_start` again
+  with frozen economic geometry. The recovery candidate itself includes the
+  Supervisor attempt nonce before envelope authorization, so a rejected
+  candidate's proposal, preview and prepared capability are all one-use and
+  cannot collide with the next watchdog.
+- Calling a deterministic recovery proposal “AI” would fabricate a new model
+  judgment. Recovery proposals therefore use the independent source
+  `paper_continuity_recovery`, carry an exact digest-linked chain back to the
+  original AI proposal, explicitly state `new_ai_judgment=false`, and record
+  the verified source package when used. The lineage can cross multiple outage
+  cycles without relabelling machine output as a fresh AI judgment.
+  A proposal's own root-id fields are not proof: each recovery digest is
+  recomputed, each parent id+digest is resolved from the same append-only
+  proposal journal or the exact referenced terminal-package revision, and the
+  chain must terminate at the persisted `source=ai` proposal. Missing,
+  non-immediate, forged, cyclic, or self-asserted lineage fails closed.
+- A TTL-like policy extension stored only in process memory would disappear on
+  restart and could silently apply to different code. Renewal is therefore an
+  immutable source-bound receipt, not an updated expiry field and not a generic
+  “Paper is safe” boolean.
+- Repricing below the profit target is itself a degraded continuation and needs
+  its own event. A generic watchdog event is insufficient because the 12-hour
+  review must distinguish market recentering, policy cap, provider fallback,
+  policy renewal and profit-objective degradation. The exact Paper-only
+  lower-profit capability is therefore carried in the prepared-start content
+  identity and accepted only for an attempt-bound manual Grid request; the
+  ordinary preview path and `fail_closed` cannot set it. At start, the original
+  canonical deny receipt is retained and only an exact
+  `grid_profit_target_not_met` blocker may be downgraded; any market, capital,
+  policy or mixed blocker still refuses.
+- Continuous retry must still distinguish a pre-intent clean refusal from an
+  unknown post-intent outcome. `control_outcome_unknown` and
+  `partial_execution_or_cleanup_required` never enter the Paper latch-reset
+  branch: they remain on the authoritative runtime/order/audit recheck path and
+  cannot create a second start attempt while the result is uncertain.
+- An already active DCA is never misrouted into Grid: the watchdog routes it
+  through the same family-preserving DCA recovery adapter used for a
+  new-cycle DCA carry-forward. It is rebuilt by
+  the deterministic DCA adapter, requires the exact DCA outer policy, and
+  carries a one-attempt Paper-only capability through prepare/start. Its normal
+  attended acknowledgement is preserved as the original gate and downgraded
+  only in `paper_continuous`; the replacement acknowledgement and degradation
+  event both bind the Supervisor attempt. `fail_closed` remains unchanged.
+- Renewal writers can race. A losing process may adopt only the concurrently
+  written receipt after independently verifying the complete chain, exact
+  source, exact policy/binding and current validity; it never retries an append
+  with guessed predecessor state.
+
+## Verification
+
+- Recovery tests prove Grid and DCA current-market recentering,
+  authoritative-equity sizing, exact Park-cap enforcement, zero/absent account
+  refusal, fresh proposal and preview identity per attempt, multi-cycle
+  digest-linked intent lineage, and refusal without an immediate verified prior
+  package.
+- Policy tests prove a source-bound Paper receipt makes the exact expired policy
+  usable only in `paper_continuous`; the same policy remains expired in
+  `fail_closed`, and a different source SHA cannot adopt the receipt.
+- Supervisor tests prove provider-readiness outage reaches a fresh prepared
+  start and execution through the audited fallback while the existing
+  fail-closed test still performs zero controls and creates zero orders.
+- A real control-plane integration test authorizes and locks the repriced
+  candidate, proves the ordinary prepare rebuild rejects its lower-profit
+  geometry, then proves only the attempt-bound Paper capability rebuilds and
+  persists it. A real DCA prepare/start test proves the Paper capability starts
+  without forged human input while recording a machine acknowledgement, and
+  `fail_closed` rejects the same flag. Separate regression tests prove
+  post-intent uncertainty is not reset, a persisted Paper recovery envelope is
+  unreadable from `fail_closed`, every bypass capability fails without its
+  exact event reference, and active DCA enters only the DCA adapter.
+- Exact-SHA Cloud deployment and the 24h/7d >=85% utilization result remain
+  #588 release evidence; unit or repository test success is not completion.

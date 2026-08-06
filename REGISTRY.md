@@ -18,12 +18,28 @@
   and sealed stopped-to-`running_proven` transition gaps. #586 adds the closed
   `execution_profile`, proven-Paper-only composition, clean per-cycle state,
   and a crash-durable five-minute watchdog that clears recorded blockers and
-  keeps converging for the full cycle. Checked-in configuration remains
-  `fail_closed`, so neither merged story activates a bypass or changes current
-  Cloud behavior. #587 next adds market-move, authoritative-equity repricing,
-  prior-plan, and authorization-renewal alternatives; #588 alone activates and
-  deploys `paper_continuous`, then holds the milestone open until both 24h and
-  7d conservative utilization reach at least 85%. Shadow and the known review
+  keeps converging for the full cycle. #587 implements the recovery adapters:
+  every Paper watchdog Grid or DCA candidate is rebuilt around current trusted
+  market and authoritative execution equity; per-grid/per-addition notional is
+  deterministically capped inside the exact Park boundary; AI outages inherit
+  only an exact current plan or the immediate prior verified terminal package,
+  with every proposal/package digest recursively verified to the persisted AI
+  root rather than trusting self-declared lineage; and an expired
+  strategy policy can be continued only through an append-only, clean-source-
+  bound, 24-hour Paper receipt that never edits or widens Park's policy. Each
+  alternative is journaled before `start_intent`, and every bypass capability
+  is bound to the exact same-cycle, same-attempt event id+digest frozen into
+  `prepared_start`; fail-closed and live paths do not accept these receipts,
+  envelopes, or fallback flags. Checked-in configuration remains
+  `fail_closed`, so these merged stories still do not activate a bypass or
+  change current Cloud behavior. Post-`start_intent` unknown/partial outcomes
+  remain non-resettable and require authoritative reconciliation before any new
+  attempt. Active and new-cycle DCA recovery both use the family-preserving
+  exact-policy adapter and audited Paper-only confirmation capability rather
+  than being converted to Grid.
+  #588 alone activates and deploys
+  `paper_continuous`, then holds the milestone open until both 24h and 7d
+  conservative utilization reach at least 85%. Shadow and the known review
   chain discrepancies remain explicitly outside this milestone.
 - #573/#574/#581 are deployed on Cloud Paper as exact clean
   `main@28cc8bd888aee06ba8fb89e03c94fa249629471e`, tree
@@ -388,6 +404,12 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Finish #587 machine gates and merge its isolated PR, then use #588's separate
+  source-controlled configuration SHA to activate `paper_continuous`. Do not
+  edit the host config in place. Before activation, capture exact runtime,
+  orders, positions, control audit, timer/boot and health baselines; after it,
+  require a fresh stopped-to-`running_proven` transition and preserve any
+  unknown control outcome for attended reconciliation rather than retrying.
 - Keep the canonical provider-readiness timer enabled and let its natural
   five-minute polls provide failure/recovery evidence; do not manually refresh
   the proof or substitute `readiness_last_success.json` for current authority.

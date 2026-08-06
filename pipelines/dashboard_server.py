@@ -46,6 +46,7 @@ from services.dualtrack_scoring import (
 )
 from services.dualtrack_store import DualTrackPlanStore
 from services.strategy_control_plane import (
+    PAPER_CONTINUITY_DEGRADATION_REFS,
     StrategyControlPlane,
     last_paper_execution_market_event,
     production_mutation_lock,
@@ -64,7 +65,10 @@ from services.strategy_recommendation import (
     RecommendationProviderError,
     StrategyRecommendationService,
 )
-from services.cloud_ai_provider import CloudAIProviderReadinessGateError
+from services.cloud_ai_provider import (
+    CloudAIProviderReadinessGateError,
+    current_cloud_ai_provider_readiness,
+)
 from services.strategy_shadow import load_strategy_shadow_runs, load_strategy_shadow_runs_for_cycles
 from services.strategy_shadow_promotion import evaluate_grid_shadow_promotion
 from services.safe_repair_queue import SafeRepairQueue
@@ -77,6 +81,11 @@ from services.tiger_venue_status import TigerVenueStatus
 from services.paper_supervisor_read_model import (
     build_paper_supervisor_history_response,
     build_paper_supervisor_polling_summary,
+)
+from services.paper_supervisor_recovery import authoritative_paper_equity
+from services.supervisor_execution_profile import (
+    FAIL_CLOSED,
+    PAPER_CONTINUOUS,
 )
 from services.trading_system_read_model import (
     project_market_read_model,
@@ -1626,6 +1635,7 @@ def build_strategy_console_control_response(
     recommendation_timeout_seconds: int | None = None,
     actor: dict | None = None,
     _frozen_grid_diagnostic: bool = False,
+    execution_profile: str = FAIL_CLOSED,
 ) -> dict:
     output = _dualtrack_output_root(output_root)
     cycle_id = str(payload.get("cycle_id") or cycle_window(payload.get("as_of")).cycle_id)
@@ -1650,7 +1660,15 @@ def build_strategy_console_control_response(
             for key, value in payload.items()
             if key not in {"action", "cycle_id", "as_of"}
         }
-        return StrategyControlPlane(output).control(
+        policy_plane = (
+            StrategyControlPlane(output)
+            if execution_profile == FAIL_CLOSED
+            else StrategyControlPlane(
+                output,
+                execution_profile=execution_profile,
+            )
+        )
+        return policy_plane.control(
             cycle_id,
             action,
             domain_payload,
@@ -1722,7 +1740,10 @@ def build_strategy_console_control_response(
             **dict(history.get("account") or {}),
             "accounting_snapshot": dict(history.get("accounting_snapshot") or {}),
         }
-    if action == "refresh_recommendation" and account is None:
+    if action in {
+        "refresh_recommendation",
+        "paper_continuity_candidate",
+    } and account is None:
         execution_adapter = build_configured_execution_engine_adapter(
             output,
             config=dualtrack_config(),
@@ -1753,17 +1774,7 @@ def build_strategy_console_control_response(
         # does not expose a positive account value; never silently fall back
         # to historical equity for order sizing.
         execution_account = dict(execution_snapshot.get("account") or {})
-        execution_equity = 0.0
-        for field in ("equity", "ending_cash", "starting_cash"):
-            try:
-                candidate = float(execution_account.get(field))
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(candidate) and candidate > 0:
-                execution_equity = candidate
-                break
-        if execution_equity <= 0:
-            raise ValueError("authoritative_execution_account_missing")
+        execution_equity = authoritative_paper_equity(execution_snapshot)
         preview_account = {
             **dict(trusted_account),
             "equity": execution_equity,
@@ -1775,7 +1786,14 @@ def build_strategy_console_control_response(
             ),
             "execution_account_source": "authoritative_execution_snapshot",
         }
-    plane = StrategyControlPlane(output)
+    plane = (
+        StrategyControlPlane(output)
+        if execution_profile == FAIL_CLOSED
+        else StrategyControlPlane(
+            output,
+            execution_profile=execution_profile,
+        )
+    )
     if _frozen_grid_diagnostic:
         diagnostic_market = _trusted_historical_diagnostic_market(
             trusted_market,
@@ -1787,6 +1805,42 @@ def build_strategy_console_control_response(
             market=diagnostic_market,
             account=trusted_account or {},
         )
+    if action == "paper_continuity_candidate":
+        if execution_profile != PAPER_CONTINUOUS:
+            raise ValueError("paper_continuity_profile_required")
+        provider_fallback = (
+            payload.get("paper_continuity_provider_fallback") is True
+        )
+        provider_readiness = (
+            None
+            if provider_fallback
+            else current_cloud_ai_provider_readiness(output)
+        )
+        candidate = plane.build_paper_continuity_candidate(
+            cycle_id,
+            market=trusted_market,
+            authoritative_equity=float(
+                dict(preview_account or {}).get("equity") or 0
+            ),
+            supervisor_attempt_id=str(
+                payload.get("supervisor_attempt_id") or ""
+            ),
+            provider_readiness=provider_readiness,
+            degradation_event_refs=[
+                dict(row)
+                for row in payload.get(
+                    PAPER_CONTINUITY_DEGRADATION_REFS
+                )
+                or []
+                if isinstance(row, Mapping)
+            ],
+            provider_fallback=provider_fallback,
+            now=payload.get("as_of"),
+        )
+        return {
+            "action": action,
+            **candidate,
+        }
     if action == "refresh_recommendation":
         plane.verify_supervisor_outer_policy()
         contexts = dict(trusted_market.get("strategy_timeframes") or {})

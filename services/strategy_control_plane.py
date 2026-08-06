@@ -65,6 +65,13 @@ from services.cloud_ai_provider import (
 )
 from services.paper_supervisor_identity import build_start_intent_contract
 from services.paper_supervisor_store import PaperSupervisorStore
+from services.paper_supervisor_recovery import (
+    PAPER_CONTINUITY_PROPOSAL_SOURCE,
+    build_recovery_candidate,
+    load_immediate_previous_verified_plan,
+    paper_continuity_proposal_digest,
+    verified_ai_source_proposal,
+)
 from services.production_accounting import normalize_nautilus_snapshot_for_accounting
 from services.risk_policy_composition import (
     build_risk_decision_store,
@@ -81,16 +88,29 @@ from services.risk_port import (
     require_exposure_permission,
 )
 from services.strategy_plan_execution import build_plan_grid_entry_commands
+from services.supervisor_execution_profile import (
+    EXECUTION_PROFILES,
+    FAIL_CLOSED,
+    PAPER_CONTINUOUS,
+)
 
 
 PROPOSAL_SCHEMA = "strategy-plan-proposal-v1"
 PLAN_SCHEMA = "strategy-plan-v1"
 PLAN_FIELDS = ("direction", "style", "range", "key_levels", "grid", "signal", "tp_sl", "risk_budget", "intraday_rules")
-FIELD_SOURCES = {"human", "ai", "confirmed"}
+FIELD_SOURCES = {
+    "human",
+    "ai",
+    "confirmed",
+    PAPER_CONTINUITY_PROPOSAL_SOURCE,
+}
 _CONTROL_LOCK = threading.RLock()
 _PROCESS_LOCK_STATE = threading.local()
 MANUAL_RANGE_RISK_ACK_SCHEMA = "grid-range-risk-ack-v1"
 PREPARED_START_SCHEMA = "strategy-prepared-start-v1"
+PAPER_CONTINUITY_DEGRADATION_REFS = (
+    "paper_continuity_degradation_event_refs"
+)
 
 
 class StrategyControlMachineError(ValueError):
@@ -486,6 +506,8 @@ class StrategyControlPlane:
         risk_port: RiskDecisionPort | None = None,
         risk_store: RiskDecisionStorePort | None = None,
         authorization_clock: Callable[[], str] | None = None,
+        execution_profile: str = FAIL_CLOSED,
+        source_attestation: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "strategy_control"
@@ -503,6 +525,10 @@ class StrategyControlPlane:
         self._authorization_clock = authorization_clock or (
             lambda: datetime.now(timezone.utc).isoformat()
         )
+        profile = str(execution_profile or "")
+        if profile not in EXECUTION_PROFILES:
+            raise ValueError("supervisor_execution_profile_invalid")
+        self.execution_profile = profile
         tracked_binding_ref = _cloud_tracked_outer_policy_binding_ref(
             self.config
         )
@@ -510,10 +536,14 @@ class StrategyControlPlane:
             self.output_root,
             supervisor_policy_binding_ref=tracked_binding_ref,
             authorization_clock=self._authorization_clock,
+            execution_profile=self.execution_profile,
+            source_attestation=source_attestation,
         )
 
     def upsert_proposal(self, payload: dict[str, Any], *, now: str | None = None) -> dict[str, Any]:
         proposal = normalize_proposal(payload, now=now)
+        if proposal.get("source") == PAPER_CONTINUITY_PROPOSAL_SOURCE:
+            raise ValueError("paper_continuity_proposal_requires_append_path")
         path = self._proposals_path(proposal["cycle_id"])
         rows = load_json(path)
         rows = [row for row in rows if str(row.get("proposal_id")) != proposal["proposal_id"]]
@@ -546,6 +576,13 @@ class StrategyControlPlane:
             at=self._authorization_clock(),
         )
 
+    def renew_expired_supervisor_outer_policy(self) -> dict[str, Any]:
+        """Append the profile-scoped receipt; never edit Park's policy row."""
+
+        return self.risk_envelopes.renew_expired_policy_for_paper_continuity(
+            now=self._authorization_clock(),
+        )
+
     def upsert_supervisor_ai_proposal(
         self,
         payload: dict[str, Any],
@@ -560,6 +597,83 @@ class StrategyControlPlane:
             raise ValueError("supervisor proposal source must be ai")
         return self.upsert_proposal(proposal, now=now)
 
+    def upsert_paper_continuity_proposal(
+        self,
+        payload: dict[str, Any],
+        *,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one deterministic recovery proposal without calling it AI."""
+
+        if self.execution_profile != PAPER_CONTINUOUS:
+            raise ValueError("paper_continuity_profile_required")
+        self.verify_supervisor_outer_policy()
+        proposal = normalize_proposal(payload, now=now)
+        analysis = dict(proposal.get("analysis") or {})
+        recovery = dict(analysis.get("paper_continuity_recovery") or {})
+        if (
+            proposal.get("source") != PAPER_CONTINUITY_PROPOSAL_SOURCE
+            or analysis.get("new_ai_judgment") is not False
+            or analysis.get("inherited_intent_source") != "ai"
+            or not str(
+                analysis.get("inherited_source_proposal_id") or ""
+            )
+            or not str(
+                analysis.get("inherited_source_proposal_digest") or ""
+            )
+            or not str(recovery.get("supervisor_attempt_id") or "")
+        ):
+            raise ValueError("verified_ai_strategy_intent_missing")
+        self._require_paper_continuity_recovery_candidate_event(
+            str(proposal["cycle_id"]),
+            {
+                "supervisor_attempt_id": str(
+                    recovery["supervisor_attempt_id"]
+                ),
+                PAPER_CONTINUITY_DEGRADATION_REFS: [
+                    dict(row)
+                    for row in recovery.get("degradation_event_refs") or []
+                    if isinstance(row, Mapping)
+                ],
+            },
+            now=now,
+        )
+        proposal["recovery_proposal_digest"] = (
+            paper_continuity_proposal_digest(proposal)
+        )
+        path = self._proposals_path(proposal["cycle_id"])
+        with production_mutation_lock(self.output_root):
+            rows = [
+                dict(row)
+                for row in load_json(path)
+                if isinstance(row, dict)
+            ]
+            existing = [
+                row
+                for row in rows
+                if row.get("proposal_id") == proposal["proposal_id"]
+            ]
+            if existing and (len(existing) != 1 or existing[0] != proposal):
+                raise ValueError("plan_identity_conflict")
+            verified_ai_source_proposal(
+                {
+                    "strategy_type": proposal.get("strategy_type"),
+                    "source_proposal_ids": [proposal["proposal_id"]],
+                    "field_sources": {
+                        field: PAPER_CONTINUITY_PROPOSAL_SOURCE
+                        for field in PLAN_FIELDS
+                    },
+                },
+                rows if existing else [*rows, proposal],
+                output_root=self.output_root,
+                package_cycle_id=str(proposal["cycle_id"]),
+            )
+            if existing:
+                return existing[0]
+            rows.append(proposal)
+            write_json(path, rows)
+        return proposal
+
     def authorize_supervisor_ai_envelope(
         self,
         cycle_id: str,
@@ -570,6 +684,11 @@ class StrategyControlPlane:
     ) -> dict[str, Any]:
         """Persist candidate comparisons before the production plan exists."""
 
+        self._require_persisted_paper_continuity_proposal(
+            cycle_id,
+            proposal,
+        )
+
         return self.risk_envelopes.authorize_ai_candidate_envelope(
             cycle_id=cycle_id,
             proposal=proposal,
@@ -577,6 +696,103 @@ class StrategyControlPlane:
             supervisor_attempt_id=supervisor_attempt_id,
             now=self._authorization_clock(),
         )
+
+    def build_paper_continuity_candidate(
+        self,
+        cycle_id: str,
+        *,
+        market: Mapping[str, Any],
+        authoritative_equity: float,
+        supervisor_attempt_id: str,
+        provider_readiness: Mapping[str, Any] | None,
+        degradation_event_refs: list[Mapping[str, Any]],
+        provider_fallback: bool = False,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Build and persist one non-executing Paper recovery proposal."""
+
+        if self.execution_profile != PAPER_CONTINUOUS:
+            raise ValueError("paper_continuity_profile_required")
+        attempt_id = str(supervisor_attempt_id or "").strip()
+        if not attempt_id:
+            raise ValueError("supervisor_pre_intent_attempt_invalid")
+        candidate_evidence = {
+            "supervisor_attempt_id": attempt_id,
+            PAPER_CONTINUITY_DEGRADATION_REFS: [
+                dict(row) for row in degradation_event_refs
+            ],
+        }
+        self._require_paper_continuity_recovery_candidate_event(
+            cycle_id,
+            candidate_evidence,
+            now=now,
+        )
+        if provider_fallback:
+            candidate_evidence["paper_continuity_provider_fallback"] = True
+            self._paper_continuity_provider_fallback(
+                candidate_evidence,
+                cycle_id=cycle_id,
+                now=now,
+            )
+        self.verify_supervisor_outer_policy()
+        current = self.active_plan(cycle_id)
+        if current is not None:
+            source_proposal = verified_ai_source_proposal(
+                current,
+                self.proposals(cycle_id),
+                output_root=self.output_root,
+                package_cycle_id=cycle_id,
+            )
+            source = {
+                "plan": dict(current),
+                "source_proposal": dict(source_proposal),
+                "provenance": {
+                    "source_kind": "current_cycle_active_plan",
+                    "source_cycle_id": cycle_id,
+                    "source_strategy_plan_id": str(
+                        current.get("strategy_plan_id") or ""
+                    ),
+                    "source_strategy_plan_version": int(
+                        current.get("version") or 0
+                    ),
+                    "source_package_hash": None,
+                },
+            }
+        else:
+            source = load_immediate_previous_verified_plan(
+                self.output_root,
+                cycle_id,
+            )
+        outer_policy = self.risk_envelopes.paper_continuity_outer_policy(
+            at=self._authorization_clock(),
+        )
+        candidate = build_recovery_candidate(
+            cycle_id=cycle_id,
+            source_plan=source["plan"],
+            source_proposal=source["source_proposal"],
+            provenance=source["provenance"],
+            market=market,
+            authoritative_equity=authoritative_equity,
+            config=self.config,
+            outer_policy=outer_policy,
+            supervisor_attempt_id=attempt_id,
+            provider_readiness=provider_readiness,
+            degradation_event_refs=[
+                dict(row) for row in degradation_event_refs
+            ],
+        )
+        proposal = self.upsert_paper_continuity_proposal(
+            dict(candidate["proposal"]),
+            now=now,
+        )
+        return {
+            **candidate,
+            "proposal": proposal,
+            "production_plan_unchanged": (
+                self.active_plan(cycle_id) or {}
+            ).get("strategy_plan_id")
+            == (current or {}).get("strategy_plan_id"),
+        }
 
     def supervisor_candidate_identity(
         self,
@@ -588,11 +804,46 @@ class StrategyControlPlane:
     ) -> dict[str, Any]:
         """Canonicalize the candidate before any envelope decision."""
 
+        self._require_persisted_paper_continuity_proposal(
+            cycle_id,
+            proposal,
+        )
+
         return self.risk_envelopes.supervisor_candidate_identity(
             cycle_id=cycle_id,
             proposal=proposal,
             preview=preview,
             supervisor_attempt_id=supervisor_attempt_id,
+        )
+
+    def _require_persisted_paper_continuity_proposal(
+        self,
+        cycle_id: str,
+        proposal: Mapping[str, Any],
+    ) -> None:
+        if proposal.get("source") != PAPER_CONTINUITY_PROPOSAL_SOURCE:
+            return
+        if self.execution_profile != PAPER_CONTINUOUS:
+            raise ValueError("paper_continuity_profile_required")
+        matches = [
+            dict(row)
+            for row in self.proposals(cycle_id)
+            if row == dict(proposal)
+        ]
+        if len(matches) != 1:
+            raise ValueError("verified_ai_strategy_intent_missing")
+        verified_ai_source_proposal(
+            {
+                "strategy_type": proposal.get("strategy_type"),
+                "source_proposal_ids": [proposal.get("proposal_id")],
+                "field_sources": {
+                    field: PAPER_CONTINUITY_PROPOSAL_SOURCE
+                    for field in PLAN_FIELDS
+                },
+            },
+            self.proposals(cycle_id),
+            output_root=self.output_root,
+            package_cycle_id=cycle_id,
         )
 
     def _candidate_proposal_for_envelope(
@@ -1320,8 +1571,31 @@ class StrategyControlPlane:
     ) -> dict[str, Any]:
         """Attach exact Paper-only consent facts without writing plan or risk state."""
 
+        allow_lower_profit_target = (
+            self._paper_continuity_lower_profit_target(
+                payload,
+                cycle_id=cycle_id,
+                now=now,
+            )
+        )
         try:
-            preview = self.preview(cycle_id, payload, market=market, account=account)
+            preview = (
+                build_grid_preview(
+                    cycle_id,
+                    payload,
+                    market=market,
+                    account=account,
+                    config=self.config,
+                    allow_unsafe_manual_preview=True,
+                )
+                if allow_lower_profit_target
+                else self.preview(
+                    cycle_id,
+                    payload,
+                    market=market,
+                    account=account,
+                )
+            )
         except AdaptiveGridInputError as error:
             return self._adaptive_input_error_preview(
                 cycle_id,
@@ -1619,8 +1893,42 @@ class StrategyControlPlane:
             raise ValueError(
                 "new grid start requires zero accepted orders and zero open positions"
             )
-        provider_readiness = current_cloud_ai_provider_readiness(
-            self.output_root
+        provider_fallback = self._paper_continuity_provider_fallback(
+            payload,
+            cycle_id=cycle_id,
+            now=now,
+        )
+        allow_lower_profit_target = (
+            self._paper_continuity_lower_profit_target(
+                payload,
+                cycle_id=cycle_id,
+                now=now,
+            )
+        )
+        dca_carry_forward = self._paper_continuity_dca_carry_forward(
+            payload,
+            cycle_id=cycle_id,
+            now=now,
+        )
+        degradation_event_refs = (
+            [
+                {
+                    "event_id": str(row["event_id"]),
+                    "event_digest": str(row["event_digest"]),
+                }
+                for row in self._paper_continuity_degradation_events(
+                    cycle_id,
+                    payload,
+                    now=now,
+                )
+            ]
+            if payload.get(PAPER_CONTINUITY_DEGRADATION_REFS) is not None
+            else []
+        )
+        provider_readiness = (
+            None
+            if provider_fallback
+            else current_cloud_ai_provider_readiness(self.output_root)
         )
         try:
             preview = self._adaptive_start_preview(
@@ -1660,6 +1968,7 @@ class StrategyControlPlane:
             # below remain authoritative and exact.
             preview["supervisor_preview_nonce"] = supervisor_attempt_id
             preview["preview_id"] = _grid_preview_id(preview)
+        candidate_proposal = None
         if requested_envelope_id:
             candidate_proposal = (
                 self._candidate_proposal_for_envelope(
@@ -1690,6 +1999,10 @@ class StrategyControlPlane:
                 version=future_version,
                 locked_at=prepared_at,
             )
+            if candidate_proposal is not None:
+                future_plan["source_proposal_ids"] = [
+                    str(candidate_proposal.get("proposal_id") or "")
+                ]
             intent_commands = build_dca_entry_commands(
                 future_plan,
                 timestamp=prepared_at,
@@ -1734,10 +2047,20 @@ class StrategyControlPlane:
                 supervisor_attempt_id or None
             ),
         }
+        if degradation_event_refs:
+            record[PAPER_CONTINUITY_DEGRADATION_REFS] = (
+                degradation_event_refs
+            )
+        if provider_fallback:
+            record["paper_continuity_provider_fallback"] = True
+        if allow_lower_profit_target:
+            record["paper_continuity_allow_lower_profit_target"] = True
+        if dca_carry_forward:
+            record["paper_continuity_dca_carry_forward"] = True
         prepared_start_id = self._prepared_start_content_id(record)
         record["prepared_start_id"] = prepared_start_id
         self._write_prepared_start(record)
-        return {
+        result = {
             "action": "prepare_start",
             "prepared_start_id": prepared_start_id,
             "cycle_risk_envelope_id": record[
@@ -1757,6 +2080,263 @@ class StrategyControlPlane:
                 "risk_decision_persisted": False,
             },
         }
+        if degradation_event_refs:
+            result[PAPER_CONTINUITY_DEGRADATION_REFS] = (
+                degradation_event_refs
+            )
+        if provider_fallback:
+            result["paper_continuity_provider_fallback"] = True
+        if allow_lower_profit_target:
+            result["paper_continuity_allow_lower_profit_target"] = True
+        if dca_carry_forward:
+            result["paper_continuity_dca_carry_forward"] = True
+        return result
+
+    def _paper_continuity_provider_fallback(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        cycle_id: str | None = None,
+        now: str | None = None,
+    ) -> bool:
+        requested = payload.get("paper_continuity_provider_fallback") is True
+        if not requested:
+            return False
+        if (
+            self.execution_profile != PAPER_CONTINUOUS
+            or not str(payload.get("supervisor_attempt_id") or "").strip()
+            or not cycle_id
+        ):
+            raise ValueError("paper_continuity_profile_required")
+        attempt_id = str(payload["supervisor_attempt_id"]).strip()
+        self._require_paper_continuity_degradation_event(
+            cycle_id,
+            payload,
+            expected=[
+                {
+                    "event_id": f"{attempt_id}:provider-fallback",
+                    "bypassed_gate": "cloud_ai_provider_readiness_gate",
+                    "alternative_action": (
+                        "reuse_verified_strategy_intent_without_new_ai_call"
+                    ),
+                },
+                {
+                    "event_id": f"{attempt_id}:provider-call-fallback",
+                    "bypassed_gate": "ai_recommendation_provider_gate",
+                    "alternative_action": (
+                        "reuse_verified_strategy_intent_without_new_ai_call"
+                    ),
+                },
+            ],
+            now=now,
+        )
+        return True
+
+    def _paper_continuity_lower_profit_target(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        cycle_id: str | None = None,
+        now: str | None = None,
+    ) -> bool:
+        requested = (
+            payload.get("paper_continuity_allow_lower_profit_target")
+            is True
+        )
+        if not requested:
+            return False
+        grid = payload.get("grid")
+        if (
+            self.execution_profile != PAPER_CONTINUOUS
+            or not str(payload.get("supervisor_attempt_id") or "").strip()
+            or not cycle_id
+            or str(payload.get("strategy_type") or "grid").lower()
+            != "grid"
+            or not isinstance(grid, Mapping)
+            or str(grid.get("notional_mode") or "") != "manual"
+        ):
+            raise ValueError("paper_continuity_profile_required")
+        attempt_id = str(payload["supervisor_attempt_id"]).strip()
+        self._require_paper_continuity_degradation_event(
+            cycle_id,
+            payload,
+            expected=[
+                {
+                    "event_id": f"{attempt_id}:profit-target-degraded",
+                    "bypassed_gate": "grid_profit_target_gate",
+                    "original_machine_code": "grid_profit_target_not_met",
+                    "alternative_action": (
+                        "accept_lower_paper_profit_target_and_continue"
+                    ),
+                }
+            ],
+            now=now,
+        )
+        return True
+
+    def _paper_continuity_dca_carry_forward(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        cycle_id: str | None = None,
+        now: str | None = None,
+    ) -> bool:
+        requested = (
+            payload.get("paper_continuity_dca_carry_forward") is True
+        )
+        if not requested:
+            return False
+        if (
+            self.execution_profile != PAPER_CONTINUOUS
+            or not str(payload.get("supervisor_attempt_id") or "").strip()
+            or not cycle_id
+            or str(payload.get("strategy_type") or "").lower() != "dca"
+        ):
+            raise ValueError("paper_continuity_profile_required")
+        attempt_id = str(payload["supervisor_attempt_id"]).strip()
+        self._require_paper_continuity_degradation_event(
+            cycle_id,
+            payload,
+            expected=[
+                {
+                    "event_id": f"{attempt_id}:dca-confirmation-degraded",
+                    "bypassed_gate": "dca_manual_risk_confirmation_gate",
+                    "original_machine_code": (
+                        "manual_risk_confirmation_required"
+                    ),
+                    "alternative_action": (
+                        "reuse_verified_dca_intent_inside_exact_outer_policy"
+                    ),
+                }
+            ],
+            now=now,
+        )
+        return True
+
+    def _require_paper_continuity_recovery_candidate_event(
+        self,
+        cycle_id: str,
+        payload: Mapping[str, Any],
+        *,
+        now: str | None,
+    ) -> dict[str, Any]:
+        """Bind candidate rebuilding to its already-persisted audit event."""
+
+        attempt_id = str(payload.get("supervisor_attempt_id") or "").strip()
+        events = self._paper_continuity_degradation_events(
+            cycle_id,
+            payload,
+            now=now,
+        )
+        matches = [
+            row
+            for row in events
+            if row.get("bypassed_gate") == "stale_strategy_candidate_gate"
+            and row.get("alternative_action")
+            == (
+                "rebuild_candidate_from_current_market_and_"
+                "authoritative_paper_equity"
+            )
+            and row.get("event_id")
+            == (
+                f"{attempt_id}:recenter-and-reprice:"
+                f"{row.get('original_machine_code')}"
+            )
+        ]
+        if len(matches) != 1:
+            raise ValueError("paper_continuity_degradation_event_required")
+        return matches[0]
+
+    def _require_paper_continuity_degradation_event(
+        self,
+        cycle_id: str,
+        payload: Mapping[str, Any],
+        *,
+        expected: list[Mapping[str, Any]],
+        now: str | None,
+    ) -> dict[str, Any]:
+        events = self._paper_continuity_degradation_events(
+            cycle_id,
+            payload,
+            now=now,
+        )
+        matches = [
+            row
+            for row in events
+            if any(
+                all(row.get(key) == value for key, value in spec.items())
+                for spec in expected
+            )
+        ]
+        if len(matches) != 1:
+            raise ValueError("paper_continuity_degradation_event_required")
+        return matches[0]
+
+    def _paper_continuity_degradation_events(
+        self,
+        cycle_id: str,
+        payload: Mapping[str, Any],
+        *,
+        now: str | None,
+    ) -> list[dict[str, Any]]:
+        if self.execution_profile != PAPER_CONTINUOUS:
+            raise ValueError("paper_continuity_profile_required")
+        attempt_id = str(payload.get("supervisor_attempt_id") or "").strip()
+        raw_refs = payload.get(PAPER_CONTINUITY_DEGRADATION_REFS)
+        if not attempt_id or not isinstance(raw_refs, list) or not raw_refs:
+            raise ValueError("paper_continuity_degradation_event_required")
+        from services.paper_degradation_events import (
+            PaperDegradationEventStore,
+        )
+
+        rows = PaperDegradationEventStore(self.output_root).events(cycle_id)
+        by_identity = {
+            (str(row["event_id"]), str(row["event_digest"])): row
+            for row in rows
+        }
+        checked_at = parse_utc(_timestamp(now))
+        result: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for value in raw_refs:
+            if not isinstance(value, Mapping) or set(value) != {
+                "event_id",
+                "event_digest",
+            }:
+                raise ValueError(
+                    "paper_continuity_degradation_event_required"
+                )
+            identity = (
+                str(value.get("event_id") or ""),
+                str(value.get("event_digest") or ""),
+            )
+            row = by_identity.get(identity)
+            if (
+                not all(identity)
+                or identity in seen
+                or row is None
+                or row.get("cycle_id") != cycle_id
+                or row.get("execution_profile") != PAPER_CONTINUOUS
+                or parse_utc(str(row.get("occurred_at") or ""))
+                > checked_at
+            ):
+                raise ValueError(
+                    "paper_continuity_degradation_event_required"
+                )
+            seen.add(identity)
+            result.append(dict(row))
+        return result
+
+    @staticmethod
+    def _require_prepared_degradation_refs(
+        prepared: Mapping[str, Any] | None,
+        payload: Mapping[str, Any],
+    ) -> None:
+        if prepared is None:
+            return
+        if prepared.get(PAPER_CONTINUITY_DEGRADATION_REFS) != payload.get(
+            PAPER_CONTINUITY_DEGRADATION_REFS
+        ):
+            raise ValueError("prepared_start_changed")
 
     def _load_prepared_start(
         self,
@@ -2007,6 +2587,19 @@ class StrategyControlPlane:
                 "supervisor_attempt_id",
             )
         }
+        if record.get("paper_continuity_provider_fallback") is True:
+            payload["paper_continuity_provider_fallback"] = True
+        if (
+            record.get("paper_continuity_allow_lower_profit_target")
+            is True
+        ):
+            payload["paper_continuity_allow_lower_profit_target"] = True
+        if record.get("paper_continuity_dca_carry_forward") is True:
+            payload["paper_continuity_dca_carry_forward"] = True
+        if record.get(PAPER_CONTINUITY_DEGRADATION_REFS) is not None:
+            payload[PAPER_CONTINUITY_DEGRADATION_REFS] = record.get(
+                PAPER_CONTINUITY_DEGRADATION_REFS
+            )
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return f"prepared-start-{hashlib.sha256(raw.encode()).hexdigest()[:16]}"
 
@@ -2988,6 +3581,7 @@ class StrategyControlPlane:
                 account=account,
                 now=now,
             )
+        self._require_prepared_degradation_refs(prepared, body)
         if (preview.get("solver") or {}).get("mode") == "manual_adaptive":
             if not expected_preview_id or expected_preview_id != str(
                 preview.get("preview_id") or ""
@@ -3025,19 +3619,47 @@ class StrategyControlPlane:
         if pending or open_positions:
             raise ValueError("new grid start requires zero accepted orders and zero open positions")
 
-        current_cloud_ai_provider_readiness(
-            self.output_root,
-            expected_digest=(
-                str(
-                    dict(prepared.get("provider_readiness") or {}).get(
-                        "readiness_digest"
-                    )
-                    or ""
-                )
-                if prepared is not None
-                else None
-            ),
+        provider_fallback = (
+            prepared is not None
+            and prepared.get("paper_continuity_provider_fallback") is True
         )
+        requested_provider_fallback = self._paper_continuity_provider_fallback(
+            body,
+            cycle_id=cycle_id,
+            now=now,
+        )
+        if provider_fallback is not requested_provider_fallback:
+            raise ValueError("prepared_start_changed")
+        lower_profit_target = (
+            prepared is not None
+            and prepared.get(
+                "paper_continuity_allow_lower_profit_target"
+            )
+            is True
+        )
+        requested_lower_profit_target = (
+            self._paper_continuity_lower_profit_target(
+                body,
+                cycle_id=cycle_id,
+                now=now,
+            )
+        )
+        if lower_profit_target is not requested_lower_profit_target:
+            raise ValueError("prepared_start_changed")
+        if not provider_fallback:
+            current_cloud_ai_provider_readiness(
+                self.output_root,
+                expected_digest=(
+                    str(
+                        dict(prepared.get("provider_readiness") or {}).get(
+                            "readiness_digest"
+                        )
+                        or ""
+                    )
+                    if prepared is not None
+                    else None
+                ),
+            )
 
         envelope_verification = None
         if envelope_authorization_id:
@@ -3104,6 +3726,9 @@ class StrategyControlPlane:
             adapter=adapter,
             timestamp=timestamp,
             manual_override=manual_override,
+            paper_continuity_allow_lower_profit_target=(
+                lower_profit_target
+            ),
         )
         envelope_receipt = None
         if envelope_verification is not None:
@@ -3361,6 +3986,7 @@ class StrategyControlPlane:
                 account=account,
                 now=now,
             )
+        self._require_prepared_degradation_refs(prepared, body)
         if preview.get("strategy_type") != "dca":
             raise ValueError("DCA start requires a DCA preview")
         if (
@@ -3379,25 +4005,49 @@ class StrategyControlPlane:
             and envelope_authorization_id != plan_envelope_id
         ):
             raise ValueError("plan_identity_conflict")
+        candidate_proposal = None
         if envelope_authorization_id:
+            if not current:
+                candidate_proposal = self._candidate_proposal_for_envelope(
+                    cycle_id,
+                    envelope_authorization_id,
+                )
             envelope_verification = self.risk_envelopes.verify_preview(
                 cycle_id=cycle_id,
                 plan=current,
                 envelope_authorization_id=envelope_authorization_id,
                 preview=preview,
-                proposal=(
-                    self._candidate_proposal_for_envelope(
-                        cycle_id,
-                        envelope_authorization_id,
-                    )
-                    if not current
-                    else None
-                ),
+                proposal=candidate_proposal,
                 now=self._authorization_clock(),
             )
-        # An envelope is an additional bounded policy check. It never replaces
-        # DCA's existing preview-bound human acknowledgement gate.
-        acknowledgement = _validated_dca_acknowledgement(preview, body, now=now)
+        prepared_dca_carry_forward = (
+            prepared is not None
+            and prepared.get("paper_continuity_dca_carry_forward") is True
+        )
+        requested_dca_carry_forward = (
+            self._paper_continuity_dca_carry_forward(
+                body,
+                cycle_id=cycle_id,
+                now=now,
+            )
+        )
+        if prepared_dca_carry_forward is not requested_dca_carry_forward:
+            raise ValueError("prepared_start_changed")
+        acknowledgement = (
+            self._paper_continuity_dca_acknowledgement(
+                preview,
+                supervisor_attempt_id=str(
+                    body.get("supervisor_attempt_id") or ""
+                ),
+                now=now,
+            )
+            if prepared_dca_carry_forward
+            else _validated_dca_acknowledgement(
+                preview,
+                body,
+                now=now,
+            )
+        )
 
         runtime = self.runtime_state(cycle_id)
         if (
@@ -3442,19 +4092,33 @@ class StrategyControlPlane:
                 "new DCA start requires zero accepted orders and zero open positions"
             )
 
-        current_cloud_ai_provider_readiness(
-            self.output_root,
-            expected_digest=(
-                str(
-                    dict(prepared.get("provider_readiness") or {}).get(
-                        "readiness_digest"
-                    )
-                    or ""
-                )
-                if prepared is not None
-                else None
-            ),
+        provider_fallback = (
+            prepared is not None
+            and prepared.get("paper_continuity_provider_fallback") is True
         )
+        requested_provider_fallback = self._paper_continuity_provider_fallback(
+            body,
+            cycle_id=cycle_id,
+            now=now,
+        )
+        if provider_fallback is not requested_provider_fallback:
+            raise ValueError("prepared_start_changed")
+        if body.get("paper_continuity_allow_lower_profit_target") is True:
+            raise ValueError("paper_continuity_profile_required")
+        if not provider_fallback:
+            current_cloud_ai_provider_readiness(
+                self.output_root,
+                expected_digest=(
+                    str(
+                        dict(prepared.get("provider_readiness") or {}).get(
+                            "readiness_digest"
+                        )
+                        or ""
+                    )
+                    if prepared is not None
+                    else None
+                ),
+            )
 
         timestamp = _timestamp(now)
         version = self._next_plan_version(cycle_id)
@@ -3465,6 +4129,10 @@ class StrategyControlPlane:
             version=version,
             locked_at=timestamp,
         )
+        if candidate_proposal is not None:
+            adjusted["source_proposal_ids"] = [
+                str(candidate_proposal.get("proposal_id") or "")
+            ]
         if prepared is not None:
             actual_intent_contract = build_start_intent_contract(
                 plan=adjusted,
@@ -3634,6 +4302,36 @@ class StrategyControlPlane:
             "risk_decision": risk_payload,
             "cycle_risk_envelope": envelope_verification,
             "idempotent": False,
+        }
+
+    @staticmethod
+    def _paper_continuity_dca_acknowledgement(
+        preview: Mapping[str, Any],
+        *,
+        supervisor_attempt_id: str,
+        now: str | None,
+    ) -> dict[str, Any]:
+        contract = dict(preview.get("manual_confirmation") or {})
+        required_codes = sorted(
+            str(row.get("code") or "")
+            for row in contract.get("required_acknowledgements") or []
+            if isinstance(row, Mapping) and str(row.get("code") or "")
+        )
+        if (
+            contract.get("schema_version") != DCA_RISK_ACK_SCHEMA
+            or contract.get("scope") != "paper_only"
+            or not supervisor_attempt_id
+        ):
+            raise ValueError("dca_risk_acknowledgements_incomplete")
+        return {
+            "schema_version": DCA_RISK_ACK_SCHEMA,
+            "scope": "paper_only",
+            "authorization_kind": "paper_continuity_recovery",
+            "supervisor_attempt_id": supervisor_attempt_id,
+            "preview_id": preview.get("preview_id"),
+            "facts_digest": contract.get("facts_digest"),
+            "acknowledgement_codes": required_codes,
+            "confirmed_at": _timestamp(now),
         }
 
     def _replace_grid(
@@ -5450,6 +6148,7 @@ class StrategyControlPlane:
         replaced_order_ids: list[str] | None = None,
         retained_order_ids: list[str] | None = None,
         manual_override: dict[str, Any] | None = None,
+        paper_continuity_allow_lower_profit_target: bool = False,
     ) -> dict[str, Any]:
         request = self._grid_risk_request(
             cycle_id,
@@ -5470,6 +6169,11 @@ class StrategyControlPlane:
             _require_acknowledged_paper_grid_risk(
                 decision.to_dict(),
                 manual_override,
+                adapter_name=str(getattr(adapter, "name", "")),
+            )
+        elif paper_continuity_allow_lower_profit_target:
+            self._require_paper_continuity_profit_only_decision(
+                decision.to_dict(),
                 adapter_name=str(getattr(adapter, "name", "")),
             )
         else:
@@ -5506,7 +6210,44 @@ class StrategyControlPlane:
                 **current_decision.to_dict(),
                 "operator_override": dict(manual_override),
             }
+        if paper_continuity_allow_lower_profit_target:
+            override = self._require_paper_continuity_profit_only_decision(
+                current_decision.to_dict(),
+                adapter_name=str(getattr(adapter, "name", "")),
+            )
+            return {
+                **current_decision.to_dict(),
+                "paper_continuity_override": override,
+            }
         return require_exposure_permission(current_decision).to_dict()
+
+    def _require_paper_continuity_profit_only_decision(
+        self,
+        decision: Mapping[str, Any],
+        *,
+        adapter_name: str,
+    ) -> dict[str, Any]:
+        blocker_codes = {
+            str(row.get("code") or "risk_blocked")
+            for row in decision.get("blockers") or []
+            if isinstance(row, Mapping)
+        }
+        if (
+            self.execution_profile != PAPER_CONTINUOUS
+            or adapter_name != "nautilus_paper"
+            or decision.get("action_class") != "increase_exposure"
+            or blocker_codes != {"grid_profit_target_not_met"}
+        ):
+            raise ValueError("paper_continuity_profit_override_invalid")
+        return {
+            "schema_version": "paper-continuity-risk-override-v1",
+            "scope": "paper_only",
+            "execution_profile": PAPER_CONTINUOUS,
+            "overridden_blocker_codes": [
+                "grid_profit_target_not_met"
+            ],
+            "decision_id": decision.get("decision_id"),
+        }
 
     def _grid_risk_request(
         self,
@@ -7207,8 +7948,12 @@ def _validated_dca_acknowledgement(
 
 def normalize_proposal(payload: dict[str, Any], *, now: str | None = None, legacy: bool = False) -> dict[str, Any]:
     source = str(payload.get("source") or payload.get("author") or "").lower()
-    if source not in {"human", "ai"}:
-        raise ValueError("proposal source must be human or ai")
+    if source not in {
+        "human",
+        "ai",
+        PAPER_CONTINUITY_PROPOSAL_SOURCE,
+    }:
+        raise ValueError("proposal source is invalid")
     cycle_id = str(payload.get("cycle_id") or "")
     if not cycle_id:
         raise ValueError("proposal cycle_id is required")
