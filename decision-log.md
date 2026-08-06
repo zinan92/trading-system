@@ -14208,3 +14208,29 @@ auditable datafeed port; broker execution remains a separate port.
   tests cover the canonical unit/user, no overlap, exact content/load path,
   warning/critical split, and the rule that provider failure cannot silence
   dead-man. Exact-SHA Cloud deployment remains the final release gate.
+
+# 2026-08-06 — Read relative timer deadlines from systemd monotonic time (#581)
+
+## Decision
+
+- Treat a non-empty `NextElapseUSecRealtime` or
+  `NextElapseUSecMonotonic` as explicit next-trigger evidence. Record the
+  selected clock and both raw fields, while preserving the existing narrow
+  active/activating oneshot exception and every unit identity/cadence/content
+  check.
+
+## Gotchas
+
+- `systemctl list-timers` renders a wall-clock deadline for
+  `OnUnitInactiveSec`, but `systemctl show` stores that relative deadline only
+  in `NextElapseUSecMonotonic`; its realtime field is empty even when the timer
+  is healthy. Requiring only the realtime property creates a false critical
+  health incident on the real host.
+- Both fields empty while the service is idle remains fail-closed. This change
+  broadens evidence transport, not the definition of an acceptable timer.
+
+## Verification
+
+- Focused tests cover calendar/realtime, relative/monotonic, missing-both, and
+  active-oneshot cases. Exact-SHA Cloud verification must show the already
+  active provider timer passing with `next_trigger_clock=monotonic`.
