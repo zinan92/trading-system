@@ -17,10 +17,25 @@
   `park-grid-paper-v2` version 2 with exact allowed directions
   `long/neutral/short` (policy digest `217e4c3e...4013`) and
   `paper-supervisor-grid` binding version 2 (binding digest
-  `38e57cb3...dcdb`). Both mutations created zero plans, controls, orders, or
-  positions. #575 makes that exact binding the source-bound Cloud selector;
-  until its merged SHA is deployed, Cloud correctly remains stopped on the
-  old v1 selector and this is not runtime or 48-hour acceptance evidence.
+  `38e57cb3...dcdb`). Both authoring mutations created zero plans, controls,
+  orders, or positions. #575/#576 are deployed on Cloud Paper as exact clean
+  `main@d7a014479ee8d4c5cbec46aea582fc289212ce89`, tree
+  `e6a91d8ced5c0f341b52dc37a4cb91d50a59200a`; Cloud preflight, provider
+  readiness, Paper predeploy, Dashboard boot, and natural live-tick boot all
+  passed at that SHA/tree. The first natural tick cleared the prior v1-bound
+  structural rejection with zero control actions. A later natural attempt
+  typed `strategy_recommendation_provider_timeout` as transient and backed off;
+  the subsequent independent tick used fresh preview
+  `grid-preview-3c0648ccc797` and prepared start
+  `prepared-start-3bc94010e01a58e7`, then reached `executed` at 11:06 CST.
+  Two more natural ticks preserved one exact 38-slot neutral Grid: runtime
+  `running/running`, 38 accepted/open orders (19 buy + 19 sell), zero unknown
+  orders and positions, fresh heartbeat, reconciliation `ok`, and Supervisor
+  `adopted_existing`. The authenticated Dashboard independently showed
+  `运行中` and `38 笔已接受委托`. This is current-cycle recovery evidence, not
+  the still-open 48-hour >=85% utilization acceptance result. Provider
+  readiness currently expires on 2026-08-07 and the Grid-only standing policy
+  still expires on 2026-09-01; both remain explicit autonomy follow-ups.
 - #568 removes the current-cycle `no active plan -> supervisor_not_required`
   health gap. No-plan and active-plan/stopped states now share an exact
   300-second convergence window anchored to the cycle boundary or the latest

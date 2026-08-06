@@ -14044,3 +14044,47 @@ auditable datafeed port; broker execution remains a separate port.
 - Existing envelope, recommendation, Supervisor, architecture, and Cloud
   execution-control suites remain unchanged and passing. Runtime proof remains
   pending the exact-main Cloud release and independent natural convergence.
+
+# 2026-08-06 — Record the #575 Cloud activation result (#577)
+
+## Decision
+
+- Record the exact deployed SHA/tree, source-bound gate results, and
+  authoritative current-cycle state in `REGISTRY.md`; keep detailed immutable
+  attempt history in the runtime stores and link the GitHub issue comment rather
+  than copying the full audit payload into the repository.
+- Treat the natural provider timeout, backoff, fresh preview/prepared-start, and
+  eventual `executed` result as recovery-chain evidence. Treat two later natural
+  `adopted_existing` ticks as the idempotency observation for this deployment.
+- Keep the 48-hour utilization result open. Current running state proves the
+  immediate outcome, but cannot substitute for the full-duration acceptance
+  window.
+
+## Gotchas
+
+- A release command may complete the atomic source switch and then fail a
+  post-switch assertion. Re-reading both symlink targets and boot receipts is
+  mandatory before retrying; blindly rerunning the cutover could restart a
+  healthy release or obscure the actual postcondition.
+- The canonical Cloudflare unit is `gridmind-cloudflared.service`, and the
+  report, dead-man, and backup timers are `gridmind-daily-24h.timer`,
+  `gridmind-deadman-ping.timer`, and `gridmind-backup.timer`. Querying obsolete
+  guessed names produces false `inactive/not-found` conclusions.
+- Restarting Dashboard also restarts its access/tunnel dependency graph on this
+  host, so a changed cloudflared PID is not proof of tunnel failure. Require the
+  service to be active and prove the authenticated Dashboard surface instead.
+- The deployed provider-readiness receipt and the v2 outer policy still expire.
+  A running current cycle does not yet satisfy unattended continuity beyond
+  those dates.
+
+## Verification
+
+- Exact Cloud source is
+  `d7a014479ee8d4c5cbec46aea582fc289212ce89` with tree
+  `e6a91d8ced5c0f341b52dc37a4cb91d50a59200a` and passing Dashboard/live-tick
+  boot receipts.
+- The authoritative read model reports `running/running`, 38 accepted/open
+  orders, zero unknown orders and positions, fresh heartbeat, reconciliation
+  `ok`, and Supervisor `adopted_existing` after two post-start natural ticks.
+- Authenticated Dashboard independently renders `运行中` and
+  `38 笔已接受委托`.
