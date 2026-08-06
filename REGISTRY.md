@@ -15,13 +15,15 @@
 ## 现在在哪里(2026-08-06)
 - Milestone 3 fixes Paper continuity in four sequential stories. #585 adds the
   prerequisite immutable degradation-event chain, v2 12h package projection,
-  and sealed stopped-to-`running_proven` transition gaps without activating a
-  bypass or changing control behavior. #586 will add the explicit
-  `execution_profile`, clean per-cycle retry state, and five-minute watchdog;
-  #587 will add market-move, authoritative-equity repricing, prior-plan, and
-  authorization-renewal alternatives; #588 alone will activate and deploy
-  `paper_continuous`, then hold the milestone open until both 24h and 7d
-  conservative utilization reach at least 85%. Shadow and the known review
+  and sealed stopped-to-`running_proven` transition gaps. #586 adds the closed
+  `execution_profile`, proven-Paper-only composition, clean per-cycle state,
+  and a crash-durable five-minute watchdog that clears recorded blockers and
+  keeps converging for the full cycle. Checked-in configuration remains
+  `fail_closed`, so neither merged story activates a bypass or changes current
+  Cloud behavior. #587 next adds market-move, authoritative-equity repricing,
+  prior-plan, and authorization-renewal alternatives; #588 alone activates and
+  deploys `paper_continuous`, then holds the milestone open until both 24h and
+  7d conservative utilization reach at least 85%. Shadow and the known review
   chain discrepancies remain explicitly outside this milestone.
 - #573/#574/#581 are deployed on Cloud Paper as exact clean
   `main@28cc8bd888aee06ba8fb89e03c94fa249629471e`, tree

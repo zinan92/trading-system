@@ -14283,3 +14283,60 @@ auditable datafeed port; broker execution remains a separate port.
 - Read-model and package regression suites prove v1 history remains readable
   and existing control/Supervisor behavior is unchanged. Deployment and any
   Paper continuity activation remain separate later issues.
+
+# 2026-08-06 — Make stopped non-absorbing only in proven Paper (#586)
+
+## Decision
+
+- Add a closed `convergence.execution_profile` with only `fail_closed` and
+  `paper_continuous`. The latter is composable only when both the configured
+  authoritative engine and actual adapter identify Paper, the engine is
+  explicitly `real_money_eligible=false`, and its Paper override approval is
+  present. Missing, malformed, unknown, or live-eligible configurations refuse
+  composition before Supervisor control.
+- Keep the checked-in profile at `fail_closed`. Under `paper_continuous`, a new
+  cycle creates a clean episode and an immutable cycle-reset event, and a
+  stopped or otherwise non-`running_proven` cycle runs one fresh full-start
+  flow immediately and then no more often than every 300 seconds for the
+  remainder of the cycle.
+- Use the fsynced #585 degradation journal, not volatile process memory, as the
+  authoritative watchdog cadence. Every forced start is recorded before the
+  control path. A runtime that says running but cannot be sealed is first
+  stopped through the public Paper control, then receives a fresh start on the
+  next due watchdog; this prevents one unproven grid from being silently
+  adopted or immediately doubled.
+- Preserve the existing classifier, structural rechecks, short/probe budgets,
+  and terminal behavior verbatim in `fail_closed`. In `paper_continuous`, a
+  latched blocker or retry budget is cleared only after its original machine
+  code and selected alternative have been appended to degradation evidence.
+  Trusted/fresh market refusal is re-observed but never recorded or treated as
+  a bypass, and no start is called while that gate rejects.
+
+## Gotchas
+
+- An in-memory `next_attempt_at` is insufficient: a crash after control intent
+  but before episode checkpoint can otherwise cause an early duplicate retry.
+  The degradation event must fsync before the public control and its timestamp
+  must govern the next 300-second deadline after restart.
+- `runtime.actual_state=running` is not the same fact as `running_proven`.
+  Re-entering start directly can create a second Paper grid, while blindly
+  adopting preserves an identity conflict. The explicit stop-now/start-on-next-
+  watchdog sequence is slower by one interval but deterministic and remains
+  confined to the proven Paper profile.
+- Cycle-reset event identity is deterministic. A crash can reconstruct an
+  absent episode later with a different observation time, so the implementation
+  first recognizes an existing immutable reset event rather than reusing its
+  identity with changed facts.
+- The profile switch itself is a deployment mutation. Merging this story must
+  not silently activate continuity; #588 owns the independent configuration
+  SHA, release/boot receipts, and runtime acceptance clock.
+
+## Verification
+
+- Focused tests prove clean market refusals and structural blockers both retry
+  at 300 seconds with fresh prepared identities, never before 300 seconds;
+  non-proven running state is stopped once and then started fresh.
+- Profile tests reject unknown, incomplete, real-money-eligible, and non-Paper
+  configurations. Heartbeat and trusted-market tests prove zero start calls
+  when either hard gate is unavailable. Existing fail-closed Supervisor,
+  runner, health, and read-model suites remain unchanged.

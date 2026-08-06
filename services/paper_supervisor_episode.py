@@ -28,6 +28,7 @@ DANGEROUS_START_LIMIT = 2
 CLEAN_REFUSAL_LIMIT = 48
 CLEAN_REFUSAL_WARNING_AT = 40
 HEARTBEAT_STRUCTURAL_AFTER_SECONDS = 600
+PAPER_CONTINUITY_WATCHDOG_SECONDS = 300
 _MODES = frozenset(
     {
         "ready",
@@ -210,6 +211,106 @@ class SupervisorEpisodeMachine:
             "classification": None,
             "start_intent_written": False,
         }
+
+    def reset_for_paper_continuity(
+        self,
+        state: Mapping[str, Any],
+        *,
+        observed_at: str | datetime,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Clear a Paper latch without deleting its immutable event history."""
+
+        current = self._state(state)
+        now = _timestamp(observed_at)
+        previous_mode = str(current.get("mode") or "ready")
+        previous_blocker = dict(current.get("blocker") or {})
+        previous_episode = dict(current["episode"])
+        current["mode"] = "ready"
+        current["blocker"] = None
+        current["alert_required"] = False
+        current["warning_required"] = False
+        current["budgets"]["dangerous_start_attempts"] = 0
+        current["budgets"]["clean_refusal_observations"] = 0
+        current["episode"] = self._new_episode(
+            generation=int(previous_episode["generation"]) + 1,
+            now=now,
+        )
+        return self._event(
+            current,
+            event_type="paper_continuity_state_reset",
+            observed_at=now,
+            machine_code=previous_blocker.get("machine_code"),
+            detail={
+                "reason": str(reason),
+                "previous_mode": previous_mode,
+                "previous_blocker": (
+                    previous_blocker.get("machine_code")
+                ),
+                "previous_episode_id": previous_episode[
+                    "episode_id"
+                ],
+                "budgets_reset": True,
+                "history_preserved": True,
+            },
+        )
+
+    def paper_continuity_attempt_is_due(
+        self,
+        state: Mapping[str, Any],
+        *,
+        observed_at: str | datetime,
+    ) -> tuple[bool, str | None]:
+        current = self._state(state)
+        now = _timestamp(observed_at)
+        latest = next(
+            (
+                event
+                for event in reversed(current["events"])
+                if event.get("event_type")
+                == "paper_continuity_watchdog_attempt"
+            ),
+            None,
+        )
+        if latest is None:
+            return True, None
+        next_attempt = _timestamp(latest["observed_at"]) + timedelta(
+            seconds=PAPER_CONTINUITY_WATCHDOG_SECONDS
+        )
+        return now >= next_attempt, next_attempt.isoformat()
+
+    def record_paper_continuity_watchdog_attempt(
+        self,
+        state: Mapping[str, Any],
+        *,
+        observed_at: str | datetime,
+    ) -> dict[str, Any]:
+        current = self._state(state)
+        now = _timestamp(observed_at)
+        due, _next_attempt = self.paper_continuity_attempt_is_due(
+            current,
+            observed_at=now,
+        )
+        if not due:
+            raise SupervisorEpisodeError(
+                "paper_continuity_watchdog_not_due"
+            )
+        next_attempt = now + timedelta(
+            seconds=PAPER_CONTINUITY_WATCHDOG_SECONDS
+        )
+        current["episode"]["next_attempt_at"] = (
+            next_attempt.isoformat()
+        )
+        return self._event(
+            current,
+            event_type="paper_continuity_watchdog_attempt",
+            observed_at=now,
+            detail={
+                "interval_seconds": PAPER_CONTINUITY_WATCHDOG_SECONDS,
+                "next_attempt_at": next_attempt.isoformat(),
+                "fresh_full_start_required": True,
+            },
+        )
 
     def record_transient_failure(
         self,

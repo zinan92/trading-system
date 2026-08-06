@@ -27,6 +27,8 @@ from services.paper_supervisor import (
     SupervisorAttemptDeadline,
     _digest,
 )
+from services.paper_degradation_events import PaperDegradationEventStore
+from services.supervisor_execution_profile import PAPER_CONTINUOUS
 from services.paper_supervisor_classifier import classify_blocker
 from services.paper_supervisor_store import PaperSupervisorStore
 from services.dualtrack_execution_adapter import (
@@ -332,6 +334,25 @@ class FakePublicControl:
             self.prepare_ids.append(prepared_id)
             self.prepared[prepared_id] = row
             return deepcopy(row)
+        if action == "stop":
+            self.execution.orders = []
+            self.execution.positions = []
+            self.plane.runtime.update(
+                {
+                    "desired_state": "stopped",
+                    "actual_state": "stopped",
+                    "accepted_order_count": 0,
+                    "accepted_order_count_known": True,
+                    "prepared_start_id": None,
+                    "preview_id": None,
+                }
+            )
+            return {
+                "runtime": deepcopy(self.plane.runtime),
+                "cancelled_orders": 0,
+                "flattened_positions": 0,
+                "reconciliation": {"status": "ok", "issues": []},
+            }
         if action != "start":
             raise AssertionError(f"unexpected action: {action}")
         prepared_id = str(payload["prepared_start_id"])
@@ -429,6 +450,7 @@ def _supervisor(
     tmp_path: Path,
     *,
     outcomes: list[str],
+    execution_profile: str = "fail_closed",
 ) -> tuple[PaperSupervisor, FakePublicControl, FakePlane]:
     output = tmp_path / "outputs"
     plane = FakePlane()
@@ -446,10 +468,24 @@ def _supervisor(
             execution=execution,
             control=control,
             accounting_reconciliation=lambda: "pass",
+            execution_profile=execution_profile,
         ),
         control,
         plane,
     )
+
+
+def _continuous_supervisor(
+    tmp_path: Path,
+    *,
+    outcomes: list[str],
+) -> tuple[PaperSupervisor, FakePublicControl, FakePlane]:
+    supervisor, control, plane = _supervisor(
+        tmp_path,
+        outcomes=outcomes,
+        execution_profile=PAPER_CONTINUOUS,
+    )
+    return supervisor, control, plane
 
 
 def _readiness_result(digest: str = "a" * 64) -> dict:
@@ -667,6 +703,214 @@ def test_market_moved_uses_fresh_preview_and_prepared_start_then_recovers(
     assert len(set(control.start_ids)) == 2
     assert control.calls.count("start") == 2
     assert control.intent_seen_before_start is True
+
+
+def test_paper_continuous_retries_clean_market_refusal_every_300_seconds(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, _ = _continuous_supervisor(
+        tmp_path,
+        outcomes=["market_moved", "accepted"],
+    )
+    supervisor.store.now = lambda: T0
+
+    first = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+    before_due = T0 + timedelta(seconds=299)
+    second = supervisor.converge_once(
+        CYCLE,
+        observed_at=before_due.isoformat(),
+        heartbeat=_heartbeat(before_due),
+    )
+    due = T0 + timedelta(seconds=300)
+    third = supervisor.converge_once(
+        CYCLE,
+        observed_at=due.isoformat(),
+        heartbeat=_heartbeat(due),
+    )
+
+    assert first["machine_code"] == "prepared_start_market_moved"
+    assert second["status"] == "watchdog_waiting"
+    assert third["terminal_status"] == "executed"
+    assert control.prepare_ids == ["prepared-1", "prepared-2"]
+    assert control.start_ids == ["prepared-1", "prepared-2"]
+    events = PaperDegradationEventStore(
+        supervisor.output_root
+    ).events(CYCLE)
+    assert events[0]["original_machine_code"] == "cycle_boundary_reset"
+    assert [
+        row["alternative_action"]
+        for row in events
+        if row["alternative_action"] == "force_fresh_full_start_flow"
+    ] == ["force_fresh_full_start_flow"] * 2
+
+
+def test_paper_continuous_retries_structural_blocker_after_watchdog_interval(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, _ = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    original = supervisor.control
+    prepare_calls = 0
+
+    def structural_once(action: str, payload: dict) -> dict:
+        nonlocal prepare_calls
+        if action == "prepare_start":
+            prepare_calls += 1
+            if prepare_calls == 1:
+                raise ValueError("risk_envelope_missing")
+        return original(action, payload)
+
+    supervisor.control = structural_once
+    first = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+    due = T0 + timedelta(seconds=300)
+    second = supervisor.converge_once(
+        CYCLE,
+        observed_at=due.isoformat(),
+        heartbeat=_heartbeat(due),
+    )
+
+    assert first["status"] == "blocked_structural"
+    assert first["machine_code"] == "risk_envelope_missing"
+    assert second["terminal_status"] == "executed"
+    assert prepare_calls == 2
+    assert control.start_ids == ["prepared-1"]
+    events = PaperDegradationEventStore(
+        supervisor.output_root
+    ).events(CYCLE)
+    assert any(
+        row["original_machine_code"] == "risk_envelope_missing"
+        and row["alternative_action"]
+        == "clear_latch_and_schedule_fresh_full_start"
+        for row in events
+    )
+
+
+def test_paper_continuous_resets_unproven_runtime_then_starts_fresh(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, plane = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.runtime.update(
+        {
+            "desired_state": "running",
+            "actual_state": "running",
+            "accepted_order_count": 0,
+            "accepted_order_count_known": True,
+        }
+    )
+
+    reset = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+    before_due = T0 + timedelta(seconds=299)
+    waiting = supervisor.converge_once(
+        CYCLE,
+        observed_at=before_due.isoformat(),
+        heartbeat=_heartbeat(before_due),
+    )
+    due = T0 + timedelta(seconds=300)
+    started = supervisor.converge_once(
+        CYCLE,
+        observed_at=due.isoformat(),
+        heartbeat=_heartbeat(due),
+    )
+
+    assert reset["terminal_status"] == "watchdog_runtime_reset"
+    assert reset["control_actions_executed"] == 1
+    assert waiting["status"] == "watchdog_waiting"
+    assert started["terminal_status"] == "executed"
+    assert control.calls.count("stop") == 1
+    assert control.calls.count("start") == 1
+    events = PaperDegradationEventStore(
+        supervisor.output_root
+    ).events(CYCLE)
+    assert any(
+        row["alternative_action"]
+        == "stop_nonproven_runtime_before_fresh_start"
+        for row in events
+    )
+
+
+def test_paper_continuous_never_controls_without_fresh_heartbeat(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, _ = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=None,
+    )
+
+    assert result["status"] == "backing_off"
+    assert result["machine_code"] == (
+        "execution_tick_heartbeat_temporarily_missing"
+    )
+    assert result["control_actions_executed"] == 0
+    assert control.calls == []
+
+
+def test_paper_continuous_never_starts_when_trusted_market_gate_rejects(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, _ = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    original = supervisor.control
+    prepare_calls = 0
+
+    def untrusted_market(action: str, payload: dict) -> dict:
+        nonlocal prepare_calls
+        if action == "prepare_start":
+            prepare_calls += 1
+            raise ValueError("trusted_market_provenance_invalid")
+        return original(action, payload)
+
+    supervisor.control = untrusted_market
+    first = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+    due = T0 + timedelta(seconds=300)
+    second = supervisor.converge_once(
+        CYCLE,
+        observed_at=due.isoformat(),
+        heartbeat=_heartbeat(due),
+    )
+
+    assert first["machine_code"] == "trusted_market_provenance_invalid"
+    assert second["machine_code"] == "trusted_market_provenance_invalid"
+    assert prepare_calls == 2
+    assert control.start_ids == []
+    assert supervisor.execution.orders == []
+    events = PaperDegradationEventStore(
+        supervisor.output_root
+    ).events(CYCLE)
+    assert not any(
+        row["original_machine_code"]
+        == "trusted_market_provenance_invalid"
+        and row["bypassed_gate"] == "structural_blocker_latch"
+        for row in events
+    )
 
 
 def test_frozen_grid_market_move_is_transient_before_start_intent(
