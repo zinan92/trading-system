@@ -14,6 +14,7 @@ from services.cycle_risk_envelope import CycleRiskEnvelopeError, CycleRiskEnvelo
 from services.dualtrack_config import dualtrack_config
 from services.paper_supervisor_classifier import STRUCTURAL, TRANSIENT, classify_blocker
 from services.strategy_control_plane import StrategyControlPlane
+from services.supervisor_execution_profile import PAPER_CONTINUOUS
 
 
 def _plan() -> dict:
@@ -204,6 +205,84 @@ def _bound_store(
         },
     )
     return store, policy, binding
+
+
+def test_expired_policy_renews_only_with_source_bound_paper_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _verified_park_actor(monkeypatch)
+    writer = CycleRiskEnvelopeStore(tmp_path)
+    policy = writer.authorize_outer_policy(
+        payload=_outer_policy_payload(
+            expires_at="2026-07-30T02:00:00+00:00"
+        ),
+        actor=actor,
+        now="2026-07-30T01:00:00+00:00",
+    )
+    binding = writer.bind_supervisor_outer_policy(
+        payload=_binding_payload(policy),
+        actor=actor,
+        now="2026-07-30T01:01:00+00:00",
+    )
+    reference = {
+        "binding_id": binding["binding_id"],
+        "binding_version": binding["binding_version"],
+        "binding_digest": binding["binding_digest"],
+    }
+    source = {
+        "source_sha": "a" * 40,
+        "source_tree_sha": "b" * 40,
+        "tracked_tree_clean": True,
+    }
+    fail_closed = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref=reference,
+    )
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_expired",
+    ):
+        fail_closed.verify_supervisor_outer_policy(
+            at="2026-07-30T03:00:00+00:00"
+        )
+
+    continuous = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref=reference,
+        execution_profile=PAPER_CONTINUOUS,
+        source_attestation=lambda: source,
+    )
+    renewed = continuous.renew_expired_policy_for_paper_continuity(
+        now="2026-07-30T03:00:00+00:00"
+    )
+    assert renewed["renewed"] is True
+    receipt = renewed["receipt"]
+    assert receipt["policy"]["policy_digest"] == policy["policy_digest"]
+    assert receipt["binding"]["binding_digest"] == binding["binding_digest"]
+    assert receipt["source"] == source
+    assert receipt["scope"] == "paper_only"
+    assert receipt["real_money_eligible"] is False
+    assert continuous.verify_supervisor_outer_policy(
+        at="2026-07-30T03:01:00+00:00"
+    )["passed"] is True
+
+    different_source = CycleRiskEnvelopeStore(
+        tmp_path,
+        supervisor_policy_binding_ref=reference,
+        execution_profile=PAPER_CONTINUOUS,
+        source_attestation=lambda: {
+            **source,
+            "source_sha": "c" * 40,
+        },
+    )
+    with pytest.raises(
+        CycleRiskEnvelopeError,
+        match="outer_strategy_policy_expired",
+    ):
+        different_source.verify_supervisor_outer_policy(
+            at="2026-07-30T03:01:00+00:00"
+        )
 
 
 def _reject_supervisor_candidate(

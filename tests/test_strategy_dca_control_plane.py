@@ -15,7 +15,10 @@ from services.execution_plugin_composition import (
 )
 from services.dca_plan import build_dca_strategy_plan
 from services.journal_store import write_json
+from services.paper_degradation_events import PaperDegradationEventStore
+from services.paper_supervisor_store import PaperSupervisorStore
 from services.strategy_control_plane import StrategyControlPlane
+from services.supervisor_execution_profile import PAPER_CONTINUOUS
 import services.strategy_control_plane as control_plane_module
 
 
@@ -157,6 +160,7 @@ def test_dca_prepare_is_read_only_and_start_requires_exact_risk_acknowledgement(
             now="2026-07-22T16:01:00+00:00",
         )
 
+
     # Any public start call spends its prepared capability, even a clean
     # rejection.  A corrected acknowledgement must bind a fresh preparation.
     prepared = plane.control(
@@ -202,6 +206,111 @@ def test_dca_prepare_is_read_only_and_start_requires_exact_risk_acknowledgement(
             account={"equity": 10_000.0},
             now="2026-07-22T16:02:00+00:00",
         )
+
+
+def test_paper_continuity_dca_carry_forward_is_profile_scoped_and_audited(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    plane = StrategyControlPlane(
+        output,
+        execution_profile=PAPER_CONTINUOUS,
+    )
+    plane.config = _config()
+    attempt_id = "supervisor-attempt-dca-carry"
+    payload = {
+        **_payload(),
+        "supervisor_attempt_id": attempt_id,
+        "paper_continuity_dca_carry_forward": True,
+    }
+    store = PaperSupervisorStore(output)
+    with store.try_lease(CYCLE_ID, holder_id="dca-carry-test") as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id=attempt_id,
+            observed_at="2026-07-22T16:00:00+00:00",
+            phase_scope="create_or_prepare",
+        )
+        with pytest.raises(
+            ValueError,
+            match="paper_continuity_degradation_event_required",
+        ):
+            plane.control(
+                CYCLE_ID,
+                "prepare_start",
+                payload,
+                market=_market(),
+                account={"equity": 10_000.0},
+                now="2026-07-22T16:00:00+00:00",
+            )
+        event = PaperDegradationEventStore(output).record(
+            event_id=f"{attempt_id}:dca-confirmation-degraded",
+            cycle_id=CYCLE_ID,
+            execution_profile=PAPER_CONTINUOUS,
+            bypassed_gate="dca_manual_risk_confirmation_gate",
+            original_machine_code="manual_risk_confirmation_required",
+            original_reason="test DCA carry-forward requires audit evidence",
+            alternative_action=(
+                "reuse_verified_dca_intent_inside_exact_outer_policy"
+            ),
+            occurred_at="2026-07-22T16:00:00+00:00",
+        )
+        payload["paper_continuity_degradation_event_refs"] = [
+            {
+                "event_id": event["event_id"],
+                "event_digest": event["event_digest"],
+            }
+        ]
+        prepared = plane.control(
+            CYCLE_ID,
+            "prepare_start",
+            payload,
+            market=_market(),
+            account={"equity": 10_000.0},
+            now="2026-07-22T16:00:00+00:00",
+        )
+        assert prepared["paper_continuity_dca_carry_forward"] is True
+        lease.record_pre_intent_prepare_succeeded(
+            attempt_id=attempt_id,
+            observed_at="2026-07-22T16:00:00+00:00",
+        )
+        contract = prepared["start_intent_contract"]
+        lease.record_start_intent(
+            attempt_id=attempt_id,
+            preview_id=prepared["preview"]["preview_id"],
+            prepared_start_id=prepared["prepared_start_id"],
+            plan_identity=contract["plan_identity"],
+            pre_start_plan_identity=contract[
+                "pre_start_plan_identity"
+            ],
+            expected_order_fingerprints=contract[
+                "expected_order_fingerprints"
+            ],
+        )
+        started = plane.control(
+            CYCLE_ID,
+            "start",
+            {
+                **payload,
+                "prepared_start_id": prepared["prepared_start_id"],
+                "expected_preview_id": prepared["preview"]["preview_id"],
+            },
+            market=_market(),
+            account={"equity": 10_000.0},
+            now="2026-07-22T16:00:01+00:00",
+        )
+
+    assert started["runtime"]["actual_state"] == "running"
+    assert started["risk_decision"]["acknowledgement"][
+        "authorization_kind"
+    ] == "paper_continuity_recovery"
+    assert started["risk_decision"]["acknowledgement"][
+        "supervisor_attempt_id"
+    ] == attempt_id
+
+    fail_closed = _plane(tmp_path / "fail-closed")
+    with pytest.raises(ValueError, match="paper_continuity_profile_required"):
+        fail_closed._paper_continuity_dca_carry_forward(payload)
 
 
 def test_dca_prepared_start_freezes_risk_envelope_identity(

@@ -1009,13 +1009,16 @@ class DualTrackCycleRunner:
             or attempt_deadline_seconds != 45
         ):
             raise ValueError("supervisor_configuration_invalid")
-        plane = StrategyControlPlane(self.output_root)
         execution = self.execution
         execution_profile = resolve_supervisor_execution_profile(
             self.config,
             execution_name=str(
                 getattr(execution, "name", "")
             ),
+        )
+        plane = StrategyControlPlane(
+            self.output_root,
+            execution_profile=execution_profile,
         )
         as_of = now.isoformat()
         actor = {
@@ -1042,6 +1045,7 @@ class DualTrackCycleRunner:
                     if action == "refresh_recommendation"
                     else None
                 ),
+                execution_profile=execution_profile,
             )
 
         def accounting_reconciliation() -> str:

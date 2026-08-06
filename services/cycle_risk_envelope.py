@@ -13,7 +13,7 @@ import fcntl
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -22,6 +22,15 @@ from services.cloud_ai_provider import validate_provider_readiness_proof
 
 from services.cloud_access_gateway import authenticated_access_identity
 from services.journal_store import load_json, write_json
+from services.paper_release_receipt import current_source_attestation
+from services.paper_supervisor_recovery import (
+    PAPER_CONTINUITY_PROPOSAL_SOURCE,
+)
+from services.supervisor_execution_profile import (
+    EXECUTION_PROFILES,
+    FAIL_CLOSED,
+    PAPER_CONTINUOUS,
+)
 
 
 OUTER_POLICY_SCHEMA_V1 = "paper-strategy-policy-boundary-v1"
@@ -40,9 +49,12 @@ OUTER_POLICY_RECHECK_SCHEMA = (
 LEGACY_REJECTION_RESOLUTION_SCHEMA = (
     "paper-supervisor-legacy-policy-rejection-resolution-v1"
 )
+PAPER_POLICY_RENEWAL_SCHEMA = "paper-continuity-policy-renewal-v1"
+PAPER_POLICY_RENEWAL_SECONDS = 24 * 60 * 60
 AUTHORIZATION_KINDS = {
     "human_explicit",
     "ai_policy_within_preapproved_strategy_boundary",
+    "paper_continuity_within_preapproved_strategy_boundary",
 }
 _AI_ENVELOPE_FIELDS = {
     "authorization_kind",
@@ -117,6 +129,8 @@ class CycleRiskEnvelopeStore:
         *,
         supervisor_policy_binding_ref: Mapping[str, Any] | None = None,
         authorization_clock: Callable[[], str] | None = None,
+        execution_profile: str = FAIL_CLOSED,
+        source_attestation: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "supervisor" / "risk_envelopes"
@@ -127,12 +141,156 @@ class CycleRiskEnvelopeStore:
         self.legacy_resolution_root = (
             self.root / "outer_policy_rejection_resolutions"
         )
+        self.paper_policy_renewal_root = (
+            self.root / "paper_continuity_policy_renewals"
+        )
         self.supervisor_policy_binding_ref = (
             dict(supervisor_policy_binding_ref)
             if isinstance(supervisor_policy_binding_ref, Mapping)
             else _binding_ref_from_environment()
         )
         self.authorization_clock = authorization_clock
+        profile = str(execution_profile or "")
+        if profile not in EXECUTION_PROFILES:
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        self.execution_profile = profile
+        self.source_attestation = source_attestation or (
+            lambda: current_source_attestation()
+        )
+
+    def renew_expired_policy_for_paper_continuity(
+        self,
+        *,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Append a source-bound Paper-only receipt without editing Park policy."""
+
+        if self.execution_profile != PAPER_CONTINUOUS:
+            raise CycleRiskEnvelopeError("outer_strategy_policy_expired")
+        renewed_at = _utc_timestamp(
+            now
+            or (
+                self.authorization_clock()
+                if self.authorization_clock
+                else None
+            ),
+            "outer_strategy_policy_invalid",
+        )
+        binding, policy = self._load_bound_outer_policy_unchecked()
+        if _parse_timestamp(renewed_at) < _parse_timestamp(
+            str(policy["expires_at"])
+        ):
+            return {
+                "renewed": False,
+                "policy_current": True,
+                "receipt": None,
+            }
+        existing = self._current_paper_policy_renewal(
+            binding=binding,
+            policy=policy,
+            at=renewed_at,
+            required=False,
+        )
+        if existing is not None:
+            return {
+                "renewed": False,
+                "policy_current": False,
+                "receipt": existing,
+            }
+        source = self._verified_source_attestation()
+        path = self.paper_policy_renewal_root / (
+            f"{_safe_filename(str(binding['binding_id']))}.json"
+        )
+        rows = _rows(path)
+        _validate_paper_policy_renewal_registry(rows)
+        previous_digest = (
+            str(rows[-1].get("receipt_digest") or "") if rows else ""
+        )
+        expires_at = (
+            _parse_timestamp(renewed_at)
+            + timedelta(seconds=PAPER_POLICY_RENEWAL_SECONDS)
+        ).isoformat()
+        identity_seed = {
+            "binding_digest": binding["binding_digest"],
+            "policy_digest": policy["policy_digest"],
+            "renewed_at": renewed_at,
+            "source_sha": source["source_sha"],
+            "source_tree_sha": source["source_tree_sha"],
+        }
+        record: dict[str, Any] = {
+            "schema_version": PAPER_POLICY_RENEWAL_SCHEMA,
+            "renewal_id": "paper-policy-renewal-"
+            + _digest(identity_seed)[:24],
+            "binding": {
+                "binding_id": binding["binding_id"],
+                "binding_version": binding["binding_version"],
+                "binding_digest": binding["binding_digest"],
+            },
+            "policy": {
+                "policy_id": policy["policy_id"],
+                "policy_version": policy["version"],
+                "policy_digest": policy["policy_digest"],
+                "original_expires_at": policy["expires_at"],
+            },
+            "execution_profile": PAPER_CONTINUOUS,
+            "scope": "paper_only",
+            "real_money_eligible": False,
+            "renewed_at": renewed_at,
+            "expires_at": expires_at,
+            "source": source,
+            "previous_receipt_digest": previous_digest,
+        }
+        record["receipt_digest"] = _digest(record)
+        try:
+            receipt = _append_immutable_record(
+                path,
+                record=record,
+                identity={"renewal_id": record["renewal_id"]},
+                digest_field="receipt_digest",
+                conflict_code="outer_strategy_policy_invalid",
+                registry_validator=_validate_paper_policy_renewal_registry,
+            )
+        except CycleRiskEnvelopeError:
+            # Another Supervisor process may have renewed the same exact
+            # source/policy while this process waited on the registry lock.
+            # Adopt only a receipt that independently verifies at this instant.
+            concurrent = self._current_paper_policy_renewal(
+                binding=binding,
+                policy=policy,
+                at=renewed_at,
+                required=False,
+            )
+            if concurrent is None:
+                raise
+            return {
+                "renewed": False,
+                "policy_current": False,
+                "receipt": concurrent,
+            }
+        return {
+            "renewed": True,
+            "policy_current": False,
+            "receipt": receipt,
+        }
+
+    def paper_continuity_outer_policy(
+        self,
+        *,
+        at: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the exact bound policy after profile-scoped validity proof."""
+
+        checked_at = _utc_timestamp(
+            at
+            or (
+                self.authorization_clock()
+                if self.authorization_clock
+                else None
+            ),
+            "outer_strategy_policy_invalid",
+        )
+        _, policy = self._load_bound_outer_policy(at=checked_at)
+        return dict(policy)
 
     def authorize_outer_policy(
         self,
@@ -470,6 +628,9 @@ class CycleRiskEnvelopeStore:
                 else None
             ),
         }
+        recovery_source = (
+            proposal.get("source") == PAPER_CONTINUITY_PROPOSAL_SOURCE
+        )
         if proposal.get("provider_readiness") is not None:
             source_proposal["provider_readiness"] = (
                 validate_provider_readiness_proof(
@@ -486,11 +647,20 @@ class CycleRiskEnvelopeStore:
             "plan_digest": None,
             "source_proposal": source_proposal,
             "authorization_kind": (
-                "ai_policy_within_preapproved_strategy_boundary"
+                "paper_continuity_within_preapproved_strategy_boundary"
+                if recovery_source
+                else "ai_policy_within_preapproved_strategy_boundary"
             ),
             "limits": limits,
             "authorized_at": authorized_at,
-            "actor": {"email": None, "transport": "ai_policy"},
+            "actor": {
+                "email": None,
+                "transport": (
+                    PAPER_CONTINUITY_PROPOSAL_SOURCE
+                    if recovery_source
+                    else "ai_policy"
+                ),
+            },
             "outer_policy": _outer_policy_reference(binding, outer),
             "outer_policy_comparisons": comparisons,
         }
@@ -506,9 +676,18 @@ class CycleRiskEnvelopeStore:
     ) -> dict[str, Any]:
         """Return the exact candidate identity persisted before authorization."""
 
+        source = str(proposal.get("source") or "")
+        recovery_analysis = dict(proposal.get("analysis") or {})
+        recovery_source = (
+            self.execution_profile == PAPER_CONTINUOUS
+            and source == PAPER_CONTINUITY_PROPOSAL_SOURCE
+            and recovery_analysis.get("new_ai_judgment") is False
+            and recovery_analysis.get("inherited_intent_source") == "ai"
+            and bool(proposal.get("recovery_proposal_digest"))
+        )
         if (
             str(proposal.get("cycle_id") or "") != str(cycle_id)
-            or str(proposal.get("source") or "") != "ai"
+            or (source != "ai" and not recovery_source)
         ):
             raise CycleRiskEnvelopeError("plan_identity_conflict")
         proposal_id = _required_text(
@@ -985,6 +1164,7 @@ class CycleRiskEnvelopeStore:
         kind = _required_text(payload.get("authorization_kind"), "risk_envelope_authorization_invalid")
         if kind not in AUTHORIZATION_KINDS:
             raise CycleRiskEnvelopeError("risk_envelope_authorization_invalid")
+        self._require_authorization_kind_for_profile(kind)
         authorized_at = _utc_timestamp(
             now,
             "risk_envelope_authorization_invalid",
@@ -1101,10 +1281,13 @@ class CycleRiskEnvelopeStore:
             raise CycleRiskEnvelopeError("risk_envelope_missing")
         if envelope.get("schema_version") != ENVELOPE_SCHEMA or envelope.get("authorization_digest") != _digest({key: value for key, value in envelope.items() if key != "authorization_digest"}):
             raise CycleRiskEnvelopeError("risk_envelope_authorization_invalid")
-        if (
+        self._require_authorization_kind_for_profile(
             envelope.get("authorization_kind")
-            == "ai_policy_within_preapproved_strategy_boundary"
-        ):
+        )
+        if envelope.get("authorization_kind") in {
+            "ai_policy_within_preapproved_strategy_boundary",
+            "paper_continuity_within_preapproved_strategy_boundary",
+        }:
             self._verify_envelope_outer_policy(
                 envelope,
                 at=_utc_timestamp(
@@ -1292,15 +1475,18 @@ class CycleRiskEnvelopeStore:
             raise CycleRiskEnvelopeError(
                 "risk_envelope_authorization_invalid"
             )
+        self._require_authorization_kind_for_profile(
+            envelope.get("authorization_kind")
+        )
         if (
             str(envelope.get("cycle_id") or "") != str(cycle_id)
             or not _matching_candidate_plan(envelope, plan)
         ):
             raise CycleRiskEnvelopeError("plan_identity_conflict")
-        if (
-            envelope.get("authorization_kind")
-            != "ai_policy_within_preapproved_strategy_boundary"
-        ):
+        if envelope.get("authorization_kind") not in {
+            "ai_policy_within_preapproved_strategy_boundary",
+            "paper_continuity_within_preapproved_strategy_boundary",
+        }:
             raise CycleRiskEnvelopeError("plan_identity_conflict")
         self._verify_envelope_outer_policy(
             envelope,
@@ -1310,6 +1496,16 @@ class CycleRiskEnvelopeStore:
             ),
         )
         return dict(envelope)
+
+    def _require_authorization_kind_for_profile(self, kind: Any) -> None:
+        """Never allow a Paper recovery authority to cross profiles."""
+
+        if (
+            str(kind or "")
+            == "paper_continuity_within_preapproved_strategy_boundary"
+            and self.execution_profile != PAPER_CONTINUOUS
+        ):
+            raise CycleRiskEnvelopeError("plan_identity_conflict")
 
     def record_start_verification(
         self,
@@ -1372,6 +1568,17 @@ class CycleRiskEnvelopeStore:
         *,
         at: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        binding, policy = self._load_bound_outer_policy_unchecked()
+        self._require_policy_current(
+            policy,
+            binding=binding,
+            at=at,
+        )
+        return binding, policy
+
+    def _load_bound_outer_policy_unchecked(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         reference = self.supervisor_policy_binding_ref
         if not isinstance(reference, Mapping):
             raise CycleRiskEnvelopeError("outer_strategy_policy_missing")
@@ -1399,7 +1606,6 @@ class CycleRiskEnvelopeStore:
         )
         if policy["policy_digest"] != binding["policy_digest"]:
             raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
-        self._require_policy_current(policy, at=at)
         return binding, policy
 
     def _load_outer_policy_exact(
@@ -1593,6 +1799,7 @@ class CycleRiskEnvelopeStore:
         self,
         policy: Mapping[str, Any],
         *,
+        binding: Mapping[str, Any] | None = None,
         at: str,
     ) -> None:
         if _parse_timestamp(at) >= _parse_timestamp(
@@ -1601,7 +1808,92 @@ class CycleRiskEnvelopeStore:
                 "outer_strategy_policy_invalid",
             )
         ):
+            if (
+                self.execution_profile == PAPER_CONTINUOUS
+                and isinstance(binding, Mapping)
+                and self._current_paper_policy_renewal(
+                    binding=binding,
+                    policy=policy,
+                    at=at,
+                    required=False,
+                )
+                is not None
+            ):
+                return
             raise CycleRiskEnvelopeError("outer_strategy_policy_expired")
+
+    def _current_paper_policy_renewal(
+        self,
+        *,
+        binding: Mapping[str, Any],
+        policy: Mapping[str, Any],
+        at: str,
+        required: bool,
+    ) -> dict[str, Any] | None:
+        path = self.paper_policy_renewal_root / (
+            f"{_safe_filename(str(binding['binding_id']))}.json"
+        )
+        rows = _rows(path)
+        _validate_paper_policy_renewal_registry(rows)
+        try:
+            source = self._verified_source_attestation()
+        except CycleRiskEnvelopeError:
+            if required:
+                raise
+            return None
+        checked_at = _parse_timestamp(at)
+        matching = [
+            row
+            for row in rows
+            if row.get("execution_profile") == PAPER_CONTINUOUS
+            and row.get("scope") == "paper_only"
+            and row.get("real_money_eligible") is False
+            and dict(row.get("binding") or {})
+            == {
+                "binding_id": binding["binding_id"],
+                "binding_version": binding["binding_version"],
+                "binding_digest": binding["binding_digest"],
+            }
+            and dict(row.get("policy") or {})
+            == {
+                "policy_id": policy["policy_id"],
+                "policy_version": policy["version"],
+                "policy_digest": policy["policy_digest"],
+                "original_expires_at": policy["expires_at"],
+            }
+            and dict(row.get("source") or {}) == source
+            and _parse_timestamp(str(row.get("renewed_at") or ""))
+            <= checked_at
+            < _parse_timestamp(str(row.get("expires_at") or ""))
+        ]
+        if matching:
+            return dict(matching[-1])
+        if required:
+            raise CycleRiskEnvelopeError("outer_strategy_policy_expired")
+        return None
+
+    def _verified_source_attestation(self) -> dict[str, Any]:
+        try:
+            source = dict(self.source_attestation())
+        except Exception as exc:  # noqa: BLE001 - source proof is mandatory.
+            raise CycleRiskEnvelopeError(
+                "outer_strategy_policy_invalid"
+            ) from exc
+        source_sha = str(source.get("source_sha") or "").lower()
+        tree_sha = str(source.get("source_tree_sha") or "").lower()
+        if (
+            source.get("tracked_tree_clean") is not True
+            or len(source_sha) != 40
+            or len(tree_sha) != 40
+            or any(value not in "0123456789abcdef" for value in source_sha)
+            or any(value not in "0123456789abcdef" for value in tree_sha)
+        ):
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        return {
+            "source_sha": source_sha,
+            "source_tree_sha": tree_sha,
+            "tracked_tree_clean": True,
+        }
 
     def _verify_envelope_outer_policy(
         self,
@@ -2226,7 +2518,10 @@ def _validate_envelope_registry(rows: list[dict[str, Any]]) -> None:
             }
             if (
                 kind
-                != "ai_policy_within_preapproved_strategy_boundary"
+                not in {
+                    "ai_policy_within_preapproved_strategy_boundary",
+                    "paper_continuity_within_preapproved_strategy_boundary",
+                }
                 or not isinstance(source, Mapping)
                 or set(source) not in {
                     frozenset(legacy_source_fields),
@@ -2843,6 +3138,134 @@ def _validate_binding_registry(rows: list[dict[str, Any]]) -> None:
             "outer_strategy_policy_invalid",
         )
         _validate_park_actor_record(row.get("actor"))
+
+
+def _validate_paper_policy_renewal_registry(
+    rows: list[dict[str, Any]],
+) -> None:
+    expected_fields = {
+        "schema_version",
+        "renewal_id",
+        "binding",
+        "policy",
+        "execution_profile",
+        "scope",
+        "real_money_eligible",
+        "renewed_at",
+        "expires_at",
+        "source",
+        "previous_receipt_digest",
+        "receipt_digest",
+    }
+    identities: set[str] = set()
+    previous_digest = ""
+    for row in rows:
+        if set(row) != expected_fields:
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        renewal_id = _required_text(
+            row.get("renewal_id"),
+            "outer_strategy_policy_invalid",
+        )
+        if renewal_id in identities:
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        identities.add(renewal_id)
+        binding = row.get("binding")
+        policy = row.get("policy")
+        source = row.get("source")
+        if (
+            row.get("schema_version") != PAPER_POLICY_RENEWAL_SCHEMA
+            or row.get("execution_profile") != PAPER_CONTINUOUS
+            or row.get("scope") != "paper_only"
+            or row.get("real_money_eligible") is not False
+            or not isinstance(binding, Mapping)
+            or set(binding)
+            != {"binding_id", "binding_version", "binding_digest"}
+            or not isinstance(policy, Mapping)
+            or set(policy)
+            != {
+                "policy_id",
+                "policy_version",
+                "policy_digest",
+                "original_expires_at",
+            }
+            or not isinstance(source, Mapping)
+            or set(source)
+            != {"source_sha", "source_tree_sha", "tracked_tree_clean"}
+            or source.get("tracked_tree_clean") is not True
+            or row.get("previous_receipt_digest") != previous_digest
+            or row.get("receipt_digest")
+            != _digest(
+                {
+                    key: value
+                    for key, value in row.items()
+                    if key != "receipt_digest"
+                }
+            )
+        ):
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        _required_text(binding.get("binding_id"), "outer_strategy_policy_invalid")
+        _positive_int(
+            binding.get("binding_version"),
+            "outer_strategy_policy_invalid",
+        )
+        _required_digest(
+            binding.get("binding_digest"),
+            "outer_strategy_policy_invalid",
+        )
+        _required_text(policy.get("policy_id"), "outer_strategy_policy_invalid")
+        _positive_int(
+            policy.get("policy_version"),
+            "outer_strategy_policy_invalid",
+        )
+        _required_digest(
+            policy.get("policy_digest"),
+            "outer_strategy_policy_invalid",
+        )
+        _utc_timestamp(
+            policy.get("original_expires_at"),
+            "outer_strategy_policy_invalid",
+        )
+        renewed_at = _utc_timestamp(
+            row.get("renewed_at"),
+            "outer_strategy_policy_invalid",
+        )
+        expires_at = _utc_timestamp(
+            row.get("expires_at"),
+            "outer_strategy_policy_invalid",
+        )
+        expected_expires_at = (
+            _parse_timestamp(renewed_at)
+            + timedelta(seconds=PAPER_POLICY_RENEWAL_SECONDS)
+        ).isoformat()
+        expected_renewal_id = "paper-policy-renewal-" + _digest(
+            {
+                "binding_digest": binding["binding_digest"],
+                "policy_digest": policy["policy_digest"],
+                "renewed_at": renewed_at,
+                "source_sha": str(source["source_sha"]).lower(),
+                "source_tree_sha": str(source["source_tree_sha"]).lower(),
+            }
+        )[:24]
+        if (
+            expires_at != expected_expires_at
+            or renewal_id != expected_renewal_id
+        ):
+            raise CycleRiskEnvelopeError("outer_strategy_policy_invalid")
+        for field in ("source_sha", "source_tree_sha"):
+            value = str(source.get(field) or "").lower()
+            if len(value) != 40 or any(
+                character not in "0123456789abcdef"
+                for character in value
+            ):
+                raise CycleRiskEnvelopeError(
+                    "outer_strategy_policy_invalid"
+                )
+        if previous_digest:
+            _required_digest(
+                row.get("previous_receipt_digest"),
+                "outer_strategy_policy_invalid",
+            )
+        previous_digest = str(row["receipt_digest"])
 
 
 def _validate_park_actor_record(value: Any) -> None:

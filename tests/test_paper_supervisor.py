@@ -292,20 +292,52 @@ class FakePublicControl:
 
     def __call__(self, action: str, payload: dict) -> dict:
         self.calls.append(action)
-        if action == "refresh_recommendation":
+        if action in {
+            "refresh_recommendation",
+            "paper_continuity_candidate",
+        }:
+            strategy_type = str(
+                (self.plane.plan or {}).get("strategy_type") or "grid"
+            ).lower()
+            direction = (
+                "long"
+                if strategy_type == "dca"
+                else "neutral"
+            )
             return {
                 "recommendation": {
-                    "direction": "neutral",
+                    "direction": direction,
                     "style": "steady",
-                    "strategy_type": "grid",
+                    "strategy_type": strategy_type,
                 },
                 "proposal": {
                     "proposal_id": "proposal-1",
-                    "direction": "neutral",
+                    "direction": direction,
                     "style": "steady",
+                    "strategy_type": strategy_type,
+                    **(
+                        {
+                            "dca": {
+                                "entry_levels": [100.0, 99.0, 98.0],
+                                "target_price": 102.0,
+                                "stop_price": 96.0,
+                                "notional_per_addition": 100.0,
+                                "max_additions": 3,
+                                "loop_enabled": False,
+                            }
+                        }
+                        if strategy_type == "dca"
+                        else {}
+                    ),
                 },
                 "preview": {
                     "preview_id": "recommendation-preview-1",
+                    "strategy_type": strategy_type,
+                    **(
+                        {"risk": {"selected_leverage": 3.0}}
+                        if strategy_type == "dca"
+                        else {}
+                    ),
                 },
             }
         if action == "prepare_start":
@@ -331,6 +363,20 @@ class FakePublicControl:
                 "start_intent_contract": contract,
                 "future_plan": future,
             }
+            if payload.get("paper_continuity_provider_fallback") is True:
+                row["paper_continuity_provider_fallback"] = True
+            if payload.get("paper_continuity_dca_carry_forward") is True:
+                row["paper_continuity_dca_carry_forward"] = True
+                row["preview"]["strategy_type"] = "dca"
+            if (
+                payload.get(
+                    "paper_continuity_allow_lower_profit_target"
+                )
+                is True
+            ):
+                row[
+                    "paper_continuity_allow_lower_profit_target"
+                ] = True
             self.prepare_ids.append(prepared_id)
             self.prepared[prepared_id] = row
             return deepcopy(row)
@@ -538,6 +584,194 @@ def test_provider_readiness_unavailable_blocks_only_new_entry(
     assert control.calls == []
     assert execution.orders == []
     assert supervisor.store.unfinished_intent(CYCLE) is None
+
+
+def test_paper_continuous_provider_outage_reuses_plan_with_audited_fallback(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, _ = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    supervisor.provider_readiness_verifier = lambda: {
+        "ok": False,
+        "blocker": "cloud_ai_provider_readiness_stale",
+    }
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+
+    assert result["terminal_status"] == "executed"
+    assert control.calls[:3] == [
+        "paper_continuity_candidate",
+        "prepare_start",
+        "start",
+    ]
+    assert control.prepare_payloads[0][
+        "paper_continuity_provider_fallback"
+    ] is True
+    events = PaperDegradationEventStore(
+        supervisor.output_root
+    ).events(CYCLE)
+    assert any(
+        row["bypassed_gate"] == "cloud_ai_provider_readiness_gate"
+        and row["alternative_action"]
+        == "reuse_verified_strategy_intent_without_new_ai_call"
+        for row in events
+    )
+    assert any(
+        row["alternative_action"]
+        == "rebuild_candidate_from_current_market_and_"
+        "authoritative_paper_equity"
+        for row in events
+    )
+
+
+def test_paper_continuity_dca_recovery_records_confirmation_degradation(
+    tmp_path: Path,
+) -> None:
+    supervisor, _, _ = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    supervisor.plane.plan = None
+
+    def dca_candidate(action: str, payload: dict) -> dict:
+        assert action == "paper_continuity_candidate"
+        assert payload["supervisor_attempt_id"] == "supervisor-attempt-dca"
+        return {
+            "recommendation": {
+                "direction": "long",
+                "style": "steady",
+                "strategy_type": "dca",
+            },
+            "proposal": {
+                "proposal_id": "proposal-1",
+                "direction": "long",
+                "style": "steady",
+                "strategy_type": "dca",
+                "dca": {
+                    "entry_levels": [100.0, 99.0, 98.0],
+                    "target_price": 102.0,
+                    "stop_price": 96.0,
+                    "notional_per_addition": 100.0,
+                    "max_additions": 3,
+                    "loop_enabled": False,
+                },
+            },
+            "preview": {
+                "preview_id": "recommendation-preview-1",
+                "strategy_type": "dca",
+                "risk": {"selected_leverage": 3.0},
+            },
+            "recovery": {"risk_repriced": False},
+        }
+
+    supervisor.control = dca_candidate
+    with supervisor.store.try_lease(
+        CYCLE,
+        holder_id="dca-degradation-test",
+    ) as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id="supervisor-attempt-dca",
+            observed_at=T0.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        _, request = supervisor._create_plan(
+            CYCLE,
+            lease=lease,
+            attempt_id="supervisor-attempt-dca",
+            observed_at=T0.isoformat(),
+            recovery_candidate=True,
+        )
+
+    assert request["strategy_type"] == "dca"
+    assert request["paper_continuity_dca_carry_forward"] is True
+    events = PaperDegradationEventStore(
+        supervisor.output_root
+    ).events(CYCLE)
+    dca_event = next(
+        row
+        for row in events
+        if row["bypassed_gate"] == "dca_manual_risk_confirmation_gate"
+    )
+    assert dca_event["original_machine_code"] == (
+        "manual_risk_confirmation_required"
+    )
+    assert dca_event["alternative_action"] == (
+        "reuse_verified_dca_intent_inside_exact_outer_policy"
+    )
+
+
+def test_paper_continuous_never_resets_unknown_control_outcome(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, _ = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted", "accepted"],
+    )
+    control._audit = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+    first = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+    second_at = T0 + timedelta(seconds=301)
+    second = supervisor.converge_once(
+        CYCLE,
+        observed_at=second_at.isoformat(),
+        heartbeat=_heartbeat(second_at),
+    )
+
+    assert first["machine_code"] == (
+        "partial_execution_or_cleanup_required"
+    )
+    assert second["status"] == "blocked_structural"
+    assert second["machine_code"] == (
+        "partial_execution_or_cleanup_required"
+    )
+    assert control.calls.count("start") == 1
+
+
+def test_paper_continuous_active_dca_uses_family_preserving_recovery(
+    tmp_path: Path,
+) -> None:
+    supervisor, control, plane = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan["strategy_type"] = "dca"
+    plane.plan["direction"] = "long"
+    plane.plan["dca"] = {
+        "entries": [{"price": 99.0}],
+        "target_price": 110.0,
+        "stop_price": 90.0,
+        "notional_per_addition": 100.0,
+        "max_additions": 1,
+        "loop_enabled": False,
+    }
+
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+
+    assert result["terminal_status"] == "executed"
+    assert control.calls[:3] == [
+        "paper_continuity_candidate",
+        "prepare_start",
+        "start",
+    ]
+    assert control.prepare_payloads[0]["strategy_type"] == "dca"
+    assert control.prepare_payloads[0][
+        "paper_continuity_dca_carry_forward"
+    ] is True
 
 
 def test_invalid_provider_readiness_is_structural_without_control(

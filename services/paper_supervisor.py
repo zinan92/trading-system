@@ -81,6 +81,12 @@ _MARKET_GATES = frozenset(
         "trusted_market_provenance_invalid",
     }
 )
+_POST_INTENT_UNCERTAINTY_GATES = frozenset(
+    {
+        "control_outcome_unknown",
+        "partial_execution_or_cleanup_required",
+    }
+)
 
 
 class SupervisorAttemptDeadline(Exception):
@@ -415,6 +421,57 @@ class PaperSupervisor:
                 )
             plan = dict(authority.active_plan)
             runtime = dict(authority.runtime)
+            continuity_recovery_code: str | None = None
+            latched_blocker = dict(state.get("blocker") or {})
+            latched_machine_code = str(
+                latched_blocker.get("machine_code")
+                or dict(state.get("episode") or {}).get(
+                    "last_transient_code"
+                )
+                or ""
+            )
+            if (
+                self._paper_continuous
+                and state.get("mode")
+                in {"blocked_structural", "backing_off", "probing"}
+                and latched_machine_code
+                in _POST_INTENT_UNCERTAINTY_GATES
+            ):
+                state, cleared = self._recheck_structural(
+                    state,
+                    authority=authority,
+                    observed_at=observed_at,
+                )
+                if not cleared:
+                    return self._finish(
+                        lease,
+                        state,
+                        self._result(
+                            cycle_id=cycle_id,
+                            observed_at=observed_at,
+                            status="blocked_structural",
+                            machine_code=latched_machine_code,
+                            classification=STRUCTURAL,
+                            control_actions=0,
+                            heartbeat=health,
+                            rechecked=True,
+                        ),
+                        authority=authority,
+                    )
+                return self._finish(
+                    lease,
+                    state,
+                    self._result(
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        status="structural_cleared",
+                        terminal_status="structural_cleared",
+                        control_actions=0,
+                        heartbeat=health,
+                        rechecked=True,
+                    ),
+                    authority=authority,
+                )
             if (
                 self._paper_continuous
                 and state.get("mode")
@@ -428,6 +485,7 @@ class PaperSupervisor:
                     )
                     or "supervisor_retry_state_latched"
                 )
+                continuity_recovery_code = machine_code
                 if machine_code not in _MARKET_GATES:
                     self._record_degradation(
                         event_id=(
@@ -680,6 +738,53 @@ class PaperSupervisor:
                     )
                 )
 
+            if self._paper_continuous:
+                try:
+                    self.plane.verify_supervisor_outer_policy()
+                except Exception as exc:  # noqa: BLE001 - exact typed code below.
+                    if str(getattr(exc, "code", str(exc))) != (
+                        "outer_strategy_policy_expired"
+                    ):
+                        return self._classify_before_intent(
+                            lease,
+                            state,
+                            cycle_id=cycle_id,
+                            observed_at=observed_at,
+                            exc=exc,
+                            heartbeat=health,
+                            deadline_exceeded=False,
+                        )
+                    self._record_degradation(
+                        event_id=f"{attempt_id}:policy-renewal",
+                        cycle_id=cycle_id,
+                        bypassed_gate="outer_strategy_policy_expiry_gate",
+                        original_machine_code=(
+                            "outer_strategy_policy_expired"
+                        ),
+                        original_reason=(
+                            "the exact Park strategy policy has passed its "
+                            "original expiry timestamp"
+                        ),
+                        alternative_action=(
+                            "append_source_bound_paper_only_policy_renewal"
+                        ),
+                        occurred_at=observed_at,
+                    )
+                    try:
+                        self.plane.renew_expired_supervisor_outer_policy()
+                    except Exception as renewal_exc:  # noqa: BLE001
+                        return self._classify_before_intent(
+                            lease,
+                            state,
+                            cycle_id=cycle_id,
+                            observed_at=observed_at,
+                            exc=renewal_exc,
+                            heartbeat=health,
+                            deadline_exceeded=False,
+                        )
+
+            provider_fallback = False
+            provider_degradation_event: dict[str, Any] | None = None
             try:
                 attempt_readiness = (
                     current_cloud_ai_provider_readiness(
@@ -688,18 +793,58 @@ class PaperSupervisor:
                     )
                 )
             except CloudAIProviderReadinessGateError as exc:
-                return self._classify_before_intent(
-                    lease,
-                    state,
+                if not self._paper_continuous:
+                    return self._classify_before_intent(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        exc=exc,
+                        heartbeat=health,
+                        deadline_exceeded=False,
+                    )
+                provider_fallback = True
+                attempt_readiness = None
+                provider_degradation_event = self._record_degradation(
+                    event_id=f"{attempt_id}:provider-fallback",
                     cycle_id=cycle_id,
-                    observed_at=observed_at,
-                    exc=exc,
-                    heartbeat=health,
-                    deadline_exceeded=False,
+                    bypassed_gate="cloud_ai_provider_readiness_gate",
+                    original_machine_code=str(
+                        getattr(exc, "code", str(exc))
+                    ),
+                    original_reason=str(
+                        dict(getattr(exc, "evidence", {}) or {}).get(
+                            "readiness_blocker"
+                        )
+                        or "Cloud AI provider readiness is unavailable"
+                    ),
+                    alternative_action=(
+                        "reuse_verified_strategy_intent_without_new_ai_call"
+                    ),
+                    occurred_at=observed_at,
                 )
 
             request: dict[str, Any]
-            if not plan:
+            recovery_candidate = bool(
+                self._paper_continuous
+                and (
+                    bool(plan)
+                    or (
+                        not plan
+                        and (
+                            provider_fallback
+                            or continuity_recovery_code
+                            in {
+                                "prepared_start_market_moved",
+                                "frozen_grid_preview_market_moved",
+                                "outer_strategy_policy_envelope_out_of_bounds",
+                                "risk_envelope_preview_out_of_bounds",
+                            }
+                        )
+                    )
+                )
+            )
+            if not plan or recovery_candidate:
                 try:
                     with self._attempt_deadline(started):
                         plan, request = self._create_plan(
@@ -707,6 +852,16 @@ class PaperSupervisor:
                             lease=lease,
                             attempt_id=attempt_id,
                             observed_at=observed_at,
+                            recovery_candidate=recovery_candidate,
+                            recovery_machine_code=(
+                                continuity_recovery_code
+                            ),
+                            provider_fallback=provider_fallback,
+                            initial_degradation_events=(
+                                [provider_degradation_event]
+                                if provider_degradation_event is not None
+                                else []
+                            ),
                         )
                 except SupervisorAttemptDeadline as exc:
                     return self._classify_before_intent(
@@ -761,6 +916,18 @@ class PaperSupervisor:
                         authority=authority,
                     )
                 request = self._request_from_plan(full_plan)
+
+            if provider_degradation_event is not None:
+                self._append_degradation_ref(
+                    request,
+                    provider_degradation_event,
+                )
+
+            if request.get("paper_continuity_provider_fallback") is True:
+                provider_fallback = True
+                attempt_readiness = None
+            if provider_fallback:
+                request["paper_continuity_provider_fallback"] = True
 
             if self._deadline_exceeded(started):
                 return self._pre_intent_deadline(
@@ -837,6 +1004,46 @@ class PaperSupervisor:
                             "cloud_ai_provider_readiness_changed"
                         ),
                     )
+                if (
+                    provider_fallback
+                    and prepared.get(
+                        "paper_continuity_provider_fallback"
+                    )
+                    is not True
+                ):
+                    raise ValueError(
+                        "execution_receipt_identity_invalid"
+                    )
+                if (
+                    request.get(
+                        "paper_continuity_allow_lower_profit_target"
+                    )
+                    is True
+                    and prepared.get(
+                        "paper_continuity_allow_lower_profit_target"
+                    )
+                    is not True
+                ):
+                    raise ValueError(
+                        "execution_receipt_identity_invalid"
+                    )
+                if (
+                    request.get(
+                        "paper_continuity_dca_carry_forward"
+                    )
+                    is True
+                    and (
+                        prepared.get(
+                            "paper_continuity_dca_carry_forward"
+                        )
+                        is not True
+                        or str(preview.get("strategy_type") or "").lower()
+                        != "dca"
+                    )
+                ):
+                    raise ValueError(
+                        "execution_receipt_identity_invalid"
+                    )
             except Exception as exc:  # noqa: BLE001 - malformed public receipt fails closed.
                 return self._classify_before_intent(
                     lease,
@@ -855,7 +1062,17 @@ class PaperSupervisor:
                 state,
                 cycle_id=cycle_id,
             )
-            if confirmation.get("required") is True:
+            if (
+                confirmation.get("required") is True
+                and not (
+                    request.get(
+                        "paper_continuity_dca_carry_forward"
+                    )
+                    is True
+                    and str(preview.get("strategy_type") or "").lower()
+                    == "dca"
+                )
+            ):
                 return self._structural(
                     lease,
                     state,
@@ -934,20 +1151,21 @@ class PaperSupervisor:
                                 prepared_start_id=prepared_start_id,
                                 authority=fresh,
                             )
-                        current_cloud_ai_provider_readiness(
-                            self.output_root,
-                            verifier=self.provider_readiness_verifier,
-                            expected_digest=(
-                                str(
-                                    (prepared_readiness or {}).get(
-                                        "readiness_digest"
+                        if not provider_fallback:
+                            current_cloud_ai_provider_readiness(
+                                self.output_root,
+                                verifier=self.provider_readiness_verifier,
+                                expected_digest=(
+                                    str(
+                                        (prepared_readiness or {}).get(
+                                            "readiness_digest"
+                                        )
+                                        or ""
                                     )
-                                    or ""
-                                )
-                                if attempt_readiness is not None
-                                else None
-                            ),
-                        )
+                                    if attempt_readiness is not None
+                                    else None
+                                ),
+                            )
                         state, guard = (
                             self.episodes.guard_start_intent(
                                 state,
@@ -1170,6 +1388,29 @@ class PaperSupervisor:
             alternative_action=alternative_action,
             occurred_at=occurred_at,
         )
+
+    @staticmethod
+    def _append_degradation_ref(
+        payload: dict[str, Any],
+        event: Mapping[str, Any],
+    ) -> None:
+        ref = {
+            "event_id": str(event.get("event_id") or ""),
+            "event_digest": str(event.get("event_digest") or ""),
+        }
+        if not all(ref.values()):
+            raise ValueError("paper_degradation_event_store_corrupt")
+        refs = [
+            dict(row)
+            for row in payload.get(
+                "paper_continuity_degradation_event_refs"
+            )
+            or []
+            if isinstance(row, Mapping)
+        ]
+        if ref not in refs:
+            refs.append(ref)
+        payload["paper_continuity_degradation_event_refs"] = refs
 
     def _paper_continuity_watchdog_due(
         self,
@@ -1444,14 +1685,157 @@ class PaperSupervisor:
         lease,
         attempt_id: str,
         observed_at: str,
+        recovery_candidate: bool = False,
+        recovery_machine_code: str | None = None,
+        provider_fallback: bool = False,
+        initial_degradation_events: list[Mapping[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         self.plane.verify_supervisor_outer_policy()
-        evaluation = self.control("refresh_recommendation", {})
+        recovery = bool(recovery_candidate)
+        degradation_evidence: dict[str, Any] = {}
+        for event in initial_degradation_events or []:
+            self._append_degradation_ref(degradation_evidence, event)
+        if recovery:
+            recovery_event = self._record_recovery_candidate_degradation(
+                cycle_id=cycle_id,
+                attempt_id=attempt_id,
+                observed_at=observed_at,
+                machine_code=(
+                    recovery_machine_code
+                    or (
+                        "cloud_ai_provider_readiness_unavailable"
+                        if provider_fallback
+                        else "runtime_not_running_proven"
+                    )
+                ),
+            )
+            self._append_degradation_ref(
+                degradation_evidence,
+                recovery_event,
+            )
+        try:
+            evaluation = self.control(
+                (
+                    "paper_continuity_candidate"
+                    if recovery
+                    else "refresh_recommendation"
+                ),
+                {
+                    **(
+                        {"paper_continuity_provider_fallback": True}
+                        if provider_fallback
+                        else {}
+                    ),
+                    **(
+                        {"supervisor_attempt_id": attempt_id}
+                        if recovery
+                        else {}
+                    ),
+                    **degradation_evidence,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - typed provider fallback only.
+            code = str(getattr(exc, "code", str(exc)))
+            provider_codes = set(RECOVERABLE_PROVIDER_CODES) | {
+                "cloud_ai_provider_readiness_unavailable",
+                "cloud_ai_provider_readiness_invalid",
+            }
+            if (
+                not self._paper_continuous
+                or recovery
+                or code not in provider_codes
+            ):
+                raise
+            provider_event = self._record_degradation(
+                event_id=f"{attempt_id}:provider-call-fallback",
+                cycle_id=cycle_id,
+                bypassed_gate="ai_recommendation_provider_gate",
+                original_machine_code=code,
+                original_reason=(
+                    "the AI provider could not produce a new-cycle judgment"
+                ),
+                alternative_action=(
+                    "reuse_verified_strategy_intent_without_new_ai_call"
+                ),
+                occurred_at=observed_at,
+            )
+            self._append_degradation_ref(
+                degradation_evidence,
+                provider_event,
+            )
+            recovery = True
+            provider_fallback = True
+            recovery_event = self._record_recovery_candidate_degradation(
+                cycle_id=cycle_id,
+                attempt_id=attempt_id,
+                observed_at=observed_at,
+                machine_code=code,
+            )
+            self._append_degradation_ref(
+                degradation_evidence,
+                recovery_event,
+            )
+            evaluation = self.control(
+                "paper_continuity_candidate",
+                {
+                    "paper_continuity_provider_fallback": True,
+                    "supervisor_attempt_id": attempt_id,
+                    **degradation_evidence,
+                },
+            )
         recommendation = dict(
             evaluation.get("recommendation") or {}
         )
         proposal = dict(evaluation.get("proposal") or {})
         preview = dict(evaluation.get("preview") or {})
+        recovery_detail = dict(evaluation.get("recovery") or {})
+        if recovery_detail.get("risk_repriced") is True:
+            risk_event = self._record_degradation(
+                event_id=f"{attempt_id}:risk-repriced",
+                cycle_id=cycle_id,
+                bypassed_gate="outer_strategy_policy_envelope_gate",
+                original_machine_code=(
+                    recovery_machine_code
+                    or "outer_strategy_policy_envelope_out_of_bounds"
+                ),
+                original_reason=(
+                    "the inherited per-grid amount exceeds the current "
+                    "authoritative Paper account or Park boundary"
+                ),
+                alternative_action=(
+                    "cap_notional_inside_exact_outer_policy_boundary"
+                ),
+                occurred_at=observed_at,
+            )
+            self._append_degradation_ref(
+                degradation_evidence,
+                risk_event,
+            )
+        lower_profit_target = (
+            dict(preview.get("risk") or {}).get("profit_target_met")
+            is False
+            or dict(preview.get("grid") or {}).get("profit_target_met")
+            is False
+        )
+        if lower_profit_target:
+            profit_event = self._record_degradation(
+                event_id=f"{attempt_id}:profit-target-degraded",
+                cycle_id=cycle_id,
+                bypassed_gate="grid_profit_target_gate",
+                original_machine_code="grid_profit_target_not_met",
+                original_reason=(
+                    "the boundary-capped Grid cannot meet the configured "
+                    "per-grid profit objective"
+                ),
+                alternative_action=(
+                    "accept_lower_paper_profit_target_and_continue"
+                ),
+                occurred_at=observed_at,
+            )
+            self._append_degradation_ref(
+                degradation_evidence,
+                profit_event,
+            )
         candidate_identity = self.plane.supervisor_candidate_identity(
             cycle_id,
             proposal=proposal,
@@ -1486,7 +1870,9 @@ class PaperSupervisor:
         if not envelope_id:
             raise ValueError("risk_envelope_authorization_invalid")
         strategy_type = str(
-            recommendation.get("strategy_type") or "grid"
+            recommendation.get("strategy_type")
+            or proposal.get("strategy_type")
+            or "grid"
         ).lower()
         if strategy_type != "dca":
             self.plane.lock_production_plan(
@@ -1498,14 +1884,22 @@ class PaperSupervisor:
                 now=observed_at,
             )
         plan = self.plane.active_plan(cycle_id) or {}
-        request = {
-            "direction": recommendation.get("direction")
-            or proposal.get("direction"),
-            "style": recommendation.get("style")
-            or proposal.get("style"),
-            "strategy_type": strategy_type,
-            "cycle_risk_envelope_id": envelope_id,
-        }
+        request = (
+            self._request_from_plan(plan)
+            if recovery and plan
+            else {
+                "direction": recommendation.get("direction")
+                or proposal.get("direction"),
+                "style": recommendation.get("style")
+                or proposal.get("style"),
+                "strategy_type": strategy_type,
+                "cycle_risk_envelope_id": envelope_id,
+            }
+        )
+        if provider_fallback:
+            request["paper_continuity_provider_fallback"] = True
+        if lower_profit_target:
+            request["paper_continuity_allow_lower_profit_target"] = True
         if strategy_type == "dca":
             dca = dict(proposal.get("dca") or {})
             risk = dict(preview.get("risk") or {})
@@ -1523,9 +1917,59 @@ class PaperSupervisor:
             request["risk_budget"] = {
                 "leverage": risk.get("selected_leverage")
             }
+            if recovery:
+                dca_event = self._record_degradation(
+                    event_id=f"{attempt_id}:dca-confirmation-degraded",
+                    cycle_id=cycle_id,
+                    bypassed_gate="dca_manual_risk_confirmation_gate",
+                    original_machine_code=(
+                        "manual_risk_confirmation_required"
+                    ),
+                    original_reason=(
+                        "a fresh DCA preview normally requires an attended "
+                        "Paper risk acknowledgement"
+                    ),
+                    alternative_action=(
+                        "reuse_verified_dca_intent_inside_exact_outer_policy"
+                    ),
+                    occurred_at=observed_at,
+                )
+                self._append_degradation_ref(
+                    degradation_evidence,
+                    dca_event,
+                )
+                request["paper_continuity_dca_carry_forward"] = True
         elif not plan:
             raise ValueError("active_plan_missing")
+        if degradation_evidence:
+            request.update(degradation_evidence)
         return plan, request
+
+    def _record_recovery_candidate_degradation(
+        self,
+        *,
+        cycle_id: str,
+        attempt_id: str,
+        observed_at: str,
+        machine_code: str,
+    ) -> dict[str, Any]:
+        if not self._paper_continuous:
+            raise ValueError("paper_degradation_requires_continuous_profile")
+        return self._record_degradation(
+            event_id=f"{attempt_id}:recenter-and-reprice:{machine_code}",
+            cycle_id=cycle_id,
+            bypassed_gate="stale_strategy_candidate_gate",
+            original_machine_code=str(machine_code),
+            original_reason=(
+                "the prior candidate cannot prove a start against current "
+                "market and Paper account facts"
+            ),
+            alternative_action=(
+                "rebuild_candidate_from_current_market_and_"
+                "authoritative_paper_equity"
+            ),
+            occurred_at=observed_at,
+        )
 
     def _recover_crashed_candidate_rejection(
         self,
