@@ -34,10 +34,13 @@ def _runner(command, **_kwargs):
             "",
         )
     if command[1] == "show":
-        next_trigger = (
+        next_trigger_realtime = (
             "Fri 2026-08-07 01:03:00 CST"
             if unit == "gridmind-daily-24h.timer"
-            else "Fri 2026-08-07 10:00:00 CST"
+            else ""
+        )
+        next_trigger_monotonic = (
+            "2d 20h 53min 14.090895s"
             if unit == "gridmind-ai-provider-readiness.timer"
             else ""
         )
@@ -51,7 +54,8 @@ def _runner(command, **_kwargs):
                     "LoadState=loaded",
                     "UnitFileState=enabled",
                     "ActiveState=active",
-                    f"NextElapseUSecRealtime={next_trigger}",
+                    f"NextElapseUSecRealtime={next_trigger_realtime}",
+                    f"NextElapseUSecMonotonic={next_trigger_monotonic}",
                     "LastTriggerUSec=Thu 2026-08-06 04:00:00 CST",
                     f"Triggers={service}",
                     f"FragmentPath=/etc/systemd/system/{unit}",
@@ -105,6 +109,9 @@ def test_cloud_timer_contract_requires_canonical_enabled_active_timers(
     )
     assert len(readiness["effective_unit_content_sha256"]) == 64
     assert readiness["next_trigger"]
+    assert readiness["next_trigger_clock"] == "monotonic"
+    assert readiness["next_trigger_realtime"] is None
+    assert readiness["next_trigger_monotonic"]
     assert result["provider_readiness"]["latest_success"]["ok"] is True
     assert result["service_status"]["ai-provider-readiness"] == "pass"
 
@@ -139,8 +146,8 @@ def test_cloud_timer_contract_allows_next_trigger_to_wait_for_active_oneshot(
             "gridmind-ai-provider-readiness.timer"
         ):
             result.stdout = result.stdout.replace(
-                "NextElapseUSecRealtime=Fri 2026-08-07 10:00:00 CST",
-                "NextElapseUSecRealtime=",
+                "NextElapseUSecMonotonic=2d 20h 53min 14.090895s",
+                "NextElapseUSecMonotonic=",
             )
         if command[1] == "show" and command[2] == (
             "gridmind-ai-provider-readiness.service"
@@ -158,6 +165,30 @@ def test_cloud_timer_contract_allows_next_trigger_to_wait_for_active_oneshot(
     )
     assert readiness["next_trigger"] is None
     assert readiness["next_trigger_pending_service_completion"] is True
+
+
+def test_relative_timer_without_either_next_clock_is_blocked_when_idle(
+    tmp_path: Path,
+):
+    def missing_both(command, **kwargs):
+        result = _runner(command, **kwargs)
+        if command[1] == "show" and command[2] == (
+            "gridmind-ai-provider-readiness.timer"
+        ):
+            result.stdout = result.stdout.replace(
+                "NextElapseUSecMonotonic=2d 20h 53min 14.090895s",
+                "NextElapseUSecMonotonic=",
+            )
+        return result
+
+    result = _contract(tmp_path, runner=missing_both).run()
+
+    assert result["status"] == "blocked"
+    assert result["service_status"]["ai-provider-readiness"] == "blocked"
+    assert any(
+        row.get("reason") == "timer_next_trigger_missing"
+        for row in result["checks"]
+    )
 
 
 def test_cloud_timer_contract_requires_deadman_cadence(tmp_path: Path):

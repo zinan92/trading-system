@@ -98,7 +98,7 @@ class CloudTimerContract:
         try:
             shown = self._run([
                 "systemctl", "show", unit, "--no-pager",
-                "--property=Id,LoadState,UnitFileState,ActiveState,NextElapseUSecRealtime,LastTriggerUSec,Triggers,FragmentPath",
+                "--property=Id,LoadState,UnitFileState,ActiveState,NextElapseUSecRealtime,NextElapseUSecMonotonic,LastTriggerUSec,Triggers,FragmentPath",
             ])
             values = dict(
                 line.split("=", 1) for line in shown.splitlines() if "=" in line
@@ -109,7 +109,20 @@ class CloudTimerContract:
                 raise RuntimeError("timer_not_enabled")
             if values.get("ActiveState") != "active":
                 raise RuntimeError("timer_not_active")
-            next_trigger = values.get("NextElapseUSecRealtime", "").strip()
+            next_trigger_realtime = values.get(
+                "NextElapseUSecRealtime", ""
+            ).strip()
+            next_trigger_monotonic = values.get(
+                "NextElapseUSecMonotonic", ""
+            ).strip()
+            next_trigger = next_trigger_realtime or next_trigger_monotonic
+            next_trigger_clock = (
+                "realtime"
+                if next_trigger_realtime
+                else "monotonic"
+                if next_trigger_monotonic
+                else None
+            )
             next_trigger_pending_service_completion = False
             if expected.get("requires_next_trigger") and not next_trigger:
                 service_state = self._show_active_state(expected["service"])
@@ -137,6 +150,9 @@ class CloudTimerContract:
                 "enabled": True,
                 "active": True,
                 "next_trigger": next_trigger or None,
+                "next_trigger_clock": next_trigger_clock,
+                "next_trigger_realtime": next_trigger_realtime or None,
+                "next_trigger_monotonic": next_trigger_monotonic or None,
                 "next_trigger_pending_service_completion": (
                     next_trigger_pending_service_completion
                 ),
