@@ -293,3 +293,168 @@ def test_provider_readiness_rejects_malformed_json_before_trusting_fields(
             stderr="permission denied\n",
         )
     ) is False
+
+
+def _install_successful_readiness_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    executable = tmp_path / "codex"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        readiness_pipeline,
+        "current_source_attestation",
+        lambda repo_root: {
+            "source_sha": SHA,
+            "source_tree_sha": TREE,
+            "tracked_tree_clean": True,
+        },
+    )
+    monkeypatch.setattr(
+        readiness_pipeline,
+        "dualtrack_config",
+        lambda: {
+            "machine_planner": {
+                "command": str(executable),
+                "model": "gpt-test",
+            },
+            "convergence": {"provider_timeout_seconds": 25},
+        },
+    )
+
+    def successful_run(command, **kwargs):
+        if "--version" in command:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                "codex-cli test\n",
+                "",
+            )
+        if "login" in command and "status" in command:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                "",
+                "Logged in using ChatGPT\n",
+            )
+        result_path = Path(command[command.index("--output-last-message") + 1])
+        result_path.write_text(
+            '{"direction":"neutral","style":"steady",'
+            '"rationale":"provider readiness smoke",'
+            '"ai_self_assessment":5}',
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(readiness_pipeline.subprocess, "run", successful_run)
+    return executable
+
+
+def test_timer_cadence_renews_for_thirty_hours_without_stale_interval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = _install_successful_readiness_runtime(tmp_path, monkeypatch)
+    output = tmp_path / "outputs"
+
+    renewal_count = 0
+    for minutes in range(0, (30 * 60) + 1, 5):
+        observed = NOW + timedelta(minutes=minutes)
+        result = readiness_pipeline.renew_if_due(
+            output_root=output,
+            repo_root=tmp_path,
+            now=lambda observed=observed: observed,
+        )
+        assert result["ok"] is True
+        assert result["control_actions_executed"] == 0
+        renewal_count += int(result["renewed"])
+        current = CloudAIProviderReadiness(
+            output,
+            repo_root=tmp_path,
+            now=lambda observed=observed: observed,
+            source_attestation=lambda: {
+                "source_sha": SHA,
+                "source_tree_sha": TREE,
+                "tracked_tree_clean": True,
+            },
+        ).verify()
+        assert current["ok"] is True
+
+    history = sorted(
+        (output / "cloud" / "provider" / "receipts").glob("*.json")
+    )
+    assert len(history) == 6
+    assert renewal_count == 6
+    assert renewal_count >= 2
+    last_success = load_json(
+        output / "cloud" / "provider" / "readiness_last_success.json"
+    )[0]
+    assert last_success["checked_at"] == (NOW + timedelta(hours=30)).isoformat()
+    assert last_success["provider"]["executable_sha256"] == _sha256(executable)
+
+
+def test_failed_renewal_is_fail_closed_then_recovers_with_fresh_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_successful_readiness_runtime(tmp_path, monkeypatch)
+    output = tmp_path / "outputs"
+    first = readiness_pipeline.renew_if_due(
+        output_root=output,
+        repo_root=tmp_path,
+        now=lambda: NOW,
+    )
+    assert first["ok"] is True
+
+    successful_run = readiness_pipeline.subprocess.run
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["codex", "--version"], timeout=10)
+
+    monkeypatch.setattr(readiness_pipeline.subprocess, "run", timeout)
+    failed = readiness_pipeline.renew_if_due(
+        output_root=output,
+        repo_root=tmp_path,
+        now=lambda: NOW + timedelta(hours=6),
+    )
+    assert failed["ok"] is False
+    assert failed["failure_code"] == "strategy_recommendation_provider_timeout"
+    assert failed["control_actions_executed"] == 0
+    failed_verification = CloudAIProviderReadiness(
+        output,
+        repo_root=tmp_path,
+        now=lambda: NOW + timedelta(hours=6),
+        source_attestation=lambda: {
+            "source_sha": SHA,
+            "source_tree_sha": TREE,
+            "tracked_tree_clean": True,
+        },
+    ).verify()
+    with pytest.raises(CloudAIProviderReadinessGateError) as raised:
+        require_cloud_ai_provider_readiness(lambda: failed_verification)
+    assert raised.value.code == PROVIDER_READINESS_UNAVAILABLE
+    preserved = load_json(
+        output / "cloud" / "provider" / "readiness_last_success.json"
+    )[0]
+    assert preserved["checked_at"] == NOW.isoformat()
+
+    monkeypatch.setattr(readiness_pipeline.subprocess, "run", successful_run)
+    recovered = readiness_pipeline.renew_if_due(
+        output_root=output,
+        repo_root=tmp_path,
+        now=lambda: NOW + timedelta(hours=6, minutes=5),
+    )
+    assert recovered["ok"] is True
+    recovery_verification = CloudAIProviderReadiness(
+        output,
+        repo_root=tmp_path,
+        now=lambda: NOW + timedelta(hours=6, minutes=5),
+        source_attestation=lambda: {
+            "source_sha": SHA,
+            "source_tree_sha": TREE,
+            "tracked_tree_clean": True,
+        },
+    ).verify()
+    assert recovery_verification["ok"] is True
+    assert recovery_verification["readiness_digest"] != first["readiness_digest"]

@@ -13,6 +13,17 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-06)
+- #573 is deployed on Cloud Paper as exact clean
+  `main@f0e2df9a43cdc9ca2c56036900d0208594f5b413`, tree
+  `80145d4926cb6ede7d7f498143d87f3d54aad8c4`. Cloud/Paper preflight,
+  provider readiness, Dashboard/live-tick boot and the next natural tick all
+  passed at that identity. The authoritative read-model remained
+  `running/running`, with 37 accepted/open orders, one open Paper position,
+  zero unknown orders, reconciliation `ok`, and Supervisor
+  `adopted_existing`; deployment created no control request or second order
+  set. #574 now implements the still-pending host-local provider-readiness
+  renewal unit and immutable renewal evidence; implementation/merge is not yet
+  Cloud activation or 48-hour acceptance.
 - Park-authenticated Cloud authoring has appended immutable
   `park-grid-paper-v2` version 2 with exact allowed directions
   `long/neutral/short` (policy digest `217e4c3e...4013`) and
@@ -358,15 +369,12 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Merge and deploy #575 through the exact main SHA/boot gates while the current
-  authority remains stopped with zero orders, zero positions, passing
-  reconciliation and no unknown control result. Do not issue a manual start:
-  the next independent natural tick must clear the exact v1 rejection against
-  binding v2 and create one fresh start chain within five minutes.
-- Complete #573/#574 immediately after activation so a 24-hour AI-readiness
-  receipt can no longer stop lifecycle/tick heartbeat and is renewed before
-  expiry. The current temporary receipt is recovery evidence, not a permanent
-  fix.
+- Merge #574, deploy its exact main SHA through the existing release/boot
+  gates, install the rendered units passively, then activate only
+  `gridmind-ai-provider-readiness.timer` through the canonical repository
+  action. Verify the real `gridmind` execution, exact load path/content hash,
+  next trigger, fresh digest/source-bound receipt, warning/critical routing,
+  and unchanged runtime/order/control state.
 - 继续从当前精确 release 进行 48h Supervisor soak；只认保守运行率、三个真实
   周期边界（含 21:00）与真实 transient 自动恢复审计链，不以测试、部署或
   read-model 200 冒充终验。第一个完整 24h 窗口形成前保持 `insufficient`。

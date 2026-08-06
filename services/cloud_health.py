@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from services.cloud_timer_contract import CloudTimerContract
 from services.cycle_decision import CycleDecisionLedger
 from services.datafeed_market_repository import DatafeedMarketRepository
 from services.dualtrack_clock import cycle_window
@@ -30,6 +31,7 @@ HEALTH_SEVERITY_BY_CODE = {
     "backup_missing_or_stale": "warning",
     "runtime_utilization_below_target": "warning",
     "runtime_utilization_insufficient": "insufficient",
+    "provider_readiness_refresh_failed": "warning",
     "supervisor_backing_off": "none",
     "supervisor_converging": "none",
     "supervisor_probing": "none",
@@ -47,6 +49,7 @@ HEALTH_SEVERITY_BY_CODE = {
     "backup_current": "none",
     "scheduler_owner_pass": "none",
     "source_sha_known": "none",
+    "provider_readiness_timer_ready": "none",
     # Structural/runtime blockers.  Unknown codes also use this severity.
     "datafeed_probe_failed": "critical",
     "datafeed_latest_timestamp_missing": "critical",
@@ -76,6 +79,8 @@ HEALTH_SEVERITY_BY_CODE = {
     "attempt_store_capacity_exceeded": "critical",
     "attempt_store_corrupt": "critical",
     "running_evidence_invalid": "critical",
+    "provider_readiness_timer_unavailable": "critical",
+    "provider_readiness_timer_contract_invalid": "critical",
 }
 
 
@@ -137,6 +142,7 @@ class CloudPaperHealth:
         deployed_sha: str = "",
         now: Callable[[], datetime] | None = None,
         latest_market_provider: Callable[[], dict[str, Any]] | None = None,
+        timer_contract_provider: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.backup_root = Path(backup_root)
@@ -148,6 +154,12 @@ class CloudPaperHealth:
         self.deployed_sha = str(deployed_sha)
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.latest_market_provider = latest_market_provider or self._latest_market
+        self.timer_contract_provider = timer_contract_provider or (
+            lambda: CloudTimerContract(
+                self.output_root,
+                now=self.now,
+            ).run(persist=False)
+        )
 
     def run(self, *, persist: bool = True) -> dict[str, Any]:
         observed = self.now().astimezone(timezone.utc).replace(microsecond=0)
@@ -165,6 +177,7 @@ class CloudPaperHealth:
             "backup": self._backup(observed),
             "scheduler_ownership": self._ownership(),
             "source": self._source(),
+            "provider_readiness": self._provider_readiness_timer(),
         }
         statuses = {row["status"] for row in checks.values()}
         if "blocked" in statuses:
@@ -955,6 +968,104 @@ class CloudPaperHealth:
             summary="Deployed source SHA is explicit." if ready else "Deployed source SHA is unavailable.",
             next_action="No action." if ready else "Redeploy from an immutable clean SHA and rerun preflight.",
             evidence={"deployed_sha": sha or None},
+        )
+
+    def _provider_readiness_timer(self) -> dict[str, Any]:
+        try:
+            contract = self.timer_contract_provider()
+        except Exception as exc:  # noqa: BLE001 - timer uncertainty is critical.
+            return _check(
+                "provider_readiness",
+                "blocked",
+                code="provider_readiness_timer_contract_invalid",
+                summary="Provider-readiness timer evidence is unavailable.",
+                next_action=(
+                    "Inspect the canonical readiness timer without starting a "
+                    "guessed unit."
+                ),
+                evidence={"error": type(exc).__name__},
+            )
+        checks = contract.get("checks") if isinstance(contract, dict) else None
+        if not isinstance(checks, list):
+            return _check(
+                "provider_readiness",
+                "blocked",
+                code="provider_readiness_timer_contract_invalid",
+                summary="Provider-readiness timer contract is malformed.",
+                next_action=(
+                    "Restore the source-bound timer contract before new entries."
+                ),
+            )
+        timer = next(
+            (
+                row
+                for row in checks
+                if isinstance(row, dict)
+                and row.get("unit")
+                == "gridmind-ai-provider-readiness.timer"
+            ),
+            {},
+        )
+        readiness = (
+            contract.get("provider_readiness")
+            if isinstance(contract.get("provider_readiness"), dict)
+            else {}
+        )
+        current = (
+            readiness.get("current")
+            if isinstance(readiness.get("current"), dict)
+            else {}
+        )
+        latest_success = (
+            readiness.get("latest_success")
+            if isinstance(readiness.get("latest_success"), dict)
+            else {}
+        )
+        evidence = {
+            "unit": timer.get("unit"),
+            "fragment_path": timer.get("fragment_path"),
+            "effective_unit_content_sha256": timer.get(
+                "effective_unit_content_sha256"
+            ),
+            "next_trigger": timer.get("next_trigger"),
+            "last_trigger": timer.get("last_trigger"),
+            "current_readiness": current,
+            "latest_success": latest_success,
+        }
+        if timer.get("status") != "pass":
+            return _check(
+                "provider_readiness",
+                "blocked",
+                code="provider_readiness_timer_unavailable",
+                summary="Canonical provider-readiness renewal timer is not ready.",
+                next_action=(
+                    "Inspect the exact unit, load path, content, and next trigger; "
+                    "do not enable a guessed timer."
+                ),
+                evidence=evidence,
+            )
+        if current.get("ok") is not True:
+            return _check(
+                "provider_readiness",
+                "degraded",
+                code="provider_readiness_refresh_failed",
+                summary=(
+                    "The renewal timer is active, but its latest readiness "
+                    "refresh did not pass."
+                ),
+                next_action=(
+                    "Let the timer retry; Supervisor will raise critical only "
+                    "if this blocks current-cycle convergence."
+                ),
+                evidence=evidence,
+            )
+        return _check(
+            "provider_readiness",
+            "ready",
+            code="provider_readiness_timer_ready",
+            summary="Provider-readiness renewal timer and current proof are ready.",
+            next_action="No action.",
+            evidence=evidence,
         )
 
     @staticmethod

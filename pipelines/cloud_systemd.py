@@ -25,6 +25,7 @@ def main() -> int:
             "install-passive",
             "activate-dashboard",
             "activate-remote-access",
+            "activate-provider-readiness",
             "uninstall",
         ),
         default="render",

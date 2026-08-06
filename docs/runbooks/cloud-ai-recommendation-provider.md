@@ -31,13 +31,65 @@ The wrapper sets `HOME` and `CODEX_HOME` to `/opt/gridmind` and
 `/opt/gridmind/.codex` and then execs the pinned `/opt/gridmind/bin/codex`
 binary.  It never reads the Mac exchange directory.
 
-Provider readiness is a separate, source-bound receipt.  Before enabling or
-restarting the live-tick timer, run the Cloud readiness pipeline as `gridmind`.
-It must prove the executable/version, `codex login status`, the bounded
-recommendation command, and the JSON response contract.  The receipt records
-only boolean/status facts and the deployed source SHA/tree; it never records
-the prompt, response, access token, or other secret.  The live-tick boot gate
-rejects a missing, expired, failed, or source-mismatched readiness receipt.
+Provider readiness is a separate, source-bound receipt.  It proves the
+executable/version, `codex login status`, the bounded recommendation command,
+and the JSON response contract.  The receipt records only bounded status facts
+and the deployed source SHA/tree; it never records the prompt, response, access
+token, or other secret.  Existing strategy lifecycle work remains independent
+of provider availability.  A fresh proof is required only at the exact new-AI,
+new-plan, prepare, and pre-`start_intent` entry seams.
+
+The canonical unattended renewal units are:
+
+- `gridmind-ai-provider-readiness.service`
+- `gridmind-ai-provider-readiness.timer`
+
+The oneshot service runs as `gridmind`, is bounded to 120 seconds, and retains
+the same read-only/no-order/no-exchange-credential contract as the manual
+probe.  The timer uses `OnBootSec=120` and `OnUnitInactiveSec=300`, so executions
+never overlap and a failed proof is rechecked within five minutes.  The renewal
+pipeline performs only local verification until the current proof reaches six
+hours of age; it then runs a new provider smoke check, well before the 24-hour
+expiry.  A real refresh writes `readiness_current.json` plus an immutable
+digest-named history receipt; successful refreshes also advance
+`readiness_last_success.json`.  A failed run does not erase the last successful
+proof.
+
+Install the source-rendered units passively first.  Activate only the canonical
+renewal timer through the repository action; never guess a unit name:
+
+```bash
+python -m pipelines.cloud_systemd \
+  --repo-root /opt/gridmind/src/trading-system \
+  --datafeed-root /opt/gridmind/src/datafeed \
+  --app-python /opt/gridmind/venvs/app/bin/python \
+  --datafeed-python /opt/gridmind/venvs/datafeed/bin/python \
+  --render-dir /tmp/gridmind-systemd \
+  --action activate-provider-readiness --apply
+```
+
+Then collect the read-only mechanical receipt:
+
+```bash
+python -m pipelines.cloud_timer_contract --json
+```
+
+The provider timer row must show `enabled=true`, `active=true`, the exact
+`/etc/systemd/system/gridmind-ai-provider-readiness.timer` load path, a
+non-empty next trigger once the oneshot finishes, the five-minute recovery
+cadence, the effective unit content SHA-256, and a digest/source-valid latest
+successful receipt.  The service boot receipt must bind the same timer
+contract.  Do not
+print the provider token, environment files, or auth file while collecting
+evidence.
+
+A failed refresh is warning-level while an already-running strategy continues.
+If the failed proof blocks current-cycle convergence for more than 300 seconds,
+the existing Supervisor health condition becomes critical and dead-man sends
+the external failure signal.  A broken sibling timer must never prevent the
+dead-man service itself from running.  The next five-minute check automatically
+recovers with a new digest when the provider becomes healthy; no old prepared
+start or control request is reused.
 
 The provider remains proposal-only: a provider success creates no plan, order,
 position, fill, or risk authorization until the existing outer-policy,
