@@ -16,6 +16,49 @@ CYCLE_ID = "2026-07-28_DAY"
 SHA = "a" * 40
 
 
+def _provider_timer_contract(
+    *,
+    timer_status: str = "pass",
+    current_ok: bool = True,
+) -> dict:
+    return {
+        "status": timer_status,
+        "checks": [
+            {
+                "unit": "gridmind-ai-provider-readiness.timer",
+                "status": timer_status,
+                "fragment_path": (
+                    "/etc/systemd/system/"
+                    "gridmind-ai-provider-readiness.timer"
+                ),
+                "effective_unit_content_sha256": "f" * 64,
+                "next_trigger": "Fri 2026-08-07 10:00:00 CST",
+                "last_trigger": "Thu 2026-08-06 04:00:00 CST",
+            }
+        ],
+        "provider_readiness": {
+            "current": {
+                "ok": current_ok,
+                **(
+                    {}
+                    if current_ok
+                    else {
+                        "blocker": "cloud_ai_provider_readiness_not_passing",
+                        "failure_code": (
+                            "strategy_recommendation_provider_timeout"
+                        ),
+                    }
+                ),
+            },
+            "latest_success": {
+                "ok": True,
+                "readiness_digest": "c" * 64,
+                "source_sha": SHA,
+            },
+        },
+    }
+
+
 def _healthy(
     tmp_path: Path,
     *,
@@ -97,6 +140,7 @@ def _healthy(
             "timestamp": fresh_at,
             "provider": "binance_usdm_futures",
         },
+        timer_contract_provider=_provider_timer_contract,
     )
 
 
@@ -236,6 +280,7 @@ def test_cloud_health_separates_all_ready_layers(tmp_path: Path, monkeypatch) ->
         "backup",
         "scheduler_ownership",
         "source",
+        "provider_readiness",
     }
     assert all(row["status"] == "ready" for row in result["checks"].values())
     assert result["dashboard_reachable_is_not_system_health"] is True
@@ -249,7 +294,39 @@ def test_health_severity_is_explicit_and_unknown_fails_closed() -> None:
     assert health_severity("daily_self_review_missing_or_incomplete") == "warning"
     assert health_severity("backup_missing_or_stale") == "warning"
     assert health_severity("runtime_utilization_insufficient") == "insufficient"
+    assert health_severity("provider_readiness_refresh_failed") == "warning"
     assert health_severity("new_unclassified_condition") == "critical"
+
+
+def test_provider_readiness_refresh_failure_is_warning_until_it_blocks_convergence(
+    tmp_path: Path,
+) -> None:
+    health = _healthy(tmp_path)
+    health.timer_contract_provider = lambda: _provider_timer_contract(
+        current_ok=False
+    )
+
+    result = health._provider_readiness_timer()
+
+    assert result["status"] == "degraded"
+    assert result["code"] == "provider_readiness_refresh_failed"
+    assert result["severity"] == "warning"
+    assert result["evidence"]["latest_success"]["ok"] is True
+
+
+def test_provider_readiness_timer_inactive_is_immediately_critical(
+    tmp_path: Path,
+) -> None:
+    health = _healthy(tmp_path)
+    health.timer_contract_provider = lambda: _provider_timer_contract(
+        timer_status="blocked"
+    )
+
+    result = health._provider_readiness_timer()
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "provider_readiness_timer_unavailable"
+    assert result["severity"] == "critical"
 
 
 def test_missing_cycle_decision_is_blocked_and_detectable(

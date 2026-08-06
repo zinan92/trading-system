@@ -24,6 +24,8 @@ UNIT_NAMES = (
     "gridmind-backup.timer",
     "gridmind-deadman-ping.service",
     "gridmind-deadman-ping.timer",
+    "gridmind-ai-provider-readiness.service",
+    "gridmind-ai-provider-readiness.timer",
 )
 
 
@@ -130,7 +132,7 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target""",
-            "gridmind-cloudflared.service": f"""[Unit]
+            "gridmind-cloudflared.service": """[Unit]
 Description=GridMind authenticated Cloudflare Tunnel
 After=gridmind-access-gateway.service network-online.target
 Requires=gridmind-access-gateway.service
@@ -255,6 +257,30 @@ Unit=gridmind-deadman-ping.service
 
 [Install]
 WantedBy=timers.target""",
+            "gridmind-ai-provider-readiness.service": f"""[Unit]
+Description=GridMind bounded Cloud AI provider readiness renewal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+{common}
+ReadWritePaths=/opt/gridmind/.codex
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service ai-provider-readiness
+ExecStart={p.app_python} -m pipelines.cloud_ai_provider_readiness --renew-if-due --json
+TimeoutStartSec=120""",
+            "gridmind-ai-provider-readiness.timer": """[Unit]
+Description=GridMind non-overlapping Cloud AI provider readiness renewal timer
+
+[Timer]
+OnBootSec=120
+OnUnitInactiveSec=300
+AccuracySec=30
+Persistent=true
+Unit=gridmind-ai-provider-readiness.service
+
+[Install]
+WantedBy=timers.target""",
         }
 
 
@@ -293,6 +319,15 @@ class CloudSystemdInstaller:
                     "gridmind-cloudflared.service",
                 ],
             ]
+        if action == "activate-provider-readiness":
+            return [
+                [
+                    "systemctl",
+                    "enable",
+                    "--now",
+                    "gridmind-ai-provider-readiness.timer",
+                ],
+            ]
         if action == "uninstall":
             return [
                 ["systemctl", "disable", "--now", *UNIT_NAMES],
@@ -301,7 +336,7 @@ class CloudSystemdInstaller:
             ]
         raise ValueError(
             "action must be install-passive, activate-dashboard, "
-            "activate-remote-access, or uninstall"
+            "activate-remote-access, activate-provider-readiness, or uninstall"
         )
 
     def apply(self, rendered_dir: Path, action: str, *, dry_run: bool = True) -> dict[str, Any]:

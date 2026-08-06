@@ -22,6 +22,13 @@ CLOUD_PAPER_SERVICES = {
     "backup",
     "deadman-ping",
     "access-gateway",
+    "ai-provider-readiness",
+}
+
+_TIMER_GATED_SERVICES = {
+    "daily-24h",
+    "deadman-ping",
+    "ai-provider-readiness",
 }
 
 
@@ -92,10 +99,25 @@ class CloudPaperServiceBootGate:
                 raise ValueError("cloud_paper_source_sha_mismatch")
             if not receipt_tree or receipt_tree != current_tree:
                 raise ValueError("cloud_paper_source_tree_sha_mismatch")
-            if service in {"daily-24h", "deadman-ping"}:
+            if service in _TIMER_GATED_SERVICES:
                 timers = self.timer_contract()
-                if timers.get("status") != "pass":
+                service_status = (
+                    (timers.get("service_status") or {}).get(service)
+                    if isinstance(timers.get("service_status"), dict)
+                    else None
+                )
+                # Backward compatibility keeps older injected contracts
+                # fail-closed.  Canonical contracts scope each service to its
+                # own timer so a broken sibling cannot silence dead-man.
+                timer_status = service_status or timers.get("status")
+                if timer_status != "pass":
                     raise ValueError("cloud_paper_timer_contract_not_passing")
+                payload["timer_contract"] = {
+                    "checked_at": timers.get("checked_at"),
+                    "status": timers.get("status"),
+                    "service_status": timer_status,
+                    "provider_readiness": timers.get("provider_readiness"),
+                }
             payload.update(
                 {
                     "status": "pass",

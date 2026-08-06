@@ -11,9 +11,14 @@ import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from services.cloud_ai_provider import READINESS_SCHEMA, _digest, _sha256
+from services.cloud_ai_provider import (
+    READINESS_SCHEMA,
+    CloudAIProviderReadiness,
+    _digest,
+    _sha256,
+)
 from services.config_loader import ROOT
 from services.dualtrack_config import dualtrack_config
 from services.journal_store import write_json
@@ -21,6 +26,7 @@ from services.paper_release_receipt import current_source_attestation
 
 
 REQUIRED_RESPONSE_KEYS = ("direction", "style", "rationale", "ai_self_assessment")
+RENEWAL_INTERVAL_SECONDS = 6 * 60 * 60
 SMOKE_PROMPT = (
     "Return exactly one JSON object with keys direction, style, rationale, "
     "ai_self_assessment. Use direction neutral, style steady, rationale "
@@ -28,9 +34,17 @@ SMOKE_PROMPT = (
 )
 
 
-def run(*, output_root: Path | None = None, repo_root: Path = ROOT) -> dict[str, Any]:
+def run(
+    *,
+    output_root: Path | None = None,
+    repo_root: Path = ROOT,
+    now: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
     output = Path(output_root or os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT") or ROOT / "outputs")
-    checked_at = datetime.now(timezone.utc).replace(microsecond=0)
+    observed = (now or (lambda: datetime.now(timezone.utc)))()
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    checked_at = observed.astimezone(timezone.utc).replace(microsecond=0)
     attestation = current_source_attestation(repo_root)
     config = dualtrack_config()
     planner = config.get("machine_planner") if isinstance(config.get("machine_planner"), dict) else {}
@@ -64,6 +78,7 @@ def run(*, output_root: Path | None = None, repo_root: Path = ROOT) -> dict[str,
             "production_mutation_allowed": False,
             "uses_exchange_credentials": False,
         },
+        "control_actions_executed": 0,
         "failure_code": None,
     }
     try:
@@ -161,9 +176,94 @@ def run(*, output_root: Path | None = None, repo_root: Path = ROOT) -> dict[str,
     except OSError:
         receipt["failure_code"] = "strategy_recommendation_provider_unavailable"
     receipt["readiness_digest"] = _digest(receipt)
-    path = output / "cloud" / "provider" / "readiness_current.json"
+    provider_root = output / "cloud" / "provider"
+    path = provider_root / "readiness_current.json"
+    history_path = (
+        provider_root
+        / "receipts"
+        / (
+            f"{checked_at.strftime('%Y%m%dT%H%M%SZ')}-"
+            f"{receipt['readiness_digest'][:12]}.json"
+        )
+    )
     write_json(path, [receipt])
-    return {"ok": receipt["status"] == "pass", "path": str(path), **receipt}
+    write_json(history_path, [receipt])
+    last_success_path = provider_root / "readiness_last_success.json"
+    if receipt["status"] == "pass":
+        write_json(last_success_path, [receipt])
+    return {
+        "ok": receipt["status"] == "pass",
+        "path": str(path),
+        "history_path": str(history_path),
+        "last_success_path": str(last_success_path),
+        **receipt,
+    }
+
+
+def renew_if_due(
+    *,
+    output_root: Path | None = None,
+    repo_root: Path = ROOT,
+    now: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
+    """Renew on a six-hour proof age, while polling failure recovery every 5m."""
+
+    output = Path(
+        output_root
+        or os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT")
+        or ROOT / "outputs"
+    )
+    observed = (now or (lambda: datetime.now(timezone.utc)))()
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    observed = observed.astimezone(timezone.utc).replace(microsecond=0)
+    verification = CloudAIProviderReadiness(
+        output,
+        repo_root=repo_root,
+        now=lambda: observed,
+        source_attestation=lambda: current_source_attestation(repo_root),
+    ).verify()
+    checked_at = _parse_timestamp(verification.get("checked_at"))
+    age_seconds = (
+        (observed - checked_at).total_seconds()
+        if verification.get("ok") is True and checked_at is not None
+        else None
+    )
+    if (
+        verification.get("ok") is True
+        and age_seconds is not None
+        and age_seconds < RENEWAL_INTERVAL_SECONDS
+    ):
+        return {
+            "ok": True,
+            "status": "not_due",
+            "renewed": False,
+            "checked_at": observed.isoformat(),
+            "current_readiness_checked_at": verification.get("checked_at"),
+            "current_readiness_expires_at": verification.get("expires_at"),
+            "current_readiness_digest": verification.get("readiness_digest"),
+            "source_sha": verification.get("source_sha"),
+            "source_tree_sha": verification.get("source_tree_sha"),
+            "next_renewal_due_at": (
+                checked_at + timedelta(seconds=RENEWAL_INTERVAL_SECONDS)
+            ).isoformat(),
+            "control_actions_executed": 0,
+            "operations": {
+                "orders_allowed": False,
+                "production_mutation_allowed": False,
+                "uses_exchange_credentials": False,
+            },
+        }
+    result = run(
+        output_root=output,
+        repo_root=repo_root,
+        now=lambda: observed,
+    )
+    return {
+        **result,
+        "renewed": True,
+        "previous_readiness_blocker": verification.get("blocker"),
+    }
 
 
 class ProviderReadinessFailure(RuntimeError):
@@ -211,17 +311,34 @@ def _auth_status_ready(result: subprocess.CompletedProcess[str]) -> bool:
     return "logged in" in combined
 
 
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the Cloud Paper AI provider readiness check.")
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
+    parser.add_argument("--renew-if-due", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    result = run(output_root=args.output_root, repo_root=args.repo_root)
+    result = (
+        renew_if_due(output_root=args.output_root, repo_root=args.repo_root)
+        if args.renew_if_due
+        else run(output_root=args.output_root, repo_root=args.repo_root)
+    )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     else:

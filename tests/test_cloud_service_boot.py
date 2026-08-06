@@ -106,3 +106,46 @@ def test_daily_and_deadman_boot_require_the_read_only_timer_contract(tmp_path: P
 
     assert result["ok"] is False
     assert result["blocker"] == "cloud_paper_timer_contract_not_passing"
+
+
+def test_provider_readiness_boot_requires_its_canonical_timer(tmp_path: Path):
+    write_preflight(tmp_path)
+
+    result = CloudPaperServiceBootGate(
+        tmp_path,
+        source_attestation=attestation,
+        timer_contract=lambda: {
+            "status": "blocked",
+            "service_status": {"ai-provider-readiness": "pass"},
+            "checked_at": "2026-08-06T00:00:00+00:00",
+            "provider_readiness": {},
+        },
+    ).verify("ai-provider-readiness")
+
+    assert result["ok"] is True
+    assert result["timer_contract"]["service_status"] == "pass"
+
+
+def test_provider_timer_failure_cannot_silence_deadman_boot(tmp_path: Path):
+    write_preflight(tmp_path)
+
+    result = CloudPaperServiceBootGate(
+        tmp_path,
+        source_attestation=attestation,
+        timer_contract=lambda: {
+            "status": "blocked",
+            "service_status": {
+                "deadman-ping": "pass",
+                "ai-provider-readiness": "blocked",
+            },
+            "provider_readiness": {
+                "current": {
+                    "ok": False,
+                    "failure_code": "strategy_recommendation_provider_timeout",
+                }
+            },
+        },
+    ).verify("deadman-ping")
+
+    assert result["ok"] is True
+    assert result["timer_contract"]["service_status"] == "pass"

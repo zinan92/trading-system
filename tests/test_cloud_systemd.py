@@ -80,6 +80,23 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     deadman_timer = rendered["gridmind-deadman-ping.timer"]
     assert "OnUnitInactiveSec=300" in deadman_timer
     assert "OnUnitActiveSec" not in deadman_timer
+    readiness_service = rendered["gridmind-ai-provider-readiness.service"]
+    readiness_timer = rendered["gridmind-ai-provider-readiness.timer"]
+    assert "User=gridmind" in readiness_service
+    assert "Type=oneshot" in readiness_service
+    assert "ReadWritePaths=/opt/gridmind/.codex" in readiness_service
+    assert (
+        "pipelines.cloud_service_boot --service ai-provider-readiness"
+        in readiness_service
+    )
+    assert (
+        "pipelines.cloud_ai_provider_readiness --renew-if-due --json"
+        in readiness_service
+    )
+    assert "OnBootSec=120" in readiness_timer
+    assert "OnUnitInactiveSec=300" in readiness_timer
+    assert "OnUnitActiveSec" not in readiness_timer
+    assert "Unit=gridmind-ai-provider-readiness.service" in readiness_timer
 
 
 def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
@@ -95,6 +112,10 @@ def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
     assert any("enable --now gridmind-datafeed.service" in row for row in command_text)
     assert not any("enable --now gridmind-dashboard.service" in row for row in command_text)
     assert not any("enable --now gridmind-live-tick.timer" in row for row in command_text)
+    assert not any(
+        "enable --now gridmind-ai-provider-readiness.timer" in row
+        for row in command_text
+    )
 
     dashboard = installer.apply(rendered, "activate-dashboard", dry_run=True)
     assert dashboard["commands"] == [
@@ -112,6 +133,19 @@ def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
             "--now",
             "gridmind-access-gateway.service",
             "gridmind-cloudflared.service",
+        ]
+    ]
+    readiness = installer.apply(
+        rendered,
+        "activate-provider-readiness",
+        dry_run=True,
+    )
+    assert readiness["commands"] == [
+        [
+            "systemctl",
+            "enable",
+            "--now",
+            "gridmind-ai-provider-readiness.timer",
         ]
     ]
 

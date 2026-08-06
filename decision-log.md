@@ -14149,3 +14149,62 @@ auditable datafeed port; broker execution remains a separate port.
 - Health tests prove provider unavailability is noncritical at 299 seconds and
   critical after 301 seconds. Full repository regression, secret scanning,
   exact-SHA deployment, and Cloud runtime evidence remain release gates.
+
+# 2026-08-06 — Renew Cloud AI readiness without operator memory (#574)
+
+## Decision
+
+- Add one canonical `gridmind-ai-provider-readiness.service` and matching
+  `.timer`. The oneshot runs as `gridmind`, remains read-only and source-bound,
+  and has no order, production-mutation, exchange-credential, or live path.
+- Poll the local proof every five minutes with a non-overlapping
+  `OnUnitInactiveSec=300` timer, but run the provider smoke check only when the
+  current proof is missing/invalid/failed or has reached six hours of age.
+  Healthy operation therefore renews four times before the 24-hour expiry,
+  while a transient failed refresh can recover within five minutes without
+  making 288 provider calls per day.
+- Persist every real refresh as a digest-named immutable receipt. Advance
+  `readiness_last_success.json` only after success, so a failed current receipt
+  remains visible without deleting the last known successful proof.
+- Extend the read-only timer contract with the provider timer's canonical unit
+  identity, enabled/active state, exact target, cadence, next/last trigger,
+  `/etc/systemd/system` fragment path, effective-content SHA-256, and bounded
+  current/latest-success readiness evidence. Add the timer to soak monitoring.
+- Project an inactive or malformed provider timer as critical. Project a
+  failed current refresh as warning while lifecycle remains running; if it
+  actually blocks current-cycle convergence for more than 300 seconds, the
+  existing Supervisor stall becomes critical and drives dead-man `/fail`.
+
+## Gotchas
+
+- A six-hour timer alone renews healthy proofs, but a single failed renewal can
+  leave Supervisor retrying the same failed receipt for six hours. Separating
+  the five-minute local poll from the six-hour provider call preserves both
+  recovery time and provider-call economy.
+- `OnUnitInactiveSec` has no next trigger while its oneshot is active. The timer
+  contract accepts that one explicit `active/activating` state and requires a
+  real next trigger whenever the service is idle; an arbitrary missing trigger
+  still fails closed.
+- A global timer-contract failure must not prevent dead-man from executing,
+  because that would silence the only external alert precisely when a sibling
+  timer is broken. Boot checks therefore require each timer-backed service's
+  own canonical timer while retaining the full contract as evidence.
+- Failed refreshes must replace `readiness_current.json`; silently falling back
+  to a still-unexpired last-success receipt would hide evidence that the
+  provider is currently unavailable. The last-success file is recovery and
+  audit evidence, not authorization fallback.
+- Passive install still enables no scheduler. The provider timer has a
+  dedicated activation action so deployment cannot guess names or accidentally
+  enable a duplicate historical unit.
+
+## Verification
+
+- Clock-controlled tests poll every five minutes across 30 hours, observe six
+  distinct successful renewals, and prove no stale interval.
+- Failure injection writes a typed timeout receipt with zero control actions,
+  preserves last success, blocks new entry through the existing transient gate,
+  and recovers with a fresh digest on the next five-minute poll.
+- Systemd, timer-contract, service-boot, health, dead-man dependency, and soak
+  tests cover the canonical unit/user, no overlap, exact content/load path,
+  warning/critical split, and the rule that provider failure cannot silence
+  dead-man. Exact-SHA Cloud deployment remains the final release gate.
