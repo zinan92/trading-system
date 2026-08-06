@@ -35,6 +35,7 @@
   },
   "convergence": {
     "mode": "paper_supervisor",
+    "execution_profile": "fail_closed",
     "provider_timeout_seconds": 25,
     "attempt_deadline_seconds": 45,
     "outer_policy_binding": {

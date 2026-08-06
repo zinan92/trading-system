@@ -545,6 +545,56 @@ def test_new_cycle_has_clean_episode_and_attempt_budgets() -> None:
     }
 
 
+def test_paper_continuity_reset_preserves_history_but_clears_every_latch() -> None:
+    machine = SupervisorEpisodeMachine()
+    blocked = machine.record_dangerous_outcome(
+        _new(),
+        machine_code="control_outcome_unknown",
+        observed_at=START + timedelta(minutes=1),
+    )
+    prior_events = list(blocked["events"])
+
+    reset = machine.reset_for_paper_continuity(
+        blocked,
+        observed_at=START + timedelta(minutes=5),
+        reason="paper_continuous_watchdog",
+    )
+
+    assert reset["mode"] == "ready"
+    assert reset["blocker"] is None
+    assert reset["alert_required"] is False
+    assert reset["warning_required"] is False
+    assert reset["budgets"]["dangerous_start_attempts"] == 0
+    assert reset["budgets"]["clean_refusal_observations"] == 0
+    assert reset["episode"]["next_attempt_at"] is None
+    assert reset["events"][:-1] == prior_events
+    assert reset["events"][-1]["event_type"] == (
+        "paper_continuity_state_reset"
+    )
+
+
+def test_paper_continuity_watchdog_is_due_only_each_300_seconds() -> None:
+    machine = SupervisorEpisodeMachine()
+    state = machine.record_paper_continuity_watchdog_attempt(
+        _new(),
+        observed_at=START,
+    )
+
+    early, early_next = machine.paper_continuity_attempt_is_due(
+        state,
+        observed_at=START + timedelta(seconds=299),
+    )
+    due, due_next = machine.paper_continuity_attempt_is_due(
+        state,
+        observed_at=START + timedelta(seconds=300),
+    )
+
+    assert early is False
+    assert early_next == (START + timedelta(seconds=300)).isoformat()
+    assert due is True
+    assert due_next == early_next
+
+
 def test_unknown_codes_and_tampered_state_fail_closed() -> None:
     unknown = classify_blocker(
         control_code="prepared_start_market_moved_again"

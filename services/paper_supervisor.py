@@ -11,6 +11,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,11 @@ from services.paper_supervisor_classifier import (
     TRANSIENT,
     classify_blocker,
 )
+from services.paper_degradation_events import (
+    PaperDegradationEventStore,
+)
 from services.paper_supervisor_episode import (
+    PAPER_CONTINUITY_WATCHDOG_SECONDS,
     CleanRefusalProof,
     SupervisorEpisodeMachine,
 )
@@ -57,6 +62,11 @@ from services.strategy_plan_execution import (
     build_plan_grid_entry_commands,
 )
 from services.strategy_control_plane import production_mutation_lock
+from services.supervisor_execution_profile import (
+    EXECUTION_PROFILES,
+    FAIL_CLOSED,
+    PAPER_CONTINUOUS,
+)
 from services.grid_lifecycle_evidence import build_grid_lifecycle_evidence
 from services.journal_store import load_json
 
@@ -65,6 +75,12 @@ SUPERVISOR_SCHEMA_VERSION = "paper-supervisor-convergence-v1"
 DEFAULT_ATTEMPT_DEADLINE_SECONDS = 45
 HARD_DEADLINE_ENV = "GRIDMIND_LIVE_TICK_HARD_DEADLINE_MONOTONIC"
 HARD_DEADLINE_RECOVERY_MARGIN_SECONDS = 5.0
+_MARKET_GATES = frozenset(
+    {
+        "trusted_market_temporarily_unavailable",
+        "trusted_market_provenance_invalid",
+    }
+)
 
 
 class SupervisorAttemptDeadline(Exception):
@@ -96,6 +112,7 @@ class PaperSupervisor:
         provider_readiness_verifier: (
             Callable[[], Mapping[str, Any]] | None
         ) = None,
+        execution_profile: str = FAIL_CLOSED,
     ) -> None:
         if attempt_deadline_seconds <= 0:
             raise ValueError("supervisor_configuration_invalid")
@@ -112,6 +129,13 @@ class PaperSupervisor:
             attempt_deadline_seconds
         )
         self.provider_readiness_verifier = provider_readiness_verifier
+        profile = str(execution_profile or "")
+        if profile not in EXECUTION_PROFILES:
+            raise ValueError("supervisor_execution_profile_invalid")
+        self.execution_profile = profile
+        self.degradation_events = PaperDegradationEventStore(
+            self.output_root
+        )
 
     def converge_once(
         self,
@@ -165,7 +189,7 @@ class PaperSupervisor:
                 ):
                     state = self.store.episode_state(cycle_id)
                     if state is None:
-                        state = self.episodes.new_cycle(
+                        state = self._new_cycle_state(
                             cycle_id,
                             observed_at=str(
                                 pending_tick.get("claimed_at")
@@ -229,7 +253,7 @@ class PaperSupervisor:
             )
             state = self.store.episode_state(cycle_id)
             if state is None:
-                state = self.episodes.new_cycle(
+                state = self._new_cycle_state(
                     cycle_id,
                     observed_at=observed_at,
                 )
@@ -391,7 +415,51 @@ class PaperSupervisor:
                 )
             plan = dict(authority.active_plan)
             runtime = dict(authority.runtime)
-            if state.get("mode") == "blocked_structural":
+            if (
+                self._paper_continuous
+                and state.get("mode")
+                in {"blocked_structural", "backing_off", "probing"}
+            ):
+                blocker = dict(state.get("blocker") or {})
+                machine_code = str(
+                    blocker.get("machine_code")
+                    or dict(state.get("episode") or {}).get(
+                        "last_transient_code"
+                    )
+                    or "supervisor_retry_state_latched"
+                )
+                if machine_code not in _MARKET_GATES:
+                    self._record_degradation(
+                        event_id=(
+                            f"{attempt_id}:state-reset:{machine_code}"
+                        ),
+                        cycle_id=cycle_id,
+                        bypassed_gate=(
+                            "structural_blocker_latch"
+                            if state.get("mode")
+                            == "blocked_structural"
+                            else "supervisor_retry_backoff"
+                        ),
+                        original_machine_code=machine_code,
+                        original_reason=(
+                            "the fail-closed profile would preserve this "
+                            "Supervisor state and defer a fresh start"
+                        ),
+                        alternative_action=(
+                            "clear_latch_and_schedule_fresh_full_start"
+                        ),
+                        occurred_at=observed_at,
+                    )
+                state = self.episodes.reset_for_paper_continuity(
+                    state,
+                    observed_at=observed_at,
+                    reason=(
+                        "hard_market_gate_recheck"
+                        if machine_code in _MARKET_GATES
+                        else "paper_continuous_watchdog"
+                    ),
+                )
+            elif state.get("mode") == "blocked_structural":
                 state, cleared = self._recheck_structural(
                     state,
                     authority=authority,
@@ -445,17 +513,37 @@ class PaperSupervisor:
                     > 0
                 )
             ):
-                return self._structural(
-                    lease,
-                    state,
-                    cycle_id=cycle_id,
-                    observed_at=observed_at,
-                    machine_code=(
-                        "previous_cycle_paper_state_unresolved"
-                    ),
-                    heartbeat=health,
-                    authority=authority,
-                )
+                if self._paper_continuous:
+                    self._record_degradation(
+                        event_id=(
+                            f"{attempt_id}:previous-cycle-runtime"
+                        ),
+                        cycle_id=cycle_id,
+                        bypassed_gate="previous_cycle_state_gate",
+                        original_machine_code=(
+                            "previous_cycle_paper_state_unresolved"
+                        ),
+                        original_reason=(
+                            "authoritative Paper runtime still names the "
+                            "previous cycle"
+                        ),
+                        alternative_action=(
+                            "continue_current_cycle_full_start_flow"
+                        ),
+                        occurred_at=observed_at,
+                    )
+                else:
+                    return self._structural(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        machine_code=(
+                            "previous_cycle_paper_state_unresolved"
+                        ),
+                        heartbeat=health,
+                        authority=authority,
+                    )
             if self._runtime_is_running(runtime):
                 try:
                     with self._attempt_deadline(started):
@@ -463,6 +551,7 @@ class PaperSupervisor:
                             lease,
                             state,
                             authority=authority,
+                            attempt_id=attempt_id,
                             observed_at=observed_at,
                             heartbeat=health,
                         )
@@ -477,43 +566,118 @@ class PaperSupervisor:
                         deadline_exceeded=True,
                     )
             if self._has_exposure(authority):
-                return self._structural(
-                    lease,
-                    state,
-                    cycle_id=cycle_id,
-                    observed_at=observed_at,
-                    machine_code="existing_exposure_conflict",
-                    heartbeat=health,
-                    authority=authority,
-                )
+                if self._paper_continuous:
+                    self._record_degradation(
+                        event_id=f"{attempt_id}:existing-exposure",
+                        cycle_id=cycle_id,
+                        bypassed_gate="existing_exposure_gate",
+                        original_machine_code=(
+                            "existing_exposure_conflict"
+                        ),
+                        original_reason=(
+                            "authoritative Paper snapshot contains existing "
+                            "orders or positions while runtime is not proven"
+                        ),
+                        alternative_action=(
+                            "continue_current_cycle_full_start_flow"
+                        ),
+                        occurred_at=observed_at,
+                    )
+                else:
+                    return self._structural(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        machine_code="existing_exposure_conflict",
+                        heartbeat=health,
+                        authority=authority,
+                    )
             if not self._reconciliation_exact(authority):
-                return self._structural(
-                    lease,
-                    state,
-                    cycle_id=cycle_id,
-                    observed_at=observed_at,
-                    machine_code="ledger_reconciliation_drift",
-                    heartbeat=health,
-                    authority=authority,
+                if self._paper_continuous:
+                    self._record_degradation(
+                        event_id=f"{attempt_id}:reconciliation",
+                        cycle_id=cycle_id,
+                        bypassed_gate="ledger_reconciliation_gate",
+                        original_machine_code=(
+                            "ledger_reconciliation_drift"
+                        ),
+                        original_reason=(
+                            "execution or accounting reconciliation is not "
+                            "exact for the current Paper snapshot"
+                        ),
+                        alternative_action=(
+                            "continue_current_cycle_full_start_flow"
+                        ),
+                        occurred_at=observed_at,
+                    )
+                else:
+                    return self._structural(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        machine_code="ledger_reconciliation_drift",
+                        heartbeat=health,
+                        authority=authority,
+                    )
+            if self._paper_continuous:
+                due, next_attempt_at = (
+                    self._paper_continuity_watchdog_due(
+                        cycle_id,
+                        observed_at=observed_at,
+                    )
                 )
-            if not self.episodes.attempt_is_due(
-                state,
-                observed_at=observed_at,
-            ):
+            else:
+                due = self.episodes.attempt_is_due(
+                    state,
+                    observed_at=observed_at,
+                )
+                next_attempt_at = dict(
+                    state.get("episode") or {}
+                ).get("next_attempt_at")
+            if not due:
                 return self._finish(
                     lease,
                     state,
                     self._result(
                         cycle_id=cycle_id,
                         observed_at=observed_at,
-                        status=str(state.get("mode") or "backing_off"),
+                        status=(
+                            "watchdog_waiting"
+                            if self._paper_continuous
+                            else str(
+                                state.get("mode") or "backing_off"
+                            )
+                        ),
                         control_actions=0,
                         heartbeat=health,
-                        next_attempt_at=dict(
-                            state.get("episode") or {}
-                        ).get("next_attempt_at"),
+                        next_attempt_at=next_attempt_at,
                     ),
                     authority=authority,
+                )
+            if self._paper_continuous:
+                self._record_degradation(
+                    event_id=f"{attempt_id}:watchdog-attempt",
+                    cycle_id=cycle_id,
+                    bypassed_gate="stopped_absorbing_state",
+                    original_machine_code=(
+                        "runtime_not_running_proven"
+                    ),
+                    original_reason=(
+                        "the current cycle lacks sealed running_proven "
+                        "authority"
+                    ),
+                    alternative_action=(
+                        "force_fresh_full_start_flow"
+                    ),
+                    occurred_at=observed_at,
+                )
+                state = (
+                    self.episodes.record_paper_continuity_watchdog_attempt(
+                        state,
+                        observed_at=observed_at,
+                    )
                 )
 
             try:
@@ -939,6 +1103,102 @@ class PaperSupervisor:
             "ambiguous",
         )
 
+    @property
+    def _paper_continuous(self) -> bool:
+        return self.execution_profile == PAPER_CONTINUOUS
+
+    def _new_cycle_state(
+        self,
+        cycle_id: str,
+        *,
+        observed_at: str,
+    ) -> dict[str, Any]:
+        """Start each cycle clean and durably attest that no latch survived."""
+
+        state = self.episodes.new_cycle(
+            cycle_id,
+            observed_at=observed_at,
+        )
+        if not self._paper_continuous:
+            return state
+        event_id = f"paper-continuity-cycle-reset:{cycle_id}"
+        existing = next(
+            (
+                row
+                for row in self.degradation_events.events(cycle_id)
+                if row.get("event_id") == event_id
+            ),
+            None,
+        )
+        if existing is None:
+            self._record_degradation(
+                event_id=event_id,
+                cycle_id=cycle_id,
+                bypassed_gate="prior_cycle_blocker_latch",
+                original_machine_code="cycle_boundary_reset",
+                original_reason=(
+                    "a new Paper cycle must not inherit retry, probe, "
+                    "exhaustion, or blocker state"
+                ),
+                alternative_action=(
+                    "initialize_clean_cycle_convergence_state"
+                ),
+                occurred_at=observed_at,
+            )
+        return state
+
+    def _record_degradation(
+        self,
+        *,
+        event_id: str,
+        cycle_id: str,
+        bypassed_gate: str,
+        original_machine_code: str,
+        original_reason: str,
+        alternative_action: str,
+        occurred_at: str,
+    ) -> dict[str, Any]:
+        if not self._paper_continuous:
+            raise ValueError("paper_degradation_requires_continuous_profile")
+        return self.degradation_events.record(
+            event_id=event_id,
+            cycle_id=cycle_id,
+            execution_profile=self.execution_profile,
+            bypassed_gate=bypassed_gate,
+            original_machine_code=original_machine_code,
+            original_reason=original_reason,
+            alternative_action=alternative_action,
+            occurred_at=occurred_at,
+        )
+
+    def _paper_continuity_watchdog_due(
+        self,
+        cycle_id: str,
+        *,
+        observed_at: str,
+    ) -> tuple[bool, str | None]:
+        """Use the fsynced degradation journal as the retry cadence authority."""
+
+        now = _utc_timestamp(observed_at)
+        attempt_actions = {
+            "force_fresh_full_start_flow",
+            "stop_nonproven_runtime_before_fresh_start",
+        }
+        attempts = [
+            row
+            for row in self.degradation_events.events(cycle_id)
+            if row.get("alternative_action") in attempt_actions
+        ]
+        if not attempts:
+            return True, None
+        latest = max(
+            (_utc_timestamp(str(row["occurred_at"])) for row in attempts),
+        )
+        next_attempt = latest + timedelta(
+            seconds=PAPER_CONTINUITY_WATCHDOG_SECONDS
+        )
+        return now >= next_attempt, next_attempt.isoformat()
+
     @staticmethod
     def _claim_heartbeat(claim: Mapping[str, Any]) -> dict[str, Any]:
         """Use durable claim facts when finishing a crashed tick.
@@ -997,7 +1257,7 @@ class PaperSupervisor:
 
         state = self.store.episode_state(cycle_id)
         if state is None:
-            state = self.episodes.new_cycle(
+            state = self._new_cycle_state(
                 cycle_id,
                 observed_at=str(claim.get("claimed_at") or observed_at),
             )
@@ -2029,6 +2289,7 @@ class PaperSupervisor:
         state: dict[str, Any],
         *,
         authority: StartAuthoritySnapshot,
+        attempt_id: str,
         observed_at: str,
         heartbeat: Mapping[str, Any],
     ) -> dict[str, Any]:
@@ -2187,6 +2448,117 @@ class PaperSupervisor:
         except (KeyError, TypeError, ValueError):
             exact = False
         if not exact:
+            if self._paper_continuous:
+                due, next_attempt_at = (
+                    self._paper_continuity_watchdog_due(
+                        cycle_id,
+                        observed_at=observed_at,
+                    )
+                )
+                if not due:
+                    return self._finish(
+                        lease,
+                        state,
+                        self._result(
+                            cycle_id=cycle_id,
+                            observed_at=observed_at,
+                            status="watchdog_waiting",
+                            control_actions=0,
+                            heartbeat=heartbeat,
+                            next_attempt_at=next_attempt_at,
+                        ),
+                        authority=authority,
+                    )
+                self._record_degradation(
+                    event_id=f"{attempt_id}:watchdog-runtime-reset",
+                    cycle_id=cycle_id,
+                    bypassed_gate="running_identity_gate",
+                    original_machine_code="order_identity_conflict",
+                    original_reason=(
+                        "Paper runtime reports running but its current plan, "
+                        "orders, positions, or audit identity cannot be "
+                        "sealed as running_proven"
+                    ),
+                    alternative_action=(
+                        "stop_nonproven_runtime_before_fresh_start"
+                    ),
+                    occurred_at=observed_at,
+                )
+                state = (
+                    self.episodes.record_paper_continuity_watchdog_attempt(
+                        state,
+                        observed_at=observed_at,
+                    )
+                )
+                try:
+                    with production_mutation_lock(self.output_root):
+                        self.control(
+                            "stop",
+                            {
+                                "expected_runtime_updated_at": (
+                                    runtime.get("updated_at")
+                                ),
+                                "transition_owner": (
+                                    "paper-supervisor-continuity"
+                                ),
+                            },
+                        )
+                        post_authority = self._authority(
+                            cycle_id,
+                            heartbeat=heartbeat,
+                        )
+                except Exception:  # noqa: BLE001 - response loss is unknown.
+                    return self._structural(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        machine_code="control_outcome_unknown",
+                        heartbeat=heartbeat,
+                        authority=authority,
+                        control_actions=1,
+                    )
+                if (
+                    str(
+                        post_authority.runtime.get("actual_state") or ""
+                    )
+                    != "stopped"
+                    or self._has_exposure(post_authority)
+                    or not self._reconciliation_exact(post_authority)
+                ):
+                    return self._structural(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        machine_code=(
+                            "partial_execution_or_cleanup_required"
+                        ),
+                        heartbeat=heartbeat,
+                        authority=post_authority,
+                        control_actions=1,
+                    )
+                return self._finish(
+                    lease,
+                    state,
+                    self._result(
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        status="watchdog_runtime_reset",
+                        terminal_status="watchdog_runtime_reset",
+                        control_actions=1,
+                        heartbeat=heartbeat,
+                        next_attempt_at=(
+                            _utc_timestamp(observed_at)
+                            + timedelta(
+                                seconds=(
+                                    PAPER_CONTINUITY_WATCHDOG_SECONDS
+                                )
+                            )
+                        ).isoformat(),
+                    ),
+                    authority=post_authority,
+                )
             return self._structural(
                 lease,
                 state,
@@ -3088,6 +3460,7 @@ class PaperSupervisor:
         machine_code: str,
         heartbeat: Mapping[str, Any],
         authority: StartAuthoritySnapshot | None = None,
+        control_actions: int = 0,
         **detail: Any,
     ) -> dict[str, Any]:
         classified = classify_blocker(control_code=machine_code)
@@ -3119,7 +3492,7 @@ class PaperSupervisor:
                 status="blocked_structural",
                 machine_code=classified["machine_code"],
                 classification=classified["classification"],
-                control_actions=0,
+                control_actions=control_actions,
                 heartbeat=heartbeat,
                 **detail,
             ),
@@ -3995,6 +4368,16 @@ def _digest(value: Any) -> str:
             default=str,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _utc_timestamp(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("supervisor_timestamp_invalid") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("supervisor_timestamp_invalid")
+    return parsed.astimezone(timezone.utc)
 
 
 def _position_side_for_order(value: Any) -> str:

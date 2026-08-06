@@ -47,6 +47,9 @@ from services.cycle_decision import CycleDecisionCoordinator
 from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.live_tick_timing import LiveTickTimingSession
 from services.paper_supervisor import PaperSupervisor
+from services.supervisor_execution_profile import (
+    resolve_supervisor_execution_profile,
+)
 from services.strategy_proposal_composition import compose_strategy_proposal
 from services.strategy_proposal_registry import StrategyProposalPluginRegistry
 from services.tiger_openapi_order_sync import TigerOpenApiOrderSync
@@ -1008,6 +1011,12 @@ class DualTrackCycleRunner:
             raise ValueError("supervisor_configuration_invalid")
         plane = StrategyControlPlane(self.output_root)
         execution = self.execution
+        execution_profile = resolve_supervisor_execution_profile(
+            self.config,
+            execution_name=str(
+                getattr(execution, "name", "")
+            ),
+        )
         as_of = now.isoformat()
         actor = {
             "type": "scheduler",
@@ -1087,6 +1096,7 @@ class DualTrackCycleRunner:
             accounting_reconciliation=accounting_reconciliation,
             pre_intent_diagnostic=pre_intent_diagnostic,
             attempt_deadline_seconds=attempt_deadline_seconds,
+            execution_profile=execution_profile,
         ).converge_once(
             cycle_id,
             observed_at=as_of,
