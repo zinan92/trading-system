@@ -13,6 +13,16 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-06)
+- Milestone 3 fixes Paper continuity in four sequential stories. #585 adds the
+  prerequisite immutable degradation-event chain, v2 12h package projection,
+  and sealed stopped-to-`running_proven` transition gaps without activating a
+  bypass or changing control behavior. #586 will add the explicit
+  `execution_profile`, clean per-cycle retry state, and five-minute watchdog;
+  #587 will add market-move, authoritative-equity repricing, prior-plan, and
+  authorization-renewal alternatives; #588 alone will activate and deploy
+  `paper_continuous`, then hold the milestone open until both 24h and 7d
+  conservative utilization reach at least 85%. Shadow and the known review
+  chain discrepancies remain explicitly outside this milestone.
 - #573/#574/#581 are deployed on Cloud Paper as exact clean
   `main@28cc8bd888aee06ba8fb89e03c94fa249629471e`, tree
   `15b393d8be70f97f1d5c431e12b096b7d70cc35e`. The canonical host-local

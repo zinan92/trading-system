@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from services.dualtrack_clock import cycle_window, cycle_window_from_id
+from services.paper_degradation_events import (
+    PaperDegradationEventStore,
+    PaperDegradationEvidenceError,
+    build_continuity_evidence_from_observations,
+)
 from services.paper_supervisor_classifier import CLASSIFIER_VERSION
 from services.paper_supervisor_evidence import same_running_identity
 from services.paper_supervisor_store import (
@@ -193,6 +198,41 @@ def build_paper_supervisor_history_response(
         cycle_id=cycle_id,
         as_of=end,
     )
+    history = dict(current.get("history") or {})
+    observations = list(history.get("observations") or [])
+    events = list(history.get("events") or [])
+    try:
+        degradation = PaperDegradationEventStore(
+            Path(output_root)
+        ).cycle_evidence(cycle_id)
+        continuity = build_continuity_evidence_from_observations(
+            observations,
+            cycle_id=cycle_id,
+        )
+    except (OSError, ValueError, PaperDegradationEvidenceError) as exc:
+        source_errors.append(
+            {
+                "cycle_id": cycle_id,
+                "machine_code": _safe_machine_code(exc),
+            }
+        )
+        degradation = {
+            "schema_version": "paper-degradation-cycle-evidence-v1",
+            "cycle_id": cycle_id,
+            "status": "unavailable",
+            "events": [],
+            "event_count": None,
+            "events_digest": None,
+            "tail_event_digest": None,
+        }
+        continuity = {
+            "schema_version": "paper-continuity-evidence-v1",
+            "cycle_id": cycle_id,
+            "status": "unavailable",
+            "transitions": [],
+            "transition_count": None,
+            "transitions_digest": None,
+        }
     model = {
         "schema_version": SUPERVISOR_CURRENT_CYCLE_AUDIT_SCHEMA_VERSION,
         "as_of": end.isoformat(),
@@ -204,9 +244,6 @@ def build_paper_supervisor_history_response(
         "read_only": True,
         "command_authority": False,
     }
-    history = dict(current.get("history") or {})
-    observations = list(history.get("observations") or [])
-    events = list(history.get("events") or [])
     return {
         "schema_version": SUPERVISOR_HISTORY_RESPONSE_SCHEMA_VERSION,
         "cycle_id": cycle_id,
@@ -229,6 +266,8 @@ def build_paper_supervisor_history_response(
                 else None
             ),
         },
+        "degradation_evidence": degradation,
+        "continuity_evidence": continuity,
         "supervisor": model,
         "read_only": True,
         "command_authority": False,

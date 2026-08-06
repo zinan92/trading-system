@@ -1502,7 +1502,20 @@ def _compact_review_packages(
         cycle_id = str(package.get("cycle_id") or "")
         summary = {
             key: package.get(key)
-            for key in ("schema_version", "cycle_id", "status", "blockers", "packaged_at", "window", "package_hash")
+            for key in (
+                "schema_version",
+                "cycle_id",
+                "status",
+                "blockers",
+                "packaged_at",
+                "window",
+                "package_hash",
+                "degradation_event_count",
+                "degradation_events_digest",
+                "degradation_event_tail_digest",
+                "continuity_transition_count",
+                "continuity_transitions_digest",
+            )
             if key in package
         }
         if cycle_id == selected_cycle_id:
@@ -1519,6 +1532,12 @@ def _compact_review_packages(
                     "reconciliation": execution.get("reconciliation") or {},
                 },
                 "review": package.get("review") or {},
+                "degradation_events": package.get(
+                    "degradation_events"
+                ) or [],
+                "continuity_transitions": package.get(
+                    "continuity_transitions"
+                ) or [],
                 "strategy_shadows": [
                     _compact_strategy_shadow(row)
                     for row in package.get("strategy_shadows") or []

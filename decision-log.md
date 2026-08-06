@@ -14234,3 +14234,52 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused tests cover calendar/realtime, relative/monotonic, missing-both, and
   active-oneshot cases. Exact-SHA Cloud verification must show the already
   active provider timer passing with `next_trigger_clock=monotonic`.
+
+# 2026-08-06 — Persist Paper degradation and continuity evidence before bypass (#585)
+
+## Decision
+
+- Add a per-cycle, append-only, hash-linked degradation-event journal under
+  `dualtrack/supervisor/degradation_events`. Each record binds the exact
+  execution profile, gate, original machine code and reason, selected
+  alternative action, UTC occurrence time, sequence, predecessor, and digest.
+- Require one caller-supplied event identity for operational idempotency. The
+  same identity with the same facts is a no-op; the same identity with changed
+  facts is an integrity conflict. Cross-thread and cross-process appends share
+  the existing production mutation lock.
+- Upgrade newly generated terminal packages to
+  `strategy-cycle-package-v2`. Every v2 package carries the full cycle event
+  list, count, digest and tail, plus sealed stopped-to-`running_proven`
+  transitions and their exact gap in seconds. Historical v1 packages remain
+  readable and immutable.
+- Expose the complete evidence through the selected cycle package and explicit
+  Supervisor-history read model. This issue records evidence only: it does not
+  select `paper_continuous`, bypass a gate, or execute a control action.
+
+## Gotchas
+
+- A package hash alone proves only that a serialized payload is internally
+  unchanged. V2 verification must also recompute the embedded degradation
+  chain, counts, list digest, tail digest, transition digests, and transition
+  timing; otherwise a self-consistent but incomplete evidence object could be
+  accepted as review input.
+- The physical JSON file is atomically replaced on append so concurrent readers
+  never see a partial document. Append-only is enforced semantically: every
+  prior row is revalidated and retained byte-equivalently before a new row is
+  published.
+- A generic non-running observation is not necessarily a stop. Continuity
+  evidence starts only when sealed authoritative runtime says
+  `actual_state=stopped`, and it closes only on a later independently validated
+  `running_proven=true` observation for the same cycle.
+- Evidence infrastructure must precede behavior. Activating any Paper bypass
+  before this journal and package contract is deployed would create an
+  unreviewable period and violate Park's mandatory degradation-audit rule.
+
+## Verification
+
+- Focused tests cover concurrent duplicate writes, identity conflicts,
+  hash-chain tampering, explicit empty evidence, complete package inclusion,
+  missing referenced events, and exact stopped-to-running gap calculation.
+- Read-model and package regression suites prove v1 history remains readable
+  and existing control/Supervisor behavior is unchanged. Deployment and any
+  Paper continuity activation remain separate later issues.
