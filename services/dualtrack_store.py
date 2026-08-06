@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from services.cloud_ai_provider import validate_provider_readiness_proof
+
 from services.config_loader import ROOT, load_pipeline_config
 from services.dualtrack_clock import cycle_window_from_id, parse_utc
 from services.dualtrack_config import dualtrack_config
@@ -333,6 +335,12 @@ def validate_plan(
     for key in ("planning_context", "range_adjustment", "replan_context"):
         if isinstance(payload.get(key), dict):
             normalized[key] = dict(payload[key])
+    if "provider_readiness" in payload:
+        normalized["provider_readiness"] = (
+            validate_provider_readiness_proof(
+                payload.get("provider_readiness") or {}
+            )
+        )
     if "review_change" in payload:
         normalized["review_change"] = _normalize_review_change(payload.get("review_change"))
     bracket = _normalize_bracket(payload, direction=direction)

@@ -11,7 +11,6 @@ from services.config_loader import ROOT, load_pipeline_config
 from services.journal_store import load_json, write_json
 from services.paper_release_receipt import current_source_attestation
 from services.cloud_timer_contract import CloudTimerContract
-from services.cloud_ai_provider import CloudAIProviderReadiness
 
 
 CLOUD_PAPER_SERVICES = {
@@ -34,7 +33,6 @@ class CloudPaperServiceBootGate:
         repo_root: Path = ROOT,
         source_attestation: Callable[[], dict[str, Any]] | None = None,
         timer_contract: Callable[[], dict[str, Any]] | None = None,
-        provider_readiness: Callable[[], dict[str, Any]] | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         config = load_pipeline_config()
@@ -50,14 +48,6 @@ class CloudPaperServiceBootGate:
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.timer_contract = timer_contract or (
             lambda: CloudTimerContract(self.output_root, now=self.now).run()
-        )
-        self.provider_readiness = provider_readiness or (
-            lambda: CloudAIProviderReadiness(
-                self.output_root,
-                repo_root=self.repo_root,
-                now=self.now,
-                source_attestation=self.source_attestation,
-            ).verify()
         )
 
     def verify(self, service: str) -> dict[str, Any]:
@@ -106,12 +96,6 @@ class CloudPaperServiceBootGate:
                 timers = self.timer_contract()
                 if timers.get("status") != "pass":
                     raise ValueError("cloud_paper_timer_contract_not_passing")
-            if service == "dualtrack-live-tick":
-                provider = self.provider_readiness()
-                if provider.get("ok") is not True:
-                    raise ValueError(
-                        str(provider.get("blocker") or "cloud_ai_provider_readiness_not_passing")
-                    )
             payload.update(
                 {
                     "status": "pass",

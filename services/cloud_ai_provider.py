@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from services.config_loader import ROOT
 from services.journal_store import load_json
@@ -22,6 +23,61 @@ RECOVERABLE_PROVIDER_CODES = frozenset(
         "strategy_recommendation_provider_failed",
     }
 )
+
+PROVIDER_READINESS_UNAVAILABLE = (
+    "cloud_ai_provider_readiness_unavailable"
+)
+PROVIDER_READINESS_INVALID = "cloud_ai_provider_readiness_invalid"
+
+_TRANSIENT_READINESS_BLOCKERS = frozenset(
+    {
+        "cloud_ai_provider_readiness_missing",
+        "cloud_ai_provider_readiness_stale",
+    }
+)
+_STRUCTURAL_READINESS_BLOCKERS = frozenset(
+    {
+        "cloud_ai_provider_readiness_json_invalid",
+        "cloud_ai_provider_readiness_shape_invalid",
+        "cloud_ai_provider_readiness_schema_invalid",
+        "cloud_ai_provider_readiness_time_invalid",
+        "cloud_ai_provider_readiness_time_in_future",
+        "cloud_ai_provider_source_unavailable",
+        "cloud_ai_provider_source_tree_dirty",
+        "cloud_ai_provider_source_sha_mismatch",
+        "cloud_ai_provider_source_tree_sha_mismatch",
+        "cloud_ai_provider_auth_not_ready",
+        "cloud_ai_provider_executable_missing",
+        "cloud_ai_provider_executable_unreadable",
+        "cloud_ai_provider_executable_changed",
+        "cloud_ai_provider_response_contract_invalid",
+        "cloud_ai_provider_side_effect_contract_invalid",
+        "cloud_ai_provider_readiness_digest_invalid",
+        "cloud_ai_provider_readiness_unreadable",
+    }
+)
+
+
+class CloudAIProviderReadinessGateError(ValueError):
+    """Typed pre-entry refusal from the Cloud provider readiness gate."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        readiness_blocker: str,
+        evidence: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.code = str(code)
+        self.evidence = {
+            "readiness_blocker": str(readiness_blocker),
+            **(
+                dict(evidence)
+                if isinstance(evidence, Mapping)
+                else {}
+            ),
+        }
+        super().__init__(self.code)
 
 
 class CloudAIProviderReadiness:
@@ -46,11 +102,45 @@ class CloudAIProviderReadiness:
         self.path = self.output_root / "cloud" / "provider" / "readiness_current.json"
 
     def verify(self) -> dict[str, Any]:
-        rows = load_json(self.path)
-        receipt = rows[-1] if rows and isinstance(rows[-1], dict) else None
         base = {"ok": False, "artifact": str(self.path)}
-        if receipt is None:
+        if not self.path.exists():
             return {**base, "blocker": "cloud_ai_provider_readiness_missing"}
+        try:
+            rows = load_json(self.path)
+        except json.JSONDecodeError:
+            return {
+                **base,
+                "blocker": "cloud_ai_provider_readiness_json_invalid",
+            }
+        except OSError:
+            return {
+                **base,
+                "blocker": "cloud_ai_provider_readiness_unreadable",
+            }
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or not isinstance(rows[0], dict)
+        ):
+            return {
+                **base,
+                "blocker": "cloud_ai_provider_readiness_shape_invalid",
+            }
+        receipt = rows[0]
+        expected_digest = _digest(
+            {
+                key: value
+                for key, value in receipt.items()
+                if key != "readiness_digest"
+            }
+        )
+        if expected_digest != str(
+            receipt.get("readiness_digest") or ""
+        ):
+            return {
+                **base,
+                "blocker": "cloud_ai_provider_readiness_digest_invalid",
+            }
         if receipt.get("schema_version") != READINESS_SCHEMA:
             return {**base, "blocker": "cloud_ai_provider_readiness_schema_invalid"}
         if receipt.get("status") != "pass":
@@ -58,6 +148,10 @@ class CloudAIProviderReadiness:
                 **base,
                 "blocker": "cloud_ai_provider_readiness_not_passing",
                 "receipt_status": str(receipt.get("status") or ""),
+                "failure_code": str(receipt.get("failure_code") or ""),
+                "readiness_digest": str(
+                    receipt.get("readiness_digest") or ""
+                ),
             }
         try:
             checked_at = _timestamp(receipt.get("checked_at"))
@@ -95,7 +189,17 @@ class CloudAIProviderReadiness:
         if not isinstance(provider, dict) or provider.get("auth_status") != "logged_in":
             return {**base, "blocker": "cloud_ai_provider_auth_not_ready"}
         executable = Path(str(provider.get("executable") or ""))
-        if not executable.is_file() or not executable.stat().st_mode & 0o111:
+        try:
+            executable_ready = (
+                executable.is_file()
+                and bool(executable.stat().st_mode & 0o111)
+            )
+        except OSError:
+            return {
+                **base,
+                "blocker": "cloud_ai_provider_executable_unreadable",
+            }
+        if not executable_ready:
             return {**base, "blocker": "cloud_ai_provider_executable_missing"}
         try:
             current_hash = _sha256(executable)
@@ -110,9 +214,6 @@ class CloudAIProviderReadiness:
             for key in ("orders_allowed", "production_mutation_allowed", "uses_exchange_credentials")
         ):
             return {**base, "blocker": "cloud_ai_provider_side_effect_contract_invalid"}
-        expected_digest = _digest({key: value for key, value in receipt.items() if key != "readiness_digest"})
-        if expected_digest != str(receipt.get("readiness_digest") or ""):
-            return {**base, "blocker": "cloud_ai_provider_readiness_digest_invalid"}
         return {
             **base,
             "ok": True,
@@ -123,10 +224,188 @@ class CloudAIProviderReadiness:
                 "name": provider.get("name"),
                 "version": provider.get("version"),
                 "auth_status": provider.get("auth_status"),
+                "executable_sha256": provider.get(
+                    "executable_sha256"
+                ),
             },
             "checked_at": checked_at.isoformat(),
             "expires_at": expires_at.isoformat(),
+            "readiness_digest": str(
+                receipt.get("readiness_digest") or ""
+            ),
         }
+
+
+def cloud_provider_readiness_required() -> bool:
+    """Return true only for the canonical Cloud service composition."""
+
+    return str(os.getenv("GRIDMIND_RUNTIME_MODE") or "").lower() == "cloud"
+
+
+def current_cloud_ai_provider_readiness(
+    output_root: Path,
+    *,
+    verifier: Callable[[], Mapping[str, Any]] | None = None,
+    expected_digest: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the current Cloud proof, while keeping local/test mode inert.
+
+    An injected verifier is an explicit test/composition seam and is therefore
+    always enforced.  Normal local runtimes do not acquire a Cloud-only gate.
+    """
+
+    if verifier is None and not cloud_provider_readiness_required():
+        return None
+    selected = verifier or CloudAIProviderReadiness(output_root).verify
+    return require_cloud_ai_provider_readiness(
+        selected,
+        expected_digest=expected_digest,
+    )
+
+
+def require_cloud_ai_provider_readiness(
+    verifier: Callable[[], Mapping[str, Any]],
+    *,
+    expected_digest: str | None = None,
+) -> dict[str, Any]:
+    """Return one bounded proof or raise an explicit fail-closed refusal."""
+
+    try:
+        result = verifier()
+    except Exception as exc:  # noqa: BLE001 - untyped verifier failure is structural.
+        raise CloudAIProviderReadinessGateError(
+            "unknown_blocker",
+            readiness_blocker=(
+                "cloud_ai_provider_readiness_verifier_failed"
+            ),
+        ) from exc
+    if not isinstance(result, Mapping):
+        raise CloudAIProviderReadinessGateError(
+            "unknown_blocker",
+            readiness_blocker=(
+                "cloud_ai_provider_readiness_result_invalid"
+            ),
+        )
+    row = dict(result)
+    if row.get("ok") is True:
+        provider = (
+            dict(row.get("provider") or {})
+            if isinstance(row.get("provider"), Mapping)
+            else {}
+        )
+        proof = {
+            "readiness_digest": str(
+                row.get("readiness_digest") or ""
+            ),
+            "source_sha": str(row.get("source_sha") or ""),
+            "source_tree_sha": str(
+                row.get("source_tree_sha") or ""
+            ),
+            "executable_sha256": str(
+                provider.get("executable_sha256") or ""
+            ),
+            "checked_at": str(row.get("checked_at") or ""),
+            "expires_at": str(row.get("expires_at") or ""),
+        }
+        try:
+            proof = validate_provider_readiness_proof(proof)
+        except ValueError as exc:
+            raise CloudAIProviderReadinessGateError(
+                "unknown_blocker",
+                readiness_blocker=(
+                    "cloud_ai_provider_readiness_proof_invalid"
+                ),
+            ) from exc
+        if (
+            expected_digest is not None
+            and proof["readiness_digest"] != expected_digest
+        ):
+            raise CloudAIProviderReadinessGateError(
+                PROVIDER_READINESS_UNAVAILABLE,
+                readiness_blocker=(
+                    "cloud_ai_provider_readiness_changed"
+                ),
+            )
+        return proof
+
+    blocker = str(row.get("blocker") or "")
+    evidence = {
+        key: str(row.get(key) or "")
+        for key in (
+            "failure_code",
+            "readiness_digest",
+            "checked_at",
+            "expires_at",
+        )
+        if row.get(key) is not None
+    }
+    if blocker in _TRANSIENT_READINESS_BLOCKERS:
+        raise CloudAIProviderReadinessGateError(
+            PROVIDER_READINESS_UNAVAILABLE,
+            readiness_blocker=blocker,
+            evidence=evidence,
+        )
+    if blocker == "cloud_ai_provider_readiness_not_passing":
+        failure_code = str(row.get("failure_code") or "")
+        if failure_code in RECOVERABLE_PROVIDER_CODES:
+            raise CloudAIProviderReadinessGateError(
+                PROVIDER_READINESS_UNAVAILABLE,
+                readiness_blocker=blocker,
+                evidence=evidence,
+            )
+        if failure_code:
+            raise CloudAIProviderReadinessGateError(
+                PROVIDER_READINESS_INVALID,
+                readiness_blocker=blocker,
+                evidence=evidence,
+            )
+    if blocker in _STRUCTURAL_READINESS_BLOCKERS:
+        raise CloudAIProviderReadinessGateError(
+            PROVIDER_READINESS_INVALID,
+            readiness_blocker=blocker,
+            evidence=evidence,
+        )
+    raise CloudAIProviderReadinessGateError(
+        "unknown_blocker",
+        readiness_blocker=(
+            blocker or "cloud_ai_provider_readiness_result_invalid"
+        ),
+    )
+
+
+def validate_provider_readiness_proof(
+    value: Mapping[str, Any],
+) -> dict[str, str]:
+    """Validate the bounded proof copied into proposal/entry artifacts."""
+
+    expected = {
+        "readiness_digest",
+        "source_sha",
+        "source_tree_sha",
+        "executable_sha256",
+        "checked_at",
+        "expires_at",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise ValueError("cloud_ai_provider_readiness_proof_invalid")
+    proof = {key: str(value.get(key) or "") for key in expected}
+    for key, size in (
+        ("readiness_digest", 64),
+        ("source_sha", 40),
+        ("source_tree_sha", 40),
+        ("executable_sha256", 64),
+    ):
+        text = proof[key].lower()
+        if len(text) != size or any(char not in "0123456789abcdef" for char in text):
+            raise ValueError("cloud_ai_provider_readiness_proof_invalid")
+        proof[key] = text
+    checked_at = _timestamp(proof["checked_at"])
+    expires_at = _timestamp(proof["expires_at"])
+    if expires_at <= checked_at:
+        raise ValueError("cloud_ai_provider_readiness_proof_invalid")
+    proof["checked_at"] = checked_at.isoformat()
+    proof["expires_at"] = expires_at.isoformat()
+    return proof
 
 
 def _timestamp(value: Any) -> datetime:

@@ -18,6 +18,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from services.cloud_ai_provider import validate_provider_readiness_proof
+
 from services.cloud_access_gateway import authenticated_access_identity
 from services.journal_store import load_json, write_json
 
@@ -468,6 +470,12 @@ class CycleRiskEnvelopeStore:
                 else None
             ),
         }
+        if proposal.get("provider_readiness") is not None:
+            source_proposal["provider_readiness"] = (
+                validate_provider_readiness_proof(
+                    proposal.get("provider_readiness") or {}
+                )
+            )
         record: dict[str, Any] = {
             "schema_version": ENVELOPE_SCHEMA,
             "cycle_id": str(cycle_id),
@@ -1934,6 +1942,11 @@ def _matching_candidate_plan(
         == str(plan.get("direction") or "")
         and str(envelope.get("strategy_type") or "")
         == _strategy_type(plan)
+        and (
+            source.get("provider_readiness") is None
+            or source.get("provider_readiness")
+            == plan.get("provider_readiness")
+        )
     )
 
 
@@ -2200,22 +2213,38 @@ def _validate_envelope_registry(rows: list[dict[str, Any]]) -> None:
                 "risk_envelope_authorization_invalid",
             )
         else:
+            legacy_source_fields = {
+                "proposal_id",
+                "proposal_digest",
+                "preview_id",
+                "preview_digest",
+                "execution_shape_digest",
+            }
+            provider_bound_source_fields = {
+                *legacy_source_fields,
+                "provider_readiness",
+            }
             if (
                 kind
                 != "ai_policy_within_preapproved_strategy_boundary"
                 or not isinstance(source, Mapping)
-                or set(source)
-                != {
-                    "proposal_id",
-                    "proposal_digest",
-                    "preview_id",
-                    "preview_digest",
-                    "execution_shape_digest",
+                or set(source) not in {
+                    frozenset(legacy_source_fields),
+                    frozenset(provider_bound_source_fields),
                 }
             ):
                 raise CycleRiskEnvelopeError(
                     "risk_envelope_authorization_invalid"
                 )
+            if "provider_readiness" in source:
+                try:
+                    validate_provider_readiness_proof(
+                        source.get("provider_readiness") or {}
+                    )
+                except ValueError as exc:
+                    raise CycleRiskEnvelopeError(
+                        "risk_envelope_authorization_invalid"
+                    ) from exc
             _required_text(
                 source.get("proposal_id"),
                 "risk_envelope_authorization_invalid",

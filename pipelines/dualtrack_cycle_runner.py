@@ -42,6 +42,7 @@ from services.paper_release_receipt import (
     PaperServiceBootGate,
 )
 from services.cloud_service_boot import CloudPaperServiceBootGate
+from services.cloud_ai_provider import CloudAIProviderReadinessGateError
 from services.cycle_decision import CycleDecisionCoordinator
 from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.live_tick_timing import LiveTickTimingSession
@@ -255,13 +256,27 @@ class DualTrackCycleRunner:
             prev_cycle_range=prev_range,
             now=as_of or cycle_window_from_id(cycle_id).start,
         )
-        plan = self.machine_planner.ensure_plan(
-            cycle_id,
-            bars=bars,
-            prev_cycle_range=prev_range,
-            volatility_context=self.planning_volatility_context(cycle_id),
-            as_of=as_of or cycle_window_from_id(cycle_id).start,
-        )
+        try:
+            plan = self.machine_planner.ensure_plan(
+                cycle_id,
+                bars=bars,
+                prev_cycle_range=prev_range,
+                volatility_context=self.planning_volatility_context(cycle_id),
+                as_of=as_of or cycle_window_from_id(cycle_id).start,
+            )
+        except CloudAIProviderReadinessGateError as exc:
+            self.store.audit(
+                cycle_id,
+                "cycle_runner_pre_cycle_skipped",
+                {"reason": exc.code, "evidence": dict(exc.evidence)},
+            )
+            return {
+                "event": "pre_cycle",
+                "cycle_id": cycle_id,
+                "status": "skipped",
+                "reason": exc.code,
+                "evidence": dict(exc.evidence),
+            }
         trend_gate_armed = self._freeze_trend_gate(cycle_id, as_of=as_of or cycle_window_from_id(cycle_id).start)
         return {
             "event": "pre_cycle",
@@ -459,17 +474,29 @@ class DualTrackCycleRunner:
         }
         revision_reason = f"confirmed_range_breach_{trigger['side']}"
         execution_start = max(now, parse_utc(bars[-1].timestamp) + timedelta(minutes=1))
-        revised = self.machine_planner.ensure_plan(
-            cycle_id,
-            bars=bars,
-            prev_cycle_range=prev_range,
-            volatility_context=self.planning_volatility_context(cycle_id),
-            as_of=now,
-            force=True,
-            execution_start=execution_start,
-            revision_reason=revision_reason,
-            replan_context=replan_context,
-        )
+        try:
+            revised = self.machine_planner.ensure_plan(
+                cycle_id,
+                bars=bars,
+                prev_cycle_range=prev_range,
+                volatility_context=self.planning_volatility_context(cycle_id),
+                as_of=now,
+                force=True,
+                execution_start=execution_start,
+                revision_reason=revision_reason,
+                replan_context=replan_context,
+            )
+        except CloudAIProviderReadinessGateError as exc:
+            return self._record_range_reassessment(cycle_id, {
+                "status": "failed",
+                "plan_locked_at": plan_locked_at,
+                "previous_range": dict(plan.get("range") or {}),
+                "trigger": trigger,
+                "planning_error": exc.code,
+                "planning_error_evidence": dict(exc.evidence),
+                "retry_at": (now + timedelta(minutes=rules["failure_retry_minutes"])).isoformat(),
+                "entry_mode": "paused",
+            }, now=now)
         success = bool(
             revised.get("locked_at")
             and revised.get("locked_at") != plan_locked_at

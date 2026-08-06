@@ -64,6 +64,7 @@ from services.strategy_recommendation import (
     RecommendationProviderError,
     StrategyRecommendationService,
 )
+from services.cloud_ai_provider import CloudAIProviderReadinessGateError
 from services.strategy_shadow import load_strategy_shadow_runs, load_strategy_shadow_runs_for_cycles
 from services.strategy_shadow_promotion import evaluate_grid_shadow_promotion
 from services.safe_repair_queue import SafeRepairQueue
@@ -527,7 +528,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         try:
             payload = self._read_json_body(max_bytes=64_000)
             self._write_json(200, build_strategy_console_control_response(payload, actor=self._control_actor()))
-        except RecommendationProviderError as exc:
+        except (RecommendationProviderError, CloudAIProviderReadinessGateError) as exc:
             self._write_error(
                 503,
                 exc.code or "unknown_blocker",
@@ -1794,7 +1795,7 @@ def build_strategy_console_control_response(
                 review=review,
                 now=payload.get("as_of"),
             )
-        except RecommendationProviderError:
+        except (RecommendationProviderError, CloudAIProviderReadinessGateError):
             # Preserve the typed provider code for the in-process Supervisor
             # classifier and for the HTTP boundary above.  Only this explicit
             # exception type is eligible for a provider machine code.
@@ -1879,6 +1880,9 @@ def build_strategy_console_control_response(
             "strategy_type": recommendation["strategy_type"],
             "framework": recommendation["framework"],
             "prompt_contract": recommendation["prompt_contract"],
+            "provider_readiness": recommendation.get(
+                "provider_readiness"
+            ),
             "evaluation_receipt": recommendation["evaluation_receipt"],
             "preview_id": preview["preview_id"],
         }, now=recommendation["created_at"])

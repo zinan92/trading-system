@@ -74,6 +74,7 @@ An unlisted, malformed or newly observed code is always
 | `strategy_recommendation_provider_unavailable` | The server-local provider transport failed before any control intent; retry through the episode budget. |
 | `strategy_recommendation_provider_failed` | The provider returned a typed failure before any control intent; retry through the episode budget. |
 | `frozen_grid_preview_market_moved` | Retry a fresh identity only when the exact authorized frozen neutral Grid remains profit-valid and the current trusted mark alone shifts venue-rounded side count beyond the unchanged inner capital budget before `start_intent`. |
+| `cloud_ai_provider_readiness_unavailable` | Keep Paper lifecycle running, but retry new AI/new-entry work only with a fresh digest-valid readiness proof. |
 
 `supervisor_attempt_deadline_before_intent` is local resource pressure.
 `upstream_data_source_transient_failure` requires independent typed evidence of
@@ -96,6 +97,7 @@ source-bound provider-readiness receipt and executes no AI or control action.
 | Exact code | Meaning |
 | --- | --- |
 | `control_outcome_unknown` | A response was lost after `start_intent`; do not retry until authority proves the result. |
+| `cloud_ai_provider_readiness_invalid` | Provider readiness evidence is malformed, source/executable-drifted, or carries a non-recoverable failure; create no new entry and require read-only clearance. |
 | `partial_execution_or_cleanup_required` | Authority proves possible partial execution or cleanup. |
 | `ledger_reconciliation_drift` | Accounting or execution reconciliation is not exact. |
 | `previous_cycle_paper_state_unresolved` | The old cycle is not safely closed. |

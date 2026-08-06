@@ -4,6 +4,8 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from schemas.market_data import Bar
 from services.dualtrack_grid_core import GridStop, simulate_explicit_grid
 from services.dualtrack_machine import DualTrackMachineRunner
@@ -11,6 +13,7 @@ from services.dualtrack_machine_plan import DualTrackMachinePlanner, _apply_rang
 from services.dualtrack_scoring import DualTrackScorer
 from services.dualtrack_store import DualTrackPlanStore, validate_machine_plan, validate_plan
 from services.journal_store import load_json, write_json
+from services.cloud_ai_provider import CloudAIProviderReadinessGateError
 from tests.test_dualtrack_dt2_machine_runner import TEST_CONFIG
 
 
@@ -27,6 +30,18 @@ def _bar(minute: int, open_: float, high: float, low: float, close: float) -> Ba
         volume=1.0,
         provider="binance_usdm",
     )
+
+
+def _readiness_result() -> dict:
+    return {
+        "ok": True,
+        "readiness_digest": "a" * 64,
+        "source_sha": "b" * 40,
+        "source_tree_sha": "c" * 40,
+        "provider": {"executable_sha256": "d" * 64},
+        "checked_at": "2026-07-10T12:00:00+00:00",
+        "expires_at": "2026-07-11T12:00:00+00:00",
+    }
 
 
 def _machine_plan(cycle_id: str = "2026-07-10_NIGHT", direction: str = "long") -> dict:
@@ -136,6 +151,7 @@ def test_machine_planner_reads_newsletter_and_persists_independent_ai_plan(tmp_p
         config=TEST_CONFIG,
         newsletter_root=newsletter_root,
         decision_provider=decide,
+        provider_readiness_verifier=_readiness_result,
     )
     plan = planner.ensure_plan(
         "2026-07-10_NIGHT",
@@ -149,7 +165,53 @@ def test_machine_planner_reads_newsletter_and_persists_independent_ai_plan(tmp_p
     assert plan["status"] == "locked"
     assert plan["source"] == "machine_ai_newsletter"
     assert plan["sources"][0]["path"] == str(newsletter)
+    assert plan["provider_readiness"]["readiness_digest"] == "a" * 64
     assert DualTrackPlanStore(tmp_path / "outputs", config=TEST_CONFIG).machine_plan(plan["cycle_id"])["direction"] == "long"
+
+
+def test_machine_planner_readiness_refusal_does_not_call_provider_or_write_degraded_plan(
+    tmp_path: Path,
+) -> None:
+    newsletter_root = tmp_path / "newsletter"
+    newsletter_root.mkdir()
+    (newsletter_root / "2026-07-10-finance-daily-newsletter.md").write_text(
+        "## 黄金\n区间震荡。\n",
+        encoding="utf-8",
+    )
+    provider_calls = 0
+
+    def decide(_: str) -> dict:
+        nonlocal provider_calls
+        provider_calls += 1
+        return _machine_plan()
+
+    planner = DualTrackMachinePlanner(
+        tmp_path / "outputs",
+        config=TEST_CONFIG,
+        newsletter_root=newsletter_root,
+        decision_provider=decide,
+        provider_readiness_verifier=lambda: {
+            "ok": False,
+            "blocker": "cloud_ai_provider_readiness_stale",
+        },
+    )
+
+    with pytest.raises(CloudAIProviderReadinessGateError):
+        planner.ensure_plan(
+            "2026-07-10_NIGHT",
+            bars=[_bar(0, 4115.0, 4118.0, 4110.0, 4114.0)],
+            prev_cycle_range=40.0,
+            as_of="2026-07-10T12:55:00+00:00",
+        )
+
+    assert provider_calls == 0
+    assert (
+        DualTrackPlanStore(
+            tmp_path / "outputs",
+            config=TEST_CONFIG,
+        ).machine_plan("2026-07-10_NIGHT")
+        is None
+    )
 
 
 def test_machine_planner_transparently_widens_range_below_active_cycle_floor() -> None:

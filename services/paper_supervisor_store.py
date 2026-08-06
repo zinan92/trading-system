@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from services.cloud_ai_provider import RECOVERABLE_PROVIDER_CODES
 from services.paper_supervisor_evidence import (
     RunningEvidenceError,
     finalize_running_evidence,
@@ -55,6 +56,34 @@ _RECOVERY_RESULTS = frozenset(
 )
 _PRE_INTENT_RESULTS = frozenset(
     {"prepare_succeeded", "no_action", "transient", "structural"}
+)
+_TRANSIENT_PROVIDER_READINESS_EVIDENCE_BLOCKERS = frozenset(
+    {
+        "cloud_ai_provider_readiness_missing",
+        "cloud_ai_provider_readiness_stale",
+        "cloud_ai_provider_readiness_changed",
+    }
+)
+_STRUCTURAL_PROVIDER_READINESS_EVIDENCE_BLOCKERS = frozenset(
+    {
+        "cloud_ai_provider_readiness_json_invalid",
+        "cloud_ai_provider_readiness_shape_invalid",
+        "cloud_ai_provider_readiness_schema_invalid",
+        "cloud_ai_provider_readiness_time_invalid",
+        "cloud_ai_provider_readiness_time_in_future",
+        "cloud_ai_provider_readiness_digest_invalid",
+        "cloud_ai_provider_readiness_unreadable",
+        "cloud_ai_provider_source_unavailable",
+        "cloud_ai_provider_source_tree_dirty",
+        "cloud_ai_provider_source_sha_mismatch",
+        "cloud_ai_provider_source_tree_sha_mismatch",
+        "cloud_ai_provider_auth_not_ready",
+        "cloud_ai_provider_executable_missing",
+        "cloud_ai_provider_executable_unreadable",
+        "cloud_ai_provider_executable_changed",
+        "cloud_ai_provider_response_contract_invalid",
+        "cloud_ai_provider_side_effect_contract_invalid",
+    }
 )
 _CYCLE_SUFFIXES = ("_DAY", "_NIGHT")
 _UNSET = object()
@@ -2650,20 +2679,34 @@ def _validate_event_payload(
                 ):
                     raise SupervisorStoreError(code)
             if evidence is not None:
-                if (
-                    result != "structural"
-                    or machine_code
-                    != "outer_strategy_policy_envelope_out_of_bounds"
-                    or not isinstance(evidence, Mapping)
-                    or set(evidence)
-                    != {"rejection_id", "rejection_digest"}
+                if machine_code == (
+                    "outer_strategy_policy_envelope_out_of_bounds"
                 ):
+                    if (
+                        result != "structural"
+                        or not isinstance(evidence, Mapping)
+                        or set(evidence)
+                        != {"rejection_id", "rejection_digest"}
+                    ):
+                        raise SupervisorStoreError(code)
+                    _identity(evidence.get("rejection_id"), code)
+                    _required_digest(
+                        evidence.get("rejection_digest"),
+                        code=code,
+                    )
+                elif machine_code in {
+                    "cloud_ai_provider_readiness_unavailable",
+                    "cloud_ai_provider_readiness_invalid",
+                }:
+                    _validate_provider_readiness_evidence(
+                        evidence,
+                        machine_code=str(machine_code),
+                        result=result,
+                        classification=str(classification or ""),
+                        code=code,
+                    )
+                else:
                     raise SupervisorStoreError(code)
-                _identity(evidence.get("rejection_id"), code)
-                _required_digest(
-                    evidence.get("rejection_digest"),
-                    code=code,
-                )
             if (
                 event_type == "pre_intent_attempt_abandoned"
                 and (
@@ -2760,6 +2803,72 @@ def _validate_candidate_identity(
         or any(not str(item) for item in limits.values())
     ):
         raise SupervisorStoreError(code)
+    return row
+
+
+def _validate_provider_readiness_evidence(
+    value: Any,
+    *,
+    machine_code: str,
+    result: str,
+    classification: str,
+    code: str,
+) -> dict[str, str]:
+    allowed = {
+        "readiness_blocker",
+        "failure_code",
+        "readiness_digest",
+        "checked_at",
+        "expires_at",
+    }
+    if (
+        not isinstance(value, Mapping)
+        or not set(value) <= allowed
+        or "readiness_blocker" not in value
+    ):
+        raise SupervisorStoreError(code)
+    row = {str(key): str(item or "") for key, item in value.items()}
+    if any(not item for item in row.values()):
+        raise SupervisorStoreError(code)
+    blocker = row["readiness_blocker"]
+    failure_code = row.get("failure_code", "")
+    if machine_code == "cloud_ai_provider_readiness_unavailable":
+        valid_classification = (
+            result == "transient"
+            and classification == "transient"
+            and (
+                blocker
+                in _TRANSIENT_PROVIDER_READINESS_EVIDENCE_BLOCKERS
+                or (
+                    blocker
+                    == "cloud_ai_provider_readiness_not_passing"
+                    and failure_code in RECOVERABLE_PROVIDER_CODES
+                )
+            )
+        )
+    else:
+        valid_classification = (
+            result == "structural"
+            and classification == "structural"
+            and (
+                blocker
+                in _STRUCTURAL_PROVIDER_READINESS_EVIDENCE_BLOCKERS
+                or (
+                    blocker
+                    == "cloud_ai_provider_readiness_not_passing"
+                    and bool(failure_code)
+                    and failure_code
+                    not in RECOVERABLE_PROVIDER_CODES
+                )
+            )
+        )
+    if not valid_classification:
+        raise SupervisorStoreError(code)
+    if "readiness_digest" in row:
+        _required_digest(row["readiness_digest"], code=code)
+    for field in ("checked_at", "expires_at"):
+        if field in row:
+            _parse_timestamp(row[field])
     return row
 
 
