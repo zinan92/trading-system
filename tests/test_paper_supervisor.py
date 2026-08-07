@@ -1246,6 +1246,63 @@ def test_active_grid_request_freezes_geometry_for_fresh_supervisor_preview() -> 
     assert request["risk_budget"] == {"leverage": 10}
 
 
+def test_fresh_ai_plan_uses_locked_execution_shape_not_minimal_rebuild(
+    tmp_path: Path,
+) -> None:
+    supervisor, _, plane = _supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    plane.plan = None
+    original_lock = plane.lock_production_plan
+
+    def lock_with_exact_shape(*args, **kwargs):
+        locked = original_lock(*args, **kwargs)
+        exact_range = {
+            "low": 3900.0,
+            "high": 4200.0,
+            "scope": "full",
+            "split_price": 4050.0,
+            "source_envelope": {"low": 3900.0, "high": 4200.0},
+        }
+        plane.plan["range"] = exact_range
+        plane.plan["grid"].update(
+            {
+                "mode": "arithmetic",
+                "notional_per_grid": 5261.21,
+                "notional_mode": "auto",
+                "out_of_range": "exit_only",
+                "leverage": 10,
+            }
+        )
+        plane.plan["risk_budget"] = {"actual_leverage": 9.9963}
+        return deepcopy(plane.plan)
+
+    plane.lock_production_plan = lock_with_exact_shape
+    with supervisor.store.try_lease(
+        CYCLE,
+        holder_id="fresh-ai-exact-shape",
+    ) as lease:
+        assert lease is not None
+        lease.record_pre_intent_started(
+            attempt_id="supervisor-attempt-exact-shape",
+            observed_at=T0.isoformat(),
+            phase_scope="create_or_prepare",
+        )
+        plan, request = supervisor._create_plan(
+            CYCLE,
+            lease=lease,
+            attempt_id="supervisor-attempt-exact-shape",
+            observed_at=T0.isoformat(),
+        )
+
+    assert plan["risk_budget"]["actual_leverage"] == 9.9963
+    assert request["range"] == plan["range"]
+    assert request["grid"]["notional_per_grid"] == 5261.21
+    assert request["grid"]["notional_mode"] == "manual"
+    assert request["risk_budget"] == {"leverage": 10}
+
+
 def test_convergence_builds_existing_plan_request_from_full_plan_not_identity(
     tmp_path: Path,
 ) -> None:

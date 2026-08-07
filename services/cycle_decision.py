@@ -429,6 +429,10 @@ class CycleDecisionCoordinator:
                 "strategy_type": strategy_type,
                 "cycle_risk_envelope_id": envelope_id,
             }
+            if preview.get("start_facts_digest") is not None:
+                request["start_facts_digest"] = str(
+                    preview["start_facts_digest"]
+                )
             if strategy_type == "dca":
                 dca = dict(proposal.get("dca") or {})
                 risk = dict(preview.get("risk") or {})

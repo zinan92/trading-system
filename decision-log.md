@@ -1,5 +1,67 @@
 # Decision Log
 
+## One StartFacts authority owns Paper candidate and start identity (Issue #594)
+
+Date: 2026-08-07
+
+### Decision
+
+- Persist one content-addressed, append-only `paper-start-facts-v1` record for
+  every start candidate. It binds the trusted execution market, full planning
+  input digest, authoritative Paper execution snapshot/account/equity,
+  execution contract, exact Park outer-policy binding, and deployed SHA/tree.
+- Inject the same `start_facts_digest` before Grid or DCA preview identity and
+  risk-confirmation contracts are minted, then carry it unchanged through the
+  proposal, envelope authorization, locked plan, prepared preview and future
+  plan. Fresh AI direction/style and deterministic continuity candidates now
+  receive the same authoritative Paper equity used by sizing and validation.
+- Make all Grid start requests, including the ordinary fresh-AI path, replay
+  the locked plan's full range, grid count/mode, exact per-grid notional and
+  leverage. `prepare_start` may no longer send a minimal direction/style
+  request that silently derives a second execution shape.
+- Immediately before a Supervisor prepare, compare the current authoritative
+  execution facts with the bound record. A changed market/account/exposure,
+  contract, policy or deployed source returns the typed pre-intent
+  `start_facts_stale` result with zero orders and zero `start_intent`; Paper may
+  build a new candidate later, while fail-closed/live behavior stays blocked.
+- Amend the explicit Supervisor classifier from v4 to v5. Added structural
+  codes are `paper_start_facts_missing`, `paper_start_facts_invalid`,
+  `paper_start_facts_store_corrupt`, `paper_start_facts_identity_conflict`, and
+  `start_facts_stale`. No code was removed, renamed or changed to transient;
+  unclassified codes remain `unknown_blocker` / structural.
+
+### Gotchas
+
+- Binding StartFacts after a preview is unsafe: Grid/DCA manual-confirmation
+  facts are capabilities tied to `preview_id`. The digest must enter the pure
+  sizing builder first, or the confirmation would refer to an obsolete id.
+- Authoritative equity was already present in PR #519. The 09:12 production
+  split came from authorizing one preview and then rebuilding another from a
+  minimal request, not from a missing equity adapter. This PR fixes the
+  authority boundary instead of adding a second equity calculation.
+- `observed_at` and the full planning-input digest make every StartFacts record
+  immutable and independently auditable. Pre-intent freshness compares the
+  executable authority (trusted mark, account/exposure, contract, policy and
+  source); it never relabels or edits an older record.
+- This is the same architecture law as #593—compute an authoritative domain
+  fact once and make every consumer reference its digest—but a separate
+  bounded context. Start-input identity and review/fill-count identity must not
+  be combined into one oversized store or one PR.
+- No envelope tolerance, gate deletion, historical rewrite, live/real-money
+  behavior, watchdog cadence or Shadow work is included.
+
+### Verification
+
+- Regression coverage proves a changed authoritative price is rejected before
+  adapter/tick/start work with zero prepared receipt, zero order and zero
+  `start_intent`; the classifier remains structural and fail closed.
+- Fresh AI Grid construction now returns the exact locked 9.9963-shape request
+  with its frozen manual notional instead of allowing a 9.9964 re-derivation.
+  The deterministic recovery integration proves one digest across proposal,
+  preview, envelope, locked plan and prepared/future plan.
+- Grid, DCA, Supervisor, risk-envelope, legacy coordinator, Dashboard/API and
+  read-model focused coverage passes 396 tests.
+
 ## Current-cycle non-convergence is a dead-man condition (Issue #568)
 
 Date: 2026-08-05

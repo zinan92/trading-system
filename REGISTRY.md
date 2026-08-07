@@ -12,7 +12,22 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-06)
+## 现在在哪里(2026-08-07)
+- #594 establishes the first shared architecture law behind the 09:12
+  start-shape mismatch and #593's review-count mismatches: compute one
+  authoritative domain fact once and make every consumer reference its digest.
+  `paper-start-facts-v1` now binds trusted market, authoritative Paper
+  execution equity/snapshot, execution contract, exact Park policy and source
+  SHA/tree before preview identity is minted; proposal, envelope, locked plan
+  and prepared execution all carry that same digest. Ordinary fresh-AI Grid
+  starts now replay the full locked geometry instead of recalculating a second
+  shape, while changed authority yields typed pre-intent `start_facts_stale`
+  with zero orders. Supervisor classifier v5 adds only the five explicit
+  StartFacts structural codes; unknown remains fail-closed. This is local
+  implementation evidence, not deployment or continuity acceptance. Next:
+  #595 precomputes a verified next-cycle plan outside the boundary path, then
+  #596 preserves sanitized raw fallback exception provenance; #593 remains the
+  separate execution/review-output authority repair.
 - Milestone 3 fixes Paper continuity in four sequential stories. #585 adds the
   prerequisite immutable degradation-event chain, v2 12h package projection,
   and sealed stopped-to-`running_proven` transition gaps. #586 adds the closed

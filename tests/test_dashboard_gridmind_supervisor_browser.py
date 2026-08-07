@@ -31,7 +31,7 @@ def test_gridmind_supervisor_tab_shows_complete_audit_history() -> None:
     }
     model["runtime"]["supervisor"] = {
         "schema_version": "paper-supervisor-read-model-v1",
-        "classifier_version": "paper-supervisor-blocker-v4",
+        "classifier_version": "paper-supervisor-blocker-v5",
         "status": "available",
         "current_cycle": {
             "cycle_id": "2026-07-18_DAY",

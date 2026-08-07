@@ -2424,7 +2424,7 @@ def test_classifier_is_closed_and_tick_dead_after_ten_minutes() -> None:
     assert classify_blocker(
         evidence={"tick_health": "missing", "tick_episode_seconds": 601}
     ) == {
-            "classifier_version": "paper-supervisor-blocker-v4",
+            "classifier_version": "paper-supervisor-blocker-v5",
         "machine_code": "execution_tick_scheduler_down",
         "classification": STRUCTURAL,
         "raw_control_code": None,

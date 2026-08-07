@@ -100,7 +100,7 @@ def test_classifier_sets_match_the_approved_machine_contract_exactly() -> None:
             root
             / "docs"
             / "contracts"
-                / "paper-supervisor-blocker-v4.json"
+                / "paper-supervisor-blocker-v5.json"
         ).read_text(encoding="utf-8")
     )
 

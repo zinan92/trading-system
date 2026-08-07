@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 
-CLASSIFIER_VERSION = "paper-supervisor-blocker-v4"
+CLASSIFIER_VERSION = "paper-supervisor-blocker-v5"
 TRANSIENT = "transient"
 STRUCTURAL = "structural"
 
@@ -67,6 +67,11 @@ STRUCTURAL_MACHINE_CODES = frozenset(
         "cloud_ai_provider_readiness_invalid",
         "dangerous_start_attempt_cap_reached",
         "clean_refusal_observation_cap_reached",
+        "paper_start_facts_missing",
+        "paper_start_facts_invalid",
+        "paper_start_facts_store_corrupt",
+        "paper_start_facts_identity_conflict",
+        "start_facts_stale",
         "unknown_blocker",
     }
 )

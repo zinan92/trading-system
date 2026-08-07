@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-convergence-v2.md"
-VOCABULARY_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-blocker-v4.json"
+VOCABULARY_PATH = ROOT / "docs" / "contracts" / "paper-supervisor-blocker-v5.json"
 
 
 def _vocabulary() -> dict:
@@ -106,6 +106,17 @@ def test_v2_amendment_records_every_approved_change() -> None:
                 "requires a read-only clearance observation."
             ),
         },
+    ]
+
+    assert [
+        (row["to"], row["classification"])
+        for row in vocabulary["amendments_from_v4"]
+    ] == [
+        ("paper_start_facts_missing", "structural"),
+        ("paper_start_facts_invalid", "structural"),
+        ("paper_start_facts_store_corrupt", "structural"),
+        ("paper_start_facts_identity_conflict", "structural"),
+        ("start_facts_stale", "structural"),
     ]
 
 

@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Hashable, Mapping, Optional
@@ -1740,10 +1740,16 @@ def build_strategy_console_control_response(
             **dict(history.get("account") or {}),
             "accounting_snapshot": dict(history.get("accounting_snapshot") or {}),
         }
+    execution_adapter = None
+    execution_snapshot = None
     if action in {
         "refresh_recommendation",
         "paper_continuity_candidate",
-    } and account is None:
+        "prepare_start",
+    }:
+        # ``account`` is a view/test dependency, never the execution authority.
+        # Every start-related path reads the configured Paper adapter exactly
+        # once and projects all sizing from that snapshot.
         execution_adapter = build_configured_execution_engine_adapter(
             output,
             config=dualtrack_config(),
@@ -1786,6 +1792,8 @@ def build_strategy_console_control_response(
             ),
             "execution_account_source": "authoritative_execution_snapshot",
         }
+        if action == "prepare_start":
+            trusted_account = preview_account
     plane = (
         StrategyControlPlane(output)
         if execution_profile == FAIL_CLOSED
@@ -1794,6 +1802,26 @@ def build_strategy_console_control_response(
             execution_profile=execution_profile,
         )
     )
+    current_start_facts = None
+    if action in {
+        "refresh_recommendation",
+        "paper_continuity_candidate",
+        "prepare_start",
+    }:
+        if execution_adapter is None or execution_snapshot is None:
+            raise ValueError("authoritative_execution_account_missing")
+        current_start_facts = plane.capture_start_facts(
+            cycle_id,
+            observed_at=str(
+                payload.get("as_of")
+                or datetime.now(timezone.utc).isoformat()
+            ),
+            market=trusted_market,
+            execution_snapshot=execution_snapshot,
+            execution_adapter_name=str(
+                getattr(execution_adapter, "name", "")
+            ),
+        )
     if _frozen_grid_diagnostic:
         diagnostic_market = _trusted_historical_diagnostic_market(
             trusted_market,
@@ -1819,9 +1847,7 @@ def build_strategy_console_control_response(
         candidate = plane.build_paper_continuity_candidate(
             cycle_id,
             market=trusted_market,
-            authoritative_equity=float(
-                dict(preview_account or {}).get("equity") or 0
-            ),
+            start_facts=current_start_facts,
             supervisor_attempt_id=str(
                 payload.get("supervisor_attempt_id") or ""
             ),
@@ -1864,7 +1890,12 @@ def build_strategy_console_control_response(
                 cycle_id,
                 strategy_timeframes=contexts,
                 current_plan=before or {},
-                account=trusted_account or {},
+                # The AI may choose direction/style, but even that candidate
+                # context must expose the same authoritative Paper equity
+                # which the deterministic preview and envelope will consume.
+                # Historical accounting remains nested in preview_account for
+                # context; it is never a second sizing authority.
+                account=preview_account or {},
                 review=review,
                 now=payload.get("as_of"),
             )
@@ -1881,6 +1912,9 @@ def build_strategy_console_control_response(
             "direction": recommendation["direction"],
             "style": recommendation["style"],
             "strategy_type": recommendation["strategy_type"],
+            "start_facts_digest": current_start_facts[
+                "start_facts_digest"
+            ],
         }
         if recommendation["strategy_type"] == "dca":
             preview_payload.update(
@@ -1958,6 +1992,9 @@ def build_strategy_console_control_response(
             ),
             "evaluation_receipt": recommendation["evaluation_receipt"],
             "preview_id": preview["preview_id"],
+            "start_facts_digest": current_start_facts[
+                "start_facts_digest"
+            ],
         }, now=recommendation["created_at"])
         after = plane.active_plan(cycle_id)
         unchanged = (before or {}).get("strategy_plan_id") == (after or {}).get("strategy_plan_id")
@@ -1989,6 +2026,7 @@ def build_strategy_console_control_response(
         payload,
         market=trusted_market,
         account=trusted_account,
+        current_start_facts=current_start_facts,
         now=payload.get("as_of"),
         actor=actor,
     )

@@ -583,6 +583,11 @@ def test_control_plane_recovery_candidate_authorizes_and_locks_exact_plan(
         tmp_path,
         execution_profile=PAPER_CONTINUOUS,
         authorization_clock=clock,
+        source_attestation=lambda: {
+            "source_sha": "a" * 40,
+            "source_tree_sha": "b" * 40,
+            "tracked_tree_clean": True,
+        },
     )
     plane.risk_envelopes = CycleRiskEnvelopeStore(
         tmp_path,
@@ -645,10 +650,25 @@ def test_control_plane_recovery_candidate_authorizes_and_locks_exact_plan(
         }
     ]
 
+    start_facts = plane.capture_start_facts(
+        "2026-08-06_DAY",
+        observed_at=clock(),
+        market=_market(110.0),
+        execution_snapshot={
+            "account": {
+                "equity": 5000.0,
+                "ending_cash": 5000.0,
+                "starting_cash": 5000.0,
+            },
+            "orders": [],
+            "positions": [],
+        },
+        execution_adapter_name="nautilus_paper",
+    )
     candidate = plane.build_paper_continuity_candidate(
         "2026-08-06_DAY",
         market=_market(110.0),
-        authoritative_equity=5000.0,
+        start_facts=start_facts,
         supervisor_attempt_id="attempt-real-control-plane",
         provider_readiness=None,
         degradation_event_refs=recovery_refs,
@@ -660,6 +680,10 @@ def test_control_plane_recovery_candidate_authorizes_and_locks_exact_plan(
         preview=candidate["preview"],
         supervisor_attempt_id="attempt-real-control-plane",
     )
+    facts_digest = start_facts["start_facts_digest"]
+    assert candidate["proposal"]["start_facts_digest"] == facts_digest
+    assert candidate["preview"]["start_facts_digest"] == facts_digest
+    assert envelope["source_proposal"]["start_facts_digest"] == facts_digest
     assert candidate["proposal"]["source"] == (
         PAPER_CONTINUITY_PROPOSAL_SOURCE
     )
@@ -728,6 +752,7 @@ def test_control_plane_recovery_candidate_authorizes_and_locks_exact_plan(
     assert locked["source_proposal_ids"] == [
         candidate["proposal"]["proposal_id"]
     ]
+    assert locked["start_facts_digest"] == facts_digest
     request = {
         "direction": locked["direction"],
         "style": locked["style"],
@@ -838,10 +863,12 @@ def test_control_plane_recovery_candidate_authorizes_and_locks_exact_plan(
             },
             market=_market(110.0),
             account={"equity": 5000.0},
+            current_start_facts=start_facts,
             now=clock(),
         )
 
     assert prepared["preview"]["grid"]["profit_target_met"] is False
+    assert prepared["preview"]["start_facts_digest"] == facts_digest
     assert prepared[
         "paper_continuity_allow_lower_profit_target"
     ] is True
@@ -857,6 +884,7 @@ def test_control_plane_recovery_candidate_authorizes_and_locks_exact_plan(
         degraded_preview,
         now=clock(),
     )
+    assert adjusted["start_facts_digest"] == facts_digest
     commands = build_plan_grid_entry_commands(
         adjusted,
         timestamp=clock(),

@@ -282,6 +282,10 @@ def preview_id(preview: dict[str, Any]) -> str:
         "range": preview.get("range"),
         "grid": preview.get("grid"),
         "orders": preview.get("orders"),
+        # StartFacts is the source identity for market/account/contract/policy
+        # inputs.  A preview rebuilt from changed authority must never retain
+        # the prior preview capability merely because its geometry matches.
+        "start_facts_digest": preview.get("start_facts_digest"),
         # Supervisor refreshes carry a per-attempt nonce so a rebuilt
         # execution preview cannot accidentally reuse the prior prepared
         # capability even when its frozen economic geometry is unchanged.
@@ -646,6 +650,10 @@ def build_grid_preview(
             "execution": execution_timeframe,
         },
     }
+    if body.get("start_facts_digest") is not None:
+        preview["start_facts_digest"] = str(
+            body["start_facts_digest"]
+        )
     preview["preview_id"] = preview_id(preview)
     return preview
 
