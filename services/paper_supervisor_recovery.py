@@ -381,6 +381,7 @@ def build_grid_recovery_candidate(
     supervisor_attempt_id: str,
     provider_readiness: Mapping[str, Any] | None,
     degradation_event_refs: list[Mapping[str, Any]] | None = None,
+    start_facts_digest: str | None = None,
 ) -> dict[str, Any]:
     """Recenter and resize a Grid candidate inside the exact Park boundary."""
 
@@ -454,6 +455,8 @@ def build_grid_recovery_candidate(
         )
     # Each convergence attempt owns a distinct candidate identity even when
     # market and equity facts are byte-for-byte unchanged.
+    if start_facts_digest is not None:
+        preview["start_facts_digest"] = str(start_facts_digest)
     preview["supervisor_preview_nonce"] = str(supervisor_attempt_id)
     preview["preview_id"] = grid_preview_id(preview)
 
@@ -541,6 +544,7 @@ def build_grid_recovery_candidate(
         "prompt_contract": dict(source.get("prompt_contract") or {}),
         "evaluation_receipt": dict(source.get("evaluation_receipt") or {}),
         "preview_id": preview.get("preview_id"),
+        "start_facts_digest": start_facts_digest,
     }
     if provider_readiness is not None:
         proposal["provider_readiness"] = dict(provider_readiness)
@@ -565,6 +569,7 @@ def build_dca_recovery_candidate(
     supervisor_attempt_id: str,
     provider_readiness: Mapping[str, Any] | None,
     degradation_event_refs: list[Mapping[str, Any]] | None = None,
+    start_facts_digest: str | None = None,
 ) -> dict[str, Any]:
     """Rebuild one inherited DCA intent around the current trusted mark."""
 
@@ -639,6 +644,8 @@ def build_dca_recovery_candidate(
             account=account,
             config=dict(config),
         )
+    if start_facts_digest is not None:
+        preview["start_facts_digest"] = str(start_facts_digest)
     preview["supervisor_preview_nonce"] = str(supervisor_attempt_id)
     preview["preview_id"] = dca_preview_id(preview)
     source = dict(source_proposal or {})
@@ -713,6 +720,7 @@ def build_dca_recovery_candidate(
         "prompt_contract": {},
         "evaluation_receipt": {},
         "preview_id": preview["preview_id"],
+        "start_facts_digest": start_facts_digest,
     }
     if provider_readiness is not None:
         proposal["provider_readiness"] = dict(provider_readiness)

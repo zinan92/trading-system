@@ -1884,9 +1884,13 @@ class PaperSupervisor:
                 now=observed_at,
             )
         plan = self.plane.active_plan(cycle_id) or {}
+        # Once a Grid proposal is locked, every start path must carry its full
+        # frozen execution shape.  Sending only direction/style here caused
+        # prepare_start to recalculate a second grid/account reality after the
+        # envelope had already authorized the first one.
         request = (
             self._request_from_plan(plan)
-            if recovery and plan
+            if plan
             else {
                 "direction": recommendation.get("direction")
                 or proposal.get("direction"),
@@ -1896,6 +1900,10 @@ class PaperSupervisor:
                 "cycle_risk_envelope_id": envelope_id,
             }
         )
+        if preview.get("start_facts_digest") is not None:
+            request["start_facts_digest"] = str(
+                preview["start_facts_digest"]
+            )
         if provider_fallback:
             request["paper_continuity_provider_fallback"] = True
         if lower_profit_target:
@@ -2130,6 +2138,10 @@ class PaperSupervisor:
                 "cycle_risk_envelope_id"
             ),
         }
+        if plan.get("start_facts_digest") is not None:
+            request["start_facts_digest"] = str(
+                plan["start_facts_digest"]
+            )
         if str(request["strategy_type"]).lower() == "dca":
             dca = dict(plan.get("dca") or {})
             risk = dict(plan.get("risk_budget") or {})

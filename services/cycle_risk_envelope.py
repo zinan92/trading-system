@@ -628,6 +628,10 @@ class CycleRiskEnvelopeStore:
                 else None
             ),
         }
+        if candidate.get("start_facts_digest") is not None:
+            source_proposal["start_facts_digest"] = str(
+                candidate["start_facts_digest"]
+            )
         recovery_source = (
             proposal.get("source") == PAPER_CONTINUITY_PROPOSAL_SOURCE
         )
@@ -690,6 +694,14 @@ class CycleRiskEnvelopeStore:
             or (source != "ai" and not recovery_source)
         ):
             raise CycleRiskEnvelopeError("plan_identity_conflict")
+        proposal_start_facts = str(
+            proposal.get("start_facts_digest") or ""
+        )
+        preview_start_facts = str(
+            preview.get("start_facts_digest") or ""
+        )
+        if proposal_start_facts != preview_start_facts:
+            raise CycleRiskEnvelopeError("plan_identity_conflict")
         proposal_id = _required_text(
             proposal.get("proposal_id"),
             "plan_identity_conflict",
@@ -732,6 +744,11 @@ class CycleRiskEnvelopeStore:
             "direction": direction,
             "limits": _limits_from_preview(preview, strategy_type),
         }
+        if proposal_start_facts:
+            identity["start_facts_digest"] = _required_digest(
+                proposal_start_facts,
+                "plan_identity_conflict",
+            )
         if supervisor_attempt_id is not None:
             identity["supervisor_attempt_id"] = _required_text(
                 supervisor_attempt_id,
@@ -1338,6 +1355,19 @@ class CycleRiskEnvelopeStore:
                     source_proposal.get("proposal_digest") or ""
                 )
                 != _proposal_plan_digest(proposal)
+            ):
+                raise CycleRiskEnvelopeError("plan_identity_conflict")
+            source_start_facts = str(
+                source_proposal.get("start_facts_digest") or ""
+            )
+            if source_start_facts and (
+                source_start_facts
+                != str(preview.get("start_facts_digest") or "")
+                or (
+                    plan
+                    and source_start_facts
+                    != str(plan.get("start_facts_digest") or "")
+                )
             ):
                 raise CycleRiskEnvelopeError("plan_identity_conflict")
         elif not _matching_plan(envelope, plan):
@@ -2235,6 +2265,11 @@ def _matching_candidate_plan(
         and str(envelope.get("strategy_type") or "")
         == _strategy_type(plan)
         and (
+            source.get("start_facts_digest") is None
+            or str(source.get("start_facts_digest") or "")
+            == str(plan.get("start_facts_digest") or "")
+        )
+        and (
             source.get("provider_readiness") is None
             or source.get("provider_readiness")
             == plan.get("provider_readiness")
@@ -2244,20 +2279,28 @@ def _matching_candidate_plan(
 
 def _plan_digest(plan: Mapping[str, Any]) -> str:
     keys = ("strategy_plan_id", "cycle_id", "version", "strategy_type", "direction", "range", "grid", "dca", "risk_budget")
-    return _digest({key: plan.get(key) for key in keys})
+    payload = {key: plan.get(key) for key in keys}
+    if plan.get("start_facts_digest") is not None:
+        payload["start_facts_digest"] = plan.get(
+            "start_facts_digest"
+        )
+    return _digest(payload)
 
 
 def _proposal_plan_digest(row: Mapping[str, Any]) -> str:
-    return _digest(
-        {
-            **{
-                key: row.get(key)
-                for key in _PLAN_SHAPE_FIELDS
-            },
-            "strategy_type": _strategy_type(row),
-            "dca": dict(row.get("dca") or {}),
-        }
-    )
+    payload = {
+        **{
+            key: row.get(key)
+            for key in _PLAN_SHAPE_FIELDS
+        },
+        "strategy_type": _strategy_type(row),
+        "dca": dict(row.get("dca") or {}),
+    }
+    if row.get("start_facts_digest") is not None:
+        payload["start_facts_digest"] = row.get(
+            "start_facts_digest"
+        )
+    return _digest(payload)
 
 
 def _outer_policy_reference(
@@ -2512,8 +2555,16 @@ def _validate_envelope_registry(rows: list[dict[str, Any]]) -> None:
                 "preview_digest",
                 "execution_shape_digest",
             }
+            start_facts_source_fields = {
+                *legacy_source_fields,
+                "start_facts_digest",
+            }
             provider_bound_source_fields = {
                 *legacy_source_fields,
+                "provider_readiness",
+            }
+            provider_start_facts_source_fields = {
+                *start_facts_source_fields,
                 "provider_readiness",
             }
             if (
@@ -2525,7 +2576,9 @@ def _validate_envelope_registry(rows: list[dict[str, Any]]) -> None:
                 or not isinstance(source, Mapping)
                 or set(source) not in {
                     frozenset(legacy_source_fields),
+                    frozenset(start_facts_source_fields),
                     frozenset(provider_bound_source_fields),
+                    frozenset(provider_start_facts_source_fields),
                 }
             ):
                 raise CycleRiskEnvelopeError(
@@ -2556,6 +2609,11 @@ def _validate_envelope_registry(rows: list[dict[str, Any]]) -> None:
                 source.get("preview_digest"),
                 "risk_envelope_authorization_invalid",
             )
+            if "start_facts_digest" in source:
+                _required_digest(
+                    source.get("start_facts_digest"),
+                    "risk_envelope_authorization_invalid",
+                )
             if strategy_type == "dca":
                 _required_digest(
                     source.get("execution_shape_digest"),
@@ -2666,6 +2724,10 @@ def _validate_outer_policy_rejection_registry(
         "direction",
         "limits",
     }
+    start_facts_candidate_fields = {
+        *candidate_fields,
+        "start_facts_digest",
+    }
     comparison_fields = {
         "field",
         "operator",
@@ -2716,7 +2778,11 @@ def _validate_outer_policy_rejection_registry(
         candidate = row.get("candidate")
         if (
             not isinstance(candidate, Mapping)
-            or set(candidate) != candidate_fields
+            or set(candidate)
+            not in {
+                frozenset(candidate_fields),
+                frozenset(start_facts_candidate_fields),
+            }
         ):
             raise CycleRiskEnvelopeError("attempt_store_corrupt")
         _required_text(
@@ -2739,6 +2805,11 @@ def _validate_outer_policy_rejection_registry(
             candidate.get("preview_digest"),
             "attempt_store_corrupt",
         )
+        if "start_facts_digest" in candidate:
+            _required_digest(
+                candidate.get("start_facts_digest"),
+                "attempt_store_corrupt",
+            )
         facts_digest = candidate.get("facts_digest")
         if facts_digest is not None:
             _required_text(

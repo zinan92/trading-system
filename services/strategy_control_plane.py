@@ -65,6 +65,15 @@ from services.cloud_ai_provider import (
 )
 from services.paper_supervisor_identity import build_start_intent_contract
 from services.paper_supervisor_store import PaperSupervisorStore
+from services.paper_release_receipt import current_source_attestation
+from services.paper_start_facts import (
+    PaperStartFactsError,
+    PaperStartFactsStore,
+    authoritative_account_from_start_facts,
+    build_start_facts,
+    same_execution_authority,
+    validate_start_facts,
+)
 from services.paper_supervisor_recovery import (
     PAPER_CONTINUITY_PROPOSAL_SOURCE,
     build_recovery_candidate,
@@ -529,6 +538,10 @@ class StrategyControlPlane:
         if profile not in EXECUTION_PROFILES:
             raise ValueError("supervisor_execution_profile_invalid")
         self.execution_profile = profile
+        self._source_attestation = source_attestation or (
+            lambda: current_source_attestation()
+        )
+        self.start_facts = PaperStartFactsStore(self.output_root)
         tracked_binding_ref = _cloud_tracked_outer_policy_binding_ref(
             self.config
         )
@@ -537,8 +550,65 @@ class StrategyControlPlane:
             supervisor_policy_binding_ref=tracked_binding_ref,
             authorization_clock=self._authorization_clock,
             execution_profile=self.execution_profile,
-            source_attestation=source_attestation,
+            source_attestation=self._source_attestation,
         )
+
+    def capture_start_facts(
+        self,
+        cycle_id: str,
+        *,
+        observed_at: str,
+        market: Mapping[str, Any],
+        execution_snapshot: Mapping[str, Any],
+        execution_adapter_name: str,
+    ) -> dict[str, Any]:
+        """Persist the sole server-built authority for one start candidate."""
+
+        record = build_start_facts(
+            cycle_id=cycle_id,
+            observed_at=observed_at,
+            market=market,
+            execution_snapshot=execution_snapshot,
+            execution_adapter_name=execution_adapter_name,
+            execution_contract=dict(
+                self.config.get("execution_contract") or {}
+            ),
+            outer_policy_preflight=self.verify_supervisor_outer_policy(),
+            source_attestation=self._source_attestation(),
+        )
+        return self.start_facts.record(record)
+
+    @staticmethod
+    def bind_preview_start_facts(
+        preview: Mapping[str, Any],
+        start_facts_digest: str,
+    ) -> dict[str, Any]:
+        """Bind preview identity to the immutable inputs that constructed it."""
+
+        bound = dict(preview)
+        digest = str(start_facts_digest or "").strip().lower()
+        if len(digest) != 64 or any(
+            char not in "0123456789abcdef" for char in digest
+        ):
+            raise ValueError("paper_start_facts_invalid")
+        existing = str(bound.get("start_facts_digest") or "").strip().lower()
+        if existing and existing != digest:
+            raise ValueError("paper_start_facts_identity_conflict")
+        if existing == digest:
+            return bound
+        if bound.get("manual_confirmation") is not None:
+            # Consent facts are capability-bound to preview_id.  StartFacts
+            # must therefore enter the pure sizing builder before that
+            # confirmation contract is minted, never be spliced in afterward.
+            raise ValueError("paper_start_facts_binding_order_invalid")
+        bound["start_facts_digest"] = digest
+        bound["preview_id"] = (
+            dca_preview_id(bound)
+            if str(bound.get("strategy_type") or "grid").lower()
+            == "dca"
+            else _grid_preview_id(bound)
+        )
+        return bound
 
     def upsert_proposal(self, payload: dict[str, Any], *, now: str | None = None) -> dict[str, Any]:
         proposal = normalize_proposal(payload, now=now)
@@ -702,7 +772,7 @@ class StrategyControlPlane:
         cycle_id: str,
         *,
         market: Mapping[str, Any],
-        authoritative_equity: float,
+        start_facts: Mapping[str, Any],
         supervisor_attempt_id: str,
         provider_readiness: Mapping[str, Any] | None,
         degradation_event_refs: list[Mapping[str, Any]],
@@ -716,6 +786,15 @@ class StrategyControlPlane:
         attempt_id = str(supervisor_attempt_id or "").strip()
         if not attempt_id:
             raise ValueError("supervisor_pre_intent_attempt_invalid")
+        try:
+            canonical_start_facts = validate_start_facts(start_facts)
+        except PaperStartFactsError as exc:
+            raise ValueError(str(exc)) from exc
+        if canonical_start_facts.get("cycle_id") != cycle_id:
+            raise ValueError("plan_identity_conflict")
+        authoritative_equity = float(
+            canonical_start_facts["execution"]["account"]["equity"]
+        )
         candidate_evidence = {
             "supervisor_attempt_id": attempt_id,
             PAPER_CONTINUITY_DEGRADATION_REFS: [
@@ -779,6 +858,9 @@ class StrategyControlPlane:
             provider_readiness=provider_readiness,
             degradation_event_refs=[
                 dict(row) for row in degradation_event_refs
+            ],
+            start_facts_digest=canonical_start_facts[
+                "start_facts_digest"
             ],
         )
         proposal = self.upsert_paper_continuity_proposal(
@@ -934,6 +1016,10 @@ class StrategyControlPlane:
                 validate_provider_readiness_proof(
                     selected.get("provider_readiness") or {}
                 )
+            )
+        if selected.get("start_facts_digest") is not None:
+            plan["start_facts_digest"] = str(
+                selected["start_facts_digest"]
             )
         if cycle_risk_envelope_id:
             plan["cycle_risk_envelope_id"] = str(
@@ -1399,6 +1485,10 @@ class StrategyControlPlane:
                 if grid.get(key) is not None
             },
         }
+        if plan.get("start_facts_digest") is not None:
+            request["start_facts_digest"] = str(
+                plan["start_facts_digest"]
+            )
         if grid.get("notional_per_grid") is not None:
             request["grid"]["notional_mode"] = "manual"
         if grid.get("leverage") is not None:
@@ -1832,6 +1922,7 @@ class StrategyControlPlane:
         *,
         market: dict[str, Any],
         account: dict[str, Any],
+        current_start_facts: Mapping[str, Any] | None,
         now: str | None,
     ) -> dict[str, Any]:
         """Freeze one server-built Paper candidate without creating a plan/order."""
@@ -1866,6 +1957,63 @@ class StrategyControlPlane:
             and requested_envelope_id != active_envelope_id
         ):
             raise ValueError("plan_identity_conflict")
+        requested_start_facts_digest = str(
+            payload.get("start_facts_digest")
+            or (current or {}).get("start_facts_digest")
+            or ""
+        ).strip().lower()
+        if (
+            supervisor_attempt_id
+            and requested_envelope_id
+            and not requested_start_facts_digest
+        ):
+            raise ValueError("paper_start_facts_missing")
+        if requested_start_facts_digest:
+            if current_start_facts is None:
+                raise ValueError("paper_start_facts_missing")
+            try:
+                bound_start_facts = self.start_facts.require(
+                    cycle_id,
+                    requested_start_facts_digest,
+                )
+                current_facts = validate_start_facts(
+                    current_start_facts or {}
+                )
+            except PaperStartFactsError as exc:
+                raise ValueError(str(exc)) from exc
+            if not same_execution_authority(
+                bound_start_facts,
+                current_facts,
+            ):
+                raise StrategyControlMachineError(
+                    "start_facts_stale",
+                    {
+                        "bound_start_facts_digest": (
+                            bound_start_facts["start_facts_digest"]
+                        ),
+                        "current_start_facts_digest": (
+                            current_facts["start_facts_digest"]
+                        ),
+                        "bound_execution_authority_digest": (
+                            bound_start_facts[
+                                "execution_authority_digest"
+                            ]
+                        ),
+                        "current_execution_authority_digest": (
+                            current_facts[
+                                "execution_authority_digest"
+                            ]
+                        ),
+                        "start_intent_persisted": False,
+                        "orders_created": 0,
+                    },
+                )
+            # Preview sizing and envelope verification now consume the exact
+            # authoritative Paper account proved above, never the historical
+            # production-accounting projection assembled for Dashboard views.
+            account = authoritative_account_from_start_facts(
+                current_facts
+            )
         runtime = self.runtime_state(cycle_id)
         if runtime.get("desired_state") == "running":
             raise ValueError("robot is already running; stop it before changing the grid")
@@ -1957,6 +2105,11 @@ class StrategyControlPlane:
                     diagnostic,
                 ) from error
             raise
+        if requested_start_facts_digest:
+            preview = self.bind_preview_start_facts(
+                preview,
+                requested_start_facts_digest,
+            )
         if (
             supervisor_attempt_id
             and str(payload.get("strategy_type") or "grid").lower()
@@ -1999,6 +2152,10 @@ class StrategyControlPlane:
                 version=future_version,
                 locked_at=prepared_at,
             )
+            if preview.get("start_facts_digest") is not None:
+                future_plan["start_facts_digest"] = str(
+                    preview["start_facts_digest"]
+                )
             if candidate_proposal is not None:
                 future_plan["source_proposal_ids"] = [
                     str(candidate_proposal.get("proposal_id") or "")
@@ -3036,6 +3193,7 @@ class StrategyControlPlane:
         *,
         market: dict[str, Any] | None = None,
         account: dict[str, Any] | None = None,
+        current_start_facts: Mapping[str, Any] | None = None,
         now: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -3047,6 +3205,7 @@ class StrategyControlPlane:
                     payload,
                     market=market,
                     account=account,
+                    current_start_facts=current_start_facts,
                     now=now,
                     actor=actor,
                 )
@@ -3162,6 +3321,7 @@ class StrategyControlPlane:
         *,
         market: dict[str, Any] | None = None,
         account: dict[str, Any] | None = None,
+        current_start_facts: Mapping[str, Any] | None = None,
         now: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -3189,6 +3349,7 @@ class StrategyControlPlane:
                 body,
                 market=market or {},
                 account=account or {},
+                current_start_facts=current_start_facts,
                 now=now,
             )
         if action == "authorize_outer_strategy_policy":
@@ -6565,6 +6726,10 @@ class StrategyControlPlane:
             },
             "preview_id": preview["preview_id"],
         }
+        if preview.get("start_facts_digest") is not None:
+            plan["start_facts_digest"] = str(
+                preview["start_facts_digest"]
+            )
         # A Grid plan is a distinct contract from DCA.  In particular, a
         # terminal DCA plan may be the current version used to seed a Grid
         # preview, but its aggregate-entry geometry must never leak into the
@@ -7989,6 +8154,10 @@ def normalize_proposal(payload: dict[str, Any], *, now: str | None = None, legac
         ),
         "preview_id": payload.get("preview_id"),
     }
+    if payload.get("start_facts_digest") is not None:
+        proposal["start_facts_digest"] = str(
+            payload["start_facts_digest"]
+        )
     proposal["proposal_id"] = str(payload.get("proposal_id") or _proposal_id(proposal))
     return proposal
 

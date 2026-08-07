@@ -1,0 +1,223 @@
+{
+  "schema_version": "paper-supervisor-blocker-v5",
+  "matching": "exact_typed_only",
+  "default": {
+    "machine_code": "unknown_blocker",
+    "classification": "structural"
+  },
+  "typed_evidence": {
+    "recommendation_provider_failure": {
+      "exception_type": "RecommendationProviderError",
+      "exception_code_field": "code",
+      "receipt_schema": "strategy-ai-evaluation-v2",
+      "receipt_code_path": "output.machine_code",
+      "legacy_text_recovery_allowed": false
+    }
+  },
+  "transient": [
+    "prepared_start_market_moved",
+    "prepared_start_expired",
+    "trusted_market_temporarily_unavailable",
+    "execution_tick_heartbeat_temporarily_missing",
+    "upstream_data_source_transient_failure",
+    "supervisor_attempt_deadline_before_intent",
+    "strategy_recommendation_provider_timeout",
+    "strategy_recommendation_provider_unavailable",
+    "strategy_recommendation_provider_failed",
+    "frozen_grid_preview_market_moved",
+    "cloud_ai_provider_readiness_unavailable"
+  ],
+  "structural": [
+    "control_outcome_unknown",
+    "partial_execution_or_cleanup_required",
+    "ledger_reconciliation_drift",
+    "previous_cycle_paper_state_unresolved",
+    "order_identity_conflict",
+    "attempt_store_corrupt",
+    "execution_tick_scheduler_down",
+    "outer_strategy_policy_missing",
+    "outer_strategy_policy_invalid",
+    "outer_strategy_policy_expired",
+    "outer_strategy_policy_envelope_out_of_bounds",
+    "risk_envelope_missing",
+    "risk_envelope_authorization_invalid",
+    "risk_envelope_preview_out_of_bounds",
+    "manual_risk_confirmation_required",
+    "prepared_start_identity_changed",
+    "strategy_preview_identity_changed",
+    "active_plan_missing",
+    "runtime_state_conflict",
+    "existing_exposure_conflict",
+    "plan_identity_conflict",
+    "execution_receipt_identity_invalid",
+    "immutable_fill_guard_triggered",
+    "risk_policy_rejected",
+    "trusted_market_provenance_invalid",
+    "supervisor_configuration_invalid",
+    "strategy_recommendation_provider_missing",
+    "strategy_recommendation_provider_not_executable",
+    "strategy_recommendation_provider_invalid_output",
+    "strategy_recommendation_provider_command_invalid",
+    "strategy_recommendation_provider_timeout_invalid",
+    "strategy_recommendation_provider_auth_not_ready",
+    "cloud_ai_provider_readiness_invalid",
+    "dangerous_start_attempt_cap_reached",
+    "clean_refusal_observation_cap_reached",
+    "paper_start_facts_missing",
+    "paper_start_facts_invalid",
+    "paper_start_facts_store_corrupt",
+    "paper_start_facts_identity_conflict",
+    "start_facts_stale",
+    "unknown_blocker"
+  ],
+  "event_labels": [
+    "episode_short_budget_exhausted",
+    "clean_refusal_observation_budget_warning"
+  ],
+  "amendments_from_v1": [
+    {
+      "change": "add",
+      "from": null,
+      "to": "supervisor_attempt_deadline_before_intent",
+      "classification": "transient"
+    },
+    {
+      "change": "add",
+      "from": null,
+      "to": "outer_strategy_policy_expired",
+      "classification": "structural"
+    },
+    {
+      "change": "replace",
+      "from": "cycle_start_attempt_cap_reached",
+      "to": "dangerous_start_attempt_cap_reached",
+      "classification": "structural"
+    },
+    {
+      "change": "add",
+      "from": null,
+      "to": "clean_refusal_observation_cap_reached",
+      "classification": "structural"
+    },
+    {
+      "change": "replace",
+      "from": "retry_budget_exhausted",
+      "to": "episode_short_budget_exhausted",
+      "classification": "event"
+    },
+    {
+      "change": "add",
+      "from": null,
+      "to": "clean_refusal_observation_budget_warning",
+      "classification": "event"
+    }
+  ],
+  "amendments_from_v2": [
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_timeout",
+      "classification": "transient",
+      "reason": "A bounded provider timeout is an external transient failure and may retry under the existing episode budget."
+    },
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_unavailable",
+      "classification": "transient",
+      "reason": "A provider transport failure may recover without changing any safety gate."
+    },
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_failed",
+      "classification": "transient",
+      "reason": "A typed provider failure is retriable only through the existing bounded episode path."
+    },
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_missing",
+      "classification": "structural",
+      "reason": "A missing configured provider is a deployment/configuration defect, not a transient market condition."
+    },
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_not_executable",
+      "classification": "structural",
+      "reason": "An unusable executable requires operator repair."
+    },
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_invalid_output",
+      "classification": "structural",
+      "reason": "The provider contract cannot be safely inferred or repaired by retrying."
+    },
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_command_invalid",
+      "classification": "structural",
+      "reason": "A malformed command is a deployment/configuration defect."
+    },
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_timeout_invalid",
+      "classification": "structural",
+      "reason": "An invalid timeout is a configuration defect."
+    },
+    {
+      "change": "add",
+      "to": "strategy_recommendation_provider_auth_not_ready",
+      "classification": "structural",
+      "reason": "Missing provider authentication requires operator action and must fail closed."
+    }
+  ],
+  "amendments_from_v3": [
+    {
+      "change": "add",
+      "to": "frozen_grid_preview_market_moved",
+      "classification": "transient",
+      "reason": "An exact frozen neutral Grid request that passed at its authorized split may retry when only the current venue-rounded single-side capital count became infeasible before start_intent; all plan, envelope and safety gates remain unchanged."
+    },
+    {
+      "change": "add",
+      "to": "cloud_ai_provider_readiness_unavailable",
+      "classification": "transient",
+      "reason": "A digest-validated missing, stale, changed, or explicitly recoverable provider receipt blocks new AI and entry work while Paper lifecycle continues."
+    },
+    {
+      "change": "add",
+      "to": "cloud_ai_provider_readiness_invalid",
+      "classification": "structural",
+      "reason": "Malformed, source-drifted, executable-drifted, or non-recoverable readiness evidence is fail-closed and requires a read-only clearance observation."
+    }
+  ],
+  "amendments_from_v4": [
+    {
+      "change": "add",
+      "to": "paper_start_facts_missing",
+      "classification": "structural",
+      "reason": "A start candidate without its immutable StartFacts authority cannot prove which market, Paper account, policy, contract, or source built it."
+    },
+    {
+      "change": "add",
+      "to": "paper_start_facts_invalid",
+      "classification": "structural",
+      "reason": "Malformed or digest-invalid StartFacts must fail closed and cannot be repaired by inference."
+    },
+    {
+      "change": "add",
+      "to": "paper_start_facts_store_corrupt",
+      "classification": "structural",
+      "reason": "An unreadable or non-append-only StartFacts authority requires operator investigation."
+    },
+    {
+      "change": "add",
+      "to": "paper_start_facts_identity_conflict",
+      "classification": "structural",
+      "reason": "One content identity resolving to conflicting StartFacts is an authority breach, never a retry condition."
+    },
+    {
+      "change": "add",
+      "to": "start_facts_stale",
+      "classification": "structural",
+      "reason": "Current trusted market or authoritative Paper execution facts differ from the authorized candidate; no start_intent may be written."
+    }
+  ]
+}

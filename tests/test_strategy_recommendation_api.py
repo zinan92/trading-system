@@ -13,6 +13,33 @@ from services.strategy_recommendation import RecommendationProviderError
 from services.strategy_control_plane import StrategyControlPlane
 
 
+@pytest.fixture(autouse=True)
+def _authoritative_paper_snapshot(monkeypatch):
+    class SnapshotAdapter:
+        name = "nautilus_paper"
+
+        @staticmethod
+        def snapshot(cycle_id: str) -> dict:
+            return {
+                "cycle_id": cycle_id,
+                "engine": "nautilus_paper",
+                "account": {
+                    "starting_cash": 100_000.0,
+                    "ending_cash": 100_000.0,
+                    "equity": 100_000.0,
+                },
+                "orders": [],
+                "positions": [],
+                "fills": [],
+            }
+
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_configured_execution_engine_adapter",
+        lambda *_args, **_kwargs: SnapshotAdapter(),
+    )
+
+
 def _bars(timeframe: str, count: int, close: float, span: float) -> list[dict]:
     rows = []
     step = {"1d": timedelta(days=1), "4h": timedelta(hours=4), "1h": timedelta(hours=1), "15m": timedelta(minutes=15)}[timeframe]
@@ -36,6 +63,7 @@ def _market() -> dict:
         "fresh": True,
         "is_synthetic": False,
         "provider": "binance_usdm",
+        "source_mode": "execution_venue",
         "symbol": "GOLD",
         "timeframe": "1m",
         "latest_close": execution[-1]["close"],
@@ -560,6 +588,10 @@ def test_dca_ai_refresh_reaches_candidate_envelope_then_human_confirmation(
         "shadow": "none",
         "real_money_eligible": False,
     }
+    current_start_facts = plane.start_facts.require(
+        cycle_id,
+        refresh["preview"]["start_facts_digest"],
+    )
     result = CycleDecisionCoordinator(output).ensure(
         cycle_id,
         now=now,
@@ -572,6 +604,7 @@ def test_dca_ai_refresh_reaches_candidate_envelope_then_human_confirmation(
             payload,
             market=market,
             account={"equity": 100_000},
+            current_start_facts=current_start_facts,
             now=now,
             actor={"type": "scheduler"},
         ),

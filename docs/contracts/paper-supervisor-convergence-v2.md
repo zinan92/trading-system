@@ -50,10 +50,10 @@ Missing, non-positive or inconsistent cardinality is structural; the
 Supervisor never repairs an identity or count mismatch by adding, cancelling
 or replacing orders.
 
-## Exact blocker classifier v4
+## Exact blocker classifier v5
 
 The machine-readable source is
-`docs/contracts/paper-supervisor-blocker-v4.json`. Classification uses exact
+`docs/contracts/paper-supervisor-blocker-v5.json`. Classification uses exact
 typed evidence and exact machine-code equality only. Substring, prefix, regex,
 exception prose and free-text matching are forbidden.
 
@@ -131,6 +131,11 @@ source-bound provider-readiness receipt and executes no AI or control action.
 | `strategy_recommendation_provider_auth_not_ready` | Server-local provider authentication is not ready. |
 | `dangerous_start_attempt_cap_reached` | A third dangerous start intent would exceed the per-cycle cap of two. |
 | `clean_refusal_observation_cap_reached` | A forty-ninth proven-clean refusal would exceed the logic-runaway guard. |
+| `paper_start_facts_missing` | A start candidate has no immutable authority for its market, Paper account, policy, contract and source inputs. |
+| `paper_start_facts_invalid` | StartFacts schema, field types or content digest are invalid. |
+| `paper_start_facts_store_corrupt` | The append-only StartFacts authority cannot be read or verified exactly. |
+| `paper_start_facts_identity_conflict` | One StartFacts content identity resolves to conflicting records. |
+| `start_facts_stale` | Current trusted market or authoritative Paper execution facts differ from the authorized candidate before `start_intent`. |
 | `unknown_blocker` | Fail-closed result for every unclassified or malformed condition. |
 
 ### Event labels, not blockers
@@ -160,6 +165,16 @@ The v2 amendment is exhaustive:
 - preserve every other code and its v1 classification exactly.
 
 No other addition, removal, rename or semantic change is authorized.
+
+### Issue #594 StartFacts amendment
+
+Classifier v5 adds exactly five structural codes:
+`paper_start_facts_missing`, `paper_start_facts_invalid`,
+`paper_start_facts_store_corrupt`, `paper_start_facts_identity_conflict`, and
+`start_facts_stale`. They protect one immutable authority shared by candidate,
+preview, envelope, plan and prepare. No transient code, event label, prior
+classification or fail-closed default changes; an unlisted code remains
+`unknown_blocker` / structural.
 
 ### Issue #463 provider amendment
 

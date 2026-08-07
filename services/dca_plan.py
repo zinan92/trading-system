@@ -262,6 +262,10 @@ def build_dca_preview(
             "risk_flags": risk_flags,
         },
     }
+    if body.get("start_facts_digest") is not None:
+        preview["start_facts_digest"] = str(
+            body["start_facts_digest"]
+        )
     preview["preview_id"] = dca_preview_id(preview)
     return preview
 
