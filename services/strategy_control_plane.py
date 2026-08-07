@@ -993,16 +993,68 @@ class StrategyControlPlane:
         cycle_risk_envelope_id: str | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
+        plan = self.project_production_plan(
+            cycle_id,
+            selected_proposal_id=selected_proposal_id,
+            field_sources=field_sources,
+            cycle_risk_envelope_id=cycle_risk_envelope_id,
+            now=now,
+        )
+        if cycle_risk_envelope_id:
+            self.risk_envelopes.verify_candidate_plan_identity(
+                cycle_id=cycle_id,
+                envelope_authorization_id=str(
+                    cycle_risk_envelope_id
+                ),
+                plan=plan,
+                now=self._authorization_clock(),
+            )
+        self._activate_plan(plan)
+        return plan
+
+    def project_production_plan(
+        self,
+        cycle_id: str,
+        *,
+        selected_proposal_id: str,
+        field_sources: dict[str, str] | None = None,
+        cycle_risk_envelope_id: str | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the exact next Grid StrategyPlan without activating it.
+
+        Next-cycle pre-generation needs a stable plan identity to validate and
+        persist before the boundary, but it must not create an active plan.
+        The mutating lock path calls this same function so staging and later
+        activation cannot drift into two independently calculated shapes.
+        """
+
         proposals = self.proposals(cycle_id)
-        selected = next((row for row in proposals if row.get("proposal_id") == selected_proposal_id), None)
+        selected = next(
+            (
+                row
+                for row in proposals
+                if row.get("proposal_id") == selected_proposal_id
+            ),
+            None,
+        )
         if not selected:
             raise ValueError("selected proposal does not exist")
-        sources = _field_sources(field_sources, selected_source=str(selected["source"]))
+        if str(selected.get("strategy_type") or "grid").lower() == "dca":
+            raise ValueError("dca_plan_projection_requires_preview")
+        sources = _field_sources(
+            field_sources,
+            selected_source=str(selected["source"]),
+        )
         existing = self.active_plan(cycle_id)
         version = int(existing.get("version") or 0) + 1 if existing else 1
         plan = {
             "schema_version": PLAN_SCHEMA,
-            "strategy_plan_id": _plan_id(cycle_id, version, selected["proposal_id"]),
+            "strategy_plan_id": _plan_id(
+                cycle_id,
+                version,
+                selected["proposal_id"],
+            ),
             "cycle_id": cycle_id,
             "version": version,
             "status": "active",
@@ -1025,15 +1077,56 @@ class StrategyControlPlane:
             plan["cycle_risk_envelope_id"] = str(
                 cycle_risk_envelope_id
             )
-            self.risk_envelopes.verify_candidate_plan_identity(
-                cycle_id=cycle_id,
-                envelope_authorization_id=str(
-                    cycle_risk_envelope_id
-                ),
-                plan=plan,
-                now=self._authorization_clock(),
+        return plan
+
+    def project_dca_production_plan(
+        self,
+        cycle_id: str,
+        *,
+        selected_proposal_id: str,
+        preview: Mapping[str, Any],
+        cycle_risk_envelope_id: str,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the exact future DCA plan without preparing or activating it."""
+
+        proposals = self.proposals(cycle_id)
+        selected = next(
+            (
+                row
+                for row in proposals
+                if row.get("proposal_id") == selected_proposal_id
+            ),
+            None,
+        )
+        if (
+            not selected
+            or str(selected.get("strategy_type") or "").lower() != "dca"
+            or str(preview.get("strategy_type") or "").lower() != "dca"
+            or str(selected.get("preview_id") or "")
+            != str(preview.get("preview_id") or "")
+        ):
+            raise ValueError("plan_identity_conflict")
+        existing = self.active_plan(cycle_id)
+        version = int(existing.get("version") or 0) + 1 if existing else 1
+        plan = build_dca_strategy_plan(
+            dict(preview),
+            strategy_plan_id=_plan_id(
+                cycle_id,
+                version,
+                str(preview.get("preview_id") or ""),
+            ),
+            version=version,
+            locked_at=_timestamp(now),
+        )
+        plan["source_proposal_ids"] = [selected_proposal_id]
+        if selected.get("start_facts_digest") is not None:
+            plan["start_facts_digest"] = str(
+                selected["start_facts_digest"]
             )
-        self._activate_plan(plan)
+        plan["cycle_risk_envelope_id"] = str(
+            cycle_risk_envelope_id
+        )
         return plan
 
     def active_plan(self, cycle_id: str) -> dict[str, Any] | None:

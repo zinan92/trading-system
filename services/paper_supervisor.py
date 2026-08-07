@@ -41,6 +41,12 @@ from services.paper_supervisor_episode import (
 from services.paper_supervisor_heartbeat import (
     validate_complete_tick_heartbeat,
 )
+from services.paper_next_cycle_plan import (
+    NextCyclePlanError,
+    VerifiedWaitingPlanStore,
+    plan_content_digest,
+    staged_facts_status,
+)
 from services.paper_supervisor_identity import (
     INTENT_CONTRACT_SCHEMA_VERSION,
     accepted_order_fingerprints,
@@ -140,6 +146,9 @@ class PaperSupervisor:
             raise ValueError("supervisor_execution_profile_invalid")
         self.execution_profile = profile
         self.degradation_events = PaperDegradationEventStore(
+            self.output_root
+        )
+        self.next_cycle_plans = VerifiedWaitingPlanStore(
             self.output_root
         )
 
@@ -1692,6 +1701,22 @@ class PaperSupervisor:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         self.plane.verify_supervisor_outer_policy()
         recovery = bool(recovery_candidate)
+        if self._paper_continuous and not recovery:
+            adopted, invalidation_reason = (
+                self._adopt_verified_waiting_plan(
+                    cycle_id,
+                    lease=lease,
+                    attempt_id=attempt_id,
+                    observed_at=observed_at,
+                )
+            )
+            if adopted is not None:
+                return adopted
+            # Missing or stale staging is never permission to call AI at the
+            # boundary.  Paper-continuous records the exact reason and uses
+            # the existing current-market + authoritative-equity builder.
+            recovery = True
+            recovery_machine_code = invalidation_reason
         degradation_evidence: dict[str, Any] = {}
         for event in initial_degradation_events or []:
             self._append_degradation_ref(degradation_evidence, event)
@@ -1949,9 +1974,255 @@ class PaperSupervisor:
                 request["paper_continuity_dca_carry_forward"] = True
         elif not plan:
             raise ValueError("active_plan_missing")
+        if (
+            self._paper_continuous
+            and str(recovery_machine_code or "").startswith(
+                "next_cycle_verified_plan_"
+            )
+        ):
+            request["boundary_ai_provider_calls"] = 0
+            request["verified_waiting_validation"] = str(
+                recovery_machine_code
+            )
+            request["deterministic_rebuild_used"] = True
         if degradation_evidence:
             request.update(degradation_evidence)
         return plan, request
+
+    def _adopt_verified_waiting_plan(
+        self,
+        cycle_id: str,
+        *,
+        lease,
+        attempt_id: str,
+        observed_at: str,
+    ) -> tuple[
+        tuple[dict[str, Any], dict[str, Any]] | None,
+        str,
+    ]:
+        """Adopt one exact staged candidate or return a typed fallback reason."""
+
+        artifact: dict[str, Any] | None = None
+        try:
+            artifact = self.next_cycle_plans.load(cycle_id)
+        except NextCyclePlanError as exc:
+            reason = str(exc)
+            self.next_cycle_plans.record_boundary_event(
+                target_cycle_id=cycle_id,
+                artifact_digest=None,
+                outcome="invalidated",
+                reason=reason,
+                observed_at=observed_at,
+                current_start_facts_digest=None,
+                boundary_ai_provider_calls=0,
+                deterministic_rebuild_used=True,
+            )
+            return None, reason
+        if artifact is None:
+            reason = "next_cycle_verified_plan_missing"
+            self.next_cycle_plans.record_boundary_event(
+                target_cycle_id=cycle_id,
+                artifact_digest=None,
+                outcome="missing",
+                reason=reason,
+                observed_at=observed_at,
+                current_start_facts_digest=None,
+                boundary_ai_provider_calls=0,
+                deterministic_rebuild_used=True,
+            )
+            return None, reason
+
+        validation = self.control(
+            "validate_verified_waiting_plan",
+            {
+                "start_facts_digest": artifact[
+                    "start_facts_digest"
+                ],
+            },
+        )
+        if (
+            not isinstance(validation, Mapping)
+            or int(validation.get("control_actions_executed", -1)) != 0
+            or int(validation.get("orders_created", -1)) != 0
+            or int(validation.get("plans_activated", -1)) != 0
+            or int(validation.get("prepared_starts_created", -1)) != 0
+        ):
+            raise ValueError("execution_receipt_identity_invalid")
+        current_facts = dict(
+            validation.get("current_start_facts") or {}
+        )
+        try:
+            bound_facts = self.plane.start_facts.require(
+                cycle_id,
+                str(artifact["start_facts_digest"]),
+            )
+            status = staged_facts_status(
+                artifact,
+                bound_facts,
+                current_facts,
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+            )
+        except (NextCyclePlanError, ValueError) as exc:
+            status = {"valid": False, "reason": str(exc)}
+        current_digest = str(
+            current_facts.get("start_facts_digest") or ""
+        ) or None
+        if status.get("valid") is not True:
+            reason = str(
+                status.get("reason")
+                or "next_cycle_verified_plan_facts_stale"
+            )
+            self.next_cycle_plans.record_boundary_event(
+                target_cycle_id=cycle_id,
+                artifact_digest=artifact["artifact_digest"],
+                outcome="invalidated",
+                reason=reason,
+                observed_at=observed_at,
+                current_start_facts_digest=current_digest,
+                boundary_ai_provider_calls=0,
+                deterministic_rebuild_used=True,
+            )
+            return None, reason
+
+        proposal_id = str(artifact["proposal"]["proposal_id"])
+        proposals = [
+            dict(row)
+            for row in self.plane.proposals(cycle_id)
+            if str(row.get("proposal_id") or "") == proposal_id
+        ]
+        envelope = self.plane.risk_envelopes.envelope(
+            cycle_id,
+            str(
+                artifact["envelope"][
+                    "envelope_authorization_id"
+                ]
+            ),
+        )
+        if (
+            len(proposals) != 1
+            or not isinstance(envelope, Mapping)
+            or str(envelope.get("authorization_digest") or "")
+            != str(artifact["envelope"]["authorization_digest"])
+        ):
+            reason = "next_cycle_verified_plan_identity_conflict"
+            self.next_cycle_plans.record_boundary_event(
+                target_cycle_id=cycle_id,
+                artifact_digest=artifact["artifact_digest"],
+                outcome="invalidated",
+                reason=reason,
+                observed_at=observed_at,
+                current_start_facts_digest=current_digest,
+                boundary_ai_provider_calls=0,
+                deterministic_rebuild_used=True,
+            )
+            return None, reason
+
+        candidate_identity = dict(artifact["candidate"])
+        candidate_identity["supervisor_attempt_id"] = attempt_id
+        lease.record_pre_intent_candidate_observed(
+            attempt_id=attempt_id,
+            observed_at=observed_at,
+            candidate_identity=candidate_identity,
+        )
+        rejected_candidates = self._cleared_rejected_candidates(
+            cycle_id
+        )
+        if any(
+            self._candidate_identity_reused(
+                candidate_identity,
+                rejected_candidate,
+            )
+            for rejected_candidate in rejected_candidates
+        ):
+            raise ValueError("plan_identity_conflict")
+
+        projected_plan = dict(artifact["plan"]["projected"])
+        strategy_type = str(
+            artifact["plan"]["strategy_type"]
+        ).lower()
+        if strategy_type == "dca":
+            plan: dict[str, Any] = {}
+            request = self._request_from_plan(projected_plan)
+        else:
+            plan = self.plane.lock_production_plan(
+                cycle_id,
+                selected_proposal_id=proposal_id,
+                cycle_risk_envelope_id=str(
+                    artifact["envelope"][
+                        "envelope_authorization_id"
+                    ]
+                ),
+                now=observed_at,
+            )
+            if (
+                plan_content_digest(plan)
+                != artifact["plan"]["content_digest"]
+            ):
+                raise ValueError("plan_identity_conflict")
+            request = self._request_from_plan(plan)
+
+        request["boundary_ai_provider_calls"] = 0
+        request["verified_waiting_artifact_digest"] = artifact[
+            "artifact_digest"
+        ]
+        request["verified_waiting_validation"] = "adopted"
+        request["deterministic_rebuild_used"] = False
+        if strategy_type == "dca":
+            dca_event = self._record_degradation(
+                event_id=f"{attempt_id}:dca-confirmation-degraded",
+                cycle_id=cycle_id,
+                bypassed_gate="dca_manual_risk_confirmation_gate",
+                original_machine_code=(
+                    "manual_risk_confirmation_required"
+                ),
+                original_reason=(
+                    "a pre-generated DCA preview normally requires an "
+                    "attended Paper risk acknowledgement"
+                ),
+                alternative_action=(
+                    "reuse_verified_dca_intent_inside_exact_outer_policy"
+                ),
+                occurred_at=observed_at,
+            )
+            self._append_degradation_ref(request, dca_event)
+            request["paper_continuity_dca_carry_forward"] = True
+        grid = dict(projected_plan.get("grid") or {})
+        risk = dict(projected_plan.get("risk_budget") or {})
+        if (
+            strategy_type == "grid"
+            and (
+                grid.get("profit_target_met") is False
+                or risk.get("profit_target_met") is False
+            )
+        ):
+            profit_event = self._record_degradation(
+                event_id=f"{attempt_id}:profit-target-degraded",
+                cycle_id=cycle_id,
+                bypassed_gate="grid_profit_target_gate",
+                original_machine_code="grid_profit_target_not_met",
+                original_reason=(
+                    "the boundary-capped Grid cannot meet the configured "
+                    "per-grid profit objective"
+                ),
+                alternative_action=(
+                    "accept_lower_paper_profit_target_and_continue"
+                ),
+                occurred_at=observed_at,
+            )
+            self._append_degradation_ref(request, profit_event)
+            request["paper_continuity_allow_lower_profit_target"] = True
+        self.next_cycle_plans.record_boundary_event(
+            target_cycle_id=cycle_id,
+            artifact_digest=artifact["artifact_digest"],
+            outcome="adopted",
+            reason="verified_waiting_valid",
+            observed_at=observed_at,
+            current_start_facts_digest=current_digest,
+            boundary_ai_provider_calls=0,
+            deterministic_rebuild_used=False,
+        )
+        return (plan, request), "verified_waiting_valid"
 
     def _record_recovery_candidate_degradation(
         self,
@@ -2160,7 +2431,10 @@ class PaperSupervisor:
                 "loop_enabled": dca.get("loop_enabled"),
             }
             request["risk_budget"] = {
-                "leverage": risk.get("leverage")
+                "leverage": (
+                    risk.get("leverage")
+                    or risk.get("selected_leverage")
+                )
             }
         else:
             # Starting an already-selected Grid plan must refresh the trusted

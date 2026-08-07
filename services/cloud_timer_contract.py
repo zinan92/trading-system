@@ -35,12 +35,19 @@ REQUIRED_TIMERS = {
         # without a next trigger remains blocked.
         "requires_next_trigger": True,
     },
+    "gridmind-next-cycle-plan.timer": {
+        "service": "gridmind-next-cycle-plan.service",
+        "on_calendar": None,
+        "on_unit_inactive_sec": "300",
+        "requires_next_trigger": True,
+    },
 }
 
 SERVICE_TIMER_UNITS = {
     "daily-24h": "gridmind-daily-24h.timer",
     "deadman-ping": "gridmind-deadman-ping.timer",
     "ai-provider-readiness": "gridmind-ai-provider-readiness.timer",
+    "next-cycle-plan": "gridmind-next-cycle-plan.timer",
 }
 
 

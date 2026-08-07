@@ -23,12 +23,14 @@ CLOUD_PAPER_SERVICES = {
     "deadman-ping",
     "access-gateway",
     "ai-provider-readiness",
+    "next-cycle-plan",
 }
 
 _TIMER_GATED_SERVICES = {
     "daily-24h",
     "deadman-ping",
     "ai-provider-readiness",
+    "next-cycle-plan",
 }
 
 

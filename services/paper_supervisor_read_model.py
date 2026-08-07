@@ -21,6 +21,7 @@ from services.paper_supervisor_store import (
     PaperSupervisorStore,
     SupervisorStoreError,
 )
+from services.paper_next_cycle_plan import VerifiedWaitingPlanStore
 from services.paper_supervisor_utilization_index import (
     PaperSupervisorUtilizationIndex,
     compact_running_identity_matches,
@@ -58,6 +59,7 @@ def build_paper_supervisor_polling_summary(
     """
 
     observed = _utc(as_of)
+    next_cycle_plan = _staged_plan_projection(output_root, cycle_id)
     utilization_summary = (
         dict(utilization) if isinstance(utilization, Mapping) else {}
     )
@@ -79,6 +81,7 @@ def build_paper_supervisor_polling_summary(
             "classifier_version": CLASSIFIER_VERSION,
             "status": "not_started",
             "current_cycle": current,
+            "next_cycle_plan": next_cycle_plan,
             "utilization": utilization_summary,
             "source_errors": [],
             "history_query": _history_query(cycle_id),
@@ -116,6 +119,7 @@ def build_paper_supervisor_polling_summary(
             "classifier_version": CLASSIFIER_VERSION,
             "status": "unavailable",
             "current_cycle": _polling_unavailable_cycle(cycle_id),
+            "next_cycle_plan": next_cycle_plan,
             "utilization": utilization_summary,
             "source_errors": [
                 {
@@ -176,6 +180,7 @@ def build_paper_supervisor_polling_summary(
         "classifier_version": CLASSIFIER_VERSION,
         "status": "available",
         "current_cycle": current,
+        "next_cycle_plan": next_cycle_plan,
         "utilization": utilization_summary,
         "source_errors": [],
         "history_query": _history_query(cycle_id),
@@ -240,6 +245,10 @@ def build_paper_supervisor_history_response(
         "classifier_version": CLASSIFIER_VERSION,
         "status": "unavailable" if source_errors else current["status"],
         "current_cycle": current,
+        "next_cycle_plan": _staged_plan_projection(
+            output_root,
+            cycle_id,
+        ),
         "source_errors": source_errors,
         "read_only": True,
         "command_authority": False,
@@ -324,6 +333,10 @@ def build_paper_supervisor_read_model(
             else current["status"]
         ),
         "current_cycle": current,
+        "next_cycle_plan": _staged_plan_projection(
+            output_root,
+            cycle_id,
+        ),
         "utilization": utilization,
         "source_errors": source_errors,
         "read_only": True,
@@ -924,6 +937,30 @@ def _latest_attempt(state: Mapping[str, Any]) -> dict[str, Any] | None:
         "machine_code": row.get("terminal_machine_code"),
         "classification": row.get("terminal_classification"),
         "source_tick_key": row.get("source_tick_key"),
+    }
+
+
+def _staged_plan_projection(
+    output_root: Path,
+    cycle_id: str,
+) -> dict[str, Any]:
+    """Expose both boundary history and the currently waiting successor."""
+
+    store = VerifiedWaitingPlanStore(Path(output_root))
+    current = store.projection(cycle_id)
+    successor = cycle_window(
+        cycle_window_from_id(cycle_id).end
+    ).cycle_id
+    waiting = store.projection(successor)
+    selected = (
+        waiting
+        if waiting.get("status") not in {"missing"}
+        else current
+    )
+    return {
+        **selected,
+        "current_cycle_candidate": current,
+        "successor_candidate": waiting,
     }
 
 

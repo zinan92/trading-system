@@ -26,6 +26,7 @@ def main() -> int:
             "activate-dashboard",
             "activate-remote-access",
             "activate-provider-readiness",
+            "activate-next-cycle-plan",
             "uninstall",
         ),
         default="render",

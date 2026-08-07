@@ -22,6 +22,7 @@ from services.paper_degradation_events import (
     build_cycle_continuity_evidence,
     validate_packaged_degradation_evidence,
 )
+from services.paper_next_cycle_plan import VerifiedWaitingPlanStore
 from services.strategy_control_plane import (
     StrategyControlPlane,
     production_mutation_lock,
@@ -157,6 +158,9 @@ class StrategyCyclePackager:
             self.output_root,
             cycle_id,
         )
+        next_cycle_plan = VerifiedWaitingPlanStore(
+            self.output_root
+        ).projection(cycle_id)
         packaged_at = now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         pnl = dict(snapshot.get("pnl") or {})
         payload: dict[str, Any] = {
@@ -204,6 +208,7 @@ class StrategyCyclePackager:
             "continuity_transitions_digest": continuity[
                 "transitions_digest"
             ],
+            "next_cycle_plan_evidence": next_cycle_plan,
             "traceability": {
                 "strategy_plan_id": (plan or {}).get("strategy_plan_id"),
                 "strategy_plan_version": (plan or {}).get("version"),
@@ -213,6 +218,9 @@ class StrategyCyclePackager:
                 "cycle_handoff_verified": handoff_verified,
                 "degradation_events_complete": True,
                 "continuity_evidence_complete": True,
+                "next_cycle_plan_evidence_readable": (
+                    next_cycle_plan.get("status") != "unavailable"
+                ),
             },
             "safety": {
                 "real_orders": False,

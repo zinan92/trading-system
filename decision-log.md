@@ -14518,3 +14518,77 @@ auditable datafeed port; broker execution remains a separate port.
   exact event reference, and active DCA enters only the DCA adapter.
 - Exact-SHA Cloud deployment and the 24h/7d >=85% utilization result remain
   #588 release evidence; unit or repository test success is not completion.
+
+# 2026-08-07 — Precompute one verified next-cycle plan outside the boundary path (#595)
+
+## Decision
+
+- Run AI evaluation in a dedicated non-overlapping Cloud oneshot during the
+  final configurable hour of a proven-running cycle, never inside the
+  55-second live-tick/Supervisor budget. The service requires the latest
+  sealed `running_proven` observation, a complete heartbeat no older than 180
+  seconds, trusted market construction, authoritative target-cycle Paper
+  execution equity, the exact Park policy binding and clean source identity
+  before it may call the provider.
+- Persist exactly one immutable `paper-next-cycle-verified-waiting-v1`
+  artifact for the successor cycle. It binds proposal, preview, projected
+  plan, envelope, canonical StartFacts, policy and source identities, states
+  that one provider call occurred, and proves zero control, plan activation,
+  prepared-start, order or position mutations. A target-cycle file lock makes
+  concurrent timer runs converge on that one artifact.
+- Project the future StrategyPlan through the same pure builder later used by
+  `lock_production_plan`; pre-generation never writes an active plan. At the
+  boundary Supervisor validates fresh StartFacts through the public trusted
+  market/execution composition. If executable authority is unchanged it
+  activates the exact projected Grid shape (or carries the exact DCA request)
+  with `boundary_ai_provider_calls=0`.
+- Missing, corrupt, expired, wrong-cycle/source/policy or changed executable
+  facts append a boundary invalidation receipt and a normal Paper degradation
+  event, then use the existing deterministic current-market and authoritative-
+  equity recovery candidate. This fallback never calls AI. Market trust and
+  Paper-only proof remain hard gates; `fail_closed` behavior is unchanged.
+- Treat #594, #595 and #593 as one architectural law across separate bounded
+  contexts: one domain authority is computed once and consumers carry its
+  digest. #594/#595 own start-input authority; #593 separately owns immutable
+  execution/review-output authority so their journals and release risk do not
+  get mixed into one oversized patch.
+
+## Gotchas
+
+- `start_facts_digest` includes observation time and the full planning bundle,
+  so byte equality would invalidate every staged plan even when its executable
+  mark, account, contract, policy and source were unchanged. Boundary adoption
+  therefore resolves the immutable bound StartFacts and compares its canonical
+  `execution_authority_digest`; planning-only changes remain auditable while a
+  price/equity/source/policy change takes deterministic recovery.
+- A projected plan cannot be written as `status=staged` in the production plan
+  journal: existing readers can promote or version that journal. The waiting
+  artifact owns the projection, while the production journal remains untouched
+  until the target cycle and the normal mutation lock.
+- Running pre-generation inside live-tick would leave less than ten seconds for
+  market, lifecycle, ledger and heartbeat work. A separate systemd timer keeps
+  the provider's 25-second budget away from execution heartbeat health and uses
+  `OnUnitInactiveSec=300` so slow runs queue instead of overlap.
+- The existing Supervisor WAL candidate schema initially rejected the
+  `start_facts_digest` added by #594 even though the envelope already carried
+  it. The validator now accepts that one optional 64-hex field while remaining
+  exact for all legacy records; no classifier or retry whitelist changed.
+- Provider-readiness verification at the boundary reads an existing local
+  receipt; it does not invoke the provider. If that receipt is unavailable,
+  the already-audited Paper provider-fallback capability remains the only
+  route, while pre-generation itself must have completed a real provider call.
+
+## Verification
+
+- Focused tests prove concurrent pre-generators make exactly one provider call
+  and one artifact, with zero control/order/plan/prepared mutations; an absent
+  running proof stops before the provider call; tampering fails closed.
+- Boundary integration proves a valid waiting artifact is the only planning
+  read, the active plan matches its content digest, and the immutable boundary
+  event reports `boundary_ai_provider_calls=0`. Planning-only fact changes are
+  accepted; executable price changes are invalidated for deterministic rebuild.
+- Cloud renderer, boot gate, timer contract and soak monitor now include the
+  new service/timer. Existing Supervisor, control-plane, DCA, read-model,
+  package and Cloud suites remain part of the upstream regression.
+- Repository tests do not prove production continuity. Exact-SHA deployment,
+  the first real boundary audit, and #588 utilization remain separate evidence.
