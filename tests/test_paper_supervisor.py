@@ -28,6 +28,12 @@ from services.paper_supervisor import (
     _digest,
 )
 from services.paper_degradation_events import PaperDegradationEventStore
+from services.paper_supervisor_exception_provenance import (
+    PaperSupervisorExceptionStore,
+)
+from services.paper_supervisor_read_model import (
+    build_paper_supervisor_history_response,
+)
 from services.supervisor_execution_profile import PAPER_CONTINUOUS
 from services.paper_supervisor_classifier import classify_blocker
 from services.paper_supervisor_store import PaperSupervisorStore
@@ -627,6 +633,77 @@ def test_paper_continuous_provider_outage_reuses_plan_with_audited_fallback(
         == "rebuild_candidate_from_current_market_and_"
         "authoritative_paper_equity"
         for row in events
+    )
+
+
+def test_provider_fallback_deeper_failure_keeps_sanitized_original_exception(
+    tmp_path: Path,
+) -> None:
+    supervisor, _control, _ = _continuous_supervisor(
+        tmp_path,
+        outcomes=["accepted"],
+    )
+    supervisor.provider_readiness_verifier = lambda: {
+        "ok": False,
+        "blocker": "cloud_ai_provider_readiness_stale",
+    }
+    supervisor.exception_provenance.source_attestation = lambda: {
+        "source_sha": "a" * 40,
+        "source_tree_sha": "b" * 40,
+        "tracked_tree_clean": True,
+    }
+
+    def failed_fallback(action: str, _payload: dict) -> dict:
+        assert action == "paper_continuity_candidate"
+        raise RuntimeError(
+            "provider payload={'prompt':'private'} token=secret-value "
+            "/var/lib/gridmind/private.json"
+        )
+
+    supervisor.control = failed_fallback
+    result = supervisor.converge_once(
+        CYCLE,
+        observed_at=T0.isoformat(),
+        heartbeat=_heartbeat(T0),
+    )
+
+    assert result["status"] == "blocked_structural"
+    assert result["machine_code"] == "unknown_blocker"
+    assert result["control_actions_executed"] == 0
+    ref = result["exception_receipt"]
+    assert ref["phase"] == "provider_fallback"
+    receipts = PaperSupervisorExceptionStore(
+        supervisor.output_root
+    ).receipts(CYCLE)
+    receipt = next(
+        row for row in receipts if row["receipt_digest"] == ref["receipt_digest"]
+    )
+    assert receipt["redacted_message"] == "provider payload=<redacted-content>"
+    assert receipt["start_intent_persisted"] is False
+    assert supervisor.store.current_state(CYCLE)["attempt_count"] == 0
+    assert supervisor.execution.orders == []
+    history = build_paper_supervisor_history_response(
+        supervisor.output_root,
+        cycle_id=CYCLE,
+    )
+    assert history["exception_provenance"]["receipts"] == receipts
+    attempt = history["supervisor"]["current_cycle"]["last_attempt"]
+    assert attempt["exception_receipt"] == ref
+    assert history["supervisor"]["current_cycle"]["history"][
+        "pre_intent_attempts"
+    ][-1]["terminal_exception_receipt"] == ref
+    provider_event = next(
+        row
+        for row in PaperDegradationEventStore(
+            supervisor.output_root
+        ).events(CYCLE)
+        if row["bypassed_gate"] == "cloud_ai_provider_readiness_gate"
+    )
+    readiness_receipt = next(
+        row for row in receipts if row["phase"] == "provider_readiness"
+    )
+    assert provider_event["exception_receipt_digest"] == (
+        readiness_receipt["receipt_digest"]
     )
 
 

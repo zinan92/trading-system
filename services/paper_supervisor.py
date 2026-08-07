@@ -56,6 +56,11 @@ from services.paper_supervisor_identity import (
     open_position_identities,
     order_fingerprint,
 )
+from services.paper_supervisor_exception_provenance import (
+    PaperSupervisorExceptionEvidenceError,
+    PaperSupervisorExceptionStore,
+    exception_receipt_ref,
+)
 from services.paper_supervisor_evidence import (
     draft_running_evidence,
     finalize_running_evidence,
@@ -124,6 +129,12 @@ class PaperSupervisor:
         provider_readiness_verifier: (
             Callable[[], Mapping[str, Any]] | None
         ) = None,
+        exception_provenance_store: (
+            PaperSupervisorExceptionStore | None
+        ) = None,
+        exception_source_attestation: (
+            Callable[[], Mapping[str, Any]] | None
+        ) = None,
         execution_profile: str = FAIL_CLOSED,
     ) -> None:
         if attempt_deadline_seconds <= 0:
@@ -150,6 +161,17 @@ class PaperSupervisor:
         )
         self.next_cycle_plans = VerifiedWaitingPlanStore(
             self.output_root
+        )
+        source_attestation = exception_source_attestation
+        if source_attestation is None:
+            candidate = getattr(self.plane, "_source_attestation", None)
+            source_attestation = candidate if callable(candidate) else None
+        self.exception_provenance = (
+            exception_provenance_store
+            or PaperSupervisorExceptionStore(
+                self.output_root,
+                source_attestation=source_attestation,
+            )
         )
 
     def converge_once(
@@ -411,22 +433,27 @@ class PaperSupervisor:
                     exc=exc,
                     heartbeat=health,
                     deadline_exceeded=True,
+                    phase="authority_snapshot",
                 )
             except Exception as exc:  # noqa: BLE001 - malformed authority fails closed.
-                return self._structural(
+                machine_code = (
+                    "attempt_store_corrupt"
+                    if str(exc) == "attempt_store_corrupt"
+                    else "order_identity_conflict"
+                    if str(exc)
+                    == "execution_receipt_identity_invalid"
+                    else "unknown_blocker"
+                )
+                return self._classify_before_intent(
                     lease,
                     state,
                     cycle_id=cycle_id,
                     observed_at=observed_at,
-                    machine_code=(
-                        "attempt_store_corrupt"
-                        if str(exc) == "attempt_store_corrupt"
-                        else "order_identity_conflict"
-                        if str(exc)
-                        == "execution_receipt_identity_invalid"
-                        else "unknown_blocker"
-                    ),
+                    exc=exc,
                     heartbeat=health,
+                    deadline_exceeded=False,
+                    phase="authority_snapshot",
+                    classification_control_code=machine_code,
                 )
             plan = dict(authority.active_plan)
             runtime = dict(authority.runtime)
@@ -631,6 +658,7 @@ class PaperSupervisor:
                         exc=exc,
                         heartbeat=health,
                         deadline_exceeded=True,
+                        phase="runtime_adoption",
                     )
             if self._has_exposure(authority):
                 if self._paper_continuous:
@@ -762,6 +790,7 @@ class PaperSupervisor:
                             exc=exc,
                             heartbeat=health,
                             deadline_exceeded=False,
+                            phase="outer_policy",
                         )
                     self._record_degradation(
                         event_id=f"{attempt_id}:policy-renewal",
@@ -790,6 +819,7 @@ class PaperSupervisor:
                             exc=renewal_exc,
                             heartbeat=health,
                             deadline_exceeded=False,
+                            phase="outer_policy",
                         )
 
             provider_fallback = False
@@ -811,6 +841,28 @@ class PaperSupervisor:
                         exc=exc,
                         heartbeat=health,
                         deadline_exceeded=False,
+                        phase="provider_readiness",
+                    )
+                try:
+                    provider_exception_ref = (
+                        self._record_pre_intent_exception(
+                            cycle_id=cycle_id,
+                            observed_at=observed_at,
+                            exc=exc,
+                            phase="provider_readiness",
+                            attempt_id=attempt_id,
+                        )
+                    )
+                except PaperSupervisorExceptionEvidenceError:
+                    return self._classify_before_intent(
+                        lease,
+                        state,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                        exc=exc,
+                        heartbeat=health,
+                        deadline_exceeded=False,
+                        phase="provider_readiness",
                     )
                 provider_fallback = True
                 attempt_readiness = None
@@ -831,6 +883,9 @@ class PaperSupervisor:
                         "reuse_verified_strategy_intent_without_new_ai_call"
                     ),
                     occurred_at=observed_at,
+                    exception_receipt_digest=(
+                        provider_exception_ref["receipt_digest"]
+                    ),
                 )
 
             request: dict[str, Any]
@@ -881,6 +936,13 @@ class PaperSupervisor:
                         exc=exc,
                         heartbeat=health,
                         deadline_exceeded=True,
+                        phase=str(
+                            getattr(
+                                exc,
+                                "_paper_supervisor_phase",
+                                "candidate_build",
+                            )
+                        ),
                     )
                 except Exception as exc:  # noqa: BLE001 - exact classifier is fail-closed.
                     return self._classify_before_intent(
@@ -893,6 +955,13 @@ class PaperSupervisor:
                         deadline_exceeded=isinstance(
                             exc,
                             SupervisorAttemptDeadline,
+                        ),
+                        phase=str(
+                            getattr(
+                                exc,
+                                "_paper_supervisor_phase",
+                                "candidate_build",
+                            )
                         ),
                     )
             else:
@@ -964,6 +1033,7 @@ class PaperSupervisor:
                     exc=exc,
                     heartbeat=health,
                     deadline_exceeded=True,
+                    phase="prepare_start",
                 )
             except Exception as exc:  # noqa: BLE001 - exact classifier is fail-closed.
                 return self._classify_before_intent(
@@ -976,7 +1046,8 @@ class PaperSupervisor:
                     deadline_exceeded=isinstance(
                         exc,
                         SupervisorAttemptDeadline,
-                    )
+                    ),
+                    phase="prepare_start",
                 )
             try:
                 if not isinstance(prepared, Mapping):
@@ -1062,6 +1133,7 @@ class PaperSupervisor:
                     exc=exc,
                     heartbeat=health,
                     deadline_exceeded=False,
+                    phase="prepared_receipt_validation",
                 )
             lease.record_pre_intent_prepare_succeeded(
                 attempt_id=attempt_id,
@@ -1251,6 +1323,7 @@ class PaperSupervisor:
                     exc=exc,
                     heartbeat=health,
                     deadline_exceeded=False,
+                    phase="pre_start_provider_readiness",
                 )
             except Exception:  # noqa: BLE001 - outcome is authority, never exception prose.
                 unfinished = self.store.unfinished_intent(cycle_id)
@@ -1384,6 +1457,7 @@ class PaperSupervisor:
         original_reason: str,
         alternative_action: str,
         occurred_at: str,
+        exception_receipt_digest: str | None = None,
     ) -> dict[str, Any]:
         if not self._paper_continuous:
             raise ValueError("paper_degradation_requires_continuous_profile")
@@ -1396,6 +1470,7 @@ class PaperSupervisor:
             original_reason=original_reason,
             alternative_action=alternative_action,
             occurred_at=occurred_at,
+            exception_receipt_digest=exception_receipt_digest,
         )
 
     @staticmethod
@@ -1699,7 +1774,8 @@ class PaperSupervisor:
         provider_fallback: bool = False,
         initial_degradation_events: list[Mapping[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        self.plane.verify_supervisor_outer_policy()
+        with self._pre_intent_exception_phase("outer_policy"):
+            self.plane.verify_supervisor_outer_policy()
         recovery = bool(recovery_candidate)
         if self._paper_continuous and not recovery:
             adopted, invalidation_reason = (
@@ -1738,27 +1814,35 @@ class PaperSupervisor:
                 degradation_evidence,
                 recovery_event,
             )
+        evaluation_phase = (
+            "provider_fallback"
+            if provider_fallback
+            else "candidate_build"
+            if recovery
+            else "primary_ai"
+        )
         try:
-            evaluation = self.control(
-                (
-                    "paper_continuity_candidate"
-                    if recovery
-                    else "refresh_recommendation"
-                ),
-                {
-                    **(
-                        {"paper_continuity_provider_fallback": True}
-                        if provider_fallback
-                        else {}
-                    ),
-                    **(
-                        {"supervisor_attempt_id": attempt_id}
+            with self._pre_intent_exception_phase(evaluation_phase):
+                evaluation = self.control(
+                    (
+                        "paper_continuity_candidate"
                         if recovery
-                        else {}
+                        else "refresh_recommendation"
                     ),
-                    **degradation_evidence,
-                },
-            )
+                    {
+                        **(
+                            {"paper_continuity_provider_fallback": True}
+                            if provider_fallback
+                            else {}
+                        ),
+                        **(
+                            {"supervisor_attempt_id": attempt_id}
+                            if recovery
+                            else {}
+                        ),
+                        **degradation_evidence,
+                    },
+                )
         except Exception as exc:  # noqa: BLE001 - typed provider fallback only.
             code = str(getattr(exc, "code", str(exc)))
             provider_codes = set(RECOVERABLE_PROVIDER_CODES) | {
@@ -1771,6 +1855,13 @@ class PaperSupervisor:
                 or code not in provider_codes
             ):
                 raise
+            provider_exception_ref = self._record_pre_intent_exception(
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+                exc=exc,
+                phase="primary_ai",
+                attempt_id=attempt_id,
+            )
             provider_event = self._record_degradation(
                 event_id=f"{attempt_id}:provider-call-fallback",
                 cycle_id=cycle_id,
@@ -1783,6 +1874,9 @@ class PaperSupervisor:
                     "reuse_verified_strategy_intent_without_new_ai_call"
                 ),
                 occurred_at=observed_at,
+                exception_receipt_digest=(
+                    provider_exception_ref["receipt_digest"]
+                ),
             )
             self._append_degradation_ref(
                 degradation_evidence,
@@ -1800,20 +1894,22 @@ class PaperSupervisor:
                 degradation_evidence,
                 recovery_event,
             )
-            evaluation = self.control(
-                "paper_continuity_candidate",
-                {
-                    "paper_continuity_provider_fallback": True,
-                    "supervisor_attempt_id": attempt_id,
-                    **degradation_evidence,
-                },
+            with self._pre_intent_exception_phase("provider_fallback"):
+                evaluation = self.control(
+                    "paper_continuity_candidate",
+                    {
+                        "paper_continuity_provider_fallback": True,
+                        "supervisor_attempt_id": attempt_id,
+                        **degradation_evidence,
+                    },
+                )
+        with self._pre_intent_exception_phase("candidate_build"):
+            recommendation = dict(
+                evaluation.get("recommendation") or {}
             )
-        recommendation = dict(
-            evaluation.get("recommendation") or {}
-        )
-        proposal = dict(evaluation.get("proposal") or {})
-        preview = dict(evaluation.get("preview") or {})
-        recovery_detail = dict(evaluation.get("recovery") or {})
+            proposal = dict(evaluation.get("proposal") or {})
+            preview = dict(evaluation.get("preview") or {})
+            recovery_detail = dict(evaluation.get("recovery") or {})
         if recovery_detail.get("risk_repriced") is True:
             risk_event = self._record_degradation(
                 event_id=f"{attempt_id}:risk-repriced",
@@ -1861,12 +1957,13 @@ class PaperSupervisor:
                 degradation_evidence,
                 profit_event,
             )
-        candidate_identity = self.plane.supervisor_candidate_identity(
-            cycle_id,
-            proposal=proposal,
-            preview=preview,
-            supervisor_attempt_id=attempt_id,
-        )
+        with self._pre_intent_exception_phase("candidate_build"):
+            candidate_identity = self.plane.supervisor_candidate_identity(
+                cycle_id,
+                proposal=proposal,
+                preview=preview,
+                supervisor_attempt_id=attempt_id,
+            )
         lease.record_pre_intent_candidate_observed(
             attempt_id=attempt_id,
             observed_at=observed_at,
@@ -1883,12 +1980,13 @@ class PaperSupervisor:
             for rejected_candidate in rejected_candidates
         ):
             raise ValueError("plan_identity_conflict")
-        envelope = self.plane.authorize_supervisor_ai_envelope(
-            cycle_id,
-            proposal=proposal,
-            preview=preview,
-            supervisor_attempt_id=attempt_id,
-        )
+        with self._pre_intent_exception_phase("envelope_authorization"):
+            envelope = self.plane.authorize_supervisor_ai_envelope(
+                cycle_id,
+                proposal=proposal,
+                preview=preview,
+                supervisor_attempt_id=attempt_id,
+            )
         envelope_id = str(
             envelope.get("envelope_authorization_id") or ""
         )
@@ -1900,14 +1998,15 @@ class PaperSupervisor:
             or "grid"
         ).lower()
         if strategy_type != "dca":
-            self.plane.lock_production_plan(
-                cycle_id,
-                selected_proposal_id=str(
-                    proposal.get("proposal_id") or ""
-                ),
-                cycle_risk_envelope_id=envelope_id,
-                now=observed_at,
-            )
+            with self._pre_intent_exception_phase("plan_lock"):
+                self.plane.lock_production_plan(
+                    cycle_id,
+                    selected_proposal_id=str(
+                        proposal.get("proposal_id") or ""
+                    ),
+                    cycle_risk_envelope_id=envelope_id,
+                    now=observed_at,
+                )
         plan = self.plane.active_plan(cycle_id) or {}
         # Once a Grid proposal is locked, every start path must carry its full
         # frozen execution shape.  Sending only direction/style here caused
@@ -2145,16 +2244,17 @@ class PaperSupervisor:
             plan: dict[str, Any] = {}
             request = self._request_from_plan(projected_plan)
         else:
-            plan = self.plane.lock_production_plan(
-                cycle_id,
-                selected_proposal_id=proposal_id,
-                cycle_risk_envelope_id=str(
-                    artifact["envelope"][
-                        "envelope_authorization_id"
-                    ]
-                ),
-                now=observed_at,
-            )
+            with self._pre_intent_exception_phase("plan_lock"):
+                plan = self.plane.lock_production_plan(
+                    cycle_id,
+                    selected_proposal_id=proposal_id,
+                    cycle_risk_envelope_id=str(
+                        artifact["envelope"][
+                            "envelope_authorization_id"
+                        ]
+                    ),
+                    now=observed_at,
+                )
             if (
                 plan_content_digest(plan)
                 != artifact["plan"]["content_digest"]
@@ -2265,6 +2365,7 @@ class PaperSupervisor:
         attempt_id = str(unfinished.get("attempt_id") or "")
         machine_code = "attempt_store_corrupt"
         evidence: dict[str, Any] | None = None
+        exception_ref: dict[str, str] | None = None
         try:
             risk_envelopes = self.plane.risk_envelopes
             load_for_attempt = getattr(
@@ -2293,7 +2394,17 @@ class PaperSupervisor:
             machine_code = (
                 "outer_strategy_policy_envelope_out_of_bounds"
             )
-        except Exception:  # noqa: BLE001 - missing or ambiguous receipt fails closed.
+        except Exception as exc:  # noqa: BLE001 - missing or ambiguous receipt fails closed.
+            try:
+                exception_ref = self._record_pre_intent_exception(
+                    cycle_id=cycle_id,
+                    observed_at=observed_at,
+                    exc=exc,
+                    phase="envelope_authorization",
+                    attempt_id=attempt_id,
+                )
+            except PaperSupervisorExceptionEvidenceError:
+                exception_ref = None
             evidence = None
             machine_code = "attempt_store_corrupt"
         try:
@@ -2302,6 +2413,7 @@ class PaperSupervisor:
                 machine_code=machine_code,
                 observed_at=observed_at,
                 evidence=evidence,
+                exception_receipt=exception_ref,
             )
             state = self._reconcile_operational_wal(
                 state,
@@ -2316,6 +2428,11 @@ class PaperSupervisor:
                 classification=STRUCTURAL,
                 control_actions=0,
                 heartbeat=heartbeat,
+                **(
+                    {"exception_receipt": exception_ref}
+                    if exception_ref is not None
+                    else {}
+                ),
             )
         return self._finish(
             lease,
@@ -2329,6 +2446,11 @@ class PaperSupervisor:
                 control_actions=0,
                 heartbeat=heartbeat,
                 recovered_attempt_id=attempt_id,
+                **(
+                    {"exception_receipt": exception_ref}
+                    if exception_ref is not None
+                    else {}
+                ),
             ),
         )
 
@@ -3466,6 +3588,60 @@ class PaperSupervisor:
             authority=authority,
         )
 
+    @contextmanager
+    def _pre_intent_exception_phase(self, phase: str):
+        """Tag a propagating exception with the exact pre-intent stage."""
+
+        try:
+            yield
+        except BaseException as exc:
+            try:
+                setattr(exc, "_paper_supervisor_phase", str(phase))
+            except Exception:  # pragma: no cover - exotic immutable exceptions.
+                pass
+            raise
+
+    def _record_pre_intent_exception(
+        self,
+        *,
+        cycle_id: str,
+        observed_at: str,
+        exc: BaseException,
+        phase: str,
+        attempt_id: str | None = None,
+    ) -> dict[str, str]:
+        attached = getattr(
+            exc,
+            "_paper_supervisor_exception_receipt",
+            None,
+        )
+        if isinstance(attached, Mapping):
+            return exception_receipt_ref(attached)
+        pending = self.store.unfinished_pre_intent(cycle_id)
+        resolved_attempt_id = str(
+            attempt_id
+            or dict(pending or {}).get("attempt_id")
+            or ""
+        )
+        receipt = self.exception_provenance.record_exception(
+            cycle_id=cycle_id,
+            attempt_id=resolved_attempt_id,
+            phase=phase,
+            occurred_at=observed_at,
+            exc=exc,
+        )
+        ref = exception_receipt_ref(receipt)
+        try:
+            setattr(exc, "_paper_supervisor_phase", str(phase))
+            setattr(
+                exc,
+                "_paper_supervisor_exception_receipt",
+                ref,
+            )
+        except Exception:  # pragma: no cover - exotic immutable exceptions.
+            pass
+        return ref
+
     def _classify_before_intent(
         self,
         lease,
@@ -3476,7 +3652,22 @@ class PaperSupervisor:
         exc: BaseException,
         heartbeat: Mapping[str, Any],
         deadline_exceeded: bool,
+        phase: str,
+        classification_control_code: str | None = None,
     ) -> dict[str, Any]:
+        exception_ref: dict[str, str] | None = None
+        provenance_failed = False
+        try:
+            exception_ref = self._record_pre_intent_exception(
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+                exc=exc,
+                phase=phase,
+            )
+        except PaperSupervisorExceptionEvidenceError:
+            # Losing diagnostic provenance must fail closed, but must never
+            # turn into a second attempt or obscure start-intent ordering.
+            provenance_failed = True
         classified = (
             classify_blocker(
                 evidence={
@@ -3486,8 +3677,10 @@ class PaperSupervisor:
             )
             if deadline_exceeded
             else classify_blocker(
-                control_code=str(
-                    getattr(exc, "code", str(exc))
+                control_code=(
+                    str(classification_control_code)
+                    if classification_control_code is not None
+                    else str(getattr(exc, "code", str(exc)))
                 )
             )
         )
@@ -3567,6 +3760,11 @@ class PaperSupervisor:
             and isinstance(raw_evidence, Mapping)
         ):
             blocker_evidence = dict(raw_evidence)
+        if provenance_failed:
+            classified = classify_blocker(
+                control_code="attempt_store_corrupt"
+            )
+            blocker_evidence = None
         if pending is not None:
             lease.record_pre_intent_finished(
                 attempt_id=str(pending["attempt_id"]),
@@ -3575,6 +3773,7 @@ class PaperSupervisor:
                 classification=classified["classification"],
                 observed_at=observed_at,
                 evidence=blocker_evidence,
+                exception_receipt=exception_ref,
             )
             state = self._reconcile_operational_wal(
                 state,
@@ -3608,6 +3807,11 @@ class PaperSupervisor:
                 classification=classified["classification"],
                 control_actions=0,
                 heartbeat=heartbeat,
+                **(
+                    {"exception_receipt": exception_ref}
+                    if exception_ref is not None
+                    else {}
+                ),
             ),
         )
 
@@ -4178,6 +4382,7 @@ class PaperSupervisor:
             ),
             heartbeat=heartbeat,
             deadline_exceeded=True,
+            phase="attempt_deadline",
         )
 
     def _structural(

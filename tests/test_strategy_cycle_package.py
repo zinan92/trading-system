@@ -4,6 +4,9 @@ import pytest
 
 from services.journal_store import load_json, write_json
 from services.paper_degradation_events import PaperDegradationEventStore
+from services.paper_supervisor_exception_provenance import (
+    PaperSupervisorExceptionStore,
+)
 from services.strategy_cycle_package import (
     StrategyCyclePackager,
     _hash_payload,
@@ -68,6 +71,11 @@ def test_terminal_package_is_hashed_linked_and_idempotent(tmp_path: Path) -> Non
     assert first["continuity_transitions"] == []
     assert first["continuity_transition_count"] == 0
     assert first["traceability"]["degradation_events_complete"] is True
+    assert first["pre_intent_exception_receipts"] == []
+    assert first["pre_intent_exception_receipt_count"] == 0
+    assert first["traceability"][
+        "pre_intent_exception_evidence_complete"
+    ] is True
     assert len(first["package_hash"]) == 64
     assert len(load_json(output / "dualtrack" / "strategy_cycle_packages" / f"{cycle_id}.json")) == 1
 
@@ -94,6 +102,67 @@ def test_package_blocks_on_non_terminal_execution(tmp_path: Path) -> None:
     assert result["status"] == "blocked"
     assert result["review"]["status"] == "blocked"
     assert result["execution"]["reconciliation"]["status"] == "drift"
+
+
+def test_terminal_package_embeds_complete_pre_intent_exception_chain(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    cycle_id = "2026-07-06_DAY"
+    _seed_plan(output, cycle_id)
+    evidence_store = PaperSupervisorExceptionStore(
+        output,
+        source_attestation=lambda: {
+            "source_sha": "a" * 40,
+            "source_tree_sha": "b" * 40,
+            "tracked_tree_clean": True,
+        },
+    )
+    receipt = evidence_store.record_exception(
+        cycle_id=cycle_id,
+        attempt_id="supervisor-attempt-package-proof",
+        phase="provider_fallback",
+        occurred_at="2026-07-06T01:00:00+00:00",
+        exc=RuntimeError("fallback failed token=secret-value"),
+    )
+
+    package = StrategyCyclePackager(
+        output,
+        adapter=TerminalAdapter(),
+    ).package(cycle_id)
+
+    assert package["pre_intent_exception_receipts"] == [receipt]
+    assert package["pre_intent_exception_receipt_count"] == 1
+    assert package["pre_intent_exception_receipt_tail_digest"] == (
+        receipt["receipt_digest"]
+    )
+    package_path = (
+        output
+        / "dualtrack"
+        / "strategy_cycle_packages"
+        / f"{cycle_id}.json"
+    )
+    assert load_latest_verified_cycle_package(package_path)[
+        "pre_intent_exception_receipts"
+    ] == [receipt]
+
+    rows = load_json(package_path)
+    rows[0]["pre_intent_exception_receipts"][0][
+        "redacted_message"
+    ] = "rewritten"
+    rows[0]["package_hash"] = _hash_payload(
+        {
+            key: value
+            for key, value in rows[0].items()
+            if key != "package_hash"
+        }
+    )
+    write_json(package_path, rows)
+    with pytest.raises(
+        ValueError,
+        match="exception evidence is invalid",
+    ):
+        load_latest_verified_cycle_package(package_path)
 
 
 def test_verified_handoff_closes_books_without_closing_positions(tmp_path: Path) -> None:

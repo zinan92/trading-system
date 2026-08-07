@@ -23,6 +23,11 @@ from services.paper_degradation_events import (
     validate_packaged_degradation_evidence,
 )
 from services.paper_next_cycle_plan import VerifiedWaitingPlanStore
+from services.paper_supervisor_exception_provenance import (
+    PaperSupervisorExceptionEvidenceError,
+    PaperSupervisorExceptionStore,
+    validate_packaged_exception_evidence,
+)
 from services.strategy_control_plane import (
     StrategyControlPlane,
     production_mutation_lock,
@@ -161,6 +166,9 @@ class StrategyCyclePackager:
         next_cycle_plan = VerifiedWaitingPlanStore(
             self.output_root
         ).projection(cycle_id)
+        exception_provenance = PaperSupervisorExceptionStore(
+            self.output_root
+        ).cycle_evidence(cycle_id)
         packaged_at = now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         pnl = dict(snapshot.get("pnl") or {})
         payload: dict[str, Any] = {
@@ -209,6 +217,18 @@ class StrategyCyclePackager:
                 "transitions_digest"
             ],
             "next_cycle_plan_evidence": next_cycle_plan,
+            "pre_intent_exception_receipts": exception_provenance[
+                "receipts"
+            ],
+            "pre_intent_exception_receipt_count": exception_provenance[
+                "receipt_count"
+            ],
+            "pre_intent_exception_receipts_digest": exception_provenance[
+                "receipts_digest"
+            ],
+            "pre_intent_exception_receipt_tail_digest": (
+                exception_provenance["tail_receipt_digest"]
+            ),
             "traceability": {
                 "strategy_plan_id": (plan or {}).get("strategy_plan_id"),
                 "strategy_plan_version": (plan or {}).get("version"),
@@ -221,6 +241,7 @@ class StrategyCyclePackager:
                 "next_cycle_plan_evidence_readable": (
                     next_cycle_plan.get("status") != "unavailable"
                 ),
+                "pre_intent_exception_evidence_complete": True,
             },
             "safety": {
                 "real_orders": False,
@@ -670,3 +691,10 @@ def _validate_package_journal_extensions(rows: list[Any]) -> None:
             raise ValueError(
                 "strategy cycle package degradation evidence is invalid"
             ) from exc
+        if "pre_intent_exception_receipts" in row:
+            try:
+                validate_packaged_exception_evidence(row)
+            except PaperSupervisorExceptionEvidenceError as exc:
+                raise ValueError(
+                    "strategy cycle package exception evidence is invalid"
+                ) from exc

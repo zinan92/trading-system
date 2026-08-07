@@ -47,6 +47,7 @@ _EVENT_FIELDS = frozenset(
         "event_digest",
     }
 )
+_EVENT_OPTIONAL_FIELDS = frozenset({"exception_receipt_digest"})
 _TRANSITION_FIELDS = frozenset(
     {
         "transition_id",
@@ -88,6 +89,7 @@ class PaperDegradationEventStore:
         original_reason: str,
         alternative_action: str,
         occurred_at: str,
+        exception_receipt_digest: str | None = None,
     ) -> dict[str, Any]:
         """Append exactly once; a reused identity must have identical facts."""
 
@@ -117,6 +119,10 @@ class PaperDegradationEventStore:
             ),
             "occurred_at": _timestamp(occurred_at).isoformat(),
         }
+        if exception_receipt_digest is not None:
+            base["exception_receipt_digest"] = _digest_text(
+                exception_receipt_digest
+            )
         with production_mutation_lock(self.output_root):
             rows = self.events(base["cycle_id"])
             for existing in rows:
@@ -213,7 +219,10 @@ def validate_degradation_event_chain(
         row = json.loads(json.dumps(dict(value)))
         supplied = str(row.get("event_digest") or "")
         if (
-            set(row) != _EVENT_FIELDS
+            not (
+                set(row) == _EVENT_FIELDS
+                or set(row) == _EVENT_FIELDS | _EVENT_OPTIONAL_FIELDS
+            )
             or row.get("schema_version")
             != DEGRADATION_EVENT_SCHEMA_VERSION
             or row.get("sequence") != expected_sequence
@@ -244,6 +253,8 @@ def validate_degradation_event_chain(
         ):
             _required_text(row.get(field), field)
         _timestamp(row.get("occurred_at"))
+        if row.get("exception_receipt_digest") is not None:
+            _digest_text(row.get("exception_receipt_digest"))
         if row["event_id"] in seen:
             raise PaperDegradationEvidenceError(
                 "paper_degradation_event_store_corrupt"

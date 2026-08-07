@@ -14592,3 +14592,79 @@ auditable datafeed port; broker execution remains a separate port.
   package and Cloud suites remain part of the upstream regression.
 - Repository tests do not prove production continuity. Exact-SHA deployment,
   the first real boundary audit, and #588 utilization remain separate evidence.
+
+# 2026-08-07 — Preserve sanitized pre-intent exception provenance (#596)
+
+## Decision
+
+- Preserve diagnostic truth before the closed blocker classifier intentionally
+  reduces an unrecognized pre-intent failure to `unknown_blocker`. Each
+  attempt/phase may append exactly one immutable
+  `paper-supervisor-pre-intent-exception-v1` receipt containing the cycle and
+  attempt identity, phase, UTC time, exception class, typed machine code when
+  present, bounded redacted message/cause chain, a stack fingerprint, exact
+  source SHA/tree and `start_intent_persisted=false`.
+- Keep public classification and retry semantics unchanged. The receipt is
+  evidence, never control authority: it cannot alter a whitelist decision,
+  retry budget, watchdog cadence, plan, prepared start, order or position.
+  Corrupt, conflicting or over-capacity evidence fails closed as
+  `attempt_store_corrupt`; an unknown post-intent outcome remains on the
+  existing authoritative reconciliation path.
+- Link the receipt id/digest/phase from the pre-intent WAL terminal result and
+  Supervisor observation. When a Paper provider-readiness or primary-provider
+  exception causes an audited degradation action, that degradation event also
+  carries the exact receipt digest. The explicit Supervisor history endpoint
+  exposes the complete validated chain; the polling projection exposes only
+  its bounded latest receipt and counts.
+- Embed the complete hash-linked exception chain and its aggregate/tail digests
+  in every newly produced v2 terminal 12h package. Historical v2 packages
+  remain readable without rewriting them; new packages mechanically validate
+  exception evidence alongside the existing degradation and continuity chains.
+- Keep #594/#595 and #593 as the same architectural principle but different
+  bounded contexts: start inputs, boundary staging and execution/review outputs
+  each need one authoritative calculation plus digest-referencing consumers.
+  #596 restores provenance at the boundary between rich runtime failures and
+  the deliberately compressed public classifier; it does not merge #593 into
+  this PR.
+
+## Gotchas
+
+- Persisting `str(exc)` directly would leak provider prompts, payloads,
+  credentials, URLs and host paths. Sanitization therefore happens before the
+  receipt object exists; the journal stores no raw traceback or stack frame,
+  only a digest of bounded function/line tuples. Re-validating a stored message
+  through the same redactor prevents a forged “already sanitized” record from
+  carrying a newly recognized secret pattern.
+- A handled primary-provider error can later be re-raised after its fallback
+  fails. Re-recording it after traceback growth would conflict with the same
+  attempt/phase identity. The first immutable receipt reference is attached to
+  the in-memory exception and reused by the outer classifier; duplicate exact
+  writes are idempotent, while different facts under the same identity fail
+  closed.
+- Expected typed staging invalidations are already persisted as boundary
+  receipts and are not exceptions to be copied into this journal. The new
+  journal is reserved for actual exception paths; otherwise normal market
+  movement would create noisy “error” evidence and blur the distinction
+  between invalidation and execution failure.
+- A new evidence field cannot make historical degradation or cycle-package
+  rows unreadable. Validators accept the optional receipt link only when it is
+  a valid 64-hex digest, and require the full exception chain only on new
+  packages that declare it. Existing rows remain byte-for-byte unchanged.
+
+## Verification
+
+- Regression coverage recreates the second provider-fallback failure: the
+  public result remains `unknown_blocker`/structural with zero control actions
+  and zero orders, while the exact `provider_fallback` receipt is readable from
+  Supervisor history and its provider-readiness degradation event references
+  the corresponding earlier receipt digest.
+- Store tests prove sanitized source binding, bounded causes, no raw paths or
+  secrets, exact duplicate idempotency under concurrency, identity-conflict
+  rejection, tamper detection and read-model fail-closed behavior.
+- Terminal-package tests prove the complete receipt chain is embedded and a
+  package with a recomputed outer hash but tampered inner exception receipt is
+  still rejected.
+- Focused/upstream suites pass. The full repository baseline remains the same
+  11 macOS `ScheduleInstaller` failures (2868 passed, 1 skipped); this PR does
+  not touch launchd, live/real-money paths, credentials, classifier whitelists,
+  watchdog timing, or any control/order behavior.

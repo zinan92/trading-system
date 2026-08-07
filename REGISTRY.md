@@ -13,7 +13,7 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-07)
-- #594/#595 implement the shared architecture law behind the 09:12 start-shape
+- #594/#595/#596 implement the shared architecture law behind the 09:12 start-shape
   mismatch and #593's review-count mismatches: compute one authoritative
   domain fact once and make every consumer reference its digest.
   `paper-start-facts-v1` now binds trusted market, authoritative Paper
@@ -27,10 +27,15 @@
   uses the existing deterministic current-market/authoritative-equity builder;
   missing or corrupt staging never reintroduces an AI call at the boundary.
   Systemd boot/timer/soak invariants and read/package evidence include this new
-  lifecycle. This is implementation evidence only until the PR lands; it is not
-  exact-SHA deployment or #588 continuity acceptance. Next: #596 preserves
-  sanitized raw fallback exception provenance; #593 remains the separate
-  execution/review-output authority repair.
+  lifecycle. Before any pre-intent exception is reduced by the public
+  fail-closed classifier, #596 now appends a source-bound, hash-linked,
+  sanitized receipt with exact attempt/phase, typed code, bounded cause chain
+  and stack fingerprint. Attempt/degradation evidence references its digest,
+  while Supervisor history and the terminal 12h package expose the verified
+  chain without provider payloads, prompts, credentials, local paths or raw
+  tracebacks. This is implementation evidence only until #596 lands; it is not
+  exact-SHA deployment or #588 continuity acceptance. #593 remains the
+  separate execution/review-output authority repair.
 - Milestone 3 fixes Paper continuity in four sequential stories. #585 adds the
   prerequisite immutable degradation-event chain, v2 12h package projection,
   and sealed stopped-to-`running_proven` transition gaps. #586 adds the closed
@@ -422,12 +427,12 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Finish #587 machine gates and merge its isolated PR, then use #588's separate
-  source-controlled configuration SHA to activate `paper_continuous`. Do not
-  edit the host config in place. Before activation, capture exact runtime,
-  orders, positions, control audit, timer/boot and health baselines; after it,
-  require a fresh stopped-to-`running_proven` transition and preserve any
-  unknown control outcome for attended reconciliation rather than retrying.
+- Merge #596 after its machine gates, then deploy #594/#595/#596 only through a
+  separate exact-SHA Paper release with normal pre-deploy and boot receipts;
+  do not mutate Cloud configuration in place. The first real boundary must
+  prove `boundary_ai_provider_calls=0`, and any fallback failure must retain a
+  readable sanitized exception receipt. #593 remains a separate PR for the
+  execution/review-count authority and must not be folded into this release.
 - Keep the canonical provider-readiness timer enabled and let its natural
   five-minute polls provide failure/recovery evidence; do not manually refresh
   the proof or substitute `readiness_last_success.json` for current authority.
