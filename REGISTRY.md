@@ -33,9 +33,10 @@
   and stack fingerprint. Attempt/degradation evidence references its digest,
   while Supervisor history and the terminal 12h package expose the verified
   chain without provider payloads, prompts, credentials, local paths or raw
-  tracebacks. This is implementation evidence only until #596 lands; it is not
-  exact-SHA deployment or #588 continuity acceptance. #593 remains the
-  separate execution/review-output authority repair.
+  tracebacks. #596 is merged through PR #599 at
+  `main@ed99a6ad79daf44d9606c2ec7b974ff61c9b8f7d`; it has not been deployed and
+  is not #588 continuity acceptance. #593 remains the separate
+  execution/review-output authority repair.
 - Milestone 3 fixes Paper continuity in four sequential stories. #585 adds the
   prerequisite immutable degradation-event chain, v2 12h package projection,
   and sealed stopped-to-`running_proven` transition gaps. #586 adds the closed
