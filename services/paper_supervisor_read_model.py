@@ -16,6 +16,11 @@ from services.paper_degradation_events import (
     build_continuity_evidence_from_observations,
 )
 from services.paper_supervisor_classifier import CLASSIFIER_VERSION
+from services.paper_supervisor_exception_provenance import (
+    EXCEPTION_CYCLE_EVIDENCE_SCHEMA_VERSION,
+    PaperSupervisorExceptionEvidenceError,
+    PaperSupervisorExceptionStore,
+)
 from services.paper_supervisor_evidence import same_running_identity
 from services.paper_supervisor_store import (
     PaperSupervisorStore,
@@ -60,6 +65,9 @@ def build_paper_supervisor_polling_summary(
 
     observed = _utc(as_of)
     next_cycle_plan = _staged_plan_projection(output_root, cycle_id)
+    exception_provenance, exception_errors = (
+        _exception_provenance_projection(output_root, cycle_id)
+    )
     utilization_summary = (
         dict(utilization) if isinstance(utilization, Mapping) else {}
     )
@@ -73,17 +81,22 @@ def build_paper_supervisor_polling_summary(
     observation_path = root / "observations" / f"{cycle_id}.jsonl"
     if not episode_path.exists() and not observation_path.exists():
         current = _polling_unavailable_cycle(cycle_id)
-        current["status"] = "not_started"
+        current["status"] = (
+            "unavailable" if exception_errors else "not_started"
+        )
         return {
             "schema_version": SUPERVISOR_POLLING_SUMMARY_SCHEMA_VERSION,
             "as_of": observed.isoformat(),
             "source": "paper_supervisor_checkpointed_tail",
             "classifier_version": CLASSIFIER_VERSION,
-            "status": "not_started",
+            "status": (
+                "unavailable" if exception_errors else "not_started"
+            ),
             "current_cycle": current,
             "next_cycle_plan": next_cycle_plan,
+            "exception_provenance": exception_provenance,
             "utilization": utilization_summary,
-            "source_errors": [],
+            "source_errors": exception_errors,
             "history_query": _history_query(cycle_id),
             "read_only": True,
             "command_authority": False,
@@ -120,12 +133,14 @@ def build_paper_supervisor_polling_summary(
             "status": "unavailable",
             "current_cycle": _polling_unavailable_cycle(cycle_id),
             "next_cycle_plan": next_cycle_plan,
+            "exception_provenance": exception_provenance,
             "utilization": utilization_summary,
             "source_errors": [
                 {
                     "cycle_id": cycle_id,
                     "machine_code": _safe_machine_code(exc),
-                }
+                },
+                *exception_errors,
             ],
             "history_query": _history_query(cycle_id),
             "read_only": True,
@@ -151,6 +166,7 @@ def build_paper_supervisor_polling_summary(
             "observed_at": payload.get("observed_at"),
             "preview_id": payload.get("preview_id"),
             "prepared_start_id": payload.get("prepared_start_id"),
+            "exception_receipt": payload.get("exception_receipt"),
         },
         "last_attempt": counts.get("last_attempt"),
         "episode": {
@@ -178,11 +194,12 @@ def build_paper_supervisor_polling_summary(
         "as_of": observed.isoformat(),
         "source": "paper_supervisor_checkpointed_tail",
         "classifier_version": CLASSIFIER_VERSION,
-        "status": "available",
+        "status": "unavailable" if exception_errors else "available",
         "current_cycle": current,
         "next_cycle_plan": next_cycle_plan,
+        "exception_provenance": exception_provenance,
         "utilization": utilization_summary,
-        "source_errors": [],
+        "source_errors": exception_errors,
         "history_query": _history_query(cycle_id),
         "read_only": True,
         "command_authority": False,
@@ -238,6 +255,18 @@ def build_paper_supervisor_history_response(
             "transition_count": None,
             "transitions_digest": None,
         }
+    try:
+        exception_provenance = PaperSupervisorExceptionStore(
+            Path(output_root)
+        ).cycle_evidence(cycle_id)
+    except (OSError, ValueError, PaperSupervisorExceptionEvidenceError) as exc:
+        source_errors.append(
+            {
+                "cycle_id": cycle_id,
+                "machine_code": _safe_machine_code(exc),
+            }
+        )
+        exception_provenance = _unavailable_exception_provenance(cycle_id)
     model = {
         "schema_version": SUPERVISOR_CURRENT_CYCLE_AUDIT_SCHEMA_VERSION,
         "as_of": end.isoformat(),
@@ -277,6 +306,7 @@ def build_paper_supervisor_history_response(
         },
         "degradation_evidence": degradation,
         "continuity_evidence": continuity,
+        "exception_provenance": exception_provenance,
         "supervisor": model,
         "read_only": True,
         "command_authority": False,
@@ -308,6 +338,18 @@ def build_paper_supervisor_read_model(
         cycle_id=cycle_id,
         as_of=end,
     )
+    try:
+        exception_provenance = PaperSupervisorExceptionStore(
+            Path(output_root)
+        ).cycle_evidence(cycle_id)
+    except (OSError, ValueError, PaperSupervisorExceptionEvidenceError) as exc:
+        source_errors.append(
+            {
+                "cycle_id": cycle_id,
+                "machine_code": _safe_machine_code(exc),
+            }
+        )
+        exception_provenance = _unavailable_exception_provenance(cycle_id)
     source_identity_cache: dict[str, dict[str, Any]] = {}
     if utilization_index is not None:
         source_identity_after = utilization_index.source_identity(cycle_id)
@@ -337,6 +379,7 @@ def build_paper_supervisor_read_model(
             output_root,
             cycle_id,
         ),
+        "exception_provenance": exception_provenance,
         "utilization": utilization,
         "source_errors": source_errors,
         "read_only": True,
@@ -512,6 +555,42 @@ def _history_query(cycle_id: str) -> dict[str, Any]:
     }
 
 
+def _exception_provenance_projection(
+    output_root: Path,
+    cycle_id: str,
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    try:
+        return (
+            PaperSupervisorExceptionStore(
+                Path(output_root)
+            ).projection(cycle_id),
+            [],
+        )
+    except (OSError, ValueError, PaperSupervisorExceptionEvidenceError) as exc:
+        return (
+            _unavailable_exception_provenance(cycle_id),
+            [
+                {
+                    "cycle_id": cycle_id,
+                    "machine_code": _safe_machine_code(exc),
+                }
+            ],
+        )
+
+
+def _unavailable_exception_provenance(cycle_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": EXCEPTION_CYCLE_EVIDENCE_SCHEMA_VERSION,
+        "cycle_id": cycle_id,
+        "status": "unavailable",
+        "receipts": [],
+        "receipt_count": None,
+        "receipts_digest": None,
+        "tail_receipt_digest": None,
+        "latest_receipt": None,
+    }
+
+
 def _nonnegative_int_or_none(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
@@ -599,6 +678,9 @@ def _current_cycle_projection(
                 "preview_id": payload.get("preview_id"),
                 "prepared_start_id": payload.get(
                     "prepared_start_id"
+                ),
+                "exception_receipt": payload.get(
+                    "exception_receipt"
                 ),
             }
             if tail
@@ -936,6 +1018,9 @@ def _latest_attempt(state: Mapping[str, Any]) -> dict[str, Any] | None:
         "result": row.get("terminal_result"),
         "machine_code": row.get("terminal_machine_code"),
         "classification": row.get("terminal_classification"),
+        "exception_receipt": row.get(
+            "terminal_exception_receipt"
+        ),
         "source_tick_key": row.get("source_tick_key"),
     }
 

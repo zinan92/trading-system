@@ -57,6 +57,23 @@ _RECOVERY_RESULTS = frozenset(
 _PRE_INTENT_RESULTS = frozenset(
     {"prepare_succeeded", "no_action", "transient", "structural"}
 )
+_PRE_INTENT_EXCEPTION_PHASES = frozenset(
+    {
+        "authority_snapshot",
+        "runtime_adoption",
+        "outer_policy",
+        "provider_readiness",
+        "primary_ai",
+        "provider_fallback",
+        "candidate_build",
+        "envelope_authorization",
+        "plan_lock",
+        "prepare_start",
+        "prepared_receipt_validation",
+        "pre_start_provider_readiness",
+        "attempt_deadline",
+    }
+)
 _TRANSIENT_PROVIDER_READINESS_EVIDENCE_BLOCKERS = frozenset(
     {
         "cloud_ai_provider_readiness_missing",
@@ -1721,6 +1738,7 @@ class SupervisorLease:
         classification: str | None,
         observed_at: str,
         evidence: Mapping[str, Any] | None = None,
+        exception_receipt: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "result": str(result),
@@ -1730,6 +1748,8 @@ class SupervisorLease:
         }
         if isinstance(evidence, Mapping):
             payload["evidence"] = dict(evidence)
+        if isinstance(exception_receipt, Mapping):
+            payload["exception_receipt"] = dict(exception_receipt)
         return self._store._append(
             self,
             event_type="pre_intent_attempt_finished",
@@ -1761,6 +1781,7 @@ class SupervisorLease:
         machine_code: str,
         observed_at: str,
         evidence: Mapping[str, Any] | None = None,
+        exception_receipt: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "result": "structural",
@@ -1771,6 +1792,8 @@ class SupervisorLease:
         }
         if isinstance(evidence, Mapping):
             payload["evidence"] = dict(evidence)
+        if isinstance(exception_receipt, Mapping):
+            payload["exception_receipt"] = dict(exception_receipt)
         return self._store._append(
             self,
             event_type="pre_intent_attempt_finished",
@@ -2345,6 +2368,10 @@ def _project(
                 terminal["terminal_evidence"] = dict(
                     payload["evidence"]
                 )
+            if isinstance(payload.get("exception_receipt"), Mapping):
+                terminal["terminal_exception_receipt"] = dict(
+                    payload["exception_receipt"]
+                )
             if payload.get("recovered_after_crash") is True:
                 terminal["recovered_after_crash"] = True
                 terminal["recovery_source_tick_key"] = source_tick_key
@@ -2653,6 +2680,17 @@ def _validate_event_payload(
             else:
                 _identity(machine_code, code)
             evidence = payload.get("evidence")
+            exception_receipt = payload.get("exception_receipt")
+            if exception_receipt is not None:
+                if (
+                    event_type != "pre_intent_attempt_finished"
+                    or result not in {"transient", "structural"}
+                ):
+                    raise SupervisorStoreError(code)
+                _validate_exception_receipt_ref(
+                    exception_receipt,
+                    code=code,
+                )
             recovered_after_crash = payload.get(
                 "recovered_after_crash"
             )
@@ -3144,6 +3182,22 @@ def _cycle_id(value: Any) -> str:
     ):
         raise SupervisorStoreError("supervisor_cycle_id_invalid")
     return cycle
+
+
+def _validate_exception_receipt_ref(
+    value: Any,
+    *,
+    code: str,
+) -> None:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"receipt_id", "receipt_digest", "phase"}
+    ):
+        raise SupervisorStoreError(code)
+    _identity(value.get("receipt_id"), code)
+    _required_digest(value.get("receipt_digest"), code=code)
+    if str(value.get("phase") or "") not in _PRE_INTENT_EXCEPTION_PHASES:
+        raise SupervisorStoreError(code)
 
 
 def _identity(value: Any, code: str) -> str:
