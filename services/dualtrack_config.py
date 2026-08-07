@@ -43,6 +43,12 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "provider_timeout_seconds": 30,
         "terminal_deadline_seconds": 300,
     },
+    "convergence": {
+        "next_cycle_precompute": {
+            "lead_minutes": 60,
+            "timer_interval_seconds": 300,
+        },
+    },
     "plan_lock_deadline_min_before_cycle": 0,
     "machine_planner": {
         "plugin": "codex_newsletter",

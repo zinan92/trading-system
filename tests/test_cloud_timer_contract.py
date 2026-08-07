@@ -41,7 +41,11 @@ def _runner(command, **_kwargs):
         )
         next_trigger_monotonic = (
             "2d 20h 53min 14.090895s"
-            if unit == "gridmind-ai-provider-readiness.timer"
+            if unit
+            in {
+                "gridmind-ai-provider-readiness.timer",
+                "gridmind-next-cycle-plan.timer",
+            }
             else ""
         )
         service = unit.removesuffix(".timer") + ".service"
@@ -98,6 +102,7 @@ def test_cloud_timer_contract_requires_canonical_enabled_active_timers(
         "gridmind-daily-24h.timer",
         "gridmind-deadman-ping.timer",
         "gridmind-ai-provider-readiness.timer",
+        "gridmind-next-cycle-plan.timer",
     }
     readiness = next(
         row

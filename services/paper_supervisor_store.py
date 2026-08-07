@@ -2758,6 +2758,11 @@ def _validate_candidate_identity(
         "direction",
         "limits",
     }
+    if (
+        isinstance(value, Mapping)
+        and value.get("start_facts_digest") is not None
+    ):
+        fields.add("start_facts_digest")
     if not isinstance(value, Mapping) or set(value) != fields:
         raise SupervisorStoreError(code)
     row = dict(value)
@@ -2766,6 +2771,11 @@ def _validate_candidate_identity(
     _required_digest(row.get("proposal_digest"), code=code)
     _identity(row.get("preview_id"), code)
     _required_digest(row.get("preview_digest"), code=code)
+    if "start_facts_digest" in row:
+        _required_digest(
+            row.get("start_facts_digest"),
+            code=code,
+        )
     if row.get("facts_digest") is not None:
         _identity(row.get("facts_digest"), code)
     if row.get("confirmation_digest") is not None:

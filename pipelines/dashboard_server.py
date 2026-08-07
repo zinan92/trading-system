@@ -1717,7 +1717,14 @@ def build_strategy_console_control_response(
             ),
         ))
     if not safe_control and not isinstance(trusted_market.get("strategy_timeframes"), dict):
-        required = ("1d", "4h") if action != "refresh_recommendation" else ("1d", "4h", "1h", "15m")
+        required = (
+            ("1d", "4h", "1h", "15m")
+            if action in {
+                "refresh_recommendation",
+                "validate_verified_waiting_plan",
+            }
+            else ("1d", "4h")
+        )
         trusted_market["strategy_timeframes"] = build_strategy_timeframes_response(
             as_of=payload.get("as_of"),
             timeframes=required,
@@ -1745,6 +1752,7 @@ def build_strategy_console_control_response(
     if action in {
         "refresh_recommendation",
         "paper_continuity_candidate",
+        "validate_verified_waiting_plan",
         "prepare_start",
     }:
         # ``account`` is a view/test dependency, never the execution authority.
@@ -1806,6 +1814,7 @@ def build_strategy_console_control_response(
     if action in {
         "refresh_recommendation",
         "paper_continuity_candidate",
+        "validate_verified_waiting_plan",
         "prepare_start",
     }:
         if execution_adapter is None or execution_snapshot is None:
@@ -1822,6 +1831,31 @@ def build_strategy_console_control_response(
                 getattr(execution_adapter, "name", "")
             ),
         )
+    if action == "validate_verified_waiting_plan":
+        expected_digest = str(
+            payload.get("start_facts_digest") or ""
+        ).strip().lower()
+        if not expected_digest:
+            raise ValueError("paper_start_facts_missing")
+        return {
+            "action": action,
+            "cycle_id": cycle_id,
+            "expected_start_facts_digest": expected_digest,
+            "current_start_facts": dict(current_start_facts or {}),
+            "matches": (
+                expected_digest
+                == str(
+                    dict(current_start_facts or {}).get(
+                        "start_facts_digest"
+                    )
+                    or ""
+                )
+            ),
+            "control_actions_executed": 0,
+            "orders_created": 0,
+            "plans_activated": 0,
+            "prepared_starts_created": 0,
+        }
     if _frozen_grid_diagnostic:
         diagnostic_market = _trusted_historical_diagnostic_market(
             trusted_market,

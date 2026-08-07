@@ -26,6 +26,8 @@ UNIT_NAMES = (
     "gridmind-deadman-ping.timer",
     "gridmind-ai-provider-readiness.service",
     "gridmind-ai-provider-readiness.timer",
+    "gridmind-next-cycle-plan.service",
+    "gridmind-next-cycle-plan.timer",
 )
 
 
@@ -281,6 +283,31 @@ Unit=gridmind-ai-provider-readiness.service
 
 [Install]
 WantedBy=timers.target""",
+            "gridmind-next-cycle-plan.service": f"""[Unit]
+Description=GridMind verified next-cycle Paper plan pre-generation
+After=gridmind-live-tick.service gridmind-datafeed.service network-online.target
+Requires=gridmind-datafeed.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+{common}
+ReadWritePaths=/opt/gridmind/.codex
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service next-cycle-plan
+ExecStart={p.app_python} -m pipelines.paper_next_cycle_plan --json
+TimeoutStartSec=120""",
+            "gridmind-next-cycle-plan.timer": """[Unit]
+Description=GridMind non-overlapping next-cycle Paper plan timer
+
+[Timer]
+OnBootSec=180
+OnUnitInactiveSec=300
+AccuracySec=30
+Persistent=true
+Unit=gridmind-next-cycle-plan.service
+
+[Install]
+WantedBy=timers.target""",
         }
 
 
@@ -328,6 +355,15 @@ class CloudSystemdInstaller:
                     "gridmind-ai-provider-readiness.timer",
                 ],
             ]
+        if action == "activate-next-cycle-plan":
+            return [
+                [
+                    "systemctl",
+                    "enable",
+                    "--now",
+                    "gridmind-next-cycle-plan.timer",
+                ],
+            ]
         if action == "uninstall":
             return [
                 ["systemctl", "disable", "--now", *UNIT_NAMES],
@@ -336,7 +372,8 @@ class CloudSystemdInstaller:
             ]
         raise ValueError(
             "action must be install-passive, activate-dashboard, "
-            "activate-remote-access, activate-provider-readiness, or uninstall"
+            "activate-remote-access, activate-provider-readiness, "
+            "activate-next-cycle-plan, or uninstall"
         )
 
     def apply(self, rendered_dir: Path, action: str, *, dry_run: bool = True) -> dict[str, Any]:

@@ -21,6 +21,7 @@ MONITORED_UNITS = (
     "gridmind-daily-24h.timer",
     "gridmind-daily-self-review.timer",
     "gridmind-backup.timer",
+    "gridmind-next-cycle-plan.timer",
     "gridmind-deadman-ping.timer",
     "gridmind-ai-provider-readiness.timer",
     "gridmind-dashboard.service",

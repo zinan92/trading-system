@@ -97,6 +97,19 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     assert "OnUnitInactiveSec=300" in readiness_timer
     assert "OnUnitActiveSec" not in readiness_timer
     assert "Unit=gridmind-ai-provider-readiness.service" in readiness_timer
+    next_cycle_service = rendered["gridmind-next-cycle-plan.service"]
+    next_cycle_timer = rendered["gridmind-next-cycle-plan.timer"]
+    assert "Type=oneshot" in next_cycle_service
+    assert "ReadWritePaths=/opt/gridmind/.codex" in next_cycle_service
+    assert (
+        "pipelines.cloud_service_boot --service next-cycle-plan"
+        in next_cycle_service
+    )
+    assert "pipelines.paper_next_cycle_plan --json" in next_cycle_service
+    assert "TimeoutStartSec=120" in next_cycle_service
+    assert "OnUnitInactiveSec=300" in next_cycle_timer
+    assert "OnUnitActiveSec" not in next_cycle_timer
+    assert "Unit=gridmind-next-cycle-plan.service" in next_cycle_timer
 
 
 def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
@@ -146,6 +159,19 @@ def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
             "enable",
             "--now",
             "gridmind-ai-provider-readiness.timer",
+        ]
+    ]
+    next_cycle = installer.apply(
+        rendered,
+        "activate-next-cycle-plan",
+        dry_run=True,
+    )
+    assert next_cycle["commands"] == [
+        [
+            "systemctl",
+            "enable",
+            "--now",
+            "gridmind-next-cycle-plan.timer",
         ]
     ]
 

@@ -38,6 +38,10 @@
     "execution_profile": "paper_continuous",
     "provider_timeout_seconds": 25,
     "attempt_deadline_seconds": 45,
+    "next_cycle_precompute": {
+      "lead_minutes": 60,
+      "timer_interval_seconds": 300
+    },
     "outer_policy_binding": {
       "binding_id": "paper-supervisor-grid",
       "binding_version": 2,
