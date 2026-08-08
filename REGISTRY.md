@@ -12,7 +12,14 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-07)
+## 现在在哪里(2026-08-08)
+- #602 applies the repository's established missing-GitHub-metadata rule to
+  #597/#598. Their PR objects are not usable audit credentials while API
+  readback returns 404; exact implementation/merge SHAs, committed trees and
+  `main` ancestry are retained in
+  [`docs/audits/github-provenance-597-598.md`](docs/audits/github-provenance-597-598.md).
+  This is the same bounded provenance limitation already indexed for
+  #52–#128 and #222–#329, not a one-off failure diagnosis or a code-loss claim.
 - #594/#595/#596 implement the shared architecture law behind the 09:12 start-shape
   mismatch and #593's review-count mismatches: compute one authoritative
   domain fact once and make every consumer reference its digest.
