@@ -14668,3 +14668,45 @@ auditable datafeed port; broker execution remains a separate port.
   11 macOS `ScheduleInstaller` failures (2868 passed, 1 skipped); this PR does
   not touch launchd, live/real-money paths, credentials, classifier whitelists,
   watchdog timing, or any control/order behavior.
+
+# 2026-08-08 — Treat missing PR numbers as hints and commit SHAs as authority (#602)
+
+## Decision
+
+- Apply the repository-level provenance rule already used for missing GitHub
+  objects #52–#128 and #222–#329 to #597/#598. Do not classify the latest pair
+  as an isolated GitHub incident or speculate about why its metadata vanished.
+- Preserve #594 through implementation commit
+  `67560110e845604b4cf114f5976ffe59037551a0` and merge commit
+  `913afe978f378f0d3b5c8551b8ca92262a19e563`; preserve #595 through
+  implementation commit `bdf81c41c986eda4e516e9a6c762871a2598aa8b`
+  and merge commit `c2e32b7fac9387e64f19c3a027d5fc452ba01d8c`.
+  Each implementation/merge pair resolves to one identical committed tree and
+  both merge commits are ancestors of current `main`.
+- Use exact reachable commit URLs plus the reachable tracking Issue #602 in
+  operator reports. A PR URL may be cited only after authenticated API readback
+  proves the object exists.
+
+## Gotchas
+
+- A GitHub-authored merge subject containing `Merge pull request #N` is useful
+  provenance input, but it is not a substitute for a readable PR object and
+  cannot prove checks, review comments, labels or approvals.
+- A 404 PR object does not prove a direct push, missing implementation, or
+  absent review. Those conclusions require independent evidence; do not infer
+  them from metadata absence.
+- Never manufacture a replacement PR, rewrite history, or revert valid code to
+  make the UI record look complete. Preserve the gap and strengthen the
+  commit-SHA index.
+
+## Verification
+
+- Authenticated REST, GraphQL, PR-list and commit-association reads return no
+  #597/#598 object. Exact reproduction commands and both positive commit/tree
+  records are retained in
+  `docs/audits/github-provenance-597-598.md`.
+- `git merge-base --is-ancestor` passes for both merge SHAs against
+  `origin/main`; each merge tree equals its implementation parent's tree.
+- This documentation-only decision changes no runtime, deployment, Paper
+  control, order, position, watchdog, Shadow, live/real-money or credential
+  path.
