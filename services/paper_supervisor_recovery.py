@@ -44,6 +44,14 @@ _AI_PLAN_FIELDS = frozenset(
 )
 
 
+class PaperContinuityRecoveryError(ValueError):
+    """Typed, safe machine code for a rejected Paper recovery lineage."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = str(code)
+
+
 def authoritative_paper_equity(snapshot: Mapping[str, Any]) -> float:
     """Return the first positive finite authoritative Paper account value."""
 
@@ -103,6 +111,7 @@ def load_immediate_previous_verified_plan(
         proposals,
         output_root=Path(output_root),
         package_cycle_id=previous_cycle_id,
+        paper_continuity_allow_confirmed_fields=True,
     )
     return {
         "plan": dict(plan),
@@ -123,6 +132,7 @@ def verified_ai_source_proposal(
     *,
     output_root: Path | None = None,
     package_cycle_id: str | None = None,
+    paper_continuity_allow_confirmed_fields: bool = False,
 ) -> dict[str, Any]:
     """Prove one exact AI intent or its append-only recovery lineage.
 
@@ -138,12 +148,26 @@ def verified_ai_source_proposal(
     field_sources = plan.get("field_sources")
     source = str(result.get("source") or "")
     if strategy_type == "grid":
+        accepted_field_sources = {source}
+        if paper_continuity_allow_confirmed_fields:
+            # ``confirmed`` is the control plane's immutable marker for fields
+            # rebuilt from a trusted preview (direction/range/grid/tp-sl/risk)
+            # after the selected proposal was locked.  It does not replace the
+            # exact proposal/package/root-AI lineage checks below.  This opt-in
+            # is used only by the Paper-continuity inheritance path; callers
+            # remain fail closed by default.
+            accepted_field_sources.add("confirmed")
         if (
             not isinstance(field_sources, Mapping)
             or set(field_sources) != _AI_PLAN_FIELDS
-            or any(str(value) != source for value in field_sources.values())
+            or any(
+                str(value) not in accepted_field_sources
+                for value in field_sources.values()
+            )
         ):
-            raise ValueError("verified_ai_strategy_intent_missing")
+            raise PaperContinuityRecoveryError(
+                "verified_ai_strategy_intent_missing"
+            )
     root = _verify_proposal_lineage(
         result,
         proposals=[dict(row) for row in proposals],

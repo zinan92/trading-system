@@ -14710,3 +14710,59 @@ auditable datafeed port; broker execution remains a separate port.
 - This documentation-only decision changes no runtime, deployment, Paper
   control, order, position, watchdog, Shadow, live/real-money or credential
   path.
+
+# 2026-08-09 — Preserve confirmed execution fields in Paper recovery lineage (#605)
+
+## Decision
+
+- Treat `confirmed` as a control-plane execution-field marker, not as a new
+  proposal source. When and only when the Paper-continuity inheritance path
+  explicitly opts in, a sealed Grid plan may contain the exact selected
+  proposal source plus `confirmed` field sources. The selected proposal ID,
+  package revision/hash, recovery proposal digest, immediate-cycle relation,
+  inherited proposal digest and root-AI lineage remain byte-exact.
+- Keep the verifier fail closed by default. Missing field-source keys, any
+  value other than the selected source or `confirmed`, ambiguous proposals,
+  forged lineage, non-immediate packages and invalid recovery digests still
+  raise `verified_ai_strategy_intent_missing`. No live/fail-closed caller opts
+  into the Paper capability.
+- Make this known rejection a typed `PaperContinuityRecoveryError` so sanitized
+  Supervisor exception evidence retains the stable machine code even though
+  the long raw message is deliberately redacted. The typed code is diagnostic
+  evidence only and does not change classification, retry, control or order
+  authority.
+
+## Gotchas
+
+- The first production clue was paired StartFacts snapshots whose prices
+  differed by one cent. Those snapshots correctly showed boundary invalidation
+  followed by a fresh rebuild request; they did not prove the rebuild failure.
+  Replaying the deployed SHA against the sealed prior package localized the
+  actual exception to `verified_ai_source_proposal()` before candidate sizing.
+- Normal Grid start/reprice logic rewrites direction, range, grid, TP/SL and
+  risk fields from the trusted preview and marks them `confirmed`. Requiring
+  every field to keep the proposal's source string made a plan produced by the
+  control plane unverifiable by the next cycle. Allowing arbitrary mixed
+  sources would instead weaken provenance, so the exception is exactly one
+  closed value and exactly one Paper-only call site.
+- The previous sanitizer correctly redacted long token-like strings, but a
+  generic `ValueError` left the stable internal code only in that redacted
+  message. A typed code preserves diagnosis without persisting free text,
+  paths, provider payloads or secrets.
+
+## Verification
+
+- A production-shape regression uses a recovery proposal whose plan marks
+  direction/range/grid/TP-SL/risk as `confirmed`; the explicit Paper loader
+  succeeds and builds a fresh candidate bound to the supplied StartFacts.
+  Default verification and `human`/`ai`/unknown mixed sources remain rejected.
+- 421 focused upstream/downstream tests pass across Supervisor, recovery,
+  StartFacts, next-cycle staging, risk envelope, control plane and terminal
+  package modules.
+- An isolated Cloud canary ran the patched functions as the real service user
+  against the immutable `2026-08-08_NIGHT` package and current trusted market:
+  exact root AI lineage verified, authoritative Paper equity was 10,000 USDT,
+  one 38-grid candidate was constructed with the expected StartFacts digest,
+  and production writes/controls/orders/positions were all zero. This is
+  pre-release proof, not runtime recovery; only exact-main deployment plus a
+  natural sealed `running_proven` can close #605.

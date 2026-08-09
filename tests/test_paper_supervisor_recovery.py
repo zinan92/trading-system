@@ -20,6 +20,7 @@ from services.paper_degradation_events import PaperDegradationEventStore
 from services.paper_supervisor_store import PaperSupervisorStore
 from services.paper_supervisor_recovery import (
     PAPER_CONTINUITY_PROPOSAL_SOURCE,
+    PaperContinuityRecoveryError,
     authoritative_paper_equity,
     build_dca_recovery_candidate,
     build_grid_recovery_candidate,
@@ -298,6 +299,175 @@ def test_previous_plan_fallback_uses_immediate_verified_package_only(
     assert loaded["provenance"]["source_package_hash"] == package[
         "package_hash"
     ]
+
+
+def _write_confirmed_recovery_package(
+    tmp_path: Path,
+    *,
+    field_source_override: str | None = None,
+) -> tuple[dict, dict]:
+    cycle_id = "2026-08-05_NIGHT"
+    root = {
+        "proposal_id": "proposal-ai-root",
+        "cycle_id": cycle_id,
+        "source": "ai",
+    }
+    root_digest = hashlib.sha256(
+        json.dumps(
+            root,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    recovery = {
+        "proposal_id": "proposal-paper-continuity-production-shape",
+        "cycle_id": cycle_id,
+        "source": PAPER_CONTINUITY_PROPOSAL_SOURCE,
+        "analysis": {
+            "new_ai_judgment": False,
+            "inherited_intent_source": "ai",
+            "inherited_source_proposal_id": root["proposal_id"],
+            "inherited_source_proposal_digest": root_digest,
+            "root_ai_source_proposal_id": root["proposal_id"],
+            "root_ai_source_proposal_digest": root_digest,
+            "paper_continuity_recovery": {
+                "source_kind": "current_cycle_active_plan",
+                "source_cycle_id": cycle_id,
+                "source_strategy_plan_id": "strategy-plan-recovery",
+                "source_strategy_plan_version": 3,
+                "source_package_hash": None,
+            },
+        },
+    }
+    recovery["recovery_proposal_digest"] = (
+        paper_continuity_proposal_digest(recovery)
+    )
+    field_sources = _ai_field_sources(PAPER_CONTINUITY_PROPOSAL_SOURCE)
+    for field in (
+        "direction",
+        "range",
+        "grid",
+        "tp_sl",
+        "risk_budget",
+    ):
+        field_sources[field] = "confirmed"
+    if field_source_override is not None:
+        field_sources["grid"] = field_source_override
+    package = {
+        "schema_version": "strategy-cycle-package-v1",
+        "cycle_id": cycle_id,
+        "status": "closed",
+        "strategy_plan": {
+            "cycle_id": cycle_id,
+            "strategy_plan_id": "strategy-plan-recovery",
+            "version": 3,
+            "strategy_type": "grid",
+            "direction": "neutral",
+            "style": "steady",
+            "grid": {
+                "count": 38,
+                "mode": "arithmetic",
+                "out_of_range": "exit_only",
+            },
+            "source_proposal_ids": [recovery["proposal_id"]],
+            "field_sources": field_sources,
+        },
+        "proposals": [root, recovery],
+    }
+    package["package_hash"] = hashlib.sha256(
+        json.dumps(
+            package,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    path = (
+        tmp_path
+        / "dualtrack"
+        / "strategy_cycle_packages"
+        / f"{cycle_id}.json"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps([package]), encoding="utf-8")
+    return package, recovery
+
+
+def test_previous_plan_fallback_accepts_confirmed_execution_fields(
+    tmp_path: Path,
+) -> None:
+    package, recovery = _write_confirmed_recovery_package(tmp_path)
+
+    with pytest.raises(
+        PaperContinuityRecoveryError,
+        match="verified_ai_strategy_intent_missing",
+    ):
+        verified_ai_source_proposal(
+            package["strategy_plan"],
+            package["proposals"],
+            output_root=tmp_path,
+            package_cycle_id=package["cycle_id"],
+        )
+
+    loaded = load_immediate_previous_verified_plan(
+        tmp_path,
+        "2026-08-06_DAY",
+    )
+    candidate = build_grid_recovery_candidate(
+        cycle_id="2026-08-06_DAY",
+        source_plan=loaded["plan"],
+        source_proposal=loaded["source_proposal"],
+        provenance=loaded["provenance"],
+        market=_market(110.0),
+        authoritative_equity=10_000.0,
+        config=dualtrack_config(),
+        outer_policy={
+            "strategy_type": "grid",
+            "limits": {
+                "max_actual_leverage": "20",
+                "max_full_depth_loss": "unbounded",
+                "max_notional_per_grid": "10000",
+                "min_grid_count": "0",
+                "max_grid_count": "unbounded",
+            },
+        },
+        supervisor_attempt_id="attempt-production-shape",
+        provider_readiness=None,
+        start_facts_digest="a" * 64,
+    )
+
+    assert loaded["source_proposal"]["proposal_id"] == recovery[
+        "proposal_id"
+    ]
+    assert loaded["provenance"]["source_package_hash"] == package[
+        "package_hash"
+    ]
+    assert candidate["preview"]["start_facts_digest"] == "a" * 64
+    assert candidate["proposal"]["source"] == (
+        PAPER_CONTINUITY_PROPOSAL_SOURCE
+    )
+
+
+@pytest.mark.parametrize("invalid_source", ["human", "ai", "unexpected"])
+def test_previous_plan_fallback_rejects_non_confirmed_field_source(
+    tmp_path: Path,
+    invalid_source: str,
+) -> None:
+    _write_confirmed_recovery_package(
+        tmp_path,
+        field_source_override=invalid_source,
+    )
+
+    with pytest.raises(
+        PaperContinuityRecoveryError,
+        match="verified_ai_strategy_intent_missing",
+    ) as caught:
+        load_immediate_previous_verified_plan(
+            tmp_path,
+            "2026-08-06_DAY",
+        )
+
+    assert caught.value.code == "verified_ai_strategy_intent_missing"
 
 
 def test_recovery_lineage_can_cross_more_than_one_cycle(

@@ -11,6 +11,7 @@ from services.paper_supervisor_exception_provenance import (
     PaperSupervisorExceptionStore,
     redact_exception_message,
 )
+from services.paper_supervisor_recovery import PaperContinuityRecoveryError
 from services.paper_supervisor_read_model import (
     build_paper_supervisor_polling_summary,
 )
@@ -98,6 +99,25 @@ def test_receipt_is_source_bound_sanitized_and_idempotent(
     ):
         assert forbidden not in serialized
     assert store.cycle_evidence(CYCLE)["receipts"] == [first]
+
+
+def test_known_recovery_code_survives_message_redaction(
+    tmp_path: Path,
+) -> None:
+    receipt = _store(tmp_path / "outputs").record_exception(
+        cycle_id=CYCLE,
+        attempt_id="supervisor-attempt-known-recovery-code",
+        phase="candidate_build",
+        occurred_at=OCCURRED_AT,
+        exc=PaperContinuityRecoveryError(
+            "verified_ai_strategy_intent_missing"
+        ),
+    )
+
+    assert receipt["original_machine_code"] == (
+        "verified_ai_strategy_intent_missing"
+    )
+    assert receipt["redacted_message"] == "<redacted-token>"
 
 
 def test_conflicting_exception_for_same_attempt_phase_fails_closed(

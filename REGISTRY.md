@@ -12,7 +12,23 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-08)
+## 现在在哪里(2026-08-09)
+- #605 owns the 2026-08-09 DAY boundary stop on deployed
+  `main@db286149a027397bc1cca690185697117d8f9b1d`. The next-cycle artifact was
+  generated, but current facts invalidated it and every deterministic rebuild
+  failed before `start_intent` because the immediate prior sealed Grid plan
+  mixed the selected `paper_continuity_recovery` source with normal
+  control-plane `confirmed` execution fields. The lineage verifier incorrectly
+  required all nine fields to equal the proposal source and reduced
+  `verified_ai_strategy_intent_missing` to `unknown_blocker`. The scoped fix
+  explicitly allows only `confirmed` beside the exact selected source in the
+  Paper-continuity inheritance call; proposal/package/recovery/root-AI digests
+  remain exact and default callers remain fail closed. A deployed-SHA isolated
+  canary using the real sealed NIGHT package now builds a 38-grid candidate
+  from current trusted market and authoritative 10,000 USDT Paper equity with
+  zero production writes, controls, orders, or positions. Cloud runtime remains
+  stopped until #605 is merged, released through the normal gates, and a
+  natural Supervisor retry proves current-cycle `running_proven`.
 - #602 applies the repository's established missing-GitHub-metadata rule to
   #597/#598. Their PR objects are not usable audit credentials while API
   readback returns 404; exact implementation/merge SHAs, committed trees and
@@ -435,12 +451,14 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Merge #596 after its machine gates, then deploy #594/#595/#596 only through a
-  separate exact-SHA Paper release with normal pre-deploy and boot receipts;
-  do not mutate Cloud configuration in place. The first real boundary must
-  prove `boundary_ai_provider_calls=0`, and any fallback failure must retain a
-  readable sanitized exception receipt. #593 remains a separate PR for the
-  execution/review-count authority and must not be folded into this release.
+- Merge #605 after its scoped recovery/lineage/provenance gates, deploy the
+  exact resulting `main` through the existing Paper release runbook, and wait
+  for the next natural Supervisor retry. Acceptance requires a sealed
+  current-cycle `running_proven`, exact SHA/boot ownership, positive planned
+  order count matching the accepted authoritative snapshot, reconciliation
+  pass, zero operator strategy controls, and a readable transition gap. Do not
+  manually start/stop/cancel/flatten to manufacture recovery evidence. The
+  separate daily-report permission failure remains outside #605.
 - Keep the canonical provider-readiness timer enabled and let its natural
   five-minute polls provide failure/recovery evidence; do not manually refresh
   the proof or substitute `readiness_last_success.json` for current authority.
