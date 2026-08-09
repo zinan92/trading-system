@@ -13,22 +13,23 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-09)
-- #605 owns the 2026-08-09 DAY boundary stop on deployed
-  `main@db286149a027397bc1cca690185697117d8f9b1d`. The next-cycle artifact was
-  generated, but current facts invalidated it and every deterministic rebuild
-  failed before `start_intent` because the immediate prior sealed Grid plan
-  mixed the selected `paper_continuity_recovery` source with normal
-  control-plane `confirmed` execution fields. The lineage verifier incorrectly
-  required all nine fields to equal the proposal source and reduced
-  `verified_ai_strategy_intent_missing` to `unknown_blocker`. The scoped fix
-  explicitly allows only `confirmed` beside the exact selected source in the
-  Paper-continuity inheritance call; proposal/package/recovery/root-AI digests
-  remain exact and default callers remain fail closed. A deployed-SHA isolated
-  canary using the real sealed NIGHT package now builds a 38-grid candidate
-  from current trusted market and authoritative 10,000 USDT Paper equity with
-  zero production writes, controls, orders, or positions. Cloud runtime remains
-  stopped until #605 is merged, released through the normal gates, and a
-  natural Supervisor retry proves current-cycle `running_proven`.
+- #605 is merged through PR #606 and deployed on Cloud Paper as exact clean
+  `main@5c0cf593eab8dac34357a1d9794a729b4cade079`, tree
+  `b519bf93833e322b5170d42413b4e2da4db98dae`. The 2026-08-09 DAY stop was
+  caused by the Paper-continuity lineage verifier rejecting normal
+  control-plane `confirmed` execution fields beside the exact selected
+  `paper_continuity_recovery` source. The scoped fix retains exact
+  proposal/package/recovery/root-AI digest checks and default fail-closed
+  behavior, while allowing that mixed lineage only in the explicit Paper
+  recovery calls. After the source switch at 12:39:58 CST, a natural Supervisor
+  attempt created one fresh preview/prepared start and reached `running_proven`
+  at 12:40:34 CST: Grid neutral, 38 planned grids, 38 accepted/open orders,
+  zero positions and passing reconciliation. Cloud health is `healthy`, all
+  seven timers are active, required exact-SHA boot receipts pass, and no human
+  strategy control occurred. The hash-linked watchdog/recenter degradation
+  events and full deployment evidence are preserved in #605; this proves the
+  target-environment repair but does not replace the outstanding conservative
+  48-hour continuity acceptance.
 - #602 applies the repository's established missing-GitHub-metadata rule to
   #597/#598. Their PR objects are not usable audit credentials while API
   readback returns 404; exact implementation/merge SHAs, committed trees and
