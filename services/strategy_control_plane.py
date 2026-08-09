@@ -821,6 +821,7 @@ class StrategyControlPlane:
                 self.proposals(cycle_id),
                 output_root=self.output_root,
                 package_cycle_id=cycle_id,
+                paper_continuity_allow_confirmed_fields=True,
             )
             source = {
                 "plan": dict(current),
