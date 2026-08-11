@@ -110,7 +110,7 @@ Type=simple
 {common}
 WorkingDirectory={p.datafeed_root}
 ExecStart={p.datafeed_python} -m uvicorn kline.app:create_app --factory --host 127.0.0.1 --port 8100
-MemoryMax=384M
+MemoryMax=768M
 Restart=on-failure
 RestartSec=5
 

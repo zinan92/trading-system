@@ -14848,3 +14848,33 @@ auditable datafeed port; broker execution remains a separate port.
 - Target-environment acceptance still requires an isolated large-file canary
   as the real service user plus a successful scheduled-service run; tests are
   not deployment proof.
+
+# 2026-08-11 — Calibrate the datafeed cgroup bound from Cloud evidence (#617)
+
+## Decision
+
+- Raise only `gridmind-datafeed.service` from the proposed 384 MiB bound to
+  768 MiB.  Immediately before deployment the healthy production cgroup
+  reported `MemoryCurrent=652296192` and `MemoryPeak=652828672` bytes, so the
+  original value was below a verified normal working set.  The corrected value
+  leaves roughly 20% headroom above that peak while remaining bounded below
+  the host's 1.6 GiB physical RAM.
+- Preserve every other #611 containment property unchanged: SSH/cloudflared
+  OOM priority, Python unit limits, and durable external unit-failure alerts.
+
+## Gotchas
+
+- Process RSS was only about 142 MiB while systemd charged about 622.6 MiB to
+  the datafeed cgroup.  `MemoryMax` governs cgroup memory, including charged
+  cache, so sizing from `ps` RSS would have created a false sense of safety and
+  killed a healthy dependency after deployment.
+- A configuration test that proves a unit is bounded does not prove the bound
+  is operationally safe.  Exact-main deployment must confirm the loaded
+  property and a successful natural datafeed/live-tick cycle before acceptance.
+
+## Verification
+
+- The renderer regression requires `MemoryMax=768M` for datafeed while
+  retaining all other exact limits and every `OnFailure` hook.
+- Cloud preflight and post-deploy cgroup evidence remain release gates; this
+  correction is not permission to bypass a blocked preflight.

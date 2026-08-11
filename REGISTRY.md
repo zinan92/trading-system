@@ -469,6 +469,10 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Deploy #617 together with #611/#612 so the production datafeed receives a
+  768 MiB cgroup bound calibrated above its verified 652,828,672-byte peak;
+  require exact-SHA preflight, loaded-property proof, a natural successful tick,
+  and both isolated canaries before declaring the OOM containment release done.
 - Deploy #612 together with the already merged #611 containment through the
   exact-SHA Paper release runbook, run isolated service-user large-file and
   unit-failure alert canaries, then observe the next natural self-review and

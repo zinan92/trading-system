@@ -119,7 +119,7 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     )
     assert "OOMScoreAdjust=-900" in rendered["gridmind-cloudflared.service"]
     expected_limits = {
-        "gridmind-datafeed.service": "MemoryMax=384M",
+        "gridmind-datafeed.service": "MemoryMax=768M",
         "gridmind-dashboard.service": "MemoryMax=384M",
         "gridmind-access-gateway.service": "MemoryMax=192M",
         "gridmind-live-tick.service": "MemoryMax=384M",
