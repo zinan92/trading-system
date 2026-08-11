@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from services.cloud_systemd import (
+    DROP_IN_FILES,
     UNIT_NAMES,
     CloudSystemdInstaller,
     CloudSystemdPaths,
@@ -26,8 +27,9 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     assert result["units"] == sorted(UNIT_NAMES)
     assert result["scheduler_active"] is False
     rendered = {
-        path.name: path.read_text(encoding="utf-8")
-        for path in (tmp_path / "rendered").iterdir()
+        str(path.relative_to(tmp_path / "rendered")): path.read_text(encoding="utf-8")
+        for path in (tmp_path / "rendered").rglob("*")
+        if path.is_file()
     }
     all_text = "\n".join(rendered.values())
     assert "/Users/" not in all_text
@@ -110,6 +112,31 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     assert "OnUnitInactiveSec=300" in next_cycle_timer
     assert "OnUnitActiveSec" not in next_cycle_timer
     assert "Unit=gridmind-next-cycle-plan.service" in next_cycle_timer
+    assert result["drop_ins"] == sorted(DROP_IN_FILES)
+    assert (
+        rendered["ssh.service.d/90-gridmind-oom-protection.conf"]
+        == "[Service]\nOOMScoreAdjust=-900\n"
+    )
+    assert "OOMScoreAdjust=-900" in rendered["gridmind-cloudflared.service"]
+    expected_limits = {
+        "gridmind-datafeed.service": "MemoryMax=384M",
+        "gridmind-dashboard.service": "MemoryMax=384M",
+        "gridmind-access-gateway.service": "MemoryMax=192M",
+        "gridmind-live-tick.service": "MemoryMax=384M",
+        "gridmind-daily-24h.service": "MemoryMax=256M",
+        "gridmind-daily-self-review.service": "MemoryMax=256M",
+        "gridmind-backup.service": "MemoryMax=256M",
+        "gridmind-deadman-ping.service": "MemoryMax=192M",
+        "gridmind-ai-provider-readiness.service": "MemoryMax=384M",
+        "gridmind-next-cycle-plan.service": "MemoryMax=384M",
+    }
+    for unit, limit in expected_limits.items():
+        assert limit in rendered[unit]
+        assert "OnFailure=gridmind-unit-failure-alert@%n.service" in rendered[unit]
+    failure_alert = rendered["gridmind-unit-failure-alert@.service"]
+    assert "pipelines.cloud_unit_failure_alert --failed-unit %i" in failure_alert
+    assert "MemoryMax=128M" in failure_alert
+    assert "OnFailure=" not in failure_alert
 
 
 def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
@@ -127,6 +154,11 @@ def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
     assert not any("enable --now gridmind-live-tick.timer" in row for row in command_text)
     assert not any(
         "enable --now gridmind-ai-provider-readiness.timer" in row
+        for row in command_text
+    )
+    assert any(
+        "ssh.service.d/90-gridmind-oom-protection.conf" in row
+        and "install -D -m 0644" in row
         for row in command_text
     )
 

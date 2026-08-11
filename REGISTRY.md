@@ -12,7 +12,18 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-09)
+## 现在在哪里(2026-08-11)
+- #611 adds source-controlled OOM containment for the 1.6 GiB Cloud Paper
+  host: the exact loaded Ubuntu `ssh.service` and Cloudflare tunnel are
+  protected with `OOMScoreAdjust=-900`; managed Python units have explicit
+  per-role `MemoryMax`; and each bounded failure routes through a non-recursive
+  systemd helper that fsyncs a structured Paper-only event before signaling the
+  external dead-man `/fail` endpoint.  Kernel/auth/service journal attribution
+  corrected the incident narrative: the 2026-08-11 direct OOM victim was an
+  abandoned interactive `sudo python3 -` process in `session-3051.scope`, not
+  a GridMind unit; backup had completed hours earlier.  #612 still removes the
+  two production whole-file hashing risks, while #613 separately owns global
+  batch/operator admission and #614 owns the single-host failure domain.
 - #605 is merged through PR #606 and deployed on Cloud Paper as exact clean
   `main@5c0cf593eab8dac34357a1d9794a729b4cade079`, tree
   `b519bf93833e322b5170d42413b4e2da4db98dae`. The 2026-08-09 DAY stop was
@@ -452,6 +463,11 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Merge and deploy #611 through the exact-SHA Paper runbook, prove the loaded
+  OOM properties and an isolated unit-failure `/fail` canary, then implement
+  #612's bounded streaming hashes before the next scheduled backup.  Do not
+  claim that unit limits constrain arbitrary admin-session diagnostics; #613
+  remains the separate deferred contract for that scope.
 - Merge #605 after its scoped recovery/lineage/provenance gates, deploy the
   exact resulting `main` through the existing Paper release runbook, and wait
   for the next natural Supervisor retry. Acceptance requires a sealed
