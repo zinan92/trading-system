@@ -14878,3 +14878,42 @@ auditable datafeed port; broker execution remains a separate port.
   retaining all other exact limits and every `OnFailure` hook.
 - Cloud preflight and post-deploy cgroup evidence remain release gates; this
   correction is not permission to bypass a blocked preflight.
+
+# 2026-08-11 — Release OOM containment at exact main (#619)
+
+## Decision
+
+- Deploy #611, #612 and #617 together at exact
+  `main@9856f83fccada01fcde3462506d3da4429ca716a` after the Cloud preflight,
+  provider readiness and Paper predeploy receipts all passed at the same clean
+  SHA/tree.  Preserve the running Paper plan and let timers recover naturally;
+  issue no strategy control during the service restart.
+- Accept the real post-restart unit failures as alert-path evidence and wait
+  for the next natural tick.  It succeeded 130 seconds after the last
+  successful pre-release tick, with runtime/order/position facts unchanged.
+
+## Gotchas
+
+- The datafeed health endpoint's full SQLite integrity check twice exceeded
+  its 10-second preflight client budget.  Cache warming allowed the unchanged
+  canonical gate to pass, but is not a repair; datafeed #6 owns separating
+  liveness from scheduled integrity proof.
+- A systemd `EnvironmentFile` overrode the first canary's requested output
+  root, appending one truthful canary record to the immutable production event
+  journal.  The record was preserved, and the rerun used an explicit final
+  process environment to prove an isolated `/tmp` artifact.
+- Restarting an active dependency is complete from systemd's perspective
+  before its application endpoint is necessarily ready.  Immediate timer
+  activation produced connection-refused alerts; subsequent natural tick and
+  dead-man runs proved recovery and healthy status.
+
+## Verification
+
+- Loaded OOM scores are -900 for SSH and cloudflared; datafeed loads 768 MiB
+  and the other managed Python limits/OnFailure hooks match the renderer.
+- A 768 MiB streaming-hash canary completed under a 64 MiB cgroup with 1 MiB
+  peak; an isolated failure canary delivered HTTP 200 with zero controls,
+  orders and position changes.
+- Authoritative post-release read-model is running with 38 accepted/open
+  orders, zero unknown orders/positions, reconciliation `ok`, trusted/fresh
+  market, exact deployed SHA and no Cloud critical/warning incident.
