@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from services.file_hash import sha256_file
+
 from services.journal_store import load_json, write_json
 
 
@@ -247,7 +249,7 @@ def _ignore_transient(_directory: str, names: list[str]) -> set[str]:
 
 
 def _hash_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return sha256_file(path)
 
 
 def _hash_json(value: Any) -> str:

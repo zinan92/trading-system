@@ -13,6 +13,12 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-11)
+- #612 removes the two audited whole-file SHA-256 allocations from Cloud Paper
+  backup and daily self-review.  Both now share a fixed 1 MiB `readinto()`
+  buffer while preserving exact digest/manifest semantics; a 64 MiB sparse
+  fixture verifies that peak Python allocation stays bounded rather than
+  scaling with artifact size.  This closes the production-code recurrence
+  mechanism but does not make arbitrary admin-session scripts safe (#613).
 - #611 adds source-controlled OOM containment for the 1.6 GiB Cloud Paper
   host: the exact loaded Ubuntu `ssh.service` and Cloudflare tunnel are
   protected with `OOMScoreAdjust=-900`; managed Python units have explicit
@@ -463,6 +469,11 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Deploy #612 together with the already merged #611 containment through the
+  exact-SHA Paper release runbook, run isolated service-user large-file and
+  unit-failure alert canaries, then observe the next natural self-review and
+  backup.  No production artifact, strategy control, order or position may be
+  mutated by the canaries.
 - Merge and deploy #611 through the exact-SHA Paper runbook, prove the loaded
   OOM properties and an isolated unit-failure `/fail` canary, then implement
   #612's bounded streaming hashes before the next scheduled backup.  Do not

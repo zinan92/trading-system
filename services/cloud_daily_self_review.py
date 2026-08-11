@@ -7,6 +7,8 @@ import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+from services.file_hash import sha256_file
 from zoneinfo import ZoneInfo
 
 from services.journal_store import load_json, write_json
@@ -459,7 +461,7 @@ def _inside(value: str, start: datetime, end: datetime) -> bool:
 
 
 def _hash_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return sha256_file(path)
 
 
 def _hash_json(value: Any) -> str:
