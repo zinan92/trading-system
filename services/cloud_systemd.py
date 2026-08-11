@@ -28,7 +28,14 @@ UNIT_NAMES = (
     "gridmind-ai-provider-readiness.timer",
     "gridmind-next-cycle-plan.service",
     "gridmind-next-cycle-plan.timer",
+    "gridmind-unit-failure-alert@.service",
 )
+
+DROP_IN_FILES = (
+    "ssh.service.d/90-gridmind-oom-protection.conf",
+)
+
+_UNIT_FAILURE_HOOK = "OnFailure=gridmind-unit-failure-alert@%n.service"
 
 
 @dataclass(frozen=True)
@@ -61,11 +68,14 @@ class CloudSystemdRenderer:
         destination.mkdir(parents=True, exist_ok=True)
         units = self._units()
         for name, content in units.items():
-            (destination / name).write_text(content.rstrip() + "\n", encoding="utf-8")
+            path = destination / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content.rstrip() + "\n", encoding="utf-8")
         return {
             "status": "rendered",
             "destination": str(destination),
-            "units": sorted(units),
+            "units": sorted(name for name in units if name in UNIT_NAMES),
+            "drop_ins": sorted(name for name in units if name in DROP_IN_FILES),
             "scheduler_active": False,
             "persistent_data_changed": False,
         }
@@ -93,12 +103,14 @@ class CloudSystemdRenderer:
 Description=GridMind independent datafeed
 After=network-online.target
 Wants=network-online.target
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=simple
 {common}
 WorkingDirectory={p.datafeed_root}
 ExecStart={p.datafeed_python} -m uvicorn kline.app:create_app --factory --host 127.0.0.1 --port 8100
+MemoryMax=384M
 Restart=on-failure
 RestartSec=5
 
@@ -108,12 +120,14 @@ WantedBy=multi-user.target""",
 Description=GridMind Paper Dashboard
 After=network-online.target gridmind-datafeed.service
 Requires=gridmind-datafeed.service
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=simple
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service dashboard
 ExecStart={p.app_python} -m pipelines.dashboard_server --host 127.0.0.1 --port 8765
+MemoryMax=384M
 Restart=on-failure
 RestartSec=5
 
@@ -123,22 +137,25 @@ WantedBy=multi-user.target""",
 Description=GridMind authenticated allowlist gateway
 After=gridmind-dashboard.service
 Requires=gridmind-dashboard.service
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=simple
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service access-gateway
 ExecStart={p.app_python} -m services.cloud_access_gateway --host 127.0.0.1 --port 8766
+MemoryMax=192M
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target""",
-            "gridmind-cloudflared.service": """[Unit]
+            "gridmind-cloudflared.service": f"""[Unit]
 Description=GridMind authenticated Cloudflare Tunnel
 After=gridmind-access-gateway.service network-online.target
 Requires=gridmind-access-gateway.service
 Wants=network-online.target
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=simple
@@ -148,6 +165,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
+OOMScoreAdjust=-900
 ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/gridmind/cloudflared.yml tunnel run
 Restart=on-failure
 RestartSec=5
@@ -158,6 +176,7 @@ WantedBy=multi-user.target""",
 Description=GridMind one-shot Paper live tick
 After=gridmind-datafeed.service
 Requires=gridmind-datafeed.service
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=oneshot
@@ -165,6 +184,7 @@ Type=oneshot
 ReadWritePaths=/opt/gridmind/.codex
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service dualtrack-live-tick
 ExecStart={p.app_python} -m pipelines.dualtrack_cycle_runner --event live-tick
+MemoryMax=384M
 TimeoutStartSec=55""",
             "gridmind-live-tick.timer": """[Unit]
 Description=GridMind non-overlapping minute Paper tick
@@ -181,12 +201,14 @@ WantedBy=timers.target""",
             "gridmind-daily-24h.service": f"""[Unit]
 Description=GridMind terminal Beijing 24-hour report
 After=gridmind-live-tick.service
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=oneshot
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service daily-24h
 ExecStart={p.app_python} -m pipelines.trading_daily_24h_report --send --verify
+MemoryMax=256M
 TimeoutStartSec=300""",
             "gridmind-daily-24h.timer": """[Unit]
 Description=GridMind terminal report timer
@@ -201,12 +223,14 @@ WantedBy=timers.target""",
             "gridmind-daily-self-review.service": f"""[Unit]
 Description=GridMind evidence-backed daily self-review
 After=gridmind-daily-24h.service
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=oneshot
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service daily-self-review
 ExecStart={p.app_python} -m pipelines.cloud_daily_self_review
+MemoryMax=256M
 TimeoutStartSec=300""",
             "gridmind-daily-self-review.timer": """[Unit]
 Description=GridMind daily self-review timer
@@ -221,12 +245,14 @@ WantedBy=timers.target""",
             "gridmind-backup.service": f"""[Unit]
 Description=GridMind verified Paper backup
 After=gridmind-daily-self-review.service
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=oneshot
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service backup
 ExecStart={p.app_python} -m pipelines.cloud_backup create --keep 7
+MemoryMax=256M
 TimeoutStartSec=900""",
             "gridmind-backup.timer": """[Unit]
 Description=GridMind daily verified backup timer
@@ -241,12 +267,14 @@ WantedBy=timers.target""",
             "gridmind-deadman-ping.service": f"""[Unit]
 Description=GridMind external dead-man ping
 After=gridmind-live-tick.service
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=oneshot
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service deadman-ping
 ExecStart={p.app_python} -m pipelines.deadman_ping
+MemoryMax=192M
 TimeoutStartSec=30""",
             "gridmind-deadman-ping.timer": """[Unit]
 Description=GridMind dead-man timer
@@ -263,6 +291,7 @@ WantedBy=timers.target""",
 Description=GridMind bounded Cloud AI provider readiness renewal
 After=network-online.target
 Wants=network-online.target
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=oneshot
@@ -270,6 +299,7 @@ Type=oneshot
 ReadWritePaths=/opt/gridmind/.codex
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service ai-provider-readiness
 ExecStart={p.app_python} -m pipelines.cloud_ai_provider_readiness --renew-if-due --json
+MemoryMax=384M
 TimeoutStartSec=120""",
             "gridmind-ai-provider-readiness.timer": """[Unit]
 Description=GridMind non-overlapping Cloud AI provider readiness renewal timer
@@ -288,6 +318,7 @@ Description=GridMind verified next-cycle Paper plan pre-generation
 After=gridmind-live-tick.service gridmind-datafeed.service network-online.target
 Requires=gridmind-datafeed.service
 Wants=network-online.target
+{_UNIT_FAILURE_HOOK}
 
 [Service]
 Type=oneshot
@@ -295,6 +326,7 @@ Type=oneshot
 ReadWritePaths=/opt/gridmind/.codex
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service next-cycle-plan
 ExecStart={p.app_python} -m pipelines.paper_next_cycle_plan --json
+MemoryMax=384M
 TimeoutStartSec=120""",
             "gridmind-next-cycle-plan.timer": """[Unit]
 Description=GridMind non-overlapping next-cycle Paper plan timer
@@ -308,6 +340,19 @@ Unit=gridmind-next-cycle-plan.service
 
 [Install]
 WantedBy=timers.target""",
+            "gridmind-unit-failure-alert@.service": f"""[Unit]
+Description=GridMind external failure alert for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+{common}
+ExecStart={p.app_python} -m pipelines.cloud_unit_failure_alert --failed-unit %i
+MemoryMax=128M
+TimeoutStartSec=30""",
+            "ssh.service.d/90-gridmind-oom-protection.conf": """[Service]
+OOMScoreAdjust=-900""",
         }
 
 
@@ -326,8 +371,8 @@ class CloudSystemdInstaller:
         if action == "install-passive":
             return [
                 *[
-                    ["install", "-m", "0644", str(rendered_dir / name), str(self.systemd_dir / name)]
-                    for name in UNIT_NAMES
+                    ["install", "-D", "-m", "0644", str(rendered_dir / name), str(self.systemd_dir / name)]
+                    for name in (*UNIT_NAMES, *DROP_IN_FILES)
                 ],
                 ["systemctl", "daemon-reload"],
                 ["systemctl", "enable", "--now", "gridmind-datafeed.service"],
@@ -367,7 +412,10 @@ class CloudSystemdInstaller:
         if action == "uninstall":
             return [
                 ["systemctl", "disable", "--now", *UNIT_NAMES],
-                *[["rm", "-f", str(self.systemd_dir / name)] for name in UNIT_NAMES],
+                *[
+                    ["rm", "-f", str(self.systemd_dir / name)]
+                    for name in (*UNIT_NAMES, *DROP_IN_FILES)
+                ],
                 ["systemctl", "daemon-reload"],
             ]
         raise ValueError(

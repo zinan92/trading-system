@@ -14766,3 +14766,48 @@ auditable datafeed port; broker execution remains a separate port.
   and production writes/controls/orders/positions were all zero. This is
   pre-release proof, not runtime recovery; only exact-main deployment plus a
   natural sealed `running_proven` can close #605.
+# 2026-08-11 — Contain managed-service OOM without losing repair access (#611)
+
+## Decision
+
+- Protect the two repair entrances independently of the failed workload:
+  the loaded Ubuntu `ssh.service` receives a source-controlled systemd drop-in
+  and `gridmind-cloudflared.service` receives `OOMScoreAdjust=-900`.
+- Bound each managed Python service below the 1.6 GiB host ceiling.  Current
+  steady/boot peaks support 384 MiB for datafeed, Dashboard, live-tick, AI
+  readiness and next-cycle planning; smaller gateway/dead-man limits are
+  192 MiB; the report, self-review and backup batches are capped at 256 MiB.
+  The failure-alert helper is capped at 128 MiB and deliberately has no
+  recursive `OnFailure` hook.
+- Attach the same systemd `OnFailure` template to every managed Python unit
+  and cloudflared.  The helper first appends+fsyncs a Paper-only structured
+  detection event, then signals the configured external dead-man `/fail`
+  endpoint, then appends+fsyncs the delivery result.  Neither the URL nor any
+  credential is persisted.
+
+## Gotchas
+
+- Post-reboot journal attribution proved that all three large Python OOM
+  victims were interactive root session scopes, not `gridmind-*.service`
+  cgroups.  On 2026-08-11 the direct process was `sudo /usr/bin/python3 -`,
+  left alive from 14:49 until the 18:12 global OOM at 538,752 KiB anonymous
+  RSS.  Unit `MemoryMax` protects managed services but cannot constrain an
+  arbitrary administrator-session program; #613 owns cross-workload admission
+  and operator-diagnostic budgeting.
+- `sshd.service` is not the loaded Ubuntu unit on this host.  It resolves to an
+  inactive name with no fragment; `/usr/lib/systemd/system/ssh.service` is the
+  active authority, so the drop-in must target `ssh.service.d` exactly.
+- A unit entering `failed` is not evidence that an alert was delivered.
+  Detection is durable before network I/O and delivery has a separate result
+  event; Cloud acceptance still requires an isolated end-to-end canary.
+
+## Verification
+
+- Renderer tests cover every exact `MemoryMax`, both OOM-score protections,
+  the non-recursive failure template and install/drop-in paths.
+- Failure-alert tests prove detection-before-send ordering, `/fail` routing,
+  secret-free immutable events, zero Paper controls/orders/positions,
+  unconfigured-network behavior and fail-closed unit-name validation.
+- Focused systemd, timer, boot and dead-man suites pass.  Target-environment
+  canary and exact-SHA deployment remain runtime acceptance gates and are not
+  replaced by these tests.
