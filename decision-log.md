@@ -14811,3 +14811,40 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused systemd, timer, boot and dead-man suites pass.  Target-environment
   canary and exact-SHA deployment remain runtime acceptance gates and are not
   replaced by these tests.
+# 2026-08-11 — Stream runtime-artifact hashes with one bounded buffer (#612)
+
+## Decision
+
+- Replace the backup and daily self-review `Path.read_bytes()` SHA-256 sites
+  with one shared `sha256_file()` implementation.  The helper allocates one
+  1 MiB bytearray, fills it with unbuffered `readinto()`, and updates the same
+  SHA-256 digest incrementally; manifest and review hash semantics do not
+  change.
+- Keep the change scoped to the two production sites identified by the OOM
+  audit.  Other file-hash implementations and batch scheduling remain outside
+  this story.
+
+## Gotchas
+
+- A successful digest comparison alone does not prove bounded memory.  The
+  regression hashes a 64 MiB sparse file under `tracemalloc` and requires peak
+  Python allocation below two chunks, in addition to comparing empty, small
+  and multi-chunk byte-for-byte SHA-256 results.
+- The 2026-08-11 direct OOM allocator was an interactive root-session Python
+  program rather than the scheduled backup unit.  This fix removes the same
+  whole-file materialization defect from production code but does not claim to
+  govern arbitrary diagnostic scripts; that remains explicit in #610/#613.
+- Chunking must not weaken manifest verification or rewrite any historical
+  artifact.  Both callers retain their existing `_hash_file` boundary and only
+  delegate the byte stream to the shared helper.
+
+## Verification
+
+- Empty, small and greater-than-one-chunk fixtures match `hashlib.sha256`
+  exactly; a nonpositive chunk size fails closed.
+- The 64 MiB sparse-file test proves bounded peak Python allocation, and the
+  existing backup create/restore/corruption and daily-self-review suites pass
+  without expected-output changes.
+- Target-environment acceptance still requires an isolated large-file canary
+  as the real service user plus a successful scheduled-service run; tests are
+  not deployment proof.
