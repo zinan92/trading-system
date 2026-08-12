@@ -27,6 +27,7 @@ def main() -> int:
             "activate-remote-access",
             "activate-provider-readiness",
             "activate-next-cycle-plan",
+            "activate-deadman-watchdog",
             "uninstall",
         ),
         default="render",
