@@ -13,6 +13,18 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-12)
+- #439/#413 cross-cycle handoff repair is implemented on branch
+  `codex/issue-413-cross-cycle-handoff` but not yet merged or deployed.  The
+  defect was ordering: the boundary rollover searched only for an active
+  successor plan while the pre-generator intentionally persisted a waiting
+  artifact, so every missing active plan fell back to stop/cancel/flatten.
+  The repair binds `takeover_from_strategy_plan_id` into the verified artifact,
+  promotes that exact Grid plan immediately before the existing handoff gate,
+  and leaves the original fail-closed close path for missing/stale/invalid
+  evidence.  Focused tests pass; next step is full-suite/gitleaks, PR review,
+  exact-SHA Paper deployment, and one natural boundary proving unchanged order
+  and position identities.  No live path or current Paper state has been
+  changed by this branch.
 - #623 adds the missing containment for administrator-session processes:
   source-controlled `user-.slice` defaults load `MemoryHigh=384M` and
   `MemoryMax=512M` without including SSH, cloudflared or system GridMind units.

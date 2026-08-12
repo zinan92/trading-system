@@ -2253,6 +2253,15 @@ class PaperSupervisor:
                             "envelope_authorization_id"
                         ]
                     ),
+                    takeover_from_strategy_plan_id=(
+                        str(
+                            projected_plan.get(
+                                "takeover_from_strategy_plan_id"
+                            )
+                            or ""
+                        )
+                        or None
+                    ),
                     now=observed_at,
                 )
             if (

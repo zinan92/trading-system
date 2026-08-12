@@ -47,6 +47,12 @@ from services.cycle_decision import CycleDecisionCoordinator
 from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.live_tick_timing import LiveTickTimingSession
 from services.paper_supervisor import PaperSupervisor
+from services.paper_next_cycle_plan import (
+    NextCyclePlanError,
+    VerifiedWaitingPlanStore,
+    plan_content_digest,
+    staged_facts_status,
+)
 from services.supervisor_execution_profile import (
     resolve_supervisor_execution_profile,
 )
@@ -1467,13 +1473,28 @@ class DualTrackCycleRunner:
         stage = str(latest.get("status") or "intent_recorded")
         try:
             handoff_failure = ""
+            waiting_handoff: dict[str, Any] | None = None
             if (
                 persisted.get("cycle_id") == previous_cycle_id
                 and persisted.get("actual_state") == "running"
             ):
                 stage = "checking_cycle_handoff"
+                waiting_handoff = self._prepare_verified_waiting_handoff(
+                    control,
+                    previous_cycle_id,
+                    current_cycle_id,
+                    persisted=persisted,
+                    now=now,
+                )
                 handoff = None
                 try:
+                    if waiting_handoff is not None and waiting_handoff.get("_blocked"):
+                        raise RuntimeError(
+                            str(
+                                waiting_handoff.get("reason")
+                                or "verified waiting handoff preparation failed"
+                            )
+                        )
                     handoff = self._attempt_managed_cycle_handoff(
                         control,
                         previous_cycle_id,
@@ -1483,6 +1504,14 @@ class DualTrackCycleRunner:
                     )
                 except Exception as exc:
                     handoff_failure = str(exc)
+                    if waiting_handoff is not None:
+                        self._record_waiting_handoff_event(
+                            waiting_handoff,
+                            outcome="blocked",
+                            reason=handoff_failure,
+                            observed_at=now.isoformat(),
+                            deterministic_rebuild_used=True,
+                        )
                     self._record_rollover(
                         previous_cycle_id,
                         current_cycle_id,
@@ -1497,6 +1526,16 @@ class DualTrackCycleRunner:
                         now=now,
                     )
                 if handoff is not None:
+                    if waiting_handoff is not None and not waiting_handoff.get(
+                        "_blocked"
+                    ):
+                        self._record_waiting_handoff_event(
+                            waiting_handoff,
+                            outcome="adopted",
+                            reason="verified_waiting_handoff_verified",
+                            observed_at=now.isoformat(),
+                            deterministic_rebuild_used=False,
+                        )
                     latest = self._record_rollover(
                         previous_cycle_id,
                         current_cycle_id,
@@ -1644,6 +1683,195 @@ class DualTrackCycleRunner:
                 now=now,
             )
             return {"event": "production_rollover", **blocked}
+
+    def _prepare_verified_waiting_handoff(
+        self,
+        control: StrategyControlPlane,
+        previous_cycle_id: str,
+        current_cycle_id: str,
+        *,
+        persisted: dict[str, Any],
+        now: datetime,
+    ) -> dict[str, Any] | None:
+        """Promote a verified successor plan before the handoff gate runs.
+
+        The old order was rollover -> look for an active successor plan.  The
+        pre-generator intentionally writes only a waiting artifact, so that
+        order guaranteed a safe flatten even when a fully verified successor
+        existed.  This method only activates that exact plan record; it never
+        prepares a start or mutates orders/positions.
+        """
+
+        store = VerifiedWaitingPlanStore(self.output_root)
+        try:
+            artifact = store.load(current_cycle_id)
+        except NextCyclePlanError:
+            return None
+        if artifact is None:
+            return None
+        projected = dict(artifact["plan"]["projected"])
+        previous_plan_id = str(persisted.get("strategy_plan_id") or "")
+        takeover_from = str(
+            projected.get("takeover_from_strategy_plan_id") or ""
+        )
+        if not previous_plan_id or takeover_from != previous_plan_id:
+            return None
+        existing = control.active_plan(current_cycle_id)
+        if existing is not None:
+            if (
+                str(existing.get("strategy_plan_id") or "")
+                == str(projected.get("strategy_plan_id") or "")
+                and str(existing.get("takeover_from_strategy_plan_id") or "")
+                == previous_plan_id
+            ):
+                return {
+                    "artifact": artifact,
+                    "current_start_facts_digest": artifact["start_facts_digest"],
+                }
+            return {
+                "_blocked": True,
+                "reason": "current-cycle StrategyPlan identity conflicts with verified waiting artifact",
+                "artifact": artifact,
+                "current_start_facts_digest": None,
+            }
+        if str(projected.get("strategy_type") or "grid").lower() != "grid":
+            # DCA has no equivalent public plan-lock path yet; retain the
+            # existing safe fallback until that contract is added.
+            return {
+                "_blocked": True,
+                "reason": "verified waiting handoff requires a Grid plan-lock path",
+                "artifact": artifact,
+                "current_start_facts_digest": None,
+            }
+        try:
+            market = self._production_market_snapshot(now)
+            execution_snapshot = self.execution.snapshot(current_cycle_id)
+            current_facts = control.capture_start_facts(
+                current_cycle_id,
+                observed_at=now.isoformat(),
+                market=market,
+                execution_snapshot=execution_snapshot,
+                execution_adapter_name=str(
+                    getattr(self.execution, "name", "")
+                ),
+            )
+            bound_facts = control.start_facts.require(
+                current_cycle_id,
+                str(artifact["start_facts_digest"]),
+            )
+            validity = staged_facts_status(
+                artifact,
+                bound_facts,
+                current_facts,
+                cycle_id=current_cycle_id,
+                observed_at=now.isoformat(),
+            )
+            if validity.get("valid") is not True:
+                store.record_boundary_event(
+                    target_cycle_id=current_cycle_id,
+                    artifact_digest=artifact["artifact_digest"],
+                    outcome="invalidated",
+                    reason=str(validity.get("reason") or "waiting_plan_invalid"),
+                    observed_at=now.isoformat(),
+                    current_start_facts_digest=current_facts.get(
+                        "start_facts_digest"
+                    ),
+                    boundary_ai_provider_calls=0,
+                    deterministic_rebuild_used=True,
+                )
+                return {
+                    "_blocked": True,
+                    "reason": str(validity.get("reason") or "waiting_plan_invalid"),
+                    "artifact": artifact,
+                    "current_start_facts_digest": current_facts.get(
+                        "start_facts_digest"
+                    ),
+                }
+            proposal_id = str(artifact["proposal"]["proposal_id"])
+            proposals = [
+                row
+                for row in control.proposals(current_cycle_id)
+                if str(row.get("proposal_id") or "") == proposal_id
+            ]
+            envelope_id = str(
+                artifact["envelope"]["envelope_authorization_id"]
+            )
+            envelope = control.risk_envelopes.envelope(
+                current_cycle_id,
+                envelope_id,
+            )
+            if (
+                len(proposals) != 1
+                or not isinstance(envelope, dict)
+                or str(envelope.get("authorization_digest") or "")
+                != str(artifact["envelope"]["authorization_digest"])
+            ):
+                raise ValueError("next_cycle_verified_plan_identity_conflict")
+            plan = control.lock_production_plan(
+                current_cycle_id,
+                selected_proposal_id=proposal_id,
+                cycle_risk_envelope_id=envelope_id,
+                takeover_from_strategy_plan_id=previous_plan_id,
+                now=now.isoformat(),
+            )
+            if (
+                str(plan.get("strategy_plan_id") or "")
+                != str(projected.get("strategy_plan_id") or "")
+                or plan_content_digest(plan)
+                != str(artifact["plan"]["content_digest"])
+            ):
+                raise ValueError("next_cycle_verified_plan_identity_conflict")
+            return {
+                "artifact": artifact,
+                "current_start_facts_digest": current_facts.get(
+                    "start_facts_digest"
+                ),
+            }
+        except Exception as exc:
+            # This is a pre-intent planning failure.  The caller continues
+            # into the existing fail-closed stop/cancel/flatten path.
+            try:
+                store.record_boundary_event(
+                    target_cycle_id=current_cycle_id,
+                    artifact_digest=artifact["artifact_digest"],
+                    outcome="blocked",
+                    reason=str(exc),
+                    observed_at=now.isoformat(),
+                    current_start_facts_digest=None,
+                    boundary_ai_provider_calls=0,
+                    deterministic_rebuild_used=True,
+                )
+            except Exception:
+                pass
+            return {
+                "_blocked": True,
+                "reason": str(exc),
+                "artifact": artifact,
+                "current_start_facts_digest": None,
+            }
+
+    def _record_waiting_handoff_event(
+        self,
+        context: dict[str, Any],
+        *,
+        outcome: str,
+        reason: str,
+        observed_at: str,
+        deterministic_rebuild_used: bool,
+    ) -> None:
+        artifact = dict(context["artifact"])
+        VerifiedWaitingPlanStore(self.output_root).record_boundary_event(
+            target_cycle_id=str(artifact["target_cycle_id"]),
+            artifact_digest=str(artifact["artifact_digest"]),
+            outcome=outcome,
+            reason=reason,
+            observed_at=observed_at,
+            current_start_facts_digest=(
+                str(context.get("current_start_facts_digest") or "") or None
+            ),
+            boundary_ai_provider_calls=0,
+            deterministic_rebuild_used=deterministic_rebuild_used,
+        )
 
     def _attempt_managed_cycle_handoff(
         self,

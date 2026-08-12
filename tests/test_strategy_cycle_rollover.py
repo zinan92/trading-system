@@ -230,6 +230,118 @@ def test_rollover_hands_off_healthy_running_namespace_without_order_mutation(
     ]
 
 
+def test_waiting_successor_is_promoted_before_managed_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "outputs"
+    previous_cycle_id = "2026-07-04_NIGHT"
+    current_cycle_id = "2026-07-05_DAY"
+    previous_plan_id = "plan-previous"
+    current_plan_id = "plan-current"
+    facts = {"start_facts_digest": "f" * 64}
+    projected = {
+        "strategy_plan_id": current_plan_id,
+        "cycle_id": current_cycle_id,
+        "version": 1,
+        "strategy_type": "grid",
+        "takeover_from_strategy_plan_id": previous_plan_id,
+    }
+    artifact = {
+        "target_cycle_id": current_cycle_id,
+        "artifact_digest": "a" * 64,
+        "start_facts_digest": facts["start_facts_digest"],
+        "proposal": {"proposal_id": "proposal-current"},
+        "envelope": {
+            "envelope_authorization_id": "envelope-current",
+            "authorization_digest": "b" * 64,
+        },
+        "plan": {"projected": projected, "content_digest": "c" * 64},
+    }
+
+    class Store:
+        def __init__(self, _output):
+            pass
+
+        def load(self, cycle_id):
+            assert cycle_id == current_cycle_id
+            return artifact
+
+        def record_boundary_event(self, **kwargs):
+            return kwargs
+
+    class StartFacts:
+        def require(self, cycle_id, digest):
+            assert cycle_id == current_cycle_id
+            assert digest == facts["start_facts_digest"]
+            return facts
+
+    class Envelopes:
+        def envelope(self, cycle_id, envelope_id):
+            assert cycle_id == current_cycle_id
+            assert envelope_id == "envelope-current"
+            return {"authorization_digest": "b" * 64}
+
+    class Control:
+        start_facts = StartFacts()
+        risk_envelopes = Envelopes()
+
+        def active_plan(self, _cycle_id):
+            return None
+
+        def capture_start_facts(self, *_args, **_kwargs):
+            return facts
+
+        def proposals(self, cycle_id):
+            assert cycle_id == current_cycle_id
+            return [{"proposal_id": "proposal-current"}]
+
+        def lock_production_plan(self, cycle_id, **kwargs):
+            assert cycle_id == current_cycle_id
+            assert kwargs["takeover_from_strategy_plan_id"] == previous_plan_id
+            return {**projected, "locked_at": kwargs["now"]}
+
+    runner = _runner(output)
+    runner.execution = type(
+        "Execution",
+        (),
+        {"name": "nautilus_paper", "snapshot": lambda self, _cycle: {}},
+    )()
+    runner._production_market_snapshot = lambda _now: {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+    }
+    monkeypatch.setattr(runner_module, "VerifiedWaitingPlanStore", Store)
+    monkeypatch.setattr(
+        runner_module,
+        "staged_facts_status",
+        lambda *_args, **_kwargs: {"valid": True},
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "plan_content_digest",
+        lambda _plan: "c" * 64,
+    )
+
+    result = runner._prepare_verified_waiting_handoff(
+        Control(),
+        previous_cycle_id,
+        current_cycle_id,
+        persisted={
+            "cycle_id": previous_cycle_id,
+            "desired_state": "running",
+            "actual_state": "running",
+            "strategy_plan_id": previous_plan_id,
+        },
+        now=parse_utc("2026-07-05T01:00:00+00:00"),
+    )
+
+    assert result is not None
+    assert result["artifact"] is artifact
+    assert result["current_start_facts_digest"] == facts["start_facts_digest"]
+
+
 def test_rollover_retries_package_after_verified_handoff_without_repeating_handoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

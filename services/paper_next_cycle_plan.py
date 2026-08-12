@@ -336,6 +336,20 @@ class NextCyclePlanPrecomputer:
                 raise NextCyclePlanError(
                     "next_cycle_plan_activation_precedes_boundary"
                 )
+            takeover_from = ""
+            persisted_runtime = getattr(
+                self.plane,
+                "persisted_runtime_state",
+                None,
+            )
+            if callable(persisted_runtime):
+                runtime = dict(persisted_runtime() or {})
+                if (
+                    str(runtime.get("cycle_id") or "") == current.cycle_id
+                    and str(runtime.get("desired_state") or "") == "running"
+                    and str(runtime.get("actual_state") or "") == "running"
+                ):
+                    takeover_from = str(runtime.get("strategy_plan_id") or "")
             evaluation = dict(
                 self.candidate_builder(
                     target.cycle_id,
@@ -357,6 +371,14 @@ class NextCyclePlanPrecomputer:
             envelope_id = _required_text(
                 envelope.get("envelope_authorization_id")
             )
+            projection_kwargs = {
+                "cycle_risk_envelope_id": envelope_id,
+                "now": observed.isoformat(),
+            }
+            if takeover_from:
+                projection_kwargs["takeover_from_strategy_plan_id"] = (
+                    takeover_from
+                )
             strategy_type = str(
                 proposal.get("strategy_type") or "grid"
             ).lower()
@@ -365,15 +387,13 @@ class NextCyclePlanPrecomputer:
                     target.cycle_id,
                     selected_proposal_id=str(proposal["proposal_id"]),
                     preview=preview,
-                    cycle_risk_envelope_id=envelope_id,
-                    now=observed.isoformat(),
+                    **projection_kwargs,
                 )
             else:
                 projected_plan = self.plane.project_production_plan(
                     target.cycle_id,
                     selected_proposal_id=str(proposal["proposal_id"]),
-                    cycle_risk_envelope_id=envelope_id,
-                    now=observed.isoformat(),
+                    **projection_kwargs,
                 )
                 self.plane.risk_envelopes.verify_candidate_plan_identity(
                     cycle_id=target.cycle_id,
@@ -478,6 +498,20 @@ def build_verified_waiting_plan(
         or str(envelope_row.get("cycle_id") or "") != target_cycle_id
     ):
         raise NextCyclePlanError("next_cycle_verified_plan_identity_conflict")
+    plan_record = {
+        "strategy_plan_id": _required_text(
+            plan.get("strategy_plan_id")
+        ),
+        "version": _positive_int(plan.get("version")),
+        "strategy_type": _required_text(
+            plan.get("strategy_type") or "grid"
+        ),
+        "content_digest": plan_content_digest(plan),
+        "projected": plan,
+    }
+    takeover_from = str(plan.get("takeover_from_strategy_plan_id") or "")
+    if takeover_from:
+        plan_record["takeover_from_strategy_plan_id"] = takeover_from
     record: dict[str, Any] = {
         "schema_version": VERIFIED_WAITING_SCHEMA_VERSION,
         "status": "verified_waiting",
@@ -502,17 +536,7 @@ def build_verified_waiting_plan(
             ),
         },
         "candidate": candidate,
-        "plan": {
-            "strategy_plan_id": _required_text(
-                plan.get("strategy_plan_id")
-            ),
-            "version": _positive_int(plan.get("version")),
-            "strategy_type": _required_text(
-                plan.get("strategy_type") or "grid"
-            ),
-            "content_digest": plan_content_digest(plan),
-            "projected": plan,
-        },
+        "plan": plan_record,
         "envelope": {
             "envelope_authorization_id": _required_text(
                 envelope_row.get("envelope_authorization_id")
@@ -589,17 +613,23 @@ def validate_verified_waiting_plan(
         "limits",
         "start_facts_digest",
     }
+    plan_fields = {
+        "strategy_plan_id",
+        "version",
+        "strategy_type",
+        "content_digest",
+        "projected",
+    }
+    projected = _json_mapping(plan.get("projected"))
+    takeover_from = str(
+        projected.get("takeover_from_strategy_plan_id") or ""
+    )
+    if takeover_from:
+        plan_fields.add("takeover_from_strategy_plan_id")
     if (
         set(proposal) != {"proposal_id", "proposal_digest"}
         or set(preview) != {"preview_id", "preview_digest"}
-        or set(plan)
-        != {
-            "strategy_plan_id",
-            "version",
-            "strategy_type",
-            "content_digest",
-            "projected",
-        }
+        or set(plan) != plan_fields
         or set(envelope)
         != {"envelope_authorization_id", "authorization_digest"}
         or str(candidate.get("proposal_id") or "")
@@ -622,7 +652,6 @@ def validate_verified_waiting_plan(
     _required_digest(proposal.get("proposal_digest"))
     _required_text(preview.get("preview_id"))
     _required_digest(preview.get("preview_digest"))
-    projected = _json_mapping(plan.get("projected"))
     if (
         _required_text(plan.get("strategy_plan_id"))
         != str(projected.get("strategy_plan_id") or "")
@@ -642,6 +671,8 @@ def validate_verified_waiting_plan(
         }
         or str(envelope.get("envelope_authorization_id") or "")
         != str(projected.get("cycle_risk_envelope_id") or "")
+        or str(plan.get("takeover_from_strategy_plan_id") or "")
+        != takeover_from
     ):
         raise NextCyclePlanError("next_cycle_verified_plan_corrupt")
     _required_text(envelope.get("envelope_authorization_id"))

@@ -15042,3 +15042,43 @@ auditable datafeed port; broker execution remains a separate port.
   report, self-review, backup and failure-alert canaries.  Exact-SHA deployment,
   loaded properties, fresh SSH, an isolated external alert canary and unchanged
   Paper state remain runtime gates.
+
+# 2026-08-12 — Promote verified successor plans before Paper cycle handoff (#439)
+
+## Decision
+
+- Keep the #413 safety contract: a Paper position and its protective/order
+  identity may cross a 12-hour boundary only when the prior tick is fresh, the
+  successor plan explicitly names the prior plan, market facts are trusted,
+  and the authoritative Nautilus handoff verifies identity preservation.
+- Fix the ordering defect in #439 by binding the running plan identity into the
+  immutable `verified_waiting` artifact and promoting that exact plan to active
+  immediately before the existing managed-handoff gate. Promotion creates no
+  prepared start, control action, order, or position; it only makes the already
+  verified successor visible to the handoff gate.
+- If the artifact is missing, stale, malformed, not a Grid plan, or cannot be
+  activated with exact proposal/envelope/content identity, retain the existing
+  fail-closed stop/cancel/flatten path and persist the typed boundary event.
+- Paper-only behavior is changed. Live/real-money execution continues to reject
+  the Paper continuity capability.
+
+## Gotchas
+
+- A healthy handoff implementation already existed, but the live-tick order was
+  `rollover -> find active successor plan -> flatten on absence`; the pre-generator
+  intentionally wrote only a waiting artifact, so production could never see
+  the handoff plan at the gate. The 2026-08-12 DAY rollover proves this exact
+  `managed rollover requires an active current-cycle StrategyPlan` cause.
+- The waiting artifact now carries `takeover_from_strategy_plan_id`; the plan
+  content digest includes it, while the risk-envelope digest remains scoped to
+  the economic execution shape. Old artifacts without the field remain valid
+  for normal start adoption but are not eligible for cross-cycle handoff.
+- Boundary promotion is not a shortcut around market, source, policy, or
+  execution-facts checks. Any mismatch records `invalidated`/`blocked` and uses
+  the existing safety close path.
+
+## Verification
+
+- Focused successor-plan and rollover tests prove idempotent staging, exact
+  takeover identity binding, healthy no-mutation handoff, and fail-closed
+  fallback; full repository validation remains required before merge.

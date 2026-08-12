@@ -974,6 +974,7 @@ class StrategyControlPlane:
         selected_proposal_id: str,
         field_sources: dict[str, str] | None = None,
         cycle_risk_envelope_id: str | None = None,
+        takeover_from_strategy_plan_id: str | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
         with production_mutation_lock(self.output_root):
@@ -982,6 +983,7 @@ class StrategyControlPlane:
                 selected_proposal_id=selected_proposal_id,
                 field_sources=field_sources,
                 cycle_risk_envelope_id=cycle_risk_envelope_id,
+                takeover_from_strategy_plan_id=takeover_from_strategy_plan_id,
                 now=now,
             )
 
@@ -992,6 +994,7 @@ class StrategyControlPlane:
         selected_proposal_id: str,
         field_sources: dict[str, str] | None = None,
         cycle_risk_envelope_id: str | None = None,
+        takeover_from_strategy_plan_id: str | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
         plan = self.project_production_plan(
@@ -999,6 +1002,7 @@ class StrategyControlPlane:
             selected_proposal_id=selected_proposal_id,
             field_sources=field_sources,
             cycle_risk_envelope_id=cycle_risk_envelope_id,
+            takeover_from_strategy_plan_id=takeover_from_strategy_plan_id,
             now=now,
         )
         if cycle_risk_envelope_id:
@@ -1020,6 +1024,7 @@ class StrategyControlPlane:
         selected_proposal_id: str,
         field_sources: dict[str, str] | None = None,
         cycle_risk_envelope_id: str | None = None,
+        takeover_from_strategy_plan_id: str | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
         """Build the exact next Grid StrategyPlan without activating it.
@@ -1078,6 +1083,10 @@ class StrategyControlPlane:
             plan["cycle_risk_envelope_id"] = str(
                 cycle_risk_envelope_id
             )
+        if takeover_from_strategy_plan_id:
+            plan["takeover_from_strategy_plan_id"] = str(
+                takeover_from_strategy_plan_id
+            )
         return plan
 
     def project_dca_production_plan(
@@ -1087,6 +1096,7 @@ class StrategyControlPlane:
         selected_proposal_id: str,
         preview: Mapping[str, Any],
         cycle_risk_envelope_id: str,
+        takeover_from_strategy_plan_id: str | None = None,
         now: str | None = None,
     ) -> dict[str, Any]:
         """Build the exact future DCA plan without preparing or activating it."""
@@ -1128,6 +1138,10 @@ class StrategyControlPlane:
         plan["cycle_risk_envelope_id"] = str(
             cycle_risk_envelope_id
         )
+        if takeover_from_strategy_plan_id:
+            plan["takeover_from_strategy_plan_id"] = str(
+                takeover_from_strategy_plan_id
+            )
         return plan
 
     def active_plan(self, cycle_id: str) -> dict[str, Any] | None:
