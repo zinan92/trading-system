@@ -35,6 +35,7 @@ UNIT_NAMES = (
 
 DROP_IN_FILES = (
     "ssh.service.d/90-gridmind-oom-protection.conf",
+    "user-.slice.d/90-gridmind-memory-budget.conf",
 )
 
 _UNIT_FAILURE_HOOK = "OnFailure=gridmind-unit-failure-alert@%n.service"
@@ -129,7 +130,7 @@ Type=simple
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service dashboard
 ExecStart={p.app_python} -m pipelines.dashboard_server --host 127.0.0.1 --port 8765
-MemoryMax=384M
+MemoryMax=256M
 Restart=on-failure
 RestartSec=5
 
@@ -146,7 +147,7 @@ Type=simple
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service access-gateway
 ExecStart={p.app_python} -m services.cloud_access_gateway --host 127.0.0.1 --port 8766
-MemoryMax=192M
+MemoryMax=96M
 Restart=on-failure
 RestartSec=5
 
@@ -169,6 +170,7 @@ ProtectHome=true
 ProtectSystem=strict
 OOMScoreAdjust=-900
 ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/gridmind/cloudflared.yml tunnel run
+MemoryMax=128M
 Restart=on-failure
 RestartSec=5
 
@@ -186,7 +188,8 @@ Type=oneshot
 ReadWritePaths=/opt/gridmind/.codex
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service dualtrack-live-tick
 ExecStart={p.app_python} -m pipelines.dualtrack_cycle_runner --event live-tick
-MemoryMax=384M
+MemoryHigh=384M
+MemoryMax=512M
 TimeoutStartSec=55""",
             "gridmind-live-tick.timer": """[Unit]
 Description=GridMind non-overlapping minute Paper tick
@@ -210,7 +213,7 @@ Type=oneshot
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service daily-24h
 ExecStart={p.app_python} -m pipelines.trading_daily_24h_report --send --verify
-MemoryMax=256M
+MemoryMax=128M
 TimeoutStartSec=300""",
             "gridmind-daily-24h.timer": """[Unit]
 Description=GridMind terminal report timer
@@ -232,7 +235,7 @@ Type=oneshot
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service daily-self-review
 ExecStart={p.app_python} -m pipelines.cloud_daily_self_review
-MemoryMax=256M
+MemoryMax=128M
 TimeoutStartSec=300""",
             "gridmind-daily-self-review.timer": """[Unit]
 Description=GridMind daily self-review timer
@@ -254,7 +257,8 @@ Type=oneshot
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service backup
 ExecStart={p.app_python} -m pipelines.cloud_backup create --keep 7
-MemoryMax=256M
+MemoryHigh=256M
+MemoryMax=384M
 TimeoutStartSec=900""",
             "gridmind-backup.timer": """[Unit]
 Description=GridMind daily verified backup timer
@@ -300,7 +304,7 @@ Type=oneshot
 {common}
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service deadman-watchdog
 ExecStart={p.app_python} -m pipelines.cloud_deadman_watchdog
-MemoryMax=96M
+MemoryMax=64M
 TimeoutStartSec=20""",
             "gridmind-deadman-watchdog.timer": """[Unit]
 Description=GridMind independent dead-man liveness watchdog timer
@@ -326,7 +330,7 @@ Type=oneshot
 ReadWritePaths=/opt/gridmind/.codex
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service ai-provider-readiness
 ExecStart={p.app_python} -m pipelines.cloud_ai_provider_readiness --renew-if-due --json
-MemoryMax=384M
+MemoryMax=128M
 TimeoutStartSec=120""",
             "gridmind-ai-provider-readiness.timer": """[Unit]
 Description=GridMind non-overlapping Cloud AI provider readiness renewal timer
@@ -353,7 +357,7 @@ Type=oneshot
 ReadWritePaths=/opt/gridmind/.codex
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service next-cycle-plan
 ExecStart={p.app_python} -m pipelines.paper_next_cycle_plan --json
-MemoryMax=384M
+MemoryMax=128M
 TimeoutStartSec=120""",
             "gridmind-next-cycle-plan.timer": """[Unit]
 Description=GridMind non-overlapping next-cycle Paper plan timer
@@ -376,10 +380,14 @@ Wants=network-online.target
 Type=oneshot
 {common}
 ExecStart={p.app_python} -m pipelines.cloud_unit_failure_alert --failed-unit %i
-MemoryMax=128M
+MemoryMax=64M
 TimeoutStartSec=30""",
             "ssh.service.d/90-gridmind-oom-protection.conf": """[Service]
 OOMScoreAdjust=-900""",
+            "user-.slice.d/90-gridmind-memory-budget.conf": """[Slice]
+MemoryAccounting=true
+MemoryHigh=384M
+MemoryMax=512M""",
         }
 
 
@@ -398,7 +406,14 @@ class CloudSystemdInstaller:
         if action == "install-passive":
             return [
                 *[
-                    ["install", "-D", "-m", "0644", str(rendered_dir / name), str(self.systemd_dir / name)]
+                    [
+                        "install",
+                        "-D",
+                        "-m",
+                        "0644",
+                        str(rendered_dir / name),
+                        str(self.systemd_dir / name),
+                    ]
                     for name in (*UNIT_NAMES, *DROP_IN_FILES)
                 ],
                 ["systemctl", "daemon-reload"],
@@ -460,7 +475,9 @@ class CloudSystemdInstaller:
             "activate-next-cycle-plan, activate-deadman-watchdog, or uninstall"
         )
 
-    def apply(self, rendered_dir: Path, action: str, *, dry_run: bool = True) -> dict[str, Any]:
+    def apply(
+        self, rendered_dir: Path, action: str, *, dry_run: bool = True
+    ) -> dict[str, Any]:
         commands = self.plan(rendered_dir, action)
         if dry_run:
             return {
@@ -473,7 +490,9 @@ class CloudSystemdInstaller:
         if os.name != "posix" or not Path("/run/systemd/system").exists():
             raise RuntimeError("systemd installer requires a Linux systemd host")
         for command in commands:
-            result = self.command_runner(command, capture_output=True, text=True, check=False)
+            result = self.command_runner(
+                command, capture_output=True, text=True, check=False
+            )
             if result.returncode != 0:
                 raise RuntimeError(
                     f"systemd command failed: {command[0]}: {str(result.stderr or '')[-300:]}"

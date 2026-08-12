@@ -13,13 +13,24 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-12)
+- #623 adds the missing containment for administrator-session processes:
+  source-controlled `user-.slice` defaults load `MemoryHigh=384M` and
+  `MemoryMax=512M` without including SSH, cloudflared or system GridMind units.
+  The independent dead-man watcher also observes cgroup `memory.events` and
+  emits one deduplicated external failure for a new pressure/OOM increment.
+  Every managed unit now has a Cloud cgroup sample and an evidence-backed limit
+  in `docs/operations/cloud-unit-memory-calibration-2026-08-12.md`; live tick
+  uses 384/512 MiB and backup 256/384 MiB so reclaim happens before the hard
+  kill boundary.  Focused tests pass; merge, exact-main deployment, loaded
+  property checks, fresh SSH and one isolated external canary remain required.
 - #622 fixes the first scheduled post-hardening 24h-report delivery failure
   without weakening file or systemd permissions.  Cloud systemd already
   injects the root-owned Paper environment before switching to `gridmind`;
   report/trade/alert senders now use those injected values instead of reopening
-  the 0600 file.  Non-Cloud loading is unchanged.  Focused tests pass; merge,
-  exact-main deployment and one real service-user delivery still gate runtime
-  acceptance.
+  the 0600 file.  Non-Cloud loading is unchanged.  It is deployed at exact
+  `main@17f8d6258918cf640f03a782a01d3cbe5fe6ab1c`; the permission error is gone,
+  but the attended rerun proved the Cloud report notifier itself was never
+  configured.  That separate explicit delivery contract is now #628.
 - #621 removes the dead-man's cycle-sized memory growth before release: Cloud
   health now reads the fsynced bounded Supervisor checkpoint/tail rather than
   materializing the full current-cycle JSONL.  The exact 2026-08-11 NIGHT
@@ -28,8 +39,10 @@
   the patched isolated full-dead-man replay completed at 73,060 KiB maximum
   RSS with zero production mutation.  A separate one-minute watcher now owns
   dead-man receipt/timer liveness and emits only deduplicated external `/fail`
-  signals, never a success ping.  Merge and exact-main Cloud deployment remain
-  required before this can be called the active fix.
+  signals, never a success ping.  It is deployed at exact
+  `main@17f8d6258918cf640f03a782a01d3cbe5fe6ab1c`: natural dead-man peak fell to
+  17 MiB immediately after release and 67.17 MiB in the later natural sample;
+  the primary heartbeat and independent watcher both recovered naturally.
 - #612 removes the two audited whole-file SHA-256 allocations from Cloud Paper
   backup and daily self-review.  Both now share a fixed 1 MiB `readinto()`
   buffer while preserving exact digest/manifest semantics; a 64 MiB sparse
