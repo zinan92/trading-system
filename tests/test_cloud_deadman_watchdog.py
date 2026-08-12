@@ -35,11 +35,32 @@ def _timer(command, **_kwargs):
 def _receipt(root: Path, at: datetime) -> None:
     write_json(
         root / "deadman_ping" / "current.json",
-        [{
-            "checked_at": at.isoformat(),
-            "status": "sent",
-            "ping": {"delivered": True},
-        }],
+        [
+            {
+                "checked_at": at.isoformat(),
+                "status": "sent",
+                "ping": {"delivered": True},
+            }
+        ],
+    )
+
+
+def _memory_events(
+    path: Path, *, high: int = 0, oom: int = 0, oom_kill: int = 0
+) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "low 0",
+                f"high {high}",
+                "max 0",
+                f"oom {oom}",
+                f"oom_kill {oom_kill}",
+                "oom_group_kill 0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
 
@@ -57,13 +78,17 @@ def test_healthy_watchdog_never_masks_primary_deadman_with_success_ping(
         opener=no_network,
         command_runner=_timer,
         now=lambda: NOW,
+        user_slice_memory_events_path=tmp_path / "missing-memory.events",
     ).run()
 
     assert result["status"] == "healthy"
     assert result["success_ping_sent"] is False
-    assert load_json(
-        tmp_path / "cloud" / "deadman_watchdog" / "current.json"
-    )[0]["machine_code"] == "deadman_liveness_fresh"
+    assert (
+        load_json(tmp_path / "cloud" / "deadman_watchdog" / "current.json")[0][
+            "machine_code"
+        ]
+        == "deadman_liveness_fresh"
+    )
 
 
 def test_stale_receipt_sends_one_fail_then_deduplicates_same_outage(
@@ -82,6 +107,7 @@ def test_stale_receipt_sends_one_fail_then_deduplicates_same_outage(
         opener=opener,
         command_runner=_timer,
         now=lambda: NOW,
+        user_slice_memory_events_path=tmp_path / "missing-memory.events",
     )
     first = watcher.run()
     second = watcher.run()
@@ -97,12 +123,10 @@ def test_stale_receipt_sends_one_fail_then_deduplicates_same_outage(
     events = [
         json.loads(line)
         for line in (
-            tmp_path
-            / "cloud"
-            / "deadman_watchdog"
-            / "events"
-            / "2026-08-12.jsonl"
-        ).read_text(encoding="utf-8").splitlines()
+            tmp_path / "cloud" / "deadman_watchdog" / "events" / "2026-08-12.jsonl"
+        )
+        .read_text(encoding="utf-8")
+        .splitlines()
     ]
     assert [row["event"] for row in events] == [
         "detected",
@@ -121,6 +145,7 @@ def test_recovery_is_recorded_without_sending_success(tmp_path: Path) -> None:
         opener=lambda *_args, **_kwargs: _Response(),
         command_runner=_timer,
         now=lambda: clock[0],
+        user_slice_memory_events_path=tmp_path / "missing-memory.events",
     )
     blocked = watcher.run()
     clock[0] = NOW + timedelta(minutes=1)
@@ -130,11 +155,7 @@ def test_recovery_is_recorded_without_sending_success(tmp_path: Path) -> None:
     assert blocked["status"] == "blocked"
     assert recovered["status"] == "healthy"
     events_path = (
-        tmp_path
-        / "cloud"
-        / "deadman_watchdog"
-        / "events"
-        / "2026-08-12.jsonl"
+        tmp_path / "cloud" / "deadman_watchdog" / "events" / "2026-08-12.jsonl"
     )
     events = [json.loads(line) for line in events_path.read_text().splitlines()]
     assert events[-1]["event"] == "recovered"
@@ -158,7 +179,65 @@ def test_inactive_timer_fails_closed(tmp_path: Path) -> None:
         opener=lambda *_args, **_kwargs: _Response(),
         command_runner=inactive,
         now=lambda: NOW,
+        user_slice_memory_events_path=tmp_path / "missing-memory.events",
     ).run()
 
     assert result["status"] == "blocked"
     assert result["machine_code"] == "deadman_timer_unavailable"
+
+
+def test_user_slice_oom_kill_increase_sends_one_external_failure(
+    tmp_path: Path,
+) -> None:
+    _receipt(tmp_path, NOW)
+    events_path = tmp_path / "memory.events"
+    _memory_events(events_path)
+    requests = []
+
+    def opener(request, **_kwargs):
+        requests.append(request.full_url)
+        return _Response()
+
+    watcher = CloudDeadmanWatchdog(
+        tmp_path,
+        url="https://hc-ping.com/redacted",
+        opener=opener,
+        command_runner=_timer,
+        now=lambda: NOW,
+        user_slice_memory_events_path=events_path,
+    )
+    assert watcher.run()["status"] == "healthy"
+
+    _memory_events(events_path, oom=1, oom_kill=1)
+    detected = watcher.run()
+    repeated = watcher.run()
+
+    assert detected["status"] == "blocked"
+    assert detected["machine_code"] == "admin_user_slice_oom_kill"
+    assert detected["previous_count"] == 0
+    assert detected["current_count"] == 1
+    assert detected["delivery"]["delivered"] is True
+    assert repeated["status"] == "healthy"
+    assert len(requests) == 1
+
+
+def test_first_user_slice_observation_sets_baseline_without_alert(
+    tmp_path: Path,
+) -> None:
+    _receipt(tmp_path, NOW)
+    events_path = tmp_path / "memory.events"
+    _memory_events(events_path, high=7, oom=2, oom_kill=1)
+
+    result = CloudDeadmanWatchdog(
+        tmp_path,
+        url="https://hc-ping.com/redacted",
+        opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("baseline must not alert")
+        ),
+        command_runner=_timer,
+        now=lambda: NOW,
+        user_slice_memory_events_path=events_path,
+    ).run()
+
+    assert result["status"] == "healthy"
+    assert result["user_slice_memory_events"]["oom_kill"] == 1

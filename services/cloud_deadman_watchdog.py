@@ -19,6 +19,9 @@ from services.journal_store import load_json, write_json
 SCHEMA_VERSION = "cloud-deadman-watchdog-v1"
 MAX_RECEIPT_AGE_SECONDS = 600.0
 FUTURE_SKEW_SECONDS = 120.0
+DEFAULT_USER_SLICE_MEMORY_EVENTS = Path(
+    "/sys/fs/cgroup/user.slice/user-1000.slice/memory.events"
+)
 
 
 def _utcnow() -> datetime:
@@ -56,6 +59,7 @@ class CloudDeadmanWatchdog:
         now: Callable[[], datetime] = _utcnow,
         timeout_seconds: float = 10.0,
         max_receipt_age_seconds: float = MAX_RECEIPT_AGE_SECONDS,
+        user_slice_memory_events_path: Path = DEFAULT_USER_SLICE_MEMORY_EVENTS,
     ) -> None:
         self.output_root = Path(output_root)
         self.url = (
@@ -69,16 +73,22 @@ class CloudDeadmanWatchdog:
         self.now = now
         self.timeout_seconds = timeout_seconds
         self.max_receipt_age_seconds = float(max_receipt_age_seconds)
+        self.user_slice_memory_events_path = Path(user_slice_memory_events_path)
 
     def run(self) -> dict[str, Any]:
         observed = self.now().astimezone(timezone.utc).replace(microsecond=0)
         receipt = _latest(self.output_root / "deadman_ping" / "current.json")
         timer = self._timer_status()
-        blocker = self._blocker(observed=observed, receipt=receipt, timer=timer)
-        current_path = (
-            self.output_root / "cloud" / "deadman_watchdog" / "current.json"
-        )
+        current_path = self.output_root / "cloud" / "deadman_watchdog" / "current.json"
         prior = _latest(current_path)
+        memory_events = self._user_slice_memory_events()
+        blocker = self._blocker(
+            observed=observed,
+            receipt=receipt,
+            timer=timer,
+            prior=prior,
+            memory_events=memory_events,
+        )
         if blocker is None:
             payload = {
                 "schema_version": SCHEMA_VERSION,
@@ -86,6 +96,7 @@ class CloudDeadmanWatchdog:
                 "status": "healthy",
                 "machine_code": "deadman_liveness_fresh",
                 "timer": timer,
+                "user_slice_memory_events": memory_events,
                 "receipt_checked_at": receipt.get("checked_at"),
                 "success_ping_sent": False,
                 "paper_only": True,
@@ -111,12 +122,8 @@ class CloudDeadmanWatchdog:
             and prior.get("machine_code") == blocker["machine_code"]
             and bool(prior.get("outage_id"))
         )
-        outage_id = (
-            str(prior["outage_id"]) if same_outage else str(uuid.uuid4())
-        )
-        prior_delivery = (
-            dict(prior.get("delivery") or {}) if same_outage else {}
-        )
+        outage_id = str(prior["outage_id"]) if same_outage else str(uuid.uuid4())
+        prior_delivery = dict(prior.get("delivery") or {}) if same_outage else {}
         if prior_delivery.get("delivered") is True:
             delivery = {
                 **prior_delivery,
@@ -131,6 +138,7 @@ class CloudDeadmanWatchdog:
                 "checked_at": observed.isoformat(),
                 **blocker,
                 "timer": timer,
+                "user_slice_memory_events": memory_events,
                 "success_ping_sent": False,
                 "paper_only": True,
                 "control_actions_executed": 0,
@@ -154,6 +162,7 @@ class CloudDeadmanWatchdog:
             "outage_id": outage_id,
             **blocker,
             "timer": timer,
+            "user_slice_memory_events": memory_events,
             "receipt_checked_at": receipt.get("checked_at"),
             "delivery": delivery,
             "success_ping_sent": False,
@@ -204,7 +213,33 @@ class CloudDeadmanWatchdog:
         observed: datetime,
         receipt: dict[str, Any],
         timer: dict[str, Any],
+        prior: dict[str, Any],
+        memory_events: dict[str, Any],
     ) -> dict[str, Any] | None:
+        previous_events = dict(prior.get("user_slice_memory_events") or {})
+        if (
+            memory_events.get("status") == "available"
+            and previous_events.get("status") == "available"
+        ):
+            for counter, machine_code in (
+                ("oom_kill", "admin_user_slice_oom_kill"),
+                ("oom", "admin_user_slice_oom"),
+                ("high", "admin_user_slice_memory_pressure"),
+            ):
+                current = int(memory_events.get(counter) or 0)
+                previous = int(previous_events.get(counter) or 0)
+                if current > previous:
+                    return {
+                        "machine_code": machine_code,
+                        "original_reason": (
+                            f"administrator user slice memory.{counter} increased "
+                            f"from {previous} to {current}"
+                        ),
+                        "alternative_action": "signal_external_deadman_fail_endpoint",
+                        "memory_event": counter,
+                        "previous_count": previous,
+                        "current_count": current,
+                    }
         if timer.get("status") != "pass":
             return {
                 "machine_code": "deadman_timer_unavailable",
@@ -235,6 +270,36 @@ class CloudDeadmanWatchdog:
                 "max_receipt_age_seconds": self.max_receipt_age_seconds,
             }
         return None
+
+    def _user_slice_memory_events(self) -> dict[str, Any]:
+        try:
+            values = dict(
+                line.split(None, 1)
+                for line in self.user_slice_memory_events_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+                if len(line.split(None, 1)) == 2
+            )
+            return {
+                "status": "available",
+                "path": str(self.user_slice_memory_events_path),
+                **{
+                    key: int(values.get(key, 0))
+                    for key in (
+                        "low",
+                        "high",
+                        "max",
+                        "oom",
+                        "oom_kill",
+                        "oom_group_kill",
+                    )
+                },
+            }
+        except (OSError, TypeError, ValueError):
+            return {
+                "status": "unavailable",
+                "path": str(self.user_slice_memory_events_path),
+            }
 
     def _deliver(
         self,
@@ -308,9 +373,7 @@ class CloudDeadmanWatchdog:
     @staticmethod
     def _with_query(url: str, params: dict[str, str]) -> str:
         parsed = urllib.parse.urlparse(url)
-        existing = dict(
-            urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-        )
+        existing = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
         existing.update(params)
         return urllib.parse.urlunparse(
             parsed._replace(query=urllib.parse.urlencode(existing))

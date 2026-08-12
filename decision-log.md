@@ -14996,3 +14996,49 @@ auditable datafeed port; broker execution remains a separate port.
 - Authoritative post-release read-model is running with 38 accepted/open
   orders, zero unknown orders/positions, reconciliation `ok`, trusted/fresh
   market, exact deployed SHA and no Cloud critical/warning incident.
+
+# 2026-08-12 — Contain administrator sessions and calibrate Cloud memory (#623)
+
+## Decision
+
+- Apply a source-controlled `user-.slice` template with `MemoryHigh=384M` and
+  `MemoryMax=512M`.  It contains abandoned administrator-session processes but
+  does not include `ssh.service`, cloudflared, or any system GridMind service.
+- Size every managed unit from Cloud cgroup evidence recorded in
+  `docs/operations/cloud-unit-memory-calibration-2026-08-12.md`.  Use
+  `MemoryHigh` plus a larger `MemoryMax` for the two cache-heavy jobs: live tick
+  is 384/512 MiB and backup is 256/384 MiB.
+- Extend the independent dead-man watchdog to baseline the administrator
+  slice's cgroup-v2 `memory.events`.  A new `high`, `oom`, or `oom_kill`
+  increment is a structured, deduplicated external failure signal; the watcher
+  still never emits a success ping.
+
+## Gotchas
+
+- Process RSS is not the sizing authority.  The natural live tick charged
+  424.42 MiB to its cgroup, while the backup's page cache expanded with the
+  available hard limit.  A 256 MiB `MemoryHigh` constrained the same isolated
+  512 MiB backup shape to 256.47 MiB while it still completed successfully.
+- Existing cgroup counters may already be nonzero after a reboot or earlier
+  incident.  The first readable observation is therefore a baseline, not a new
+  alert; only a later counter increase is actionable.
+- A user-slice hard cap without an observer would turn a host-wide OOM into an
+  unexplained session failure.  Conversely, an observer without a cap would
+  report the same failure while allowing the host and repair tunnel to die.
+  Both parts are required.
+- The 24h report's original permission error is gone, but the attended rerun
+  revealed a separate longstanding `not_configured` delivery contract.  It is
+  recorded as #628 rather than hidden inside memory containment.
+
+## Verification
+
+- Renderer and installer tests assert the exact user-slice drop-in, every
+  calibrated limit, OOM-protected repair daemons and non-recursive failure
+  alert path.
+- Watchdog tests prove baseline-without-alert, one external failure on a new
+  user-slice OOM, deduplication, recovery recording, and zero Paper controls,
+  orders or position changes.
+- Cloud measurements include natural long-running/timer samples plus isolated
+  report, self-review, backup and failure-alert canaries.  Exact-SHA deployment,
+  loaded properties, fresh SSH, an isolated external alert canary and unchanged
+  Paper state remain runtime gates.
