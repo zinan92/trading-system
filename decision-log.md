@@ -1,5 +1,39 @@
 # Decision Log
 
+## Use systemd-injected Cloud notification environment (Issue #622)
+
+Date: 2026-08-12
+
+### Decision
+
+- In `GRIDMIND_RUNTIME_MODE=cloud`, report, trade and alert senders consume the
+  environment systemd loaded before dropping privileges.  They do not reopen
+  `/etc/gridmind/paper.env` from the unprivileged process.
+- Preserve non-Cloud behavior: local callers still use `apply_live_env()` and
+  all existing sender precedence/fallback rules remain unchanged.
+- Keep `/etc/gridmind/paper.env` root-owned mode 0600 and retain
+  `User=gridmind`, `ProtectSystem=strict`, `NoNewPrivileges` and every other
+  unit hardening boundary.
+
+### Gotchas
+
+- Skipping `apply_live_env()` only in `resolve_report_sender()` is incomplete:
+  the constructed `FeishuSender` also loaded the file in its constructor.  The
+  Cloud-mode guard therefore belongs on both resolution and sender layers.
+- The permission failure was not introduced by #611 hardening.  `User=gridmind`
+  and `ProtectSystem=strict` predated that release; #611 added only the memory
+  limit and OnFailure hook to this unit.  The first scheduled run exposed the
+  older redundant file read.
+
+### Verification
+
+- Tests force every Cloud sender-layer file read to raise and prove report and
+  trade resolution still use injected values; a non-Cloud regression proves
+  both existing env-loading layers remain active.
+- Cloud journal audit found no other GridMind permission regression after the
+  release.  The cloudflared ICMP proxy warning is unrelated to Dashboard
+  tunnel transport; the natural self-review and backup both completed.
+
 ## Bound dead-man health reads and watch the watcher (Issue #621)
 
 Date: 2026-08-12

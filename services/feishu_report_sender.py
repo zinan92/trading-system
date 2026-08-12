@@ -168,7 +168,8 @@ class FeishuReportSender:
 
 
 def resolve_report_sender():
-    apply_live_env()
+    if os.getenv("GRIDMIND_RUNTIME_MODE") != "cloud":
+        apply_live_env()
     webhook_url = _first_env(REPORT_WEBHOOK_KEYS)
     secret = _first_env(REPORT_SECRET_KEYS)
     if webhook_url:
@@ -179,7 +180,8 @@ def resolve_report_sender():
 def resolve_trade_sender():
     """Sender for executed trade-record cards: dedicated trade channel if set,
     otherwise fall back to the report channel (then the alert webhook)."""
-    apply_live_env()
+    if os.getenv("GRIDMIND_RUNTIME_MODE") != "cloud":
+        apply_live_env()
     webhook_url = _first_env(TRADE_WEBHOOK_KEYS)
     secret = _first_env(TRADE_SECRET_KEYS)
     if webhook_url:
