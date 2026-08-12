@@ -193,8 +193,13 @@ class _Plane:
     def authorize_supervisor_ai_envelope(*_args, **_kwargs) -> dict:
         return _envelope()
 
-    def project_production_plan(self, *_args, **_kwargs) -> dict:
-        return _plan(self.facts)
+    def project_production_plan(self, *_args, **kwargs) -> dict:
+        plan = _plan(self.facts)
+        if kwargs.get("takeover_from_strategy_plan_id"):
+            plan["takeover_from_strategy_plan_id"] = kwargs[
+                "takeover_from_strategy_plan_id"
+            ]
+        return plan
 
 
 class _SupervisorRiskEnvelopes:
@@ -293,6 +298,51 @@ def test_precompute_is_append_only_zero_control_and_concurrent_idempotent(
     assert stored is not None
     assert stored["operations"]["plans_activated"] == 0
     assert stored["operations"]["prepared_starts_created"] == 0
+
+
+def test_precompute_binds_running_plan_identity_for_boundary_handoff(
+    tmp_path: Path,
+) -> None:
+    class RunningPlane(_Plane):
+        @staticmethod
+        def persisted_runtime_state() -> dict:
+            return {
+                "cycle_id": CURRENT,
+                "desired_state": "running",
+                "actual_state": "running",
+                "strategy_plan_id": "plan-previous",
+            }
+
+    facts = _facts()
+
+    def builder(_target: str, _observed: str) -> dict:
+        return {
+            "proposal": {
+                "proposal_id": "proposal-ai-next-cycle",
+                "strategy_type": "grid",
+            },
+            "preview": {
+                "preview_id": "preview-next-cycle",
+                "strategy_type": "grid",
+            },
+        }
+
+    result = _Precomputer(
+        tmp_path,
+        plane=RunningPlane(facts),
+        candidate_builder=builder,
+        execution_profile=PAPER_CONTINUOUS,
+        heartbeat_provider=_heartbeat,
+    ).run(observed_at=OBSERVED_AT)
+
+    assert result["status"] == "verified_waiting"
+    artifact = VerifiedWaitingPlanStore(tmp_path).load(TARGET)
+    assert artifact is not None
+    assert (
+        artifact["plan"]["projected"]["takeover_from_strategy_plan_id"]
+        == "plan-previous"
+    )
+    assert artifact["plan"]["takeover_from_strategy_plan_id"] == "plan-previous"
 
 
 def test_precompute_requires_running_proof_before_provider_call(
