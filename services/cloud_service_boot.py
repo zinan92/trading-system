@@ -21,6 +21,7 @@ CLOUD_PAPER_SERVICES = {
     "daily-self-review",
     "backup",
     "deadman-ping",
+    "deadman-watchdog",
     "access-gateway",
     "ai-provider-readiness",
     "next-cycle-plan",
@@ -29,6 +30,7 @@ CLOUD_PAPER_SERVICES = {
 _TIMER_GATED_SERVICES = {
     "daily-24h",
     "deadman-ping",
+    "deadman-watchdog",
     "ai-provider-readiness",
     "next-cycle-plan",
 }

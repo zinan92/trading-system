@@ -149,3 +149,22 @@ def test_provider_timer_failure_cannot_silence_deadman_boot(tmp_path: Path):
 
     assert result["ok"] is True
     assert result["timer_contract"]["service_status"] == "pass"
+
+
+def test_deadman_failure_cannot_silence_watchdog_boot(tmp_path: Path):
+    write_preflight(tmp_path)
+
+    result = CloudPaperServiceBootGate(
+        tmp_path,
+        source_attestation=attestation,
+        timer_contract=lambda: {
+            "status": "blocked",
+            "service_status": {
+                "deadman-ping": "blocked",
+                "deadman-watchdog": "pass",
+            },
+        },
+    ).verify("deadman-watchdog")
+
+    assert result["ok"] is True
+    assert result["timer_contract"]["service_status"] == "pass"

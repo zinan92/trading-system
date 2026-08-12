@@ -213,6 +213,17 @@ def test_passive_install_does_not_enable_scheduler(tmp_path: Path):
             "gridmind-next-cycle-plan.timer",
         ]
     ]
+    watcher = installer.apply(
+        rendered,
+        "activate-deadman-watchdog",
+        dry_run=True,
+    )
+    assert watcher["commands"] == [[
+        "systemctl",
+        "enable",
+        "--now",
+        "gridmind-deadman-watchdog.timer",
+    ]]
 
 
 def test_uninstall_never_targets_persistent_state(tmp_path: Path):
