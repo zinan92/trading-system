@@ -35,6 +35,13 @@ from services.live_env import apply_live_env
 ALERT_STATES = {"fail", "error", "block"}
 
 
+def _apply_runtime_env() -> None:
+    """Cloud systemd injects the root-owned env before dropping privileges."""
+
+    if os.getenv("GRIDMIND_RUNTIME_MODE") != "cloud":
+        apply_live_env()
+
+
 class TelegramSender:
     channel = "telegram"
     required_env = [
@@ -43,7 +50,7 @@ class TelegramSender:
     ]
 
     def __init__(self, token: str | None = None, chat_id: str | None = None) -> None:
-        apply_live_env()
+        _apply_runtime_env()
         self.token = token or os.getenv("TRADING_ORCHESTRATOR_TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = chat_id or os.getenv("TRADING_ORCHESTRATOR_TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID")
 
@@ -70,7 +77,7 @@ class FeishuSender:
     ]
 
     def __init__(self, webhook_url: str | None = None, secret: str | None = None) -> None:
-        apply_live_env()
+        _apply_runtime_env()
         self.webhook_url = (
             webhook_url
             or os.getenv("TRADING_ORCHESTRATOR_FEISHU_WEBHOOK_URL")
@@ -133,7 +140,7 @@ class FeishuSender:
 
 
 def resolve_alert_sender():
-    apply_live_env()
+    _apply_runtime_env()
     channel = str(os.getenv("TRADING_ORCHESTRATOR_ALERT_CHANNEL", "auto")).strip().lower()
     if channel in {"feishu", "lark"}:
         return FeishuSender()

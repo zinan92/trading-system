@@ -252,3 +252,71 @@ def test_default_report_sender_prefers_report_specific_feishu(monkeypatch):
 
     assert sender.webhook_url == "https://report.example/webhook"
     assert sender.secret == "report-secret"
+
+
+def test_cloud_report_sender_uses_injected_environment_without_reading_env_file(
+    monkeypatch,
+):
+    import services.alert_notifier as notifier
+    import services.feishu_report_sender as report
+
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    monkeypatch.setenv(
+        "TRADING_ORCHESTRATOR_REPORT_FEISHU_WEBHOOK_URL",
+        "https://report.example/webhook",
+    )
+    monkeypatch.setattr(
+        report,
+        "apply_live_env",
+        lambda: (_ for _ in ()).throw(AssertionError("must not read env file")),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "apply_live_env",
+        lambda: (_ for _ in ()).throw(AssertionError("must not read env file")),
+    )
+
+    sender = report.resolve_report_sender()
+
+    assert sender.webhook_url == "https://report.example/webhook"
+
+
+def test_cloud_trade_sender_uses_injected_environment_without_reading_env_file(
+    monkeypatch,
+):
+    import services.alert_notifier as notifier
+    import services.feishu_report_sender as report
+
+    monkeypatch.setenv("GRIDMIND_RUNTIME_MODE", "cloud")
+    monkeypatch.setenv(
+        "TRADING_ORCHESTRATOR_TRADE_FEISHU_WEBHOOK_URL",
+        "https://trade.example/webhook",
+    )
+    monkeypatch.setattr(
+        report,
+        "apply_live_env",
+        lambda: (_ for _ in ()).throw(AssertionError("must not read env file")),
+    )
+    monkeypatch.setattr(
+        notifier,
+        "apply_live_env",
+        lambda: (_ for _ in ()).throw(AssertionError("must not read env file")),
+    )
+
+    sender = report.resolve_trade_sender()
+
+    assert sender.webhook_url == "https://trade.example/webhook"
+
+
+def test_noncloud_sender_still_loads_live_env(monkeypatch):
+    import services.alert_notifier as notifier
+    import services.feishu_report_sender as report
+
+    monkeypatch.delenv("GRIDMIND_RUNTIME_MODE", raising=False)
+    calls = []
+    monkeypatch.setattr(report, "apply_live_env", lambda: calls.append("report"))
+    monkeypatch.setattr(notifier, "apply_live_env", lambda: calls.append("sender"))
+
+    report.resolve_report_sender()
+
+    assert calls == ["report", "sender"]
