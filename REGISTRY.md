@@ -12,7 +12,17 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-11)
+## 现在在哪里(2026-08-12)
+- #621 removes the dead-man's cycle-sized memory growth before release: Cloud
+  health now reads the fsynced bounded Supervisor checkpoint/tail rather than
+  materializing the full current-cycle JSONL.  The exact 2026-08-11 NIGHT
+  production shape was 28 MiB / 509 observations and pushed the deployed
+  dead-man to 201,322,496 bytes, only 4 KiB below its 192 MiB cgroup ceiling;
+  the patched isolated full-dead-man replay completed at 73,060 KiB maximum
+  RSS with zero production mutation.  A separate one-minute watcher now owns
+  dead-man receipt/timer liveness and emits only deduplicated external `/fail`
+  signals, never a success ping.  Merge and exact-main Cloud deployment remain
+  required before this can be called the active fix.
 - #612 removes the two audited whole-file SHA-256 allocations from Cloud Paper
   backup and daily self-review.  Both now share a fixed 1 MiB `readinto()`
   buffer while preserving exact digest/manifest semantics; a 64 MiB sparse

@@ -69,6 +69,8 @@ def _runner(command, **_kwargs):
         )
     if unit == "gridmind-daily-24h.timer":
         schedule = "OnCalendar=*-*-* 01:03:00 UTC"
+    elif unit == "gridmind-deadman-watchdog.timer":
+        schedule = "OnUnitInactiveSec=60"
     elif unit == "gridmind-ai-provider-readiness.timer":
         schedule = "OnUnitInactiveSec=300"
     else:
@@ -101,6 +103,7 @@ def test_cloud_timer_contract_requires_canonical_enabled_active_timers(
     assert {row["unit"] for row in result["checks"]} == {
         "gridmind-daily-24h.timer",
         "gridmind-deadman-ping.timer",
+        "gridmind-deadman-watchdog.timer",
         "gridmind-ai-provider-readiness.timer",
         "gridmind-next-cycle-plan.timer",
     }
