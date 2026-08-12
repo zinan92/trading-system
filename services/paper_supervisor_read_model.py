@@ -124,6 +124,13 @@ def build_paper_supervisor_polling_summary(
         episode_identity = _polling_mapping(episode.get("episode"))
         episode_blocker = _polling_mapping(episode.get("blocker"))
         snapshot_blocker = _polling_mapping(snapshot.get("blocker"))
+        running_evidence = _polling_mapping(
+            payload.get("running_evidence")
+        )
+        last_running_proof = _polling_mapping(
+            episode.get("last_running_proof")
+            or snapshot.get("last_running_proof")
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {
             "schema_version": SUPERVISOR_POLLING_SUMMARY_SCHEMA_VERSION,
@@ -148,7 +155,17 @@ def build_paper_supervisor_polling_summary(
         }
 
     blocker = episode_blocker or snapshot_blocker
-    counts = dict(count_summary) if isinstance(count_summary, Mapping) else {}
+    checkpoint_counts = _polling_mapping(
+        episode.get("count_summary") or snapshot.get("count_summary")
+    )
+    counts = (
+        checkpoint_counts
+        or (
+            dict(count_summary)
+            if isinstance(count_summary, Mapping)
+            else {}
+        )
+    )
     event_sequence = wal_anchor.get("event_sequence")
     current = {
         "cycle_id": cycle_id,
@@ -169,6 +186,8 @@ def build_paper_supervisor_polling_summary(
             "exception_receipt": payload.get("exception_receipt"),
         },
         "last_attempt": counts.get("last_attempt"),
+        "running_evidence": running_evidence or None,
+        "last_running_proof": last_running_proof or None,
         "episode": {
             "mode": episode.get("mode") or snapshot.get("mode"),
             "episode_id": episode_identity.get("episode_id"),

@@ -277,14 +277,29 @@ class CloudPaperHealth:
         )
         try:
             from services.paper_supervisor_read_model import (
-                build_paper_supervisor_read_model,
+                build_paper_supervisor_polling_summary,
             )
 
-            model = build_paper_supervisor_read_model(
+            prior_health = _latest(
+                self.output_root / "cloud" / "health" / "current.json"
+            )
+            prior_supervisor = (
+                ((prior_health.get("checks") or {}).get("supervisor") or {})
+                if isinstance(prior_health, dict)
+                else {}
+            )
+            prior_evidence = (
+                prior_supervisor.get("evidence")
+                if isinstance(prior_supervisor, dict)
+                and isinstance(prior_supervisor.get("evidence"), dict)
+                else {}
+            )
+            model = build_paper_supervisor_polling_summary(
                 self.output_root,
                 cycle_id=cycle_id,
                 as_of=now,
-                persist_utilization_index=True,
+                utilization=prior_evidence.get("runtime_utilization"),
+                count_summary=prior_evidence.get("current_cycle_summary"),
             )
         except Exception as exc:  # noqa: BLE001 - health fails closed.
             return _check(
@@ -576,42 +591,40 @@ class CloudPaperHealth:
         active_plan: dict[str, Any],
         runtime: dict[str, Any],
     ) -> tuple[dict[str, Any] | None, datetime | None, str | None]:
-        history = current.get("history")
-        if not isinstance(history, dict):
+        evidence = current.get("running_evidence")
+        if not isinstance(evidence, dict):
             return None, None, "supervisor_running_evidence_missing"
-        observations = history.get("observations")
-        if not isinstance(observations, list) or not observations:
-            return None, None, "supervisor_running_evidence_missing"
-        latest: dict[str, Any] | None = None
+        if (
+            str(evidence.get("cycle_id") or "") != cycle_id
+            or not isinstance(evidence.get("running_proven"), bool)
+        ):
+            return None, None, "running_evidence_invalid"
+        evidence_at = _parse_ts(evidence.get("evidence_at"))
+        if evidence_at is None or evidence_at > now:
+            return None, None, "running_evidence_invalid"
         latest_proven_at: datetime | None = None
-        for row in observations:
-            payload = row.get("payload") if isinstance(row, dict) else None
-            evidence = (
-                payload.get("running_evidence")
-                if isinstance(payload, dict)
-                else None
+        if (
+            evidence["running_proven"] is True
+            and active_plan
+            and CloudPaperHealth._supervisor_running_identity_matches(
+                evidence,
+                active_plan=active_plan,
+                runtime=runtime,
             )
-            if (
-                not isinstance(evidence, dict)
-                or str(evidence.get("cycle_id") or "") != cycle_id
-                or not isinstance(evidence.get("running_proven"), bool)
-            ):
+        ):
+            latest_proven_at = evidence_at
+        elif isinstance(current.get("last_running_proof"), dict):
+            prior = dict(current["last_running_proof"])
+            prior_at = _parse_ts(prior.get("evidence_at"))
+            if prior_at is None or prior_at > now:
                 return None, None, "running_evidence_invalid"
-            evidence_at = _parse_ts(evidence.get("evidence_at"))
-            if evidence_at is None or evidence_at > now:
-                return None, None, "running_evidence_invalid"
-            latest = evidence
-            if (
-                evidence["running_proven"] is True
-                and active_plan
-                and CloudPaperHealth._supervisor_running_identity_matches(
-                    evidence,
+            if CloudPaperHealth._supervisor_running_identity_matches(
+                    prior,
                     active_plan=active_plan,
                     runtime=runtime,
-                )
-            ):
-                latest_proven_at = evidence_at
-        return latest, latest_proven_at, None
+                ):
+                latest_proven_at = prior_at
+        return evidence, latest_proven_at, None
 
     @staticmethod
     def _supervisor_running_identity_matches(

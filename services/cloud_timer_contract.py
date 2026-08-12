@@ -26,6 +26,12 @@ REQUIRED_TIMERS = {
         "on_unit_inactive_sec": "300",
         "requires_next_trigger": False,
     },
+    "gridmind-deadman-watchdog.timer": {
+        "service": "gridmind-deadman-watchdog.service",
+        "on_calendar": None,
+        "on_unit_inactive_sec": "60",
+        "requires_next_trigger": False,
+    },
     "gridmind-ai-provider-readiness.timer": {
         "service": "gridmind-ai-provider-readiness.service",
         "on_calendar": None,
@@ -46,6 +52,7 @@ REQUIRED_TIMERS = {
 SERVICE_TIMER_UNITS = {
     "daily-24h": "gridmind-daily-24h.timer",
     "deadman-ping": "gridmind-deadman-ping.timer",
+    "deadman-watchdog": "gridmind-deadman-watchdog.timer",
     "ai-provider-readiness": "gridmind-ai-provider-readiness.timer",
     "next-cycle-plan": "gridmind-next-cycle-plan.timer",
 }

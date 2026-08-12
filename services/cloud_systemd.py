@@ -24,6 +24,8 @@ UNIT_NAMES = (
     "gridmind-backup.timer",
     "gridmind-deadman-ping.service",
     "gridmind-deadman-ping.timer",
+    "gridmind-deadman-watchdog.service",
+    "gridmind-deadman-watchdog.timer",
     "gridmind-ai-provider-readiness.service",
     "gridmind-ai-provider-readiness.timer",
     "gridmind-next-cycle-plan.service",
@@ -287,6 +289,31 @@ Unit=gridmind-deadman-ping.service
 
 [Install]
 WantedBy=timers.target""",
+            "gridmind-deadman-watchdog.service": f"""[Unit]
+Description=GridMind independent dead-man liveness watchdog
+After=network-online.target
+Wants=network-online.target
+{_UNIT_FAILURE_HOOK}
+
+[Service]
+Type=oneshot
+{common}
+ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service deadman-watchdog
+ExecStart={p.app_python} -m pipelines.cloud_deadman_watchdog
+MemoryMax=96M
+TimeoutStartSec=20""",
+            "gridmind-deadman-watchdog.timer": """[Unit]
+Description=GridMind independent dead-man liveness watchdog timer
+
+[Timer]
+OnBootSec=90
+OnUnitInactiveSec=60
+AccuracySec=5
+Persistent=true
+Unit=gridmind-deadman-watchdog.service
+
+[Install]
+WantedBy=timers.target""",
             "gridmind-ai-provider-readiness.service": f"""[Unit]
 Description=GridMind bounded Cloud AI provider readiness renewal
 After=network-online.target
@@ -409,6 +436,15 @@ class CloudSystemdInstaller:
                     "gridmind-next-cycle-plan.timer",
                 ],
             ]
+        if action == "activate-deadman-watchdog":
+            return [
+                [
+                    "systemctl",
+                    "enable",
+                    "--now",
+                    "gridmind-deadman-watchdog.timer",
+                ],
+            ]
         if action == "uninstall":
             return [
                 ["systemctl", "disable", "--now", *UNIT_NAMES],
@@ -421,7 +457,7 @@ class CloudSystemdInstaller:
         raise ValueError(
             "action must be install-passive, activate-dashboard, "
             "activate-remote-access, activate-provider-readiness, "
-            "activate-next-cycle-plan, or uninstall"
+            "activate-next-cycle-plan, activate-deadman-watchdog, or uninstall"
         )
 
     def apply(self, rendered_dir: Path, action: str, *, dry_run: bool = True) -> dict[str, Any]:

@@ -82,6 +82,12 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     deadman_timer = rendered["gridmind-deadman-ping.timer"]
     assert "OnUnitInactiveSec=300" in deadman_timer
     assert "OnUnitActiveSec" not in deadman_timer
+    deadman_watchdog = rendered["gridmind-deadman-watchdog.service"]
+    deadman_watchdog_timer = rendered["gridmind-deadman-watchdog.timer"]
+    assert "pipelines.cloud_deadman_watchdog" in deadman_watchdog
+    assert "MemoryMax=96M" in deadman_watchdog
+    assert "OnUnitInactiveSec=60" in deadman_watchdog_timer
+    assert "Unit=gridmind-deadman-watchdog.service" in deadman_watchdog_timer
     readiness_service = rendered["gridmind-ai-provider-readiness.service"]
     readiness_timer = rendered["gridmind-ai-provider-readiness.timer"]
     assert "User=gridmind" in readiness_service
@@ -129,6 +135,7 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
         "gridmind-deadman-ping.service": "MemoryMax=192M",
         "gridmind-ai-provider-readiness.service": "MemoryMax=384M",
         "gridmind-next-cycle-plan.service": "MemoryMax=384M",
+        "gridmind-deadman-watchdog.service": "MemoryMax=96M",
     }
     for unit, limit in expected_limits.items():
         assert limit in rendered[unit]

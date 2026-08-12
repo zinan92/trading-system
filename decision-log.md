@@ -1,5 +1,50 @@
 # Decision Log
 
+## Bound dead-man health reads and watch the watcher (Issue #621)
+
+Date: 2026-08-12
+
+### Decision
+
+- Replace Cloud health's complete Supervisor-history materialization with the
+  existing checkpoint-anchored, 2 MiB bounded polling tail.  The tail now
+  carries the current running evidence plus an incrementally persisted last
+  matching running proof and count summary, so fail-closed convergence timing
+  and read-model attempt counts do not depend on replaying a growing JSONL.
+- Keep `gridmind-deadman-ping.service` at 192 MiB after calibration.  The
+  deployed path reached 201,322,496 bytes (4 KiB below its old cap) while
+  reading a 28 MiB / 509-observation cycle; the patched full dead-man canary
+  replayed that late-cycle shape at 73,060 KiB maximum RSS and completed under
+  a 192 MiB cgroup with zero control actions.
+- Add a separate one-minute `gridmind-deadman-watchdog` timer.  It checks the
+  primary dead-man timer and success-receipt freshness, sends only `/fail` on
+  a new outage, deduplicates repeat alerts, and records recovery.  It never
+  sends a success ping, so it cannot mask the external missed-ping authority.
+
+### Gotchas
+
+- The 09:01 recovery was deterministic but temporary: the 09:00 cycle boundary
+  replaced the 28 MiB NIGHT observation file with a small DAY file.  It did
+  not clear the unbounded read path; the same failure would recur as the new
+  cycle grew.
+- `OnFailure` did preserve endpoint delivery during the outage: 52 dead-man
+  failures produced 52 external `/fail` HTTP 200 results.  That proves endpoint
+  acceptance, not that a human notification was received, and it does not
+  detect a disabled timer or a hung service that never exits.
+- Carrying the prior Cloud-health utilization snapshot is intentionally
+  warning-only.  Current running proof, blockers, timer state and count summary
+  come from the bounded fsynced checkpoint/tail; no safety classification is
+  allowed to depend on a stale utilization percentage.
+
+### Verification
+
+- Focused Supervisor/store/read-model/health/systemd/watcher suites cover the
+  bounded projection, preserved running clock, fail-closed corruption, watcher
+  deduplication/recovery and absence of masking success pings.
+- The Cloud canary used the real service user, deployed Python, immutable
+  2026-08-11 NIGHT data and an isolated hard-linked output tree; it performed
+  zero production writes and zero controls/orders/position changes.
+
 ## One StartFacts authority owns Paper candidate and start identity (Issue #594)
 
 Date: 2026-08-07

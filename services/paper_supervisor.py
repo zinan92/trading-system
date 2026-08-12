@@ -4484,6 +4484,60 @@ class PaperSupervisor:
                 reconciliation=None,
             )
         )
+        if running_evidence.get("running_proven") is True:
+            state = {
+                **state,
+                "last_running_proof": {
+                    "cycle_id": running_evidence.get("cycle_id"),
+                    "evidence_at": running_evidence.get("evidence_at"),
+                    "plan_identity": dict(
+                        running_evidence.get("plan_identity") or {}
+                    ),
+                    "runtime": dict(
+                        running_evidence.get("runtime") or {}
+                    ),
+                },
+            }
+        projected = self.store.current_state(str(result["cycle_id"]))
+        pre_intent_attempts = [
+            dict(row)
+            for row in projected.get("pre_intent_attempts") or []
+            if isinstance(row, Mapping)
+        ]
+        start_attempts = [
+            dict(row)
+            for row in projected.get("attempts") or []
+            if isinstance(row, Mapping)
+        ]
+        last_attempt = pre_intent_attempts[-1] if pre_intent_attempts else {}
+        state = {
+            **state,
+            "count_summary": {
+                "attempt_count": len(pre_intent_attempts),
+                "start_intent_count": len(start_attempts),
+                "last_attempt": (
+                    {
+                        "attempt_id": last_attempt.get("attempt_id"),
+                        "observed_at": last_attempt.get("observed_at"),
+                        "result": last_attempt.get("terminal_result"),
+                        "machine_code": last_attempt.get(
+                            "terminal_machine_code"
+                        ),
+                        "classification": last_attempt.get(
+                            "terminal_classification"
+                        ),
+                        "exception_receipt": last_attempt.get(
+                            "terminal_exception_receipt"
+                        ),
+                        "source_tick_key": last_attempt.get(
+                            "source_tick_key"
+                        ),
+                    }
+                    if last_attempt
+                    else None
+                ),
+            },
+        }
         self.store.commit_episode_observation(
             lease,
             state=state,

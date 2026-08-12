@@ -232,6 +232,15 @@ def _supervisor_model(
         _supervisor_observation(at, running_proven=running_proven)
     ]
     attempt_time = attempt_at or at
+    latest_evidence = dict(rows[-1]["payload"]["running_evidence"])
+    last_running = next(
+        (
+            dict(row["payload"]["running_evidence"])
+            for row in reversed(rows)
+            if row["payload"]["running_evidence"]["running_proven"] is True
+        ),
+        None,
+    )
     return {
         "status": "available",
         "source_errors": [],
@@ -245,6 +254,17 @@ def _supervisor_model(
                 "observed_at": attempt_time.isoformat(),
                 "result": "no_action",
             },
+            "running_evidence": latest_evidence,
+            "last_running_proof": (
+                {
+                    "cycle_id": last_running["cycle_id"],
+                    "evidence_at": last_running["evidence_at"],
+                    "plan_identity": last_running["plan_identity"],
+                    "runtime": last_running["runtime"],
+                }
+                if last_running is not None
+                else None
+            ),
             "episode": {
                 "mode": mode,
                 "alert_required": alert_required,
@@ -258,7 +278,7 @@ def _supervisor_model(
 
 def _install_supervisor_model(monkeypatch, model: dict) -> None:
     monkeypatch.setattr(
-        "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
+        "services.paper_supervisor_read_model.build_paper_supervisor_polling_summary",
         lambda *_args, **_kwargs: model,
     )
 
@@ -544,7 +564,7 @@ def test_running_runtime_does_not_hide_supervisor_structural_blocker(
         lambda: {"convergence": {"mode": "paper_supervisor"}},
     )
     monkeypatch.setattr(
-        "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
+        "services.paper_supervisor_read_model.build_paper_supervisor_polling_summary",
         lambda *_args, **_kwargs: {
             "status": "available",
             "source_errors": [],
@@ -614,7 +634,7 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
         return model
 
     monkeypatch.setattr(
-        "services.paper_supervisor_read_model.build_paper_supervisor_read_model",
+        "services.paper_supervisor_read_model.build_paper_supervisor_polling_summary",
         supervisor_read_model,
     )
 
@@ -634,7 +654,8 @@ def test_running_runtime_is_ready_only_after_fresh_healthy_supervisor_model(
         {
             "cycle_id": "2026-07-28_DAY",
             "as_of": NOW,
-            "persist_utilization_index": True,
+            "utilization": None,
+            "count_summary": None,
         }
     ]
 
@@ -985,7 +1006,8 @@ def test_missing_corrupt_and_unknown_supervisor_evidence_fail_closed(
     assert health._supervisor(NOW)["code"] == "attempt_store_corrupt"
 
     missing = _supervisor_model(NOW)
-    missing["current_cycle"]["history"] = {"observations": []}
+    missing["current_cycle"]["running_evidence"] = None
+    missing["current_cycle"]["last_running_proof"] = None
     _install_supervisor_model(monkeypatch, missing)
     assert health._supervisor(NOW)["code"] == (
         "supervisor_running_evidence_missing"
