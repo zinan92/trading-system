@@ -134,7 +134,7 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
         "gridmind-backup.service": "MemoryMax=384M",
         "gridmind-deadman-ping.service": "MemoryMax=192M",
         "gridmind-ai-provider-readiness.service": "MemoryMax=128M",
-        "gridmind-next-cycle-plan.service": "MemoryMax=128M",
+        "gridmind-next-cycle-plan.service": "MemoryMax=256M",
         "gridmind-deadman-watchdog.service": "MemoryMax=64M",
     }
     for unit, limit in expected_limits.items():
@@ -143,6 +143,7 @@ def test_renderer_emits_loopback_source_gated_non_overlapping_units(tmp_path: Pa
     assert "MemoryMax=128M" in rendered["gridmind-cloudflared.service"]
     assert "MemoryHigh=384M" in rendered["gridmind-live-tick.service"]
     assert "MemoryHigh=256M" in rendered["gridmind-backup.service"]
+    assert "MemoryHigh=192M" in rendered["gridmind-next-cycle-plan.service"]
     failure_alert = rendered["gridmind-unit-failure-alert@.service"]
     assert "pipelines.cloud_unit_failure_alert --failed-unit %i" in failure_alert
     assert "MemoryMax=64M" in failure_alert

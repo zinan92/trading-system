@@ -15082,3 +15082,41 @@ auditable datafeed port; broker execution remains a separate port.
 - Focused successor-plan and rollover tests prove idempotent staging, exact
   takeover identity binding, healthy no-mutation handoff, and fail-closed
   fallback; full repository validation remains required before merge.
+
+# 2026-08-13 — One due-path budget and one market snapshot per Paper attempt (#631)
+
+## Decision
+
+- Replace the `gridmind-next-cycle-plan.service` limit calibrated only from the
+  cheap `not_due` path.  The first natural due path hit `MemoryMax=128M` and was
+  killed with about 145.5 MiB process RSS, so the evidence-backed unit now uses
+  `MemoryHigh=192M` and `MemoryMax=256M`.  Its existing non-recursive
+  `OnFailure` external alert remains mandatory.
+- In `paper_continuous` only, lazily capture one trusted execution-market
+  snapshot for a Supervisor convergence tick and pass that same immutable
+  value through recommendation/continuity candidate, staged-plan validation
+  and `prepare_start`.  The real `start` action deliberately receives no pinned
+  value and re-reads current market, preserving the market-moved gate.
+- Keep StartFacts byte-exact and keep every public/live fail-closed path
+  unchanged.  This repair removes two reads of the same still-forming 1m bar;
+  it does not add a price tolerance or relabel `start_facts_stale` as transient.
+
+## Gotchas
+
+- A timer's `not_due` branch is not a representative memory calibration for
+  its provider/candidate generation branch.  The earlier 33 MiB sample proved
+  timer hygiene only; it could not justify the 128 MiB hard limit.
+- Identical `as_of` values did not make two datafeed reads identical.  At
+  01:12:43 UTC the candidate captured 4437.90 and prepare captured 4437.78 for
+  the same 01:12 bar, so exact StartFacts correctly rejected the split
+  authority.  Snapshot ownership belongs to the outer Supervisor tick.
+- Passing the pinned market into `start` would hide a real price movement and
+  weaken a safety gate.  Tests therefore assert candidate and prepare share
+  object identity while start receives no override.
+
+## Verification
+
+- Focused systemd, Supervisor, StartFacts, control-plane, risk-envelope,
+  recommendation and next-cycle suites pass.  Cloud acceptance still requires
+  exact-SHA deployment, natural current-cycle `running_proven`, a natural
+  next-cycle due-path run without OOM, and a later natural adopted handoff.

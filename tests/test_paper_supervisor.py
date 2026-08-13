@@ -34,7 +34,7 @@ from services.paper_supervisor_exception_provenance import (
 from services.paper_supervisor_read_model import (
     build_paper_supervisor_history_response,
 )
-from services.supervisor_execution_profile import PAPER_CONTINUOUS
+from services.supervisor_execution_profile import FAIL_CLOSED, PAPER_CONTINUOUS
 from services.paper_supervisor_classifier import classify_blocker
 from services.paper_supervisor_store import PaperSupervisorStore
 from services.dualtrack_execution_adapter import (
@@ -3307,6 +3307,112 @@ def test_runner_supervisor_mode_never_calls_legacy_coordinator(
     )
 
     assert result["cycle_decision"]["status"] == "healthy"
+
+
+@pytest.mark.parametrize(
+    ("execution_profile", "expected_market_reads"),
+    [(PAPER_CONTINUOUS, 1), (FAIL_CLOSED, 0)],
+)
+def test_runner_pins_start_market_only_for_paper_continuous(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    execution_profile: str,
+    expected_market_reads: int,
+) -> None:
+    import pipelines.dashboard_server as dashboard_server_module
+    import pipelines.dualtrack_cycle_runner as cycle_runner_module
+
+    config = deepcopy(TEST_CONFIG)
+    config["cycle_decision"] = {"enabled": False}
+    config["convergence"] = {
+        "mode": "paper_supervisor",
+        "execution_profile": execution_profile,
+        "provider_timeout_seconds": 25,
+        "attempt_deadline_seconds": 45,
+    }
+    runner = DualTrackCycleRunner(
+        output_root=tmp_path / "outputs",
+        market_db=tmp_path / "market.db",
+        config=config,
+    )
+    pinned_market = {
+        "status": "ready",
+        "fresh": True,
+        "is_synthetic": False,
+        "provider": "test",
+        "source_mode": "test",
+        "symbol": "GOLD",
+        "timeframe": "1m",
+        "latest_close": 4437.9,
+        "latest_timestamp": T0.isoformat(),
+        "bars": [],
+    }
+    market_reads: list[datetime] = []
+    received_markets: list[tuple[str, dict | None]] = []
+
+    def market_snapshot(now: datetime) -> dict:
+        market_reads.append(now)
+        return pinned_market
+
+    def control_response(payload: dict, **kwargs) -> dict:
+        received_markets.append(
+            (str(payload["action"]), kwargs.get("market"))
+        )
+        return {"action": payload["action"]}
+
+    class FakeSupervisor:
+        def __init__(self, *_args, control, **_kwargs) -> None:
+            self.control = control
+
+        def converge_once(self, *_args, **_kwargs) -> dict:
+            self.control("paper_continuity_candidate", {})
+            self.control("prepare_start", {})
+            self.control("start", {})
+            return {"status": "observed"}
+
+    monkeypatch.setattr(runner, "_production_market_snapshot", market_snapshot)
+    monkeypatch.setattr(
+        cycle_runner_module,
+        "resolve_supervisor_execution_profile",
+        lambda *_args, **_kwargs: execution_profile,
+    )
+    monkeypatch.setattr(
+        cycle_runner_module,
+        "StrategyControlPlane",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        cycle_runner_module,
+        "PaperSupervisor",
+        FakeSupervisor,
+    )
+    monkeypatch.setattr(
+        dashboard_server_module,
+        "build_strategy_console_control_response",
+        control_response,
+    )
+
+    result = runner._ensure_paper_supervisor(
+        CYCLE,
+        now=T0,
+        heartbeat=_heartbeat(),
+    )
+
+    assert result == {"status": "observed"}
+    assert len(market_reads) == expected_market_reads
+    if execution_profile == PAPER_CONTINUOUS:
+        assert market_reads == [T0]
+        assert received_markets == [
+            ("paper_continuity_candidate", pinned_market),
+            ("prepare_start", pinned_market),
+            ("start", None),
+        ]
+    else:
+        assert received_markets == [
+            ("paper_continuity_candidate", None),
+            ("prepare_start", None),
+            ("start", None),
+        ]
 
 
 def test_invalid_double_enabled_convergence_fails_closed(
