@@ -18,12 +18,69 @@ from services.cloud_ai_provider import (
     validate_provider_readiness_proof,
 )
 from services.journal_store import load_json, write_json
-from pipelines.cloud_ai_provider_readiness import _auth_status_ready
+from pipelines.cloud_ai_provider_readiness import (
+    _auth_status_ready,
+    resolve_provider_readiness_timeout,
+)
 
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
 SHA = "a" * 40
 TREE = "b" * 40
+
+
+def test_readiness_timeout_is_independent_from_supervisor_budget() -> None:
+    assert resolve_provider_readiness_timeout(
+        {
+            "convergence": {
+                "provider_timeout_seconds": 25,
+                "provider_readiness_timeout_seconds": 60,
+            }
+        }
+    ) == 60
+
+
+@pytest.mark.parametrize("value", [24, 61, "invalid"])
+def test_readiness_timeout_rejects_out_of_bounds_configuration(value: object) -> None:
+    with pytest.raises(
+        readiness_pipeline.ProviderReadinessFailure,
+        match="strategy_recommendation_provider_timeout_configuration_invalid",
+    ):
+        resolve_provider_readiness_timeout(
+            {"convergence": {"provider_readiness_timeout_seconds": value}}
+        )
+
+
+def test_invalid_readiness_timeout_writes_blocked_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        readiness_pipeline,
+        "current_source_attestation",
+        lambda repo_root: {"source_sha": SHA, "source_tree_sha": TREE},
+    )
+    monkeypatch.setattr(
+        readiness_pipeline,
+        "dualtrack_config",
+        lambda: {
+            "machine_planner": {"command": "codex"},
+            "convergence": {"provider_readiness_timeout_seconds": 61},
+        },
+    )
+
+    result = readiness_pipeline.run(
+        output_root=tmp_path / "outputs",
+        repo_root=tmp_path,
+    )
+
+    assert result["ok"] is False
+    assert (
+        result["failure_code"]
+        == "strategy_recommendation_provider_timeout_configuration_invalid"
+    )
+    stored = load_json(Path(result["path"]))[0]
+    assert stored["control_actions_executed"] == 0
 
 
 def _receipt(executable: Path, *, checked_at: datetime = NOW) -> dict:

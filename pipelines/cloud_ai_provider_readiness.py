@@ -27,11 +27,40 @@ from services.paper_release_receipt import current_source_attestation
 
 REQUIRED_RESPONSE_KEYS = ("direction", "style", "rationale", "ai_self_assessment")
 RENEWAL_INTERVAL_SECONDS = 6 * 60 * 60
+MIN_PROVIDER_TIMEOUT_SECONDS = 25
+MAX_PROVIDER_TIMEOUT_SECONDS = 60
+DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS = 60
 SMOKE_PROMPT = (
     "Return exactly one JSON object with keys direction, style, rationale, "
     "ai_self_assessment. Use direction neutral, style steady, rationale "
     "provider readiness smoke, and ai_self_assessment 5. No markdown."
 )
+
+
+class ProviderReadinessFailure(RuntimeError):
+    pass
+
+
+def resolve_provider_readiness_timeout(config: dict[str, Any]) -> int:
+    """Resolve the read-only smoke budget without borrowing live-tick budget."""
+
+    convergence = config.get("convergence")
+    convergence = convergence if isinstance(convergence, dict) else {}
+    raw_timeout = convergence.get(
+        "provider_readiness_timeout_seconds",
+        DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS,
+    )
+    try:
+        timeout_seconds = int(raw_timeout)
+    except (TypeError, ValueError) as exc:
+        raise ProviderReadinessFailure(
+            "strategy_recommendation_provider_timeout_configuration_invalid"
+        ) from exc
+    if not MIN_PROVIDER_TIMEOUT_SECONDS <= timeout_seconds <= MAX_PROVIDER_TIMEOUT_SECONDS:
+        raise ProviderReadinessFailure(
+            "strategy_recommendation_provider_timeout_configuration_invalid"
+        )
+    return timeout_seconds
 
 
 def run(
@@ -49,10 +78,7 @@ def run(
     config = dualtrack_config()
     planner = config.get("machine_planner") if isinstance(config.get("machine_planner"), dict) else {}
     command = str(planner.get("command") or "codex")
-    timeout_seconds = min(
-        60,
-        max(5, int((config.get("convergence") or {}).get("provider_timeout_seconds") or 25)),
-    )
+    timeout_seconds = DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS
     receipt: dict[str, Any] = {
         "schema_version": READINESS_SCHEMA,
         "checked_at": checked_at.isoformat(),
@@ -82,6 +108,8 @@ def run(
         "failure_code": None,
     }
     try:
+        timeout_seconds = resolve_provider_readiness_timeout(config)
+        receipt["timeout_seconds"] = timeout_seconds
         command_args = shlex.split(command)
         if not command_args:
             raise ProviderReadinessFailure("strategy_recommendation_provider_command_invalid")
@@ -264,10 +292,6 @@ def renew_if_due(
         "renewed": True,
         "previous_readiness_blocker": verification.get("blocker"),
     }
-
-
-class ProviderReadinessFailure(RuntimeError):
-    pass
 
 
 def _provider_env() -> dict[str, str]:

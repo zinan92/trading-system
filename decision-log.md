@@ -15170,3 +15170,35 @@ auditable datafeed port; broker execution remains a separate port.
   history-payload exclusion, observability, bounded independent timeout, and
   append-only zero-control staging.  Cloud natural due-path verification is
   still required before claiming the issue resolved.
+
+# 2026-08-13 — Isolate provider-readiness smoke budget (#639)
+
+## Decision
+
+- Keep `convergence.provider_timeout_seconds=25` as the Supervisor/live-tick
+  execution budget.
+- Give the read-only Cloud AI readiness smoke its own explicit
+  `convergence.provider_readiness_timeout_seconds`, bounded to 25–60 seconds
+  and configured to 60 seconds in Paper Cloud.
+- Preserve all existing readiness fail-closed checks: command and auth status,
+  response contract, no-side-effect contract, source SHA/tree, executable
+  digest, receipt digest, freshness, and Paper-only operations.
+- An invalid readiness timeout configuration writes the existing typed blocked
+  receipt and never calls the provider.
+
+## Gotchas
+
+- The readiness timer is a renewable health proof, not the live-tick budget.
+  Reusing the 25-second convergence value caused two natural post-#637
+  readiness refreshes to fail at the same fixed boundary even though the
+  next-cycle path had already received a separate 60-second budget.
+- Increasing only the readiness smoke budget does not authorize stale or failed
+  proof. A failed refresh still replaces `readiness_current.json`, while
+  `readiness_last_success.json` remains historical recovery evidence.
+
+## Verification
+
+- Focused tests prove the readiness timeout is independent from the 25-second
+  Supervisor budget and rejects values outside the 25–60 second envelope.
+- Cloud natural timer and next-cycle due-path evidence remain required before
+  claiming recovery.
