@@ -29,7 +29,7 @@
 | `gridmind-deadman-ping.service` | Natural post-fix cycle, 10:22–10:28 CST | 70,430,720 | 67.17 | — | 192 MiB | 2.8x the post-fix peak and covers the late-cycle canary. |
 | `gridmind-deadman-watchdog.service` | Natural one-minute runs, 10:22–10:28 CST | 16,674,816 | 15.90 | — | 64 MiB | 4x the observed peak. |
 | `gridmind-ai-provider-readiness.service` | Natural failed-provider refresh, 10:22–10:28 CST | 11,808,768 | 11.26 | — | 128 MiB | Includes the real provider subprocess attempt; generous provider-variation headroom. |
-| `gridmind-next-cycle-plan.service` | Natural not-due observation, 10:22–10:28 CST | 34,615,296 | 33.01 | — | 128 MiB | 3.8x the observed not-due path. The provider-heavy path remains bounded by the same 128 MiB provider subprocess profile. |
+| `gridmind-next-cycle-plan.service` | Natural due-path generation, 2026-08-13 08:04 CST | 134,217,728 | 128.00 | 192 MiB | 256 MiB | The old hard limit was reached and killed Python with about 145.5 MiB resident (130,444 KiB anonymous plus 18,560 KiB file RSS). The new hard limit is 2x the observed cgroup ceiling and retains `OnFailure` alerting. |
 | `gridmind-unit-failure-alert@.service` | Isolated unconfigured-delivery failure event | 12,595,200 | 12.01 | — | 64 MiB | More than 5x the observed peak; the canary wrote only isolated evidence. |
 
 `ssh.service` is not a GridMind Python unit. Its measured process-lifetime cgroup

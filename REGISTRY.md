@@ -12,19 +12,28 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-12)
-- #439/#413 cross-cycle handoff repair is implemented on branch
-  `codex/issue-413-cross-cycle-handoff` but not yet merged or deployed.  The
-  defect was ordering: the boundary rollover searched only for an active
-  successor plan while the pre-generator intentionally persisted a waiting
-  artifact, so every missing active plan fell back to stop/cancel/flatten.
-  The repair binds `takeover_from_strategy_plan_id` into the verified artifact,
-  promotes that exact Grid plan immediately before the existing handoff gate,
-  and leaves the original fail-closed close path for missing/stale/invalid
-  evidence.  Focused tests pass; next step is full-suite/gitleaks, PR review,
-  exact-SHA Paper deployment, and one natural boundary proving unchanged order
-  and position identities.  No live path or current Paper state has been
-  changed by this branch.
+## 现在在哪里(2026-08-13)
+- #631 owns the two production blockers exposed by the first natural #439/#413
+  acceptance.  At 08:04 CST the due path of
+  `gridmind-next-cycle-plan.service` reached its 128 MiB cgroup ceiling and was
+  OOM-killed, so the 09:01 boundary had no verified successor and correctly
+  used the existing safe close fallback.  The same boundary then exposed an
+  intra-tick authority split: candidate and `prepare_start` independently read
+  the still-forming 1m bar, producing different exact StartFacts digests and a
+  repeating `start_facts_stale` result.  The scoped repair raises only this
+  measured unit to `MemoryHigh=192M` / `MemoryMax=256M` and pins one trusted
+  market snapshot across candidate/validation/prepare inside a Paper-continuous
+  Supervisor tick; `start` still reads fresh market and all live/fail-closed
+  behavior is unchanged.  Focused tests pass; PR, exact-SHA deployment,
+  current-cycle natural recovery and a successful natural due-path run remain.
+- #439/#413 cross-cycle handoff repair merged as PR #630 and is deployed on
+  Cloud Paper at exact `main@97cef3c3777ee7674c730b13e50e4583029326dc`.
+  The first natural 2026-08-13 DAY acceptance did not pass because #631's
+  pre-generation OOM left no waiting artifact.  The immutable boundary event
+  recorded `outcome=missing`, `boundary_ai_provider_calls=0`; rollover used
+  `safe_stop_cancel_flatten`.  All nine positions had already closed naturally,
+  but 38 remaining orders were canceled, so identity-preserving handoff remains
+  unproven pending a later natural boundary.
 - #623 adds the missing containment for administrator-session processes:
   source-controlled `user-.slice` defaults load `MemoryHigh=384M` and
   `MemoryMax=512M` without including SSH, cloudflared or system GridMind units.

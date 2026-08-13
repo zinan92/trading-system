@@ -357,7 +357,8 @@ Type=oneshot
 ReadWritePaths=/opt/gridmind/.codex
 ExecStartPre={p.app_python} -m pipelines.cloud_service_boot --service next-cycle-plan
 ExecStart={p.app_python} -m pipelines.paper_next_cycle_plan --json
-MemoryMax=128M
+MemoryHigh=192M
+MemoryMax=256M
 TimeoutStartSec=120""",
             "gridmind-next-cycle-plan.timer": """[Unit]
 Description=GridMind non-overlapping next-cycle Paper plan timer

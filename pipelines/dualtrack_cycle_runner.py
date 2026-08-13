@@ -54,6 +54,7 @@ from services.paper_next_cycle_plan import (
     staged_facts_status,
 )
 from services.supervisor_execution_profile import (
+    PAPER_CONTINUOUS,
     resolve_supervisor_execution_profile,
 )
 from services.strategy_proposal_composition import compose_strategy_proposal
@@ -1032,11 +1033,29 @@ class DualTrackCycleRunner:
             "id": "paper-supervisor",
             "source": "paper_supervisor",
         }
+        pinned_start_market: dict[str, Any] | None = None
 
         def invoke(
             action: str,
             payload: dict[str, Any],
         ) -> dict[str, Any]:
+            nonlocal pinned_start_market
+            market = None
+            if (
+                execution_profile == PAPER_CONTINUOUS
+                and action
+                in {
+                    "refresh_recommendation",
+                    "paper_continuity_candidate",
+                    "validate_verified_waiting_plan",
+                    "prepare_start",
+                }
+            ):
+                if pinned_start_market is None:
+                    pinned_start_market = self._production_market_snapshot(
+                        now
+                    )
+                market = pinned_start_market
             return build_strategy_console_control_response(
                 {
                     **dict(payload),
@@ -1045,6 +1064,7 @@ class DualTrackCycleRunner:
                     "action": action,
                 },
                 output_root=self.output_root,
+                market=market,
                 actor=actor,
                 recommendation_timeout_seconds=(
                     provider_timeout_seconds
