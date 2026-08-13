@@ -12,8 +12,25 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-13)
-- #642 / PR #643 is merged at `main@2a0f6d6c8b8f79344d02fa1977aafcfc1f4d6ead`.
+## 现在在哪里(2026-08-14)
+- #642 / PR #643 and #644 / PR #645 are merged and deployed on Cloud Paper as
+  exact clean `main@29ecd3e83b54d129bfba46fc827c228797ead1b`, tree
+  `51d2c465a281cd98eeff8da67cd31b5247cbeb51`; the source symlink was switched
+  atomically without restarting Paper services. #642 makes the deterministic
+  current-market + authoritative-Paper-equity rebuild the explicit Paper
+  boundary guarantee (`boundary_plan_path=deterministic_rebuild`) and makes AI
+  next-cycle pre-generation an asynchronous optional enhancement. #644 adds a
+  durable provider-call trace to readiness/evaluation receipts: deadline,
+  start/deadline/finish timestamps, phase timings and return codes, bounded
+  redacted stdout/stderr, timeout and partial-output flags. A natural readiness
+  run at 00:56 CST was source-bound to this SHA and recorded the provider's
+  60-second smoke timeout (`login=1.56s`, `version=0.22s`, `smoke=60.10s`)
+  with bounded stderr and partial-output evidence; this remains a readiness
+  warning, not a Paper boundary blocker. Paper runtime remained
+  `running/running`, 19 accepted/open orders, zero positions, fresh tick and
+  passing reconciliation; no manual controls occurred.
+  Paper/Live safety gates are unchanged.
+- #642 / PR #643 was previously merged at `main@2a0f6d6c8b8f79344d02fa1977aafcfc1f4d6ead`.
   It makes the deterministic current-market + authoritative-Paper-equity
   rebuild the explicit Paper boundary guarantee (`boundary_plan_path=
   deterministic_rebuild`). AI next-cycle pre-generation is now an
