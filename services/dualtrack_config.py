@@ -47,6 +47,7 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "next_cycle_precompute": {
             "lead_minutes": 60,
             "timer_interval_seconds": 300,
+            "provider_timeout_seconds": 60,
         },
     },
     "plan_lock_deadline_min_before_cycle": 0,

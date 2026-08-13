@@ -15132,3 +15132,41 @@ auditable datafeed port; broker execution remains a separate port.
   generation without OOM, and the 21:00 boundary must still prove `adopted`,
   zero boundary provider calls, exact staged/active digest equality, preserved
   order/position identity, no flatten fallback and `running_proven`.
+
+# 2026-08-13 — Bound next-cycle AI context and provider budget (#636)
+
+## Decision
+
+- Keep the 25-second convergence/Supervisor provider budget unchanged.
+- Give the read-only next-cycle pre-generator its own bounded 60-second
+  provider budget; the systemd unit already has enough startup headroom for
+  this branch.
+- Project the account input at the recommendation boundary into the explicit
+  `strategy-ai-account-context-v1` schema.  Preserve authoritative equity,
+  P&L, reconciliation codes, and open position/accepted-order identities, but
+  never serialize historical fills, trades, or the full accounting snapshot
+  into the AI prompt.
+- Persist only sanitized context/prompt character counts and provider elapsed
+  milliseconds in the evaluation receipt.  This changes no risk, policy,
+  order, or position decision and creates no production mutation.
+
+## Gotchas
+
+- The repeated `strategy_recommendation_provider_timeout` failures were not
+  provider authentication failures or Paper execution failures.  Cloud
+  receipts showed a roughly 31KB accounting snapshot inside a roughly 40KB
+  prompt, while a same-user read-only provider smoke test completed in 9s.
+- The full accounting snapshot remains available to deterministic accounting,
+  reconciliation, and risk paths.  Compaction is only an AI input boundary;
+  omitting fills/trades from the prompt must not be read as omitting them from
+  the authoritative ledger.
+- The pre-generator budget is bounded to 25–60 seconds and is not a change to
+  the live-tick/Supervisor deadline.  Values outside that envelope fail
+  closed as configuration-invalid.
+
+## Verification
+
+- Focused recommendation, API, and pre-generation tests cover prompt schema,
+  history-payload exclusion, observability, bounded independent timeout, and
+  append-only zero-control staging.  Cloud natural due-path verification is
+  still required before claiming the issue resolved.
