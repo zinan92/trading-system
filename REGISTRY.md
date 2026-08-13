@@ -13,6 +13,19 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-13)
+- #642 / PR #643 is merged at `main@2a0f6d6c8b8f79344d02fa1977aafcfc1f4d6ead`.
+  It makes the deterministic current-market + authoritative-Paper-equity
+  rebuild the explicit Paper boundary guarantee (`boundary_plan_path=
+  deterministic_rebuild`). AI next-cycle pre-generation is now an
+  asynchronous optional enhancement: explicit provider execution/configuration
+  failures return `enhancement_unavailable` with zero control/plan/order/
+  position mutation and the boundary remains on deterministic rebuild. Valid
+  staged artifacts remain eligible only after all existing StartFacts, policy,
+  source, identity and zero-mutation checks, and are marked
+  `boundary_plan_path=optional_ai_enhancement`. Strategy evaluation receipts
+  now persist bounded redacted provider deadline/timestamps, phase timings,
+  return code, stderr/stdout and timeout partial output. Paper/Live safety
+  gates are unchanged. This exact commit is merged but not yet deployed.
 - #636 / PR #637 is merged at `main@b7bbbd65fbd902de871766531a2a10a35d060716`.
   It bounds the next-cycle recommendation prompt to the explicit
   `strategy-ai-account-context-v1` projection (authoritative account,
@@ -544,6 +557,12 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Deploy exact clean `main@2a0f6d6c8b8f79344d02fa1977aafcfc1f4d6ead` through the
+  existing Paper release/boot/SHA gates. Verify the next-cycle provider
+  timeout path is non-blocking, its receipt contains bounded diagnostics, and
+  the next natural boundary reaches running via deterministic rebuild when no
+  valid enhancement artifact exists. Do not claim #642 deployed until those
+  cloud receipts exist.
 - Wait for the natural `gridmind-next-cycle-plan.service` due path after
   `main@16c1909` to create exactly one immutable `verified_waiting` artifact
   with `provider_call_count=1`, compact-context observability, zero
