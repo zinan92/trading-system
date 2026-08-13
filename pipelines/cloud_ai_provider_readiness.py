@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -35,10 +37,91 @@ SMOKE_PROMPT = (
     "ai_self_assessment. Use direction neutral, style steady, rationale "
     "provider readiness smoke, and ai_self_assessment 5. No markdown."
 )
+_PROVIDER_OUTPUT_LIMIT = 4096
+_PROVIDER_SECRET_PATTERNS = (
+    re.compile(r"(?is)-----BEGIN [^-]+ PRIVATE KEY-----.*?-----END [^-]+ PRIVATE KEY-----"),
+    re.compile(r"(?i)(\bbearer\s+)[^\s,;]+"),
+    re.compile(
+        r"(?i)(\b(?:api[_-]?key|access[_-]?token|authorization|password|secret|token)\s*[:=]\s*)[^\s,;]+"
+    ),
+)
 
 
 class ProviderReadinessFailure(RuntimeError):
     pass
+
+
+def _provider_output_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _bounded_redacted_provider_output(value: Any) -> str:
+    text = _provider_output_text(value)
+    for pattern in _PROVIDER_SECRET_PATTERNS:
+        if pattern.pattern.startswith("(?is)-----"):
+            text = pattern.sub("[REDACTED_PRIVATE_KEY]", text)
+        elif "bearer" in pattern.pattern.lower():
+            text = pattern.sub(r"\1[REDACTED]", text)
+        else:
+            text = pattern.sub(r"\1[REDACTED]", text)
+    if len(text) > _PROVIDER_OUTPUT_LIMIT:
+        return text[:_PROVIDER_OUTPUT_LIMIT] + "...[truncated]"
+    return text
+
+
+def _provider_call_trace(*, deadline_seconds: int | None) -> dict[str, Any]:
+    started_at = datetime.now(timezone.utc)
+    return {
+        "deadline_seconds": deadline_seconds,
+        "started_at": started_at.isoformat(),
+        "deadline_at": (
+            (started_at + timedelta(seconds=deadline_seconds)).isoformat()
+            if deadline_seconds is not None
+            else None
+        ),
+        "finished_at": None,
+        "elapsed_ms": None,
+        "phase_timings_ms": {},
+        "phase_return_codes": {},
+        "return_code": None,
+        "timed_out": False,
+        "stdout": "",
+        "stderr": "",
+        "partial_output": False,
+    }
+
+
+def _finish_provider_call_trace(
+    trace: dict[str, Any],
+    started_monotonic: float,
+    *,
+    stdout: Any = None,
+    stderr: Any = None,
+    return_code: int | None = None,
+    timed_out: bool | None = None,
+    partial_output: bool | None = None,
+) -> None:
+    trace["finished_at"] = datetime.now(timezone.utc).isoformat()
+    trace["elapsed_ms"] = round((time.monotonic() - started_monotonic) * 1000)
+    trace["return_code"] = return_code
+    if stdout is not None:
+        trace["stdout"] = _bounded_redacted_provider_output(stdout)
+    if stderr is not None:
+        trace["stderr"] = _bounded_redacted_provider_output(stderr)
+    if timed_out is not None:
+        trace["timed_out"] = bool(timed_out)
+    if partial_output is not None:
+        trace["partial_output"] = bool(partial_output)
+
+
+def _record_phase(trace: dict[str, Any], name: str, started_monotonic: float) -> None:
+    trace["phase_timings_ms"][name] = round(
+        (time.monotonic() - started_monotonic) * 1000
+    )
 
 
 def resolve_provider_readiness_timeout(config: dict[str, Any]) -> int:
@@ -107,9 +190,20 @@ def run(
         "control_actions_executed": 0,
         "failure_code": None,
     }
+    provider_trace = _provider_call_trace(
+        deadline_seconds=DEFAULT_PROVIDER_READINESS_TIMEOUT_SECONDS
+    )
+    provider_started_monotonic = time.monotonic()
+    receipt["provider_call"] = provider_trace
     try:
         timeout_seconds = resolve_provider_readiness_timeout(config)
         receipt["timeout_seconds"] = timeout_seconds
+        provider_trace["deadline_seconds"] = timeout_seconds
+        started_at = datetime.fromisoformat(provider_trace["started_at"])
+        provider_trace["deadline_at"] = (
+            started_at + timedelta(seconds=timeout_seconds)
+        ).isoformat()
+        resolution_started = time.monotonic()
         command_args = shlex.split(command)
         if not command_args:
             raise ProviderReadinessFailure("strategy_recommendation_provider_command_invalid")
@@ -119,6 +213,7 @@ def run(
         executable = Path(resolved).resolve()
         if not executable.is_file() or not os.access(executable, os.X_OK):
             raise ProviderReadinessFailure("strategy_recommendation_provider_not_executable")
+        _record_phase(provider_trace, "command_resolution", resolution_started)
         receipt["provider"].update(
             {
                 "executable": str(executable),
@@ -126,65 +221,165 @@ def run(
             }
         )
         env = _provider_env()
-        version = subprocess.run(
-            [*command_args, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-            env=env,
-        )
+        version_started = time.monotonic()
+        try:
+            version = subprocess.run(
+                [*command_args, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            _record_phase(provider_trace, "version", version_started)
+            provider_trace["phase_return_codes"]["version"] = None
+            _finish_provider_call_trace(
+                provider_trace,
+                provider_started_monotonic,
+                stdout=exc.stdout,
+                stderr=exc.stderr,
+                timed_out=True,
+                partial_output=bool(exc.stdout or exc.stderr),
+            )
+            raise ProviderReadinessFailure(
+                "strategy_recommendation_provider_timeout"
+            ) from exc
+        _record_phase(provider_trace, "version", version_started)
+        provider_trace["phase_return_codes"]["version"] = int(version.returncode)
         if version.returncode != 0:
+            _finish_provider_call_trace(
+                provider_trace,
+                provider_started_monotonic,
+                stdout=version.stdout,
+                stderr=version.stderr,
+                return_code=int(version.returncode),
+            )
             raise ProviderReadinessFailure("strategy_recommendation_provider_failed")
         receipt["provider"]["version"] = _safe_line(version.stdout or version.stderr)
-        login = subprocess.run(
-            [*command_args, "login", "status"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-            env=env,
-        )
+        login_started = time.monotonic()
+        try:
+            login = subprocess.run(
+                [*command_args, "login", "status"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            _record_phase(provider_trace, "login", login_started)
+            provider_trace["phase_return_codes"]["login"] = None
+            _finish_provider_call_trace(
+                provider_trace,
+                provider_started_monotonic,
+                stdout=exc.stdout,
+                stderr=exc.stderr,
+                timed_out=True,
+                partial_output=bool(exc.stdout or exc.stderr),
+            )
+            raise ProviderReadinessFailure(
+                "strategy_recommendation_provider_timeout"
+            ) from exc
+        _record_phase(provider_trace, "login", login_started)
+        provider_trace["phase_return_codes"]["login"] = int(login.returncode)
         if not _auth_status_ready(login):
+            _finish_provider_call_trace(
+                provider_trace,
+                provider_started_monotonic,
+                stdout=login.stdout,
+                stderr=login.stderr,
+                return_code=int(login.returncode),
+            )
             raise ProviderReadinessFailure("strategy_recommendation_provider_auth_not_ready")
         receipt["provider"]["auth_status"] = "logged_in"
 
         with tempfile.NamedTemporaryFile(prefix="cloud-ai-provider-", suffix=".json", delete=False) as handle:
             result_path = Path(handle.name)
         try:
-            smoke = subprocess.run(
-                [
-                    *command_args,
-                    "--ask-for-approval",
-                    "never",
-                    "exec",
-                    "--ignore-user-config",
-                    "--ephemeral",
-                    "--model",
-                    str(planner.get("model") or "gpt-5.4"),
-                    "--sandbox",
-                    "read-only",
-                    "--cd",
-                    str(repo_root),
-                    "--output-last-message",
-                    str(result_path),
-                    "-",
-                ],
-                input=SMOKE_PROMPT,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
-                env=env,
-            )
+            smoke_started = time.monotonic()
+            try:
+                smoke = subprocess.run(
+                    [
+                        *command_args,
+                        "--ask-for-approval",
+                        "never",
+                        "exec",
+                        "--ignore-user-config",
+                        "--ephemeral",
+                        "--model",
+                        str(planner.get("model") or "gpt-5.4"),
+                        "--sandbox",
+                        "read-only",
+                        "--cd",
+                        str(repo_root),
+                        "--output-last-message",
+                        str(result_path),
+                        "-",
+                    ],
+                    input=SMOKE_PROMPT,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    check=False,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired as exc:
+                _record_phase(provider_trace, "smoke", smoke_started)
+                provider_trace["phase_return_codes"]["smoke"] = None
+                _finish_provider_call_trace(
+                    provider_trace,
+                    provider_started_monotonic,
+                    stdout=exc.stdout,
+                    stderr=exc.stderr,
+                    timed_out=True,
+                    partial_output=bool(exc.stdout or exc.stderr),
+                )
+                raise
+            _record_phase(provider_trace, "smoke", smoke_started)
+            provider_trace["phase_return_codes"]["smoke"] = int(smoke.returncode)
             if smoke.returncode != 0:
+                _finish_provider_call_trace(
+                    provider_trace,
+                    provider_started_monotonic,
+                    stdout=smoke.stdout,
+                    stderr=smoke.stderr,
+                    return_code=int(smoke.returncode),
+                )
                 raise ProviderReadinessFailure("strategy_recommendation_provider_failed")
+            output_started = time.monotonic()
             try:
                 response = json.loads(result_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
+                _record_phase(provider_trace, "output_read", output_started)
+                _finish_provider_call_trace(
+                    provider_trace,
+                    provider_started_monotonic,
+                    stdout=smoke.stdout,
+                    stderr=smoke.stderr,
+                    return_code=int(smoke.returncode),
+                )
                 raise ProviderReadinessFailure("strategy_recommendation_provider_invalid_output") from exc
+            _record_phase(provider_trace, "output_read", output_started)
+            parse_started = time.monotonic()
             if not isinstance(response, dict) or not _valid_response(response):
+                _record_phase(provider_trace, "parse", parse_started)
+                _finish_provider_call_trace(
+                    provider_trace,
+                    provider_started_monotonic,
+                    stdout=smoke.stdout,
+                    stderr=smoke.stderr,
+                    return_code=int(smoke.returncode),
+                )
                 raise ProviderReadinessFailure("strategy_recommendation_provider_invalid_output")
+            _record_phase(provider_trace, "parse", parse_started)
+            _finish_provider_call_trace(
+                provider_trace,
+                provider_started_monotonic,
+                stdout=smoke.stdout,
+                stderr=smoke.stderr,
+                return_code=int(smoke.returncode),
+            )
             receipt["response_contract"].update(
                 {
                     "status": "pass",
@@ -203,6 +398,9 @@ def run(
         receipt["failure_code"] = "strategy_recommendation_provider_timeout"
     except OSError:
         receipt["failure_code"] = "strategy_recommendation_provider_unavailable"
+    finally:
+        if provider_trace["finished_at"] is None:
+            _finish_provider_call_trace(provider_trace, provider_started_monotonic)
     receipt["readiness_digest"] = _digest(receipt)
     provider_root = output / "cloud" / "provider"
     path = provider_root / "readiness_current.json"

@@ -15246,3 +15246,31 @@ auditable datafeed port; broker execution remains a separate port.
   timeout partial output.
 - Cloud deployment and natural boundary evidence are intentionally separate:
   repository tests do not claim the Paper runtime has adopted this commit.
+
+# 2026-08-14 — Persist provider-readiness smoke diagnostics (#644)
+
+## Decision
+
+- Extend the existing Cloud AI readiness receipt with the same bounded provider
+  call trace used by strategy recommendations: deadline, start/deadline/end
+  timestamps, total elapsed time, per-phase timings, phase return codes, final
+  return code, timeout flag, and bounded/redacted stdout/stderr.
+- A readiness timeout preserves captured partial output and remains the same
+  `strategy_recommendation_provider_timeout` failure.  The readiness gate,
+  source/SHA checks, Paper-only contract, and service exit behavior are not
+  relaxed or reclassified.
+
+## Gotchas
+
+- The readiness smoke has version, login, and model phases; the trace records
+  those phase timings without treating a successful version/login check as a
+  successful model call.
+- `readiness_last_success.json` remains the last passing proof.  A new blocked
+  receipt contains diagnostics but must not be accepted as current readiness.
+- Diagnostics are bounded to 4 KiB and redact private keys, bearer tokens, and
+  common credential assignments before persistence.
+
+## Verification
+
+- Focused readiness, strategy recommendation, pre-generation, and Supervisor
+  tests pass (171 tests); diff check and gitleaks pass.
