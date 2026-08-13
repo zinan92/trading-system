@@ -408,6 +408,143 @@ def _install_successful_readiness_runtime(
     return executable
 
 
+def test_readiness_provider_trace_persists_deadline_phases_and_return_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_successful_readiness_runtime(tmp_path, monkeypatch)
+    result = readiness_pipeline.run(
+        output_root=tmp_path / "outputs",
+        repo_root=tmp_path,
+    )
+
+    assert result["ok"] is True
+    trace = load_json(Path(result["path"]))[0]["provider_call"]
+    assert trace["deadline_seconds"] == 60
+    assert trace["deadline_at"]
+    assert trace["finished_at"]
+    assert trace["elapsed_ms"] >= 0
+    assert trace["return_code"] == 0
+    assert trace["timed_out"] is False
+    assert trace["phase_timings_ms"]["command_resolution"] >= 0
+    assert trace["phase_timings_ms"]["version"] >= 0
+    assert trace["phase_timings_ms"]["login"] >= 0
+    assert trace["phase_timings_ms"]["smoke"] >= 0
+
+
+def test_readiness_provider_trace_bounds_and_redacts_failure_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = tmp_path / "codex"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        readiness_pipeline,
+        "current_source_attestation",
+        lambda repo_root: {
+            "source_sha": SHA,
+            "source_tree_sha": TREE,
+            "tracked_tree_clean": True,
+        },
+    )
+    monkeypatch.setattr(
+        readiness_pipeline,
+        "dualtrack_config",
+        lambda: {
+            "machine_planner": {"command": str(executable)},
+            "convergence": {"provider_readiness_timeout_seconds": 25},
+        },
+    )
+
+    def failed_run(command, **kwargs):
+        if "login" in command:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                "",
+                "Logged in using ChatGPT\n",
+            )
+        return subprocess.CompletedProcess(
+            command,
+            7,
+            "",
+            "Authorization: Bearer redact-me\n" + "x" * 6000,
+        )
+
+    monkeypatch.setattr(readiness_pipeline.subprocess, "run", failed_run)
+    result = readiness_pipeline.run(
+        output_root=tmp_path / "outputs",
+        repo_root=tmp_path,
+    )
+
+    assert result["ok"] is False
+    trace = load_json(Path(result["path"]))[0]["provider_call"]
+    assert trace["return_code"] == 7
+    assert len(trace["stderr"]) <= 4110
+    assert "redact-me" not in trace["stderr"]
+    assert trace["stderr"].endswith("...[truncated]")
+
+
+def test_readiness_provider_trace_keeps_timeout_partial_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = tmp_path / "codex"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        readiness_pipeline,
+        "current_source_attestation",
+        lambda repo_root: {
+            "source_sha": SHA,
+            "source_tree_sha": TREE,
+            "tracked_tree_clean": True,
+        },
+    )
+    monkeypatch.setattr(
+        readiness_pipeline,
+        "dualtrack_config",
+        lambda: {
+            "machine_planner": {"command": str(executable)},
+            "convergence": {"provider_readiness_timeout_seconds": 25},
+        },
+    )
+
+    def timeout_run(command, **kwargs):
+        if "--version" in command:
+            return subprocess.CompletedProcess(command, 0, "codex\n", "")
+        if "login" in command:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                "",
+                "Logged in using ChatGPT\n",
+            )
+        raise subprocess.TimeoutExpired(
+            cmd=command,
+            timeout=25,
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    monkeypatch.setattr(readiness_pipeline.subprocess, "run", timeout_run)
+    result = readiness_pipeline.run(
+        output_root=tmp_path / "outputs",
+        repo_root=tmp_path,
+    )
+
+    assert result["ok"] is False
+    assert result["failure_code"] == "strategy_recommendation_provider_timeout"
+    trace = load_json(Path(result["path"]))[0]["provider_call"]
+    assert trace["deadline_seconds"] == 25
+    assert trace["timed_out"] is True
+    assert trace["return_code"] is None
+    assert trace["partial_output"] is True
+    assert "partial stdout" in trace["stdout"]
+    assert "partial stderr" in trace["stderr"]
+
+
 def test_timer_cadence_renews_for_thirty_hours_without_stale_interval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
