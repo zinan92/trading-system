@@ -23,6 +23,8 @@ from services.paper_supervisor_read_model import (
 from services.paper_supervisor_store import PaperSupervisorStore
 from services.paper_start_facts import build_start_facts
 from services.supervisor_execution_profile import PAPER_CONTINUOUS
+from services.strategy_recommendation import RecommendationProviderError
+from services.cloud_ai_provider import CloudAIProviderReadinessGateError
 
 
 OBSERVED_AT = "2026-08-07T12:30:00+00:00"
@@ -383,6 +385,61 @@ def test_precompute_requires_running_proof_before_provider_call(
     assert calls == 0
 
 
+@pytest.mark.parametrize(
+    ("failure", "expected_calls"),
+    [
+        (
+            RecommendationProviderError(
+                "strategy_recommendation_provider_timeout",
+                "1s",
+            ),
+            1,
+        ),
+        (
+            RecommendationProviderError(
+                "strategy_recommendation_provider_unavailable",
+                "socket",
+            ),
+            1,
+        ),
+        (
+            CloudAIProviderReadinessGateError(
+                "cloud_ai_provider_readiness_unavailable",
+                readiness_blocker="cloud_ai_provider_readiness_stale",
+            ),
+            0,
+        ),
+    ],
+)
+def test_provider_failure_is_non_blocking_optional_enhancement_with_zero_mutations(
+    tmp_path: Path,
+    failure: Exception,
+    expected_calls: int,
+) -> None:
+    def builder(_target: str, _observed: str) -> dict:
+        raise failure
+
+    result = _Precomputer(
+        tmp_path,
+        plane=_Plane(_facts()),
+        candidate_builder=builder,
+        execution_profile=PAPER_CONTINUOUS,
+        heartbeat_provider=_heartbeat,
+    ).run(observed_at=OBSERVED_AT)
+
+    assert result["status"] == "enhancement_unavailable"
+    assert result["enhancement"] == "ai_next_cycle_precompute"
+    assert result["non_blocking"] is True
+    assert result["machine_code"] == failure.code
+    assert result["provider_call_count"] == expected_calls
+    assert result["next_action"] == "deterministic_rebuild_at_boundary"
+    assert result["control_actions_executed"] == 0
+    assert result["orders_created"] == 0
+    assert result["plans_activated"] == 0
+    assert result["prepared_starts_created"] == 0
+    assert VerifiedWaitingPlanStore(tmp_path).load(TARGET) is None
+
+
 def test_boundary_facts_validation_accepts_planning_only_change_but_not_price(
 ) -> None:
     bound = _facts()
@@ -513,6 +570,7 @@ def test_supervisor_adopts_valid_waiting_plan_with_zero_boundary_ai_calls(
     assert request["boundary_ai_provider_calls"] == 0
     assert request["verified_waiting_validation"] == "adopted"
     assert request["deterministic_rebuild_used"] is False
+    assert request["boundary_plan_path"] == "optional_ai_enhancement"
     event = store.boundary_events(TARGET)[-1]
     assert event["outcome"] == "adopted"
     assert event["boundary_ai_provider_calls"] == 0

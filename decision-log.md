@@ -15202,3 +15202,47 @@ auditable datafeed port; broker execution remains a separate port.
   Supervisor budget and rejects values outside the 25–60 second envelope.
 - Cloud natural timer and next-cycle due-path evidence remain required before
   claiming recovery.
+
+# 2026-08-13 — Make deterministic boundary rebuild primary; make AI staging optional (#642)
+
+## Decision
+
+- In Paper continuous mode, deterministic current-market plus authoritative
+  Paper-equity rebuild is the boundary guarantee.  The boundary request now
+  records `boundary_plan_path=deterministic_rebuild` whenever that path is
+  used.  A valid asynchronously staged candidate remains an optional
+  `boundary_plan_path=optional_ai_enhancement`; its absence or invalidation
+  never creates a boundary AI call.
+- The next-cycle AI pre-generator remains append-only and zero-control.  Exact
+  provider timeout, unavailable, failed, invalid-output and readiness
+  unavailable/invalid codes return `enhancement_unavailable` with
+  `next_action=deterministic_rebuild_at_boundary`, exit successfully from the
+  oneshot and do not create an active plan, prepared start, order or position.
+  Unlisted exceptions remain fail-closed and alertable.
+- Every strategy evaluation persists an `output.provider_call` trace with the
+  configured deadline, start/deadline/end timestamps, total and per-phase
+  elapsed milliseconds, subprocess return code, bounded redacted stdout/stderr
+  and timeout partial output.  The existing evaluation schema and typed
+  machine-code chain remain backward compatible.
+
+## Gotchas
+
+- “Primary” describes the continuity guarantee, not permission to skip a valid
+  staged identity.  Adoption is still allowed only after the existing fresh
+  StartFacts, policy, source, identity and zero-mutation checks pass; otherwise
+  deterministic rebuild is selected.
+- Optional handling is an explicit allowlist.  A generic exception, unknown
+  code, malformed readiness result or any post-intent uncertainty is not
+  converted into a non-blocking result.
+- Provider streams are diagnostic evidence only.  Prompt contents and
+  credentials are never copied into the trace; each stream is redacted and
+  bounded to 4 KiB, and a timeout keeps only the captured partial stream.
+
+## Verification
+
+- Focused tests cover valid staged adoption and deterministic path labels,
+  provider timeout/unavailable/readiness failures with zero mutations, external
+  subprocess return codes, deadline and phase timings, redaction/bounds, and
+  timeout partial output.
+- Cloud deployment and natural boundary evidence are intentionally separate:
+  repository tests do not claim the Paper runtime has adopted this commit.

@@ -3,8 +3,11 @@
 The pre-generator may call the AI provider while the current cycle is proven
 running.  It can persist proposals, previews, envelope decisions, and this
 artifact, but it never activates a plan, prepares a start, or mutates runtime,
-orders, or positions.  At the boundary the Supervisor either adopts the exact
-artifact or records why it used the deterministic Paper recovery builder.
+orders, or positions.  The deterministic current-market/authoritative-equity
+builder is the boundary guarantee; a valid artifact is an optional enhancement
+and provider failure is explicitly non-blocking.  At the boundary the
+Supervisor may adopt an exact valid artifact or records why it used the
+deterministic Paper recovery builder.
 """
 
 from __future__ import annotations
@@ -22,6 +25,12 @@ from pathlib import Path
 from typing import Any
 
 from services.dualtrack_clock import cycle_window, cycle_window_from_id, parse_utc
+from services.cloud_ai_provider import (
+    CloudAIProviderReadinessGateError,
+    PROVIDER_READINESS_INVALID,
+    PROVIDER_READINESS_UNAVAILABLE,
+    RECOVERABLE_PROVIDER_CODES,
+)
 from services.journal_store import load_json
 from services.paper_start_facts import (
     PaperStartFactsError,
@@ -43,6 +52,19 @@ _CYCLE_ID = re.compile(r"^\d{4}-\d{2}-\d{2}_(DAY|NIGHT)$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _MAX_ARTIFACT_BYTES = 2 * 1024 * 1024
+_OPTIONAL_PROVIDER_CODES = frozenset(
+    {
+        *RECOVERABLE_PROVIDER_CODES,
+        "strategy_recommendation_provider_missing",
+        "strategy_recommendation_provider_not_executable",
+        "strategy_recommendation_provider_invalid_output",
+        "strategy_recommendation_provider_command_invalid",
+        "strategy_recommendation_provider_timeout_invalid",
+        "strategy_recommendation_provider_auth_not_ready",
+        PROVIDER_READINESS_INVALID,
+        PROVIDER_READINESS_UNAVAILABLE,
+    }
+)
 _PROCESS_LOCKS: dict[str, threading.Lock] = {}
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _ARTIFACT_FIELDS = frozenset(
@@ -88,6 +110,16 @@ _EVENT_FIELDS = frozenset(
 
 class NextCyclePlanError(ValueError):
     """Stable fail-closed signal for staged-candidate evidence."""
+
+
+def _optional_provider_failure(exc: Exception) -> tuple[str, int] | None:
+    """Return only explicitly whitelisted, non-blocking pre-generation failures."""
+
+    code = str(getattr(exc, "code", "") or "")
+    if code not in _OPTIONAL_PROVIDER_CODES:
+        return None
+    provider_calls = 0 if isinstance(exc, CloudAIProviderReadinessGateError) else 1
+    return code, provider_calls
 
 
 class VerifiedWaitingPlanStore:
@@ -350,12 +382,27 @@ class NextCyclePlanPrecomputer:
                     and str(runtime.get("actual_state") or "") == "running"
                 ):
                     takeover_from = str(runtime.get("strategy_plan_id") or "")
-            evaluation = dict(
-                self.candidate_builder(
-                    target.cycle_id,
-                    observed.isoformat(),
+            try:
+                evaluation = dict(
+                    self.candidate_builder(
+                        target.cycle_id,
+                        observed.isoformat(),
+                    )
                 )
-            )
+            except Exception as exc:  # noqa: BLE001 - explicit provider allowlist only.
+                optional_failure = _optional_provider_failure(exc)
+                if optional_failure is None:
+                    raise
+                machine_code, provider_call_count = optional_failure
+                return {
+                    **base,
+                    "status": "enhancement_unavailable",
+                    "enhancement": "ai_next_cycle_precompute",
+                    "non_blocking": True,
+                    "machine_code": machine_code,
+                    "provider_call_count": provider_call_count,
+                    "next_action": "deterministic_rebuild_at_boundary",
+                }
             proposal = _json_mapping(evaluation.get("proposal"))
             preview = _json_mapping(evaluation.get("preview"))
             candidate = self.plane.supervisor_candidate_identity(

@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -268,6 +269,170 @@ def test_typed_provider_failure_receipt_keeps_code_separate_from_text(
         "strategy_recommendation_provider_timeout"
     )
     assert receipt["output"]["error"].endswith(detail)
+
+
+def _external_provider_script(tmp_path: Path, body: str) -> Path:
+    script = tmp_path / "provider.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        + body,
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def _external_service(
+    tmp_path: Path,
+    script: Path,
+    *,
+    timeout_seconds: int = 5,
+) -> StrategyRecommendationService:
+    service = StrategyRecommendationService(
+        tmp_path / "outputs",
+        provider_timeout_seconds=timeout_seconds,
+    )
+    service.config["machine_planner"] = {
+        "command": str(script),
+        "model": "test-model",
+        "timeout_seconds": timeout_seconds,
+    }
+    return service
+
+
+def test_external_provider_receipt_persists_deadline_phases_return_code_and_redacted_streams(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    script = _external_provider_script(
+        tmp_path,
+        """
+import json
+import sys
+output = sys.argv[sys.argv.index('--output-last-message') + 1]
+print('Authorization: Bearer redact-me', flush=True)
+print('api_key=redact-me-too', flush=True)
+open(output, 'w', encoding='utf-8').write(json.dumps({
+    'direction': 'short',
+    'style': 'steady',
+    'rationale': 'external provider test',
+    'key_levels': [],
+    'ai_self_assessment': 5,
+    'evidence_used': ['D1'],
+}))
+""",
+    )
+    receipt = _external_service(tmp_path, script).recommend(
+        "2026-07-05_DAY",
+        strategy_timeframes=_trusted_contexts(),
+        current_plan={},
+        account={},
+        review={},
+    )["evaluation_receipt"]
+
+    trace = receipt["output"]["provider_call"]
+    assert trace["deadline_seconds"] == 5
+    assert trace["deadline_at"]
+    assert trace["finished_at"]
+    assert trace["elapsed_ms"] >= 0
+    assert trace["return_code"] == 0
+    assert trace["timed_out"] is False
+    assert trace["phase_timings_ms"]["command_resolution"] >= 0
+    assert trace["phase_timings_ms"]["subprocess"] >= 0
+    assert "redact-me" not in trace["stdout"]
+    assert "[REDACTED]" in trace["stdout"]
+
+
+def test_external_provider_failure_receipt_persists_return_code_and_bounded_redacted_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    script = _external_provider_script(
+        tmp_path,
+        """
+import sys
+sys.stderr.write('Authorization: Bearer redact-me\\n' + 'x' * 6000)
+sys.stderr.flush()
+raise SystemExit(7)
+""",
+    )
+    service = _external_service(tmp_path, script)
+    with pytest.raises(RecommendationProviderError) as raised:
+        service.recommend(
+            "2026-07-05_DAY",
+            strategy_timeframes=_trusted_contexts(),
+            current_plan={},
+            account={},
+            review={},
+        )
+
+    assert raised.value.code == "strategy_recommendation_provider_failed"
+    receipt_path = next(
+        (
+            tmp_path
+            / "outputs"
+            / "dualtrack"
+            / "strategy_control"
+            / "evaluations"
+            / "2026-07-05_DAY"
+        ).glob("*.json")
+    )
+    trace = json.loads(receipt_path.read_text(encoding="utf-8"))[0]["output"][
+        "provider_call"
+    ]
+    assert trace["return_code"] == 7
+    assert len(trace["stderr"]) <= 4110
+    assert "redact-me" not in trace["stderr"]
+    assert trace["stderr"].endswith("...[truncated]")
+
+
+def test_external_provider_timeout_receipt_keeps_partial_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    script = _external_provider_script(
+        tmp_path,
+        """
+import sys
+import time
+print('partial stdout', flush=True)
+print('partial stderr', file=sys.stderr, flush=True)
+time.sleep(2)
+""",
+    )
+    service = _external_service(tmp_path, script, timeout_seconds=1)
+    with pytest.raises(RecommendationProviderError) as raised:
+        service.recommend(
+            "2026-07-05_DAY",
+            strategy_timeframes=_trusted_contexts(),
+            current_plan={},
+            account={},
+            review={},
+        )
+
+    assert raised.value.code == "strategy_recommendation_provider_timeout"
+    receipt_path = next(
+        (
+            tmp_path
+            / "outputs"
+            / "dualtrack"
+            / "strategy_control"
+            / "evaluations"
+            / "2026-07-05_DAY"
+        ).glob("*.json")
+    )
+    trace = json.loads(receipt_path.read_text(encoding="utf-8"))[0]["output"][
+        "provider_call"
+    ]
+    assert trace["deadline_seconds"] == 1
+    assert trace["timed_out"] is True
+    assert trace["return_code"] is None
+    assert trace["partial_output"] is True
+    assert "partial stdout" in trace["stdout"]
+    assert "partial stderr" in trace["stderr"]
 
 
 def _trusted_contexts() -> dict:
