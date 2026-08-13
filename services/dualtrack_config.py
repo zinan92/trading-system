@@ -44,6 +44,7 @@ DEFAULT_DUALTRACK_CONFIG: dict[str, Any] = {
         "terminal_deadline_seconds": 300,
     },
     "convergence": {
+        "provider_readiness_timeout_seconds": 60,
         "next_cycle_precompute": {
             "lead_minutes": 60,
             "timer_interval_seconds": 300,

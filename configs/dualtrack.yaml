@@ -37,6 +37,7 @@
     "mode": "paper_supervisor",
     "execution_profile": "paper_continuous",
     "provider_timeout_seconds": 25,
+    "provider_readiness_timeout_seconds": 60,
     "attempt_deadline_seconds": 45,
     "next_cycle_precompute": {
       "lead_minutes": 60,
