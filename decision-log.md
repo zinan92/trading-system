@@ -15117,6 +15117,18 @@ auditable datafeed port; broker execution remains a separate port.
 ## Verification
 
 - Focused systemd, Supervisor, StartFacts, control-plane, risk-envelope,
-  recommendation and next-cycle suites pass.  Cloud acceptance still requires
-  exact-SHA deployment, natural current-cycle `running_proven`, a natural
-  next-cycle due-path run without OOM, and a later natural adopted handoff.
+  recommendation and next-cycle suites pass (316 tests); ruff, diff-check and
+  gitleaks also pass.
+- Cloud Paper runs the exact clean merge SHA
+  `57959a3389c4be9745bbb18bdb6b4fa831713077` (tree
+  `0aabb4660b7b200f5bcc64799996b84169f8967a`).  At 09:35:32 CST a natural
+  Supervisor attempt created one fresh preview/prepared start and reached
+  `running` with 38 accepted/open orders, zero open positions, passing
+  reconciliation and zero manual controls.  At 09:38 the next-cycle service
+  passed its boot gate and completed `not_due` successfully under the new
+  cgroup limit; no post-deploy kernel OOM was recorded.
+- This proves the stopped-state recovery and the cheap timer path only.  The
+  first natural due-path run around 20:00 CST must still prove artifact
+  generation without OOM, and the 21:00 boundary must still prove `adopted`,
+  zero boundary provider calls, exact staged/active digest equality, preserved
+  order/position identity, no flatten fallback and `running_proven`.

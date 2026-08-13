@@ -13,8 +13,10 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-13)
-- #631 owns the two production blockers exposed by the first natural #439/#413
-  acceptance.  At 08:04 CST the due path of
+- #631 / PR #632 is merged and deployed on Cloud Paper as exact clean
+  `main@57959a3389c4be9745bbb18bdb6b4fa831713077`, tree
+  `0aabb4660b7b200f5bcc64799996b84169f8967a`.  It repairs the two production
+  blockers exposed by the first natural #439/#413 acceptance.  At 08:04 CST the due path of
   `gridmind-next-cycle-plan.service` reached its 128 MiB cgroup ceiling and was
   OOM-killed, so the 09:01 boundary had no verified successor and correctly
   used the existing safe close fallback.  The same boundary then exposed an
@@ -24,8 +26,13 @@
   measured unit to `MemoryHigh=192M` / `MemoryMax=256M` and pins one trusted
   market snapshot across candidate/validation/prepare inside a Paper-continuous
   Supervisor tick; `start` still reads fresh market and all live/fail-closed
-  behavior is unchanged.  Focused tests pass; PR, exact-SHA deployment,
-  current-cycle natural recovery and a successful natural due-path run remain.
+  behavior is unchanged.  At 09:35:32 CST the first natural post-release
+  Supervisor tick recovered `2026-08-13_DAY` to `running` with 38 accepted/open
+  orders, zero open positions, passing reconciliation, a fresh tick and zero
+  manual strategy controls.  At 09:38 the next-cycle unit naturally completed
+  its `not_due` path under the new limit with zero controls and no new OOM.
+  The first repaired due path around 20:00 and the natural 21:00 adopted
+  identity-preserving handoff remain the explicit acceptance gates.
 - #439/#413 cross-cycle handoff repair merged as PR #630 and is deployed on
   Cloud Paper at exact `main@97cef3c3777ee7674c730b13e50e4583029326dc`.
   The first natural 2026-08-13 DAY acceptance did not pass because #631's
