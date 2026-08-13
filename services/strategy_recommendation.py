@@ -15,10 +15,11 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from services.cloud_ai_provider import (
     current_cloud_ai_provider_readiness,
@@ -28,10 +29,179 @@ from services.dualtrack_config import dualtrack_config
 from services.journal_store import write_json
 
 
-PROMPT_VERSION = "strategy-recommendation-prompt-v3"
+PROMPT_VERSION = "strategy-recommendation-prompt-v4"
 EVALUATION_SCHEMA = "strategy-ai-evaluation-v2"
+ACCOUNT_CONTEXT_SCHEMA = "strategy-ai-account-context-v1"
 TIMEFRAMES = ("1d", "4h", "1h", "15m")
 LONG_TERM_D1_BARS = 200
+
+
+_POSITION_CONTEXT_FIELDS = (
+    "position_id",
+    "trade_id",
+    "status",
+    "side",
+    "quantity",
+    "entry_quantity",
+    "remaining_quantity",
+    "entry_price",
+    "mark_price",
+    "take_profit_price",
+    "stop_loss_price",
+    "tp_price",
+    "sl_price",
+    "strategy_plan_id",
+    "strategy_plan_version",
+    "source_plan_id",
+    "source_cycle_id",
+)
+_ORDER_CONTEXT_FIELDS = (
+    "order_id",
+    "client_order_id",
+    "status",
+    "state",
+    "side",
+    "price",
+    "limit_price",
+    "quantity",
+    "notional",
+    "reduce_only",
+    "trigger_price",
+    "take_profit_price",
+    "stop_loss_price",
+    "tp_price",
+    "sl_price",
+    "strategy_plan_id",
+    "strategy_plan_version",
+    "source_plan_id",
+    "source_cycle_id",
+)
+
+
+def _compact_identity_rows(
+    rows: Any,
+    fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    return [
+        {field: row[field] for field in fields if field in row}
+        for row in rows
+        if isinstance(row, Mapping)
+    ]
+
+
+def build_recommendation_account_context(
+    account: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project the minimum authoritative account facts needed by the AI.
+
+    The full accounting snapshot remains available to deterministic risk and
+    reconciliation paths. It is deliberately excluded from the model prompt:
+    fills and historical event payloads add latency without changing the
+    direction/style proposal contract.
+    """
+
+    source = dict(account or {})
+    snapshot = source.get("accounting_snapshot")
+    snapshot = snapshot if isinstance(snapshot, Mapping) else {}
+    execution = source.get("execution")
+    execution = execution if isinstance(execution, Mapping) else {}
+    compact: dict[str, Any] = {
+        "schema_version": ACCOUNT_CONTEXT_SCHEMA,
+        "execution_account_source": source.get("execution_account_source"),
+        "accounting_snapshot_id": snapshot.get("snapshot_id"),
+        "accounting_snapshot_schema": snapshot.get("schema_version"),
+        "accounting_source_type": snapshot.get("source_type"),
+        "accounting_source_name": snapshot.get("source_name"),
+        "accounting_source_schema": snapshot.get("source_schema_version"),
+        "accounting_currency": snapshot.get("currency"),
+    }
+    for field in ("engine", "cycle_id", "schema_version", "snapshot_id"):
+        if field in execution:
+            compact.setdefault("execution", {})[field] = execution[field]
+    for field in (
+        "starting_cash",
+        "ending_cash",
+        "equity",
+        "realized_pnl",
+        "unrealized_pnl",
+        "margin",
+        "exposure",
+        "slippage",
+    ):
+        if field in source:
+            compact[field] = source[field]
+    snapshot_account = snapshot.get("account")
+    if isinstance(snapshot_account, Mapping):
+        for field in (
+            "starting_balance",
+            "ending_cash",
+            "equity",
+            "margin",
+            "exposure",
+            "available_balance",
+            "leverage",
+        ):
+            if field not in compact and field in snapshot_account:
+                compact[field] = snapshot_account[field]
+    snapshot_counts = snapshot.get("counts")
+    if isinstance(snapshot_counts, Mapping):
+        compact["accounting_counts"] = {
+            field: snapshot_counts[field]
+            for field in (
+                "order_count",
+                "accepted_order_count",
+                "open_order_count",
+                "fill_count",
+                "trade_count",
+                "position_count",
+                "open_position_count",
+                "completed_trade_count",
+            )
+            if field in snapshot_counts
+        }
+    snapshot_pnl = snapshot.get("pnl")
+    if isinstance(snapshot_pnl, Mapping):
+        compact["accounting_pnl"] = {
+            field: snapshot_pnl[field]
+            for field in (
+                "net_realized_pnl",
+                "gross_realized_pnl",
+                "fees",
+                "realized_pnl",
+                "unrealized_pnl",
+                "net_pnl",
+                "funding",
+            )
+            if field in snapshot_pnl
+        }
+    reconciliation = snapshot.get("reconciliation")
+    if isinstance(reconciliation, Mapping):
+        issues = reconciliation.get("issues")
+        issue_codes = [
+            str(row.get("code"))
+            for row in issues
+            if isinstance(row, Mapping) and row.get("code")
+        ] if isinstance(issues, list) else []
+        compact["accounting_reconciliation"] = {
+            "status": reconciliation.get("status"),
+            "issue_codes": issue_codes,
+        }
+    compact["execution"] = {
+        **dict(compact.get("execution") or {}),
+        "open_positions": _compact_identity_rows(
+            execution.get("open_positions"), _POSITION_CONTEXT_FIELDS
+        ),
+        "accepted_orders": _compact_identity_rows(
+            execution.get("accepted_orders"), _ORDER_CONTEXT_FIELDS
+        ),
+    }
+    return {
+        key: value
+        for key, value in compact.items()
+        if value not in (None, {}, [])
+    }
 
 
 class RecommendationProviderError(RuntimeError):
@@ -78,6 +248,15 @@ class StrategyRecommendationService:
         )
         created_at = str(now or datetime.now(timezone.utc).isoformat())
         evaluation_id = f"ai-eval-{uuid.uuid4().hex[:16]}"
+        account_context = build_recommendation_account_context(account)
+        account_context_chars = len(
+            json.dumps(
+                account_context,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
         receipt: dict[str, Any] = {
             "schema_version": EVALUATION_SCHEMA,
             "evaluation_id": evaluation_id,
@@ -100,7 +279,11 @@ class StrategyRecommendationService:
                     for timeframe in TIMEFRAMES
                 },
                 "current_plan": dict(current_plan or {}),
-                "account": dict(account or {}),
+                "account": account_context,
+                "account_context": {
+                    "schema_version": ACCOUNT_CONTEXT_SCHEMA,
+                    "char_count": account_context_chars,
+                },
                 "review": dict(review or {}),
             },
             "output": {},
@@ -113,6 +296,7 @@ class StrategyRecommendationService:
         if provider_readiness is not None:
             receipt["provider_readiness"] = dict(provider_readiness)
         prompt = ""
+        provider_elapsed_ms: int | None = None
         try:
             contexts = {
                 timeframe: self._context_summary(strategy_timeframes, timeframe)
@@ -124,9 +308,15 @@ class StrategyRecommendationService:
                 contexts=contexts,
                 framework=framework,
                 current_plan=current_plan or {},
-                account=account or {},
+                account=account_context,
                 review=review or {},
             )
+            prompt_chars = len(prompt)
+            receipt["input"]["context_observability"] = {
+                "account_context_schema": ACCOUNT_CONTEXT_SCHEMA,
+                "account_context_char_count": account_context_chars,
+                "prompt_char_count": prompt_chars,
+            }
             prompt_contract = {
                 "version": PROMPT_VERSION,
                 "model": str((self.config.get("machine_planner") or {}).get("model") or "gpt-5.4"),
@@ -136,7 +326,11 @@ class StrategyRecommendationService:
             }
             receipt["input"].update({"contexts": contexts, "position_first_framework": framework, "prompt": prompt, "prompt_contract": prompt_contract})
             self._last_raw_model_response = None
-            decision = self.decision_provider(prompt)
+            provider_started = time.monotonic()
+            try:
+                decision = self.decision_provider(prompt)
+            finally:
+                provider_elapsed_ms = round((time.monotonic() - provider_started) * 1000)
             raw_model_response = self._last_raw_model_response or json.dumps(
                 decision, ensure_ascii=False, sort_keys=True, indent=2
             )
@@ -178,6 +372,7 @@ class StrategyRecommendationService:
                     "rationale": rationale,
                     "key_levels": [float(value) for value in decision.get("key_levels") or []],
                 },
+                "provider_call_elapsed_ms": provider_elapsed_ms,
             }
             receipt = self.persist_receipt(receipt)
             return {
@@ -219,6 +414,7 @@ class StrategyRecommendationService:
                     else None
                 ),
                 "error": str(exc),
+                "provider_call_elapsed_ms": provider_elapsed_ms,
             }
             self.persist_receipt(receipt)
             raise
@@ -338,7 +534,7 @@ class StrategyRecommendationService:
 完整 D1、4H、1H、15m 可信行情与指标: {json.dumps(contexts, ensure_ascii=False, sort_keys=True)}
 确定性评估框架（必须按此顺序解释，不可绕过）: {json.dumps(framework, ensure_ascii=False, sort_keys=True)}
 当前生产计划: {json.dumps(current_plan, ensure_ascii=False, sort_keys=True)}
-账户与权威执行状态（包括 open_positions / accepted_orders）: {json.dumps(account, ensure_ascii=False, sort_keys=True)}
+压缩后的账户与权威执行状态（包括 open_positions / accepted_orders，不含 fills/trades 历史）: {json.dumps(account, ensure_ascii=False, sort_keys=True)}
 上一周期复盘: {json.dumps(review, ensure_ascii=False, sort_keys=True)}
 
 只输出 JSON 对象，字段必须为：

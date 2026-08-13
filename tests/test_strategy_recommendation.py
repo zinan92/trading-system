@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from services.strategy_recommendation import (
+    ACCOUNT_CONTEXT_SCHEMA,
     LONG_TERM_D1_BARS,
     RecommendationProviderError,
     StrategyRecommendationService,
+    build_recommendation_account_context,
     build_position_first_framework,
 )
 from services.cloud_ai_provider import CloudAIProviderReadinessGateError
@@ -77,7 +79,7 @@ def test_strategy_recommendation_uses_fixed_multitimeframe_input_and_rule_score(
     assert result["analysis"]["timeframes"] == ["1d", "4h", "1h", "15m"]
     assert result["analysis"]["contexts"]["15m"]["indicators"]["ema20"] is not None
     assert result["analysis"]["contexts"]["15m"]["indicators"]["macd"]["histogram"] is not None
-    assert result["prompt_contract"]["version"] == "strategy-recommendation-prompt-v3"
+    assert result["prompt_contract"]["version"] == "strategy-recommendation-prompt-v4"
     assert result["framework"]["position"]["lookback_bars"] == LONG_TERM_D1_BARS
     assert result["framework"]["position"]["label"] == "high"
     assert result["strategy_type"] == "grid"
@@ -92,11 +94,51 @@ def test_strategy_recommendation_uses_fixed_multitimeframe_input_and_rule_score(
     assert receipt["input"]["position_first_framework"]["strategy"]["recommended_strategy_type"] == "grid"
     assert receipt["input"]["source_manifests"]["1d"]["long_term_position_bar_count"] == LONG_TERM_D1_BARS + 20
     assert receipt["input"]["prompt"] == prompts[0]
+    assert receipt["input"]["account"]["schema_version"] == ACCOUNT_CONTEXT_SCHEMA
+    assert receipt["input"]["context_observability"]["prompt_char_count"] == len(prompts[0])
+    assert receipt["output"]["provider_call_elapsed_ms"] >= 0
     assert '"direction": "short"' in receipt["output"]["raw_model_response"]
     assert receipt["output"]["parsed_decision"]["style"] == "steady"
     archive = tmp_path / "outputs" / receipt["archive"]["relative_path"]
     assert archive.exists()
     assert json.loads(archive.read_text(encoding="utf-8"))[0]["evaluation_id"] == receipt["evaluation_id"]
+
+
+def test_recommendation_account_context_excludes_history_payloads() -> None:
+    context = build_recommendation_account_context(
+        {
+            "equity": 10_000,
+            "execution_account_source": "authoritative_execution_snapshot",
+            "accounting_snapshot": {
+                "snapshot_id": "accounting-1",
+                "source_name": "nautilus_paper",
+                "counts": {"order_count": 3, "fill_count": 9},
+                "pnl": {"net_realized_pnl": 12.5},
+                "fills": [{"fill_id": "must-not-enter-prompt"}],
+                "trades": [{"trade_id": "must-not-enter-prompt"}],
+                "account": {"equity": 10_000},
+            },
+            "execution": {
+                "engine": "nautilus_paper",
+                "cycle_id": "2026-07-05_DAY",
+                "open_positions": [
+                    {"position_id": "position-1", "side": "short", "quantity": 1}
+                ],
+                "accepted_orders": [
+                    {"order_id": "order-1", "state": "accepted", "side": "sell"}
+                ],
+                "fills": [{"fill_id": "must-not-enter-prompt"}],
+            },
+        }
+    )
+
+    encoded = json.dumps(context, ensure_ascii=False)
+    assert context["schema_version"] == ACCOUNT_CONTEXT_SCHEMA
+    assert context["equity"] == 10_000
+    assert context["execution"]["open_positions"][0]["position_id"] == "position-1"
+    assert "must-not-enter-prompt" not in encoded
+    assert "fills" not in context
+    assert "trades" not in context
 
 
 def test_strategy_recommendation_rejects_untrusted_or_insufficient_context(tmp_path: Path) -> None:

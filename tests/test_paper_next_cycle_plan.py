@@ -15,6 +15,7 @@ from services.paper_next_cycle_plan import (
     build_verified_waiting_plan,
     staged_facts_status,
 )
+from pipelines.paper_next_cycle_plan import resolve_next_cycle_provider_timeout
 from services.paper_supervisor import PaperSupervisor
 from services.paper_supervisor_read_model import (
     build_paper_supervisor_polling_summary,
@@ -27,6 +28,18 @@ from services.supervisor_execution_profile import PAPER_CONTINUOUS
 OBSERVED_AT = "2026-08-07T12:30:00+00:00"
 CURRENT = "2026-08-07_DAY"
 TARGET = "2026-08-07_NIGHT"
+
+
+def test_next_cycle_precompute_uses_independent_bounded_provider_budget() -> None:
+    convergence = {
+        "provider_timeout_seconds": 25,
+        "next_cycle_precompute": {"provider_timeout_seconds": 60},
+    }
+    assert resolve_next_cycle_provider_timeout(convergence) == 60
+    with pytest.raises(NextCyclePlanError, match="configuration_invalid"):
+        resolve_next_cycle_provider_timeout(
+            {"next_cycle_precompute": {"provider_timeout_seconds": 61}}
+        )
 
 
 def _market(price: float = 4050.0) -> dict:

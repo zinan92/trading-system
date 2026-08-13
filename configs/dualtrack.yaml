@@ -40,7 +40,8 @@
     "attempt_deadline_seconds": 45,
     "next_cycle_precompute": {
       "lead_minutes": 60,
-      "timer_interval_seconds": 300
+      "timer_interval_seconds": 300,
+      "provider_timeout_seconds": 60
     },
     "outer_policy_binding": {
       "binding_id": "paper-supervisor-grid",

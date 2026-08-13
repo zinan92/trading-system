@@ -25,6 +25,16 @@ from services.supervisor_execution_profile import (
 )
 
 
+def resolve_next_cycle_provider_timeout(convergence: dict[str, Any]) -> int:
+    """Resolve the pre-generator budget without changing the live-tick budget."""
+
+    precompute = dict(convergence.get("next_cycle_precompute") or {})
+    timeout_seconds = int(precompute.get("provider_timeout_seconds") or 60)
+    if not 25 <= timeout_seconds <= 60:
+        raise NextCyclePlanError("next_cycle_precompute_configuration_invalid")
+    return timeout_seconds
+
+
 def run(
     *,
     output_root: Path | None = None,
@@ -47,11 +57,7 @@ def run(
     convergence = dict(config.get("convergence") or {})
     precompute = dict(convergence.get("next_cycle_precompute") or {})
     lead_minutes = int(precompute.get("lead_minutes") or 60)
-    provider_timeout_seconds = int(
-        convergence.get("provider_timeout_seconds") or 25
-    )
-    if provider_timeout_seconds != 25:
-        raise NextCyclePlanError("next_cycle_precompute_configuration_invalid")
+    provider_timeout_seconds = resolve_next_cycle_provider_timeout(convergence)
     plane = StrategyControlPlane(output, execution_profile=profile)
 
     def candidate_builder(
