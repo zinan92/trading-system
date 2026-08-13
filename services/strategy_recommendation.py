@@ -17,7 +17,8 @@ import subprocess
 import tempfile
 import time
 import uuid
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -34,6 +35,82 @@ EVALUATION_SCHEMA = "strategy-ai-evaluation-v2"
 ACCOUNT_CONTEXT_SCHEMA = "strategy-ai-account-context-v1"
 TIMEFRAMES = ("1d", "4h", "1h", "15m")
 LONG_TERM_D1_BARS = 200
+_PROVIDER_OUTPUT_LIMIT = 4096
+_PROVIDER_SECRET_PATTERNS = (
+    re.compile(r"(?is)-----BEGIN [^-]+ PRIVATE KEY-----.*?-----END [^-]+ PRIVATE KEY-----"),
+    re.compile(r"(?i)(\bbearer\s+)[^\s,;]+"),
+    re.compile(
+        r"(?i)(\b(?:api[_-]?key|access[_-]?token|authorization|password|secret|token)\s*[:=]\s*)[^\s,;]+"
+    ),
+)
+
+
+def _provider_output_text(value: Any) -> str:
+    """Decode subprocess output without ever persisting raw secret material."""
+
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _bounded_redacted_provider_output(value: Any) -> str:
+    text = _provider_output_text(value)
+    for pattern in _PROVIDER_SECRET_PATTERNS:
+        if pattern.pattern.startswith("(?is)-----"):
+            text = pattern.sub("[REDACTED_PRIVATE_KEY]", text)
+        elif "bearer" in pattern.pattern.lower():
+            text = pattern.sub(r"\1[REDACTED]", text)
+        else:
+            text = pattern.sub(r"\1[REDACTED]", text)
+    if len(text) > _PROVIDER_OUTPUT_LIMIT:
+        return text[:_PROVIDER_OUTPUT_LIMIT] + "...[truncated]"
+    return text
+
+
+def _provider_call_trace(*, deadline_seconds: int | None) -> dict[str, Any]:
+    started_at = datetime.now(timezone.utc)
+    return {
+        "deadline_seconds": deadline_seconds,
+        "started_at": started_at.isoformat(),
+        "deadline_at": (
+            (started_at + timedelta(seconds=deadline_seconds)).isoformat()
+            if deadline_seconds is not None
+            else None
+        ),
+        "finished_at": None,
+        "elapsed_ms": None,
+        "phase_timings_ms": {},
+        "return_code": None,
+        "timed_out": False,
+        "stdout": "",
+        "stderr": "",
+        "partial_output": False,
+    }
+
+
+def _finish_provider_call_trace(
+    trace: dict[str, Any],
+    started_monotonic: float,
+    *,
+    stdout: Any = None,
+    stderr: Any = None,
+    return_code: int | None = None,
+    timed_out: bool | None = None,
+    partial_output: bool | None = None,
+) -> None:
+    trace["finished_at"] = datetime.now(timezone.utc).isoformat()
+    trace["elapsed_ms"] = round((time.monotonic() - started_monotonic) * 1000)
+    trace["return_code"] = return_code
+    if stdout is not None:
+        trace["stdout"] = _bounded_redacted_provider_output(stdout)
+    if stderr is not None:
+        trace["stderr"] = _bounded_redacted_provider_output(stderr)
+    if timed_out is not None:
+        trace["timed_out"] = bool(timed_out)
+    if partial_output is not None:
+        trace["partial_output"] = bool(partial_output)
 
 
 _POSITION_CONTEXT_FIELDS = (
@@ -231,6 +308,21 @@ class StrategyRecommendationService:
         self.provider_timeout_seconds = provider_timeout_seconds
         self.provider_readiness_verifier = provider_readiness_verifier
         self._last_raw_model_response: str | None = None
+        self._last_provider_call_trace: dict[str, Any] | None = None
+
+    def _configured_provider_timeout(self) -> int | None:
+        if self.provider_timeout_seconds is not None:
+            try:
+                return int(self.provider_timeout_seconds)
+            except (TypeError, ValueError):
+                return None
+        planner = self.config.get("machine_planner")
+        if not isinstance(planner, Mapping):
+            return None
+        try:
+            return int(planner.get("timeout_seconds") or 240)
+        except (TypeError, ValueError):
+            return None
 
     def recommend(
         self,
@@ -297,6 +389,7 @@ class StrategyRecommendationService:
             receipt["provider_readiness"] = dict(provider_readiness)
         prompt = ""
         provider_elapsed_ms: int | None = None
+        self._last_provider_call_trace = None
         try:
             contexts = {
                 timeframe: self._context_summary(strategy_timeframes, timeframe)
@@ -327,10 +420,26 @@ class StrategyRecommendationService:
             receipt["input"].update({"contexts": contexts, "position_first_framework": framework, "prompt": prompt, "prompt_contract": prompt_contract})
             self._last_raw_model_response = None
             provider_started = time.monotonic()
+            provider_trace = _provider_call_trace(
+                deadline_seconds=self._configured_provider_timeout()
+            )
+            self._last_provider_call_trace = provider_trace
             try:
                 decision = self.decision_provider(prompt)
             finally:
                 provider_elapsed_ms = round((time.monotonic() - provider_started) * 1000)
+                provider_trace = self._last_provider_call_trace or provider_trace
+                if provider_trace.get("finished_at") is None:
+                    provider_trace["phase_timings_ms"]["decision_provider"] = provider_elapsed_ms
+                    _finish_provider_call_trace(
+                        provider_trace,
+                        provider_started,
+                    )
+                else:
+                    provider_trace["phase_timings_ms"].setdefault(
+                        "decision_provider",
+                        provider_elapsed_ms,
+                    )
             raw_model_response = self._last_raw_model_response or json.dumps(
                 decision, ensure_ascii=False, sort_keys=True, indent=2
             )
@@ -373,6 +482,7 @@ class StrategyRecommendationService:
                     "key_levels": [float(value) for value in decision.get("key_levels") or []],
                 },
                 "provider_call_elapsed_ms": provider_elapsed_ms,
+                "provider_call": dict(provider_trace),
             }
             receipt = self.persist_receipt(receipt)
             return {
@@ -415,6 +525,11 @@ class StrategyRecommendationService:
                 ),
                 "error": str(exc),
                 "provider_call_elapsed_ms": provider_elapsed_ms,
+                "provider_call": (
+                    dict(self._last_provider_call_trace)
+                    if self._last_provider_call_trace is not None
+                    else None
+                ),
             }
             self.persist_receipt(receipt)
             raise
@@ -580,47 +695,66 @@ class StrategyRecommendationService:
     def _codex_decision(self, prompt: str) -> dict[str, Any]:
         if os.getenv("PYTEST_CURRENT_TEST"):
             raise RuntimeError("external recommendation provider disabled under pytest")
-        planner = self.config.get("machine_planner") if isinstance(self.config.get("machine_planner"), dict) else {}
+        planner = (
+            self.config.get("machine_planner")
+            if isinstance(self.config.get("machine_planner"), dict)
+            else {}
+        )
         command = str(planner.get("command") or "codex")
         model = str(planner.get("model") or "gpt-5.4")
-        timeout = int(
-            self.provider_timeout_seconds
-            if self.provider_timeout_seconds is not None
-            else planner.get("timeout_seconds") or 240
-        )
-        if timeout <= 0:
-            raise RecommendationProviderError(
-                "strategy_recommendation_provider_timeout_invalid",
-                str(timeout),
-            )
-        command_args = shlex.split(command)
-        if not command_args:
-            raise RecommendationProviderError(
-                "strategy_recommendation_provider_command_invalid",
-                "configured command is empty",
-            )
-        executable = command_args[0]
-        executable_path = Path(executable)
-        if executable_path.is_absolute() and not executable_path.exists():
-            raise RecommendationProviderError(
-                "strategy_recommendation_provider_missing",
-                executable,
-            )
-        if executable_path.is_absolute() and not os.access(executable, os.X_OK):
-            raise RecommendationProviderError(
-                "strategy_recommendation_provider_not_executable",
-                executable,
-            )
-        resolved = executable if executable_path.is_absolute() else shutil.which(executable)
-        if not resolved:
-            raise RecommendationProviderError(
-                "strategy_recommendation_provider_missing",
-                executable,
-            )
-        command_args[0] = resolved
-        with tempfile.NamedTemporaryFile(prefix="strategy-recommendation-", suffix=".json", delete=False) as handle:
-            result_path = Path(handle.name)
         try:
+            timeout = int(
+                self.provider_timeout_seconds
+                if self.provider_timeout_seconds is not None
+                else planner.get("timeout_seconds") or 240
+            )
+        except (TypeError, ValueError):
+            timeout = 0
+        trace = _provider_call_trace(deadline_seconds=timeout or None)
+        started_monotonic = time.monotonic()
+        self._last_provider_call_trace = trace
+        result_path: Path | None = None
+        try:
+            resolution_started = time.monotonic()
+            if timeout <= 0:
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_timeout_invalid",
+                    str(timeout),
+                )
+            command_args = shlex.split(command)
+            if not command_args:
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_command_invalid",
+                    "configured command is empty",
+                )
+            executable = command_args[0]
+            executable_path = Path(executable)
+            if executable_path.is_absolute() and not executable_path.exists():
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_missing",
+                    executable,
+                )
+            if executable_path.is_absolute() and not os.access(executable, os.X_OK):
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_not_executable",
+                    executable,
+                )
+            resolved = executable if executable_path.is_absolute() else shutil.which(executable)
+            if not resolved:
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_missing",
+                    executable,
+                )
+            command_args[0] = resolved
+            trace["phase_timings_ms"]["command_resolution"] = round(
+                (time.monotonic() - resolution_started) * 1000
+            )
+            with tempfile.NamedTemporaryFile(
+                prefix="strategy-recommendation-",
+                suffix=".json",
+                delete=False,
+            ) as handle:
+                result_path = Path(handle.name)
             args = [
                 *command_args, "--ask-for-approval", "never", "exec",
                 "--ignore-user-config", "--ephemeral", "--model", model,
@@ -628,6 +762,7 @@ class StrategyRecommendationService:
                 "--output-last-message", str(result_path), "-",
             ]
             env = dict(os.environ)
+            subprocess_started = time.monotonic()
             try:
                 result = subprocess.run(
                     args,
@@ -639,31 +774,115 @@ class StrategyRecommendationService:
                     env=env,
                 )
             except subprocess.TimeoutExpired as exc:
+                trace["phase_timings_ms"]["subprocess"] = round(
+                    (time.monotonic() - subprocess_started) * 1000
+                )
+                _finish_provider_call_trace(
+                    trace,
+                    started_monotonic,
+                    stdout=exc.stdout,
+                    stderr=exc.stderr,
+                    timed_out=True,
+                    partial_output=bool(exc.stdout or exc.stderr),
+                )
+                detail = _bounded_redacted_provider_output(
+                    exc.stderr or exc.stdout or f"{timeout}s"
+                ).strip()
                 raise RecommendationProviderError(
                     "strategy_recommendation_provider_timeout",
-                    f"{timeout}s",
+                    detail[-1000:] or f"{timeout}s",
                 ) from exc
             except OSError as exc:
+                trace["phase_timings_ms"]["subprocess"] = round(
+                    (time.monotonic() - subprocess_started) * 1000
+                )
+                _finish_provider_call_trace(
+                    trace,
+                    started_monotonic,
+                    stderr=str(exc),
+                )
                 raise RecommendationProviderError(
                     "strategy_recommendation_provider_unavailable",
-                    str(exc),
+                    _bounded_redacted_provider_output(str(exc)),
                 ) from exc
+            trace["phase_timings_ms"]["subprocess"] = round(
+                (time.monotonic() - subprocess_started) * 1000
+            )
+            trace["return_code"] = int(result.returncode)
+            trace["stdout"] = _bounded_redacted_provider_output(result.stdout)
+            trace["stderr"] = _bounded_redacted_provider_output(result.stderr)
             if result.returncode != 0:
-                detail = (result.stderr or result.stdout or "unknown recommendation error").strip()
+                _finish_provider_call_trace(
+                    trace,
+                    started_monotonic,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    return_code=int(result.returncode),
+                )
+                detail = _bounded_redacted_provider_output(
+                    result.stderr or result.stdout or "unknown recommendation error"
+                ).strip()
                 raise RecommendationProviderError(
                     "strategy_recommendation_provider_failed",
                     detail[-1000:],
                 )
+            output_started = time.monotonic()
             try:
                 self._last_raw_model_response = result_path.read_text(encoding="utf-8")
-                return _parse_json_object(self._last_raw_model_response)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
+            except OSError as exc:
+                trace["phase_timings_ms"]["output_read"] = round(
+                    (time.monotonic() - output_started) * 1000
+                )
+                _finish_provider_call_trace(
+                    trace,
+                    started_monotonic,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    return_code=int(result.returncode),
+                )
                 raise RecommendationProviderError(
                     "strategy_recommendation_provider_invalid_output",
                     str(exc),
                 ) from exc
+            trace["phase_timings_ms"]["output_read"] = round(
+                (time.monotonic() - output_started) * 1000
+            )
+            parse_started = time.monotonic()
+            try:
+                decision = _parse_json_object(self._last_raw_model_response)
+            except (ValueError, json.JSONDecodeError) as exc:
+                trace["phase_timings_ms"]["parse"] = round(
+                    (time.monotonic() - parse_started) * 1000
+                )
+                _finish_provider_call_trace(
+                    trace,
+                    started_monotonic,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    return_code=int(result.returncode),
+                )
+                raise RecommendationProviderError(
+                    "strategy_recommendation_provider_invalid_output",
+                    str(exc),
+                ) from exc
+            trace["phase_timings_ms"]["parse"] = round(
+                (time.monotonic() - parse_started) * 1000
+            )
+            _finish_provider_call_trace(
+                trace,
+                started_monotonic,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                return_code=int(result.returncode),
+            )
+            return decision
+        except Exception:
+            if trace.get("finished_at") is None:
+                _finish_provider_call_trace(trace, started_monotonic)
+            raise
         finally:
-            result_path.unlink(missing_ok=True)
+            if result_path is not None:
+                result_path.unlink(missing_ok=True)
 
 
 def build_position_first_framework(contexts: dict[str, Any]) -> dict[str, Any]:

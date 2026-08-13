@@ -92,6 +92,30 @@ parsed or promoted: they remain `unknown_blocker`/structural. The legacy
 structural recheck likewise consumes only the typed receipt field plus a valid
 source-bound provider-readiness receipt and executes no AI or control action.
 
+### Boundary path and optional AI enhancement
+
+In `PAPER_CONTINUOUS`, the boundary guarantee is the deterministic
+current-market plus authoritative-Paper-equity rebuild. Every newly produced
+boundary request records `boundary_plan_path=deterministic_rebuild` when that
+path is used. The asynchronously staged AI candidate is an optional
+enhancement only: a valid artifact may be adopted and records
+`boundary_plan_path=optional_ai_enhancement`, but a missing, stale or corrupt
+artifact never calls AI at the boundary and falls back to deterministic
+rebuild. Any explicitly classified provider execution/configuration failure
+(timeout, transport, unavailable, non-zero return, invalid output, missing or
+non-executable command, invalid timeout or auth-not-ready) during the
+pre-generation oneshot returns the typed
+non-blocking result `enhancement_unavailable`; it creates no active plan,
+prepared start, order or position, and the next action remains deterministic
+boundary rebuild. Unlisted exceptions remain fail-closed and alertable.
+
+Every provider evaluation receipt also persists a bounded `output.provider_call`
+trace: `deadline_seconds`, `started_at`, `deadline_at`, `finished_at`,
+`elapsed_ms`, per-phase timings, subprocess `return_code`, and redacted,
+4-KiB-bounded `stdout`/`stderr`. Timeout receipts set `timed_out=true`,
+`return_code=null`, and retain any bounded partial output. No prompt,
+credential or unbounded provider stream is added to this trace.
+
 ### Structural whitelist
 
 | Exact code | Meaning |

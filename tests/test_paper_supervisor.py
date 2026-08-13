@@ -768,6 +768,7 @@ def test_paper_continuity_dca_recovery_records_confirmation_degradation(
 
     assert request["strategy_type"] == "dca"
     assert request["paper_continuity_dca_carry_forward"] is True
+    assert request["boundary_plan_path"] == "deterministic_rebuild"
     events = PaperDegradationEventStore(
         supervisor.output_root
     ).events(CYCLE)

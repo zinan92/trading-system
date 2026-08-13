@@ -98,6 +98,8 @@ _POST_INTENT_UNCERTAINTY_GATES = frozenset(
         "partial_execution_or_cleanup_required",
     }
 )
+BOUNDARY_PLAN_PATH_DETERMINISTIC = "deterministic_rebuild"
+BOUNDARY_PLAN_PATH_OPTIONAL_AI_ENHANCEMENT = "optional_ai_enhancement"
 
 
 class SupervisorAttemptDeadline(Exception):
@@ -2084,6 +2086,11 @@ class PaperSupervisor:
                 recovery_machine_code
             )
             request["deterministic_rebuild_used"] = True
+        if self._paper_continuous and recovery:
+            # The deterministic current-market + authoritative-equity builder
+            # is the continuity guarantee.  AI pre-generation is an optional
+            # enhancement and must never be a boundary dependency.
+            request["boundary_plan_path"] = BOUNDARY_PLAN_PATH_DETERMINISTIC
         if degradation_evidence:
             request.update(degradation_evidence)
         return plan, request
@@ -2277,6 +2284,7 @@ class PaperSupervisor:
         ]
         request["verified_waiting_validation"] = "adopted"
         request["deterministic_rebuild_used"] = False
+        request["boundary_plan_path"] = BOUNDARY_PLAN_PATH_OPTIONAL_AI_ENHANCEMENT
         if strategy_type == "dca":
             dca_event = self._record_degradation(
                 event_id=f"{attempt_id}:dca-confirmation-degraded",
