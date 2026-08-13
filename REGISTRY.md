@@ -13,6 +13,14 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-13)
+- #636 / PR #637 is merged at `main@b7bbbd65fbd902de871766531a2a10a35d060716`.
+  It bounds the next-cycle recommendation prompt to the explicit
+  `strategy-ai-account-context-v1` projection (authoritative account,
+  reconciliation, and open execution identities; no historical fills/trades)
+  and gives the read-only pre-generator its own bounded 60-second provider
+  budget while keeping the Supervisor budget at 25 seconds.  This exact SHA
+  is not yet deployed to Cloud Paper; the first natural due-path run after
+  release remains the acceptance gate.
 - #631 / PR #632 is merged and deployed on Cloud Paper as exact clean
   `main@57959a3389c4be9745bbb18bdb6b4fa831713077`, tree
   `0aabb4660b7b200f5bcc64799996b84169f8967a`.  It repairs the two production
@@ -527,6 +535,13 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Deploy exact `main@b7bbbd65fbd902de871766531a2a10a35d060716` through the
+  existing Paper release/boot/SHA gates.  Then wait for the natural
+  `gridmind-next-cycle-plan.service` due path to create exactly one immutable
+  `verified_waiting` artifact with `provider_call_count=1`, compact-context
+  observability, zero controls/orders/positions, and no OOM.  Do not claim
+  #636 resolved until that cloud evidence exists; the subsequent natural
+  boundary must still prove adopted staged identity and running_proven.
 - Cloud Paper now runs exact `main@9856f83` with #611/#612/#617 OOM
   containment, streaming hashes, calibrated datafeed bound, external failure
   alerts and both isolated canaries verified.  Evidence is in
