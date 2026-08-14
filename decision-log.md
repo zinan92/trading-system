@@ -1,5 +1,37 @@
 # Decision Log
 
+## Keep Park cutover default-off and fail-closed (Issue #665)
+
+Date: 2026-08-14
+
+### Decision
+
+- The Park track declares one Paper execution track and Telegram-only control.
+  Autonomous, Shadow mutation, Feishu control, and live/real-money paths are
+  forbidden for this track.
+- The repository guard is disabled by default and read-only.  Even an explicit
+  pass requires release SHA, boot proof, and every named market/tick/state/
+  reconciliation/fill/risk/Paper/SHA/boot/Supervisor gate.
+- Missing or failed evidence returns typed blockers; the guard never starts or
+  stops a service, calls AI, submits/cancels an order, flattens a position, or
+  changes Cloud state.
+- A passing repository gate is not a claim that the target runtime has been
+  cut over or is customer-ready.  Deployment and natural Paper evidence remain
+  separate release gates.
+
+### Gotchas
+
+- Existing legacy Autonomous/Shadow/Feishu code is retained for historical or
+  other-track use; this Issue prevents it from being silently admitted as Park.
+- `feature_enabled=true` in a test fixture is not production activation.  A
+  later release must supply source-bound runtime evidence and Park's authority.
+
+### Verification
+
+- Focused tests cover default-off blocking, explicit all-gates pass, forbidden
+  path blockers, missing release/boot/safety evidence, and AST import isolation
+  for every Park module.
+
 ## Separate facts and review from strategy execution (Issue #663)
 
 Date: 2026-08-14
