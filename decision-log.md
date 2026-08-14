@@ -1,5 +1,33 @@
 # Decision Log
 
+## Make Park DCA finite and terminal after a boundary touch (Issue #659)
+
+Date: 2026-08-14
+
+### Decision
+
+- Park DCA entries are finite, identity-bound, and loop-disabled.  They require
+  an exact Park confirmation receipt before a consumer may verify them.
+- A trusted/fresh touch or cross of either authorized boundary freezes the
+  remaining entries and emits the identity-bound terminal action plan.
+- The adapter queues one durable Telegram terminal notification.  Duplicate
+  terminal observations return the same action/notification identity.
+- After terminal closure there is no reopen or direction inference path.
+
+### Gotchas
+
+- This adapter projects commands and records the terminal intent; it does not
+  submit/cancel orders or close positions.  A later execution story must verify
+  the action plan and preserve all existing gates.
+- Generic DCA lifecycle code remains unchanged and is not silently reinterpreted
+  as Park ownership.
+
+### Verification
+
+- Focused tests cover finite owned entries, exact confirmation, upper/lower
+  terminal behavior, stale-market blocking, no-reopen semantics, and durable
+  notification idempotency.
+
 ## Require exact Park confirmation for every plan (Issue #657)
 
 Date: 2026-08-14
