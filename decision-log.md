@@ -1,5 +1,36 @@
 # Decision Log
 
+## Separate strategy identity from recording windows (Issue #649)
+
+Date: 2026-08-14
+
+### Decision
+
+- `strategy_session_id` identifies one clean-slate-to-terminal strategy run;
+  `strategy_revision_id` identifies one exact plan.  Neither derives authority
+  from a 12-hour recording window.
+- Beijing 09:00/21:00 windows are append-only fact/package/review slices.  A
+  window transition can append an observation or late amendment while keeping
+  the same strategy session and revision active.
+- The new identity journal is Paper-only and default-off.  It deliberately
+  does not import or write the existing cycle runner, order, position,
+  Supervisor, or rollover state.
+
+### Gotchas
+
+- The legacy runtime still has cycle-bound authority; this Issue does not claim
+  that it has been cut over.  Story 1 supplies the safe identity seam before a
+  later runtime integration ticket.
+- A recording event containing switch/replan/cancel/flatten effects is rejected
+  rather than interpreted as an execution command.
+
+### Verification
+
+- Focused tests cover Beijing boundaries, cross-window identity continuity,
+  append-only late amendments, immutable revision IDs, clean-slate rejection,
+  forbidden recording effects, and byte-for-byte preservation of a legacy
+  runtime file.
+
 ## Lock one Park strategy from clean slate to boundary closure (Issue #647)
 
 Date: 2026-08-14
