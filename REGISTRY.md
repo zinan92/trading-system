@@ -13,6 +13,21 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-14)
+- #668 / PR #670 adds the isolated Park Paper runtime and bounded
+  Telegram+Paper control pass.  Only an exact, unexpired Park confirmation
+  for the current session/revision/plan digest can reach the direct
+  `nautilus_paper` adapter; every command and terminal action carries Park
+  ownership.  A trusted/fresh boundary touch cancels only owned entries,
+  handles only owned exposure, reconciles, closes the session and pauses;
+  09:00/21:00 Beijing recording windows only package/review and never switch,
+  replan, cancel or flatten.  The implementation is merged and tested, but
+  `feature_enabled` remains false and no target Paper/Telegram runtime is
+  claimed running.
+- #667 / PR #669 adds the Telegram Bot long-polling transport, durable cursor,
+  explicit `message_id` receipts, Park proposal router, exact digest
+  confirmation handling, duplicate/conflict audit and single worker lease.
+  It is a pre-execution seam: no broker mutation, deployment, Cloud change,
+  live path, Feishu, Shadow or autonomous start is enabled.
 - #665 adds the default-off, read-only Park cutover/release gate.  Explicit
   enablement still requires one Paper track, Telegram-only control, no
   Autonomous/Shadow/Feishu mutation, exact release SHA and boot proof, and all
