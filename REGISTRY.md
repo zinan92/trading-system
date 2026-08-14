@@ -13,6 +13,12 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-14)
+- #655 adds deterministic Park input normalization and Paper risk planning:
+  Chinese/English DCA/Grid and range/leverage input are canonicalized; trusted
+  fresh market and authoritative Paper equity are mandatory; leverage and
+  maximum-loss caps select the stricter notional constraint; no direction,
+  stop, equity, or authorization is invented.  The planner is pure and does
+  not place orders or mutate runtime/Cloud state.
 - #653 adds the durable Telegram Park control-plane ledger.  It authenticates
   one Park user/chat, persists idempotent inbox updates and outbox messages,
   requires explicit transport receipts, retries bounded failures, dead-letters

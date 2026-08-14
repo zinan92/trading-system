@@ -1,0 +1,14 @@
+{
+  "contract_id": "park-strategy-plan-v1",
+  "provider": "deterministic",
+  "required_authority": ["direction", "strategy_type", "upper_price_boundary", "lower_price_boundary", "maximum_leverage_or_maximum_acceptable_loss"],
+  "market": "trusted_fresh_price_with_source_and_observed_at",
+  "equity": "authoritative_paper_equity_required",
+  "risk": {
+    "maximum_loss_is_hard_constraint": true,
+    "both_caps": "select_stricter_notional_cap",
+    "default_equity": false
+  },
+  "invalidation": "touch_or_cross_authorized_upper_or_lower_boundary",
+  "execution_authorized": false
+}
