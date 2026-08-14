@@ -1,5 +1,36 @@
 # Decision Log
 
+## Separate facts and review from strategy execution (Issue #663)
+
+Date: 2026-08-14
+
+### Decision
+
+- Recording windows are fact/package/review slices bound to the independent
+  strategy session/revision.  They do not own strategy authority.
+- The manifest requires control, plan, orders, fills, positions, exits,
+  Telegram, provider, market/tick, runtime, reconciliation, and actual path
+  categories.  Missing categories are blocked/unknown, never healthy by
+  default.
+- A package may close with an open strategy or positions.  Packaging never
+  cancels, flattens, switches, or replans.
+- Late facts are append-only amendments with a new revision and watermark.
+  Review reports good/bad/next based only on evidence and makes no invented PnL
+  claim.
+
+### Gotchas
+
+- This is a new Recording Track seam.  Existing cycle package/shadow behavior
+  remains until the final cutover story and is not silently reinterpreted.
+- Completeness is intentionally explicit so a missing provider/tick/runtime
+  trace cannot masquerade as a successful 12-hour package.
+
+### Verification
+
+- Focused tests cover cross-window identity continuity, all required categories,
+  open-strategy packaging, incomplete blockers, late amendments/watermarks, and
+  evidence-based review output.
+
 ## Keep Park Grid fixed until a boundary terminal (Issue #661)
 
 Date: 2026-08-14
