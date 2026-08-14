@@ -1,0 +1,10 @@
+{
+  "contract_id": "park-recording-track-v1",
+  "window_timezone": "Asia/Shanghai",
+  "authority": "facts_package_review_only",
+  "required_categories": ["control", "plan", "orders", "fills", "positions", "exits", "telegram", "provider", "market_tick", "runtime", "reconciliation", "execution_path"],
+  "open_strategy_allowed": true,
+  "late_events": "append_only_amendment_with_watermark",
+  "missing_evidence": "blocked_or_unknown_not_healthy",
+  "forbidden": ["strategy_switch", "strategy_replan", "cancel_orders", "flatten_positions"]
+}
