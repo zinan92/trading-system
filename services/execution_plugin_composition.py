@@ -183,6 +183,43 @@ def build_execution_engine_adapter(
     )
 
 
+def build_park_direct_paper_adapter(
+    output_root: Path,
+    *,
+    config: dict[str, Any],
+    nautilus_python: str | Path,
+    preflight_path: str | Path,
+    registry: ExecutionEnginePluginRegistry = EXECUTION_ENGINE_PLUGINS,
+) -> ExecutionEngineAdapter:
+    """Build Park's direct Paper authority without the legacy Shadow gate.
+
+    Park supplies its own source-bound Paper preflight.  This function is
+    deliberately separate from ``build_execution_engine_adapter`` so the
+    existing DualTrack Shadow cutover contract remains unchanged.
+    """
+
+    descriptor = registry.descriptor("nautilus_paper", role="authoritative")
+    _require_restricted_authoritative_policy(descriptor)
+    if descriptor.implementation != NAUTILUS_EXECUTION_IMPLEMENTATION:
+        raise RuntimeError("Park direct authority implementation mismatch")
+    runtime_path = str(nautilus_python or "").strip()
+    if not runtime_path:
+        raise RuntimeError("Park Paper authority requires an isolated runtime path")
+    if not Path(runtime_path).exists():
+        raise RuntimeError("Park Paper authority runtime path is missing")
+    if (config.get("execution_engine") or {}).get("real_money_eligible") is True:
+        raise RuntimeError("Park direct Paper authority is Paper-only")
+    from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+
+    return NautilusExecutionAdapter(
+        Path(output_root),
+        nautilus_python=runtime_path,
+        storage_namespace="nautilus_authoritative",
+        preflight_path=Path(preflight_path),
+        config=dict(config),
+    )
+
+
 def compose_configured_execution_engine(
     output_root: Path,
     *,

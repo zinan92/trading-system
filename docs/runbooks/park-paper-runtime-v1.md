@@ -24,6 +24,34 @@ The deployed Park config must be an approved copy of
 `runtime_mode=paper_only`, `execution_track_count=1`, `control_plane=telegram`,
 `autonomous=false`, `shadow_mutation=false`, and `feishu_control=false`.
 
+The approved copy must also include an explicit `paper_execution` contract:
+
+```json
+{
+  "instrument": {
+    "instrument_id": "XAUUSDT.BINANCE",
+    "symbol": "XAUUSDT",
+    "venue": "BINANCE",
+    "provider": "park_paper_config"
+  },
+  "paper_fee_model": {
+    "mode": "paper_contract",
+    "maker_fee_rate": "0",
+    "taker_fee_rate": "0.000400",
+    "funding_rate": "0",
+    "source": "park_paper_config",
+    "environment": "paper",
+    "real_money_eligible": false
+  }
+}
+```
+
+The runtime writes a short-lived, source-bound
+`park_strategy/paper_preflight_current.json` from this contract. It does not
+read exchange credentials or require the legacy seven-cycle Shadow cutover
+receipt. Missing, stale, dirty-source, digest-mismatched, or real-money
+eligible preflight evidence blocks before any adapter mutation.
+
 Before starting the service, write source-bound release/boot and all ten
 cutover safety-gate receipts to the target output root. Missing or stale
 evidence blocks without attempting an order.

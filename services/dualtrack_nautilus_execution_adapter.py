@@ -21,6 +21,7 @@ from services.dualtrack_config import dualtrack_config
 from services.dualtrack_grid_core import GridLineLifecycle
 from services.dualtrack_shadow_input import build_shadow_input
 from services.journal_store import load_json, write_json
+from services.park_paper_preflight import validate_park_paper_preflight
 from services.risk_port import action_class_for_command, build_paper_safe_action_market_gate
 
 
@@ -1464,6 +1465,19 @@ class NautilusExecutionAdapter:
     def _validate_runtime(self) -> None:
         preflight = load_json(self.preflight_path)
         artifact = preflight[-1] if preflight else {}
+        if artifact.get("schema_version") == "park-paper-preflight-v1":
+            validate_park_paper_preflight(
+                artifact,
+                expected_config_digest=str(self.config.get("park_paper_preflight_config_digest") or ""),
+            )
+            fee_model = artifact.get("fee_model") if isinstance(artifact.get("fee_model"), dict) else {}
+            configured_fees = self.config.get("paper_fee_model") if isinstance(self.config.get("paper_fee_model"), dict) else {}
+            for field in ("maker_fee_rate", "taker_fee_rate"):
+                if configured_fees.get(field) in (None, ""):
+                    raise RuntimeError(f"Park Paper fee contract is missing {field}")
+                if float(configured_fees[field]) != float(fee_model[field]):
+                    raise RuntimeError(f"Park Paper fee contract differs for {field}")
+            return
         if artifact.get("status") != "ready_for_paper_shadow":
             raise RuntimeError("Nautilus instrument preflight is not ready for paper shadow")
         fee_model = artifact.get("fee_model") or {}

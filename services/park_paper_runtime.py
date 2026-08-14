@@ -22,6 +22,7 @@ from services.execution_engine_port import ExecutionEngineAdapter
 from services.park_cutover_guard import evaluate_park_cutover, load_default_config
 from services.park_dca_track import ParkDcaLifecycle
 from services.park_grid_track import ParkGridLifecycle
+from services.park_paper_preflight import ParkPaperPreflightError, build_park_paper_preflight
 from services.park_recording_track import ParkRecordingTrack
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
@@ -980,22 +981,24 @@ def build_park_authoritative_adapter(
     if environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") != "1":
         raise ParkPaperRuntimeError("paper_switch_unapproved", "attended Paper switch approval is required")
     from services.dualtrack_config import dualtrack_config
-    from services.execution_plugin_composition import build_execution_engine_adapter
+    from services.execution_plugin_composition import build_park_direct_paper_adapter
     dualtrack_settings = dualtrack_config()
     configured = dict(dualtrack_settings)
-    configured.update(dict(settings.get("paper_execution") or {}))
+    paper_execution = dict(settings.get("paper_execution") or {})
+    configured.update(paper_execution)
+    try:
+        preflight = build_park_paper_preflight(Path(output_root), settings)
+    except ParkPaperPreflightError as exc:
+        raise ParkPaperRuntimeError(exc.code, str(exc)) from exc
+    configured["paper_fee_model"] = dict(preflight.get("fee_model") or {})
+    configured["park_paper_preflight_config_digest"] = str(preflight.get("config_digest") or "")
 
     try:
-        return build_execution_engine_adapter(
+        return build_park_direct_paper_adapter(
             Path(output_root),
-            engine=engine,
             config=configured,
             nautilus_python=runtime_path,
-            allow_paper_switch=True,
-            allow_shadow_gate_override=(
-                environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE")
-                == "I_UNDERSTAND_NAUTILUS_PAPER_CUTOVER_BYPASSES_7_CYCLE_SHADOW_GATE"
-            ),
+            preflight_path=Path(output_root) / "park_strategy" / "paper_preflight_current.json",
         )
     except Exception as exc:  # noqa: BLE001 - startup is fail closed.
         raise ParkPaperRuntimeError("paper_adapter_unavailable", type(exc).__name__) from exc
