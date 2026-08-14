@@ -50,6 +50,20 @@ def _find_one(text: str, patterns: tuple[str, ...], field: str) -> float | None:
     return _number(values[0], field)
 
 
+def _find_labeled_number(text: str, labels: tuple[str, ...], field: str) -> float | None:
+    """Read an explicitly labelled price in either ``label 1`` or ``1 label`` form."""
+
+    patterns = tuple(
+        pattern
+        for label in labels
+        for pattern in (
+            label + r"\s*(?:位|price)?\s*[:：=]?\s*" + _NUMBER,
+            _NUMBER + r"\s*" + label,
+        )
+    )
+    return _find_one(text, patterns, field)
+
+
 def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     """Normalize explicit Park input without filling authorization gaps."""
 
@@ -112,6 +126,16 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     if max_leverage is None and max_loss is None:
         raise ParkStrategyPlanError("missing_risk_authority", "Park must provide maximum leverage or maximum acceptable loss")
 
+    stop_price = body.get("stop_price")
+    if stop_price is None:
+        stop_price = _find_labeled_number(text, ("止损", "stop(?:_price)?", "stop"), "stop_price")
+    take_profit_price = body.get("take_profit_price")
+    if take_profit_price is None:
+        take_profit_price = _find_labeled_number(
+            text,
+            ("止盈", "take(?:_profit)?(?:_price)?", "tp"),
+            "take_profit_price",
+        )
     result: dict[str, Any] = {
         "schema_version": PARK_PLAN_SCHEMA,
         "direction": direction,
@@ -120,8 +144,8 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "lower_price_boundary": lower_value,
         "maximum_leverage": _number(max_leverage, "maximum_leverage") if max_leverage is not None else None,
         "maximum_acceptable_loss": _number(max_loss, "maximum_acceptable_loss") if max_loss is not None else None,
-        "stop_price": _number(body["stop_price"], "stop_price") if body.get("stop_price") is not None else None,
-        "take_profit_price": _number(body["take_profit_price"], "take_profit_price") if body.get("take_profit_price") is not None else None,
+        "stop_price": _number(stop_price, "stop_price") if stop_price is not None else None,
+        "take_profit_price": _number(take_profit_price, "take_profit_price") if take_profit_price is not None else None,
         "order_count": int(body.get("order_count", 1)),
         "source_text": text or None,
     }
@@ -169,7 +193,33 @@ def build_deterministic_risk_plan(
     lower = _number(normalized.get("lower_price_boundary"), "lower_price_boundary")
     if not lower <= current_price <= upper:
         raise ParkStrategyPlanError("current_price_outside_range", "strategy is already outside its authorized range")
-    adverse_distance = (current_price - lower) if direction == "long" else (upper - current_price)
+    explicit_stop = normalized.get("stop_price")
+    if explicit_stop not in (None, ""):
+        stop_price = _number(explicit_stop, "stop_price")
+        if direction == "long":
+            if stop_price >= current_price:
+                raise ParkStrategyPlanError("invalid_stop_price", "long stop_price must be below current price")
+            adverse_distance = current_price - stop_price
+        else:
+            if stop_price <= current_price:
+                raise ParkStrategyPlanError("invalid_stop_price", "short stop_price must be above current price")
+            adverse_distance = stop_price - current_price
+        risk_boundary = stop_price
+        risk_boundary_source = "explicit_stop_price"
+    else:
+        adverse_distance = (current_price - lower) if direction == "long" else (upper - current_price)
+        risk_boundary = lower if direction == "long" else upper
+        risk_boundary_source = "authorized_price_boundary"
+    explicit_take_profit = normalized.get("take_profit_price")
+    if explicit_take_profit not in (None, ""):
+        take_profit_price = _number(explicit_take_profit, "take_profit_price")
+        if (direction == "long" and take_profit_price <= current_price) or (
+            direction == "short" and take_profit_price >= current_price
+        ):
+            raise ParkStrategyPlanError(
+                "invalid_take_profit_price",
+                f"{direction} take_profit_price must be beyond current price",
+            )
     if adverse_distance <= 0:
         raise ParkStrategyPlanError("boundary_already_invalid", "current price is at the adverse boundary")
     adverse_fraction = round(adverse_distance / current_price, 12)
@@ -194,6 +244,8 @@ def build_deterministic_risk_plan(
         "maximum_notional": max_notional,
         "effective_leverage": round(max_notional / equity, 12),
         "theoretical_max_loss": theoretical_max_loss,
+        "risk_boundary": risk_boundary,
+        "risk_boundary_source": risk_boundary_source,
         "order_count": order_count,
         "per_order_notional": per_order_notional,
         "per_order_quantity": per_order_quantity,

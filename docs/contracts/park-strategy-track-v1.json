@@ -10,8 +10,8 @@
   "feature_flag": {
     "name": "park_strategy_track_v1",
     "enabled_by_default": false,
-    "runtime_wiring_present": false,
-    "enablement_rule": "a_later_issue_must_supply_runtime_wiring_tests_and_a_separate_release_decision"
+    "runtime_wiring_present": true,
+    "enablement_rule": "runtime wiring is implemented and tested; a separate source-bound release decision is still required"
   },
   "strategy_input": {
     "park_must_authorize": [
