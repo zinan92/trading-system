@@ -16,6 +16,20 @@
     "missing_receipt": "failed_not_delivered",
     "terminal_failure": "dead_letter_notify_park"
   },
+  "transport": {
+    "mode": "long_polling_getUpdates",
+    "cursor": "durable_next_offset",
+    "lease": "single_worker",
+    "response_receipt": "result.message_id_required",
+    "feishu_fallback": false
+  },
+  "proposal_router": {
+    "market": "trusted_fresh_only",
+    "equity": "authoritative_paper_only",
+    "clean_slate": "required",
+    "confirmation": "exact_digest_only",
+    "pre_confirmation_execution": false
+  },
   "binding": {
     "required_for_strategy_commands": ["strategy_session_id", "strategy_revision_id"],
     "record_window_id_alone": "insufficient"

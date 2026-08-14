@@ -36,6 +36,13 @@ def _digest(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def update_digest(update: Mapping[str, Any] | None) -> str:
+    """Hash update content for duplicate/conflict detection without storing it."""
+
+    encoded = json.dumps(dict(update or {}), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return _digest(encoded)
+
+
 def _append(path: Path, row: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     line = (json.dumps(dict(row), sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
@@ -110,6 +117,54 @@ class ParkTelegramLedger:
 
     def outbox_rows(self) -> list[dict[str, Any]]:
         return _rows(self.outbox_path)
+
+    def record_rejected_update(
+        self,
+        *,
+        update: Mapping[str, Any] | None,
+        code: str,
+        detail: str = "",
+        received_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Persist a malformed or unauthorized update without granting access.
+
+        Telegram updates are external control-plane input.  A rejected update
+        must remain auditable, but its raw token-like fields must not be copied
+        into the journal.  The stable update id is retained when available so
+        the transport cursor can advance idempotently.
+        """
+
+        body = dict(update or {})
+        raw_update_id = body.get("update_id")
+        try:
+            update_id = int(raw_update_id) if raw_update_id is not None else None
+        except (TypeError, ValueError):
+            update_id = None
+        existing = next(
+            (
+                row
+                for row in self.inbox_rows()
+                if row.get("event") == "inbound_rejected"
+                and row.get("update_id") == update_id
+                and update_id is not None
+            ),
+            None,
+        )
+        if existing:
+            return dict(existing)
+        row = {
+            "schema_version": PARK_TELEGRAM_SCHEMA,
+            "event": "inbound_rejected",
+            "update_id": update_id,
+            "update_digest": update_digest(update),
+            "code": _text(code, "code"),
+            "detail": str(detail)[:240],
+            "received_at": float(received_at if received_at is not None else time.time()),
+            "execution_authorized": False,
+            "next_action": "notify_park_and_wait" if code != "unauthorized_user" else "ignore_and_audit",
+        }
+        _append(self.inbox_path, row)
+        return dict(row)
 
     def _effective_outbox(self) -> dict[str, dict[str, Any]]:
         effective: dict[str, dict[str, Any]] = {}
