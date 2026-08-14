@@ -1,0 +1,10 @@
+{
+  "contract_id": "park-confirmation-v1",
+  "binding": ["proposal_id", "strategy_session_id", "strategy_revision_id", "plan_digest", "risk_digest"],
+  "actor": "Park",
+  "command": "exact_confirm_or_reject_with_plan_digest",
+  "expiry_binding": "proposal_revision_not_record_window",
+  "duplicate": "idempotent",
+  "execution_authorized": "receipt_capability_only_not_start_or_order",
+  "missing_or_stale": "reject_without_mutation"
+}

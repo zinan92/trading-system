@@ -1,5 +1,33 @@
 # Decision Log
 
+## Require exact Park confirmation for every plan (Issue #657)
+
+Date: 2026-08-14
+
+### Decision
+
+- A proposal is bound to one strategy session, exact revision, plan digest,
+  risk digest, and expiry.  The recording window is never its authority key.
+- Only the configured Park identity can send an exact `confirm|确认` or
+  `reject|拒绝` command containing the full plan digest.
+- A confirmed receipt is an immutable capability for a later adapter to verify;
+  it does not start a runtime or submit an order.  Duplicate decisions return
+  the first receipt.
+- Mismatch, stale revision, expiry, incomplete command, or non-Park identity
+  remains rejected with no execution mutation.
+
+### Gotchas
+
+- Exact confirmation does not compensate for a bad plan.  The risk digest and
+  plan digest are both persisted so the later adapter can verify both.
+- The parser intentionally accepts no conversational “yes”; natural-language
+  interpretation belongs to a later controlled parser story.
+
+### Verification
+
+- Focused tests cover exact command syntax, identity/digest/revision/expiry
+  gates, idempotent confirmation, durable rejection, and no-start semantics.
+
 ## Make Park input explicit and risk sizing deterministic (Issue #655)
 
 Date: 2026-08-14
