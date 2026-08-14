@@ -22,6 +22,7 @@ from services.execution_engine_port import ExecutionEngineAdapter
 from services.park_cutover_guard import evaluate_park_cutover, load_default_config
 from services.park_dca_track import ParkDcaLifecycle
 from services.park_grid_track import ParkGridLifecycle
+from services.park_paper_preflight import ParkPaperPreflightError, build_park_paper_preflight
 from services.park_recording_track import ParkRecordingTrack
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
@@ -249,6 +250,13 @@ class ParkPaperRuntime:
                     reconciliation=reconciliation,
                     gate=gate,
                 )
+            self._grant_adapter_mutation(
+                session=session,
+                revision=revision,
+                digest=digest,
+                confirmation=confirmation,
+                gate=gate,
+            )
             try:
                 pre_terminal = self._terminal_reason(plan, current_price)
                 has_prior_entries = any(
@@ -316,6 +324,7 @@ class ParkPaperRuntime:
                 )
                 if terminal.get("status") != "paused":
                     return terminal
+                self._revoke_adapter_mutation()
                 result = {
                     **terminal,
                     "submitted": submitted,
@@ -345,6 +354,7 @@ class ParkPaperRuntime:
                     market_read_ms=market_elapsed_ms,
                     next_action="continue_trusted_fresh_ticks",
                 )
+                self._revoke_adapter_mutation()
             return result
 
     def _submit_entries_if_needed(
@@ -461,8 +471,8 @@ class ParkPaperRuntime:
             "strategy_session_id": session,
             "strategy_revision_id": revision,
             "plan_digest": digest,
-            "symbol": str(market.get("symbol") or (self.config.get("market_data") or {}).get("symbol") or "GOLD"),
-            "instrument_id": str(market.get("instrument_id") or (self.config.get("market_data") or {}).get("symbol") or "GOLD"),
+            "symbol": str(market.get("symbol") or self._paper_instrument_symbol()),
+            "instrument_id": str(market.get("instrument_id") or self._paper_instrument_symbol()),
             "market_timestamp": str(market.get("observed_at") or observed_at),
             "market_source": str(market.get("source") or ""),
             "market_fresh": True,
@@ -680,7 +690,8 @@ class ParkPaperRuntime:
             "strategy_revision_id": revision,
             "plan_digest": digest,
             "source": "park_telegram",
-            "symbol": str(market.get("symbol") or (self.config.get("market_data") or {}).get("symbol") or "GOLD"),
+            "symbol": str(market.get("symbol") or self._paper_instrument_symbol()),
+            "instrument_id": str(market.get("instrument_id") or self._paper_instrument_symbol()),
             "market_timestamp": str(market.get("observed_at") or observed_at),
             "market_source": str(market.get("source") or ""),
             "market_fresh": True,
@@ -734,8 +745,16 @@ class ParkPaperRuntime:
         )
         return evaluate_park_cutover(self.config, safety_evidence=evidence)
 
-    @staticmethod
-    def _market_event(market: Mapping[str, Any], *, cycle_id: str, observed_at: str) -> dict[str, Any]:
+    def _paper_instrument_symbol(self) -> str:
+        paper_execution = self.config.get("paper_execution")
+        instrument = paper_execution.get("instrument") if isinstance(paper_execution, Mapping) else {}
+        return str(
+            (instrument or {}).get("symbol")
+            or (self.config.get("market_data") or {}).get("symbol")
+            or "GOLD"
+        )
+
+    def _market_event(self, market: Mapping[str, Any], *, cycle_id: str, observed_at: str) -> dict[str, Any]:
         price = float(market.get("price"))
         source = str(market.get("source") or "")
         provider = str(market.get("provider") or source)
@@ -754,7 +773,7 @@ class ParkPaperRuntime:
             "is_synthetic": False,
             "source": source,
             "provider": provider,
-            "instrument_id": str(market.get("instrument_id") or market.get("symbol") or "GOLD"),
+            "instrument_id": str(market.get("instrument_id") or market.get("symbol") or self._paper_instrument_symbol()),
             "event_id": _digest({"cycle_id": cycle_id, "ts_event": timestamp, "price": price, "source": source}),
         }
 
@@ -918,6 +937,7 @@ class ParkPaperRuntime:
             _append_jsonl(self.review_path, {"record_window_id": window_id, "review": review, "package": package})
 
     def _blocked(self, code: str, detail: str, **context: Any) -> dict[str, Any]:
+        self._revoke_adapter_mutation()
         row = {
             "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
             "event": "runtime_blocked",
@@ -939,6 +959,34 @@ class ParkPaperRuntime:
             binding=binding,
         )
         return {"schema_version": PARK_PAPER_RUNTIME_SCHEMA, "status": "blocked", **row}
+
+    def _grant_adapter_mutation(
+        self,
+        *,
+        session: str,
+        revision: str,
+        digest: str,
+        confirmation: Mapping[str, Any],
+        gate: Mapping[str, Any],
+    ) -> None:
+        grant = getattr(self.adapter, "grant_park_mutation", None)
+        if not callable(grant):
+            return
+        grant(
+            {
+                "issuer": "ParkPaperRuntime.run_once",
+                "strategy_session_id": session,
+                "strategy_revision_id": revision,
+                "plan_digest": digest,
+                "park_confirmation_digest": str(confirmation.get("plan_digest") or ""),
+                "cutover_status": str(gate.get("status") or ""),
+            }
+        )
+
+    def _revoke_adapter_mutation(self) -> None:
+        revoke = getattr(self.adapter, "revoke_park_mutation", None)
+        if callable(revoke):
+            revoke()
 
     @staticmethod
     def _result(status: str, **payload: Any) -> dict[str, Any]:
@@ -980,22 +1028,25 @@ def build_park_authoritative_adapter(
     if environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") != "1":
         raise ParkPaperRuntimeError("paper_switch_unapproved", "attended Paper switch approval is required")
     from services.dualtrack_config import dualtrack_config
-    from services.execution_plugin_composition import build_execution_engine_adapter
+    from services.execution_plugin_composition import build_park_direct_paper_adapter
     dualtrack_settings = dualtrack_config()
     configured = dict(dualtrack_settings)
-    configured.update(dict(settings.get("paper_execution") or {}))
+    paper_execution = dict(settings.get("paper_execution") or {})
+    configured.update(paper_execution)
+    try:
+        preflight = build_park_paper_preflight(Path(output_root), settings)
+    except ParkPaperPreflightError as exc:
+        raise ParkPaperRuntimeError(exc.code, str(exc)) from exc
+    configured["paper_fee_model"] = dict(preflight.get("fee_model") or {})
+    configured["park_paper_preflight_config_digest"] = str(preflight.get("config_digest") or "")
 
     try:
-        return build_execution_engine_adapter(
+        return build_park_direct_paper_adapter(
             Path(output_root),
-            engine=engine,
             config=configured,
             nautilus_python=runtime_path,
-            allow_paper_switch=True,
-            allow_shadow_gate_override=(
-                environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE")
-                == "I_UNDERSTAND_NAUTILUS_PAPER_CUTOVER_BYPASSES_7_CYCLE_SHADOW_GATE"
-            ),
+            preflight_path=Path(output_root) / "park_strategy" / "paper_preflight_current.json",
+            environ=environment,
         )
     except Exception as exc:  # noqa: BLE001 - startup is fail closed.
         raise ParkPaperRuntimeError("paper_adapter_unavailable", type(exc).__name__) from exc

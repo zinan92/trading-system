@@ -18,6 +18,8 @@ from services.execution_engine_port import (
 )
 from services.journal_store import load_json
 from services.legacy_paper_execution_adapter import LegacyPaperExecutionAdapter
+from services.park_paper_mutation_gate import ParkPaperMutationGate
+from services.park_paper_preflight import ParkPaperPreflightError, validate_park_paper_preflight
 
 
 NAUTILUS_PAPER_GATE_OVERRIDE_ACKNOWLEDGEMENT = (
@@ -180,6 +182,58 @@ def build_execution_engine_adapter(
             role="authoritative",
             runtime_path=nautilus_python,
         ),
+    )
+
+
+def build_park_direct_paper_adapter(
+    output_root: Path,
+    *,
+    config: dict[str, Any],
+    nautilus_python: str | Path,
+    preflight_path: str | Path,
+    environ: dict[str, str] | None = None,
+    registry: ExecutionEnginePluginRegistry = EXECUTION_ENGINE_PLUGINS,
+) -> ExecutionEngineAdapter:
+    """Build Park's direct Paper authority without the legacy Shadow gate.
+
+    Park supplies its own source-bound Paper preflight.  This function is
+    deliberately separate from ``build_execution_engine_adapter`` so the
+    existing DualTrack Shadow cutover contract remains unchanged.
+    """
+
+    descriptor = registry.descriptor("nautilus_paper", role="authoritative")
+    _require_restricted_authoritative_policy(descriptor)
+    if descriptor.implementation != NAUTILUS_EXECUTION_IMPLEMENTATION:
+        raise RuntimeError("Park direct authority implementation mismatch")
+    runtime_path = str(nautilus_python or "").strip()
+    if not runtime_path:
+        raise RuntimeError("Park Paper authority requires an isolated runtime path")
+    if not Path(runtime_path).exists():
+        raise RuntimeError("Park Paper authority runtime path is missing")
+    environment = dict(os.environ if environ is None else environ)
+    if environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") != "1":
+        raise RuntimeError("Park Paper authority requires attended approval")
+    if (config.get("execution_engine") or {}).get("real_money_eligible") is not False:
+        raise RuntimeError("Park direct Paper authority is Paper-only")
+    preflight_rows = load_json(Path(preflight_path))
+    preflight = preflight_rows[-1] if preflight_rows and isinstance(preflight_rows[-1], dict) else {}
+    try:
+        validate_park_paper_preflight(
+            preflight,
+            expected_config_digest=str(config.get("park_paper_preflight_config_digest") or ""),
+        )
+    except ParkPaperPreflightError as exc:
+        raise RuntimeError(f"Park Paper preflight is not admissible: {exc.code}") from exc
+    from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+
+    mutation_gate = ParkPaperMutationGate()
+    return NautilusExecutionAdapter(
+        Path(output_root),
+        nautilus_python=runtime_path,
+        storage_namespace="nautilus_authoritative",
+        preflight_path=Path(preflight_path),
+        mutation_gate=mutation_gate,
+        config=dict(config),
     )
 
 

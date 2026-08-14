@@ -3,6 +3,15 @@
   "execution_track": "park",
   "paper_only": true,
   "authoritative_adapter": "nautilus_paper_direct",
+  "paper_preflight": {
+    "schema": "park-paper-preflight-v1",
+    "required": true,
+    "source_bound": true,
+    "credential_free": true,
+    "fee_mode": "paper_contract",
+    "instrument_and_fee_fields_must_be_explicit": true,
+    "legacy_shadow_cutover_receipt": "not_required"
+  },
   "strategy_identity": ["strategy_session_id", "strategy_revision_id", "plan_digest"],
   "recording_window": {
     "timezone": "Asia/Shanghai",
