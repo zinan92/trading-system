@@ -189,6 +189,7 @@ def build_park_direct_paper_adapter(
     config: dict[str, Any],
     nautilus_python: str | Path,
     preflight_path: str | Path,
+    environ: dict[str, str] | None = None,
     registry: ExecutionEnginePluginRegistry = EXECUTION_ENGINE_PLUGINS,
 ) -> ExecutionEngineAdapter:
     """Build Park's direct Paper authority without the legacy Shadow gate.
@@ -207,6 +208,9 @@ def build_park_direct_paper_adapter(
         raise RuntimeError("Park Paper authority requires an isolated runtime path")
     if not Path(runtime_path).exists():
         raise RuntimeError("Park Paper authority runtime path is missing")
+    environment = dict(os.environ if environ is None else environ)
+    if environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") != "1":
+        raise RuntimeError("Park Paper authority requires attended approval")
     if (config.get("execution_engine") or {}).get("real_money_eligible") is True:
         raise RuntimeError("Park direct Paper authority is Paper-only")
     from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter

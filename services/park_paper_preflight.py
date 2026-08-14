@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -72,6 +73,13 @@ def build_park_paper_preflight(
     for field in ("maker_fee_rate", "taker_fee_rate", "funding_rate"):
         if fee_payload.get(field) in (None, ""):
             blockers.append(f"paper_fee_{field}_missing")
+        else:
+            try:
+                value = Decimal(str(fee_payload.get(field)))
+                if not value.is_finite() or (field != "funding_rate" and value < 0):
+                    blockers.append(f"paper_fee_{field}_invalid")
+            except (InvalidOperation, ValueError):
+                blockers.append(f"paper_fee_{field}_invalid")
     if fee_payload.get("real_money_eligible") is not False:
         blockers.append("paper_fee_real_money_forbidden")
     if str(fee_payload.get("source") or "") != "park_paper_config":
@@ -93,6 +101,9 @@ def build_park_paper_preflight(
     fee_payload.setdefault("observed_at", observed_at.isoformat())
     fee_payload.setdefault("funding_time", observed_at.isoformat())
     fee_payload["real_money_eligible"] = False
+    for field in ("funding_time", "observed_at"):
+        if fee_payload.get(field) in (None, ""):
+            blockers.append(f"paper_fee_{field}_missing")
     config_digest = paper_execution_config_digest(config)
     artifact: dict[str, Any] = {
         "schema_version": PARK_PAPER_PREFLIGHT_SCHEMA,

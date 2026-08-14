@@ -999,6 +999,7 @@ def build_park_authoritative_adapter(
             config=configured,
             nautilus_python=runtime_path,
             preflight_path=Path(output_root) / "park_strategy" / "paper_preflight_current.json",
+            environ=environment,
         )
     except Exception as exc:  # noqa: BLE001 - startup is fail closed.
         raise ParkPaperRuntimeError("paper_adapter_unavailable", type(exc).__name__) from exc

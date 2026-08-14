@@ -81,6 +81,11 @@ def test_missing_or_real_money_fee_contract_blocks(tmp_path: Path, monkeypatch: 
     with pytest.raises(ParkPaperPreflightError, match="paper_fee_real_money_forbidden"):
         build_park_paper_preflight(tmp_path / "real-money", real_money)
 
+    invalid_rate = _config()
+    invalid_rate["paper_execution"]["paper_fee_model"]["taker_fee_rate"] = "not-a-rate"
+    with pytest.raises(ParkPaperPreflightError, match="paper_fee_taker_fee_rate_invalid"):
+        build_park_paper_preflight(tmp_path / "invalid-rate", invalid_rate)
+
 
 def test_preflight_rejects_source_digest_and_expiry_mismatch(
     tmp_path: Path,
@@ -124,8 +129,25 @@ def test_direct_park_factory_does_not_consult_legacy_shadow_gate(
         config={"execution_engine": {"real_money_eligible": False}},
         nautilus_python=__import__("sys").executable,
         preflight_path=tmp_path / "output" / "park_strategy" / "paper_preflight_current.json",
+        environ={"TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED": "1"},
     )
 
     assert adapter.name == "nautilus_paper"
     assert adapter.kwargs["storage_namespace"] == "nautilus_authoritative"
     assert not (tmp_path / "output" / "dualtrack" / "cutover" / "shadow_gate_current.json").exists()
+
+
+def test_direct_park_factory_requires_attended_paper_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.execution_plugin_composition import build_park_direct_paper_adapter
+
+    with pytest.raises(RuntimeError, match="attended approval"):
+        build_park_direct_paper_adapter(
+            tmp_path / "output",
+            config={"execution_engine": {"real_money_eligible": False}},
+            nautilus_python=__import__("sys").executable,
+            preflight_path=tmp_path / "output" / "park_strategy" / "paper_preflight_current.json",
+            environ={},
+        )
