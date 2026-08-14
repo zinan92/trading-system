@@ -1,0 +1,9 @@
+{
+  "contract_id": "park-dca-lifecycle-v1",
+  "entry_mode": "finite_idempotent_owned_commands",
+  "loop_enabled": false,
+  "terminal_trigger": "trusted_fresh_touch_or_cross_either_boundary",
+  "terminal_actions": ["freeze_new_entries", "cancel_remaining_strategy_entries", "close_all_strategy_owned_positions", "reconcile", "persist_closure", "notify_park", "enter_paused"],
+  "after_terminal": "no_reopen_or_direction_inference",
+  "confirmation": "exact_plan_receipt_required"
+}
