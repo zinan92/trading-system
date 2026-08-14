@@ -200,6 +200,8 @@ def build_deterministic_risk_plan(
     }
     plan = {
         "schema_version": PARK_PLAN_SCHEMA,
+        "strategy_session_id": str(normalized.get("strategy_session_id") or "").strip() or None,
+        "strategy_revision_id": str(normalized.get("strategy_revision_id") or "").strip() or None,
         "normalized_input": dict(normalized),
         "market": {"price": current_price, "source": source, "observed_at": observed_at},
         "risk": risk,
