@@ -82,6 +82,10 @@ The runtime writes a short-lived, source-bound
 read exchange credentials or require the legacy seven-cycle Shadow cutover
 receipt. Missing, stale, dirty-source, digest-mismatched, or real-money
 eligible preflight evidence blocks before any adapter mutation.
+The direct adapter is also locked behind an opaque capability minted by the
+Park runtime only after exact confirmation and the ten cutover gates pass;
+caller-supplied strings/mappings, stale session/revision identities, and
+manual Park adapter construction fail closed.
 
 Before starting the service, write source-bound release/boot and all ten
 cutover safety-gate receipts to the target output root. Missing or stale

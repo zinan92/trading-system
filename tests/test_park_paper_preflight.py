@@ -163,14 +163,17 @@ def test_direct_park_factory_does_not_consult_legacy_shadow_gate(
     )
     adapter = build_park_direct_paper_adapter(
         tmp_path / "output",
-        config={"execution_engine": {"real_money_eligible": False}},
+        config={
+            "execution_engine": {"real_money_eligible": False},
+            "park_paper_preflight_config_digest": "sha256:" + "c" * 64,
+        },
         nautilus_python=__import__("sys").executable,
         preflight_path=tmp_path / "output" / "park_strategy" / "paper_preflight_current.json",
         environ={"TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED": "1"},
     )
 
-    assert adapter.name == "nautilus_paper"
-    assert adapter.kwargs["storage_namespace"] == "nautilus_authoritative"
+    assert adapter.adapter.name == "nautilus_paper"
+    assert adapter.adapter.kwargs["storage_namespace"] == "nautilus_authoritative"
     assert not (tmp_path / "output" / "dualtrack" / "cutover" / "shadow_gate_current.json").exists()
 
 
@@ -200,7 +203,10 @@ def test_direct_factory_rejects_missing_preflight(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="preflight"):
         build_park_direct_paper_adapter(
             tmp_path / "output",
-            config={"execution_engine": {"real_money_eligible": False}},
+            config={
+                "execution_engine": {"real_money_eligible": False},
+                "park_paper_preflight_config_digest": "sha256:" + "c" * 64,
+            },
             nautilus_python=__import__("sys").executable,
             preflight_path=tmp_path / "missing.json",
             environ={"TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED": "1"},
@@ -258,22 +264,111 @@ def test_nautilus_replay_scrubs_host_credentials(
 
 
 def test_park_mutation_gate_is_locked_until_runtime_admission() -> None:
-    from services.park_paper_mutation_gate import ParkPaperMutationGate
+    from services.park_paper_mutation_gate import _mint_park_paper_capability, _new_park_paper_mutation_gate
 
-    gate = ParkPaperMutationGate()
+    gate = _new_park_paper_mutation_gate()
     with pytest.raises(RuntimeError, match="requires runtime admission"):
         gate.require()
-    gate.grant(
-        {
-            "issuer": "ParkPaperRuntime.run_once",
-            "strategy_session_id": "session-1",
-            "strategy_revision_id": "revision-1",
-            "plan_digest": "sha256:" + "a" * 64,
-            "park_confirmation_digest": "sha256:" + "a" * 64,
-            "cutover_status": "pass",
-        }
+    gate._activate(
+        _mint_park_paper_capability(
+            {
+                "issuer": "ParkPaperRuntime.run_once",
+                "cycle_id": "park-session-1",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "plan_digest": "sha256:" + "a" * 64,
+                "park_confirmation_digest": "sha256:" + "a" * 64,
+                "cutover_status": "pass",
+            }
+        )
     )
     gate.require()
     gate.revoke()
     with pytest.raises(RuntimeError, match="requires runtime admission"):
         gate.require()
+
+
+def test_manual_park_adapter_construction_requires_a_mutation_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+
+    monkeypatch.setattr(
+        "services.park_paper_preflight.current_source_attestation",
+        lambda repo_root: _attestation(),
+    )
+    config = _config()
+    artifact = build_park_paper_preflight(tmp_path / "output", config)
+    preflight_path = tmp_path / "output" / "park_strategy" / "paper_preflight_current.json"
+    adapter_config = {
+        "paper_fee_model": dict(config["paper_execution"]["paper_fee_model"]),
+        "park_paper_preflight_config_digest": artifact["config_digest"],
+    }
+    with pytest.raises(RuntimeError, match="runtime-owned mutation gate"):
+        NautilusExecutionAdapter(
+            tmp_path / "output",
+            nautilus_python=sys.executable,
+            storage_namespace="nautilus_authoritative",
+            preflight_path=preflight_path,
+            replay_executor=lambda *_args: {},
+            config=adapter_config,
+        )
+
+
+def test_mutation_rejects_stale_cycle_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
+    from services.park_paper_mutation_gate import _mint_park_paper_capability, _new_park_paper_mutation_gate
+
+    monkeypatch.setattr(
+        "services.park_paper_preflight.current_source_attestation",
+        lambda repo_root: _attestation(),
+    )
+    config = _config()
+    output = tmp_path / "output"
+    artifact = build_park_paper_preflight(output, config)
+    gate = _new_park_paper_mutation_gate()
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=sys.executable,
+        storage_namespace="nautilus_authoritative",
+        preflight_path=output / "park_strategy" / "paper_preflight_current.json",
+        replay_executor=lambda *_args: {},
+        mutation_gate=gate,
+        config={
+            "paper_fee_model": dict(config["paper_execution"]["paper_fee_model"]),
+            "park_paper_preflight_config_digest": artifact["config_digest"],
+        },
+    )
+    gate._activate(
+        _mint_park_paper_capability(
+            {
+                "issuer": "ParkPaperRuntime.run_once",
+                "cycle_id": "park-session-1",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "plan_digest": "sha256:" + "d" * 64,
+                "park_confirmation_digest": "sha256:" + "d" * 64,
+                "cutover_status": "pass",
+            }
+        )
+    )
+    with pytest.raises(RuntimeError, match="cycle does not match"):
+        adapter.process_market_event(
+            {
+                "cycle_id": "park-stale-session",
+                "ts_event": "2026-08-14T10:00:00+00:00",
+                "price": 4300.0,
+                "open": 4300.0,
+                "high": 4300.0,
+                "low": 4300.0,
+                "fresh": True,
+                "is_synthetic": False,
+                "source": "paper-validation",
+                "provider": "paper-validation",
+                "instrument_id": "XAUUSDT",
+            }
+        )

@@ -49,15 +49,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
         try:
-            adapter = build_park_authoritative_adapter(output_root, config=config)
+            binding = build_park_authoritative_adapter(output_root, config=config)
             evidence = _latest(output_root / "park_strategy" / "safety_evidence.json")
             execution = ParkPaperRuntime(
                 output_root,
-                adapter=adapter,
+                adapter=binding.adapter,
                 park_user_id=args.park_user_id,
                 chat_id=args.chat_id,
                 config=config,
                 safety_evidence_reader=lambda: evidence,
+                mutation_authorizer=binding.authorize,
+                mutation_revoker=binding.revoke,
             ).run_once()
         except ParkPaperRuntimeError as exc:
             execution = {

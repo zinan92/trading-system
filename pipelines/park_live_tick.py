@@ -45,15 +45,17 @@ def main(argv: list[str] | None = None) -> int:
     output_root = Path(args.output_root)
     try:
         config = _load_config(args.park_config)
-        adapter = build_park_authoritative_adapter(output_root, config=config)
+        binding = build_park_authoritative_adapter(output_root, config=config)
         evidence = _latest(output_root / "park_strategy" / "safety_evidence.json")
         runtime = ParkPaperRuntime(
             output_root,
-            adapter=adapter,
+            adapter=binding.adapter,
             park_user_id=args.park_user_id,
             chat_id=args.chat_id,
             config=config,
             safety_evidence_reader=lambda: evidence,
+            mutation_authorizer=binding.authorize,
+            mutation_revoker=binding.revoke,
         )
         result = runtime.run_once()
     except (ParkPaperRuntimeError, OSError, ValueError, json.JSONDecodeError) as exc:

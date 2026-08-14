@@ -63,12 +63,16 @@ class NautilusExecutionAdapter:
         self.defer_replay = bool(defer_replay)
         self.mutation_gate = mutation_gate
         self.config = dict(config or dualtrack_config())
+        preflight_rows = load_json(self.preflight_path)
+        latest_preflight = preflight_rows[-1] if preflight_rows and isinstance(preflight_rows[-1], dict) else {}
+        if latest_preflight.get("schema_version") == "park-paper-preflight-v1" and mutation_gate is None:
+            raise RuntimeError("Park Paper adapter requires a runtime-owned mutation gate")
         self._validate_runtime()
 
     def submit_order(self, command: dict[str, Any]) -> dict[str, Any]:
-        self._require_mutation_authority()
         normalized = _canonical_command(self._prepare_command(command))
         cycle_id = normalized["cycle_id"]
+        self._require_mutation_authority(cycle_id=cycle_id, command=normalized["command"])
         path = self._commands_path(cycle_id)
         rows = load_json(path)
         command_id = normalized["command_id"]
@@ -346,7 +350,7 @@ class NautilusExecutionAdapter:
         ts: str | None = None,
         reason: str = "",
     ) -> dict[str, Any]:
-        self._require_mutation_authority()
+        self._require_mutation_authority(cycle_id=cycle_id, strategy_plan_id=strategy_plan_id)
         requested_ids = {str(value) for value in (order_ids or []) if str(value)}
         rows = load_json(self._commands_path(cycle_id))
         accepted_ids = {
@@ -378,6 +382,11 @@ class NautilusExecutionAdapter:
         existing_ids = {str(row.get("command_id") or "") for row in rows}
         for source_row, match_id in candidates:
             source_command = dict(source_row.get("command") or {})
+            self._require_mutation_authority(
+                cycle_id=cycle_id,
+                command=source_command,
+                strategy_plan_id=strategy_plan_id,
+            )
             target_command_id = str(source_row.get("command_id") or "")
             cancel_source_id = f"nautilus-cancel:{target_command_id}:{timestamp}:{reason}"
             cancel_payload = {
@@ -415,13 +424,13 @@ class NautilusExecutionAdapter:
         }
 
     def process_market_event(self, event: dict[str, Any]) -> dict[str, Any]:
-        self._require_mutation_authority()
         normalized = canonical_market_event(event)
         if not normalized.get("provider"):
             raise ValueError("Nautilus market event provider is required")
         if not normalized.get("instrument_id"):
             raise ValueError("Nautilus market event instrument_id is required")
         cycle_id = normalized["cycle_id"]
+        self._require_mutation_authority(cycle_id=cycle_id)
         path = self._events_path(cycle_id)
         rows = load_json(path)
         event_id = normalized["event_id"]
@@ -454,7 +463,6 @@ class NautilusExecutionAdapter:
     ) -> dict[str, Any]:
         """Durably append one ordered Paper batch and flush it exactly once."""
 
-        self._require_mutation_authority()
         if not events:
             raise ValueError("Nautilus market event batch is empty")
         normalized_events = [canonical_market_event(event) for event in events]
@@ -465,6 +473,7 @@ class NautilusExecutionAdapter:
         if len(cycle_ids) != 1 or "" in cycle_ids:
             raise ValueError("Nautilus market event batch mixes cycles")
         cycle_id = next(iter(cycle_ids))
+        self._require_mutation_authority(cycle_id=cycle_id)
         normalized_events.sort(key=_market_event_sort_key)
         event_ids = [
             str(event.get("event_id") or "")
@@ -577,7 +586,7 @@ class NautilusExecutionAdapter:
         return dict(max(rows, key=_market_event_sort_key))
 
     def flush(self, cycle_id: str) -> dict[str, Any]:
-        self._require_mutation_authority()
+        self._require_mutation_authority(cycle_id=cycle_id)
         return self._flush(cycle_id, reject_pending_market_events=False)
 
     def flush_commands(self, cycle_id: str) -> dict[str, Any]:
@@ -589,21 +598,22 @@ class NautilusExecutionAdapter:
         remains pending for the normal market-event path.
         """
 
-        self._require_mutation_authority()
+        self._require_mutation_authority(cycle_id=cycle_id)
         return self._flush(cycle_id, reject_pending_market_events=True)
 
-    def grant_park_mutation(self, receipt: dict[str, Any]) -> None:
-        if self.mutation_gate is None:
-            raise RuntimeError("Park adapter mutation gate is missing")
-        self.mutation_gate.grant(receipt)
-
-    def revoke_park_mutation(self) -> None:
+    def _require_mutation_authority(
+        self,
+        *,
+        cycle_id: str | None = None,
+        command: dict[str, Any] | None = None,
+        strategy_plan_id: str | None = None,
+    ) -> None:
         if self.mutation_gate is not None:
-            self.mutation_gate.revoke()
-
-    def _require_mutation_authority(self) -> None:
-        if self.mutation_gate is not None:
-            self.mutation_gate.require()
+            self.mutation_gate.require(
+                cycle_id=cycle_id,
+                command=command,
+                strategy_plan_id=strategy_plan_id,
+            )
 
     def _flush(
         self,

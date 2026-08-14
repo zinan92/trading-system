@@ -24,6 +24,13 @@
     "exact_digest": true,
     "pre_confirmation_mutations": false
   },
+  "mutation_authority": {
+    "runtime_capability": "opaque_runtime_minted",
+    "caller_supplied_strings_or_mappings": false,
+    "command_identity_binding": ["strategy_session_id", "strategy_revision_id", "plan_digest"],
+    "manual_adapter_construction": "fail_closed",
+    "missing_capability": "fail_closed"
+  },
   "boundary_invalidation": {
     "trigger": "touch_or_cross_upper_or_lower_boundary",
     "actions": ["freeze_new_entries", "cancel_owned_unfilled_entries", "close_owned_positions", "reconcile", "persist_closure", "pause", "notify_park"],
