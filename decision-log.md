@@ -1,5 +1,34 @@
 # Decision Log
 
+## Make Park ownership immutable and terminal actions idempotent (Issue #651)
+
+Date: 2026-08-14
+
+### Decision
+
+- Park artifacts are owned by the exact pair
+  `strategy_session_id`/`strategy_revision_id`; missing or mismatched ownership
+  is a structural blocker.
+- A clean-slate admission is a pure decision requiring healthy reconciliation,
+  no positions/orders, no unresolved runtime, and no pending terminal action.
+- An active revision cannot be reversed, edited, replaced, or re-confirmed.
+- A trusted/fresh upper or lower boundary creates one identity-bound terminal
+  action plan.  Replays return the same plan and cannot repeat mutations.
+- Structural blockers freeze new exposure and preserve safe protection; they do
+  not themselves authorize flattening.
+
+### Gotchas
+
+- This Issue emits a plan, not an execution.  The broker adapter must consume
+  only a verified plan in a later story and retain all existing safety gates.
+- The old cycle runtime remains untouched until the explicit cutover story.
+
+### Verification
+
+- Focused tests cover clean-slate blockers, exact ownership, immutable changes,
+  trusted/fresh boundary requirements, action ordering/idempotency, and the
+  structural no-flatten rule.
+
 ## Separate strategy identity from recording windows (Issue #649)
 
 Date: 2026-08-14

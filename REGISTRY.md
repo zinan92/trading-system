@@ -13,6 +13,11 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-14)
+- #651 adds deterministic Park ownership and lifecycle planning on top of the
+  independent session identity.  Clean-slate admission, exact order/fill/
+  position ownership, immutable active revisions, idempotent trusted-boundary
+  terminal action plans, and structural no-flatten blockers are now explicit;
+  the module emits plans only and does not call a broker or alter legacy state.
 - #649 adds the default-off Park Strategy identity layer: immutable
   `strategy_session_id`/`strategy_revision_id` remain active across independent
   Beijing 09:00/21:00 recording windows, whose append-only amendments have no
