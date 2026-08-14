@@ -13,6 +13,12 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-14)
+- #653 adds the durable Telegram Park control-plane ledger.  It authenticates
+  one Park user/chat, persists idempotent inbox updates and outbox messages,
+  requires explicit transport receipts, retries bounded failures, dead-letters
+  terminal delivery failures, and rejects stale strategy bindings.  The ledger
+  grants no execution authority and has no network, Feishu, order, position,
+  deployment, or Cloud side effects.
 - #651 adds deterministic Park ownership and lifecycle planning on top of the
   independent session identity.  Clean-slate admission, exact order/fill/
   position ownership, immutable active revisions, idempotent trusted-boundary

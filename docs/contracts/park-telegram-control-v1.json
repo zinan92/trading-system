@@ -1,0 +1,24 @@
+{
+  "contract_id": "park-telegram-control-v1",
+  "control_plane": "telegram",
+  "authority": "Park",
+  "paper_only": true,
+  "execution_authorized_by_ledger": false,
+  "inbox": {
+    "identity": ["park_user_id", "chat_id"],
+    "dedupe_key": "update_id",
+    "stale_binding": "reject_without_effect"
+  },
+  "outbox": {
+    "persist_before_send": true,
+    "dedupe_key": "idempotency_key",
+    "success_requires": "explicit_transport_message_id",
+    "missing_receipt": "failed_not_delivered",
+    "terminal_failure": "dead_letter_notify_park"
+  },
+  "binding": {
+    "required_for_strategy_commands": ["strategy_session_id", "strategy_revision_id"],
+    "record_window_id_alone": "insufficient"
+  },
+  "forbidden": ["automatic_authorization", "feishu_fallback", "live_execution"]
+}
