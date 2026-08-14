@@ -1,0 +1,8 @@
+{
+  "contract_id": "park-grid-lifecycle-v1",
+  "geometry": "deterministic_fixed_levels_inside_explicit_range",
+  "in_range": "no_reassessment_no_direction_change",
+  "boundary": "trusted_fresh_touch_or_cross_terminal",
+  "geometry_change": "proposal_only_new_clean_slate_revision_and_confirmation",
+  "after_terminal": "no_reopen_or_inference"
+}

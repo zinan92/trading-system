@@ -13,6 +13,11 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-14)
+- #661 adds the Park Grid fixed-range lifecycle.  Levels are deterministic,
+  identity-bound and unchanged while price remains inside the authorized range;
+  trusted/fresh boundary touch terminates once and notifies Park.  Geometry or
+  direction changes are proposal-only and require a new clean-slate revision
+  and confirmation; no autonomous replan or broker/runtime mutation is added.
 - #659 adds the Park DCA lifecycle adapter.  Finite DCA entries carry exact
   session/revision/plan ownership and require the exact confirmation receipt;
   trusted/fresh touch of either authorized boundary yields one idempotent

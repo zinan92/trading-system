@@ -1,5 +1,33 @@
 # Decision Log
 
+## Keep Park Grid fixed until a boundary terminal (Issue #661)
+
+Date: 2026-08-14
+
+### Decision
+
+- Grid levels are generated deterministically inside Park's explicit upper and
+  lower boundaries and remain immutable while the mark is in range.
+- A trusted/fresh touch or cross of either boundary uses the same terminal
+  action plan and one idempotent Park notification; it never silently reopens,
+  reverses, or changes geometry.
+- A geometry or direction change is a proposal only.  It requires a new clean
+  slate, strategy revision, risk plan, and exact confirmation.
+- Stale/untrusted market data cannot trigger re-evaluation or closure.
+
+### Gotchas
+
+- “Reassessment” in this track is not automatic strategy mutation.  It is an
+  explicit proposal that leaves the active strategy unchanged.
+- Generic Grid code and existing AI/Shadow paths remain outside this adapter
+  until the final cutover story.
+
+### Verification
+
+- Focused tests cover deterministic in-range levels, immutable geometry,
+  proposal-only changes, both-boundary terminal behavior, stale-market blocking,
+  exact confirmation, and notification idempotency.
+
 ## Make Park DCA finite and terminal after a boundary touch (Issue #659)
 
 Date: 2026-08-14
