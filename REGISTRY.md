@@ -13,6 +13,15 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-14)
+- #672 / PR #673 and #674 / PR #675 complete the attended local Park Paper
+  handoff on exact `main@4851718746df63481ce59ea351cbd006f0917eb8`.  The
+  local `com.wendy.trading-orchestrator.park-paper-control` launchd job is
+  loaded with a 60-second poll interval and the latest source-bound
+  predeploy, boot, and Park preflight receipts are `pass` /
+  `ready_for_park_paper`; the Telegram worker safely rejected an incomplete
+  `/start` with zero orders and zero positions.  This is Paper-only and
+  local: no live path, exchange credential, Cloud deployment, Feishu, Shadow,
+  or autonomous strategy path is enabled.
 - #668 / PR #670 adds the isolated Park Paper runtime and bounded
   Telegram+Paper control pass.  Only an exact, unexpired Park confirmation
   for the current session/revision/plan digest can reach the direct
@@ -20,9 +29,9 @@
   ownership.  A trusted/fresh boundary touch cancels only owned entries,
   handles only owned exposure, reconciles, closes the session and pauses;
   09:00/21:00 Beijing recording windows only package/review and never switch,
-  replan, cancel or flatten.  The implementation is merged and tested, but
-  `feature_enabled` remains false and no target Paper/Telegram runtime is
-  claimed running.
+  replan, cancel or flatten.  The repository default remains fail-closed;
+  the separate local Paper config is the only explicit enablement used by the
+  attended launchd handoff above.
 - #667 / PR #669 adds the Telegram Bot long-polling transport, durable cursor,
   explicit `message_id` receipts, Park proposal router, exact digest
   confirmation handling, duplicate/conflict audit and single worker lease.
@@ -648,6 +657,11 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Park's next action is to send one complete strategy through the Jessie
+  Telegram bot.  The worker will return the normalized plan, risk/maximum-loss
+  and leverage calculation, then wait for Park's exact confirmation before
+  any Paper mutation.  Incomplete, duplicate, stale, or unconfirmed input
+  remains blocked and cannot create orders.
 - Deploy exact clean `main@2a0f6d6c8b8f79344d02fa1977aafcfc1f4d6ead` through the
   existing Paper release/boot/SHA gates. Verify the next-cycle provider
   timeout path is non-blocking, its receipt contains bounded diagnostics, and
