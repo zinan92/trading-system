@@ -1,0 +1,1001 @@
+"""Paper-only execution boundary for the Park Strategy Track.
+
+The legacy cycle runner is deliberately not imported here.  A Park session is
+an execution identity that survives the 09:00/21:00 recording windows, while
+the Paper adapter namespace is stable for that session.  This module accepts
+only an exact, unexpired Park confirmation and a passing cutover evidence
+bundle; otherwise it records a blocker and performs no broker mutation.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+from services.execution_engine_port import ExecutionEngineAdapter
+from services.park_cutover_guard import evaluate_park_cutover, load_default_config
+from services.park_dca_track import ParkDcaLifecycle
+from services.park_grid_track import ParkGridLifecycle
+from services.park_recording_track import ParkRecordingTrack
+from services.park_strategy_session import (
+    ParkStrategyIdentityJournal,
+    recording_window,
+)
+from services.park_telegram_control import ParkTelegramLedger
+from services.strategy_control_plane import production_mutation_lock
+
+
+PARK_PAPER_RUNTIME_SCHEMA = "park-paper-runtime-v1"
+_SAFE_NAMESPACE = re.compile(r"[^a-zA-Z0-9_-]+")
+
+
+class ParkPaperRuntimeError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _text(value: Any, field: str) -> str:
+    result = str(value or "").strip()
+    if not result:
+        raise ParkPaperRuntimeError("identity_missing", f"{field} is required")
+    return result
+
+
+def _digest(value: Any) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            value = json.loads(line)
+            if isinstance(value, dict):
+                rows.append(value)
+    return rows
+
+
+def park_paper_namespace(strategy_session_id: str) -> str:
+    """Return a stable adapter namespace that is independent of record windows."""
+
+    session = _text(strategy_session_id, "strategy_session_id")
+    safe = _SAFE_NAMESPACE.sub("-", session).strip("-")
+    if not safe:
+        raise ParkPaperRuntimeError("identity_invalid", "strategy session namespace is invalid")
+    return f"park-{safe[:120]}"
+
+
+def _owned(artifact: Mapping[str, Any], session: str, revision: str, digest: str) -> bool:
+    return (
+        str(artifact.get("strategy_session_id") or "") == session
+        and str(artifact.get("strategy_revision_id") or "") == revision
+        and str(artifact.get("plan_digest") or artifact.get("strategy_plan_id") or "") == digest
+    )
+
+
+class ParkPaperRuntime:
+    """Run one bounded, idempotent Paper tick for the active Park revision."""
+
+    def __init__(
+        self,
+        output_root: Path,
+        *,
+        adapter: ExecutionEngineAdapter,
+        park_user_id: str,
+        chat_id: str,
+        config: Mapping[str, Any] | None = None,
+        market_reader: Callable[[], Mapping[str, Any]] | None = None,
+        now: Callable[[], str] | None = None,
+        safety_evidence_reader: Callable[[], Mapping[str, Any]] | None = None,
+    ) -> None:
+        self.output_root = Path(output_root)
+        self.adapter = adapter
+        self.config = dict(config or load_default_config())
+        if str(getattr(adapter, "name", "")).strip() != "nautilus_paper":
+            raise ParkPaperRuntimeError(
+                "authoritative_paper_adapter_required",
+                "Park requires the direct authoritative nautilus_paper adapter",
+            )
+        self.park_user_id = _text(park_user_id, "park_user_id")
+        self.chat_id = _text(chat_id, "chat_id")
+        self.market_reader = market_reader
+        self.now = now or _utc_now
+        self.safety_evidence_reader = safety_evidence_reader or (lambda: {})
+        self.identity = ParkStrategyIdentityJournal(self.output_root)
+        self.recording = ParkRecordingTrack(self.output_root)
+        self.telegram = ParkTelegramLedger(
+            self.output_root,
+            park_user_id=self.park_user_id,
+            chat_id=self.chat_id,
+        )
+        self.execution_path = self.output_root / "park_strategy" / "executions.jsonl"
+        self.blocker_path = self.output_root / "park_strategy" / "runtime_blockers.jsonl"
+        self.review_path = self.output_root / "park_strategy" / "recording" / "reviews.jsonl"
+
+    def run_once(self) -> dict[str, Any]:
+        observed_at = self.now()
+        self._close_due_recording_packages(observed_at)
+        active = self.identity.active_session()
+        if not active:
+            return self._result("idle", observed_at=observed_at, next_action="await_new_park_strategy")
+        session = _text(active.get("strategy_session_id"), "strategy_session_id")
+        revision = _text(active.get("strategy_revision_id"), "strategy_revision_id")
+        digest = _text(active.get("plan_digest"), "plan_digest")
+        plan = self._plan_for_digest(digest)
+        if plan is None:
+            return self._blocked(
+                "plan_missing",
+                "active Park session has no immutable plan",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+            )
+        confirmation = self._confirmed_for(digest, session, revision)
+        if confirmation is None:
+            self._record_window_facts(
+                active,
+                observed_at=observed_at,
+                status="awaiting_confirmation",
+                plan=plan,
+                market=None,
+                snapshot=None,
+                reconciliation=None,
+            )
+            return self._result(
+                "awaiting_confirmation",
+                observed_at=observed_at,
+                session=session,
+                revision=revision,
+                digest=digest,
+                next_action="await_exact_park_confirmation",
+            )
+
+        market_started = time.monotonic()
+        try:
+            market = dict(self.market_reader() if self.market_reader else self._default_market_reader())
+        except Exception as exc:  # noqa: BLE001 - runtime must fail closed.
+            return self._blocked(
+                "market_unavailable",
+                type(exc).__name__,
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+            )
+        market_elapsed_ms = round((time.monotonic() - market_started) * 1000, 3)
+        if market.get("trusted") is not True or market.get("fresh") is not True:
+            return self._blocked(
+                "market_not_authoritative",
+                "Park Paper tick requires trusted and fresh market evidence",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+                market=market,
+            )
+        try:
+            current_price = float(market.get("price"))
+        except (TypeError, ValueError):
+            return self._blocked(
+                "market_price_invalid",
+                "market price is not numeric",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+                market=market,
+            )
+        cycle_id = park_paper_namespace(session)
+        with production_mutation_lock(self.output_root):
+            try:
+                snapshot = dict(
+                    self.adapter.snapshot(
+                        cycle_id,
+                        mark_price=current_price,
+                        mark_fresh=True,
+                        mark_source=str(market.get("source") or ""),
+                    )
+                )
+                reconciliation = dict(self.adapter.reconcile(cycle_id))
+            except Exception as exc:  # noqa: BLE001 - no mutation when state is unknown.
+                return self._blocked(
+                    "paper_state_unavailable",
+                    type(exc).__name__,
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    observed_at=observed_at,
+                    market=market,
+                )
+            gate = self._admission(
+                market=market,
+                snapshot=snapshot,
+                reconciliation=reconciliation,
+                confirmation=confirmation,
+            )
+            if gate.get("status") != "pass":
+                return self._blocked(
+                    "park_cutover_blocked",
+                    ",".join(str(value) for value in gate.get("blockers") or []),
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    observed_at=observed_at,
+                    market=market,
+                    snapshot=snapshot,
+                    reconciliation=reconciliation,
+                    gate=gate,
+                )
+            try:
+                pre_terminal = self._terminal_reason(plan, current_price)
+                has_prior_entries = any(
+                    row.get("event") == "entry_submitted"
+                    and _owned(row, session, revision, digest)
+                    for row in _read_jsonl(self.execution_path)
+                )
+                submitted = (
+                    []
+                    if pre_terminal and not has_prior_entries
+                    else self._submit_entries_if_needed(
+                        plan=plan,
+                        confirmation=confirmation,
+                        session=session,
+                        revision=revision,
+                        digest=digest,
+                        cycle_id=cycle_id,
+                        current_price=current_price,
+                        market=market,
+                        observed_at=observed_at,
+                    )
+                )
+                event_result = self.adapter.process_market_event(
+                    self._market_event(
+                        market,
+                        cycle_id=cycle_id,
+                        observed_at=observed_at,
+                    )
+                )
+                snapshot = dict(
+                    self.adapter.snapshot(
+                        cycle_id,
+                        mark_price=current_price,
+                        mark_fresh=True,
+                        mark_source=str(market.get("source") or ""),
+                    )
+                )
+                reconciliation = dict(self.adapter.reconcile(cycle_id))
+            except Exception as exc:  # noqa: BLE001 - partial execution is durable and blocked.
+                return self._blocked(
+                    "paper_mutation_blocked",
+                    type(exc).__name__,
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    observed_at=observed_at,
+                    market=market,
+                    snapshot=snapshot,
+                    reconciliation=reconciliation,
+                )
+            boundary = self._terminal_reason(plan, current_price)
+            if boundary:
+                terminal = self._terminal(
+                    plan=plan,
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    cycle_id=cycle_id,
+                    boundary=boundary,
+                    current_price=current_price,
+                    observed_at=observed_at,
+                    market=market,
+                    snapshot=snapshot,
+                    reconciliation=reconciliation,
+                )
+                if terminal.get("status") != "paused":
+                    return terminal
+                result = {
+                    **terminal,
+                    "submitted": submitted,
+                    "market_event": event_result,
+                    "market_read_ms": market_elapsed_ms,
+                }
+            else:
+                self._record_window_facts(
+                    self.identity.active_session() or active,
+                    observed_at=observed_at,
+                    status="active",
+                    plan=plan,
+                    market=market,
+                    snapshot=snapshot,
+                    reconciliation=reconciliation,
+                )
+                result = self._result(
+                    "active",
+                    observed_at=observed_at,
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    submitted=submitted,
+                    market_event=event_result,
+                    snapshot=snapshot,
+                    reconciliation=reconciliation,
+                    market_read_ms=market_elapsed_ms,
+                    next_action="continue_trusted_fresh_ticks",
+                )
+            return result
+
+    def _submit_entries_if_needed(
+        self,
+        *,
+        plan: Mapping[str, Any],
+        confirmation: Mapping[str, Any],
+        session: str,
+        revision: str,
+        digest: str,
+        cycle_id: str,
+        current_price: float,
+        market: Mapping[str, Any],
+        observed_at: str,
+    ) -> list[dict[str, Any]]:
+        existing = {
+            str(row.get("entry_id") or ""): dict(row)
+            for row in _read_jsonl(self.execution_path)
+            if row.get("event") == "entry_submitted"
+            and _owned(row, session, revision, digest)
+        }
+        normalized = dict(plan.get("normalized_input") or {})
+        if str(normalized.get("strategy_type") or "") == "dca":
+            lifecycle = ParkDcaLifecycle(
+                plan,
+                confirmation_receipt=confirmation,
+                output_root=self.output_root,
+                park_user_id=self.park_user_id,
+                chat_id=self.chat_id,
+            )
+            commands = lifecycle.entry_commands()
+        elif str(normalized.get("strategy_type") or "") == "grid":
+            lifecycle = ParkGridLifecycle(
+                plan,
+                confirmation_receipt=confirmation,
+                output_root=self.output_root,
+                park_user_id=self.park_user_id,
+                chat_id=self.chat_id,
+            )
+            commands = lifecycle.levels()
+        else:
+            raise ParkPaperRuntimeError("strategy_type_invalid", "Park strategy type is unsupported")
+        receipts: list[dict[str, Any]] = []
+        for source in commands:
+            entry_id = _text(source.get("entry_id") or source.get("level_id"), "entry_id")
+            if entry_id in existing:
+                receipts.append(dict(existing[entry_id].get("receipt") or {}))
+                continue
+            command = self._entry_command(
+                source,
+                plan=plan,
+                session=session,
+                revision=revision,
+                digest=digest,
+                cycle_id=cycle_id,
+                current_price=current_price,
+                market=market,
+                observed_at=observed_at,
+            )
+            receipt = dict(self.adapter.submit_order(command))
+            _append_jsonl(
+                self.execution_path,
+                {
+                    "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+                    "event": "entry_submitted",
+                    "entry_id": entry_id,
+                    "strategy_session_id": session,
+                    "strategy_revision_id": revision,
+                    "plan_digest": digest,
+                    "cycle_id": cycle_id,
+                    "command": command,
+                    "receipt": receipt,
+                    "recorded_at": observed_at,
+                },
+            )
+            receipts.append(receipt)
+        return receipts
+
+    def _entry_command(
+        self,
+        source: Mapping[str, Any],
+        *,
+        plan: Mapping[str, Any],
+        session: str,
+        revision: str,
+        digest: str,
+        cycle_id: str,
+        current_price: float,
+        market: Mapping[str, Any],
+        observed_at: str,
+    ) -> dict[str, Any]:
+        normalized = dict(plan.get("normalized_input") or {})
+        price = float(source.get("price") or 0.0)
+        quantity = float(source.get("quantity") or 0.0)
+        if price <= 0 or quantity <= 0:
+            raise ParkPaperRuntimeError("risk_incomplete", "Park entry command has no positive price/quantity")
+        direction = str(source.get("direction") or normalized.get("direction") or "")
+        if direction not in {"long", "short"}:
+            raise ParkPaperRuntimeError("direction_invalid", "Park entry direction is invalid")
+        command: dict[str, Any] = {
+            "cycle_id": cycle_id,
+            "ts": observed_at,
+            "event": "entry",
+            "side": "buy" if direction == "long" else "sell",
+            "order_type": "limit",
+            "price": price,
+            "market_price": current_price,
+            "quantity": quantity,
+            "notional": round(price * quantity, 12),
+            "source": "park_telegram",
+            "source_fill_id": str(source.get("entry_id") or source.get("level_id")),
+            "strategy_plan_id": digest,
+            "strategy_plan_version": str(plan.get("schema_version") or ""),
+            "strategy_session_id": session,
+            "strategy_revision_id": revision,
+            "plan_digest": digest,
+            "symbol": str(market.get("symbol") or (self.config.get("market_data") or {}).get("symbol") or "GOLD"),
+            "instrument_id": str(market.get("instrument_id") or (self.config.get("market_data") or {}).get("symbol") or "GOLD"),
+            "market_timestamp": str(market.get("observed_at") or observed_at),
+            "market_source": str(market.get("source") or ""),
+            "market_fresh": True,
+        }
+        for key in ("stop_price", "take_profit_price"):
+            if normalized.get(key) not in (None, ""):
+                command["sl" if key == "stop_price" else "tp"] = normalized[key]
+        return command
+
+    def _terminal(
+        self,
+        *,
+        plan: Mapping[str, Any],
+        session: str,
+        revision: str,
+        digest: str,
+        cycle_id: str,
+        boundary: Mapping[str, Any],
+        current_price: float,
+        observed_at: str,
+        market: Mapping[str, Any],
+        snapshot: Mapping[str, Any],
+        reconciliation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        terminal_key = f"{session}:{revision}:{boundary['reason']}"
+        existing = next(
+            (
+                row
+                for row in reversed(_read_jsonl(self.execution_path))
+                if row.get("event") == "terminal_paused" and row.get("terminal_key") == terminal_key
+            ),
+            None,
+        )
+        if existing:
+            return dict(existing.get("result") or {})
+        accepted_ids = {
+            str(row.get("order_id") or "")
+            for row in snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+            and self._order_owned(row, session, revision, digest)
+        }
+        if accepted_ids:
+            cancel = self.adapter.cancel_orders(
+                cycle_id,
+                order_ids=sorted(accepted_ids),
+                strategy_plan_id=digest,
+                ts=observed_at,
+                reason=f"park_{boundary['reason']}",
+            )
+        else:
+            cancel = {"status": "idempotent", "cancelled_order_ids": []}
+        # A boundary is an explicit, Park-confirmed invalidation trigger. Only
+        # positions carrying the exact Park ownership identity are eligible
+        # for this terminal close; unrelated exposure is never touched.
+        open_positions = [
+            dict(row)
+            for row in snapshot.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+            and self._position_owned(row, session, revision, digest)
+        ]
+        exit_receipts: list[dict[str, Any]] = []
+        if boundary.get("close_positions"):
+            for position in open_positions:
+                exit_receipts.append(
+                    self.adapter.submit_order(
+                        self._exit_command(
+                            position,
+                            plan=plan,
+                            session=session,
+                            revision=revision,
+                            digest=digest,
+                            cycle_id=cycle_id,
+                            current_price=current_price,
+                            market=market,
+                            observed_at=observed_at,
+                            reason=str(boundary["reason"]),
+                        )
+                    )
+                )
+        if exit_receipts:
+            terminal_event = self._market_event(
+                market,
+                cycle_id=cycle_id,
+                observed_at=observed_at,
+            )
+            terminal_event["event_id"] = _digest(
+                {"base_event_id": terminal_event["event_id"], "terminal": terminal_key}
+            )
+            self.adapter.process_market_event(terminal_event)
+        final_snapshot = dict(
+            self.adapter.snapshot(
+                cycle_id,
+                mark_price=current_price,
+                mark_fresh=True,
+                mark_source=str(market.get("source") or ""),
+            )
+        )
+        final_reconciliation = dict(self.adapter.reconcile(cycle_id))
+        remaining_accepted = [
+            row
+            for row in final_snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+            and self._order_owned(row, session, revision, digest)
+        ]
+        if remaining_accepted or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
+            return self._blocked(
+                "terminal_reconciliation_blocked",
+                "owned entries or reconciliation remain unresolved",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+                snapshot=final_snapshot,
+                reconciliation=final_reconciliation,
+            )
+        result = {
+            "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+            "status": "paused",
+            "session": session,
+            "revision": revision,
+            "plan_digest": digest,
+            "terminal_reason": boundary["reason"],
+            "observed_price": current_price,
+            "cancel": cancel,
+            "exit_receipts": exit_receipts,
+            "positions_preserved": sum(
+                1
+                for row in final_snapshot.get("positions") or []
+                if str(row.get("status") or "").lower() == "open"
+                and self._position_owned(row, session, revision, digest)
+            ),
+            "reconciliation": final_reconciliation,
+            "paper_only": True,
+            "next_action": "await_park_next_strategy",
+        }
+        self.identity.close_session(
+            strategy_session_id=session,
+            strategy_revision_id=revision,
+            observed_at=observed_at,
+            reason=str(boundary["reason"]),
+        )
+        self.telegram.queue_outbound(
+            idempotency_key=f"park-terminal:{session}:{revision}:{boundary['reason']}",
+            message_type="park_terminal",
+            text=(
+                f"Park strategy paused: {boundary['reason']} at {current_price}. "
+                f"Owned positions were handled only for this exact terminal trigger; "
+                f"send a new strategy only after clean-slate checks pass."
+            ),
+            binding={"strategy_session_id": session, "strategy_revision_id": revision},
+        )
+        _append_jsonl(
+            self.execution_path,
+            {
+                "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+                "event": "terminal_paused",
+                "terminal_key": terminal_key,
+                "strategy_session_id": session,
+                "strategy_revision_id": revision,
+                "plan_digest": digest,
+                "result": result,
+                "recorded_at": observed_at,
+            },
+        )
+        self._record_window_facts(
+            {**(self.identity.active_session() or {}), **{"strategy_session_id": session, "strategy_revision_id": revision}},
+            observed_at=observed_at,
+            status="paused",
+            plan=plan,
+            market=market,
+            snapshot=final_snapshot,
+            reconciliation=final_reconciliation,
+        )
+        return result
+
+    def _exit_command(
+        self,
+        position: Mapping[str, Any],
+        *,
+        plan: Mapping[str, Any],
+        session: str,
+        revision: str,
+        digest: str,
+        cycle_id: str,
+        current_price: float,
+        market: Mapping[str, Any],
+        observed_at: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        side = str(position.get("side") or "").lower()
+        target_side = "long" if side in {"long", "buy"} else "short" if side in {"short", "sell"} else ""
+        if not target_side:
+            raise ParkPaperRuntimeError("position_side_invalid", "owned position side is invalid")
+        position_id = _text(position.get("position_id"), "position_id")
+        quantity = float(position.get("remaining_units") or position.get("quantity") or 0.0)
+        if quantity <= 0:
+            raise ParkPaperRuntimeError("position_quantity_invalid", "owned position quantity is invalid")
+        return {
+            "cycle_id": cycle_id,
+            "ts": observed_at,
+            "event": "stop" if reason == "stop_price" else "target",
+            "side": "sell" if target_side == "long" else "buy",
+            "order_type": "market",
+            "price": current_price,
+            "market_price": current_price,
+            "quantity": quantity,
+            "source_fill_id": f"park-terminal:{session}:{revision}:{reason}:{position_id}",
+            "position_id": position_id,
+            "trade_id": str(position.get("trade_id") or ""),
+            "target_position_id": position_id,
+            "target_position_side": target_side,
+            "strategy_plan_id": digest,
+            "strategy_plan_version": str(plan.get("schema_version") or ""),
+            "strategy_session_id": session,
+            "strategy_revision_id": revision,
+            "plan_digest": digest,
+            "source": "park_telegram",
+            "symbol": str(market.get("symbol") or (self.config.get("market_data") or {}).get("symbol") or "GOLD"),
+            "market_timestamp": str(market.get("observed_at") or observed_at),
+            "market_source": str(market.get("source") or ""),
+            "market_fresh": True,
+        }
+
+    def _terminal_reason(self, plan: Mapping[str, Any], price: float) -> dict[str, Any] | None:
+        normalized = dict(plan.get("normalized_input") or {})
+        try:
+            upper = float(normalized.get("upper_price_boundary"))
+            lower = float(normalized.get("lower_price_boundary"))
+        except (TypeError, ValueError):
+            return {"reason": "boundary_invalid"}
+        if price >= upper:
+            return {"reason": "upper_boundary_invalidated", "close_positions": True}
+        if price <= lower:
+            return {"reason": "lower_boundary_invalidated", "close_positions": True}
+        direction = str(normalized.get("direction") or "")
+        stop = normalized.get("stop_price")
+        target = normalized.get("take_profit_price")
+        if stop not in (None, ""):
+            stop_value = float(stop)
+            if (direction == "long" and price <= stop_value) or (direction == "short" and price >= stop_value):
+                return {"reason": "stop_price", "close_positions": True}
+        if target not in (None, ""):
+            target_value = float(target)
+            if (direction == "long" and price >= target_value) or (direction == "short" and price <= target_value):
+                return {"reason": "take_profit_price", "close_positions": True}
+        return None
+
+    def _admission(
+        self,
+        *,
+        market: Mapping[str, Any],
+        snapshot: Mapping[str, Any],
+        reconciliation: Mapping[str, Any],
+        confirmation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        evidence = dict(self.safety_evidence_reader() or {})
+        evidence.setdefault("trusted_market", market.get("trusted") is True)
+        evidence.setdefault("tick_freshness", market.get("fresh") is True)
+        evidence.setdefault("stale_cycle_state", evidence.get("unresolved_runtime") is not True)
+        evidence.setdefault(
+            "reconciliation",
+            reconciliation.get("status") == "ok" and not reconciliation.get("issues"),
+        )
+        evidence.setdefault("park_risk_confirmation", confirmation.get("execution_authorized") is True)
+        evidence.setdefault("paper_only", getattr(self.adapter, "name", "") == "nautilus_paper")
+        evidence.setdefault(
+            "immutable_fill",
+            (snapshot.get("capabilities") or {}).get("immutable_fill_guard") is True,
+        )
+        return evaluate_park_cutover(self.config, safety_evidence=evidence)
+
+    @staticmethod
+    def _market_event(market: Mapping[str, Any], *, cycle_id: str, observed_at: str) -> dict[str, Any]:
+        price = float(market.get("price"))
+        source = str(market.get("source") or "")
+        provider = str(market.get("provider") or source)
+        if not source or not provider:
+            raise ParkPaperRuntimeError("market_evidence_incomplete", "market source/provider is required")
+        timestamp = str(market.get("observed_at") or observed_at)
+        return {
+            "cycle_id": cycle_id,
+            "ts_event": timestamp,
+            "event_started_at": str(market.get("event_started_at") or timestamp),
+            "price": price,
+            "open": market.get("open", price),
+            "high": market.get("high", price),
+            "low": market.get("low", price),
+            "fresh": True,
+            "is_synthetic": False,
+            "source": source,
+            "provider": provider,
+            "instrument_id": str(market.get("instrument_id") or market.get("symbol") or "GOLD"),
+            "event_id": _digest({"cycle_id": cycle_id, "ts_event": timestamp, "price": price, "source": source}),
+        }
+
+    def _plan_for_digest(self, digest: str) -> dict[str, Any] | None:
+        return next(
+            (
+                dict(row)
+                for row in reversed(_read_jsonl(self.output_root / "park_strategy" / "plans.jsonl"))
+                if row.get("event") == "plan_proposed" and str(row.get("plan_digest") or "") == digest
+            ),
+            None,
+        )
+
+    def _confirmed_for(self, digest: str, session: str, revision: str) -> dict[str, Any] | None:
+        return next(
+            (
+                dict(row)
+                for row in reversed(_read_jsonl(self.output_root / "park_strategy" / "confirmations.jsonl"))
+                if row.get("event") == "confirmed"
+                and row.get("execution_authorized") is True
+                and row.get("plan_digest") == digest
+                and row.get("strategy_session_id") == session
+                and row.get("strategy_revision_id") == revision
+            ),
+            None,
+        )
+
+    def _order_owned(self, row: Mapping[str, Any], session: str, revision: str, digest: str) -> bool:
+        if _owned(row, session, revision, digest):
+            return True
+        order_id = str(row.get("order_id") or "")
+        return any(
+            str(item.get("receipt", {}).get("order_id") or item.get("receipt", {}).get("fill_id") or "") == order_id
+            and _owned(item, session, revision, digest)
+            for item in _read_jsonl(self.execution_path)
+            if item.get("event") == "entry_submitted"
+        )
+
+    def _position_owned(self, row: Mapping[str, Any], session: str, revision: str, digest: str) -> bool:
+        if _owned(row, session, revision, digest):
+            return True
+        position_id = str(row.get("position_id") or "")
+        trade_id = str(row.get("trade_id") or "")
+        if str(row.get("strategy_plan_id") or "") == digest and (
+            position_id in self._derived_position_ids(session, revision, digest)
+            or trade_id in self._derived_position_ids(session, revision, digest)
+        ):
+            return True
+        return any(
+            position_id in {
+                str(item.get("receipt", {}).get("position_id") or ""),
+                str(item.get("receipt", {}).get("trade_id") or ""),
+            }
+            and _owned(item, session, revision, digest)
+            for item in _read_jsonl(self.execution_path)
+            if item.get("event") == "entry_submitted"
+        )
+
+    def _derived_position_ids(self, session: str, revision: str, digest: str) -> set[str]:
+        """Derive Nautilus replay position/trade IDs from Park-owned commands."""
+
+        result: set[str] = set()
+        for item in _read_jsonl(self.execution_path):
+            if item.get("event") != "entry_submitted" or not _owned(item, session, revision, digest):
+                continue
+            command = dict(item.get("command") or {})
+            source_id = str(command.get("source_fill_id") or "")
+            if not source_id:
+                continue
+            command_id = "nautilus-command-" + hashlib.sha256(source_id.encode("utf-8")).hexdigest()[:20]
+            result.update({command_id, f"POS-{command_id}"})
+        return result
+
+    def _record_window_facts(
+        self,
+        active: Mapping[str, Any],
+        *,
+        observed_at: str,
+        status: str,
+        plan: Mapping[str, Any],
+        market: Mapping[str, Any] | None,
+        snapshot: Mapping[str, Any] | None,
+        reconciliation: Mapping[str, Any] | None,
+    ) -> None:
+        session = str(active.get("strategy_session_id") or "")
+        revision = str(active.get("strategy_revision_id") or "")
+        if not session or not revision:
+            return
+        window = recording_window(observed_at)
+        self.recording.start_window(
+            record_window_id=str(window["record_window_id"]),
+            strategy_session_id=session,
+            strategy_revision_id=revision,
+            starts_at=str(window["starts_at"]),
+            ends_at=str(window["ends_at"]),
+        )
+        snapshot_data = dict(snapshot or {})
+        reconciliation_data = dict(reconciliation or {})
+        base = {
+            "record_window_id": window["record_window_id"],
+            "strategy_session_id": session,
+            "strategy_revision_id": revision,
+        }
+        facts = (
+            ("control", "runtime_status", {"status": status}),
+            ("plan", "plan_proposed", {"plan_digest": plan.get("plan_digest")}),
+            ("orders", "snapshot", {"count": len(snapshot_data.get("orders") or [])}),
+            ("fills", "snapshot", {"count": len(snapshot_data.get("fills") or [])}),
+            ("positions", "snapshot", {"count": len(snapshot_data.get("positions") or []), "open_count": sum(1 for row in snapshot_data.get("positions") or [] if str(row.get("status") or "").lower() == "open")}),
+            ("exits", "terminal_or_none", {"status": status}),
+            ("telegram", "ledger", {"inbox": len(self.telegram.inbox_rows()), "outbox": len(self.telegram.outbox_rows())}),
+            ("provider", "market_read", {"source": (market or {}).get("source"), "elapsed_ms": None}),
+            ("market_tick", "observed", dict(market or {})),
+            ("runtime", "tick", {"status": status, "engine": getattr(self.adapter, "name", "")}),
+            ("reconciliation", "snapshot", reconciliation_data),
+            ("execution_path", "mutation_boundary", {"paper_only": True, "legacy_cycle_runner": False}),
+        )
+        for category, event_type, payload in facts:
+            self.recording.record_event(
+                **base,
+                category=category,
+                event_type=event_type,
+                source="park_paper_runtime",
+                occurred_at=observed_at,
+                payload=payload,
+            )
+
+    def _close_due_recording_packages(self, observed_at: str) -> None:
+        try:
+            current = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        except ValueError:
+            return
+        manifests = [row for row in self.recording.events() if row.get("event") == "manifest_started"]
+        packages = {str(row.get("record_window_id")) for row in self.recording.packages()}
+        for manifest in manifests:
+            window_id = str(manifest.get("record_window_id") or "")
+            if not window_id or window_id in packages:
+                continue
+            try:
+                ends = datetime.fromisoformat(str(manifest.get("ends_at") or "").replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if ends > current:
+                continue
+            session = str(manifest.get("strategy_session_id") or "")
+            revision = str(manifest.get("strategy_revision_id") or "")
+            latest_positions = [
+                row
+                for row in reversed(self.recording.events())
+                if row.get("record_window_id") == window_id and row.get("category") == "positions"
+            ]
+            payload = dict((latest_positions[0] if latest_positions else {}).get("payload") or {})
+            package = self.recording.close_package(
+                record_window_id=window_id,
+                strategy_session_id=session,
+                strategy_revision_id=revision,
+                strategy_open=bool(self.identity.active_session() and self.identity.active_session().get("strategy_session_id") == session),
+                positions_open=int(payload.get("open_count") or 0),
+            )
+            review = self.recording.review(record_window_id=window_id)
+            _append_jsonl(self.review_path, {"record_window_id": window_id, "review": review, "package": package})
+
+    def _blocked(self, code: str, detail: str, **context: Any) -> dict[str, Any]:
+        row = {
+            "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+            "event": "runtime_blocked",
+            "code": code,
+            "detail": str(detail)[:500],
+            "recorded_at": context.pop("observed_at", _utc_now()),
+            **context,
+            "paper_only": True,
+            "next_action": "notify_park_and_wait",
+        }
+        _append_jsonl(self.blocker_path, row)
+        session = str(row.get("session") or row.get("strategy_session_id") or "")
+        revision = str(row.get("revision") or row.get("strategy_revision_id") or "")
+        binding = {"strategy_session_id": session, "strategy_revision_id": revision} if session and revision else None
+        self.telegram.queue_outbound(
+            idempotency_key=f"park-runtime-blocker:{session}:{revision}:{code}",
+            message_type="park_blocker",
+            text=f"Park Paper runtime blocked: {code}; next_action=notify_park_and_wait",
+            binding=binding,
+        )
+        return {"schema_version": PARK_PAPER_RUNTIME_SCHEMA, "status": "blocked", **row}
+
+    @staticmethod
+    def _result(status: str, **payload: Any) -> dict[str, Any]:
+        return {
+            "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+            "status": status,
+            "paper_only": True,
+            **payload,
+        }
+
+    @staticmethod
+    def _default_market_reader() -> Mapping[str, Any]:
+        from services.park_telegram_runtime import default_market_reader
+
+        return default_market_reader()
+
+
+def build_park_authoritative_adapter(
+    output_root: Path,
+    *,
+    config: Mapping[str, Any] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> ExecutionEngineAdapter:
+    """Build only the direct attended Nautilus Paper adapter; never a wrapper."""
+
+    settings = dict(config or load_default_config())
+    environment = dict(os.environ if environ is None else environ)
+    if settings.get("feature_enabled") is not True:
+        raise ParkPaperRuntimeError("park_track_disabled", "Park Strategy Track is disabled")
+    if settings.get("runtime_mode") != "paper_only" or settings.get("control_plane") != "telegram":
+        raise ParkPaperRuntimeError("park_contract_invalid", "Park runtime contract is not Paper-only Telegram-only")
+    engine_settings = dict(settings.get("execution_engine") or {})
+    engine = str(engine_settings.get("authoritative") or "nautilus_paper").lower()
+    if engine not in {"nautilus", "nautilus_paper"}:
+        raise ParkPaperRuntimeError("authoritative_paper_adapter_required", "Park requires nautilus_paper authority")
+    runtime_path = str(environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or "").strip()
+    if not runtime_path:
+        raise ParkPaperRuntimeError("paper_runtime_path_missing", "isolated Nautilus Paper runtime path is required")
+    if environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") != "1":
+        raise ParkPaperRuntimeError("paper_switch_unapproved", "attended Paper switch approval is required")
+    from services.dualtrack_config import dualtrack_config
+    from services.execution_plugin_composition import build_execution_engine_adapter
+    dualtrack_settings = dualtrack_config()
+    configured = dict(dualtrack_settings)
+    configured.update(dict(settings.get("paper_execution") or {}))
+
+    try:
+        return build_execution_engine_adapter(
+            Path(output_root),
+            engine=engine,
+            config=configured,
+            nautilus_python=runtime_path,
+            allow_paper_switch=True,
+            allow_shadow_gate_override=(
+                environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_GATE_OVERRIDE")
+                == "I_UNDERSTAND_NAUTILUS_PAPER_CUTOVER_BYPASSES_7_CYCLE_SHADOW_GATE"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - startup is fail closed.
+        raise ParkPaperRuntimeError("paper_adapter_unavailable", type(exc).__name__) from exc

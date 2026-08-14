@@ -25,9 +25,9 @@ def test_contract_is_single_track_telegram_paper_and_default_off() -> None:
     assert contract["feature_flag"] == {
         "name": "park_strategy_track_v1",
         "enabled_by_default": False,
-        "runtime_wiring_present": False,
+        "runtime_wiring_present": True,
         "enablement_rule": (
-            "a_later_issue_must_supply_runtime_wiring_tests_and_a_separate_release_decision"
+            "runtime wiring is implemented and tested; a separate source-bound release decision is still required"
         ),
     }
 

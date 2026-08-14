@@ -246,3 +246,52 @@ class ParkStrategyIdentityJournal:
         }
         _atomic_append(self.path, row)
         return dict(row)
+
+    def close_session(
+        self,
+        *,
+        strategy_session_id: str,
+        strategy_revision_id: str,
+        observed_at: datetime | str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Close one terminal Park session without changing any position."""
+
+        session_id = _required_text(strategy_session_id, "strategy_session_id")
+        revision_id = _required_text(strategy_revision_id, "strategy_revision_id")
+        active = self.active_session()
+        if not active:
+            raise ParkStrategyIdentityError("strategy session is not active")
+        if (
+            active.get("strategy_session_id") != session_id
+            or active.get("strategy_revision_id") != revision_id
+        ):
+            raise ParkStrategyIdentityError("strategy session identity is stale")
+        reason_text = _required_text(reason, "reason")
+        metadata = recording_metadata(
+            strategy_session_id=session_id,
+            strategy_revision_id=revision_id,
+            observed_at=observed_at,
+        )
+        existing = next(
+            (
+                row
+                for row in reversed(self.rows())
+                if row.get("event") == "session_closed"
+                and row.get("strategy_session_id") == session_id
+                and row.get("strategy_revision_id") == revision_id
+            ),
+            None,
+        )
+        if existing:
+            return dict(existing)
+        row = {
+            "schema_version": PARK_STRATEGY_SESSION_SCHEMA,
+            "event": "session_closed",
+            **metadata,
+            "reason": reason_text,
+            "execution_authority": "strategy_session_revision",
+            "recording_authority": "facts_package_review_only",
+        }
+        _atomic_append(self.path, row)
+        return dict(row)
