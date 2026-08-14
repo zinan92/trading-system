@@ -1,5 +1,36 @@
 # Decision Log
 
+## Make Telegram durable, authenticated, and explicit about delivery (Issue #653)
+
+Date: 2026-08-14
+
+### Decision
+
+- Telegram is the only future Park control plane.  The inbox accepts exactly
+  one configured Park user and chat and deduplicates on Telegram `update_id`.
+- Outbound messages are persisted before transport with an idempotency key and
+  body digest.  Delivery is true only with an explicit transport message ID;
+  timeout, empty, or malformed responses are failures.
+- Failures retry within a bounded budget, then become durable dead letters with
+  `notify_park_and_wait`.  No failure is silently treated as success.
+- Strategy commands require the exact session/revision binding; a recording
+  window ID alone cannot make an old command valid for a new strategy.
+- The ledger does not authorize plans, infer direction, call a network client,
+  fall back to Feishu, or mutate any execution state.
+
+### Gotchas
+
+- The current alert notifier remains a separate thin transport path until the
+  later cutover story.  This ticket does not claim Telegram polling/webhook
+  production readiness.
+- Inbound text is persisted for later parsing but `execution_authorized` is
+  always false at ingestion.
+
+### Verification
+
+- Focused tests cover identity, update/message idempotency, explicit delivery
+  receipts, retry/dead-letter state, exact bindings, and stale-command rejection.
+
 ## Make Park ownership immutable and terminal actions idempotent (Issue #651)
 
 Date: 2026-08-14
