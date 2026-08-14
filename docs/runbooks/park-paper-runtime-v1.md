@@ -29,10 +29,41 @@ The approved copy must also include an explicit `paper_execution` contract:
 ```json
 {
   "instrument": {
+    "schema_version": "instrument-definition-v1",
     "instrument_id": "XAUUSDT.BINANCE",
     "symbol": "XAUUSDT",
     "venue": "BINANCE",
-    "provider": "park_paper_config"
+    "asset_class": "commodity",
+    "market_type": "usd_m_futures",
+    "contract_type": "TRADIFI_PERPETUAL",
+    "status": "TRADING",
+    "base_currency": "XAU",
+    "quote_currency": "USDT",
+    "settlement_currency": "USDT",
+    "margin_currency": "USDT",
+    "is_inverse": false,
+    "price_precision": 2,
+    "price_increment": "0.01",
+    "min_price": "0.01",
+    "max_price": "200000",
+    "size_precision": 3,
+    "size_increment": "0.001",
+    "min_quantity": "0.001",
+    "max_quantity": "10000",
+    "min_notional": "5",
+    "margin_init_rate": "0.0500",
+    "margin_maint_rate": "0.0250",
+    "contract_multiplier": "1",
+    "provider": "binance_usdm_futures",
+    "source_mode": "binance_usdm_futures",
+    "served_from": "upstream",
+    "execution_venue": true,
+    "is_synthetic": false,
+    "upstream_server_time": 1786703775365,
+    "derived_fields": {
+      "is_inverse": "binance_usdm_linear_contract",
+      "contract_multiplier": "usd_m_notional_equals_price_times_quantity"
+    }
   },
   "paper_fee_model": {
     "mode": "paper_contract",

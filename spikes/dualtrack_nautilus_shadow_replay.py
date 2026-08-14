@@ -22,8 +22,8 @@ from services.journal_store import write_json
 def run_replay(preflight_path: str | Path, input_path: str | Path) -> dict[str, Any]:
     preflight = _latest(preflight_path, "preflight")
     bundle = _latest(input_path, "shadow input")
-    if preflight.get("status") != "ready_for_paper_shadow":
-        raise RuntimeError("preflight is not ready for paper shadow")
+    if preflight.get("status") not in {"ready_for_paper_shadow", "ready_for_park_paper"}:
+        raise RuntimeError("preflight is not ready for paper execution")
     if bundle.get("schema_version") != "dualtrack-shadow-input-v1":
         raise ValueError("unsupported shadow input schema")
     events = list(bundle.get("market_events") or [])

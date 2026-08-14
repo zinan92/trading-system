@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from services.config_loader import ROOT
+from services.dualtrack_nautilus_instrument import validate_instrument_definition
 from services.journal_store import write_json
 from services.paper_release_receipt import current_source_attestation
 
@@ -33,6 +34,20 @@ def paper_execution_config_digest(config: Mapping[str, Any]) -> str:
 
     paper_execution = config.get("paper_execution") if isinstance(config, Mapping) else None
     payload = dict(paper_execution) if isinstance(paper_execution, Mapping) else {}
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def paper_execution_artifact_digest(
+    instrument: Mapping[str, Any],
+    fee_model: Mapping[str, Any],
+) -> str:
+    """Hash the exact normalized payload persisted in the preflight artifact."""
+
+    payload = {
+        "instrument": dict(instrument),
+        "fee_model": dict(fee_model),
+    }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -68,6 +83,10 @@ def build_park_paper_preflight(
     for field in ("instrument_id", "symbol", "venue", "provider"):
         if not str(instrument_payload.get(field) or "").strip():
             blockers.append(f"paper_instrument_{field}_missing")
+    try:
+        validate_instrument_definition(instrument_payload)
+    except (TypeError, ValueError) as exc:
+        blockers.append(f"paper_instrument_definition_invalid:{type(exc).__name__}")
     if str(fee_payload.get("mode") or "") != "paper_contract":
         blockers.append("paper_fee_contract_mode_required")
     for field in ("maker_fee_rate", "taker_fee_rate", "funding_rate"):
@@ -105,6 +124,7 @@ def build_park_paper_preflight(
         if fee_payload.get(field) in (None, ""):
             blockers.append(f"paper_fee_{field}_missing")
     config_digest = paper_execution_config_digest(config)
+    artifact_digest = paper_execution_artifact_digest(instrument_payload, fee_payload)
     artifact: dict[str, Any] = {
         "schema_version": PARK_PAPER_PREFLIGHT_SCHEMA,
         "status": PARK_PAPER_PREFLIGHT_STATUS if not blockers else "blocked",
@@ -115,6 +135,7 @@ def build_park_paper_preflight(
         "source_tree_sha": str(attestation.get("source_tree_sha") or ""),
         "tracked_tree_clean": bool(attestation.get("tracked_tree_clean")),
         "config_digest": config_digest,
+        "artifact_digest": artifact_digest,
         "instrument": instrument_payload,
         "fee_model": fee_payload,
         "paper_only": True,
@@ -153,6 +174,14 @@ def validate_park_paper_preflight(
         raise ParkPaperPreflightError("paper_preflight_source_dirty", "Park preflight source tree is dirty")
     if expected_config_digest and str(artifact.get("config_digest") or "") != expected_config_digest:
         raise ParkPaperPreflightError("paper_preflight_config_mismatch", "Park preflight config digest mismatch")
+    instrument = artifact.get("instrument") if isinstance(artifact.get("instrument"), Mapping) else {}
+    fee_model = artifact.get("fee_model") if isinstance(artifact.get("fee_model"), Mapping) else {}
+    expected_artifact_digest = paper_execution_artifact_digest(instrument, fee_model)
+    if str(artifact.get("artifact_digest") or "") != expected_artifact_digest:
+        raise ParkPaperPreflightError(
+            "paper_preflight_artifact_digest_mismatch",
+            "Park preflight artifact payload digest mismatch",
+        )
     current = current_source_attestation(Path(repo_root))
     if str(artifact.get("source_sha") or "") != str(current.get("source_sha") or ""):
         raise ParkPaperPreflightError("paper_preflight_source_sha_mismatch", "Park preflight source SHA mismatch")
@@ -162,11 +191,13 @@ def validate_park_paper_preflight(
     observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     if expires_at is None or expires_at <= observed_at:
         raise ParkPaperPreflightError("paper_preflight_stale", "Park preflight is missing or expired")
-    instrument = artifact.get("instrument") if isinstance(artifact.get("instrument"), Mapping) else {}
-    for field in ("instrument_id", "symbol", "venue", "provider"):
-        if not str(instrument.get(field) or "").strip():
-            raise ParkPaperPreflightError("paper_preflight_instrument_invalid", "Park instrument contract is incomplete")
-    fee_model = artifact.get("fee_model") if isinstance(artifact.get("fee_model"), Mapping) else {}
+    try:
+        validate_instrument_definition(dict(instrument))
+    except (TypeError, ValueError) as exc:
+        raise ParkPaperPreflightError(
+            "paper_preflight_instrument_invalid",
+            f"Park instrument contract is invalid: {type(exc).__name__}",
+        ) from exc
     if fee_model.get("mode") != "paper_contract" or fee_model.get("real_money_eligible") is not False:
         raise ParkPaperPreflightError("paper_preflight_fee_invalid", "Park fee contract is invalid")
     for field in ("maker_fee_rate", "taker_fee_rate", "funding_rate", "funding_time", "observed_at"):

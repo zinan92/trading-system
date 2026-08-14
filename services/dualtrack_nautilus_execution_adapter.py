@@ -21,6 +21,7 @@ from services.dualtrack_config import dualtrack_config
 from services.dualtrack_grid_core import GridLineLifecycle
 from services.dualtrack_shadow_input import build_shadow_input
 from services.journal_store import load_json, write_json
+from services.park_paper_mutation_gate import ParkPaperMutationGate
 from services.park_paper_preflight import validate_park_paper_preflight
 from services.risk_port import action_class_for_command, build_paper_safe_action_market_gate
 
@@ -44,6 +45,7 @@ class NautilusExecutionAdapter:
         preflight_path: str | Path | None = None,
         replay_executor: ReplayExecutor | None = None,
         defer_replay: bool = False,
+        mutation_gate: ParkPaperMutationGate | None = None,
         config: dict[str, Any] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
@@ -59,10 +61,12 @@ class NautilusExecutionAdapter:
         )
         self._replay_executor = replay_executor or self._subprocess_replay
         self.defer_replay = bool(defer_replay)
+        self.mutation_gate = mutation_gate
         self.config = dict(config or dualtrack_config())
         self._validate_runtime()
 
     def submit_order(self, command: dict[str, Any]) -> dict[str, Any]:
+        self._require_mutation_authority()
         normalized = _canonical_command(self._prepare_command(command))
         cycle_id = normalized["cycle_id"]
         path = self._commands_path(cycle_id)
@@ -342,6 +346,7 @@ class NautilusExecutionAdapter:
         ts: str | None = None,
         reason: str = "",
     ) -> dict[str, Any]:
+        self._require_mutation_authority()
         requested_ids = {str(value) for value in (order_ids or []) if str(value)}
         rows = load_json(self._commands_path(cycle_id))
         accepted_ids = {
@@ -410,6 +415,7 @@ class NautilusExecutionAdapter:
         }
 
     def process_market_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        self._require_mutation_authority()
         normalized = canonical_market_event(event)
         if not normalized.get("provider"):
             raise ValueError("Nautilus market event provider is required")
@@ -448,6 +454,7 @@ class NautilusExecutionAdapter:
     ) -> dict[str, Any]:
         """Durably append one ordered Paper batch and flush it exactly once."""
 
+        self._require_mutation_authority()
         if not events:
             raise ValueError("Nautilus market event batch is empty")
         normalized_events = [canonical_market_event(event) for event in events]
@@ -570,6 +577,7 @@ class NautilusExecutionAdapter:
         return dict(max(rows, key=_market_event_sort_key))
 
     def flush(self, cycle_id: str) -> dict[str, Any]:
+        self._require_mutation_authority()
         return self._flush(cycle_id, reject_pending_market_events=False)
 
     def flush_commands(self, cycle_id: str) -> dict[str, Any]:
@@ -581,7 +589,21 @@ class NautilusExecutionAdapter:
         remains pending for the normal market-event path.
         """
 
+        self._require_mutation_authority()
         return self._flush(cycle_id, reject_pending_market_events=True)
+
+    def grant_park_mutation(self, receipt: dict[str, Any]) -> None:
+        if self.mutation_gate is None:
+            raise RuntimeError("Park adapter mutation gate is missing")
+        self.mutation_gate.grant(receipt)
+
+    def revoke_park_mutation(self) -> None:
+        if self.mutation_gate is not None:
+            self.mutation_gate.revoke()
+
+    def _require_mutation_authority(self) -> None:
+        if self.mutation_gate is not None:
+            self.mutation_gate.require()
 
     def _flush(
         self,
@@ -1435,7 +1457,14 @@ class NautilusExecutionAdapter:
 
     def _subprocess_replay(self, preflight_path: Path, input_path: Path, output_path: Path) -> dict[str, Any]:
         script = ROOT / "spikes" / "dualtrack_nautilus_shadow_replay.py"
-        environment = dict(os.environ)
+        # The replay subprocess is Paper-only.  Never inherit the host's
+        # exchange/live credentials or orchestration secrets, even when the
+        # parent service was started from a credentialed shell.
+        environment = {
+            key: os.environ[key]
+            for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ")
+            if os.environ.get(key) is not None
+        }
         existing = environment.get("PYTHONPATH", "")
         environment["PYTHONPATH"] = str(ROOT) if not existing else f"{ROOT}{os.pathsep}{existing}"
         result = subprocess.run(
