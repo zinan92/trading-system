@@ -1,5 +1,36 @@
 # Decision Log
 
+## Make Park input explicit and risk sizing deterministic (Issue #655)
+
+Date: 2026-08-14
+
+### Decision
+
+- Park must explicitly provide direction, DCA/Grid type, upper/lower boundaries,
+  and either maximum leverage or maximum acceptable loss.  Chinese and English
+  spellings normalize to one canonical input.
+- Current price is read only from a trusted, fresh market envelope.  The plan
+  requires authoritative Paper equity and never defaults to an invented 10,000.
+- Leverage and maximum-loss constraints become notional caps; when both exist,
+  the stricter cap wins and both caps are persisted in the plan.
+- Missing stop/take-profit values remain missing.  The authorized upper/lower
+  range is recorded as the explicit invalidation boundary; no stop is guessed.
+- The resulting normalized input, market evidence, risk calculation, and digest
+  are deterministic and not execution authorization.
+
+### Gotchas
+
+- The planner computes a conservative single/default order count when Park does
+  not specify one; this is a sizing policy, not permission to infer direction,
+  boundaries, stops, or risk authority.  Later DCA/Grid stories own geometry.
+- This module does not call AI or an exchange and does not replace existing
+  DCA/Grid builders until the exact confirmation gate is wired.
+
+### Verification
+
+- Focused tests cover Park's Chinese example, English Grid input, missing fields,
+  trusted/fresh/equity gates, strictest-cap selection, and deterministic replay.
+
 ## Make Telegram durable, authenticated, and explicit about delivery (Issue #653)
 
 Date: 2026-08-14
