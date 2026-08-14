@@ -23,6 +23,11 @@ from services.park_cutover_guard import evaluate_park_cutover, load_default_conf
 from services.park_dca_track import ParkDcaLifecycle
 from services.park_grid_track import ParkGridLifecycle
 from services.park_paper_preflight import ParkPaperPreflightError, build_park_paper_preflight
+from services.park_paper_mutation_gate import (
+    ParkPaperAdapterBinding,
+    ParkPaperMutationCapability,
+    _mint_park_paper_capability,
+)
 from services.park_recording_track import ParkRecordingTrack
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
@@ -110,6 +115,8 @@ class ParkPaperRuntime:
         market_reader: Callable[[], Mapping[str, Any]] | None = None,
         now: Callable[[], str] | None = None,
         safety_evidence_reader: Callable[[], Mapping[str, Any]] | None = None,
+        mutation_authorizer: Callable[[ParkPaperMutationCapability], None] | None = None,
+        mutation_revoker: Callable[[], None] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.adapter = adapter
@@ -124,6 +131,8 @@ class ParkPaperRuntime:
         self.market_reader = market_reader
         self.now = now or _utc_now
         self.safety_evidence_reader = safety_evidence_reader or (lambda: {})
+        self.mutation_authorizer = mutation_authorizer
+        self.mutation_revoker = mutation_revoker
         self.identity = ParkStrategyIdentityJournal(self.output_root)
         self.recording = ParkRecordingTrack(self.output_root)
         self.telegram = ParkTelegramLedger(
@@ -254,6 +263,7 @@ class ParkPaperRuntime:
                 session=session,
                 revision=revision,
                 digest=digest,
+                cycle_id=cycle_id,
                 confirmation=confirmation,
                 gate=gate,
             )
@@ -966,27 +976,29 @@ class ParkPaperRuntime:
         session: str,
         revision: str,
         digest: str,
+        cycle_id: str,
         confirmation: Mapping[str, Any],
         gate: Mapping[str, Any],
     ) -> None:
-        grant = getattr(self.adapter, "grant_park_mutation", None)
-        if not callable(grant):
+        if not callable(self.mutation_authorizer):
             return
-        grant(
-            {
-                "issuer": "ParkPaperRuntime.run_once",
-                "strategy_session_id": session,
-                "strategy_revision_id": revision,
-                "plan_digest": digest,
-                "park_confirmation_digest": str(confirmation.get("plan_digest") or ""),
-                "cutover_status": str(gate.get("status") or ""),
-            }
+        self.mutation_authorizer(
+            _mint_park_paper_capability(
+                {
+                    "issuer": "ParkPaperRuntime.run_once",
+                    "cycle_id": cycle_id,
+                    "strategy_session_id": session,
+                    "strategy_revision_id": revision,
+                    "plan_digest": digest,
+                    "park_confirmation_digest": str(confirmation.get("plan_digest") or ""),
+                    "cutover_status": str(gate.get("status") or ""),
+                }
+            )
         )
 
     def _revoke_adapter_mutation(self) -> None:
-        revoke = getattr(self.adapter, "revoke_park_mutation", None)
-        if callable(revoke):
-            revoke()
+        if callable(self.mutation_revoker):
+            self.mutation_revoker()
 
     @staticmethod
     def _result(status: str, **payload: Any) -> dict[str, Any]:
@@ -1009,7 +1021,7 @@ def build_park_authoritative_adapter(
     *,
     config: Mapping[str, Any] | None = None,
     environ: Mapping[str, str] | None = None,
-) -> ExecutionEngineAdapter:
+) -> ParkPaperAdapterBinding:
     """Build only the direct attended Nautilus Paper adapter; never a wrapper."""
 
     settings = dict(config or load_default_config())

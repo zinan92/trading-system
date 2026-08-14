@@ -18,7 +18,7 @@ from services.execution_engine_port import (
 )
 from services.journal_store import load_json
 from services.legacy_paper_execution_adapter import LegacyPaperExecutionAdapter
-from services.park_paper_mutation_gate import ParkPaperMutationGate
+from services.park_paper_mutation_gate import ParkPaperAdapterBinding, _new_park_paper_mutation_gate
 from services.park_paper_preflight import ParkPaperPreflightError, validate_park_paper_preflight
 
 
@@ -215,25 +215,33 @@ def build_park_direct_paper_adapter(
         raise RuntimeError("Park Paper authority requires attended approval")
     if (config.get("execution_engine") or {}).get("real_money_eligible") is not False:
         raise RuntimeError("Park direct Paper authority is Paper-only")
+    expected_config_digest = str(config.get("park_paper_preflight_config_digest") or "").strip()
+    if not expected_config_digest:
+        raise RuntimeError("Park direct Paper authority requires a preflight config digest")
     preflight_rows = load_json(Path(preflight_path))
     preflight = preflight_rows[-1] if preflight_rows and isinstance(preflight_rows[-1], dict) else {}
     try:
         validate_park_paper_preflight(
             preflight,
-            expected_config_digest=str(config.get("park_paper_preflight_config_digest") or ""),
+            expected_config_digest=expected_config_digest,
         )
     except ParkPaperPreflightError as exc:
         raise RuntimeError(f"Park Paper preflight is not admissible: {exc.code}") from exc
     from services.dualtrack_nautilus_execution_adapter import NautilusExecutionAdapter
 
-    mutation_gate = ParkPaperMutationGate()
-    return NautilusExecutionAdapter(
+    mutation_gate = _new_park_paper_mutation_gate()
+    adapter = NautilusExecutionAdapter(
         Path(output_root),
         nautilus_python=runtime_path,
         storage_namespace="nautilus_authoritative",
         preflight_path=Path(preflight_path),
         mutation_gate=mutation_gate,
         config=dict(config),
+    )
+    return ParkPaperAdapterBinding(
+        adapter=adapter,
+        authorize=mutation_gate._activate,
+        revoke=mutation_gate.revoke,
     )
 
 
