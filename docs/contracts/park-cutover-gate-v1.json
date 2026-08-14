@@ -1,0 +1,11 @@
+{
+  "contract_id": "park-cutover-gate-v1",
+  "default": "disabled_and_blocked",
+  "execution_track_count": 1,
+  "runtime_mode": "paper_only",
+  "control_plane": "telegram",
+  "forbidden_mutation_paths": ["autonomous", "shadow", "feishu", "live"],
+  "required_evidence": ["release_sha", "boot_verified", "trusted_market", "tick_freshness", "stale_cycle_state", "reconciliation", "immutable_fill", "park_risk_confirmation", "paper_only", "release_sha_ownership", "boot", "supervisor_fail_closed"],
+  "guard_mutations": false,
+  "repository_tests_are_runtime_ready": false
+}

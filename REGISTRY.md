@@ -13,6 +13,12 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-14)
+- #665 adds the default-off, read-only Park cutover/release gate.  Explicit
+  enablement still requires one Paper track, Telegram-only control, no
+  Autonomous/Shadow/Feishu mutation, exact release SHA and boot proof, and all
+  trusted-market/tick/stale-state/reconciliation/immutable-fill/Park-risk/
+  Paper/SHA/boot/Supervisor gates.  Repository pass is not runtime readiness;
+  no current Supervisor, deployment, Cloud, order, or position path changed.
 - #663 adds the independent Park Recording Track.  Each Beijing 12-hour
   manifest binds the same strategy session/revision across windows, records
   control/plan/order/fill/position/exit/Telegram/provider/tick/runtime/

@@ -1,0 +1,10 @@
+{
+  "feature_enabled": false,
+  "execution_track_count": 1,
+  "runtime_mode": "paper_only",
+  "control_plane": "telegram",
+  "autonomous": false,
+  "shadow_mutation": false,
+  "feishu_control": false,
+  "deployment_required": true
+}
