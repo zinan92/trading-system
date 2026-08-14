@@ -1,0 +1,139 @@
+{
+  "contract_id": "park-strategy-track-v1",
+  "status": "approved_design_implementation_default_off",
+  "authority": {
+    "owner": "Park",
+    "execution_track_count": 1,
+    "control_plane": "telegram",
+    "runtime_mode": "paper_only"
+  },
+  "feature_flag": {
+    "name": "park_strategy_track_v1",
+    "enabled_by_default": false,
+    "runtime_wiring_present": false,
+    "enablement_rule": "a_later_issue_must_supply_runtime_wiring_tests_and_a_separate_release_decision"
+  },
+  "strategy_input": {
+    "park_must_authorize": [
+      "direction",
+      "strategy_type",
+      "upper_price_boundary",
+      "lower_price_boundary",
+      "maximum_leverage_or_maximum_acceptable_loss"
+    ],
+    "system_reads_from_trusted_market": [
+      "current_price",
+      "observed_at",
+      "market_source"
+    ],
+    "must_not_be_inferred": [
+      "direction",
+      "strategy_type",
+      "price_boundaries",
+      "risk_authority"
+    ]
+  },
+  "identities": {
+    "strategy_session_id": "one_clean_slate_to_terminal_closure",
+    "strategy_revision_id": "one_exact_calculated_and_confirmed_plan",
+    "record_window_id": "one_beijing_time_12h_fact_slice"
+  },
+  "primary_state_machine": [
+    "IDLE_CLEAN",
+    "PLAN_CALCULATED",
+    "AWAITING_CONFIRMATION",
+    "ACTIVE_LOCKED",
+    "BOUNDARY_TRIGGERED",
+    "CLOSING",
+    "RECONCILED",
+    "PAUSED"
+  ],
+  "clean_slate_admission": {
+    "decision": "fail_closed",
+    "all_required": [
+      "reconciliation_healthy",
+      "no_open_positions",
+      "no_open_or_accepted_orders",
+      "no_unresolved_prior_runtime",
+      "no_pending_terminal_actions"
+    ],
+    "on_failure": "reject_proposal_without_runtime_order_or_position_mutation"
+  },
+  "confirmation": {
+    "required": true,
+    "binding": "exact_strategy_revision_id_and_plan_digest",
+    "duplicate_result": "idempotent_same_result",
+    "stale_result": "reject_without_side_effect"
+  },
+  "active_strategy": {
+    "authority": "immutable_while_active",
+    "replacement": "forbidden",
+    "reversal": "forbidden",
+    "parameter_edit": "forbidden",
+    "reconfirmation": "forbidden",
+    "attempted_change_result": "reject_without_runtime_order_or_position_mutation"
+  },
+  "boundary_invalidation": {
+    "trigger": "trusted_fresh_market_price_touches_or_crosses_either_authorized_boundary",
+    "automatic_authority": "preauthorized_by_exact_park_confirmation",
+    "ordered_actions": [
+      "freeze_new_entries",
+      "cancel_remaining_strategy_entries",
+      "close_all_strategy_owned_positions",
+      "reconcile",
+      "persist_closure",
+      "notify_park",
+      "enter_paused"
+    ],
+    "after_terminal": [
+      "no_automatic_reopen",
+      "no_direction_inference",
+      "wait_for_new_clean_slate_strategy"
+    ]
+  },
+  "structural_failure_overlay": {
+    "state": "BLOCKED_MANUAL",
+    "entry_authority": "freeze_new_exposure",
+    "position_authority": "no_automatic_flatten_without_the_confirmed_boundary_trigger",
+    "required_actions": [
+      "preserve_existing_protective_exits_when_safe",
+      "persist_exact_blocker",
+      "notify_park",
+      "wait_for_park"
+    ]
+  },
+  "recording_windows": {
+    "timezone": "Asia/Shanghai",
+    "boundaries": [
+      "09:00",
+      "21:00"
+    ],
+    "authority": "record_facts_generate_12h_package_and_review_only",
+    "forbidden_effects": [
+      "strategy_switch",
+      "strategy_replan",
+      "cancel_orders",
+      "flatten_positions"
+    ]
+  },
+  "excluded_capabilities": [
+    "autonomous_strategy_track",
+    "shadow_strategy",
+    "feishu_control_plane",
+    "multiple_execution_tracks",
+    "live_or_real_money_execution",
+    "exchange_key_handling"
+  ],
+  "preserved_gates": [
+    "trusted_market",
+    "tick_freshness",
+    "stale_cycle_state",
+    "reconciliation",
+    "immutable_fill",
+    "park_risk_confirmation",
+    "paper_only",
+    "release_sha_ownership",
+    "boot",
+    "supervisor_fail_closed"
+  ]
+}

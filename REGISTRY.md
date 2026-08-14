@@ -13,6 +13,14 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-14)
+- #647 establishes the approved, default-off repository contract for the next
+  Park Strategy Track: exactly one Paper execution track, Telegram as the sole
+  future control plane, clean-slate-only admission, an immutable active
+  strategy, and automatic terminal close only when a Park-confirmed price
+  boundary is touched.  Strategy session/revision identity is independent of
+  the Beijing-time 12-hour recording window.  This issue changes no runtime,
+  order, position, deployment, or Cloud state; implementation wiring remains
+  deliberately absent and must proceed through later atomic Issues.
 - #642 / PR #643 and #644 / PR #645 are merged and deployed on Cloud Paper as
   exact clean `main@29ecd3e83b54d129bfba46fc827c228797ead1b`, tree
   `51d2c465a281cd98eeff8da67cd31b5247cbeb51`; the source symlink was switched

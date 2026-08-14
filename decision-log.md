@@ -1,5 +1,53 @@
 # Decision Log
 
+## Lock one Park strategy from clean slate to boundary closure (Issue #647)
+
+Date: 2026-08-14
+
+### Decision
+
+- Park is the sole strategy authority.  The next track contains exactly one
+  Paper execution strategy and uses Telegram as its only future control plane.
+- A new strategy is admissible only from a reconciled clean slate: no open
+  position, accepted/open order, unresolved runtime, or pending terminal
+  action.  Once Park confirms the exact calculated revision, it is immutable
+  until a confirmed upper or lower price boundary is touched.
+- The system reads current price, observation time, and source from the trusted
+  market path.  It never infers Park's direction, strategy type, boundaries,
+  or risk authority.
+- A boundary touch preauthorizes one ordered terminal sequence: freeze entries,
+  cancel remaining strategy entries, close every strategy-owned position,
+  reconcile, persist closure, notify Park, and pause.  It never automatically
+  reopens or chooses another direction.
+- A 09:00/21:00 Beijing-time boundary closes only a recording slice.  Strategy
+  session/revision identity is independent from `record_window_id`; recording
+  cannot switch, replan, cancel, or flatten a strategy.
+- The new capability remains default-off with no runtime wiring in #647.  Each
+  later behavior change requires its own Issue, branch, PR, focused tests, and
+  release decision.
+
+### Gotchas
+
+- “The strategy cannot change” removes the old-switch coexistence problem; it
+  does not remove exact-plan confirmation.  Confirmation still binds the
+  calculated risk, leverage, order geometry, and boundary authority to one
+  immutable revision.
+- A structural blocker freezes new exposure and alerts Park.  It is not itself
+  permission to flatten; automatic close authority comes only from the exact
+  confirmed boundary trigger.
+- The current runtime still couples execution to 12-hour cycle identity and
+  contains autonomous/Shadow/Feishu paths.  This contract documents the target
+  and adds regression checks; it does not claim those paths are cut over.
+
+### Verification
+
+- Static contract tests verify single-track Telegram Paper authority,
+  default-off runtime wiring, independent execution/recording identities,
+  clean-slate admission, immutable active state, ordered boundary closure,
+  excluded capabilities, and preservation of every named safety gate.
+- No service, runtime, order, position, deployment, or Cloud mutation is part
+  of this Issue.
+
 ## Use systemd-injected Cloud notification environment (Issue #622)
 
 Date: 2026-08-12
