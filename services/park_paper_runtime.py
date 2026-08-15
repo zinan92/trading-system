@@ -1049,29 +1049,69 @@ class ParkPaperRuntime:
             return
         manifests = [row for row in self.recording.events() if row.get("event") == "manifest_started"]
         packages = {str(row.get("record_window_id")) for row in self.recording.packages()}
+        manifests_by_window: dict[str, list[dict[str, Any]]] = {}
         for manifest in manifests:
             window_id = str(manifest.get("record_window_id") or "")
-            if not window_id or window_id in packages:
+            if window_id:
+                manifests_by_window.setdefault(window_id, []).append(manifest)
+        active = self.identity.active_session()
+        active_pair = (
+            str(active.get("strategy_session_id") or ""),
+            str(active.get("strategy_revision_id") or ""),
+        ) if active else ("", "")
+        for window_id, window_manifests in manifests_by_window.items():
+            if window_id in packages:
                 continue
             try:
-                ends = datetime.fromisoformat(str(manifest.get("ends_at") or "").replace("Z", "+00:00"))
+                ends = datetime.fromisoformat(
+                    str(window_manifests[-1].get("ends_at") or "").replace("Z", "+00:00")
+                )
             except ValueError:
                 continue
             if ends > current:
                 continue
-            session = str(manifest.get("strategy_session_id") or "")
-            revision = str(manifest.get("strategy_revision_id") or "")
+            window_events = [
+                row for row in self.recording.events() if row.get("record_window_id") == window_id
+            ]
+            window_pairs = {
+                (
+                    str(row.get("strategy_session_id") or ""),
+                    str(row.get("strategy_revision_id") or ""),
+                )
+                for row in window_events
+                if str(row.get("strategy_session_id") or "")
+                and str(row.get("strategy_revision_id") or "")
+            }
+            selected = window_manifests[-1]
+            if active_pair != ("", "") and active_pair in window_pairs:
+                selected_pair = active_pair
+                strategy_open = True
+            else:
+                selected_pair = (
+                    str(selected.get("strategy_session_id") or ""),
+                    str(selected.get("strategy_revision_id") or ""),
+                )
+                strategy_open = False
+            session, revision = selected_pair
             latest_positions = [
                 row
-                for row in reversed(self.recording.events())
-                if row.get("record_window_id") == window_id and row.get("category") == "positions"
+                for row in reversed(window_events)
+                if row.get("category") == "positions"
+                and (
+                    str(row.get("strategy_session_id") or ""),
+                    str(row.get("strategy_revision_id") or ""),
+                ) == selected_pair
             ]
+            if not latest_positions:
+                latest_positions = [
+                    row for row in reversed(window_events) if row.get("category") == "positions"
+                ]
             payload = dict((latest_positions[0] if latest_positions else {}).get("payload") or {})
             package = self.recording.close_package(
                 record_window_id=window_id,
                 strategy_session_id=session,
                 strategy_revision_id=revision,
-                strategy_open=bool(self.identity.active_session() and self.identity.active_session().get("strategy_session_id") == session),
+                strategy_open=strategy_open,
                 positions_open=int(payload.get("open_count") or 0),
             )
             review = self.recording.review(record_window_id=window_id)

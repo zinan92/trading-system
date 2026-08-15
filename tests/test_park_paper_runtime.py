@@ -4,6 +4,7 @@ import copy
 from pathlib import Path
 
 from services.park_paper_runtime import ParkPaperRuntime, build_park_authoritative_adapter
+from services.park_recording_track import REQUIRED_CATEGORIES
 from services.park_strategy_plan import normalize_park_input
 from services.park_strategy_plan import build_deterministic_risk_plan
 from services.park_strategy_session import ParkStrategyIdentityJournal
@@ -482,3 +483,70 @@ def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identi
     assert adapter.cancel_calls == []
     assert adapter.submit_calls and len(adapter.submit_calls) == 1
     assert any(row.get("record_window_id") == "2026-08-14_DAY" for row in runtime.recording.packages())
+
+
+def test_multi_session_recording_close_keeps_new_active_identity_open(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T10:00:00+00:00",
+        "symbol": "GOLD",
+    }
+    runtime = _runtime(output, FakePaperAdapter(), market)
+    old = runtime.identity.start_clean_session(
+        observed_at="2026-08-14T10:00:00+00:00",
+        plan_digest="sha256:" + "1" * 64,
+        reconciliation_healthy=True,
+        strategy_session_id="session-old",
+        strategy_revision_id="revision-old",
+    )
+    runtime.identity.close_session(
+        strategy_session_id=old["strategy_session_id"],
+        strategy_revision_id=old["strategy_revision_id"],
+        observed_at="2026-08-14T11:00:00+00:00",
+        reason="boundary",
+    )
+    new = runtime.identity.start_clean_session(
+        observed_at="2026-08-14T11:30:00+00:00",
+        plan_digest="sha256:" + "2" * 64,
+        reconciliation_healthy=True,
+        strategy_session_id="session-new",
+        strategy_revision_id="revision-new",
+    )
+    for session, revision in (
+        (old["strategy_session_id"], old["strategy_revision_id"]),
+        (new["strategy_session_id"], new["strategy_revision_id"]),
+    ):
+        runtime.recording.start_window(
+            record_window_id="2026-08-14_DAY",
+            strategy_session_id=session,
+            strategy_revision_id=revision,
+            starts_at="2026-08-14T01:00:00Z",
+            ends_at="2026-08-14T13:00:00Z",
+        )
+        for category in REQUIRED_CATEGORIES:
+            runtime.recording.record_event(
+                record_window_id="2026-08-14_DAY",
+                strategy_session_id=session,
+                strategy_revision_id=revision,
+                category=category,
+                event_type=f"{category}_observed",
+                source="test",
+                occurred_at="2026-08-14T12:30:00Z",
+                payload={"open_count": 2} if category == "positions" else {},
+            )
+
+    runtime._close_due_recording_packages("2026-08-14T13:01:00+00:00")
+
+    package = runtime.recording.packages()[0]
+    assert package["status"] == "complete"
+    assert package["strategy_open"] is True
+    assert package["positions_open"] == 2
+    assert package["strategy_session_id"] == ""
+    assert package["strategy_session_ids"] == ["session-new", "session-old"]
+    assert package["strategy_revision_ids"] == ["revision-new", "revision-old"]
+    assert package["execution_mutations"] == []
