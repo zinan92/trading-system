@@ -63,25 +63,57 @@ class ParkGridLifecycle:
             raise ParkGridLifecycleError("invalid_grid_count", "Grid count must be positive")
         lower = float(self.normalized["lower_price_boundary"])
         upper = float(self.normalized["upper_price_boundary"])
+        current = float((self.plan.get("market") or {}).get("price") or 0.0)
         step = (upper - lower) / (count + 1)
         direction = str(self.normalized["direction"])
+        if direction == "neutral" and not lower < current < upper:
+            raise ParkGridLifecycleError(
+                "neutral_grid_requires_interior_price",
+                "neutral Grid requires the current price to be strictly inside its range",
+            )
         quantity = float((self.plan.get("risk") or {}).get("per_order_quantity") or 0)
         if quantity <= 0:
             raise ParkGridLifecycleError("risk_incomplete", "Grid risk plan has no executable quantity")
-        self._levels = [
-            {
-                "command_type": "grid_level",
-                "level_id": f"{self.revision_id}:grid:{index + 1}",
-                "strategy_session_id": self.session_id,
-                "strategy_revision_id": self.revision_id,
-                "plan_digest": self.plan_digest,
-                "direction": direction,
-                "price": round(lower + step * (index + 1), 12),
-                "quantity": quantity,
-                "geometry_locked": True,
-            }
-            for index in range(count)
-        ]
+        prices = [round(lower + step * (index + 1), 12) for index in range(count)]
+        levels: list[dict[str, Any]] = []
+        for index, price in enumerate(prices):
+            side = None
+            protections: dict[str, float] = {}
+            if direction == "neutral":
+                side = "buy" if price < current else "sell"
+                if side == "buy":
+                    # A filled buy exits at the next higher grid line; the
+                    # lower authorized boundary is its hard stop.
+                    next_level = prices[index + 1] if index + 1 < len(prices) else upper
+                    protections = {"tp": next_level, "sl": lower}
+                else:
+                    # A filled sell exits at the next lower grid line; the
+                    # upper authorized boundary is its hard stop.
+                    next_level = prices[index - 1] if index > 0 else lower
+                    protections = {"tp": next_level, "sl": upper}
+            levels.append(
+                {
+                    "command_type": "grid_level",
+                    "level_id": f"{self.revision_id}:grid:{index + 1}",
+                    "strategy_session_id": self.session_id,
+                    "strategy_revision_id": self.revision_id,
+                    "plan_digest": self.plan_digest,
+                    "direction": direction,
+                    "side": side,
+                    "price": price,
+                    "quantity": quantity,
+                    "geometry_locked": True,
+                    **protections,
+                }
+            )
+        if direction == "neutral":
+            sides = {str(row.get("side") or "") for row in levels}
+            if sides != {"buy", "sell"}:
+                raise ParkGridLifecycleError(
+                    "neutral_grid_requires_two_legs",
+                    "neutral Grid must create at least one buy and one sell entry",
+                )
+        self._levels = levels
         return [dict(row) for row in self._levels]
 
     def observe(self, *, price: float, trusted: bool, fresh: bool) -> dict[str, Any]:
@@ -121,12 +153,17 @@ class ParkGridLifecycle:
         }
 
     def _notification(self, action: Mapping[str, Any]) -> dict[str, Any]:
+        position_text = (
+            "owned positions preserved for reconciliation"
+            if action.get("position_authority") == "preserve_strategy_owned_positions"
+            else "owned positions closed only for this exact strategy"
+        )
         return self.telegram.queue_outbound(
             idempotency_key=f"park-grid-terminal:{self.session_id}:{self.revision_id}",
             message_type="grid_terminal",
             text=(
                 f"Grid terminal: {action['boundary']} boundary at {action['observed_price']}; "
-                "geometry frozen, entries canceled, positions reconcile, paused; await Park."
+                f"geometry frozen, entries canceled, {position_text}, paused; await Park."
             ),
             binding={"strategy_session_id": self.session_id, "strategy_revision_id": self.revision_id},
         )

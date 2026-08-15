@@ -462,13 +462,19 @@ class ParkPaperRuntime:
         if price <= 0 or quantity <= 0:
             raise ParkPaperRuntimeError("risk_incomplete", "Park entry command has no positive price/quantity")
         direction = str(source.get("direction") or normalized.get("direction") or "")
-        if direction not in {"long", "short"}:
+        if direction not in {"long", "short", "neutral"}:
             raise ParkPaperRuntimeError("direction_invalid", "Park entry direction is invalid")
+        if direction == "neutral":
+            side = str(source.get("side") or "").lower()
+            if side not in {"buy", "sell"}:
+                raise ParkPaperRuntimeError("neutral_grid_side_invalid", "neutral Grid entry must declare buy or sell")
+        else:
+            side = "buy" if direction == "long" else "sell"
         command: dict[str, Any] = {
             "cycle_id": cycle_id,
             "ts": observed_at,
             "event": "entry",
-            "side": "buy" if direction == "long" else "sell",
+            "side": side,
             "order_type": "limit",
             "price": price,
             "market_price": current_price,
@@ -487,9 +493,15 @@ class ParkPaperRuntime:
             "market_source": str(market.get("source") or ""),
             "market_fresh": True,
         }
-        for key in ("stop_price", "take_profit_price"):
-            if normalized.get(key) not in (None, ""):
-                command["sl" if key == "stop_price" else "tp"] = normalized[key]
+        for source_key, target_key, normalized_key in (
+            ("sl", "sl", "stop_price"),
+            ("tp", "tp", "take_profit_price"),
+        ):
+            value = source.get(source_key)
+            if value in (None, ""):
+                value = normalized.get(normalized_key)
+            if value not in (None, ""):
+                command[target_key] = value
         return command
 
     def _terminal(
@@ -714,11 +726,17 @@ class ParkPaperRuntime:
             lower = float(normalized.get("lower_price_boundary"))
         except (TypeError, ValueError):
             return {"reason": "boundary_invalid"}
-        if price >= upper:
-            return {"reason": "upper_boundary_invalidated", "close_positions": True}
-        if price <= lower:
-            return {"reason": "lower_boundary_invalidated", "close_positions": True}
         direction = str(normalized.get("direction") or "")
+        if price >= upper:
+            return {
+                "reason": "upper_boundary_invalidated",
+                "close_positions": direction != "neutral",
+            }
+        if price <= lower:
+            return {
+                "reason": "lower_boundary_invalidated",
+                "close_positions": direction != "neutral",
+            }
         stop = normalized.get("stop_price")
         target = normalized.get("take_profit_price")
         if stop not in (None, ""):

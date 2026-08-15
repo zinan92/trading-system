@@ -37,6 +37,33 @@ def _grid(tmp_path: Path) -> ParkGridLifecycle:
     return ParkGridLifecycle(_plan(), confirmation_receipt=_receipt(), output_root=tmp_path / "outputs", park_user_id="park", chat_id="chat")
 
 
+def _neutral_plan() -> dict:
+    return {
+        "plan_digest": "sha256:" + "a" * 64,
+        "market": {"price": 4300.0},
+        "normalized_input": {
+            "strategy_session_id": "session-1",
+            "strategy_revision_id": "revision-1",
+            "strategy_type": "grid",
+            "direction": "neutral",
+            "upper_price_boundary": 4450.0,
+            "lower_price_boundary": 4100.0,
+            "order_count": 30,
+        },
+        "risk": {"order_count": 30, "per_order_quantity": 0.1},
+    }
+
+
+def _neutral_grid(tmp_path: Path) -> ParkGridLifecycle:
+    return ParkGridLifecycle(
+        _neutral_plan(),
+        confirmation_receipt=_receipt(),
+        output_root=tmp_path / "outputs",
+        park_user_id="park",
+        chat_id="chat",
+    )
+
+
 def test_levels_are_deterministic_inside_range_and_owned(tmp_path: Path) -> None:
     grid = _grid(tmp_path)
     first = grid.levels()
@@ -57,6 +84,26 @@ def test_in_range_observation_has_no_reassessment_or_direction_change(tmp_path: 
     assert proposal["status"] == "proposal_only"
     assert proposal["current_strategy_unchanged"] is True
     assert proposal["requires_clean_slate"] is True
+
+
+def test_neutral_grid_levels_are_explicitly_bilateral_and_protected(tmp_path: Path) -> None:
+    grid = _neutral_grid(tmp_path)
+    levels = grid.levels()
+    assert len(levels) == 30
+    assert {row["side"] for row in levels} == {"buy", "sell"}
+    assert all(4100 < row["price"] < 4450 for row in levels)
+    assert all(row["sl"] == (4100.0 if row["side"] == "buy" else 4450.0) for row in levels)
+    assert all(
+        row["tp"] > row["price"] if row["side"] == "buy" else row["tp"] < row["price"]
+        for row in levels
+    )
+
+
+def test_neutral_boundary_preserves_positions_in_action_plan(tmp_path: Path) -> None:
+    grid = _neutral_grid(tmp_path)
+    result = grid.observe(price=4450, trusted=True, fresh=True)
+    assert result["action_plan"]["position_authority"] == "preserve_strategy_owned_positions"
+    assert "preserve_strategy_owned_positions" in result["action_plan"]["ordered_actions"]
 
 
 def test_both_boundaries_terminal_and_notification_idempotent(tmp_path: Path) -> None:
