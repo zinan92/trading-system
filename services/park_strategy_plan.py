@@ -10,13 +10,15 @@ from typing import Any, Mapping
 
 
 PARK_PLAN_SCHEMA = "park-strategy-plan-v1"
+DEFAULT_NEUTRAL_GRID_ORDER_COUNT = 30
 _DIRECTION_ALIASES = {
     "long": "long", "做多": "long", "多": "long",
     "short": "short", "做空": "short", "空": "short",
+    "neutral": "neutral", "中性": "neutral",
 }
 _TYPE_ALIASES = {
     "dca": "dca", "趋势": "dca", "trend": "dca",
-    "grid": "grid", "震荡": "grid", "range": "grid",
+    "grid": "grid", "网格": "grid", "震荡": "grid", "range": "grid",
 }
 _NUMBER = r"([0-9]+(?:\.[0-9]+)?)"
 
@@ -81,14 +83,21 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     if text:
         # Single-character ``多`` also appears in ``最多`` (maximum), so only
         # accept the explicit Chinese compound or English token in free text.
-        text_aliases = {"做多": "long", "做空": "short", "long": "long", "short": "short"}
+        text_aliases = {
+            "做多": "long",
+            "做空": "short",
+            "中性": "neutral",
+            "long": "long",
+            "short": "short",
+            "neutral": "neutral",
+        }
         matches = [normalized for alias, normalized in text_aliases.items() if alias in text.lower()]
         if len(set(matches)) > 1:
             raise ParkStrategyPlanError("ambiguous_direction", "direction is ambiguous")
         if matches:
             direction = matches[0]
-    if direction not in {"long", "short"}:
-        raise ParkStrategyPlanError("missing_direction", "Park must explicitly provide long or short")
+    if direction not in {"long", "short", "neutral"}:
+        raise ParkStrategyPlanError("missing_direction", "Park must explicitly provide long, short, or neutral")
 
     strategy_type: str | None = None
     raw_type = body.get("strategy_type") or body.get("type")
@@ -102,11 +111,19 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
             strategy_type = matches[0]
     if strategy_type not in {"dca", "grid"}:
         raise ParkStrategyPlanError("missing_strategy_type", "Park must explicitly provide DCA or Grid")
+    if direction == "neutral" and strategy_type != "grid":
+        raise ParkStrategyPlanError("neutral_direction_requires_grid", "neutral direction is only valid for Grid")
 
     upper = body.get("upper_price_boundary")
     lower = body.get("lower_price_boundary")
     if upper is None or lower is None:
         range_match = re.search(_NUMBER + r"\s*(?:~|～|-|到|至)\s*" + _NUMBER, text)
+        if range_match is None:
+            # Park often omits the tilde in a short Telegram message, e.g.
+            # ``中性网格策略 4450 4100 最大20x杠杆``.  Use only the first
+            # adjacent positive pair as the authorized range; all later
+            # numbers remain available for leverage/loss parsing.
+            range_match = re.search(_NUMBER + r"\s+" + _NUMBER, text)
         if range_match:
             first, second = float(range_match.group(1)), float(range_match.group(2))
             upper, lower = max(first, second), min(first, second)
@@ -136,6 +153,9 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
             ("止盈", "take(?:_profit)?(?:_price)?", "tp"),
             "take_profit_price",
         )
+    raw_order_count = body.get("order_count")
+    if raw_order_count in (None, ""):
+        raw_order_count = DEFAULT_NEUTRAL_GRID_ORDER_COUNT if direction == "neutral" and strategy_type == "grid" else 1
     result: dict[str, Any] = {
         "schema_version": PARK_PLAN_SCHEMA,
         "direction": direction,
@@ -146,7 +166,7 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "maximum_acceptable_loss": _number(max_loss, "maximum_acceptable_loss") if max_loss is not None else None,
         "stop_price": _number(stop_price, "stop_price") if stop_price is not None else None,
         "take_profit_price": _number(take_profit_price, "take_profit_price") if take_profit_price is not None else None,
-        "order_count": int(body.get("order_count", 1)),
+        "order_count": int(raw_order_count),
         "source_text": text or None,
     }
     if result["order_count"] <= 0:
@@ -183,8 +203,11 @@ def build_deterministic_risk_plan(
     """Build one immutable risk plan; no provider or execution side effects."""
 
     direction = str(normalized.get("direction") or "")
-    if direction not in {"long", "short"}:
+    strategy_type = str(normalized.get("strategy_type") or "")
+    if direction not in {"long", "short", "neutral"}:
         raise ParkStrategyPlanError("missing_direction", "normalized direction is invalid")
+    if direction == "neutral" and strategy_type != "grid":
+        raise ParkStrategyPlanError("neutral_direction_requires_grid", "neutral direction is only valid for Grid")
     current_price, source, observed_at = _market_price(market)
     equity = _number(account_equity, "account_equity") if account_equity is not None else None
     if equity is None:
@@ -194,6 +217,18 @@ def build_deterministic_risk_plan(
     if not lower <= current_price <= upper:
         raise ParkStrategyPlanError("current_price_outside_range", "strategy is already outside its authorized range")
     explicit_stop = normalized.get("stop_price")
+    explicit_take_profit = normalized.get("take_profit_price")
+    if direction == "neutral" and (explicit_stop not in (None, "") or explicit_take_profit not in (None, "")):
+        raise ParkStrategyPlanError(
+            "neutral_grid_boundary_only",
+            "neutral Grid uses its upper and lower boundaries as invalidation; stop/take-profit must be omitted",
+        )
+    if direction == "neutral" and not lower < current_price < upper:
+        raise ParkStrategyPlanError(
+            "neutral_grid_requires_interior_price",
+            "neutral Grid requires the trusted current price to be strictly inside its range",
+        )
+    neutral_legs: dict[str, dict[str, Any]] | None = None
     if explicit_stop not in (None, ""):
         stop_price = _number(explicit_stop, "stop_price")
         if direction == "long":
@@ -206,11 +241,34 @@ def build_deterministic_risk_plan(
             adverse_distance = stop_price - current_price
         risk_boundary = stop_price
         risk_boundary_source = "explicit_stop_price"
+    elif direction == "neutral":
+        long_distance = current_price - lower
+        short_distance = upper - current_price
+        long_fraction = round(long_distance / current_price, 12)
+        short_fraction = round(short_distance / current_price, 12)
+        # Every neutral Grid order is budgeted from the same total notional.
+        # Taking the larger bilateral adverse fraction is conservative: it
+        # remains a hard upper bound even when both sides have filled before a
+        # boundary breach is observed.
+        adverse_distance = max(long_distance, short_distance)
+        risk_boundary = {"lower": lower, "upper": upper}
+        risk_boundary_source = "authorized_price_boundaries"
+        neutral_legs = {
+            "long": {
+                "boundary": lower,
+                "adverse_distance": round(long_distance, 12),
+                "adverse_fraction": long_fraction,
+            },
+            "short": {
+                "boundary": upper,
+                "adverse_distance": round(short_distance, 12),
+                "adverse_fraction": short_fraction,
+            },
+        }
     else:
         adverse_distance = (current_price - lower) if direction == "long" else (upper - current_price)
         risk_boundary = lower if direction == "long" else upper
         risk_boundary_source = "authorized_price_boundary"
-    explicit_take_profit = normalized.get("take_profit_price")
     if explicit_take_profit not in (None, ""):
         take_profit_price = _number(explicit_take_profit, "take_profit_price")
         if (direction == "long" and take_profit_price <= current_price) or (
@@ -234,7 +292,11 @@ def build_deterministic_risk_plan(
     selected_constraint = "maximum_leverage" if loss_cap is None or (leverage_cap is not None and leverage_cap <= loss_cap) else "maximum_acceptable_loss"
     order_count = int(normalized.get("order_count") or 1)
     per_order_notional = round(max_notional / order_count, 12)
-    per_order_quantity = round(per_order_notional / current_price, 12)
+    # Neutral entries span both sides of the current mark.  Size against the
+    # highest possible entry price so the sum of accepted limit notionals never
+    # exceeds the hard notional cap when sell levels are above the mark.
+    quantity_price_basis = upper if direction == "neutral" else current_price
+    per_order_quantity = round(per_order_notional / quantity_price_basis, 12)
     theoretical_max_loss = round(max_notional * adverse_fraction, 12)
     risk = {
         "account_equity": equity,
@@ -248,8 +310,14 @@ def build_deterministic_risk_plan(
         "risk_boundary_source": risk_boundary_source,
         "order_count": order_count,
         "per_order_notional": per_order_notional,
+        "quantity_price_basis": quantity_price_basis,
         "per_order_quantity": per_order_quantity,
     }
+    if neutral_legs is not None:
+        for leg in neutral_legs.values():
+            leg["theoretical_max_loss"] = round(max_notional * float(leg["adverse_fraction"]), 12)
+        risk["legs"] = neutral_legs
+        risk["risk_model"] = "bilateral_conservative_max_leg"
     plan = {
         "schema_version": PARK_PLAN_SCHEMA,
         "strategy_session_id": str(normalized.get("strategy_session_id") or "").strip() or None,

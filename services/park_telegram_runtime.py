@@ -283,14 +283,6 @@ class ParkTelegramRouter:
             if isinstance(candidate, Mapping):
                 direction = str(candidate.get("direction") or "")
                 strategy_type = str(candidate.get("strategy_type") or "")
-                if direction == "neutral" and strategy_type == "grid":
-                    return self._block(
-                        code="neutral_grid_not_enabled",
-                        message=self._neutral_grid_message(candidate),
-                        binding=None,
-                        idempotency_key=f"park-neutral-grid:{update_id}",
-                        provider=provider,
-                    )
                 if direction == "neutral" and strategy_type not in {"", "grid"}:
                     return self._block(
                         code="neutral_direction_requires_grid",
@@ -464,7 +456,7 @@ class ParkTelegramRouter:
                 message_type="confirmation_receipt",
                 text=(
                     f"Park {event}: {proposal['plan_digest']}. "
-                    + ("Execution remains blocked until the Paper execution release is enabled." if event == "confirmed" else "No execution will be attempted; send a new clean-slate strategy after closure.")
+                    + ("Paper execution is authorized for the next trusted fresh tick; no live order will be sent." if event == "confirmed" else "No execution will be attempted; send a new clean-slate strategy after closure.")
                 ),
                 binding=active,
             )
@@ -527,11 +519,9 @@ class ParkTelegramRouter:
         return (
             "我理解你的意思是：中性网格"
             f"，区间 {lower}~{upper}，{risk_text}。\n"
-            "但当前 Park Paper 执行路径还没有启用中性双向 Grid，所以没有下单，也没有改变持仓。\n\n"
-            "当前可直接提交的示例：\n"
-            "1) 做多 Grid，区间 4450~4100，最大20倍杠杆\n"
-            "2) 做空 DCA，区间 4444~4200，最大10倍杠杆，止损=……，止盈=……\n\n"
-            "如果你要启用中性双向 Grid，我会先把它作为独立 Paper 能力接入，不会偷偷改成做多或做空。"
+            "中性 Grid 会拆成明确的买入腿和卖出腿；系统会先读取可信当前价，"
+            "计算双边风险并发回规范化计划。确认前不会下单，也不会改动持仓。\n\n"
+            "确认格式示例：confirm <plan_digest>；拒绝格式示例：reject <plan_digest>。"
         )
 
     @staticmethod
@@ -558,14 +548,24 @@ class ParkTelegramRouter:
     def _format_plan(plan: Mapping[str, Any], proposal: Mapping[str, Any]) -> str:
         risk = dict(plan.get("risk") or {})
         normalized = dict(plan.get("normalized_input") or {})
-        return (
-            "Park proposal (Paper-only, exact confirmation required)\n"
-            f"direction={normalized.get('direction')} type={normalized.get('strategy_type')}\n"
-            f"range={normalized.get('upper_price_boundary')}~{normalized.get('lower_price_boundary')} current={dict(plan.get('market') or {}).get('price')}\n"
-            f"max_notional={risk.get('maximum_notional')} effective_leverage={risk.get('effective_leverage')}x\n"
-            f"theoretical_max_loss={risk.get('theoretical_max_loss')} order_count={risk.get('order_count')} quantity_each={risk.get('per_order_quantity')}\n"
-            f"plan_digest={proposal.get('plan_digest')}\n"
-            f"Reply exactly: confirm {proposal.get('plan_digest')} or reject {proposal.get('plan_digest')}"
+        neutral_detail = ""
+        if normalized.get("direction") == "neutral":
+            legs = dict(risk.get("legs") or {})
+            neutral_detail = (
+                f"neutral_legs=buy→{legs.get('long', {}).get('boundary')} / "
+                f"sell→{legs.get('short', {}).get('boundary')}\n"
+            )
+        return "".join(
+            (
+                "Park proposal (Paper-only, exact confirmation required)\n",
+                f"direction={normalized.get('direction')} type={normalized.get('strategy_type')}\n",
+                f"range={normalized.get('upper_price_boundary')}~{normalized.get('lower_price_boundary')} current={dict(plan.get('market') or {}).get('price')}\n",
+                neutral_detail,
+                f"max_notional={risk.get('maximum_notional')} effective_leverage={risk.get('effective_leverage')}x\n",
+                f"theoretical_max_loss={risk.get('theoretical_max_loss')} order_count={risk.get('order_count')} quantity_each={risk.get('per_order_quantity')}\n",
+                f"plan_digest={proposal.get('plan_digest')}\n",
+                f"Reply exactly: confirm {proposal.get('plan_digest')} or reject {proposal.get('plan_digest')}",
+            )
         )
 
     def drain_outbound(self, transport: TelegramBotTransport) -> dict[str, Any]:

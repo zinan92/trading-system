@@ -37,6 +37,62 @@ def test_normalizes_english_grid_input_and_never_invents_stop() -> None:
     assert normalized["take_profit_price"] is None
 
 
+def test_normalizes_neutral_grid_as_a_first_class_bilateral_direction() -> None:
+    normalized = normalize_park_input("中性网格策略 4450 4100 最大20x杠杆")
+    assert normalized["direction"] == "neutral"
+    assert normalized["strategy_type"] == "grid"
+    assert normalized["order_count"] == 30
+    assert normalized["stop_price"] is None
+    assert normalized["take_profit_price"] is None
+
+
+def test_neutral_grid_risk_plan_is_bilateral_and_conservative() -> None:
+    normalized = normalize_park_input("中性网格策略 4450 4100 最大20x杠杆")
+    plan = build_deterministic_risk_plan(normalized, market=MARKET, account_equity=1000)
+    risk = plan["risk"]
+    assert risk["risk_boundary"] == {"lower": 4100.0, "upper": 4450.0}
+    assert set(risk["legs"]) == {"long", "short"}
+    assert risk["legs"]["long"]["boundary"] == 4100.0
+    assert risk["legs"]["short"]["boundary"] == 4450.0
+    assert risk["effective_leverage"] <= 20.0
+    assert risk["theoretical_max_loss"] > 0
+
+
+def test_neutral_direction_cannot_be_reinterpreted_as_dca() -> None:
+    with pytest.raises(ParkStrategyPlanError) as error:
+        normalize_park_input({
+            "direction": "neutral",
+            "strategy_type": "dca",
+            "upper_price_boundary": 4450,
+            "lower_price_boundary": 4100,
+            "maximum_leverage": 20,
+        })
+    assert error.value.code == "neutral_direction_requires_grid"
+
+
+def test_neutral_grid_uses_the_stricter_loss_cap_and_rejects_ambiguous_global_tp_sl() -> None:
+    normalized = normalize_park_input({
+        "direction": "neutral",
+        "strategy_type": "grid",
+        "upper_price_boundary": 4450,
+        "lower_price_boundary": 4100,
+        "maximum_leverage": 20,
+        "maximum_acceptable_loss": 10,
+        "stop_price": None,
+        "take_profit_price": None,
+    })
+    plan = build_deterministic_risk_plan(normalized, market=MARKET, account_equity=1000)
+    assert plan["risk"]["selected_constraint"] == "maximum_acceptable_loss"
+    assert plan["risk"]["theoretical_max_loss"] <= 10
+    with pytest.raises(ParkStrategyPlanError) as error:
+        build_deterministic_risk_plan(
+            {**normalized, "stop_price": 4000},
+            market=MARKET,
+            account_equity=1000,
+        )
+    assert error.value.code == "neutral_grid_boundary_only"
+
+
 @pytest.mark.parametrize("payload, code", [
     ({"strategy_type": "dca", "upper_price_boundary": 2, "lower_price_boundary": 1, "maximum_leverage": 2}, "missing_direction"),
     ({"direction": "short", "upper_price_boundary": 2, "lower_price_boundary": 1, "maximum_leverage": 2}, "missing_strategy_type"),

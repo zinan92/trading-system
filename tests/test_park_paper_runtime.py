@@ -182,6 +182,63 @@ def test_confirmation_is_the_only_path_to_paper_mutation(tmp_path: Path) -> None
     assert active["paper_only"] is True
 
 
+def test_confirmed_neutral_grid_submits_both_owned_legs_and_preserves_boundary_positions(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T10:00:00+00:00",
+        "symbol": "GOLD",
+    }
+    router = _router(output, market)
+    adapter = FakePaperAdapter()
+    runtime = _runtime(output, adapter, market)
+
+    proposal = router.handle_update(_update(11, "中性网格策略 4450 4100 最大20x杠杆"))
+    assert proposal["status"] == "proposal_created"
+    confirmed = router.handle_update(_update(12, f"confirm {proposal['proposal']['plan_digest']}"))
+    assert confirmed["status"] == "confirmed"
+
+    active = runtime.run_once()
+    assert active["status"] == "active"
+    assert len(adapter.submit_calls) == 30
+    assert {command["side"] for command in adapter.submit_calls} == {"buy", "sell"}
+    assert all(command["strategy_session_id"].startswith("session-") for command in adapter.submit_calls)
+    assert all(command["strategy_revision_id"].startswith("revision-") for command in adapter.submit_calls)
+    assert all("sl" in command and "tp" in command for command in adapter.submit_calls)
+    assert sum(command["price"] * command["quantity"] for command in adapter.submit_calls) <= proposal["plan"]["risk"]["maximum_notional"]
+    assert all(
+        command["sl"] < command["price"] < command["tp"]
+        if command["side"] == "buy"
+        else command["tp"] < command["price"] < command["sl"]
+        for command in adapter.submit_calls
+    )
+
+    session = ParkStrategyIdentityJournal(output).active_session()
+    adapter.positions.append(
+        {
+            "position_id": "neutral-position-1",
+            "trade_id": "neutral-trade-1",
+            "status": "open",
+            "side": "long",
+            "remaining_units": 0.1,
+            "strategy_session_id": session["strategy_session_id"],
+            "strategy_revision_id": session["strategy_revision_id"],
+            "plan_digest": proposal["proposal"]["plan_digest"],
+        }
+    )
+    market.update({"price": 4450.0, "observed_at": "2026-08-14T10:01:00+00:00"})
+    paused = runtime.run_once()
+    assert paused["status"] == "paused"
+    assert paused["terminal_reason"] == "upper_boundary_invalidated"
+    assert paused["positions_preserved"] == 1
+    assert len(adapter.cancel_calls) == 1
+    assert not any(command["event"] in {"exit", "stop", "target", "flatten"} for command in adapter.submit_calls)
+
+
 def test_explicit_stop_and_take_profit_are_parsed_but_never_inferred() -> None:
     normalized = normalize_park_input("做空 DCA，10 倍杠杆，区间 4444~4200，止损 4450，止盈 4210")
     assert normalized["stop_price"] == 4450.0

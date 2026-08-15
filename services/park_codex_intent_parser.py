@@ -129,8 +129,9 @@ def deterministic_neutral_grid_candidate(text: str) -> dict[str, Any] | None:
 
     This is deliberately smaller than the Codex parser.  It exists only so a
     provider timeout does not turn an otherwise clear ``中性网格`` message into
-    a misleading ``missing_direction`` response.  The returned candidate is
-    never sent to the risk planner: the router blocks neutral Grid explicitly.
+    a misleading ``missing_direction`` response.  The returned candidate still
+    has to pass the deterministic neutral-Grid risk planner and exact Park
+    confirmation before it can reach Paper execution.
     """
 
     source_text = str(text or "").strip()

@@ -8,6 +8,27 @@ from services.park_codex_intent_parser import CodexCliIntentParser, deterministi
 from services.park_telegram_runtime import ParkTelegramRouter
 
 
+_MARKET = {
+    "price": 4300.0,
+    "trusted": True,
+    "fresh": True,
+    "source": "test-feed",
+    "provider": "test-provider",
+    "observed_at": "2026-08-15T02:30:00+00:00",
+}
+
+
+def _account(_root: Path, _cycle_id: str) -> dict:
+    return {
+        "equity": 1000.0,
+        "reconciliation_healthy": True,
+        "open_positions": 0,
+        "open_or_accepted_orders": 0,
+        "unresolved_runtime": False,
+        "pending_terminal_actions": False,
+    }
+
+
 class _Completed:
     returncode = 0
     stdout = json.dumps(
@@ -116,6 +137,8 @@ def test_router_gives_natural_guidance_for_neutral_grid(tmp_path: Path) -> None:
         tmp_path / "outputs",
         park_user_id="park-user",
         chat_id="park-chat",
+        market_reader=lambda: dict(_MARKET),
+        account_reader=_account,
         intent_parser=FakeParser(),
     )
     result = router.handle_update(
@@ -130,12 +153,14 @@ def test_router_gives_natural_guidance_for_neutral_grid(tmp_path: Path) -> None:
         }
     )
 
-    assert result["status"] == "blocked"
-    assert result["code"] == "neutral_grid_not_enabled"
+    assert result["status"] == "proposal_created"
+    assert result["plan"]["normalized_input"]["direction"] == "neutral"
+    assert result["plan"]["risk"]["order_count"] == 30
     outbound = router.telegram.pending_outbound()[0]["text"]
-    assert "我理解你的意思是：中性网格" in outbound
-    assert "做空 DCA" in outbound
-    assert "code=" not in outbound
+    assert "direction=neutral type=grid" in outbound
+    assert "neutral_legs=buy" in outbound
+    assert "Reply exactly: confirm" in outbound
+    assert not list((tmp_path / "outputs" / "park_strategy").glob("executions.jsonl"))
     provider_rows = (tmp_path / "outputs" / "park_strategy" / "provider_calls.jsonl").read_text().splitlines()
     assert json.loads(provider_rows[-1])["provider"] == "codex_cli"
 
@@ -157,6 +182,8 @@ def test_router_uses_safe_neutral_grid_fallback_after_provider_timeout(tmp_path:
         tmp_path / "outputs",
         park_user_id="park-user",
         chat_id="park-chat",
+        market_reader=lambda: dict(_MARKET),
+        account_reader=_account,
         intent_parser=TimeoutParser(),
     )
     result = router.handle_update(
@@ -171,10 +198,11 @@ def test_router_uses_safe_neutral_grid_fallback_after_provider_timeout(tmp_path:
         }
     )
 
-    assert result["code"] == "neutral_grid_not_enabled"
+    assert result["status"] == "proposal_created"
+    assert result["plan"]["normalized_input"]["direction"] == "neutral"
     assert "没读清楚你的方向" not in router.telegram.pending_outbound()[0]["text"]
     assert result["provider"]["fallback"] == "deterministic_neutral_grid"
-    assert not list((tmp_path / "outputs" / "park_strategy").glob("plans.jsonl"))
+    assert list((tmp_path / "outputs" / "park_strategy").glob("plans.jsonl"))
 
 
 def test_router_help_is_local_and_does_not_call_provider(tmp_path: Path) -> None:
