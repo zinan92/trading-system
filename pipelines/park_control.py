@@ -55,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             park_user_id=args.park_user_id,
             chat_id=args.chat_id,
             intent_parser=intent_parser,
+            config=config,
         )
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
         try:
