@@ -109,6 +109,8 @@
       "21:00"
     ],
     "authority": "record_facts_generate_12h_package_and_review_only",
+    "execution_identity_binding": "strategy_session_id_and_strategy_revision_id_are_preserved_per_fact; a package uses identity lists when one window contains more than one clean-slate session",
+    "multiple_strategy_sessions_per_window": true,
     "forbidden_effects": [
       "strategy_switch",
       "strategy_replan",

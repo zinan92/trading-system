@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from services.park_recording_track import ParkRecordingTrack, REQUIRED_CATEGORIES
+import pytest
+
+from services.park_recording_track import ParkRecordingError, ParkRecordingTrack, REQUIRED_CATEGORIES
 
 
 def _recording(tmp_path: Path) -> ParkRecordingTrack:
@@ -42,6 +44,100 @@ def test_same_session_can_start_two_record_windows(tmp_path: Path) -> None:
     )
     assert second["strategy_session_id"] == "session-1"
     assert second["strategy_revision_id"] == "revision-1"
+
+
+def test_different_clean_slate_sessions_can_share_one_recording_window(tmp_path: Path) -> None:
+    track = _recording(tmp_path)
+    second = track.start_window(
+        record_window_id="2026-08-14_DAY",
+        strategy_session_id="session-2",
+        strategy_revision_id="revision-2",
+        starts_at="2026-08-14T01:00:00Z",
+        ends_at="2026-08-14T13:00:00Z",
+    )
+    assert second["strategy_session_id"] == "session-2"
+    manifests = [row for row in track.events() if row["event"] == "manifest_started"]
+    assert {(row["strategy_session_id"], row["strategy_revision_id"]) for row in manifests} == {
+        ("session-1", "revision-1"),
+        ("session-2", "revision-2"),
+    }
+
+
+def test_same_session_cannot_change_revision_inside_one_window(tmp_path: Path) -> None:
+    track = _recording(tmp_path)
+    with pytest.raises(ParkRecordingError) as error_info:
+        track.start_window(
+            record_window_id="2026-08-14_DAY",
+            strategy_session_id="session-1",
+            strategy_revision_id="revision-2",
+            starts_at="2026-08-14T01:00:00Z",
+            ends_at="2026-08-14T13:00:00Z",
+        )
+    assert error_info.value.code == "window_identity_conflict"
+
+
+def test_multi_session_package_preserves_all_identities(tmp_path: Path) -> None:
+    track = _recording(tmp_path)
+    track.start_window(
+        record_window_id="2026-08-14_DAY",
+        strategy_session_id="session-2",
+        strategy_revision_id="revision-2",
+        starts_at="2026-08-14T01:00:00Z",
+        ends_at="2026-08-14T13:00:00Z",
+    )
+    for session, revision in (("session-1", "revision-1"), ("session-2", "revision-2")):
+        for category in REQUIRED_CATEGORIES:
+            track.record_event(
+                record_window_id="2026-08-14_DAY",
+                strategy_session_id=session,
+                strategy_revision_id=revision,
+                category=category,
+                event_type=f"{category}_observed",
+                source="test",
+                occurred_at="2026-08-14T10:00:00Z",
+            )
+    package = track.close_package(
+        record_window_id="2026-08-14_DAY",
+        strategy_session_id="session-2",
+        strategy_revision_id="revision-2",
+        strategy_open=True,
+        positions_open=0,
+    )
+    assert package["status"] == "complete"
+    assert package["strategy_session_id"] == ""
+    assert package["strategy_session_ids"] == ["session-1", "session-2"]
+    assert package["strategy_revision_ids"] == ["revision-1", "revision-2"]
+
+
+def test_late_event_amendment_adds_new_session_identity(tmp_path: Path) -> None:
+    track = _recording(tmp_path)
+    _all_facts(track)
+    track.close_package(
+        record_window_id="2026-08-14_DAY",
+        strategy_session_id="session-1",
+        strategy_revision_id="revision-1",
+        strategy_open=False,
+        positions_open=0,
+    )
+    track.start_window(
+        record_window_id="2026-08-14_DAY",
+        strategy_session_id="session-2",
+        strategy_revision_id="revision-2",
+        starts_at="2026-08-14T01:00:00Z",
+        ends_at="2026-08-14T13:00:00Z",
+    )
+    amendment = track.amend_late_event(
+        record_window_id="2026-08-14_DAY",
+        strategy_session_id="session-2",
+        strategy_revision_id="revision-2",
+        category="control",
+        event_type="session_started_late",
+        source="test",
+        occurred_at="2026-08-14T12:30:00Z",
+    )
+    assert amendment["strategy_session_id"] == ""
+    assert amendment["strategy_session_ids"] == ["session-1", "session-2"]
+    assert amendment["strategy_revision_ids"] == ["revision-1", "revision-2"]
 
 
 def test_complete_package_allows_open_strategy_and_positions(tmp_path: Path) -> None:

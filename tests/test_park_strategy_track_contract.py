@@ -43,6 +43,7 @@ def test_execution_identity_is_independent_from_recording_windows() -> None:
     assert contract["recording_windows"]["authority"] == (
         "record_facts_generate_12h_package_and_review_only"
     )
+    assert contract["recording_windows"]["multiple_strategy_sessions_per_window"] is True
     assert set(contract["recording_windows"]["forbidden_effects"]) == {
         "strategy_switch",
         "strategy_replan",
