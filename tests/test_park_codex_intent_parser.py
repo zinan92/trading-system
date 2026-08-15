@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from services.park_codex_intent_parser import CodexCliIntentParser
+from services.park_codex_intent_parser import CodexCliIntentParser, deterministic_neutral_grid_candidate
 from services.park_telegram_runtime import ParkTelegramRouter
 
 
@@ -64,8 +64,24 @@ def test_codex_parser_extracts_candidate_without_authority(tmp_path: Path) -> No
     assert candidate["lower_price_boundary"] == 4100.0
     assert candidate["maximum_leverage"] == 20.0
     assert calls[0]["command"][0:5] == ["/bin/sh", "exec", "--model", "gpt-5.6-luna", "--ephemeral"]
-    assert calls[0]["timeout"] == 15.0
+    assert calls[0]["timeout"] == 30.0
     assert "Telegram" not in calls[0]["input"]
+
+
+def test_deterministic_neutral_grid_fallback_accepts_space_separated_boundaries() -> None:
+    result = deterministic_neutral_grid_candidate("中性网格策略 4450 4100 最大20x杠杆")
+
+    assert result is not None
+    assert result["direction"] == "neutral"
+    assert result["strategy_type"] == "grid"
+    assert result["upper_price_boundary"] == 4450.0
+    assert result["lower_price_boundary"] == 4100.0
+    assert result["maximum_leverage"] == 20.0
+
+
+def test_deterministic_neutral_grid_fallback_does_not_guess_other_intents() -> None:
+    assert deterministic_neutral_grid_candidate("做空 DCA，区间 4444~4200，最大10倍杠杆") is None
+    assert deterministic_neutral_grid_candidate("中性网格，区间 4450~4100") is None
 
 
 def test_codex_parser_timeout_is_bounded_and_redacted() -> None:
@@ -122,6 +138,43 @@ def test_router_gives_natural_guidance_for_neutral_grid(tmp_path: Path) -> None:
     assert "code=" not in outbound
     provider_rows = (tmp_path / "outputs" / "park_strategy" / "provider_calls.jsonl").read_text().splitlines()
     assert json.loads(provider_rows[-1])["provider"] == "codex_cli"
+
+
+def test_router_uses_safe_neutral_grid_fallback_after_provider_timeout(tmp_path: Path) -> None:
+    class TimeoutParser:
+        def parse(self, _text):
+            return {
+                "status": "unavailable",
+                "metadata": {
+                    "provider": "codex_cli",
+                    "status": "timeout",
+                    "timed_out": True,
+                    "elapsed_ms": 15016,
+                },
+            }
+
+    router = ParkTelegramRouter(
+        tmp_path / "outputs",
+        park_user_id="park-user",
+        chat_id="park-chat",
+        intent_parser=TimeoutParser(),
+    )
+    result = router.handle_update(
+        {
+            "update_id": 5,
+            "message": {
+                "message_id": 6,
+                "from": {"id": "park-user"},
+                "chat": {"id": "park-chat"},
+                "text": "中性网格策略 4450 4100 最大20x杠杆",
+            },
+        }
+    )
+
+    assert result["code"] == "neutral_grid_not_enabled"
+    assert "没读清楚你的方向" not in router.telegram.pending_outbound()[0]["text"]
+    assert result["provider"]["fallback"] == "deterministic_neutral_grid"
+    assert not list((tmp_path / "outputs" / "park_strategy").glob("plans.jsonl"))
 
 
 def test_router_help_is_local_and_does_not_call_provider(tmp_path: Path) -> None:

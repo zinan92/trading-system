@@ -24,6 +24,6 @@
     "read_telegram_token",
     "read_exchange_key"
   ],
-  "timeout_seconds": 15,
-  "fallback": "deterministic_parser_then_guided_clarification"
+  "timeout_seconds": 30,
+  "fallback": "deterministic_neutral_grid_then_guided_clarification"
 }

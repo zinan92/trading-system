@@ -21,6 +21,7 @@ from typing import Any, Callable, Mapping
 
 from services.journal_store import load_json, write_json
 from services.park_confirmation import ParkConfirmationError, ParkConfirmationLedger, parse_confirmation_command
+from services.park_codex_intent_parser import deterministic_neutral_grid_candidate
 from services.park_strategy_lifecycle import admit_clean_slate
 from services.park_strategy_plan import ParkStrategyPlanError, build_deterministic_risk_plan, normalize_park_input
 from services.park_strategy_session import ParkStrategyIdentityError, ParkStrategyIdentityJournal, recording_window
@@ -397,9 +398,15 @@ class ParkTelegramRouter:
             }
         metadata = dict(parsed.get("metadata") or {})
         metadata.setdefault("provider", "codex_cli")
-        self._record_provider(update_id=update_id, metadata=metadata)
         if parsed.get("status") == "ok" and isinstance(parsed.get("candidate"), Mapping):
+            self._record_provider(update_id=update_id, metadata=metadata)
             return {"status": "ok", "candidate": dict(parsed["candidate"]), "metadata": metadata}
+        fallback_candidate = deterministic_neutral_grid_candidate(text)
+        if fallback_candidate is not None:
+            metadata = {**metadata, "fallback": "deterministic_neutral_grid"}
+            self._record_provider(update_id=update_id, metadata=metadata)
+            return {"status": "deterministic_fallback", "candidate": fallback_candidate, "metadata": metadata}
+        self._record_provider(update_id=update_id, metadata=metadata)
         return {"status": "deterministic_fallback", "metadata": metadata}
 
     def _record_provider(self, *, update_id: Any, metadata: Mapping[str, Any]) -> None:
@@ -511,9 +518,15 @@ class ParkTelegramRouter:
         upper = candidate.get("upper_price_boundary")
         lower = candidate.get("lower_price_boundary")
         leverage = candidate.get("maximum_leverage")
+        maximum_loss = candidate.get("maximum_acceptable_loss")
+        risk_text = (
+            f"最大杠杆 {leverage}x"
+            if leverage is not None
+            else f"最大可接受亏损 {maximum_loss}"
+        )
         return (
             "我理解你的意思是：中性网格"
-            f"，区间 {lower}~{upper}，最大杠杆 {leverage}x。\n"
+            f"，区间 {lower}~{upper}，{risk_text}。\n"
             "但当前 Park Paper 执行路径还没有启用中性双向 Grid，所以没有下单，也没有改变持仓。\n\n"
             "当前可直接提交的示例：\n"
             "1) 做多 Grid，区间 4450~4100，最大20倍杠杆\n"
