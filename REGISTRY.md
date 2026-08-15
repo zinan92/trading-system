@@ -13,6 +13,34 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-15)
+- #705 records the current Park Paper handoff after #701 / PR #701 and #702 /
+  PR #704.  `main@84938268ba439ed5b9796000d7ff674d53f5bce3` now binds source-
+  bound safety evidence and lets independent clean-slate strategy sessions share
+  a Beijing 09:00/21:00 recording window without losing exact ownership.  The
+  local `com.wendy.trading-orchestrator.park-paper-control` launchd job is
+  loaded with a 60-second interval; the latest source-bound run is
+  `status=pass`, `execution=active`, `next_action=continue_trusted_fresh_ticks`.
+  The confirmed neutral Grid has 30 accepted Paper orders, zero fills, zero
+  positions, equity `10000.0`, and reconciliation `ok`; a duplicate pass added
+  no orders.  This is local Paper-only evidence, not live/real-money readiness.
+  Park tests are `114 passed`; the full suite is `3028 passed, 1 skipped` with
+  11 pre-existing macOS `schedule_manager`/launchd harness failures.  No live,
+  Cloud, Feishu, Shadow, autonomous, exchange-key, or Telegram strategy state
+  was changed by the recovery work.
+- #701 / PR #701 repairs the Park cutover safety evidence path.  It builds
+  source-bound release, boot, immutable-fill, Paper-only, and Supervisor
+  fail-closed evidence before any runtime mutation; missing or stale evidence
+  remains fail-closed.  Merged on
+  `main@621832923e071bf32bfc5571370b842ddaa06be0`; focused Park validation and
+  gitleaks passed.  This removed the observed `park_cutover_blocked` state once
+  the exact local Paper source/boot receipts were present.
+- #702 / PR #704 decouples Recording Track from execution identity.  Distinct
+  clean-slate `strategy_session_id`/`strategy_revision_id` pairs can share one
+  12-hour reporting window; same-pair starts remain idempotent and half-bound
+  identity reuse remains fail-closed.  Multi-session packages and late
+  amendments preserve all identity pairs and never emit execution mutations.
+  Merged on `main@84938268ba439ed5b9796000d7ff674d53f5bce3` after 114 focused
+  Park tests and gitleaks passed.
 - #696 / PR #697 adds bounded Park confirmation shortcuts.  Park may reply
   `确认当前计划` / `确认这个计划` (or a bounded English equivalent) and the
   router resolves it only against the single unexpired proposal for the active
