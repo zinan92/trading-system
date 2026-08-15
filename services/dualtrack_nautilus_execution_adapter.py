@@ -749,6 +749,7 @@ class NautilusExecutionAdapter:
             "capabilities": {
                 "native_order_lifecycle": True,
                 "paper_only": True,
+                "immutable_fill_guard": True,
                 "event_sourced_restart": True,
                 "browser_mark_ignored": True,
                 "replay_version": REPLAY_VERSION,
@@ -1114,6 +1115,7 @@ class NautilusExecutionAdapter:
             "capabilities": {
                 **dict(snapshot.get("capabilities") or {}),
                 "paper_only": True,
+                "immutable_fill_guard": True,
                 "event_sourced_restart": True,
                 "browser_mark_ignored": True,
                 "replay_version": REPLAY_VERSION,

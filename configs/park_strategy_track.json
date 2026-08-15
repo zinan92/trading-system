@@ -6,5 +6,10 @@
   "autonomous": false,
   "shadow_mutation": false,
   "feishu_control": false,
-  "deployment_required": true
+  "supervisor_execution_profile": "fail_closed",
+  "deployment_required": true,
+  "execution_engine": {
+    "authoritative": "nautilus_paper",
+    "real_money_eligible": false
+  }
 }
