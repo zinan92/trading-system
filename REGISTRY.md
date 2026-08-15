@@ -13,11 +13,22 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-15)
+- #686 / PR #687 makes `neutral`/`中性` a first-class Park direction for Grid.
+  The Telegram path now creates a deterministic bilateral proposal from
+  messages such as `中性网格策略 4450 4100 最大20x杠杆`, sizes both explicit buy
+  and sell legs under the stricter leverage/loss cap, and requires Park's exact
+  confirmation before the authoritative Paper adapter receives any command.
+  A trusted boundary touch freezes/cancels only owned entries, preserves
+  neutral owned positions for reconciliation, records closure and pauses;
+  there is no reverse, reopen, live, Cloud, Shadow, Feishu or autonomous path.
+  Merged on `main@e5ac71a82af366dba55e1556dff0c084498322a` after 40 focused Park
+  tests passed and gitleaks found no leaks.
 - #682 / PR #683 fixes the launchd Codex timeout handoff.  The bounded provider
   window is now 30 seconds (the observed Codex response is about 14–18 seconds),
   and a clear `中性网格` message has a deterministic, non-authoritative fallback
-  when the provider is slow.  The fallback returns `neutral_grid_not_enabled`
-  and never maps neutral to long/short or creates a plan, order, or position.
+  when the provider is slow.  The fallback now feeds the same neutral Grid
+  proposal/risk path; it never maps neutral to long/short or bypasses exact
+  confirmation.
   Main is merged at `9e6f92d970f92b4f857fdde31a762326f3ea15a9`; the local
   `com.wendy.trading-orchestrator.park-paper-control` job is source-bound to the
   same Paper-only code path and latest run is `status=pass`, `execution=idle`.
@@ -25,9 +36,9 @@
   intent parser.  Codex receives only Park's strategy text and returns an
   untrusted candidate; deterministic normalization, trusted market/equity
   risk planning, exact Park confirmation, and Paper execution remain the sole
-  authorities.  Natural-language `neutral Grid` is recognized and explained,
-  but the Park Paper execution path still refuses neutral-grid mutation rather
-  than silently mapping it to long or short.  The local launchd handoff remains
+  authorities.  Natural-language `neutral Grid` is recognized and reaches the
+  bilateral proposal path, rather than being mapped to long or short.  The
+  local launchd handoff remains
   Paper-only, Telegram-only, and source-bound; no live, Cloud, Feishu, Shadow,
   autonomous, or credential path is enabled.
 - #672 / PR #673 and #674 / PR #675 complete the attended local Park Paper
@@ -676,10 +687,10 @@
 ## 下一步
 - Park can now describe a strategy naturally in Jessie Telegram; the Bot will
   acknowledge its interpretation, ask only for genuinely missing or ambiguous
-  facts, and return the deterministic Paper risk plan before exact
-  confirmation.  Neutral Grid remains a separately gated Paper capability and
-  is not executable until its bilateral order geometry and risk contract are
-  explicitly implemented and verified.
+  facts, and return the deterministic bilateral Paper risk plan before exact
+  confirmation.  Neutral Grid is now a first-class Paper option; it remains
+  subject to the same trusted-market, equity, safety-gate and exact-confirmation
+  requirements as long/short.
 - Park's next action is to send one complete strategy through the Jessie
   Telegram bot.  The worker will return the normalized plan, risk/maximum-loss
   and leverage calculation, then wait for Park's exact confirmation before
