@@ -158,6 +158,7 @@ class ParkTelegramRouter:
         now: Callable[[], str] | None = None,
         cycle_id_provider: Callable[[str], str] | None = None,
         confirmation_ttl_seconds: int = 900,
+        intent_parser: Any | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.telegram = ParkTelegramLedger(self.output_root, park_user_id=park_user_id, chat_id=chat_id)
@@ -169,6 +170,10 @@ class ParkTelegramRouter:
         self.now = now or _utc_now
         self.cycle_id_provider = cycle_id_provider or _default_cycle_id
         self.confirmation_ttl_seconds = max(60, int(confirmation_ttl_seconds))
+        # Offline/tests may omit this seam.  The production pipeline supplies
+        # a bounded Codex CLI parser explicitly; its output is untrusted.
+        self.intent_parser = intent_parser
+        self.provider_path = self.output_root / "park_strategy" / "provider_calls.jsonl"
 
     def handle_update(self, update: Mapping[str, Any]) -> dict[str, Any]:
         update_id = update.get("update_id")
@@ -255,6 +260,13 @@ class ParkTelegramRouter:
         active: Mapping[str, Any] | None,
         update_id: Any,
     ) -> dict[str, Any]:
+        if text.lower() in {"/start", "start", "/help", "help"}:
+            return self._block(
+                code="strategy_input_help",
+                message=self._help_message(),
+                binding=None,
+                idempotency_key=f"park-strategy-help:{update_id}",
+            )
         if active:
             return self._block(
                 code="strategy_locked",
@@ -262,8 +274,33 @@ class ParkTelegramRouter:
                 binding=active,
                 idempotency_key=f"park-strategy-locked:{update_id}",
             )
+        provider: Mapping[str, Any] | None = None
         try:
-            normalized = normalize_park_input(text)
+            parsed = self._parse_intent(text, update_id=update_id)
+            provider = parsed.get("metadata") if isinstance(parsed, Mapping) else None
+            candidate = parsed.get("candidate") if isinstance(parsed, Mapping) else None
+            if isinstance(candidate, Mapping):
+                direction = str(candidate.get("direction") or "")
+                strategy_type = str(candidate.get("strategy_type") or "")
+                if direction == "neutral" and strategy_type == "grid":
+                    return self._block(
+                        code="neutral_grid_not_enabled",
+                        message=self._neutral_grid_message(candidate),
+                        binding=None,
+                        idempotency_key=f"park-neutral-grid:{update_id}",
+                        provider=provider,
+                    )
+                if direction == "neutral" and strategy_type not in {"", "grid"}:
+                    return self._block(
+                        code="neutral_direction_requires_grid",
+                        message="我理解到的是‘中性’，但中性只适用于 Grid；请把策略类型说成 Grid。\n\n例如：中性网格，区间 4450~4100，最大20倍杠杆",
+                        binding=None,
+                        idempotency_key=f"park-neutral-direction:{update_id}",
+                        provider=provider,
+                    )
+                normalized = normalize_park_input(candidate)
+            else:
+                normalized = normalize_park_input(text)
             observed_at = self.now()
             cycle_id = self.cycle_id_provider(observed_at)
             facts = dict(self.account_reader(self.output_root, cycle_id))
@@ -320,13 +357,17 @@ class ParkTelegramRouter:
                 text=self._format_plan(plan, proposal),
                 binding={"strategy_session_id": session_id, "strategy_revision_id": revision_id},
             )
-            return {"status": "proposal_created", "plan": plan, "proposal": proposal, "session": started}
+            result: dict[str, Any] = {"status": "proposal_created", "plan": plan, "proposal": proposal, "session": started}
+            if provider:
+                result["provider"] = dict(provider)
+            return result
         except (ParkStrategyPlanError, ParkStrategyIdentityError, ParkTelegramControlError) as exc:
             return self._block(
                 code=getattr(exc, "code", "park_strategy_rejected"),
                 message=f"Park strategy not accepted: {str(exc)}",
                 binding=None,
                 idempotency_key=f"park-strategy-rejected:{update_id}",
+                provider=provider,
             )
         except ParkTelegramRuntimeError as exc:
             return self._block(
@@ -334,7 +375,48 @@ class ParkTelegramRouter:
                 message=f"Park strategy is blocked: {str(exc)}",
                 binding=None,
                 idempotency_key=f"park-runtime-blocked:{update_id}:{exc.code}",
+                provider=provider,
             )
+
+    def _parse_intent(self, text: str, *, update_id: Any) -> dict[str, Any]:
+        if self.intent_parser is None:
+            return {
+                "status": "deterministic_fallback",
+                "metadata": {"provider": "deterministic", "status": "not_configured"},
+            }
+        try:
+            parsed = dict(self.intent_parser.parse(text) or {})
+        except Exception as exc:  # noqa: BLE001 - NLU failure is a safe fallback.
+            parsed = {
+                "status": "unavailable",
+                "metadata": {
+                    "provider": "codex_cli",
+                    "status": "adapter_error",
+                    "error_type": type(exc).__name__,
+                },
+            }
+        metadata = dict(parsed.get("metadata") or {})
+        metadata.setdefault("provider", "codex_cli")
+        self._record_provider(update_id=update_id, metadata=metadata)
+        if parsed.get("status") == "ok" and isinstance(parsed.get("candidate"), Mapping):
+            return {"status": "ok", "candidate": dict(parsed["candidate"]), "metadata": metadata}
+        return {"status": "deterministic_fallback", "metadata": metadata}
+
+    def _record_provider(self, *, update_id: Any, metadata: Mapping[str, Any]) -> None:
+        safe = {
+            "schema_version": PARK_TELEGRAM_RUNTIME_SCHEMA,
+            "event": "provider_call",
+            "provider": str(metadata.get("provider") or ""),
+            "status": str(metadata.get("status") or ""),
+            "elapsed_ms": metadata.get("elapsed_ms"),
+            "exit_code": metadata.get("exit_code"),
+            "timed_out": bool(metadata.get("timed_out")),
+            "stderr_digest": metadata.get("stderr_digest"),
+            "error_type": metadata.get("error_type"),
+            "update_id": int(update_id) if str(update_id or "").isdigit() else None,
+            "recorded_at": _utc_now(),
+        }
+        _append_jsonl(self.provider_path, safe)
 
     def _handle_confirmation(
         self,
@@ -395,14 +477,69 @@ class ParkTelegramRouter:
         message: str,
         binding: Mapping[str, Any] | None,
         idempotency_key: str,
+        provider: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        user_message = self._friendly_block_message(code, message)
         outbound = self.telegram.queue_outbound(
             idempotency_key=idempotency_key,
             message_type="park_blocker",
-            text=f"{message} code={code}; next_action=notify_park_and_wait",
+            text=user_message,
             binding=binding,
         )
-        return {"status": "blocked", "code": code, "next_action": "notify_park_and_wait", "outbound": outbound}
+        result: dict[str, Any] = {
+            "status": "blocked",
+            "code": code,
+            "next_action": "notify_park_and_wait",
+            "outbound": outbound,
+        }
+        if provider:
+            result["provider"] = dict(provider)
+        return result
+
+    @staticmethod
+    def _help_message() -> str:
+        return (
+            "直接用自然语言描述策略即可，我会先复述理解并计算 Paper 风险，不会直接下单。\n\n"
+            "例如：\n"
+            "1) 做空 DCA，价格区间 4444~4200，最大10倍杠杆，止损=……，止盈=……\n"
+            "2) 中性网格，区间 4450~4100，最大20倍杠杆\n\n"
+            "当前价格由系统读取；只有你确认精确计划后才会执行。"
+        )
+
+    @staticmethod
+    def _neutral_grid_message(candidate: Mapping[str, Any]) -> str:
+        upper = candidate.get("upper_price_boundary")
+        lower = candidate.get("lower_price_boundary")
+        leverage = candidate.get("maximum_leverage")
+        return (
+            "我理解你的意思是：中性网格"
+            f"，区间 {lower}~{upper}，最大杠杆 {leverage}x。\n"
+            "但当前 Park Paper 执行路径还没有启用中性双向 Grid，所以没有下单，也没有改变持仓。\n\n"
+            "当前可直接提交的示例：\n"
+            "1) 做多 Grid，区间 4450~4100，最大20倍杠杆\n"
+            "2) 做空 DCA，区间 4444~4200，最大10倍杠杆，止损=……，止盈=……\n\n"
+            "如果你要启用中性双向 Grid，我会先把它作为独立 Paper 能力接入，不会偷偷改成做多或做空。"
+        )
+
+    @staticmethod
+    def _friendly_block_message(code: str, message: str) -> str:
+        if code == "strategy_input_help":
+            return message
+        if code == "missing_direction":
+            return (
+                "我还没读清楚你的方向。你可以直接说：做多、做空，或‘中性网格’。\n\n"
+                "例如：\n"
+                "1) 做空 DCA，区间 4444~4200，最大10倍杠杆\n"
+                "2) 做多 Grid，区间 4450~4100，最大20倍杠杆\n\n"
+                "当前价格我会自动读取，确认前不会下单。"
+            )
+        if code == "missing_strategy_type":
+            return "我还没读清楚你要 DCA 还是 Grid。比如：做空 DCA，区间 4444~4200，最大10倍杠杆。"
+        if code == "missing_price_boundary":
+            return "我还缺价格区间。请像这样说：做空 DCA，区间 4444~4200，最大10倍杠杆。"
+        if code == "missing_risk_authority":
+            return "我还缺风险上限。请补充最大杠杆或最大可接受亏损，例如：最大10倍杠杆。"
+        return message
 
     @staticmethod
     def _format_plan(plan: Mapping[str, Any], proposal: Mapping[str, Any]) -> str:

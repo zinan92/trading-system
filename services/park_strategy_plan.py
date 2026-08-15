@@ -68,7 +68,7 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     """Normalize explicit Park input without filling authorization gaps."""
 
     body = dict(payload) if isinstance(payload, Mapping) else {}
-    text = payload if isinstance(payload, str) else ""
+    text = payload if isinstance(payload, str) else str(body.get("source_text") or "")
     direction_values = [
         value for key, value in body.items() if key in {"direction", "side"} and value is not None
     ]

@@ -1,0 +1,29 @@
+{
+  "schema_version": "park-codex-intent-v1",
+  "authority": "untrusted_candidate_only",
+  "provider": "codex_cli",
+  "allowed_direction": ["long", "short", "neutral"],
+  "allowed_strategy_type": ["dca", "grid"],
+  "nullable_fields": [
+    "direction",
+    "strategy_type",
+    "upper_price_boundary",
+    "lower_price_boundary",
+    "maximum_leverage",
+    "maximum_acceptable_loss",
+    "stop_price",
+    "take_profit_price",
+    "order_count"
+  ],
+  "forbidden_effects": [
+    "submit_order",
+    "cancel_order",
+    "flatten_position",
+    "confirm_plan",
+    "change_strategy",
+    "read_telegram_token",
+    "read_exchange_key"
+  ],
+  "timeout_seconds": 15,
+  "fallback": "deterministic_parser_then_guided_clarification"
+}

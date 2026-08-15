@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from services.journal_store import load_json
+from services.park_codex_intent_parser import CodexCliIntentParser
 from services.park_paper_runtime import (
     ParkPaperRuntime,
     ParkPaperRuntimeError,
@@ -42,10 +43,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = json.loads(Path(args.park_config).read_text(encoding="utf-8"))
         transport = TelegramBotTransport(chat_id=args.chat_id)
+        intent_parser = CodexCliIntentParser(
+            executable=os.getenv("TRADING_ORCHESTRATOR_CODEX_CLI", "/opt/homebrew/bin/codex"),
+            model=os.getenv("TRADING_ORCHESTRATOR_CODEX_MODEL", "gpt-5.6-luna"),
+            timeout_seconds=float(os.getenv("TRADING_ORCHESTRATOR_CODEX_TIMEOUT_SECONDS", "15")),
+            cwd=Path(os.getenv("TRADING_ORCHESTRATOR_CODEX_CWD", "/tmp")),
+            codex_home=os.getenv("CODEX_HOME") or None,
+        )
         router = ParkTelegramRouter(
             output_root,
             park_user_id=args.park_user_id,
             chat_id=args.chat_id,
+            intent_parser=intent_parser,
         )
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
         try:
