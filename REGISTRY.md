@@ -13,6 +13,15 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-15)
+- #692 / PR #693 repairs Park Telegram account admission.  The default reader
+  now uses the direct Park-authoritative Paper adapter and receives the same
+  external Paper config as `pipelines/park_control.py`; it no longer calls the
+  legacy DualTrack/Shadow-gated configured adapter.  This removes the observed
+  `Park strategy is blocked: RuntimeError` path without weakening any gate.
+  Merged on `main@7e25262dc22b27ab4c8d8652d59a940862e35321`; local read-only
+  Paper smoke reported equity `10000.0`, zero open positions, zero accepted
+  orders, and healthy reconciliation.  No Telegram strategy was submitted
+  and no order/position mutation occurred.
 - #686 / PR #687 makes `neutral`/`中性` a first-class Park direction for Grid.
   The Telegram path now creates a deterministic bilateral proposal from
   messages such as `中性网格策略 4450 4100 最大20x杠杆`, sizes both explicit buy
@@ -685,13 +694,11 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Neutral Grid code and handoff are on clean `main@081fa165f4217fa57a3e869a3b379482ce94c394`.
+- Park Telegram account admission and Neutral Grid code are on clean
+  `main@7e25262dc22b27ab4c8d8652d59a940862e35321`.
   The local source-bound `com.wendy.trading-orchestrator.park-paper-control`
-  launchd job is running with `last exit code=0`; the latest Paper preflight is
-  `ready_for_park_paper` with `tracked_tree_clean=true`, `paper_only=true`,
-  `real_money_eligible=false`, and no blockers.  Recent control passes are
-  `idle/await_new_park_strategy` with zero orders and zero positions; no
-  strategy has been submitted on Park's behalf.
+  launchd job must be re-verified against this exact source after the local
+  checkout is updated; verification remains Paper-only and read-only.
 - Park can now describe a strategy naturally in Jessie Telegram; the Bot will
   acknowledge its interpretation, ask only for genuinely missing or ambiguous
   facts, and return the deterministic bilateral Paper risk plan before exact
