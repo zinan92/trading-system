@@ -27,6 +27,13 @@
   11 pre-existing macOS `schedule_manager`/launchd harness failures.  No live,
   Cloud, Feishu, Shadow, autonomous, exchange-key, or Telegram strategy state
   was changed by the recovery work.
+- #707 / PR #708 fixes the remaining multi-session package-close fact selection:
+  when a reporting window contains a terminal older session and a newer active
+  session, the package now selects the active identity's latest positions fact
+  and preserves `strategy_open=true`; package close remains review-only with
+  `execution_mutations=[]`.  Merged on
+  `main@e6a3104b5bc796ca437480c0bc8caa1c818cdfe4` after 115 focused Park tests
+  passed and gitleaks found no leaks.
 - #701 / PR #701 repairs the Park cutover safety evidence path.  It builds
   source-bound release, boot, immutable-fill, Paper-only, and Supervisor
   fail-closed evidence before any runtime mutation; missing or stale evidence
