@@ -182,6 +182,67 @@ def test_confirmation_is_the_only_path_to_paper_mutation(tmp_path: Path) -> None
     assert active["paper_only"] is True
 
 
+def test_expired_unconfirmed_runtime_session_is_released_without_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T10:00:00+00:00",
+        "symbol": "GOLD",
+    }
+    clock = {"value": 1000.0}
+    monkeypatch.setattr("services.park_telegram_runtime.time.time", lambda: clock["value"])
+    router = _router(output, market)
+    adapter = FakePaperAdapter()
+    runtime = _runtime(output, adapter, market)
+    proposal = router.handle_update(_update(5, "short DCA 10x 4444~4200"))
+    assert proposal["status"] == "proposal_created"
+
+    clock["value"] = 2000.0
+    released = runtime.run_once()
+
+    assert released["status"] == "idle"
+    assert released["reason"] == "confirmation_expired"
+    assert adapter.submit_calls == []
+    assert adapter.process_calls == []
+    assert ParkStrategyIdentityJournal(output).active_session() is None
+
+
+def test_expired_unconfirmed_runtime_session_stays_blocked_with_exposure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T10:00:00+00:00",
+        "symbol": "GOLD",
+    }
+    clock = {"value": 1000.0}
+    monkeypatch.setattr("services.park_telegram_runtime.time.time", lambda: clock["value"])
+    router = _router(output, market)
+    adapter = FakePaperAdapter()
+    adapter.positions.append({"position_id": "external-1", "status": "open", "remaining_units": 1.0})
+    runtime = _runtime(output, adapter, market)
+    assert router.handle_update(_update(6, "short DCA 10x 4444~4200"))["status"] == "proposal_created"
+
+    clock["value"] = 2000.0
+    blocked = runtime.run_once()
+
+    assert blocked["status"] == "blocked"
+    assert blocked["code"] == "confirmation_expired_requires_clean_slate"
+    assert ParkStrategyIdentityJournal(output).active_session() is not None
+    assert adapter.submit_calls == []
+
+
 def test_confirmed_neutral_grid_submits_both_owned_legs_and_preserves_boundary_positions(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     market = {

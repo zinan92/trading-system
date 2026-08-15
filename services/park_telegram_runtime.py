@@ -20,7 +20,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from services.journal_store import load_json, write_json
-from services.park_confirmation import ParkConfirmationError, ParkConfirmationLedger, parse_confirmation_command
+from services.park_confirmation import (
+    ParkConfirmationError,
+    ParkConfirmationLedger,
+    parse_confirmation_command,
+    parse_confirmation_shortcut,
+)
 from services.park_codex_intent_parser import deterministic_neutral_grid_candidate
 from services.park_strategy_lifecycle import admit_clean_slate
 from services.park_strategy_plan import ParkStrategyPlanError, build_deterministic_risk_plan, normalize_park_input
@@ -284,6 +289,16 @@ class ParkTelegramRouter:
                 idempotency_key=f"park-strategy-help:{update_id}",
             )
         if active:
+            try:
+                active = self._release_expired_unconfirmed_session(active)
+            except ParkTelegramRuntimeError as exc:
+                return self._block(
+                    code=exc.code,
+                    message=f"Park strategy is blocked: {str(exc)}",
+                    binding=active,
+                    idempotency_key=f"park-runtime-blocked:{update_id}:{exc.code}",
+                )
+        if active:
             return self._block(
                 code="strategy_locked",
                 message="Park strategy is already active and immutable; wait for terminal closure before a new clean-slate strategy.",
@@ -386,6 +401,64 @@ class ParkTelegramRouter:
                 provider=provider,
             )
 
+    def _release_expired_unconfirmed_session(self, active: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        pending = self.confirmations.pending_proposals(active)
+        if not pending:
+            return active
+        if len(pending) > 1:
+            raise ParkTelegramRuntimeError(
+                "multiple_pending_proposals",
+                "multiple Park proposals are bound to the active revision",
+            )
+        proposal = pending[0]
+        try:
+            expired = float(proposal.get("expires_at") or 0) <= time.time()
+        except (TypeError, ValueError):
+            raise ParkTelegramRuntimeError(
+                "confirmation_expiry_invalid",
+                "Park proposal expiry is invalid",
+            ) from None
+        if not expired:
+            return active
+        cycle_id = self.cycle_id_provider(self.now())
+        try:
+            facts = dict(self.account_reader(self.output_root, cycle_id))
+        except ParkTelegramRuntimeError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - expiry release is fail closed.
+            raise ParkTelegramRuntimeError("paper_account_unavailable", type(exc).__name__) from exc
+        blockers: list[str] = []
+        if facts.get("reconciliation_healthy") is not True:
+            blockers.append("reconciliation_unhealthy")
+        if int(facts.get("open_positions") or 0) != 0:
+            blockers.append("open_positions")
+        if int(facts.get("open_or_accepted_orders") or 0) != 0:
+            blockers.append("open_or_accepted_orders")
+        if facts.get("unresolved_runtime"):
+            blockers.append("unresolved_runtime")
+        if facts.get("pending_terminal_actions"):
+            blockers.append("pending_terminal_actions")
+        if blockers:
+            raise ParkTelegramRuntimeError(
+                "confirmation_expired_requires_clean_slate",
+                f"expired proposal cannot be released: {','.join(blockers)}",
+            )
+        session = str(active.get("strategy_session_id") or "")
+        revision = str(active.get("strategy_revision_id") or "")
+        self.identity.close_session(
+            strategy_session_id=session,
+            strategy_revision_id=revision,
+            observed_at=self.now(),
+            reason="confirmation_expired",
+        )
+        self.telegram.queue_outbound(
+            idempotency_key=f"park-confirmation-expired:{proposal.get('proposal_id')}",
+            message_type="confirmation_expired",
+            text="上一个 Paper 计划未确认且已过期；当前仍是 clean slate，系统已释放它。请重新描述策略。",
+            binding=None,
+        )
+        return None
+
     def _parse_intent(self, text: str, *, update_id: Any) -> dict[str, Any]:
         if self.intent_parser is None:
             return {
@@ -447,21 +520,39 @@ class ParkTelegramRouter:
                 idempotency_key=f"park-confirmation-no-active:{update_id}",
             )
         try:
-            _verb, digest = parse_confirmation_command(text)
-            proposal = next(
-                (
-                    row
-                    for row in reversed(self.confirmations.rows())
-                    if row.get("event") == "proposal" and str(row.get("plan_digest") or "").lower() == digest
-                ),
-                None,
-            )
+            mode = "exact_digest"
+            try:
+                verb, digest = parse_confirmation_command(text)
+            except ParkConfirmationError as exact_error:
+                try:
+                    verb = parse_confirmation_shortcut(text)
+                except ParkConfirmationError:
+                    raise exact_error
+                digest = ""
+                mode = "pending_proposal_shortcut"
+            if digest:
+                proposal = next(
+                    (
+                        row
+                        for row in reversed(self.confirmations.rows())
+                        if row.get("event") == "proposal" and str(row.get("plan_digest") or "").lower() == digest
+                    ),
+                    None,
+                )
+            else:
+                pending = self.confirmations.pending_proposals(active)
+                if len(pending) != 1:
+                    if pending and all(float(row.get("expires_at") or 0) <= time.time() for row in pending):
+                        raise ParkConfirmationError("confirmation_expired", "the current Park proposal has expired; resend the strategy")
+                    raise ParkConfirmationError("ambiguous_pending_proposals", "there is not exactly one pending Park proposal")
+                proposal = pending[0]
+                digest = str(proposal.get("plan_digest") or "").lower()
             if not proposal:
                 raise ParkConfirmationError("proposal_missing", "proposal digest is unknown")
             decision = self.confirmations.decide(
                 proposal_id=str(proposal["proposal_id"]),
                 park_user_id=self.telegram.park_user_id,
-                command_text=text,
+                command_text=f"{verb} {digest}",
                 current_binding=active,
                 now=time.time(),
             )
@@ -475,7 +566,7 @@ class ParkTelegramRouter:
                 ),
                 binding=active,
             )
-            return {"status": event, "decision": decision}
+            return {"status": event, "decision": decision, "confirmation_mode": mode}
         except ParkConfirmationError as exc:
             return self._block(
                 code=exc.code,
@@ -557,6 +648,14 @@ class ParkTelegramRouter:
             return "我还缺价格区间。请像这样说：做空 DCA，区间 4444~4200，最大10倍杠杆。"
         if code == "missing_risk_authority":
             return "我还缺风险上限。请补充最大杠杆或最大可接受亏损，例如：最大10倍杠杆。"
+        if code == "confirmation_incomplete":
+            return "可以直接回复‘确认当前计划’或‘拒绝当前计划’；也可以回复 confirm <plan_digest>。"
+        if code == "confirmation_expired":
+            return "这个 Paper 计划已经过期，请重新发送策略；过期计划不会执行。"
+        if code == "ambiguous_pending_proposals":
+            return "当前有多个待确认计划，不能猜测你要确认哪一个；请使用计划摘要确认。"
+        if code == "confirmation_expired_requires_clean_slate":
+            return "上一个计划已过期，但账户状态不是 clean slate；系统不会自动释放它，请先处理阻塞状态。"
         return message
 
     @staticmethod
@@ -572,14 +671,14 @@ class ParkTelegramRouter:
             )
         return "".join(
             (
-                "Park proposal (Paper-only, exact confirmation required)\n",
+                "Park proposal (Paper-only; confirm this plan in plain language or with its digest)\n",
                 f"direction={normalized.get('direction')} type={normalized.get('strategy_type')}\n",
                 f"range={normalized.get('upper_price_boundary')}~{normalized.get('lower_price_boundary')} current={dict(plan.get('market') or {}).get('price')}\n",
                 neutral_detail,
                 f"max_notional={risk.get('maximum_notional')} effective_leverage={risk.get('effective_leverage')}x\n",
                 f"theoretical_max_loss={risk.get('theoretical_max_loss')} order_count={risk.get('order_count')} quantity_each={risk.get('per_order_quantity')}\n",
                 f"plan_digest={proposal.get('plan_digest')}\n",
-                f"Reply exactly: confirm {proposal.get('plan_digest')} or reject {proposal.get('plan_digest')}",
+                f"Reply: 确认当前计划 / 拒绝当前计划；or confirm {proposal.get('plan_digest')}",
             )
         )
 

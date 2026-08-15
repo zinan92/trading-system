@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from services.park_confirmation import ParkConfirmationError, ParkConfirmationLedger, parse_confirmation_command
+from services.park_confirmation import (
+    ParkConfirmationError,
+    ParkConfirmationLedger,
+    parse_confirmation_command,
+    parse_confirmation_shortcut,
+)
 
 
 def _ledger(tmp_path: Path) -> ParkConfirmationLedger:
@@ -29,6 +34,14 @@ def test_command_requires_exact_verb_and_digest() -> None:
         parse_confirmation_command("确认")
 
 
+def test_shortcut_requires_bounded_human_confirmation_phrase() -> None:
+    assert parse_confirmation_shortcut("确认当前计划") == "confirm"
+    assert parse_confirmation_shortcut("confirm this plan") == "confirm"
+    assert parse_confirmation_shortcut("拒绝这个计划。") == "reject"
+    with pytest.raises(ParkConfirmationError, match="confirm.*当前计划"):
+        parse_confirmation_shortcut("确认一下")
+
+
 def test_exact_confirmation_creates_capability_not_start(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     proposal = _proposal(ledger)
@@ -41,6 +54,13 @@ def test_exact_confirmation_creates_capability_not_start(tmp_path: Path) -> None
     assert receipt["execution_authorized"] is True
     assert receipt["start_or_order_submitted"] is False
     assert receipt["risk_digest"] == "sha256:" + "b" * 64
+
+
+def test_pending_proposals_are_bound_to_one_active_revision(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    proposal = _proposal(ledger)
+    assert ledger.pending_proposals({"strategy_session_id": "session-1", "strategy_revision_id": "revision-1"}) == [proposal]
+    assert ledger.pending_proposals({"strategy_session_id": "session-other", "strategy_revision_id": "revision-1"}) == []
 
 
 def test_confirmation_is_idempotent_and_wrong_identity_or_digest_is_rejected(tmp_path: Path) -> None:

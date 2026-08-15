@@ -159,7 +159,8 @@ def test_router_gives_natural_guidance_for_neutral_grid(tmp_path: Path) -> None:
     outbound = router.telegram.pending_outbound()[0]["text"]
     assert "direction=neutral type=grid" in outbound
     assert "neutral_legs=buy" in outbound
-    assert "Reply exactly: confirm" in outbound
+    assert "确认当前计划" in outbound
+    assert "or confirm sha256:" in outbound
     assert not list((tmp_path / "outputs" / "park_strategy").glob("executions.jsonl"))
     provider_rows = (tmp_path / "outputs" / "park_strategy" / "provider_calls.jsonl").read_text().splitlines()
     assert json.loads(provider_rows[-1])["provider"] == "codex_cli"
