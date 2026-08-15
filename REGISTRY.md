@@ -13,6 +13,15 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-15)
+- #696 / PR #697 adds bounded Park confirmation shortcuts.  Park may reply
+  `确认当前计划` / `确认这个计划` (or a bounded English equivalent) and the
+  router resolves it only against the single unexpired proposal for the active
+  session/revision; the exact digest command remains supported.  Codex remains
+  an untrusted intent parser and cannot authorize execution.  An expired
+  unconfirmed proposal is released only after Paper snapshot and reconciliation
+  prove a clean slate; exposure or uncertainty stays blocked.  Merged on
+  `main@eeb130220185f412be25663f6e6b2860c1e2e7b6` after 59 focused Park tests
+  passed and gitleaks found no leaks.
 - #692 / PR #693 repairs Park Telegram account admission.  The default reader
   now uses the direct Park-authoritative Paper adapter and receives the same
   external Paper config as `pipelines/park_control.py`; it no longer calls the
@@ -694,22 +703,22 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
-- Park Telegram account admission and Neutral Grid code are on clean
-  `main@7e25262dc22b27ab4c8d8652d59a940862e35321`.
+- Park Telegram account admission, Neutral Grid, and bounded confirmation UX
+  are merged through `main@eeb130220185f412be25663f6e6b2860c1e2e7b6`.
   The local source-bound `com.wendy.trading-orchestrator.park-paper-control`
   launchd job must be re-verified against this exact source after the local
   checkout is updated; verification remains Paper-only and read-only.
 - Park can now describe a strategy naturally in Jessie Telegram; the Bot will
   acknowledge its interpretation, ask only for genuinely missing or ambiguous
-  facts, and return the deterministic bilateral Paper risk plan before exact
-  confirmation.  Neutral Grid is now a first-class Paper option; it remains
-  subject to the same trusted-market, equity, safety-gate and exact-confirmation
+  facts, and return the deterministic bilateral Paper risk plan before bounded
+  Park confirmation.  Neutral Grid is now a first-class Paper option; it remains
+  subject to the same trusted-market, equity, safety-gate and confirmation
   requirements as long/short.
 - Park's next action is to send one complete strategy through the Jessie
   Telegram bot.  The worker will return the normalized plan, risk/maximum-loss
-  and leverage calculation, then wait for Park's exact confirmation before
-  any Paper mutation.  Incomplete, duplicate, stale, or unconfirmed input
-  remains blocked and cannot create orders.
+  and leverage calculation, then wait for `确认当前计划` or the exact digest
+  confirmation before any Paper mutation.  Incomplete, duplicate, stale, or
+  unconfirmed input remains blocked and cannot create orders.
 - Deploy exact clean `main@2a0f6d6c8b8f79344d02fa1977aafcfc1f4d6ead` through the
   existing Paper release/boot/SHA gates. Verify the next-cycle provider
   timeout path is non-blocking, its receipt contains bounded diagnostics, and
