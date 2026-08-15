@@ -87,9 +87,14 @@ Park runtime only after exact confirmation and the ten cutover gates pass;
 caller-supplied strings/mappings, stale session/revision identities, and
 manual Park adapter construction fail closed.
 
-Before starting the service, write source-bound release/boot and all ten
-cutover safety-gate receipts to the target output root. Missing or stale
-evidence blocks without attempting an order.
+Before a control pass reaches the runtime, it writes source-bound
+`park_strategy/safety_evidence.json` by re-running the Paper predeploy and boot
+receipts, validating the Park Paper preflight, and checking the direct adapter
+capability surface. The deployed Park config must explicitly set
+`supervisor_execution_profile=fail_closed` and
+`execution_engine.real_money_eligible=false`. Missing, stale, mismatched, or
+failed evidence blocks without attempting an order; the evidence builder never
+submits, cancels, or closes anything.
 
 ## One bounded pass
 

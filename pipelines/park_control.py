@@ -22,6 +22,7 @@ from services.park_paper_runtime import (
     ParkPaperRuntimeError,
     build_park_authoritative_adapter,
 )
+from services.park_safety_evidence import build_park_safety_evidence
 from services.park_telegram_runtime import ParkTelegramRouter, ParkTelegramRuntimeError, ParkTelegramWorker
 from services.telegram_bot_transport import TelegramBotTransport, TelegramBotTransportError
 
@@ -60,6 +61,13 @@ def main(argv: list[str] | None = None) -> int:
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
         try:
             binding = build_park_authoritative_adapter(output_root, config=config)
+            build_park_safety_evidence(
+                output_root,
+                config=config,
+                repo_root=Path(__file__).resolve().parents[1],
+                interpreter=os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or None,
+                adapter=binding.adapter,
+            )
             evidence = _latest(output_root / "park_strategy" / "safety_evidence.json")
             execution = ParkPaperRuntime(
                 output_root,

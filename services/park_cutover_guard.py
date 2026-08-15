@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -62,6 +63,12 @@ def evaluate_park_cutover(
         blockers.append("release_sha_missing")
     if evidence.get("boot_verified") is not True:
         blockers.append("boot_unverified")
+    evidence_status = evidence.get("status")
+    if evidence_status not in (None, "pass"):
+        blockers.append("safety_evidence_not_passing")
+    expires_at = _parse_timestamp(evidence.get("expires_at"))
+    if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+        blockers.append("safety_evidence_stale")
     for gate in REQUIRED_SAFETY_GATES:
         if evidence.get(gate) is not True:
             blockers.append(f"safety_gate_failed:{gate}")
@@ -75,3 +82,16 @@ def evaluate_park_cutover(
         "deployment_required": True,
         "runtime_ready_claim": False,
     }
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
