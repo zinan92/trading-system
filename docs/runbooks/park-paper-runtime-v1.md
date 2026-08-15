@@ -118,6 +118,11 @@ to retry with a different strategy.
   the later Paper tick.
 - The strategy session/revision owns every projected order and receipt. A
   duplicate pass is idempotent.
+- A Beijing-time recording window is only a reporting slice. It may contain
+  more than one immutable clean-slate strategy session (for example, a
+  terminal session followed by a newly confirmed session). Every fact keeps
+  its exact session/revision; a multi-session package exposes identity lists
+  instead of pretending the window has one execution owner.
 - Touching/crossing the configured boundary is the explicit Park-confirmed
   invalidation trigger: it freezes and cancels only owned unfilled entries,
   closes only positions carrying the exact Park ownership identity, reconciles,

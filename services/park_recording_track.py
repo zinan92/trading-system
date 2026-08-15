@@ -104,11 +104,36 @@ class ParkRecordingTrack:
         window = _text(record_window_id, "record_window_id")
         session = _text(strategy_session_id, "strategy_session_id")
         revision = _text(strategy_revision_id, "strategy_revision_id")
-        existing = next((row for row in self.events() if row.get("event") == "manifest_started" and row.get("record_window_id") == window), None)
+        manifests = [
+            row
+            for row in self.events()
+            if row.get("event") == "manifest_started"
+            and row.get("record_window_id") == window
+        ]
+        existing = next(
+            (
+                row
+                for row in manifests
+                if row.get("strategy_session_id") == session
+                and row.get("strategy_revision_id") == revision
+            ),
+            None,
+        )
         if existing:
-            if existing.get("strategy_session_id") != session or existing.get("strategy_revision_id") != revision:
-                raise ParkRecordingError("window_identity_conflict", "recording window cannot change strategy identity")
             return dict(existing)
+        # A recording window is a reporting slice, not an execution identity.
+        # Different clean-slate session/revision pairs may therefore coexist in
+        # one window. Reusing either half of an existing identity is still
+        # ambiguous and remains fail-closed.
+        if any(
+            row.get("strategy_session_id") == session
+            or row.get("strategy_revision_id") == revision
+            for row in manifests
+        ):
+            raise ParkRecordingError(
+                "window_identity_conflict",
+                "recording window identity half is already bound to another revision",
+            )
         row = {
             "schema_version": PARK_RECORDING_SCHEMA,
             "event": "manifest_started",
@@ -169,25 +194,47 @@ class ParkRecordingTrack:
         window = _text(record_window_id, "record_window_id")
         session = _text(strategy_session_id, "strategy_session_id")
         revision = _text(strategy_revision_id, "strategy_revision_id")
+        window_events = [row for row in self.events() if row.get("record_window_id") == window]
+        identities = sorted(
+            {
+                (
+                    str(row.get("strategy_session_id") or ""),
+                    str(row.get("strategy_revision_id") or ""),
+                )
+                for row in window_events
+                if str(row.get("strategy_session_id") or "")
+                and str(row.get("strategy_revision_id") or "")
+            }
+        )
+        if (session, revision) not in identities:
+            identities.append((session, revision))
+            identities.sort()
+        session_ids = [item[0] for item in identities]
+        revision_ids = [item[1] for item in identities]
         existing = next((row for row in self.packages() if row.get("record_window_id") == window), None)
         if existing:
-            return dict(existing)
-        window_events = [row for row in self.events() if row.get("record_window_id") == window]
+            existing_pairs = set(zip(existing.get("strategy_session_ids") or [], existing.get("strategy_revision_ids") or []))
+            if set(identities).issubset(existing_pairs):
+                return dict(existing)
         categories = {str(row.get("category")) for row in window_events if row.get("event") in {"fact", "late_amendment"}}
         missing = sorted(set(REQUIRED_CATEGORIES) - categories)
         package = {
             "schema_version": PARK_RECORDING_SCHEMA,
-            "event": "package_closed",
+            "event": "package_amended" if existing else "package_closed",
             "record_window_id": window,
-            "strategy_session_id": session,
-            "strategy_revision_id": revision,
+            # Keep the original scalar fields for single-session consumers;
+            # multi-session windows use the explicit identity lists below.
+            "strategy_session_id": session_ids[0] if len(session_ids) == 1 else "",
+            "strategy_revision_id": revision_ids[0] if len(revision_ids) == 1 else "",
+            "strategy_session_ids": session_ids,
+            "strategy_revision_ids": revision_ids,
             "status": "complete" if not missing else "blocked_incomplete",
             "missing_categories": missing,
             "strategy_open": bool(strategy_open),
             "positions_open": int(positions_open),
             "evidence_count": len(window_events),
             "watermark": max((float(row.get("recorded_at") or 0) for row in window_events), default=time.time()),
-            "revision": 0,
+            "revision": int(existing.get("revision") or 0) + 1 if existing else 0,
             "execution_mutations": [],
             "next_action": "review_recorded_evidence" if not missing else "collect_missing_evidence",
         }
@@ -200,11 +247,34 @@ class ParkRecordingTrack:
         packages = [row for row in self.packages() if row.get("record_window_id") == kwargs.get("record_window_id")]
         if packages:
             package = packages[-1]
+            window_events = [
+                event
+                for event in self.events()
+                if event.get("record_window_id") == kwargs.get("record_window_id")
+            ]
+            identities = sorted(
+                {
+                    (
+                        str(event.get("strategy_session_id") or ""),
+                        str(event.get("strategy_revision_id") or ""),
+                    )
+                    for event in window_events
+                    if str(event.get("strategy_session_id") or "")
+                    and str(event.get("strategy_revision_id") or "")
+                }
+            )
+            session_ids = [item[0] for item in identities]
+            revision_ids = [item[1] for item in identities]
             package_revision = int(package.get("revision") or 0) + 1
             amended = {
                 **package,
                 "event": "package_amended",
+                "strategy_session_id": session_ids[0] if len(session_ids) == 1 else "",
+                "strategy_revision_id": revision_ids[0] if len(revision_ids) == 1 else "",
+                "strategy_session_ids": session_ids,
+                "strategy_revision_ids": revision_ids,
                 "revision": package_revision,
+                "evidence_count": len(window_events),
                 "watermark": max(float(package.get("watermark") or 0), float(row["recorded_at"])),
                 "amendment_event_digest": row["payload_digest"],
             }
@@ -227,6 +297,14 @@ class ParkRecordingTrack:
             "record_window_id": record_window_id,
             "strategy_session_id": package["strategy_session_id"],
             "strategy_revision_id": package["strategy_revision_id"],
+            "strategy_session_ids": list(
+                package.get("strategy_session_ids")
+                or ([package["strategy_session_id"]] if package.get("strategy_session_id") else [])
+            ),
+            "strategy_revision_ids": list(
+                package.get("strategy_revision_ids")
+                or ([package["strategy_revision_id"]] if package.get("strategy_revision_id") else [])
+            ),
             "status": package["status"],
             "evidence_categories": sorted(categories),
             "did_well": good,

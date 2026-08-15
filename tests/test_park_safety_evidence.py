@@ -88,7 +88,7 @@ def _patch_read_only_gates(monkeypatch, source: dict, now: datetime) -> None:
 
 
 def test_source_bound_evidence_passes_without_mutation(tmp_path: Path, monkeypatch) -> None:
-    now = datetime(2026, 8, 15, 12, 30, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     source = {
         "source_sha": "a" * 40,
         "source_tree_sha": "b" * 40,
