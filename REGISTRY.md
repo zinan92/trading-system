@@ -13,6 +13,14 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-15)
+- #682 / PR #683 fixes the launchd Codex timeout handoff.  The bounded provider
+  window is now 30 seconds (the observed Codex response is about 14–18 seconds),
+  and a clear `中性网格` message has a deterministic, non-authoritative fallback
+  when the provider is slow.  The fallback returns `neutral_grid_not_enabled`
+  and never maps neutral to long/short or creates a plan, order, or position.
+  Main is merged at `9e6f92d970f92b4f857fdde31a762326f3ea15a9`; the local
+  `com.wendy.trading-orchestrator.park-paper-control` job is source-bound to the
+  same Paper-only code path and latest run is `status=pass`, `execution=idle`.
 - #678 / PR #679 connects the local Telegram ingress to a bounded Codex CLI
   intent parser.  Codex receives only Park's strategy text and returns an
   untrusted candidate; deterministic normalization, trusted market/equity
