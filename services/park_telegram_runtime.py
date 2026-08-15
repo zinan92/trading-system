@@ -77,13 +77,24 @@ def default_market_reader() -> dict[str, Any]:
     }
 
 
-def default_account_reader(output_root: Path, cycle_id: str) -> dict[str, Any]:
-    """Read the configured Paper snapshot; never fall back to a fake equity."""
+def default_account_reader(
+    output_root: Path,
+    cycle_id: str,
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Read the Park-authoritative Paper snapshot; never use a fake equity.
+
+    Park admission must use the same direct Paper authority that the Park
+    runtime will execute against.  The legacy configured execution builder
+    carries the DualTrack Shadow cutover gate and is therefore not a valid
+    account-read path for this single-track control plane.
+    """
 
     try:
-        from services.execution_plugin_composition import build_configured_execution_engine_adapter
+        from services.park_paper_runtime import build_park_authoritative_adapter
 
-        adapter = build_configured_execution_engine_adapter(Path(output_root))
+        adapter = build_park_authoritative_adapter(Path(output_root), config=config).adapter
         snapshot = dict(adapter.snapshot(cycle_id))
         reconciliation = dict(adapter.reconcile(cycle_id))
     except Exception as exc:  # noqa: BLE001 - turned into a typed worker blocker.
@@ -160,6 +171,7 @@ class ParkTelegramRouter:
         cycle_id_provider: Callable[[str], str] | None = None,
         confirmation_ttl_seconds: int = 900,
         intent_parser: Any | None = None,
+        config: Mapping[str, Any] | None = None,
     ) -> None:
         self.output_root = Path(output_root)
         self.telegram = ParkTelegramLedger(self.output_root, park_user_id=park_user_id, chat_id=chat_id)
@@ -167,7 +179,10 @@ class ParkTelegramRouter:
         self.identity = ParkStrategyIdentityJournal(self.output_root)
         self.confirmations = ParkConfirmationLedger(self.output_root, park_user_id=park_user_id)
         self.market_reader = market_reader or default_market_reader
-        self.account_reader = account_reader or default_account_reader
+        self.config = dict(config or {})
+        self.account_reader = account_reader or (
+            lambda root, cycle: default_account_reader(root, cycle, config=self.config)
+        )
         self.now = now or _utc_now
         self.cycle_id_provider = cycle_id_provider or _default_cycle_id
         self.confirmation_ttl_seconds = max(60, int(confirmation_ttl_seconds))

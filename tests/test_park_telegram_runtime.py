@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from services.park_confirmation import ParkConfirmationLedger
-from services.park_telegram_runtime import ParkTelegramRouter, ParkTelegramWorker
+from services.park_telegram_runtime import ParkTelegramRouter, ParkTelegramWorker, default_account_reader
 from services.telegram_bot_transport import TelegramBotTransport, TelegramBotTransportError
 
 
@@ -56,6 +56,71 @@ def test_transport_requires_explicit_message_receipt_and_parses_updates() -> Non
 
     with pytest.raises(TelegramBotTransportError, match="no message_id"):
         TelegramBotTransport(token="token", chat_id="chat", opener=missing_receipt).send_message("hello")
+
+
+def test_default_account_reader_uses_park_authoritative_adapter_and_external_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeAdapter:
+        def snapshot(self, cycle_id: str) -> dict:
+            calls["snapshot_cycle"] = cycle_id
+            return {
+                "account": {"equity": 1234.0},
+                "positions": [{"status": "open"}],
+                "orders": [{"state": "accepted"}, {"state": "cancelled"}],
+            }
+
+        def reconcile(self, cycle_id: str) -> dict:
+            calls["reconcile_cycle"] = cycle_id
+            return {"status": "ok", "issues": []}
+
+    class FakeBinding:
+        adapter = FakeAdapter()
+
+    def build(root: Path, *, config=None):
+        calls["root"] = root
+        calls["config"] = config
+        return FakeBinding()
+
+    monkeypatch.setattr("services.park_paper_runtime.build_park_authoritative_adapter", build)
+
+    result = default_account_reader(
+        tmp_path / "outputs",
+        "2026-08-15_DAY",
+        config={"feature_enabled": True, "runtime_mode": "paper_only"},
+    )
+
+    assert calls == {
+        "root": tmp_path / "outputs",
+        "config": {"feature_enabled": True, "runtime_mode": "paper_only"},
+        "snapshot_cycle": "2026-08-15_DAY",
+        "reconcile_cycle": "2026-08-15_DAY",
+    }
+    assert result["equity"] == 1234.0
+    assert result["open_positions"] == 1
+    assert result["open_or_accepted_orders"] == 1
+    assert result["reconciliation_healthy"] is True
+
+
+def test_router_passes_park_config_to_default_account_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[object] = []
+
+    def fake_reader(_root: Path, _cycle_id: str, *, config=None) -> dict:
+        seen.append(config)
+        return {}
+
+    monkeypatch.setattr("services.park_telegram_runtime.default_account_reader", fake_reader)
+    router = ParkTelegramRouter(
+        tmp_path / "outputs",
+        park_user_id="park-user",
+        chat_id="park-chat",
+        config={"execution_engine": {"authoritative": "nautilus_paper"}},
+    )
+
+    assert router.account_reader(router.output_root, "cycle") == {}
+    assert seen == [{"execution_engine": {"authoritative": "nautilus_paper"}}]
 
 
 def test_router_creates_deterministic_proposal_without_execution_mutation(tmp_path: Path) -> None:
