@@ -12,7 +12,16 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-14)
+## 现在在哪里(2026-08-15)
+- #678 / PR #679 connects the local Telegram ingress to a bounded Codex CLI
+  intent parser.  Codex receives only Park's strategy text and returns an
+  untrusted candidate; deterministic normalization, trusted market/equity
+  risk planning, exact Park confirmation, and Paper execution remain the sole
+  authorities.  Natural-language `neutral Grid` is recognized and explained,
+  but the Park Paper execution path still refuses neutral-grid mutation rather
+  than silently mapping it to long or short.  The local launchd handoff remains
+  Paper-only, Telegram-only, and source-bound; no live, Cloud, Feishu, Shadow,
+  autonomous, or credential path is enabled.
 - #672 / PR #673 and #674 / PR #675 complete the attended local Park Paper
   handoff on exact `main@4851718746df63481ce59ea351cbd006f0917eb8`.  The
   local `com.wendy.trading-orchestrator.park-paper-control` launchd job is
@@ -657,6 +666,12 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- Park can now describe a strategy naturally in Jessie Telegram; the Bot will
+  acknowledge its interpretation, ask only for genuinely missing or ambiguous
+  facts, and return the deterministic Paper risk plan before exact
+  confirmation.  Neutral Grid remains a separately gated Paper capability and
+  is not executable until its bilateral order geometry and risk contract are
+  explicitly implemented and verified.
 - Park's next action is to send one complete strategy through the Jessie
   Telegram bot.  The worker will return the normalized plan, risk/maximum-loss
   and leverage calculation, then wait for Park's exact confirmation before
