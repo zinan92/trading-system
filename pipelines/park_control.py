@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         intent_parser = CodexCliIntentParser(
             executable=os.getenv("TRADING_ORCHESTRATOR_CODEX_CLI", "/opt/homebrew/bin/codex"),
             model=os.getenv("TRADING_ORCHESTRATOR_CODEX_MODEL", "gpt-5.6-luna"),
-            timeout_seconds=float(os.getenv("TRADING_ORCHESTRATOR_CODEX_TIMEOUT_SECONDS", "15")),
+            timeout_seconds=float(os.getenv("TRADING_ORCHESTRATOR_CODEX_TIMEOUT_SECONDS", "30")),
             cwd=Path(os.getenv("TRADING_ORCHESTRATOR_CODEX_CWD", "/tmp")),
             codex_home=os.getenv("CODEX_HOME") or None,
         )

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -19,7 +20,7 @@ from typing import Any, Callable, Mapping
 
 PARK_CODEX_INTENT_SCHEMA = "park-codex-intent-v1"
 DEFAULT_CODEX_CLI = "/opt/homebrew/bin/codex"
-DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_TIMEOUT_SECONDS = 30.0
 MAX_STDOUT_BYTES = 128_000
 MAX_STDERR_BYTES = 4_000
 
@@ -119,6 +120,69 @@ def _candidate(value: Mapping[str, Any], *, source_text: str) -> dict[str, Any]:
         "clarification_fields": clarification_fields[:12],
         "interpretation": _bounded(value.get("interpretation"), 500),
         "confidence": confidence,
+        "source_text": source_text,
+    }
+
+
+def deterministic_neutral_grid_candidate(text: str) -> dict[str, Any] | None:
+    """Recognize the narrow, non-authoritative neutral-Grid fallback shape.
+
+    This is deliberately smaller than the Codex parser.  It exists only so a
+    provider timeout does not turn an otherwise clear ``中性网格`` message into
+    a misleading ``missing_direction`` response.  The returned candidate is
+    never sent to the risk planner: the router blocks neutral Grid explicitly.
+    """
+
+    source_text = str(text or "").strip()
+    lowered = source_text.lower()
+    neutral = "中性" in source_text or "neutral" in lowered
+    grid = "网格" in source_text or "grid" in lowered
+    if not (neutral and grid):
+        return None
+
+    range_match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(?:~|～|-|到|至)\s*([0-9]+(?:\.[0-9]+)?)", source_text)
+    if range_match is None:
+        # Park commonly writes the two boundaries separated by spaces.  Only
+        # use the first adjacent numeric pair here; Codex remains the general
+        # natural-language parser when it is available.
+        range_match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)", source_text)
+    upper: float | None = None
+    lower: float | None = None
+    if range_match is not None:
+        first, second = float(range_match.group(1)), float(range_match.group(2))
+        if first > 0 and second > 0 and first != second:
+            upper, lower = max(first, second), min(first, second)
+
+    leverage_match = re.search(
+        r"([0-9]+(?:\.[0-9]+)?)\s*(?:倍\s*杠杆|倍|x)(?:\s*杠杆|\s*leverage)?",
+        source_text,
+        re.IGNORECASE,
+    )
+    maximum_leverage = float(leverage_match.group(1)) if leverage_match else None
+    loss_match = re.search(
+        r"([0-9]+(?:\.[0-9]+)?)\s*(?:最大可接受亏损|最大亏损|max(?:imum)?\s*loss)",
+        source_text,
+        re.IGNORECASE,
+    )
+    maximum_loss = float(loss_match.group(1)) if loss_match else None
+    if upper is None or lower is None or (maximum_leverage is None and maximum_loss is None):
+        return None
+
+    return {
+        "schema_version": PARK_CODEX_INTENT_SCHEMA,
+        "direction": "neutral",
+        "strategy_type": "grid",
+        "upper_price_boundary": upper,
+        "lower_price_boundary": lower,
+        "maximum_leverage": maximum_leverage,
+        "maximum_acceptable_loss": maximum_loss,
+        "stop_price": None,
+        "take_profit_price": None,
+        "order_count": None,
+        "needs_clarification": False,
+        "clarification_fields": [],
+        "interpretation": "中性网格意图（确定性超时后备识别）",
+        "confidence": "medium",
         "source_text": source_text,
     }
 
