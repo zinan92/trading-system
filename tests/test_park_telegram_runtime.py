@@ -168,6 +168,84 @@ def test_router_creates_deterministic_proposal_without_execution_mutation(tmp_pa
     assert router.telegram.pending_outbound()
 
 
+def test_router_accepts_bounded_confirmation_shortcut_for_current_proposal(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: {
+            "price": 4300.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "paper-feed",
+            "observed_at": "2026-08-14T10:00:00+00:00",
+        },
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: "2026-08-14T10:00:00+00:00",
+        cycle_id_provider=lambda now: "2026-08-14_DAY",
+    )
+    proposal = router.handle_update(_update(10, "short DCA 10x 4444~4200"))
+
+    confirmed = router.handle_update(_update(11, "确认当前计划"))
+
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["confirmation_mode"] == "pending_proposal_shortcut"
+    assert confirmed["decision"]["plan_digest"] == proposal["proposal"]["plan_digest"]
+
+
+def test_router_releases_expired_unconfirmed_session_only_on_clean_slate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "outputs"
+    clock = {"value": 1000.0}
+    monkeypatch.setattr("services.park_telegram_runtime.time.time", lambda: clock["value"])
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: {
+            "price": 4300.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "paper-feed",
+            "observed_at": "2026-08-14T10:00:00+00:00",
+        },
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: "2026-08-14T10:00:00+00:00",
+        cycle_id_provider=lambda now: "2026-08-14_DAY",
+    )
+    first = router.handle_update(_update(20, "short DCA 10x 4444~4200"))
+    clock["value"] = 2000.0
+
+    replacement = router.handle_update(_update(21, "short DCA 10x 4444~4200"))
+
+    assert first["status"] == "proposal_created"
+    assert replacement["status"] == "proposal_created"
+    assert replacement["proposal"]["plan_digest"] != first["proposal"]["plan_digest"]
+    identity_rows = [
+        json.loads(line)
+        for line in (output / "park_strategy" / "identity.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert any(row.get("event") == "session_closed" and row.get("reason") == "confirmation_expired" for row in identity_rows)
+    assert any(row.get("message_type") == "confirmation_expired" for row in router.telegram.pending_outbound())
+
+
 def test_confirmation_is_exact_idempotent_and_still_zero_execution(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     router = ParkTelegramRouter(

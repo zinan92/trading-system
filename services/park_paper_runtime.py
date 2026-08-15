@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from services.execution_engine_port import ExecutionEngineAdapter
+from services.park_confirmation import ParkConfirmationLedger
 from services.park_cutover_guard import evaluate_park_cutover, load_default_config
 from services.park_dca_track import ParkDcaLifecycle
 from services.park_grid_track import ParkGridLifecycle
@@ -140,6 +141,7 @@ class ParkPaperRuntime:
             park_user_id=self.park_user_id,
             chat_id=self.chat_id,
         )
+        self.confirmations = ParkConfirmationLedger(self.output_root, park_user_id=self.park_user_id)
         self.execution_path = self.output_root / "park_strategy" / "executions.jsonl"
         self.blocker_path = self.output_root / "park_strategy" / "runtime_blockers.jsonl"
         self.review_path = self.output_root / "park_strategy" / "recording" / "reviews.jsonl"
@@ -165,6 +167,15 @@ class ParkPaperRuntime:
             )
         confirmation = self._confirmed_for(digest, session, revision)
         if confirmation is None:
+            expired = self._release_expired_unconfirmed_session(
+                active,
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+            )
+            if expired is not None:
+                return expired
             self._record_window_facts(
                 active,
                 observed_at=observed_at,
@@ -828,6 +839,108 @@ class ParkPaperRuntime:
             ),
             None,
         )
+
+    def _release_expired_unconfirmed_session(
+        self,
+        active: Mapping[str, Any],
+        *,
+        session: str,
+        revision: str,
+        digest: str,
+        observed_at: str,
+    ) -> dict[str, Any] | None:
+        pending = self.confirmations.pending_proposals(active)
+        if not pending:
+            return None
+        if len(pending) > 1:
+            return self._blocked(
+                "multiple_pending_proposals",
+                "multiple Park proposals are bound to the active revision",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+            )
+        proposal = pending[0]
+        try:
+            expired = float(proposal.get("expires_at") or 0) <= time.time()
+        except (TypeError, ValueError):
+            return self._blocked(
+                "confirmation_expiry_invalid",
+                "Park proposal expiry is invalid",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+            )
+        if not expired:
+            return None
+        cycle_id = park_paper_namespace(session)
+        try:
+            snapshot = dict(self.adapter.snapshot(cycle_id))
+            reconciliation = dict(self.adapter.reconcile(cycle_id))
+        except Exception as exc:  # noqa: BLE001 - unknown state cannot be released.
+            return self._blocked(
+                "paper_state_unavailable",
+                type(exc).__name__,
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+            )
+        open_positions = [
+            row for row in snapshot.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+        ]
+        accepted_orders = [
+            row for row in snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+        ]
+        if open_positions or accepted_orders or reconciliation.get("status") != "ok" or reconciliation.get("issues"):
+            return self._blocked(
+                "confirmation_expired_requires_clean_slate",
+                "expired proposal cannot be released while Paper exposure or reconciliation uncertainty remains",
+                session=session,
+                revision=revision,
+                digest=digest,
+                observed_at=observed_at,
+                snapshot=snapshot,
+                reconciliation=reconciliation,
+            )
+        self.identity.close_session(
+            strategy_session_id=session,
+            strategy_revision_id=revision,
+            observed_at=observed_at,
+            reason="confirmation_expired",
+        )
+        result = self._result(
+            "idle",
+            observed_at=observed_at,
+            session=session,
+            revision=revision,
+            digest=digest,
+            next_action="await_new_park_strategy",
+            reason="confirmation_expired",
+        )
+        self.telegram.queue_outbound(
+            idempotency_key=f"park-confirmation-expired:{proposal.get('proposal_id')}",
+            message_type="confirmation_expired",
+            text="上一个 Paper 计划未确认且已过期；当前仍是 clean slate，系统已释放它。请重新描述策略。",
+            binding=None,
+        )
+        _append_jsonl(
+            self.execution_path,
+            {
+                "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+                "event": "confirmation_expired",
+                "strategy_session_id": session,
+                "strategy_revision_id": revision,
+                "plan_digest": digest,
+                "result": result,
+                "recorded_at": observed_at,
+            },
+        )
+        return result
 
     def _order_owned(self, row: Mapping[str, Any], session: str, revision: str, digest: str) -> bool:
         if _owned(row, session, revision, digest):

@@ -18,6 +18,22 @@ from typing import Any, Mapping
 
 PARK_CONFIRMATION_SCHEMA = "park-confirmation-v1"
 _COMMAND = re.compile(r"^\s*(confirm|确认|reject|拒绝)\s+(sha256:[0-9a-f]{64})\s*$", re.IGNORECASE)
+_SHORTCUTS = {
+    "confirm": "confirm",
+    "确认": "confirm",
+    "确认当前计划": "confirm",
+    "确认这个计划": "confirm",
+    "确认刚才的计划": "confirm",
+    "confirm current plan": "confirm",
+    "confirm this plan": "confirm",
+    "approve current plan": "confirm",
+    "reject": "reject",
+    "拒绝": "reject",
+    "拒绝当前计划": "reject",
+    "拒绝这个计划": "reject",
+    "reject current plan": "reject",
+    "reject this plan": "reject",
+}
 
 
 class ParkConfirmationError(ValueError):
@@ -38,6 +54,21 @@ def parse_confirmation_command(text: str) -> tuple[str, str]:
     if not match:
         raise ParkConfirmationError("confirmation_incomplete", "use exactly confirm|确认 <sha256:plan_digest>")
     return ("confirm" if match.group(1).lower() in {"confirm", "确认"} else "reject", match.group(2).lower())
+
+
+def parse_confirmation_shortcut(text: str) -> str:
+    """Parse a bounded human-friendly decision without inventing a digest.
+
+    The caller must resolve the returned verb against exactly one current,
+    unexpired proposal.  This helper never authorizes a plan by itself and
+    deliberately does not accept arbitrary natural-language or model output.
+    """
+
+    normalized = re.sub(r"[\s。、.!！?？]+$", "", str(text or "").strip()).lower()
+    try:
+        return _SHORTCUTS[normalized]
+    except KeyError as exc:
+        raise ParkConfirmationError("confirmation_incomplete", "use confirm|确认 <sha256:plan_digest> or confirm|确认当前计划") from exc
 
 
 def _append(path: Path, row: Mapping[str, Any]) -> None:
@@ -103,6 +134,25 @@ class ParkConfirmationLedger:
             if row.get("proposal_id") == proposal_id and row.get("event") in {"confirmed", "rejected"}:
                 decision = dict(row)
         return decision
+
+    def pending_proposals(self, current_binding: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Return undecided proposals bound to one active session/revision."""
+
+        session_id, revision_id = _binding(current_binding)
+        rows = self.rows()
+        decided = {
+            str(row.get("proposal_id") or "")
+            for row in rows
+            if row.get("event") in {"confirmed", "rejected"}
+        }
+        return [
+            dict(row)
+            for row in reversed(rows)
+            if row.get("event") == "proposal"
+            and str(row.get("proposal_id") or "") not in decided
+            and str(row.get("strategy_session_id") or "") == session_id
+            and str(row.get("strategy_revision_id") or "") == revision_id
+        ]
 
     def create_proposal(
         self,
