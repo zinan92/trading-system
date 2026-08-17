@@ -1,4 +1,10 @@
-"""Authenticated, allowlisted reverse proxy for the Cloud Paper Dashboard."""
+"""Public, read-only allowlist proxy for the Park Paper Dashboard.
+
+Cloudflare may publish this viewer without an interactive Access login.  The
+gateway is therefore the final public security boundary: it proxies only the
+exact GET allowlist and never forwards Dashboard mutations.  Telegram remains
+the sole Park Paper control plane.
+"""
 
 from __future__ import annotations
 
@@ -58,12 +64,6 @@ ALLOW_EXACT = frozenset(
         "/api/trading-system/supervisor-history",
         "/api/trading-system/ai-evaluation-receipt",
         "/api/dualtrack/market/bars",
-    }
-)
-MUTATION_EXACT = frozenset(
-    {
-        "/api/strategy-console/control",
-        "/api/dualtrack/orders",
     }
 )
 _DROP_HEADERS = frozenset(
@@ -148,35 +148,16 @@ def _session_payload(headers: Any) -> dict[str, Any]:
     identity = authenticated_access_identity(headers)
     return {
         "authenticated": identity is not None,
-        "can_control": identity is not None,
+        # A valid historical Access session may still be attached while the
+        # public policy change propagates.  Identity must never re-enable a
+        # Dashboard mutation; Telegram is the only control plane.
+        "can_control": False,
         "email": identity.get("email") if identity else None,
         "expires_at": identity.get("expires_at") if identity else None,
         "session_duration": ACCESS_SESSION_DURATION,
         "access_configured": bool(
             ACCESS_TEAM_DOMAIN and ACCESS_AUD and ALLOWED_ACCESS_EMAIL
         ),
-    }
-
-
-def _mutation_identity(path: str, payload: Any, headers: Any) -> dict[str, Any] | None:
-    if path not in MUTATION_EXACT or not isinstance(payload, dict):
-        return None
-    return authenticated_access_identity(headers)
-
-
-def _upstream_mutation_headers(
-    headers: Any,
-    identity: dict[str, Any],
-) -> dict[str, str]:
-    """Forward the signed assertion so the loopback server can re-verify it."""
-
-    assertion = str(headers.get("Cf-Access-Jwt-Assertion") or "").strip()
-    if not assertion:
-        raise ValueError("validated Cloudflare Access assertion is missing")
-    return {
-        "Content-Type": "application/json",
-        "X-Goldbot-Actor-Email": str(identity["email"]),
-        "Cf-Access-Jwt-Assertion": assertion,
     }
 
 
@@ -217,49 +198,23 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path not in MUTATION_EXACT:
-            self._refuse()
-            return
-        try:
-            length = int(self.headers.get("Content-Length") or "0")
-        except ValueError:
-            self._refuse()
-            return
-        if length <= 0 or length > 64_000:
-            self._refuse()
-            return
-        body = self.rfile.read(length)
-        try:
-            payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            self._refuse()
-            return
-        identity = _mutation_identity(parsed.path, payload, self.headers)
-        if identity is None:
-            self._audit(payload, parsed.path, None, "denied", 403)
-            self._send_json(
-                403,
-                {
-                    "error": "access_denied",
-                    "message": "需要使用获授权的 Cloudflare Access 账号登录。",
-                },
-            )
-            return
-        self._proxy(
-            f"{UPSTREAM}{parsed.path}",
-            method="POST",
-            body=body,
-            request_headers=_upstream_mutation_headers(self.headers, identity),
-            audit={
-                "email": identity["email"],
+        _write_audit(
+            {
+                "email": None,
                 "path": parsed.path,
-                "action": payload.get("action"),
-            },
+                "action": None,
+                "result": "dashboard_read_only",
+                "status": 405,
+            }
         )
+        # Refuse before reading or parsing the body.  This makes the public
+        # boundary independent of Access identity and of any upstream action
+        # semantics, including the legacy read-only-looking `preview` action.
+        self._refuse()
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
-        self.send_header("Allow", "GET, POST, OPTIONS")
+        self.send_header("Allow", "GET, OPTIONS")
         self.end_headers()
 
     def _proxy(
@@ -376,7 +331,7 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
 
     def _refuse(self) -> None:
         self.send_response(405)
-        self.send_header("Allow", "GET, POST, OPTIONS")
+        self.send_header("Allow", "GET, OPTIONS")
         self.send_header("Content-Length", "0")
         self.end_headers()
 

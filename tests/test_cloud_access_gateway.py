@@ -139,7 +139,7 @@ def test_supervisor_history_forwards_complete_body_above_normal_read_cap(
     ]
 
 
-def test_mutation_requires_validated_allowed_identity(monkeypatch) -> None:
+def test_access_identity_never_grants_dashboard_control(monkeypatch) -> None:
     monkeypatch.setattr(gateway, "ALLOWED_ACCESS_EMAIL", "operator@example.com")
     monkeypatch.setattr(
         gateway,
@@ -147,11 +147,8 @@ def test_mutation_requires_validated_allowed_identity(monkeypatch) -> None:
         lambda _headers: {"email": "operator@example.com", "exp": 1},
     )
 
-    identity = gateway._mutation_identity(
-        "/api/strategy-console/control",
-        {"action": "start"},
-        {"Cf-Access-Jwt-Assertion": "secret"},
-    )
+    headers = {"Cf-Access-Jwt-Assertion": "signed-access-jwt"}
+    identity = gateway.authenticated_access_identity(headers)
 
     assert identity == {
         "email": "operator@example.com",
@@ -160,39 +157,58 @@ def test_mutation_requires_validated_allowed_identity(monkeypatch) -> None:
         "issuer": None,
         "subject": None,
     }
+    session = gateway._session_payload(headers)
+    assert session["authenticated"] is True
+    assert session["can_control"] is False
 
 
-def test_wrong_or_missing_identity_cannot_mutate(monkeypatch) -> None:
-    monkeypatch.setattr(gateway, "ALLOWED_ACCESS_EMAIL", "operator@example.com")
+class _UnreadableBody:
+    def read(self, _size: int = -1) -> bytes:
+        raise AssertionError("public gateway must refuse before reading POST body")
+
+
+def test_public_gateway_refuses_post_before_body_parse_or_upstream(monkeypatch) -> None:
+    audits: list[dict] = []
+    refused: list[bool] = []
+    monkeypatch.setattr(gateway, "_write_audit", audits.append)
     monkeypatch.setattr(
         gateway,
-        "_validated_access_claims",
-        lambda _headers: {"email": "intruder@example.com"},
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("public gateway must not call upstream for POST")
+        ),
     )
 
-    assert gateway._mutation_identity(
+    paths = [
         "/api/strategy-console/control",
-        {"action": "stop"},
-        {"Cf-Access-Jwt-Assertion": "secret"},
-    ) is None
-    assert gateway._mutation_identity(
-        "/api/trading-system/read-model",
-        {},
-        {},
-    ) is None
+        "/api/dualtrack/orders",
+        "/api/unlisted-neighbor",
+    ]
+    for path in paths:
+        handler = object.__new__(gateway.CloudAccessGatewayHandler)
+        handler.path = path
+        handler.headers = {
+            "Content-Length": "20",
+            "Cf-Access-Jwt-Assertion": "signed-access-jwt",
+        }
+        handler.rfile = _UnreadableBody()
+        handler._refuse = lambda: refused.append(True)
 
+        handler.do_POST()
 
-def test_upstream_mutation_forwards_signed_assertion_for_independent_verification() -> None:
-    headers = gateway._upstream_mutation_headers(
-        {"Cf-Access-Jwt-Assertion": "signed-access-jwt"},
-        {"email": "operator@example.com"},
+    assert refused == [True, True, True]
+    assert [row["path"] for row in audits] == paths
+    assert all(
+        row
+        == {
+            "email": None,
+            "path": row["path"],
+            "action": None,
+            "result": "dashboard_read_only",
+            "status": 405,
+        }
+        for row in audits
     )
-
-    assert headers == {
-        "Content-Type": "application/json",
-        "X-Goldbot-Actor-Email": "operator@example.com",
-        "Cf-Access-Jwt-Assertion": "signed-access-jwt",
-    }
 
 
 def test_access_audit_never_persists_assertion_or_secret(monkeypatch, tmp_path: Path) -> None:
