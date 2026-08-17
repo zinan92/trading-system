@@ -13,23 +13,28 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-17)
-- #711 / #713 / #715 are complete on exact clean
-  `main@7d7491a3507f1897cfd6909778526ca24859c313`.  Opening
-  `https://goldbot.park-ai-intel.com/` now requires no email or OTP and lands
-  on the dedicated Park Paper observer.  DNS routes only this hostname through
-  the local `topic-workbench` Tunnel to the loopback Gateway; Goldbot v5 has the
-  scoped `Public Paper observer / Bypass / Everyone` policy.  The Gateway
-  exposes only the observer HTML, observer read model, and read-only session
-  route, rejects every mutation method before body parsing, closes rejected
-  HTTP/1.1 connections, and returns 404 for the legacy Dashboard and neighboring
-  APIs.  Public verification passed 8/8 HTML/API/POST probes plus 12/12 repeated
-  POST denials; a fresh browser rendered `事实完整` with zero buttons, forms,
-  inputs, or links.  Dashboard/Gateway launchd jobs, predeploy, Dashboard boot,
-  and Park safety evidence all bind the exact SHA.  The active neutral Grid
-  identity remains unchanged (4100–4450, max 20x), reconciliation is `ok`, and
-  safety records `operations.mutations=[]`.  Immediate rollback is to detach
-  the public observer policy and save, restoring OTP; the hostname can then be
-  routed back to `gridmind-paper-cloud` if origin rollback is also required.
+- #719 / #721 / #723 / #724 are complete on exact clean
+  `main@1a2ec229c940f1f133adc95ec3f422dfd2f9a990` with deployed tree
+  `ac3852e4644c036b793ae489404e8af1a084d6b4`.  The original Park Paper
+  Dashboard is restored at `https://goldbot.park-ai-intel.com/`: its
+  `dashboard-gridmind.html` is byte-identical to the prior baseline
+  (`sha256=4de1f38cfe1f015124e266d4e5217297bee5c8cddcac47807d35f0deedac87e7`),
+  while the intentional delta is the password/session Gateway and its exact
+  allowlist.  Cloudflare's hostname-scoped `Public Paper observer / Bypass /
+  Everyone` policy now only removes the OTP layer; the local Gateway still
+  requires the Park Paper password and returns 401 for anonymous control POSTs.
+  Dashboard/Gateway/Cloud Tunnel/Datafeed are active, all eight Paper timers
+  remain enabled, and a browser smoke test loaded the original K-line,
+  strategy, order, fill, position, Supervisor, review, shadow, and NAV tabs with
+  zero console errors.  Before/after read-model facts are unchanged: running
+  `2026-08-17_DAY`, plan `strategy-plan-2026-08-17_DAY-2-ddaab7c5` v2, 19
+  accepted/open orders, 0 positions, reconciliation `ok`, and no control action.
+  PR #723 adds a host-only CSRF challenge so the Codex in-app browser's
+  `Origin: null` login succeeds without weakening mutation/logout same-origin
+  guards.  Current Codex provider readiness is `blocked` on
+  `strategy_recommendation_provider_timeout`; the AI-enhanced refresh path is
+  therefore partial and not claimed as healthy.  No order, position, strategy,
+  live, exchange-key, Feishu, Shadow, or autonomous mutation was performed.
 - #715 closes the public Gateway's HTTP/1.1 origin connection after refusing a
   request body.  The Gateway still returns 405 before parsing or forwarding the
   body, but Cloudflare can no longer reuse that socket and reinterpret leftover
