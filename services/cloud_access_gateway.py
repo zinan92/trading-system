@@ -320,8 +320,13 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
         self._write_response(404, b"404", {"Content-Type": "text/plain"})
 
     def _refuse(self) -> None:
+        # The body is deliberately left unread.  Close this HTTP/1.1 origin
+        # connection so a proxy cannot reuse it and reinterpret the rejected
+        # body's bytes as the start of a subsequent request.
+        self.close_connection = True
         self.send_response(405)
         self.send_header("Allow", "GET, OPTIONS")
+        self.send_header("Connection", "close")
         self.send_header("Content-Length", "0")
         self.end_headers()
 

@@ -15635,3 +15635,30 @@ auditable datafeed port; broker execution remains a separate port.
 - Merge, exact-SHA Dashboard/Gateway deployment, unauthenticated public GET,
   public POST denial, and Cloudflare policy read-back remain separate runtime
   evidence owned by #711; repository tests do not claim those steps complete.
+
+# 2026-08-17 — Close rejected public Gateway connections (#715)
+
+## Decision
+
+- Keep rejecting mutation methods before reading their request body or calling
+  an upstream, and explicitly return `Connection: close` while marking the
+  HTTP/1.1 connection non-reusable.
+- Do not drain or parse the body merely to preserve keep-alive.  Closing the
+  origin socket is the smaller fail-closed boundary and prevents a proxy from
+  interpreting leftover body bytes as another request.
+
+## Gotcha
+
+- A first public POST correctly returned 405, but Cloudflare reused the origin
+  connection.  Because the body was intentionally unread, its `{}` bytes were
+  prefixed to the following method and the Python server reported an
+  unsupported `{}POST` as 501.  The request was still denied, but the transport
+  contract was unstable.
+
+## Verification
+
+- A raw pipelined HTTP/1.1 test sends a rejected two-byte body immediately
+  followed by an otherwise valid GET.  It receives exactly one 405 response,
+  `Allow: GET, OPTIONS`, and `Connection: close`; the GET is never handled.
+- Focused Gateway tests pass (8); the broader Park/Gateway/Dashboard suite
+  passes (185), with Ruff, compilation, and diff checks passing.

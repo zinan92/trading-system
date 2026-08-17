@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import socket
+import threading
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from services import cloud_access_gateway as gateway
@@ -212,6 +215,44 @@ def test_public_gateway_refuses_post_before_body_parse_or_upstream(monkeypatch) 
         }
         for row in audits
     )
+
+
+def test_refused_body_cannot_contaminate_a_reused_origin_connection() -> None:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), gateway.CloudAccessGatewayHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    response = bytearray()
+    try:
+        with socket.create_connection(server.server_address, timeout=2) as client:
+            client.settimeout(2)
+            client.sendall(
+                b"POST /api/strategy-console/control HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 2\r\n"
+                b"Connection: keep-alive\r\n\r\n"
+                b"{}"
+                b"GET /api/auth/session HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n\r\n"
+            )
+            while True:
+                try:
+                    chunk = client.recv(4096)
+                except ConnectionResetError:
+                    break
+                if not chunk:
+                    break
+                response.extend(chunk)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert response.count(b"HTTP/1.1 ") == 1
+    assert b"HTTP/1.1 405 Method Not Allowed" in response
+    assert b"Allow: GET, OPTIONS" in response
+    assert b"Connection: close" in response
+    assert b'"can_control"' not in response
 
 
 def test_access_audit_never_persists_assertion_or_secret(monkeypatch, tmp_path: Path) -> None:
