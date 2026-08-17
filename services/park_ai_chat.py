@@ -496,14 +496,14 @@ class ParkAiChatService:
                 "已有 orders/positions 尚未完成归属处理；系统不会静默切换执行身份。请先完成处置并重新确认。",
             )
         if active:
-            # Existing Paper runtime has one active execution identity.  The
-            # disposition is persisted and surfaced, but replacement remains
-            # fail-closed until the old owned portfolio is reconciled.
-            self.identity.close_session(
-                strategy_session_id=str(active.get("strategy_session_id") or ""),
-                strategy_revision_id=str(active.get("strategy_revision_id") or ""),
-                observed_at=self.now(),
-                reason="superseded_by_dashboard_ai",
+            # The existing Paper runtime has one active execution identity.
+            # A web draft may record the requested disposition, but it must
+            # never close or supersede that identity implicitly.  The old
+            # session remains authoritative until its own terminal boundary
+            # path records closure and the next proposal starts clean.
+            return self._blocked(
+                "active_strategy_not_terminal",
+                "当前策略仍处于 active；处置意图已记录，但必须等旧策略进入 terminal/paused 后才能确认新策略。",
             )
         session_id = str(draft.get("strategy_session_id") or f"session-{uuid.uuid4().hex}")
         revision_id = str(draft.get("strategy_revision_id") or f"revision-{uuid.uuid4().hex}")
@@ -512,6 +512,11 @@ class ParkAiChatService:
         if str(plan.get("plan_digest") or "") != expected:
             return self._blocked("plan_changed", "计划身份在确认前发生变化，请重新描述策略。")
         facts = dict(context.get("account") or {})
+        if facts.get("reconciliation_healthy") is not True:
+            return self._blocked("reconciliation_required", "Paper 对账尚未通过；确认不会创建新策略。")
+        if bool(facts.get("unresolved_runtime")) or bool(facts.get("pending_terminal_actions")):
+            return self._blocked("runtime_not_terminal", "Paper runtime 或终态动作尚未收口；确认不会创建新策略。")
+        session_started = False
         try:
             self.identity.start_clean_session(
                 observed_at=self.now(),
@@ -524,45 +529,56 @@ class ParkAiChatService:
                 strategy_session_id=session_id,
                 strategy_revision_id=revision_id,
             )
+            session_started = True
+            _append_jsonl(self.output_root / "park_strategy" / "plans.jsonl", {"event": "plan_proposed", **plan, "created_at": self.now(), "source": "dashboard_ai"})
+            confirmation = ParkConfirmationLedger(self.output_root, park_user_id=self.park_user_id)
+            proposal_id = f"park-proposal-{expected.removeprefix('sha256:')[:24]}"
+            proposal = confirmation.create_proposal(
+                proposal_id=proposal_id,
+                strategy_session_id=session_id,
+                strategy_revision_id=revision_id,
+                plan_digest=expected,
+                risk_digest=_digest(plan.get("risk") or {}),
+                expires_at=self._time() + self.draft_ttl_seconds,
+            )
+            decision = confirmation.decide(
+                proposal_id=proposal_id,
+                park_user_id=self.park_user_id,
+                command_text=f"confirm {expected}",
+                current_binding={"strategy_session_id": session_id, "strategy_revision_id": revision_id},
+                now=self._time(),
+            )
+            snapshot = self._snapshot(plan, draft=draft, decision=decision, actor=actor)
+            _append_jsonl(self.snapshot_path, snapshot)
+            self._record_event_for_draft(
+                draft,
+                category="control",
+                event_type="strategy_accepted",
+                payload={
+                    "snapshot_id": snapshot["snapshot_id"],
+                    "plan_digest": snapshot.get("plan_digest"),
+                    "actor": actor,
+                },
+            )
+            self._record_event_for_draft(
+                draft,
+                category="plan",
+                event_type="strategy_snapshot_created",
+                payload={"snapshot_id": snapshot["snapshot_id"], "plan_digest": snapshot.get("plan_digest")},
+            )
+            _append_jsonl(self.chat_path, {"event": "strategy_accepted", "snapshot_id": snapshot["snapshot_id"], "source_text": draft.get("source_text"), "recorded_at": self.now(), "actor": actor, "provider": draft.get("provider")})
         except Exception as exc:  # noqa: BLE001 - no partial execution authority.
-            return self._blocked("strategy_identity_blocked", str(exc))
-        _append_jsonl(self.output_root / "park_strategy" / "plans.jsonl", {"event": "plan_proposed", **plan, "created_at": self.now(), "source": "dashboard_ai"})
-        confirmation = ParkConfirmationLedger(self.output_root, park_user_id=self.park_user_id)
-        proposal_id = f"park-proposal-{expected.removeprefix('sha256:')[:24]}"
-        proposal = confirmation.create_proposal(
-            proposal_id=proposal_id,
-            strategy_session_id=session_id,
-            strategy_revision_id=revision_id,
-            plan_digest=expected,
-            risk_digest=_digest(plan.get("risk") or {}),
-            expires_at=self._time() + self.draft_ttl_seconds,
-        )
-        decision = confirmation.decide(
-            proposal_id=proposal_id,
-            park_user_id=self.park_user_id,
-            command_text=f"confirm {expected}",
-            current_binding={"strategy_session_id": session_id, "strategy_revision_id": revision_id},
-            now=self._time(),
-        )
-        snapshot = self._snapshot(plan, draft=draft, decision=decision, actor=actor)
-        _append_jsonl(self.snapshot_path, snapshot)
-        self._record_event_for_draft(
-            draft,
-            category="control",
-            event_type="strategy_accepted",
-            payload={
-                "snapshot_id": snapshot["snapshot_id"],
-                "plan_digest": snapshot.get("plan_digest"),
-                "actor": actor,
-            },
-        )
-        self._record_event_for_draft(
-            draft,
-            category="plan",
-            event_type="strategy_snapshot_created",
-            payload={"snapshot_id": snapshot["snapshot_id"], "plan_digest": snapshot.get("plan_digest")},
-        )
-        _append_jsonl(self.chat_path, {"event": "strategy_accepted", "snapshot_id": snapshot["snapshot_id"], "source_text": draft.get("source_text"), "recorded_at": self.now(), "actor": actor, "provider": draft.get("provider")})
+            if session_started:
+                try:
+                    self.identity.close_session(
+                        strategy_session_id=session_id,
+                        strategy_revision_id=revision_id,
+                        observed_at=self.now(),
+                        reason="dashboard_ai_commit_failed",
+                    )
+                except Exception:
+                    pass
+            return self._blocked("strategy_commit_blocked", f"策略确认持久化未完成（{type(exc).__name__}）；未提交新的 Paper 执行权。")
         self._delete_draft()
         return {"status": "confirmed", "snapshot": self._public_snapshot(snapshot), "proposal": proposal, "decision": decision, "paper_only": True}
 

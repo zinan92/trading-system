@@ -772,7 +772,7 @@ load();setInterval(()=>{if(!state.busy&&!document.hidden)load()},5000);
     // needless 404 there; the real local Dashboard ports and public gateway
     // remain enabled.
     if(["127.0.0.1","localhost"].includes(location.hostname)&&!["8765","8766"].includes(location.port))return;
-    try{const response=await fetch("/api/park-paper/ai-chat",{credentials:"same-origin"});if(!response.ok)throw new Error(`HTTP ${response.status}`);const data=await response.json();if(data.pending_draft){pending=data.pending_draft;renderSnapshot(null,pending);confirm.disabled=!pending.confirmable;reject.disabled=false;setStatus("已恢复未过期 Draft；尚未下单。")}}catch(error){setStatus(`AI 助手读取受限：${error.message}`)}
+    try{const response=await fetch("/api/park-paper/ai-chat",{credentials:"same-origin"});if(!response.ok)throw new Error(`HTTP ${response.status}`);const data=await response.json();if(data.pending_draft){pending=data.pending_draft;renderSnapshot(null,pending);confirm.disabled=!pending.confirmable;reject.disabled=false;setStatus("已恢复未过期 Draft；尚未下单。")}else if(Array.isArray(data.snapshots)&&data.snapshots.length){renderSnapshot(data.snapshots[data.snapshots.length-1],null);setStatus(`已读取 ${data.snapshots.length} 张策略 Snapshot；最新一张显示在上方。`)}}catch(error){setStatus(`AI 助手读取受限：${error.message}`)}
   }
   send.addEventListener("click",sendMessage);confirm.addEventListener("click",confirmDraft);reject.addEventListener("click",rejectDraft);input.addEventListener("keydown",event=>{if((event.metaKey||event.ctrlKey)&&event.key==="Enter"){event.preventDefault();sendMessage()}});hydrate();
 })();

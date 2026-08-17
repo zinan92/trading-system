@@ -11,6 +11,7 @@ from services.park_ai_chat import (
     record_strategy_snapshot_terminal,
 )
 from services.park_ai_chat import _safe_context
+from services.park_codex_intent_parser import _candidate as _codex_candidate
 
 
 MARKET = {
@@ -171,6 +172,22 @@ def test_provider_gateway_falls_back_to_codex_model(monkeypatch):
     configured = ParkAiProviderGateway(deepseek=Provider(), codex=None)
     assert configured.codex.executable == "/cloud/bin/codex"
     assert configured.codex.model == "gpt-5.6-sol"
+
+
+def test_codex_candidate_preserves_explicit_portfolio_disposition_fields():
+    candidate = _codex_candidate(
+        {
+            "direction": None,
+            "strategy_type": None,
+            "position_action": "keep",
+            "entry_action": "cancel_orders",
+            "exit_action": "manage",
+        },
+        source_text="继续旧仓，撤掉旧挂单，保留止盈止损",
+    )
+    assert candidate["position_action"] == "keep"
+    assert candidate["entry_action"] == "cancel_orders"
+    assert candidate["exit_action"] == "manage"
 
 
 def test_provider_explicit_clarification_flag_cannot_become_a_confirmable_plan(tmp_path):
@@ -357,6 +374,24 @@ def test_existing_exposure_without_identity_still_requires_disposition_and_stays
     confirmed = service.confirm(disposition["draft"]["draft_id"], disposition["draft"]["plan_digest"])
     assert confirmed["status"] == "blocked"
     assert confirmed["code"] == "portfolio_reconciliation_required"
+
+
+def test_active_identity_is_not_silently_superseded(tmp_path):
+    service = _service(tmp_path)
+    service.identity.start_clean_session(
+        observed_at="2026-08-17T03:00:00+00:00",
+        plan_digest="sha256:" + "1" * 64,
+        reconciliation_healthy=True,
+        strategy_session_id="session-old",
+        strategy_revision_id="revision-old",
+    )
+    result = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")
+    assert result["status"] == "needs_disposition"
+    result = service.handle_message("旧仓继续止盈止损，撤掉旧挂单")
+    assert result["confirmable"] is True
+    blocked = service.confirm(result["draft"]["draft_id"], result["draft"]["plan_digest"])
+    assert blocked["code"] == "active_strategy_not_terminal"
+    assert service.identity.active_session()["strategy_session_id"] == "session-old"
 
 
 def test_confirmation_records_control_and_plan_facts_without_raw_rejected_cards(tmp_path):
