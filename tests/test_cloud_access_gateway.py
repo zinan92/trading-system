@@ -11,17 +11,20 @@ from services import cloud_access_gateway as gateway
 
 
 def test_gateway_allowlist_exposes_only_dashboard_contracts() -> None:
-    assert gateway.ROOT_REDIRECT == "/park-paper-dashboard.html"
-    assert gateway._is_allowed("/park-paper-dashboard.html")
-    assert gateway._is_allowed("/api/park-paper/read-model")
+    assert gateway.ROOT_REDIRECT == "/dashboard-v5.html"
+    assert gateway._is_allowed("/dashboard-v5.html")
+    assert gateway._is_allowed("/assets/tokens.css")
     assert gateway._is_allowed("/api/auth/session")
-    assert not gateway._is_allowed("/dashboard-v5.html")
-    assert not gateway._is_allowed("/api/trading-system/read-model")
-    assert not gateway._is_allowed("/api/trading-system/cloud-health")
-    assert not gateway._is_allowed("/api/trading-system/supervisor-history")
+    assert gateway._is_allowed("/api/trading-system/read-model")
+    assert gateway._is_allowed("/api/trading-system/cloud-health")
+    assert gateway._is_allowed("/api/trading-system/supervisor-history")
+    assert gateway.MUTATION_EXACT == {
+        "/api/strategy-console/control",
+        "/api/dualtrack/orders",
+    }
     assert not gateway._is_allowed("/outputs/dualtrack/strategy_control/runtime.json")
-    assert not gateway._is_allowed("/api/park-paper/read-model/internal")
-    assert not gateway._is_allowed("/api/park-paper/read-model/")
+    assert not gateway._is_allowed("/api/trading-system/read-model/internal")
+    assert not gateway._is_allowed("/api/trading-system/read-model/")
     assert not gateway._is_allowed("/../configs/paper.env")
 
 
@@ -145,7 +148,9 @@ def test_supervisor_history_forwards_complete_body_above_normal_read_cap(
     ]
 
 
-def test_access_identity_never_grants_dashboard_control(monkeypatch) -> None:
+def test_verified_identity_grants_only_the_allowlisted_dashboard_control(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(gateway, "ALLOWED_ACCESS_EMAIL", "operator@example.com")
     monkeypatch.setattr(
         gateway,
@@ -165,7 +170,7 @@ def test_access_identity_never_grants_dashboard_control(monkeypatch) -> None:
     }
     session = gateway._session_payload(headers)
     assert session["authenticated"] is True
-    assert session["can_control"] is False
+    assert session["can_control"] is True
 
 
 class _UnreadableBody:
@@ -173,10 +178,13 @@ class _UnreadableBody:
         raise AssertionError("public gateway must refuse before reading POST body")
 
 
-def test_public_gateway_refuses_post_before_body_parse_or_upstream(monkeypatch) -> None:
+def test_anonymous_gateway_refuses_mutation_before_body_parse_or_upstream(
+    monkeypatch,
+) -> None:
     audits: list[dict] = []
     refused: list[bool] = []
-    monkeypatch.setattr(gateway, "_write_audit", audits.append)
+    sent: list[tuple[int, dict]] = []
+    monkeypatch.setattr(gateway, "authenticated_access_identity", lambda _headers: None)
     monkeypatch.setattr(
         gateway,
         "urlopen",
@@ -195,26 +203,67 @@ def test_public_gateway_refuses_post_before_body_parse_or_upstream(monkeypatch) 
         handler.path = path
         handler.headers = {
             "Content-Length": "20",
-            "Cf-Access-Jwt-Assertion": "signed-access-jwt",
         }
         handler.rfile = _UnreadableBody()
         handler._refuse = lambda: refused.append(True)
+        handler._audit = lambda payload, selected_path, identity, result, status: audits.append(
+            {
+                "payload": payload,
+                "path": selected_path,
+                "identity": identity,
+                "result": result,
+                "status": status,
+            }
+        )
+        handler._send_json = lambda status, payload: sent.append((status, payload))
 
         handler.do_POST()
 
-    assert refused == [True, True, True]
-    assert [row["path"] for row in audits] == paths
-    assert all(
-        row
-        == {
-            "email": None,
-            "path": row["path"],
-            "action": None,
-            "result": "dashboard_read_only",
-            "status": 405,
-        }
-        for row in audits
+    assert refused == [True]
+    assert [row["path"] for row in audits] == paths[:2]
+    assert all(row["result"] == "denied" and row["status"] == 401 for row in audits)
+    assert [status for status, _payload in sent] == [401, 401]
+
+
+def test_authenticated_same_origin_mutation_forwards_verified_assertion(
+    monkeypatch,
+) -> None:
+    identity = {"email": "operator@example.com"}
+    monkeypatch.setattr(
+        gateway,
+        "authenticated_access_identity",
+        lambda _headers: identity,
     )
+    monkeypatch.setattr(gateway, "PUBLIC_ORIGIN", "https://goldbot.example")
+    forwarded: list[dict] = []
+    body = b'{"action":"preview"}'
+    token = "gbp1.payload.signature"
+    handler = object.__new__(gateway.CloudAccessGatewayHandler)
+    handler.path = "/api/strategy-console/control"
+    handler.headers = {
+        "Content-Length": str(len(body)),
+        "Content-Type": "application/json",
+        "Cookie": f"{gateway.SESSION_COOKIE_NAME}={token}",
+        "Host": "goldbot.example",
+        "Origin": "https://goldbot.example",
+    }
+    handler.rfile = BytesIO(body)
+    handler._proxy = lambda target, **kwargs: forwarded.append(
+        {"target": target, **kwargs}
+    )
+
+    handler.do_POST()
+
+    assert len(forwarded) == 1
+    assert forwarded[0]["method"] == "POST"
+    assert forwarded[0]["body"] == body
+    assert forwarded[0]["request_headers"] == {
+        "Content-Type": "application/json",
+        "X-Goldbot-Actor-Email": "operator@example.com",
+        "Cf-Access-Jwt-Assertion": token,
+        "Host": "127.0.0.1:8765",
+        "Origin": "http://127.0.0.1:8765",
+    }
 
 
 def test_refused_body_cannot_contaminate_a_reused_origin_connection() -> None:
@@ -249,8 +298,7 @@ def test_refused_body_cannot_contaminate_a_reused_origin_connection() -> None:
         thread.join(timeout=2)
 
     assert response.count(b"HTTP/1.1 ") == 1
-    assert b"HTTP/1.1 405 Method Not Allowed" in response
-    assert b"Allow: GET, OPTIONS" in response
+    assert b"HTTP/1.1 401 Unauthorized" in response
     assert b"Connection: close" in response
     assert b'"can_control"' not in response
 
