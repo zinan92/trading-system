@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import html
 import json
 import os
+import secrets
 import threading
 import time
 from collections import defaultdict, deque
@@ -40,6 +42,8 @@ ALLOWED_ACCESS_EMAIL = os.getenv("GOLDBOT_ACCESS_EMAIL", "").strip().lower()
 ACCESS_SESSION_DURATION = os.getenv("GOLDBOT_ACCESS_SESSION_DURATION", "168h")
 PUBLIC_ORIGIN = os.getenv("GOLDBOT_PUBLIC_ORIGIN", "").rstrip("/")
 SESSION_COOKIE_NAME = "__Host-gridmind_session"
+LOGIN_CSRF_COOKIE_NAME = "__Host-gridmind_login_csrf"
+LOGIN_CSRF_TTL_SECONDS = 600
 LOGIN_MAX_FAILURES = int(os.getenv("GOLDBOT_LOGIN_MAX_FAILURES", "5"))
 LOGIN_GLOBAL_MAX_FAILURES = int(
     os.getenv("GOLDBOT_LOGIN_GLOBAL_MAX_FAILURES", "30")
@@ -319,12 +323,58 @@ def _same_origin(headers: Any) -> bool:
     return bool(host) and origin in {f"https://{host}", f"http://{host}"}
 
 
-def _login_page(*, failed: bool = False, unavailable: bool = False) -> bytes:
+def _login_csrf_cookie(headers: Any) -> str:
+    try:
+        cookie = SimpleCookie()
+        cookie.load(str(headers.get("Cookie") or ""))
+        morsel = cookie.get(LOGIN_CSRF_COOKIE_NAME)
+        return str(morsel.value if morsel else "").strip()
+    except (AttributeError, TypeError):
+        return ""
+
+
+def _login_origin_allowed(headers: Any, csrf_token: str) -> bool:
+    if _same_origin(headers):
+        return True
+    origin = str(headers.get("Origin") or "").strip().rstrip("/")
+    if origin != "null":
+        return False
+    cookie_token = _login_csrf_cookie(headers)
+    return bool(
+        cookie_token
+        and csrf_token
+        and secrets.compare_digest(cookie_token, csrf_token)
+    )
+
+
+def _new_login_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _login_csrf_set_cookie(token: str) -> str:
+    return (
+        f"{LOGIN_CSRF_COOKIE_NAME}={token}; Path=/; "
+        f"Max-Age={LOGIN_CSRF_TTL_SECONDS}; Secure; HttpOnly; SameSite=Strict"
+    )
+
+
+def _login_page(
+    *,
+    failed: bool = False,
+    unavailable: bool = False,
+    csrf_token: str = "",
+) -> bytes:
     message = ""
     if failed:
         message = '<p class="error" role="alert">密码不正确，请重试。</p>'
     elif unavailable:
         message = '<p class="error" role="alert">登录暂不可用，请稍后重试。</p>'
+    csrf_field = (
+        f'<input type="hidden" name="csrf_token" '
+        f'value="{html.escape(csrf_token, quote=True)}">'
+        if csrf_token
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -352,6 +402,7 @@ def _login_page(*, failed: bool = False, unavailable: bool = False) -> bytes:
     <p>输入密码后进入原 Dashboard。</p>
     {message}
     <form method="post" action="/api/auth/login" autocomplete="on">
+      {csrf_field}
       <label for="password">密码</label>
       <input id="password" name="password" type="password" required autofocus autocomplete="current-password" maxlength="1024">
       <button type="submit">登录</button>
@@ -376,11 +427,7 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
             if identity:
                 self._redirect(ROOT_REDIRECT)
             else:
-                self._write_response(
-                    200,
-                    _login_page(),
-                    {"Content-Type": "text/html; charset=utf-8"},
-                )
+                self._write_login_page()
             return
         if parsed.path == "/api/auth/session":
             self._send_json(200, _session_payload(self.headers))
@@ -483,7 +530,8 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _handle_login(self) -> None:
-        if not _same_origin(self.headers):
+        origin = str(self.headers.get("Origin") or "").strip().rstrip("/")
+        if not _same_origin(self.headers) and origin != "null":
             self.close_connection = True
             self._send_json(403, {"error": "origin_denied", "message": "登录请求来源无效。"})
             return
@@ -497,15 +545,7 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
         )
         if retry_after:
             self.close_connection = True
-            self._write_response(
-                429,
-                _login_page(failed=True),
-                {
-                    "Content-Type": "text/html; charset=utf-8",
-                    "Retry-After": str(retry_after),
-                    "Connection": "close",
-                },
-            )
+            self._write_login_page(429, failed=True, retry_after=retry_after)
             return
         try:
             length = int(self.headers.get("Content-Length") or "0")
@@ -523,23 +563,21 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
             values = parse_qs(
                 body.decode("utf-8"),
                 strict_parsing=True,
-                max_num_fields=2,
+                max_num_fields=3,
             )
             supplied = str((values.get("password") or [""])[0])
+            csrf_token = str((values.get("csrf_token") or [""])[0])
         except (UnicodeDecodeError, ValueError):
             supplied = ""
+            csrf_token = ""
+        if not _login_origin_allowed(self.headers, csrf_token):
+            self.close_connection = True
+            self._send_json(403, {"error": "origin_denied", "message": "登录请求来源无效。"})
+            return
         if not _LOGIN_VERIFY_SLOTS.acquire(blocking=False):
             supplied = ""
             self.close_connection = True
-            self._write_response(
-                429,
-                _login_page(failed=True),
-                {
-                    "Content-Type": "text/html; charset=utf-8",
-                    "Retry-After": "2",
-                    "Connection": "close",
-                },
-            )
+            self._write_login_page(429, failed=True, retry_after=2)
             return
         try:
             verified = verify_password(supplied)
@@ -562,11 +600,7 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
                     "status": 503,
                 }
             )
-            self._write_response(
-                503,
-                _login_page(unavailable=True),
-                {"Content-Type": "text/html; charset=utf-8"},
-            )
+            self._write_login_page(503, unavailable=True)
             return
         _clear_login_failures(key)
         _clear_login_failures(_GLOBAL_LOGIN_KEY)
@@ -601,13 +635,31 @@ class CloudAccessGatewayHandler(BaseHTTPRequestHandler):
                 "status": 401,
             }
         )
+        self._write_login_page(401, failed=True)
+
+    def _write_login_page(
+        self,
+        status: int = 200,
+        *,
+        failed: bool = False,
+        unavailable: bool = False,
+        retry_after: int | None = None,
+    ) -> None:
+        token = _new_login_csrf_token()
+        headers = {
+            "Content-Type": "text/html; charset=utf-8",
+            "Set-Cookie": _login_csrf_set_cookie(token),
+        }
+        if retry_after is not None:
+            headers["Retry-After"] = str(retry_after)
         self._write_response(
-            401,
-            _login_page(failed=True),
-            {
-                "Content-Type": "text/html; charset=utf-8",
-                "Connection": "close",
-            },
+            status,
+            _login_page(
+                failed=failed,
+                unavailable=unavailable,
+                csrf_token=token,
+            ),
+            headers,
         )
 
     def _handle_logout(self) -> None:

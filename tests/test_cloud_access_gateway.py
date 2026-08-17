@@ -266,6 +266,78 @@ def test_authenticated_same_origin_mutation_forwards_verified_assertion(
     }
 
 
+def test_null_origin_login_requires_matching_csrf_challenge(monkeypatch) -> None:
+    monkeypatch.setattr(gateway, "PUBLIC_ORIGIN", "https://goldbot.example")
+    token = "login-challenge"
+    headers = {
+        "Origin": "null",
+        "Cookie": f"{gateway.LOGIN_CSRF_COOKIE_NAME}={token}",
+    }
+
+    assert gateway._login_origin_allowed(headers, token) is True
+    assert gateway._login_origin_allowed(headers, "wrong") is False
+    assert gateway._login_origin_allowed({"Origin": "null"}, token) is False
+    assert gateway._login_origin_allowed(
+        {"Origin": "https://goldbot.example"}, ""
+    ) is True
+    assert gateway._login_origin_allowed(
+        {"Origin": "https://evil.example", "Cookie": headers["Cookie"]},
+        token,
+    ) is False
+
+
+def test_login_page_embeds_csrf_challenge_and_host_cookie() -> None:
+    token = "login-challenge"
+    page = gateway._login_page(csrf_token=token).decode("utf-8")
+    cookie = gateway._login_csrf_set_cookie(token)
+
+    assert f'name="csrf_token" value="{token}"' in page
+    assert gateway.LOGIN_CSRF_COOKIE_NAME in cookie
+    assert "Path=/" in cookie
+    assert "HttpOnly" in cookie
+    assert "SameSite=Strict" in cookie
+
+
+def test_null_origin_remains_denied_for_authenticated_mutation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gateway,
+        "authenticated_access_identity",
+        lambda _headers: {"email": "operator@example.com"},
+    )
+    body = b'{"action":"preview"}'
+    sent: list[tuple[int, dict]] = []
+    audited: list[tuple[object, str, object, str, int]] = []
+    forwarded: list[object] = []
+    handler = object.__new__(gateway.CloudAccessGatewayHandler)
+    handler.path = "/api/strategy-console/control"
+    handler.headers = {
+        "Content-Length": str(len(body)),
+        "Content-Type": "application/json",
+        "Cookie": "__Host-gridmind_session=gbp1.payload.signature",
+        "Origin": "null",
+    }
+    handler.rfile = BytesIO(body)
+    handler._send_json = lambda status, payload: sent.append((status, payload))
+    handler._audit = lambda payload, path, identity, result, status: audited.append(
+        (payload, path, identity, result, status)
+    )
+    handler._proxy = lambda *_args, **_kwargs: forwarded.append(True)
+
+    handler.do_POST()
+
+    assert sent == [
+        (
+            403,
+            {
+                "error": "origin_denied",
+                "message": "控制请求必须来自当前 Dashboard 页面。",
+            },
+        )
+    ]
+    assert audited[-1][3:] == ("origin_denied", 403)
+    assert forwarded == []
+
+
 def test_refused_body_cannot_contaminate_a_reused_origin_connection() -> None:
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway.CloudAccessGatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
