@@ -84,6 +84,7 @@ from services.paper_supervisor_read_model import (
 )
 from services.paper_supervisor_recovery import authoritative_paper_equity
 from services.park_public_read_model import build_park_public_read_model
+from services.park_ai_chat import ParkAiChatError, ParkAiChatService
 from services.supervisor_execution_profile import (
     FAIL_CLOSED,
     PAPER_CONTINUOUS,
@@ -138,6 +139,9 @@ _CLOUDFLARED_LOG = ROOT / "outputs" / "cloudflared.log"
 
 
 _DUALTRACK_POST_ENDPOINTS = {"/api/dualtrack/plan", "/api/dualtrack/orders", "/api/dualtrack/verdict"}
+
+
+_PARK_AI_CHAT_ENDPOINT = "/api/park-paper/ai-chat"
 
 
 class _SingleFlightCall:
@@ -347,6 +351,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/park-paper/read-model":
             self._handle_park_paper_read_model()
             return
+        if parsed.path == _PARK_AI_CHAT_ENDPOINT:
+            self._handle_park_ai_chat_get()
+            return
         if parsed.path == "/api/trading-system/supervisor-history":
             self._handle_supervisor_history(parsed.query)
             return
@@ -419,6 +426,16 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == _PARK_AI_CHAT_ENDPOINT:
+            if not _park_ai_request_allowed(
+                str(self.headers.get("Host") or ""),
+                str(self.headers.get("Origin") or ""),
+                self.headers,
+            ):
+                self._write_error(403, "park_ai_origin_blocked", "AI strategy requests require the authenticated Dashboard origin")
+                return
+            self._handle_park_ai_chat_post()
+            return
         if parsed.path == "/api/market-view/intake":
             self._handle_market_view_intake_api()
             return
@@ -496,6 +513,31 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 },
             }
         self._write_json(200 if payload.get("status") == "ok" else 503, payload)
+
+    def _handle_park_ai_chat_get(self) -> None:
+        try:
+            self._write_json(200, build_park_ai_chat_read_model(output_root=_dualtrack_output_root()))
+        except Exception as exc:  # noqa: BLE001 - read model is fail-closed.
+            self._write_error(503, "park_ai_read_model_unavailable", type(exc).__name__)
+
+    def _handle_park_ai_chat_post(self) -> None:
+        try:
+            payload = self._read_json_body(max_bytes=64_000)
+            self._write_json(
+                200,
+                build_park_ai_chat_response(
+                    payload,
+                    output_root=_dualtrack_output_root(),
+                    actor=self._control_actor(),
+                ),
+            )
+        except ParkAiChatError as exc:
+            self._write_error(400, exc.code, str(exc))
+        except ValueError as exc:
+            self._write_error(400, "invalid_park_ai_chat_request", str(exc))
+        except Exception as exc:  # noqa: BLE001 - no provider exception may become an order.
+            self.log_error("Park AI chat failed: %s", exc)
+            self._write_error(503, "park_ai_chat_unavailable", type(exc).__name__)
 
     def _handle_supervisor_history(self, query: str) -> None:
         try:
@@ -1005,6 +1047,75 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_header("Location", target)
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+
+
+def build_park_ai_chat_read_model(*, output_root: Path | None = None) -> dict[str, Any]:
+    """Return the additive Dashboard AI chat projection.
+
+    This helper intentionally has no execution side effects.  The service
+    reads only the Paper strategy journal and its own draft/snapshot ledgers.
+    """
+
+    service = ParkAiChatService(
+        _dualtrack_output_root(output_root),
+        park_user_id=os.getenv("PARK_DASHBOARD_PARK_USER_ID", "park-dashboard"),
+    )
+    return service.read_model()
+
+
+def build_park_ai_chat_response(
+    payload: Mapping[str, Any],
+    *,
+    output_root: Path | None = None,
+    actor: Mapping[str, Any] | None = None,
+    service_factory: Callable[..., ParkAiChatService] | None = None,
+) -> dict[str, Any]:
+    """Dispatch one explicit AI chat action without exposing a control API.
+
+    ``message`` only creates/updates a short-lived proposal.  ``confirm`` and
+    ``reject`` are separate actions so the UI cannot accidentally treat a
+    provider response as authorization.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("body must be a JSON object")
+    action = str(payload.get("action") or "message").strip().lower()
+    factory = service_factory or ParkAiChatService
+    service = factory(
+        _dualtrack_output_root(output_root),
+        park_user_id=os.getenv("PARK_DASHBOARD_PARK_USER_ID", "park-dashboard"),
+    )
+    actor_email = str((actor or {}).get("email") or "").strip() or None
+    if action in {"message", "chat"}:
+        return service.handle_message(str(payload.get("message") or ""), actor=actor_email)
+    if action == "confirm":
+        return service.confirm(
+            _text_payload(payload, "draft_id"),
+            _text_payload(payload, "plan_digest"),
+            actor=actor_email,
+        )
+    if action == "reject":
+        return service.reject(_text_payload(payload, "draft_id"), actor=actor_email)
+    raise ValueError("action must be message, confirm, or reject")
+
+
+def _text_payload(payload: Mapping[str, Any], field: str) -> str:
+    value = str(payload.get(field) or "").strip()
+    if not value:
+        raise ValueError(f"{field} is required")
+    return value
+
+
+def _park_ai_request_allowed(
+    host: str,
+    origin: str,
+    headers: Mapping[str, Any] | None = None,
+) -> bool:
+    """Require a verified public identity or the existing local origin gate."""
+
+    if headers is not None and authenticated_access_identity(headers) is not None:
+        return True
+    return _dualtrack_mutation_request_allowed(host, origin)
 
 
 def build_dualtrack_cycle_current_response(*, output_root: Path | None = None, as_of: str | None = None) -> dict:

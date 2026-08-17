@@ -73,6 +73,7 @@
     .strategy-type-row .choice{position:relative;min-height:58px;padding:9px 8px 8px;text-align:left}.strategy-type-row .choice.on{border-color:#74aeff;box-shadow:inset 0 0 0 1px #74aeff,0 0 0 2px rgba(79,142,247,.16),0 7px 18px rgba(44,108,210,.16);background:linear-gradient(135deg,rgba(79,142,247,.32),rgba(41,84,151,.2));color:#f4f8ff}.strategy-type-row .choice.on small{color:#c9dcff}.strategy-type-row .choice.on::after{content:"✓ 当前选择";position:absolute;right:6px;top:6px;padding:2px 4px;border-radius:3px;background:#7fb7ff;color:#07101f;font:700 7px var(--mono,monospace);letter-spacing:.02em}.strategy-mode-note{margin-top:7px;padding:7px 8px;border-left:2px solid var(--gm-blue);border-radius:4px;background:rgba(79,142,247,.055);color:var(--gm-muted);font-size:9px;line-height:1.5}.action-status{min-height:14px;margin:5px 0 0;color:var(--gm-amber);font:9px/1.5 var(--mono,monospace)}.dca-only.hidden,.grid-only.hidden,.param-field.hidden{display:none}.choice:disabled{cursor:not-allowed;opacity:.38}.strategy-card[data-strategy-type="dca"] .button.fill{background:linear-gradient(180deg,#62a1ff,#3f7ee3);color:#07101f}.strategy-card[data-strategy-type="dca"] .preview-summary{border-color:rgba(79,142,247,.3)}
     .market-card,.strategy-card{height:auto}.live-card .card-body{height:295px;max-height:295px;overflow-y:auto;scrollbar-gutter:stable}.kv{padding:6px 0;border-color:rgba(36,44,64,.78);font-size:9px}.kv b{font-size:9px}.rail-status{border-left:2px solid var(--gm-blue)}
     .ai-dialog{border-color:var(--gm-line);background:var(--gm-panel)}.receipt-head{border-color:var(--gm-line);background:var(--gm-panel)}.receipt-pane,.receipt-tf,.score-parts div{border-color:var(--gm-line);background:var(--gm-panel-2)}
+    .park-ai-chat-card{border-left:2px solid var(--gm-violet)}.top-ai-card{border:1px solid rgba(152,94,255,.42);border-left:4px solid var(--gm-violet);box-shadow:0 8px 28px rgba(0,0,0,.22)}.top-ai-card .card-title{padding:13px 14px 8px;color:var(--gm-text);font-size:12px;letter-spacing:.1em}.top-ai-card .card-body{padding:10px 14px 13px}.park-ai-chat-messages{display:grid;gap:6px;max-height:180px;overflow-y:auto;margin-bottom:8px}.park-ai-chat-message{padding:7px 8px;border:1px solid var(--gm-line);border-radius:6px;color:var(--gm-muted);font-size:10px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}.park-ai-chat-message.user{border-color:rgba(116,174,255,.3);background:rgba(79,142,247,.07);color:var(--gm-text)}.park-ai-chat-message.system{border-color:rgba(240,180,41,.3);background:rgba(240,180,41,.055)}.park-ai-snapshot{display:none;margin:8px 0;padding:8px;border:1px dashed var(--gm-line);border-radius:6px;background:var(--gm-panel-2);font-size:9px;line-height:1.55}.park-ai-snapshot.on{display:block}.park-ai-snapshot h4{margin:0 0 5px;color:var(--gm-text);font-size:10px}.park-ai-snapshot-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px}.park-ai-snapshot-grid span{color:var(--gm-faint)}.park-ai-snapshot-grid b{color:var(--gm-text);font:9px var(--mono,monospace);overflow-wrap:anywhere}.park-ai-input{width:100%;min-height:64px;resize:vertical;padding:7px 8px;border:1px solid var(--gm-line);border-radius:6px;background:var(--gm-panel-2);color:var(--gm-text);font-size:10px;line-height:1.5}.park-ai-input:focus{outline:none;border-color:var(--gm-violet);box-shadow:0 0 0 1px rgba(152,94,255,.24)}.park-ai-actions{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:5px;margin-top:6px}.park-ai-actions button{padding:7px 5px;border:1px solid var(--gm-line);border-radius:5px;background:var(--gm-panel-2);color:var(--gm-text);font-size:9px;font-weight:700;cursor:pointer}.park-ai-actions button.primary{border-color:rgba(47,191,113,.5);background:rgba(47,191,113,.12);color:var(--gm-green)}.park-ai-actions button.danger{border-color:rgba(246,70,93,.4);color:var(--gm-red)}.park-ai-actions button:disabled{cursor:not-allowed;opacity:.42}.park-ai-status{min-height:13px;margin:5px 0 0;color:var(--gm-faint);font:8px/1.5 var(--mono,monospace)}
     @media(max-width:1120px){.workspace{grid-template-columns:1fr}.control-rail{position:static;height:auto;min-height:0;max-height:none;overflow:visible;grid-template-columns:repeat(2,minmax(0,1fr));padding-right:0}.market-card,.strategy-card{grid-row:span 2}.chart{height:420px}}
     @media(prefers-reduced-motion:reduce){.run-state.running .run-dot,.trade-toast{animation:none}.trade-toast.leaving{transition:none}}
     @media(max-width:760px){.top{position:static;padding:8px 10px;max-width:100%;flex-wrap:wrap}.brand small,.top .pill.live{display:none}.top-status{width:auto;max-width:100%;margin-left:0;overflow-wrap:anywhere}.console-wrap{max-width:100%;padding:7px}.account{grid-template-columns:repeat(2,minmax(0,1fr))}.account .metric:last-child{grid-column:1/-1}.workspace{gap:7px}.control-rail{grid-template-columns:minmax(0,1fr)}.market-card,.strategy-card{grid-row:auto}.chart-title{align-items:flex-start}.chart-tools{width:100%;max-width:100%}.timeframes{max-width:100%}.chart{height:340px}.data-card .tabs button{padding-inline:7px}.shadow-grid{grid-template-columns:1fr}.robot-actions{grid-template-columns:1fr}.receipt-layout,.grid-compare{grid-template-columns:1fr}.grid-compare-row{grid-template-columns:86px minmax(0,1fr) 12px minmax(0,1fr)}.trade-toast-stack{top:8px;right:8px;width:calc(100vw - 16px)}}
@@ -92,6 +93,7 @@
   </header>
   <div class="trade-toast-stack" id="tradeToasts" aria-live="polite" aria-atomic="false"></div>
   <div class="console-wrap">
+    <section class="card park-ai-chat-card top-ai-card" id="parkAiChatCard"><div class="card-title">Park AI 策略助手 · Paper</div><div class="card-body"><div class="park-ai-chat-messages" id="parkAiChatMessages" aria-live="polite"><div class="park-ai-chat-message system">用自然语言描述策略。我会先解析并展示 snapshot，只有你点击“确认并执行”才会提交到 Paper 计划。</div></div><div class="park-ai-snapshot" id="parkAiSnapshot"></div><textarea class="park-ai-input" id="parkAiChatInput" maxlength="8000" placeholder="例如：做空 DCA，区间 4444~4200，最大 10 倍杠杆，止损 4444，止盈 4100"></textarea><div class="park-ai-actions"><button class="primary" id="parkAiSend" type="button">解析策略</button><button id="parkAiConfirm" type="button" disabled>确认并执行</button><button class="danger" id="parkAiReject" type="button" disabled>拒绝 Draft</button></div><p class="park-ai-status" id="parkAiChatStatus" aria-live="polite"></p></div></section>
     <section class="metrics" aria-label="账户指标"><div class="account" id="account"></div></section>
     <main class="workspace">
       <section class="market-column">
@@ -697,5 +699,82 @@ $("#positions").addEventListener("click",async event=>{if(state.gridAdjustMode||
 $("#tabs").addEventListener("click",event=>{const button=event.target.closest("[data-tab]");if(!button)return;$("#tabs .on").classList.remove("on");$(".tab.on").classList.remove("on");button.classList.add("on");$(`[data-panel="${button.dataset.tab}"]`).classList.add("on");if(button.dataset.tab==="supervisor")loadSupervisorAudit().catch(()=>{})});
 window.addEventListener("pointerdown",armTradeAudio,{capture:true,passive:true});window.addEventListener("keydown",armTradeAudio,{capture:true});
 load();setInterval(()=>{if(!state.busy&&!document.hidden)load()},5000);
+</script>
+<script>
+(function(){
+  const $ai=(id)=>document.getElementById(id);
+  const messages=$ai("parkAiChatMessages"), input=$ai("parkAiChatInput"), send=$ai("parkAiSend"), confirm=$ai("parkAiConfirm"), reject=$ai("parkAiReject"), snapshotBox=$ai("parkAiSnapshot"), status=$ai("parkAiChatStatus");
+  let pending=null;
+  const text=(value)=>value===null||value===undefined||value===""?"—":String(value);
+  const addMessage=(value,kind="system")=>{if(!value)return;const node=document.createElement("div");node.className=`park-ai-chat-message ${kind}`;node.textContent=String(value);messages.appendChild(node);messages.scrollTop=messages.scrollHeight};
+  const setStatus=(value)=>{status.textContent=String(value||"")};
+  const valueFor=(source,key)=>source&&Object.prototype.hasOwnProperty.call(source,key)?source[key]:null;
+  function fillLegacyForm(draft){
+    const source=(draft&&draft.plan&&draft.plan.normalized_input)||(draft&&draft.normalized)||{};
+    const risk=(draft&&draft.plan&&draft.plan.risk)||{};
+    const click=(selector,attr,value)=>{if(value===null||value===undefined||value==="")return;const button=document.querySelector(`${selector}[${attr}="${String(value).replace(/"/g,"\\\"")}"]`);if(button&&!button.disabled)button.click()};
+    click("#strategyTypeChoices [data-strategy-type]","data-strategy-type",source.strategy_type);
+    click("#directionChoices [data-direction]","data-direction",source.direction);
+    const fields={rangeLow:source.lower_price_boundary,rangeHigh:source.upper_price_boundary,leverage:source.maximum_leverage,dcaStop:source.stop_price,dcaTarget:source.take_profit_price,gridCount:source.order_count,gridNotional:risk.per_order_notional};
+    Object.entries(fields).forEach(([id,value])=>{if(value===null||value===undefined||value==="")return;const field=$ai(id);if(!field)return;field.value=String(value);field.dispatchEvent(new Event("input",{bubbles:true}))});
+    setStatus("Draft 已解析并填入左侧 Paper 表单；尚未下单。请检查 snapshot 后确认。");
+  }
+  function renderSnapshot(card,draft){
+    const plan=(card&&card.plan)||((draft&&draft.plan)||{});
+    const normalized=(card&&card.normalized_input)||plan.normalized_input||(draft&&draft.normalized)||{};
+    const market=(card&&card.market)||plan.market||{};
+    const risk=(card&&card.risk)||plan.risk||{};
+    const portfolio=(card&&card.portfolio)||plan.portfolio||{};
+    const rows=[
+      ["方向 / 类型",`${text(normalized.direction)} / ${text(normalized.strategy_type)}`],
+      ["价格区间",`${text(normalized.lower_price_boundary)} ~ ${text(normalized.upper_price_boundary)}`],
+      ["当前价",text(market.price)],
+      ["最大名义",text(risk.maximum_notional)],
+      ["理论最大亏损",text(risk.theoretical_max_loss)],
+      ["有效杠杆",`${text(risk.effective_leverage)}x`],
+      ["旧仓处理",portfolio.disposition?JSON.stringify(portfolio.disposition):"无"],
+      ["Digest",text(card&&card.plan_digest||draft&&draft.plan_digest)]
+    ];
+    snapshotBox.replaceChildren();
+    const title=document.createElement("h4");title.textContent=card&&(card.sealed===true||card.status==="expired")?"已封存的不可变策略 Snapshot":card&&card.status==="confirmed"?"已确认的不可变策略 Snapshot":"Draft · 等待 Park 确认";snapshotBox.appendChild(title);
+    const grid=document.createElement("div");grid.className="park-ai-snapshot-grid";rows.forEach(([label,value])=>{const span=document.createElement("span");span.textContent=label;const b=document.createElement("b");b.textContent=value;grid.append(span,b)});snapshotBox.appendChild(grid);snapshotBox.classList.add("on");
+  }
+  function applyResponse(data){
+    if(data.message)addMessage(data.message,"system");
+    const draft=data.draft||null;
+    const card=data.snapshot||null;
+    if(draft){pending=draft;renderSnapshot(card,draft);fillLegacyForm(draft)}
+    if(card){pending=null;renderSnapshot(card,null)}
+    confirm.disabled=!(draft&&data.confirmable===true);
+    reject.disabled=!draft;
+    if(data.status)setStatus(`状态：${data.status}${data.code?` · ${data.code}`:""}`);
+  }
+  async function post(action,payload){
+    const response=await fetch("/api/park-paper/ai-chat",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,...payload})});
+    let data={};try{data=await response.json()}catch(_error){data={message:"服务器返回了不可解析的响应。"}};
+    if(!response.ok)throw new Error(data.message||data.error||`HTTP ${response.status}`);
+    return data;
+  }
+  async function sendMessage(){
+    const value=String(input.value||"").trim();if(!value)return;addMessage(value,"user");input.value="";send.disabled=true;setStatus("正在解析；不会自动下单……");
+    try{applyResponse(await post("message",{message:value}))}catch(error){addMessage(`解析未完成：${error.message}`,"system");setStatus("没有创建或执行策略。可重试，或使用原来的手工 Paper 表单。")}finally{send.disabled=false}
+  }
+  async function confirmDraft(){
+    if(!pending||!pending.draft_id||!pending.plan_digest)return;confirm.disabled=true;setStatus("正在重新核对最新行情、风险和 digest……");
+    try{applyResponse(await post("confirm",{draft_id:pending.draft_id,plan_digest:pending.plan_digest}))}catch(error){addMessage(`确认未完成：${error.message}`,"system");setStatus("仍未执行；请重新读取 Draft 后再确认");confirm.disabled=false}
+  }
+  async function rejectDraft(){
+    if(!pending||!pending.draft_id)return;reject.disabled=true;
+    try{applyResponse(await post("reject",{draft_id:pending.draft_id}));pending=null;snapshotBox.classList.remove("on");snapshotBox.replaceChildren();confirm.disabled=true;setStatus("Draft 已拒绝且未保存为策略卡片。")}catch(error){addMessage(`拒绝未完成：${error.message}`,"system");reject.disabled=false}
+  }
+  async function hydrate(){
+    // Browser-only static smoke servers do not expose the Paper API. Avoid a
+    // needless 404 there; the real local Dashboard ports and public gateway
+    // remain enabled.
+    if(["127.0.0.1","localhost"].includes(location.hostname)&&!["8765","8766"].includes(location.port))return;
+    try{const response=await fetch("/api/park-paper/ai-chat",{credentials:"same-origin"});if(!response.ok)throw new Error(`HTTP ${response.status}`);const data=await response.json();if(data.pending_draft){pending=data.pending_draft;renderSnapshot(null,pending);confirm.disabled=!pending.confirmable;reject.disabled=false;setStatus("已恢复未过期 Draft；尚未下单。")}else if(Array.isArray(data.snapshots)&&data.snapshots.length){renderSnapshot(data.snapshots[data.snapshots.length-1],null);setStatus(`已读取 ${data.snapshots.length} 张策略 Snapshot；最新一张显示在上方。`)}}catch(error){setStatus(`AI 助手读取受限：${error.message}`)}
+  }
+  send.addEventListener("click",sendMessage);confirm.addEventListener("click",confirmDraft);reject.addEventListener("click",rejectDraft);input.addEventListener("keydown",event=>{if((event.metaKey||event.ctrlKey)&&event.key==="Enter"){event.preventDefault();sendMessage()}});hydrate();
+})();
 </script>
 </body></html>

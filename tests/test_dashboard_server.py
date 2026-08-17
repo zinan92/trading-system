@@ -1661,6 +1661,64 @@ def test_dashboard_v5_is_a_stable_alias_for_the_production_strategy_console():
     assert 'http://127.0.0.1:8766/dashboard-v5.html' in source
 
 
+def test_dashboard_ai_chat_dispatch_is_proposal_only_and_action_explicit(tmp_path: Path) -> None:
+    calls: list[tuple[str, tuple, dict]] = []
+
+    class FakeService:
+        def __init__(self, output_root, *, park_user_id):
+            calls.append(("init", (output_root, park_user_id), {}))
+
+        def handle_message(self, message, *, actor=None):
+            calls.append(("message", (message,), {"actor": actor}))
+            return {"status": "draft", "confirmable": False}
+
+        def confirm(self, draft_id, digest, *, actor=None):
+            calls.append(("confirm", (draft_id, digest), {"actor": actor}))
+            return {"status": "confirmed"}
+
+        def reject(self, draft_id, *, actor=None):
+            calls.append(("reject", (draft_id,), {"actor": actor}))
+            return {"status": "rejected"}
+
+    assert dashboard_server.build_park_ai_chat_response(
+        {"action": "message", "message": "中性网格 4450~4100"},
+        output_root=tmp_path,
+        actor={"email": "park@example.com"},
+        service_factory=FakeService,
+    ) == {"status": "draft", "confirmable": False}
+    assert dashboard_server.build_park_ai_chat_response(
+        {"action": "confirm", "draft_id": "draft-1", "plan_digest": "sha256:abc"},
+        output_root=tmp_path,
+        actor={"email": "park@example.com"},
+        service_factory=FakeService,
+    ) == {"status": "confirmed"}
+    assert dashboard_server.build_park_ai_chat_response(
+        {"action": "reject", "draft_id": "draft-1"},
+        output_root=tmp_path,
+        actor={"email": "park@example.com"},
+        service_factory=FakeService,
+    ) == {"status": "rejected"}
+    assert [row[0] for row in calls] == ["init", "message", "init", "confirm", "init", "reject"]
+    assert calls[1][2] == {"actor": "park@example.com"}
+
+
+def test_dashboard_ai_chat_public_request_accepts_verified_identity_but_not_cross_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dashboard_server, "authenticated_access_identity", lambda _headers: {"email": "park@example.com"})
+    assert dashboard_server._park_ai_request_allowed(
+        "evil.example",
+        "https://evil.example",
+        {"Cf-Access-Jwt-Assertion": "verified"},
+    ) is True
+    monkeypatch.setattr(dashboard_server, "authenticated_access_identity", lambda _headers: None)
+    assert dashboard_server._park_ai_request_allowed(
+        "goldbot.example",
+        "https://evil.example",
+        {},
+    ) is False
+
+
 def test_strategy_console_production_history_keeps_prior_versioned_trades(tmp_path: Path):
     output = tmp_path / "outputs"
     cycle_id = "2026-07-04_NIGHT"

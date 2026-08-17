@@ -100,6 +100,14 @@ def _candidate(value: Mapping[str, Any], *, source_text: str) -> dict[str, Any]:
         clarification_fields = []
     if not isinstance(clarification_fields, list) or any(not isinstance(row, str) for row in clarification_fields):
         raise ParkCodexIntentError("provider_output_invalid", "Codex clarification_fields must be a string list")
+
+    def action(name: str, allowed: set[str]) -> str | None:
+        raw = value.get(name)
+        if raw in (None, ""):
+            return None
+        normalized = str(raw).strip().lower()
+        return normalized if normalized in allowed else None
+
     raw_confidence = value.get("confidence")
     if isinstance(raw_confidence, (int, float)):
         confidence = "high" if raw_confidence >= 0.8 else "medium" if raw_confidence >= 0.5 else "low"
@@ -120,6 +128,9 @@ def _candidate(value: Mapping[str, Any], *, source_text: str) -> dict[str, Any]:
         "clarification_fields": clarification_fields[:12],
         "interpretation": _bounded(value.get("interpretation"), 500),
         "confidence": confidence,
+        "position_action": action("position_action", {"keep", "preserve", "flatten", "close", "close_all"}),
+        "entry_action": action("entry_action", {"keep", "preserve", "cancel", "cancel_entries", "cancel_orders"}),
+        "exit_action": action("exit_action", {"keep", "preserve", "manage"}),
         "source_text": source_text,
     }
 
@@ -205,7 +216,11 @@ Canonical values:
 Return these keys only:
 schema_version, direction, strategy_type, upper_price_boundary, lower_price_boundary,
 maximum_leverage, maximum_acceptable_loss, stop_price, take_profit_price, order_count,
-needs_clarification, clarification_fields, interpretation, confidence.
+needs_clarification, clarification_fields, interpretation, confidence,
+position_action, entry_action, exit_action. For an old-portfolio disposition
+message only, use keep/preserve/flatten/close/close_all for position_action,
+keep/preserve/cancel/cancel_entries/cancel_orders for entry_action, and
+keep/preserve/manage for exit_action. Otherwise return null; never infer an action.
 
 The user message is:
 ---

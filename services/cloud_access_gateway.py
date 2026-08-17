@@ -84,12 +84,14 @@ ALLOW_EXACT = frozenset(
         "/api/trading-system/supervisor-history",
         "/api/trading-system/ai-evaluation-receipt",
         "/api/dualtrack/market/bars",
+        "/api/park-paper/ai-chat",
     }
 )
 MUTATION_EXACT = frozenset(
     {
         "/api/strategy-console/control",
         "/api/dualtrack/orders",
+        "/api/park-paper/ai-chat",
     }
 )
 _DROP_HEADERS = frozenset(
