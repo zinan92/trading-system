@@ -52,8 +52,8 @@ def test_legacy_store_imports_are_frozen_to_explicit_compatibility_seams():
     assert actual == approved
 
 
-def test_sqlite_market_access_is_frozen_to_ownerless_test_and_rehearsal_seams():
-    approved = {
+def test_sqlite_access_is_frozen_to_explicit_ownerless_and_auth_seams():
+    approved_market_data = {
         "pipelines/testnet_drill.py",
         "services/connector_config_apply.py",
         "services/cloud_backup.py",
@@ -62,13 +62,18 @@ def test_sqlite_market_access_is_frozen_to_ownerless_test_and_rehearsal_seams():
         "services/data_integrity_check.py",
         "services/market_store.py",
     }
+    approved_auth_state = {
+        # The password session ledger is durable authentication state, not a
+        # market-data store, and has its own focused tests.
+        "services/cloud_password_auth.py",
+    }
     actual = {
         str(path.relative_to(ROOT))
         for folder in (ROOT / "services", ROOT / "pipelines")
         for path in folder.glob("*.py")
         if "import sqlite3" in path.read_text(encoding="utf-8")
     }
-    assert actual == approved
+    assert actual == approved_market_data | approved_auth_state
 
 
 def test_no_pipeline_contains_market_data_upstream_urls():
