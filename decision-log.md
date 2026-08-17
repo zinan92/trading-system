@@ -15591,3 +15591,47 @@ auditable datafeed port; broker execution remains a separate port.
 
 - Focused readiness, strategy recommendation, pre-generation, and Supervisor
   tests pass (171 tests); diff check and gitleaks pass.
+
+# 2026-08-17 — Publish only an immutable Park Paper observer (#713)
+
+## Decision
+
+- Do not publish the legacy Dashboard after removing Cloudflare Access.  Its
+  read model still traverses the historical DualTrack/Shadow adapter gate and
+  its application surface contains mutation routes that do not belong on a
+  public endpoint.
+- Publish one self-contained Park Paper observer backed only by persisted
+  strategy identity, lifecycle, plan, safety, and authoritative Nautilus Paper
+  snapshot artifacts.  A GET never refreshes a provider, constructs an
+  adapter, reconciles, writes an artifact, or emits a control event.
+- Make the gateway, rather than browser identity, the final mutation boundary:
+  allow only the exact observer HTML, observer read model, and read-only session
+  endpoint; reject every POST with 405 before reading its body.  Telegram
+  remains the sole Park Strategy control plane.
+- Missing, corrupt, stale, non-Paper, non-authoritative, or unreconciled facts
+  return a typed fail-closed observer response.  The page must never fill a
+  missing fact with a healthy-looking value.
+
+## Gotchas
+
+- A healthy legacy Dashboard process is not proof that its old read model is
+  compatible with the Park-only runtime.  Enabling a legacy Shadow cutover
+  override would violate the single-track contract and is forbidden.
+- Removing OTP makes the displayed Paper strategy, orders, positions, account,
+  and PnL visible to anyone who has the hostname.  Cloudflare Access must remain
+  unchanged until the exact merged origin is proven healthy and POST denial is
+  verified locally.
+- A read-only HTML page is insufficient if a neighboring API remains reachable.
+  The public gateway therefore uses an exact allowlist rather than a prefix or
+  wildcard route.
+
+## Verification
+
+- Focused Park, gateway, Dashboard server, and boot-output-root suites pass
+  (184 tests); Python compilation, Ruff, diff check, and staged gitleaks pass.
+- The projection was exercised against the current persisted Park Paper facts:
+  active neutral Grid 4100–4450 at 20x, reconciliation `ok`.  Aggregate source
+  artifact hashes were identical before and after the read.
+- Merge, exact-SHA Dashboard/Gateway deployment, unauthenticated public GET,
+  public POST denial, and Cloudflare policy read-back remain separate runtime
+  evidence owned by #711; repository tests do not claim those steps complete.

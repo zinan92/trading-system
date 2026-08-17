@@ -83,6 +83,7 @@ from services.paper_supervisor_read_model import (
     build_paper_supervisor_polling_summary,
 )
 from services.paper_supervisor_recovery import authoritative_paper_equity
+from services.park_public_read_model import build_park_public_read_model
 from services.supervisor_execution_profile import (
     FAIL_CLOSED,
     PAPER_CONTINUOUS,
@@ -280,6 +281,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def _should_disable_static_cache(self) -> bool:
         path = urlparse(self.path).path
         return path in {
+            "/park-paper-dashboard.html",
             "/dashboard-v2.html",
             "/dashboard-v3.html",
             "/dashboard.html",
@@ -341,6 +343,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/trading-system/read-model":
             self._handle_trading_system_read_model(parsed.query)
+            return
+        if parsed.path == "/api/park-paper/read-model":
+            self._handle_park_paper_read_model()
             return
         if parsed.path == "/api/trading-system/supervisor-history":
             self._handle_supervisor_history(parsed.query)
@@ -474,6 +479,23 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             )
         except ValueError as exc:
             self._write_error(400, "trading_system_read_model_unavailable", str(exc))
+
+    def _handle_park_paper_read_model(self) -> None:
+        try:
+            payload = build_park_public_read_model(_dualtrack_output_root())
+        except Exception:  # noqa: BLE001 - observer uncertainty is fail-closed.
+            payload = {
+                "schema_version": "park-paper-public-read-model-v1",
+                "status": "blocked",
+                "blockers": ["observer_projection_failed"],
+                "viewer": {
+                    "mode": "public_read_only",
+                    "paper_only": True,
+                    "control_plane": "telegram_only",
+                    "mutations_allowed": False,
+                },
+            }
+        self._write_json(200 if payload.get("status") == "ok" else 503, payload)
 
     def _handle_supervisor_history(self, query: str) -> None:
         try:

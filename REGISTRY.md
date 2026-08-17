@@ -13,6 +13,18 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-15)
+- #713 / PR #714 adds a dedicated immutable Park Paper public observer.  Its
+  read model projects only persisted Park identity/plan/lifecycle/safety facts
+  and the authoritative Nautilus Paper snapshot; it does not construct an
+  adapter, refresh market data, reconcile, call a provider, write a file, or
+  issue a control action.  The self-contained page has no controls and the
+  public gateway admits only its exact HTML, read-model, and session GET
+  routes; every POST is refused before body parsing.  Focused Park, gateway,
+  Dashboard, and boot tests pass (184), Ruff/compile/diff/gitleaks pass, and a
+  read against the current local Paper artifacts returned the active neutral
+  Grid with reconciliation `ok` while artifact bytes remained unchanged.  The
+  code does not by itself remove Cloudflare OTP or prove a public deployment;
+  #711 retains that exact-SHA origin and edge-policy verification.
 - #705 records the current Park Paper handoff after #701 / PR #701 and #702 /
   PR #704.  `main@84938268ba439ed5b9796000d7ff674d53f5bce3` now binds source-
   bound safety evidence and lets independent clean-slate strategy sessions share
