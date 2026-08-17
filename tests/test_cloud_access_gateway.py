@@ -18,9 +18,11 @@ def test_gateway_allowlist_exposes_only_dashboard_contracts() -> None:
     assert gateway._is_allowed("/api/trading-system/read-model")
     assert gateway._is_allowed("/api/trading-system/cloud-health")
     assert gateway._is_allowed("/api/trading-system/supervisor-history")
+    assert gateway._is_allowed("/api/park-paper/ai-chat")
     assert gateway.MUTATION_EXACT == {
         "/api/strategy-console/control",
         "/api/dualtrack/orders",
+        "/api/park-paper/ai-chat",
     }
     assert not gateway._is_allowed("/outputs/dualtrack/strategy_control/runtime.json")
     assert not gateway._is_allowed("/api/trading-system/read-model/internal")
@@ -196,6 +198,7 @@ def test_anonymous_gateway_refuses_mutation_before_body_parse_or_upstream(
     paths = [
         "/api/strategy-console/control",
         "/api/dualtrack/orders",
+        "/api/park-paper/ai-chat",
         "/api/unlisted-neighbor",
     ]
     for path in paths:
@@ -220,9 +223,9 @@ def test_anonymous_gateway_refuses_mutation_before_body_parse_or_upstream(
         handler.do_POST()
 
     assert refused == [True]
-    assert [row["path"] for row in audits] == paths[:2]
+    assert [row["path"] for row in audits] == paths[:3]
     assert all(row["result"] == "denied" and row["status"] == 401 for row in audits)
-    assert [status for status, _payload in sent] == [401, 401]
+    assert [status for status, _payload in sent] == [401, 401, 401]
 
 
 def test_authenticated_same_origin_mutation_forwards_verified_assertion(
@@ -264,6 +267,35 @@ def test_authenticated_same_origin_mutation_forwards_verified_assertion(
         "Host": "127.0.0.1:8765",
         "Origin": "http://127.0.0.1:8765",
     }
+
+
+def test_authenticated_same_origin_ai_chat_mutation_is_forwarded_as_control(
+    monkeypatch,
+) -> None:
+    identity = {"email": "operator@example.com"}
+    monkeypatch.setattr(gateway, "authenticated_access_identity", lambda _headers: identity)
+    monkeypatch.setattr(gateway, "PUBLIC_ORIGIN", "https://goldbot.example")
+    forwarded: list[dict] = []
+    body = '{"action":"message","message":"中性网格 4450~4100"}'.encode()
+    token = "gbp1.ai.payload"
+    handler = object.__new__(gateway.CloudAccessGatewayHandler)
+    handler.path = "/api/park-paper/ai-chat"
+    handler.headers = {
+        "Content-Length": str(len(body)),
+        "Content-Type": "application/json",
+        "Cookie": f"{gateway.SESSION_COOKIE_NAME}={token}",
+        "Host": "goldbot.example",
+        "Origin": "https://goldbot.example",
+    }
+    handler.rfile = BytesIO(body)
+    handler._proxy = lambda target, **kwargs: forwarded.append({"target": target, **kwargs})
+
+    handler.do_POST()
+
+    assert len(forwarded) == 1
+    assert forwarded[0]["method"] == "POST"
+    assert forwarded[0]["body"] == body
+    assert forwarded[0]["request_headers"]["X-Goldbot-Actor-Email"] == "operator@example.com"
 
 
 def test_null_origin_login_requires_matching_csrf_challenge(monkeypatch) -> None:

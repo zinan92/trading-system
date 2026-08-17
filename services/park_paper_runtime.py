@@ -30,6 +30,7 @@ from services.park_paper_mutation_gate import (
     _mint_park_paper_capability,
 )
 from services.park_recording_track import ParkRecordingTrack
+from services.park_strategy_snapshot import record_strategy_snapshot_terminal
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
     recording_window,
@@ -669,6 +670,14 @@ class ParkPaperRuntime:
                 "result": result,
                 "recorded_at": observed_at,
             },
+        )
+        record_strategy_snapshot_terminal(
+            self.output_root,
+            strategy_session_id=session,
+            strategy_revision_id=revision,
+            plan_digest=digest,
+            reason=str(boundary["reason"]),
+            observed_at=observed_at,
         )
         self._record_window_facts(
             {**(self.identity.active_session() or {}), **{"strategy_session_id": session, "strategy_revision_id": revision}},

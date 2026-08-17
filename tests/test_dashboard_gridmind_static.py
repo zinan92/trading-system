@@ -160,6 +160,28 @@ def test_gridmind_control_cards_expand_while_runtime_status_scrolls() -> None:
     assert ".chart{height:340px}" in html
 
 
+def test_gridmind_adds_an_additive_park_ai_chat_without_replacing_existing_controls() -> None:
+    html = _html()
+
+    for element_id in (
+        "parkAiChatCard",
+        "parkAiChatMessages",
+        "parkAiChatInput",
+        "parkAiSend",
+        "parkAiConfirm",
+        "parkAiReject",
+        "parkAiSnapshot",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "/api/park-paper/ai-chat" in html
+    assert 'id="startRobot"' in html
+    assert 'id="stopRobot"' in html
+    assert "api.deepseek.com" not in html
+    assert "DEEPSEEK_API_KEY" not in html
+    assert 'body:JSON.stringify({action,...payload})' in html
+    assert 'post("confirm",{draft_id:pending.draft_id,plan_digest:pending.plan_digest})' in html
+
+
 def test_gridmind_labels_a_running_strategy_with_a_stale_execution_tick_as_degraded() -> None:
     html = _html()
 
