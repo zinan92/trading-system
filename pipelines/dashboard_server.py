@@ -4297,11 +4297,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
-    boot = (
-        CloudPaperServiceBootGate().verify("dashboard")
-        if os.getenv("GRIDMIND_RUNTIME_MODE") == "cloud"
-        else PaperServiceBootGate().verify("dashboard")
-    )
+    boot = _verify_dashboard_boot()
     if not boot.get("ok"):
         print(
             f"[paper-boot] dashboard blocked: {boot.get('blocker') or 'unknown'}",
@@ -4314,6 +4310,18 @@ def main() -> None:
     print(f"Dashboard API: http://{args.host}:{args.port}/api/dashboard?date={utc_run_date()}")
     _start_code_reload_watcher()
     server.serve_forever()
+
+
+def _verify_dashboard_boot() -> dict[str, Any]:
+    """Bind the boot receipt to the same output root as the read model."""
+
+    output_root = _dualtrack_output_root()
+    gate = (
+        CloudPaperServiceBootGate(output_root=output_root)
+        if os.getenv("GRIDMIND_RUNTIME_MODE") == "cloud"
+        else PaperServiceBootGate(output_root=output_root)
+    )
+    return gate.verify("dashboard")
 
 
 def _start_code_reload_watcher(interval_seconds: int = 30) -> None:
