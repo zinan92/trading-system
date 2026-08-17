@@ -13,6 +13,14 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-15)
+- #715 closes the public Gateway's HTTP/1.1 origin connection after refusing a
+  request body.  The Gateway still returns 405 before parsing or forwarding the
+  body, but Cloudflare can no longer reuse that socket and reinterpret leftover
+  bytes as a malformed follow-up request.  A raw pipelined-socket regression
+  proves there is exactly one 405 response and no second request; the broader
+  Park/Gateway/Dashboard suite passes (185).  Exact-SHA public deployment and
+  repeated anonymous POST evidence remain runtime verification, not repository
+  truth.
 - #713 / PR #714 adds a dedicated immutable Park Paper public observer.  Its
   read model projects only persisted Park identity/plan/lifecycle/safety facts
   and the authoritative Nautilus Paper snapshot; it does not construct an
