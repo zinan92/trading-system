@@ -47,23 +47,13 @@ SUPERVISOR_HISTORY_TIMEOUT = float(
 SUPERVISOR_HISTORY_MAX_BYTES = int(
     os.getenv("GOLDBOT_SUPERVISOR_HISTORY_MAX_BYTES", str(64 * 1024 * 1024))
 )
-ROOT_REDIRECT = "/dashboard-v5.html"
+ROOT_REDIRECT = "/park-paper-dashboard.html"
 
 ALLOW_EXACT = frozenset(
     {
-        "/dashboard-v5.html",
-        "/assets/tokens.css",
-        "/packages/standard-kline/standard-kline.js",
-        "/data/vendor/echarts.min.js",
-        "/data/vendor/lightweight-charts.standalone.production.js",
+        "/park-paper-dashboard.html",
         "/api/auth/session",
-        "/api/public-access-health",
-        "/api/trading-system/read-model",
-        "/api/trading-system/cloud-health",
-        "/api/trading-system/daily-self-review",
-        "/api/trading-system/supervisor-history",
-        "/api/trading-system/ai-evaluation-receipt",
-        "/api/dualtrack/market/bars",
+        "/api/park-paper/read-model",
     }
 )
 _DROP_HEADERS = frozenset(

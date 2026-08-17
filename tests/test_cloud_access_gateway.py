@@ -8,14 +8,17 @@ from services import cloud_access_gateway as gateway
 
 
 def test_gateway_allowlist_exposes_only_dashboard_contracts() -> None:
-    assert gateway._is_allowed("/dashboard-v5.html")
-    assert gateway._is_allowed("/api/trading-system/cloud-health")
-    assert gateway._is_allowed("/api/trading-system/daily-self-review")
-    assert gateway._is_allowed("/api/trading-system/supervisor-history")
+    assert gateway.ROOT_REDIRECT == "/park-paper-dashboard.html"
+    assert gateway._is_allowed("/park-paper-dashboard.html")
+    assert gateway._is_allowed("/api/park-paper/read-model")
+    assert gateway._is_allowed("/api/auth/session")
+    assert not gateway._is_allowed("/dashboard-v5.html")
+    assert not gateway._is_allowed("/api/trading-system/read-model")
+    assert not gateway._is_allowed("/api/trading-system/cloud-health")
+    assert not gateway._is_allowed("/api/trading-system/supervisor-history")
     assert not gateway._is_allowed("/outputs/dualtrack/strategy_control/runtime.json")
-    assert not gateway._is_allowed("/api/trading-system/cloud-health/internal")
-    assert not gateway._is_allowed("/api/trading-system/supervisor-history/internal")
-    assert not gateway._is_allowed("/api/trading-system/supervisor-history/")
+    assert not gateway._is_allowed("/api/park-paper/read-model/internal")
+    assert not gateway._is_allowed("/api/park-paper/read-model/")
     assert not gateway._is_allowed("/../configs/paper.env")
 
 

@@ -1623,6 +1623,7 @@ def test_dashboard_handler_disables_cache_for_dashboard_html():
     handler = object.__new__(dashboard_server.DashboardHandler)
 
     for path in [
+        "/park-paper-dashboard.html",
         "/dashboard-v2.html",
         "/dashboard-v3.html",
         "/dashboard-v4.html",
@@ -1638,9 +1639,17 @@ def test_dashboard_handler_disables_cache_for_dashboard_html():
         handler.path = path
         assert handler._should_disable_static_cache() is True
 
-    for path in ["/api/dashboard", "/api/public-access-health", "/outputs/state.json", "/"]:
+    for path in ["/api/park-paper/read-model", "/api/dashboard", "/api/public-access-health", "/outputs/state.json", "/"]:
         handler.path = path
         assert handler._should_disable_static_cache() is False
+
+
+def test_dashboard_exposes_the_dedicated_park_paper_observer_route():
+    source = Path(dashboard_server.__file__).read_text(encoding="utf-8")
+
+    assert 'if parsed.path == "/api/park-paper/read-model":' in source
+    assert "self._handle_park_paper_read_model()" in source
+    assert "build_park_public_read_model(_dualtrack_output_root())" in source
 
 
 def test_dashboard_v5_is_a_stable_alias_for_the_production_strategy_console():

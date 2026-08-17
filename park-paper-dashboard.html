@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Park Paper · Public Observer</title>
+  <style>
+    :root{color-scheme:dark;--bg:#071019;--panel:#0d1924;--line:#1d3040;--muted:#8ca0b3;--text:#edf4f8;--green:#31d18b;--red:#ff6b6b;--amber:#ffcf70;--cyan:#74d7ff}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 12% 0,#10283a 0,transparent 34%),var(--bg);color:var(--text);font:14px/1.5 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    main{width:min(1440px,100%);margin:auto;padding:28px}.top{display:flex;gap:20px;align-items:flex-start;justify-content:space-between;margin-bottom:22px}.brand small{display:block;color:var(--cyan);font-weight:750;letter-spacing:.14em;text-transform:uppercase}.brand h1{font-size:clamp(24px,4vw,42px);line-height:1.05;margin:7px 0}.brand p{color:var(--muted);margin:0}.badges{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.pill{border:1px solid var(--line);border-radius:999px;padding:7px 11px;color:var(--muted);background:#09141e}.pill.good{color:var(--green);border-color:#1f6b50}.pill.warn{color:var(--amber);border-color:#765c24}
+    .notice{display:none;padding:12px 14px;border:1px solid #794343;background:#2b171b;color:#ffb0b0;border-radius:12px;margin-bottom:16px}.notice.show{display:block}
+    .metrics{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:10px;margin-bottom:14px}.metric,.panel{background:linear-gradient(180deg,rgba(17,34,48,.97),rgba(10,23,34,.97));border:1px solid var(--line);border-radius:15px;box-shadow:0 18px 50px rgba(0,0,0,.18)}.metric{padding:14px}.metric span{color:var(--muted);display:block;font-size:12px}.metric strong{display:block;font-size:22px;margin-top:4px}.positive{color:var(--green)}.negative{color:var(--red)}
+    .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;margin-bottom:14px}.panel{padding:18px;min-width:0}.panel h2{font-size:14px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 14px;color:#b9c9d5}.strategy{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.fact{border-top:1px solid var(--line);padding-top:10px}.fact span{display:block;color:var(--muted);font-size:12px}.fact b{display:block;margin-top:3px;overflow-wrap:anywhere}.wide{grid-column:1/-1}.health-line{display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-bottom:1px solid var(--line)}.health-line:last-child{border-bottom:0}.health-line span{color:var(--muted)}
+    .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:11px}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px}th{position:sticky;top:0;background:#132332;color:#9db1c2;z-index:1}tr:last-child td{border-bottom:0}.empty{padding:22px;color:var(--muted);text-align:center}.section-stack{display:grid;gap:14px}.footer{display:flex;justify-content:space-between;gap:14px;color:var(--muted);font-size:12px;margin-top:18px}
+    @media(max-width:960px){main{padding:18px}.top{display:block}.badges{justify-content:flex-start;margin-top:15px}.metrics{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.strategy{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:520px){.metrics,.strategy{grid-template-columns:1fr}.footer{display:block}}
+  </style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div class="brand"><small>Park Strategy Track</small><h1>Paper Observer</h1><p>这里只显示已持久化事实。所有策略控制只在 Telegram 完成。</p></div>
+    <div class="badges"><span class="pill good">Public read-only</span><span class="pill good">Paper</span><span class="pill">Telegram only</span><span class="pill" id="statusBadge">读取中</span></div>
+  </header>
+  <div class="notice" id="notice" role="alert" aria-live="polite"></div>
+  <section class="metrics" id="metrics"></section>
+  <section class="grid">
+    <article class="panel"><h2>当前 Park 策略</h2><div class="strategy" id="strategy"></div></article>
+    <article class="panel"><h2>安全与对账</h2><div id="health"></div></article>
+  </section>
+  <section class="section-stack">
+    <article class="panel"><h2>当前持仓</h2><div id="positions"></div></article>
+    <article class="panel"><h2>订单事实</h2><div id="orders"></div></article>
+    <article class="panel"><h2>成交事实</h2><div id="fills"></div></article>
+  </section>
+  <footer class="footer"><span>自动读取间隔 15 秒 · 页面不发送任何写请求</span><span id="updatedAt">尚未读取</span></footer>
+</main>
+<script>
+const $=selector=>document.querySelector(selector);
+const esc=value=>String(value??"—").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+const num=value=>Number.isFinite(Number(value))?Number(value).toLocaleString("en-US",{maximumFractionDigits:4}):"—";
+const money=value=>Number.isFinite(Number(value))?Number(value).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}):"—";
+const short=value=>{const text=String(value||"");return text.length>24?`${text.slice(0,12)}…${text.slice(-8)}`:text||"—"};
+const time=value=>{if(!value)return"—";const date=new Date(value);return Number.isNaN(date.valueOf())?String(value):new Intl.DateTimeFormat("zh-CN",{timeZone:"Asia/Shanghai",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"}).format(date)};
+const fact=(label,value,wide=false)=>`<div class="fact${wide?" wide":""}"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
+const metric=(label,value,klass="")=>`<div class="metric"><span>${esc(label)}</span><strong class="${klass}">${esc(value)}</strong></div>`;
+function table(rows,columns){if(!rows.length)return'<div class="empty">没有记录</div>';return`<div class="table-wrap"><table><thead><tr>${columns.map(([_,label])=>`<th>${esc(label)}</th>`).join("")}</tr></thead><tbody>${rows.map(row=>`<tr>${columns.map(([key])=>`<td>${esc(key.endsWith("_ts")||key==="ts"?time(row[key]):key.includes("price")||key==="notional"||key==="realized_pnl"?num(row[key]):row[key])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`}
+function render(data){
+  const strategy=data.strategy||{},execution=data.execution||{},counts=execution.counts||{},account=execution.account||{},pnl=execution.pnl||{},market=data.market||{},safety=data.safety||{},reconciliation=execution.reconciliation||{};
+  const healthy=data.status==="ok";$("#statusBadge").textContent=healthy?"事实完整":"Fail-closed";$("#statusBadge").className=`pill ${healthy?"good":"warn"}`;
+  $("#notice").className=`notice ${healthy?"":"show"}`;$("#notice").textContent=healthy?"":`只读事实不完整：${(data.blockers||[]).join(" · ")||"unknown"}`;
+  const totalPnl=Number(pnl.realized||0)+Number(pnl.unrealized||0),pnlClass=totalPnl>0?"positive":totalPnl<0?"negative":"";
+  $("#metrics").innerHTML=[metric("最新价",num(market.price)),metric("Accepted 订单",num(counts.accepted_orders)),metric("成交",num(counts.fills)),metric("Open 持仓",num(counts.open_positions)),metric("账户权益",money(account.equity)),metric("总 PnL",money(totalPnl),pnlClass)].join("");
+  $("#strategy").innerHTML=[fact("状态",strategy.state),fact("类型",strategy.strategy_type),fact("方向",strategy.direction),fact("价格下限",num(strategy.lower_price_boundary)),fact("价格上限",num(strategy.upper_price_boundary)),fact("最大杠杆",strategy.maximum_leverage?`${num(strategy.maximum_leverage)}x`:"—"),fact("最大名义",money(strategy.maximum_notional)),fact("理论最大亏损",money(strategy.theoretical_max_loss)),fact("计划订单数",num(strategy.order_count)),fact("Session",short(strategy.strategy_session_id),true),fact("Revision",short(strategy.strategy_revision_id),true),fact("Plan digest",short(strategy.plan_digest),true)].join("");
+  const healthRows=[["Viewer","Public read-only"],["控制面","Telegram only"],["执行引擎",execution.engine||"—"],["行情来源",market.source||"—"],["行情事实",market.fresh===true?"fresh":"blocked"],["对账",reconciliation.status||"missing"],["Safety",safety.status||"missing"],["Boot SHA",short(safety.release_sha)],["Safety 时间",time(safety.checked_at)]];
+  $("#health").innerHTML=healthRows.map(([label,value])=>`<div class="health-line"><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join("");
+  const positions=[...(execution.positions||[])].sort((a,b)=>(a.status==="open"?-1:1)-(b.status==="open"?-1:1));
+  $("#positions").innerHTML=table(positions,[["status","状态"],["side","方向"],["remaining_units","数量"],["entry_price","入场价"],["sl","SL"],["tp","TP"],["realized_pnl","已实现 PnL"],["entry_ts","入场时间"]]);
+  $("#orders").innerHTML=table(execution.orders||[],[["state","状态"],["event","事件"],["side","方向"],["order_type","类型"],["quantity","数量"],["price","价格"],["tp","TP"],["sl","SL"],["ts","时间"]]);
+  $("#fills").innerHTML=table(execution.fills||[],[["event","事件"],["side","方向"],["quantity","数量"],["price","价格"],["realized_pnl","已实现 PnL"],["ts","时间"]]);
+  $("#updatedAt").textContent=`页面读取 ${time(data.generated_at)}`;
+}
+async function refresh(){try{const response=await fetch("/api/park-paper/read-model",{cache:"no-store",headers:{Accept:"application/json"}});const data=await response.json();render(data)}catch(error){$("#statusBadge").textContent="读取失败";$("#statusBadge").className="pill warn";$("#notice").className="notice show";$("#notice").textContent="Dashboard 只读事实暂不可用；未执行任何操作。"}}
+refresh();setInterval(refresh,15000);
+</script>
+</body>
+</html>
