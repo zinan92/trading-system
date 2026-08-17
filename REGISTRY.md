@@ -12,7 +12,24 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-15)
+## 现在在哪里(2026-08-17)
+- #711 / #713 / #715 are complete on exact clean
+  `main@7d7491a3507f1897cfd6909778526ca24859c313`.  Opening
+  `https://goldbot.park-ai-intel.com/` now requires no email or OTP and lands
+  on the dedicated Park Paper observer.  DNS routes only this hostname through
+  the local `topic-workbench` Tunnel to the loopback Gateway; Goldbot v5 has the
+  scoped `Public Paper observer / Bypass / Everyone` policy.  The Gateway
+  exposes only the observer HTML, observer read model, and read-only session
+  route, rejects every mutation method before body parsing, closes rejected
+  HTTP/1.1 connections, and returns 404 for the legacy Dashboard and neighboring
+  APIs.  Public verification passed 8/8 HTML/API/POST probes plus 12/12 repeated
+  POST denials; a fresh browser rendered `事实完整` with zero buttons, forms,
+  inputs, or links.  Dashboard/Gateway launchd jobs, predeploy, Dashboard boot,
+  and Park safety evidence all bind the exact SHA.  The active neutral Grid
+  identity remains unchanged (4100–4450, max 20x), reconciliation is `ok`, and
+  safety records `operations.mutations=[]`.  Immediate rollback is to detach
+  the public observer policy and save, restoring OTP; the hostname can then be
+  routed back to `gridmind-paper-cloud` if origin rollback is also required.
 - #715 closes the public Gateway's HTTP/1.1 origin connection after refusing a
   request body.  The Gateway still returns 405 before parsing or forwarding the
   body, but Cloudflare can no longer reuse that socket and reinterpret leftover
@@ -758,6 +775,12 @@
 - 治理:decision-log 与 main 对账一致(近期功能 PR 完工义务全履行);pre-live 四项历史风险已复验,唯一残留 gate = naked-position 的 mainnet attended canary(docs/audits/);AGENTS.md 已仓内化;GitHub 缺号 #52–#128 有 provenance 索引。
 
 ## 下一步
+- No operator action is required for the public viewer.  Use
+  `https://goldbot.park-ai-intel.com/` for read-only Paper facts and Telegram
+  for every strategy instruction or confirmation.  Keep the local Mac,
+  Dashboard/Gateway launchd jobs, and `topic-workbench` Tunnel available; an
+  unavailable local owner should make the viewer unavailable, never enable a
+  fallback control or legacy Dashboard path.
 - Park Telegram account admission, Neutral Grid, and bounded confirmation UX
   are merged through `main@eeb130220185f412be25663f6e6b2860c1e2e7b6`.
   The local source-bound `com.wendy.trading-orchestrator.park-paper-control`

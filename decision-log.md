@@ -15662,3 +15662,44 @@ auditable datafeed port; broker execution remains a separate port.
   `Allow: GET, OPTIONS`, and `Connection: close`; the GET is never handled.
 - Focused Gateway tests pass (8); the broader Park/Gateway/Dashboard suite
   passes (185), with Ruff, compilation, and diff checks passing.
+
+# 2026-08-17 — Accept the no-OTP Park Paper observer cutover (#717)
+
+## Decision
+
+- Publish only the dedicated Park Paper observer at the existing Goldbot
+  hostname.  Keep Telegram as the sole control plane and do not expose the
+  legacy Dashboard, neighboring APIs, files, or mutation methods.
+- Route `goldbot.park-ai-intel.com` to the local `topic-workbench` Tunnel,
+  whose ingress owns the loopback read-only Gateway.  Apply the hostname-scoped
+  `Public Paper observer / Bypass / Everyone` Access policy only after the
+  route and origin are independently verified.
+- Treat detach-and-save of that policy as the immediate authentication
+  rollback.  Repointing the hostname to `gridmind-paper-cloud` is a separate
+  origin rollback and is not needed to restore OTP.
+
+## Gotcha
+
+- The first Bypass attempt correctly revealed that DNS still targeted the old
+  Cloud Tunnel.  Public evidence showed the old Dashboard surface, so the
+  Bypass was removed immediately and Access 302 protection was re-proven before
+  changing the single hostname route.  A healthy local port was not sufficient
+  evidence of public origin ownership.
+- Cloudflare briefly returned mixed 404/200 results while the Tunnel route
+  propagated.  Acceptance waited for repeated stable probes instead of treating
+  the first 200 as completion.
+
+## Verification
+
+- Exact clean release `7d7491a3507f1897cfd6909778526ca24859c313`
+  owns the Dashboard/Gateway checkout, passing predeploy, Dashboard boot, and
+  Park safety receipts.  Both launchd services are running under KeepAlive.
+- Eight consecutive anonymous probes passed HTML 200, read-model `status=ok`,
+  and mutation POST 405; 12 more alternating mutation POSTs all returned 405.
+  Legacy Dashboard and neighboring read-model routes return 404.
+- A fresh browser reached the observer without OTP, showed `Public read-only`,
+  `Paper`, `Telegram only`, and `事实完整`, and contained zero buttons, forms,
+  inputs, or links.
+- The active session/revision/digest and neutral Grid geometry are unchanged;
+  confirmation and lifecycle journals did not gain control events, and safety
+  evidence reports `operations.mutations=[]`.
