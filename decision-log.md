@@ -1,5 +1,43 @@
 # Decision Log
 
+## Keep Park Dashboard AI chat additive, exact-confirmed, and Paper-only (Issue #737)
+
+Date: 2026-08-17
+
+### Decision
+
+- The Dashboard chat is an additive natural-language proposal surface.  It
+  creates a deterministic snapshot and an exact-digest confirmation receipt;
+  provider output remains untrusted and cannot authorize a plan by itself.
+- DeepSeek is attempted first and the bounded Codex CLI provider is a fallback.
+  Both paths feed the same deterministic Park normalizer and risk planner;
+  provider timeout or malformed output remains fail-closed.
+- Existing active exposure is never silently cancelled, flattened, reversed,
+  or reassigned by the chat.  A non-clean-slate proposal must remain blocked
+  until its explicit disposition is present and the existing Paper authority
+  gates accept it.
+- The chat card is visually prominent at the top of Goldbot V5, while the
+  Park strategy feature flag remains default-off and the configured Telegram
+  control plane remains unchanged.
+
+### Gotchas
+
+- This release deploys the Dashboard and authenticated Gateway code but does
+  not prove an authenticated Park conversation or provider-key readiness.
+- During release preparation, the existing source-attestation boot gate
+  rejected one old-source live-tick attempt while a new preflight receipt was
+  being prepared.  No control action ran; the next scheduled tick passed after
+  the atomic source switch.  This is retained as evidence, not hidden as a
+  healthy uninterrupted run.
+
+### Verification
+
+- Evidence: [`docs/evidence/issue-737-park-ai-dashboard-release-2026-08-17.md`](docs/evidence/issue-737-park-ai-dashboard-release-2026-08-17.md)
+- Focused tests: 123 passed; full suite: 3080 passed, 1 skipped.
+- Cloud readback: exact source SHA and file hashes match; Dashboard and
+  Gateway are active; live-tick timer remains enabled/active; read model stayed
+  at 19 accepted Paper orders, 0 positions, and reconciliation `ok`.
+
 ## Keep Park cutover default-off and fail-closed (Issue #665)
 
 Date: 2026-08-14

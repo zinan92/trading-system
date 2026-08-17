@@ -13,6 +13,18 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-17)
+- #737 / PR #738 adds the additive Park Dashboard AI strategy chat and moves
+  it to the top of Goldbot V5, before account metrics.  The exact merged
+  `main@a91505c7e557ea468984a9eebef13cac2600a4f9` is deployed to the Cloud
+  Dashboard and authenticated Gateway; loopback static readback contains
+  `parkAiChatCard` / `top-ai-card`, and the anonymous AI route remains 401.
+  The release is Paper-only and proposal/confirmation-audit only; the Park
+  feature flag remains off, Telegram remains the configured control plane, and
+  no live-tick restart or order/position lifecycle action was performed.  A
+  transient old-source boot mismatch was rejected by the existing fail-closed
+  source gate before the atomic source switch; the next scheduled tick passed.
+  Full delivery facts are in
+  [`docs/evidence/issue-737-park-ai-dashboard-release-2026-08-17.md`](docs/evidence/issue-737-park-ai-dashboard-release-2026-08-17.md).
 - #719 / #721 / #723 / #724 are complete on exact clean
   `main@1a2ec229c940f1f133adc95ec3f422dfd2f9a990` with deployed tree
   `ac3852e4644c036b793ae489404e8af1a084d6b4`.  The original Park Paper
