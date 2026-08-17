@@ -736,7 +736,7 @@ load();setInterval(()=>{if(!state.busy&&!document.hidden)load()},5000);
       ["Digest",text(card&&card.plan_digest||draft&&draft.plan_digest)]
     ];
     snapshotBox.replaceChildren();
-    const title=document.createElement("h4");title.textContent=card&&card.status==="confirmed"?"已确认的不可变策略 Snapshot":"Draft · 等待 Park 确认";snapshotBox.appendChild(title);
+    const title=document.createElement("h4");title.textContent=card&&(card.sealed===true||card.status==="expired")?"已封存的不可变策略 Snapshot":card&&card.status==="confirmed"?"已确认的不可变策略 Snapshot":"Draft · 等待 Park 确认";snapshotBox.appendChild(title);
     const grid=document.createElement("div");grid.className="park-ai-snapshot-grid";rows.forEach(([label,value])=>{const span=document.createElement("span");span.textContent=label;const b=document.createElement("b");b.textContent=value;grid.append(span,b)});snapshotBox.appendChild(grid);snapshotBox.classList.add("on");
   }
   function applyResponse(data){

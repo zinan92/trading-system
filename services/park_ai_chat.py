@@ -86,6 +86,12 @@ def _digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _confirmation_receipt_digest(proposal_id: str, plan_digest: str, confirmed_at: float) -> str:
+    return "sha256:" + hashlib.sha256(
+        f"{proposal_id}|{plan_digest}|confirmed|{confirmed_at}".encode("utf-8")
+    ).hexdigest()
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -257,6 +263,18 @@ def _disposition_from_candidate(candidate: Mapping[str, Any], source_text: str) 
     }
 
 
+def _disposition_complete(disposition: Mapping[str, Any] | None) -> bool:
+    """Require an explicit decision for positions, entries, and exits."""
+
+    if not isinstance(disposition, Mapping):
+        return False
+    return (
+        str(disposition.get("position_action") or "") in {"keep", "flatten"}
+        and str(disposition.get("entry_action") or "") in {"keep", "cancel"}
+        and str(disposition.get("exit_action") or "") == "keep"
+    )
+
+
 class ParkAiChatService:
     """Stateful Dashboard chat seam shared by API tests and the HTTP handler."""
 
@@ -318,6 +336,19 @@ class ParkAiChatService:
                         text,
                     )
             if disposition is not None:
+                if not _disposition_complete(disposition):
+                    draft["disposition"] = disposition
+                    draft["clarification_code"] = "portfolio_disposition_incomplete"
+                    draft["confirmable"] = False
+                    self._save_draft(draft)
+                    return {
+                        "status": "needs_disposition",
+                        "code": "portfolio_disposition_incomplete",
+                        "message": "旧仓处置还不完整。请同时明确：持仓保留/平仓、未成交入口保留/撤销、止盈止损保留（例如：旧仓继续止盈止损，撤掉未成交挂单）。",
+                        "draft": self._public_draft(draft),
+                        "confirmable": False,
+                        "paper_only": True,
+                    }
                 if disposition_metadata:
                     draft["provider"] = disposition_metadata
                 draft["disposition"] = disposition
@@ -517,6 +548,8 @@ class ParkAiChatService:
         if bool(facts.get("unresolved_runtime")) or bool(facts.get("pending_terminal_actions")):
             return self._blocked("runtime_not_terminal", "Paper runtime 或终态动作尚未收口；确认不会创建新策略。")
         session_started = False
+        snapshot_persisted = False
+        decision_committed = False
         try:
             self.identity.start_clean_session(
                 observed_at=self.now(),
@@ -533,27 +566,28 @@ class ParkAiChatService:
             _append_jsonl(self.output_root / "park_strategy" / "plans.jsonl", {"event": "plan_proposed", **plan, "created_at": self.now(), "source": "dashboard_ai"})
             confirmation = ParkConfirmationLedger(self.output_root, park_user_id=self.park_user_id)
             proposal_id = f"park-proposal-{expected.removeprefix('sha256:')[:24]}"
+            confirmation_now = self._time()
             proposal = confirmation.create_proposal(
                 proposal_id=proposal_id,
                 strategy_session_id=session_id,
                 strategy_revision_id=revision_id,
                 plan_digest=expected,
                 risk_digest=_digest(plan.get("risk") or {}),
-                expires_at=self._time() + self.draft_ttl_seconds,
+                expires_at=confirmation_now + self.draft_ttl_seconds,
             )
-            decision = confirmation.decide(
-                proposal_id=proposal_id,
-                park_user_id=self.park_user_id,
-                command_text=f"confirm {expected}",
-                current_binding={"strategy_session_id": session_id, "strategy_revision_id": revision_id},
-                now=self._time(),
+            expected_receipt = _confirmation_receipt_digest(proposal_id, expected, confirmation_now)
+            snapshot = self._snapshot(
+                plan,
+                draft=draft,
+                decision={"receipt_digest": expected_receipt},
+                actor=actor,
             )
-            snapshot = self._snapshot(plan, draft=draft, decision=decision, actor=actor)
             _append_jsonl(self.snapshot_path, snapshot)
+            snapshot_persisted = True
             self._record_event_for_draft(
                 draft,
                 category="control",
-                event_type="strategy_accepted",
+                event_type="strategy_confirmation_prepared",
                 payload={
                     "snapshot_id": snapshot["snapshot_id"],
                     "plan_digest": snapshot.get("plan_digest"),
@@ -563,11 +597,40 @@ class ParkAiChatService:
             self._record_event_for_draft(
                 draft,
                 category="plan",
-                event_type="strategy_snapshot_created",
+                event_type="strategy_snapshot_prepared",
                 payload={"snapshot_id": snapshot["snapshot_id"], "plan_digest": snapshot.get("plan_digest")},
             )
-            _append_jsonl(self.chat_path, {"event": "strategy_accepted", "snapshot_id": snapshot["snapshot_id"], "source_text": draft.get("source_text"), "recorded_at": self.now(), "actor": actor, "provider": draft.get("provider")})
+            _append_jsonl(self.chat_path, {"event": "strategy_confirmation_prepared", "snapshot_id": snapshot["snapshot_id"], "source_text": draft.get("source_text"), "recorded_at": self.now(), "actor": actor, "provider": draft.get("provider")})
+            decision = confirmation.decide(
+                proposal_id=proposal_id,
+                park_user_id=self.park_user_id,
+                command_text=f"confirm {expected}",
+                current_binding={"strategy_session_id": session_id, "strategy_revision_id": revision_id},
+                now=confirmation_now,
+            )
+            if str(decision.get("receipt_digest") or "") != expected_receipt:
+                raise ParkAiChatError("confirmation_receipt_mismatch", "confirmation receipt did not match the prepared snapshot")
+            decision_committed = True
+            try:
+                _append_jsonl(self.chat_path, {"event": "strategy_accepted", "snapshot_id": snapshot["snapshot_id"], "source_text": draft.get("source_text"), "recorded_at": self.now(), "actor": actor, "provider": draft.get("provider")})
+            except OSError:
+                # The confirmation ledger and immutable snapshot are already
+                # durable; a chat-audit transport failure cannot authorize a
+                # second attempt or mutate Paper state.
+                pass
         except Exception as exc:  # noqa: BLE001 - no partial execution authority.
+            if snapshot_persisted and not decision_committed:
+                try:
+                    record_strategy_snapshot_terminal(
+                        self.output_root,
+                        strategy_session_id=session_id,
+                        strategy_revision_id=revision_id,
+                        plan_digest=expected,
+                        reason="confirmation_failed",
+                        observed_at=self.now(),
+                    )
+                except Exception:
+                    pass
             if session_started:
                 try:
                     self.identity.close_session(
@@ -578,6 +641,12 @@ class ParkAiChatService:
                     )
                 except Exception:
                     pass
+            draft["confirmable"] = False
+            draft["clarification_code"] = "strategy_commit_blocked"
+            try:
+                self._save_draft(draft)
+            except OSError:
+                pass
             return self._blocked("strategy_commit_blocked", f"策略确认持久化未完成（{type(exc).__name__}）；未提交新的 Paper 执行权。")
         self._delete_draft()
         return {"status": "confirmed", "snapshot": self._public_snapshot(snapshot), "proposal": proposal, "decision": decision, "paper_only": True}
