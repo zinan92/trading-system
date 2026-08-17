@@ -10,6 +10,7 @@ from services.park_ai_chat import (
     ParkAiProviderGateway,
     record_strategy_snapshot_terminal,
 )
+from services.park_confirmation import ParkConfirmationLedger
 from services.park_ai_chat import _safe_context
 from services.park_codex_intent_parser import _candidate as _codex_candidate
 
@@ -392,6 +393,23 @@ def test_active_identity_is_not_silently_superseded(tmp_path):
     blocked = service.confirm(result["draft"]["draft_id"], result["draft"]["plan_digest"])
     assert blocked["code"] == "active_strategy_not_terminal"
     assert service.identity.active_session()["strategy_session_id"] == "session-old"
+
+
+def test_confirmation_failure_after_snapshot_has_no_execution_authority(tmp_path, monkeypatch):
+    service = _service(tmp_path)
+    draft = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")
+
+    def fail_decide(*_args, **_kwargs):
+        raise RuntimeError("simulated confirmation ledger failure")
+
+    monkeypatch.setattr(ParkConfirmationLedger, "decide", fail_decide)
+    result = service.confirm(draft["draft"]["draft_id"], draft["draft"]["plan_digest"])
+    assert result["status"] == "blocked"
+    assert result["code"] == "strategy_commit_blocked"
+    assert service.identity.active_session() is None
+    rows = service.output_root.joinpath("park_strategy", "confirmations.jsonl").read_text().splitlines()
+    assert not any(json.loads(line).get("event") == "confirmed" for line in rows)
+    assert service.read_model()["snapshots"][0]["status"] == "expired"
 
 
 def test_confirmation_records_control_and_plan_facts_without_raw_rejected_cards(tmp_path):

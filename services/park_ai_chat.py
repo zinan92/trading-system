@@ -702,6 +702,12 @@ class ParkAiChatService:
         public_snapshots: list[dict[str, Any]] = []
         for snapshot in snapshots[-20:]:
             public = self._public_snapshot(snapshot)
+            if public.get("integrity") == "mismatch":
+                public["status"] = "blocked"
+                public["timeline"] = [
+                    *list(public.get("timeline") or []),
+                    {"event": "integrity_mismatch", "occurred_at": self.now()},
+                ]
             event = terminal_events.get(
                 (
                     str(snapshot.get("strategy_session_id") or ""),
