@@ -15703,3 +15703,41 @@ auditable datafeed port; broker execution remains a separate port.
 - The active session/revision/digest and neutral Grid geometry are unchanged;
   confirmation and lifecycle journals did not gain control events, and safety
   evidence reports `operations.mutations=[]`.
+
+# 2026-08-17 — Restore the original Park Paper Dashboard behind password auth (#719, #721, #723, #724, #725)
+
+## Decision
+
+- Treat the existing `dashboard-gridmind.html` and its original asset/control
+  surface as the product baseline. Do not rebuild or redesign it while changing
+  the access layer.
+- Restore the legacy Dashboard behind the exact password/session Gateway and
+  the existing loopback Dashboard assertion check. Keep Cloudflare's
+  hostname-scoped Bypass limited to removing the OTP layer; the Gateway still
+  authenticates Park and allowlists exact routes.
+- Accept the Codex in-app browser's `Origin: null` only for login when a
+  host-only CSRF challenge from the login page matches. Mutation and logout
+  requests remain strict same-origin and fail closed.
+
+## Gotchas
+
+- A byte-identical HTML file does not prove runtime equivalence. The release
+  therefore records a real browser smoke test and a before/after read-model
+  comparison, while deliberately not exercising order/position mutations.
+- The current Codex provider readiness receipt timed out on the strategy
+  recommendation smoke call. This is a separate partial AI-enhancement state;
+  it must not be represented as a healthy Dashboard/runtime result.
+
+## Verification
+
+- Main `1a2ec229c940f1f133adc95ec3f422dfd2f9a990` and tree
+  `ac3852e4644c036b793ae489404e8af1a084d6b4` are deployed. The Dashboard HTML
+  SHA256 is `4de1f38cfe1f015124e266d4e5217297bee5c8cddcac47807d35f0deedac87e7`
+  in both the baseline and deployed checkout.
+- Cloud Paper preflight passed with zero control actions. Dashboard, Gateway,
+  Tunnel, Datafeed, and all eight Paper timers are active.
+- Browser login, original controls, seven read-only tabs, and zero console
+  errors were observed. Anonymous control POST remains HTTP 401.
+- Before/after facts remain equal: cycle `2026-08-17_DAY`, runtime running,
+  plan v2, 19 accepted/open orders, 0 positions, reconciliation `ok`, and no
+  control action.
