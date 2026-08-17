@@ -67,22 +67,43 @@ activate-dashboard --apply`. Neither action enables the live-tick, report, or
 dead-man timers. Scheduler activation belongs to the later single-owner
 cutover contract.
 
-## Authenticated remote access and layered health
+## Password-authenticated remote access and layered health
 
 Never point a public tunnel at ports 8100 or 8765. The public chain is:
 
 ```text
-Cloudflare Access -> cloudflared -> 127.0.0.1:8766 allowlist gateway
-                  -> 127.0.0.1:8765 Dashboard
+Cloudflare Tunnel -> 127.0.0.1:8766 password/session allowlist gateway
+                  -> 127.0.0.1:8765 Dashboard (independent assertion check)
 ```
 
 Copy `cloudflared.yml.example` to `/etc/gridmind/cloudflared.yml`, replace only
-the tunnel ID and authenticated hostname, and keep the credential JSON outside
-the Git checkout. In `/etc/gridmind/paper.env` configure
-`GOLDBOT_ACCESS_TEAM_DOMAIN`, `GOLDBOT_ACCESS_AUD`, and
-`GOLDBOT_ACCESS_EMAIL`. The gateway validates the signed Access JWT and
-allowlists exact Dashboard assets/APIs; assertions and tunnel/dead-man tokens
-never enter its audit log.
+the tunnel ID and hostname, and keep the credential JSON outside the Git
+checkout. `GOLDBOT_ACCESS_EMAIL` remains the internal Park actor binding; it
+is not a login field. Provision a non-reversible password record and an
+independent random session-signing secret through the private prompt:
+
+```bash
+sudo install -d -o gridmind -g gridmind -m 0700 /etc/gridmind/dashboard-auth
+sudo -u gridmind /opt/gridmind/venvs/app/bin/python \
+  -m services.cloud_password_auth provision \
+  --password-file /etc/gridmind/dashboard-auth/password.scrypt \
+  --session-secret-file /etc/gridmind/dashboard-auth/session-secret
+sudo chmod 600 /etc/gridmind/dashboard-auth/password.scrypt \
+  /etc/gridmind/dashboard-auth/session-secret
+```
+
+The command never accepts the password as an argument or environment value.
+The public gateway requires an expiring Secure/HttpOnly session and exact
+same-origin POST; the loopback Dashboard re-verifies the signed assertion
+before accepting Park as the actor. Only exact Dashboard assets/APIs are
+allowlisted, logout revokes the server-side session, and neither passwords,
+assertions, tunnel credentials, nor dead-man tokens enter the audit log.
+
+Keep the Cloudflare Access application attached until password login, logout,
+anonymous denial, and a non-mutating `preview` have passed against the origin.
+Only then replace the OTP policy with the narrowly scoped bypass for this one
+hostname. Roll back by removing that bypass and reattaching the previous Access
+policy; this restores email OTP without changing trading state.
 
 After Dashboard preflight passes, `activate-remote-access` may enable the
 gateway and tunnel. It does not enable the live-tick scheduler:
