@@ -16001,3 +16001,30 @@ auditable datafeed port; broker execution remains a separate port.
 - This remains Paper-only evidence.  No live, exchange-key, Cloud order, or
   position mutation was performed; exact-SHA deployment and natural-tick
   verification remain separate operational evidence.
+
+# 2026-08-18 — Require explicit Park-confirmed Reverse (#748)
+
+## Decision
+
+- A Reverse exists only when Park explicitly writes the new direction.  AI may
+  normalize a candidate, but it cannot select or change direction.  The Draft
+  shows the old identity/disposition, trusted market, full new specification,
+  risk, new identity, and digest before Park confirmation.
+- Confirmation is digest/identity/TTL bound and creates a durable pending
+  Reverse request without mutating Paper.  On the next trusted tick the runtime
+  cancels exact old entries, flattens exact old positions, reconciles zero old
+  exposure, seals the old revision, and only then starts the new revision.
+- Missing confirmation, stale market/risk evidence, missing old/new identity,
+  failed cleanup, or failed reconciliation blocks the transition durably;
+  opposite exposure and blind retries are forbidden.  The stable read model
+  and Dashboard expose pending/blocked/transitioned Reverse status and next
+  action.
+
+## Verification
+
+- PR #773 merged as `main@a9553e14db3dffa8137a7f3c0c91843e21b1402a` (tree
+  `3fb4ed96ab19d4fdad6bcadd4101b3f9f85b19b1`) after 141 focused tests,
+  diff-check, compileall, gitleaks, and focused spec/safety review passed.
+- This remains Paper-only.  No live, exchange-key, Cloud order, or position
+  mutation was performed; exact-SHA deployment and natural-tick verification
+  remain separate operational evidence.
