@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Mapping
 
 from services.park_strategy_lifecycle import ParkStrategyLifecycleLedger
@@ -12,6 +14,11 @@ class ParkGridLifecycleError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _risk_digest(value: Mapping[str, Any]) -> str:
+    encoded = json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class ParkGridLifecycle:
@@ -41,8 +48,12 @@ class ParkGridLifecycle:
             or receipt.get("strategy_session_id") != self.session_id
             or receipt.get("strategy_revision_id") != self.revision_id
             or receipt.get("start_or_order_submitted") is not False
+            or (
+                (plan.get("risk") or {}).get("grid_spacing") is not None
+                and receipt.get("risk_digest") != _risk_digest(plan.get("risk") or {})
+            )
         ):
-            raise ParkGridLifecycleError("confirmation_required", "Grid lifecycle requires an exact Park confirmation receipt")
+            raise ParkGridLifecycleError("confirmation_required", "Grid lifecycle requires an exact Park plan and risk confirmation receipt")
         self.lifecycle = ParkStrategyLifecycleLedger(output_root)
         self.lifecycle.activate({
             **self.normalized,
@@ -58,7 +69,48 @@ class ParkGridLifecycle:
     def levels(self) -> list[dict[str, Any]]:
         if self._levels is not None:
             return [dict(row) for row in self._levels]
-        count = int((self.plan.get("risk") or {}).get("order_count") or self.normalized.get("order_count") or 1)
+        risk = self.plan.get("risk") or {}
+        geometry = risk.get("grid_rungs")
+        if risk.get("grid_spacing") is not None and not isinstance(geometry, list):
+            raise ParkGridLifecycleError("grid_geometry_authority_missing", "Grid lifecycle requires authoritative planned rungs")
+        if isinstance(geometry, list) and geometry:
+            quantity = float(risk.get("per_order_quantity") or 0)
+            if quantity <= 0:
+                raise ParkGridLifecycleError("risk_incomplete", "Grid risk plan has no executable quantity")
+            levels = []
+            direction = str(self.normalized.get("direction") or "")
+            for rung in geometry:
+                if not isinstance(rung, Mapping):
+                    raise ParkGridLifecycleError("grid_geometry_invalid", "Grid rung evidence is malformed")
+                price = float(rung.get("price") or 0)
+                take_profit = float(rung.get("take_profit") or 0)
+                hard_stop = float(rung.get("hard_stop") or 0)
+                if price <= 0 or take_profit <= 0 or hard_stop <= 0:
+                    raise ParkGridLifecycleError("grid_geometry_invalid", "Grid rung prices must be positive")
+                side = str(rung.get("side") or "")
+                if side not in {"buy", "sell"}:
+                    raise ParkGridLifecycleError("grid_geometry_invalid", "Grid rung side is invalid")
+                level = {
+                    "command_type": "grid_level",
+                    "level_id": f"{self.revision_id}:grid:{int(rung.get('rung') or len(levels) + 1)}",
+                    "strategy_session_id": self.session_id,
+                    "strategy_revision_id": self.revision_id,
+                    "plan_digest": self.plan_digest,
+                    "direction": direction,
+                    "side": side,
+                    "price": price,
+                    "quantity": quantity,
+                    "tp": take_profit,
+                    "geometry_locked": True,
+                }
+                if bool(risk.get("local_stop_authorized")):
+                    level["sl"] = hard_stop
+                levels.append(level)
+            if direction == "neutral" and {row["side"] for row in levels} != {"buy", "sell"}:
+                raise ParkGridLifecycleError("neutral_grid_requires_two_legs", "neutral Grid must contain both buy and sell entries")
+            self._levels = levels
+            return [dict(row) for row in self._levels]
+        count = int(risk.get("order_count") or self.normalized.get("order_count") or 1)
         if count <= 0:
             raise ParkGridLifecycleError("invalid_grid_count", "Grid count must be positive")
         lower = float(self.normalized["lower_price_boundary"])

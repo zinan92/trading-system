@@ -273,12 +273,12 @@ def test_confirmed_neutral_grid_submits_both_owned_legs_and_preserves_boundary_p
     assert {command["side"] for command in adapter.submit_calls} == {"buy", "sell"}
     assert all(command["strategy_session_id"].startswith("session-") for command in adapter.submit_calls)
     assert all(command["strategy_revision_id"].startswith("revision-") for command in adapter.submit_calls)
-    assert all("sl" in command and "tp" in command for command in adapter.submit_calls)
+    assert all("tp" in command and "sl" not in command for command in adapter.submit_calls)
     assert sum(command["price"] * command["quantity"] for command in adapter.submit_calls) <= proposal["plan"]["risk"]["maximum_notional"]
     assert all(
-        command["sl"] < command["price"] < command["tp"]
+        command["price"] < command["tp"]
         if command["side"] == "buy"
-        else command["tp"] < command["price"] < command["sl"]
+        else command["tp"] < command["price"]
         for command in adapter.submit_calls
     )
 

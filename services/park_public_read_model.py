@@ -403,6 +403,35 @@ def build_park_public_read_model(
     grid_spacing: float | None = None
     grid_rung_prices: list[float] = []
     if strategy_type == "grid":
+        authoritative_rungs = [row for row in risk.get("grid_rungs") or [] if isinstance(row, Mapping)]
+        authoritative_range = risk.get("grid_entry_range")
+        authoritative_spacing = risk.get("grid_spacing")
+        if authoritative_spacing is not None and not authoritative_rungs:
+            blockers.append("grid_geometry_authority_missing")
+        if authoritative_rungs and isinstance(authoritative_range, Mapping):
+            try:
+                grid_count = len(authoritative_rungs)
+                grid_spacing = round(float(authoritative_spacing), 8)
+                grid_entry_range = {
+                    "lower": round(float(authoritative_range["lower"]), 8),
+                    "upper": round(float(authoritative_range["upper"]), 8),
+                }
+                grid_rung_prices = [round(float(row["price"]), 8) for row in authoritative_rungs]
+                if (
+                    grid_count <= 0
+                    or grid_spacing <= 0
+                    or not lower_boundary < grid_entry_range["lower"] < grid_entry_range["upper"] < upper_boundary
+                    or any(not lower_boundary < price < upper_boundary for price in grid_rung_prices)
+                ):
+                    raise ValueError("Grid authoritative geometry is outside its boundaries")
+            except (KeyError, TypeError, ValueError, OverflowError):
+                blockers.append("grid_geometry_invalid")
+                grid_count = 0
+                grid_entry_range = None
+                grid_spacing = None
+                grid_rung_prices = []
+        else:
+            authoritative_rungs = []
         try:
             lower = float(lower_boundary)
             upper = float(upper_boundary)
@@ -415,9 +444,13 @@ def build_park_public_read_model(
         except (TypeError, ValueError, OverflowError):
             valid_geometry = False
             lower = upper = 0.0
+        if authoritative_rungs:
+            valid_geometry = True
+        elif authoritative_spacing is not None:
+            valid_geometry = False
         if not valid_geometry:
             blockers.append("grid_geometry_invalid")
-        else:
+        elif not authoritative_rungs:
             grid_spacing = round((upper - lower) / (grid_count + 1), 8)
             grid_entry_range = {
                 "lower": round(lower + grid_spacing, 8),
@@ -437,7 +470,9 @@ def build_park_public_read_model(
         "direction": lifecycle.get("direction") or normalized.get("direction"),
         "lower_price_boundary": lifecycle.get("lower_price_boundary") or normalized.get("lower_price_boundary"),
         "upper_price_boundary": lifecycle.get("upper_price_boundary") or normalized.get("upper_price_boundary"),
-        "stop_price": lifecycle.get("stop_price") or normalized.get("stop_price"),
+        "stop_price": lifecycle.get("stop_price") or normalized.get("stop_price") or risk.get("hard_stop"),
+        "hard_stop": risk.get("hard_stop"),
+        "hard_stop_source": risk.get("hard_stop_source"),
         "take_profit_price": lifecycle.get("take_profit_price") or normalized.get("take_profit_price"),
         "maximum_leverage": lifecycle.get("maximum_leverage") or normalized.get("maximum_leverage"),
         "maximum_acceptable_loss": lifecycle.get("maximum_acceptable_loss") or normalized.get("maximum_acceptable_loss"),
@@ -449,6 +484,16 @@ def build_park_public_read_model(
         "grid_spacing": grid_spacing,
         "grid_rung_count": grid_count if strategy_type == "grid" else None,
         "grid_rung_prices": grid_rung_prices,
+        "grid_rungs": [
+            {
+                key: row.get(key)
+                for key in ("rung", "price", "side", "take_profit", "hard_stop", "local_stop")
+                if row.get(key) is not None
+            }
+            for row in (risk.get("grid_rungs") or [])
+            if isinstance(row, Mapping)
+        ] if strategy_type == "grid" else [],
+        "local_stop_authorized": risk.get("local_stop_authorized") is True,
     }
 
     orders = _compact_rows(

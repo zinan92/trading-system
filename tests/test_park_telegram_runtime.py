@@ -168,6 +168,41 @@ def test_router_creates_deterministic_proposal_without_execution_mutation(tmp_pa
     assert router.telegram.pending_outbound()
 
 
+def test_router_snapshot_exposes_grid_boundary_entry_range_spacing_and_hard_stop(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: {
+            "price": 3900.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "paper-feed",
+            "observed_at": "2026-08-14T10:00:00+00:00",
+        },
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: "2026-08-14T10:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-14_DAY",
+    )
+
+    result = router.handle_update(_update(23, "中性网格，区间 3800~4000，间距 10，最大10倍杠杆"))
+
+    assert result["status"] == "proposal_created"
+    text = router.telegram.pending_outbound()[0]["text"]
+    assert "entry_range=3810.0~3990.0" in text
+    assert "spacing=10.0 rungs=19" in text
+    assert "grid_hard_stop={'long': 3800.0, 'short': 4000.0}" in text
+    assert result["plan"]["risk"]["grid_rung_prices"][:2] == [3810.0, 3820.0]
+
+
 def test_router_accepts_bounded_confirmation_shortcut_for_current_proposal(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     router = ParkTelegramRouter(
