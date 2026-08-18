@@ -1193,6 +1193,11 @@ def build_trading_system_read_model_response(
     output = _dualtrack_output_root(output_root)
     source = _assemble_strategy_console_snapshot(output_root=output, as_of=as_of)
     risk = _current_strategy_risk_decision(output, source)
+    observed_at = parse_utc(as_of)
+    park = build_park_public_read_model(
+        output,
+        now=lambda: observed_at,
+    )
     broker_adapter = PaperBrokerAdapter(output)
     broker = project_broker_read_model(
         broker_adapter,
@@ -1202,7 +1207,8 @@ def build_trading_system_read_model_response(
         source,
         risk_decision=risk,
         broker=broker,
-        generated_at=parse_utc(as_of).isoformat(),
+        park=park,
+        generated_at=observed_at.isoformat(),
     ).to_dict()
     return _compact_dashboard_read_model_payload(payload)
 

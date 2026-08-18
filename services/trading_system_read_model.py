@@ -21,6 +21,7 @@ from services.order_lifecycle import LEGAL_TRANSITIONS, ORDER_STATES, TERMINAL_S
 
 
 TRADING_SYSTEM_READ_MODEL_SCHEMA = "trading-system-read-model-v1"
+PARK_CURRENT_STRATEGY_SCHEMA = "park-current-strategy-summary-v1"
 
 _DIRECTION_LABELS = {
     "neutral": "中性",
@@ -79,6 +80,7 @@ def project_trading_system_read_model(
     *,
     risk_decision: Mapping[str, Any] | None = None,
     broker: Mapping[str, Any] | None = None,
+    park: Mapping[str, Any] | None = None,
     generated_at: str | None = None,
 ) -> TradingSystemReadModel:
     """Project one request-scoped source snapshot into the stable contract."""
@@ -148,6 +150,11 @@ def project_trading_system_read_model(
         _mapping(source.get("paper_supervisor"))
     )
     strategy_summary = _project_strategy_summary(plan, completeness_issues)
+    current_strategy = _project_current_strategy(
+        park,
+        execution=execution,
+        completeness_issues=completeness_issues,
+    )
     broker_view = _json_copy(_mapping(broker))
     if not broker_view:
         completeness_issues.append("broker_read_model_missing")
@@ -155,6 +162,7 @@ def project_trading_system_read_model(
     core = {
         "cycle": cycle,
         "market": market,
+        "current_strategy": current_strategy,
         "strategy": {
             "plan": plan,
             "summary": strategy_summary,
@@ -204,6 +212,12 @@ def project_trading_system_read_model(
                 "accounting_snapshot_id": accounting.get("snapshot_id"),
                 "current_accounting_snapshot_id": current_accounting.get("snapshot_id"),
                 "risk_decision_id": risk.get("displayed_decision_id"),
+                "strategy_session_id": current_strategy["identity"].get(
+                    "strategy_session_id"
+                ),
+                "strategy_revision_id": current_strategy["identity"].get(
+                    "strategy_revision_id"
+                ),
             },
         },
         **core,
@@ -213,6 +227,109 @@ def project_trading_system_read_model(
         },
     }
     return TradingSystemReadModel(payload=_freeze(_json_copy(payload)))
+
+
+def _project_current_strategy(
+    park_value: Any,
+    *,
+    execution: Mapping[str, Any],
+    completeness_issues: list[str],
+) -> dict[str, Any]:
+    park = _mapping(park_value)
+    strategy = _mapping(park.get("strategy"))
+    park_execution = _mapping(park.get("execution"))
+    counts = _mapping(park_execution.get("counts"))
+    reconciliation = _mapping(park_execution.get("reconciliation"))
+    market = _mapping(park.get("market"))
+    safety = _mapping(park.get("safety"))
+    active = strategy.get("active") is True
+    state = str(strategy.get("state") or "IDLE_CLEAN").strip().lower()
+    status_labels = {
+        "running": "运行中",
+        "paused": "已暂停",
+        "terminal": "已终止",
+        "closed": "已终止",
+        "idle_clean": "暂无策略",
+        "migration_blocked": "迁移阻塞",
+    }
+    blockers = [str(item) for item in _list(park.get("blockers")) if str(item)]
+    legacy_counts = _mapping(execution.get("counts"))
+    legacy_exposure = not active and any(
+        (_integer_or_none(legacy_counts.get(key)) or 0) > 0
+        for key in (
+            "accepted_order_count",
+            "open_order_count",
+            "open_position_count",
+        )
+    )
+    if active:
+        source = "park_strategy_session"
+        contract_status = "authoritative" if park.get("status") == "ok" else "blocked"
+    elif legacy_exposure:
+        source = "legacy_exposure_blocker"
+        state = "migration_blocked"
+        contract_status = "blocked"
+        blockers.append("legacy_cycle_exposure_without_park_identity")
+        completeness_issues.append("legacy_cycle_exposure_without_park_identity")
+    else:
+        source = "park_strategy_session"
+        contract_status = "blocked" if blockers else "idle"
+    if legacy_exposure:
+        projected_execution = {
+            "accepted_order_count": legacy_counts.get("accepted_order_count"),
+            "filled_order_count": None,
+            "fill_count": legacy_counts.get("fill_count"),
+            "open_position_count": legacy_counts.get("open_position_count"),
+            "closed_position_count": legacy_counts.get("completed_trade_count"),
+            "reconciliation_status": _mapping(execution.get("reconciliation")).get("status"),
+        }
+    else:
+        projected_execution = {
+            "accepted_order_count": counts.get("accepted_orders"),
+            "filled_order_count": counts.get("filled_orders"),
+            "fill_count": counts.get("fills"),
+            "open_position_count": counts.get("open_positions"),
+            "closed_position_count": counts.get("closed_positions"),
+            "reconciliation_status": reconciliation.get("status"),
+        }
+    return {
+        "schema_version": PARK_CURRENT_STRATEGY_SCHEMA,
+        "source": source,
+        "active": active,
+        "status": state,
+        "status_label": status_labels.get(state, "状态未知"),
+        "contract_status": contract_status,
+        "blockers": blockers,
+        "identity": {
+            "strategy_session_id": strategy.get("strategy_session_id"),
+            "strategy_revision_id": strategy.get("strategy_revision_id"),
+            "plan_digest": strategy.get("plan_digest"),
+        },
+        "specification": {
+            key: strategy.get(key)
+            for key in (
+                "strategy_type",
+                "direction",
+                "lower_price_boundary",
+                "upper_price_boundary",
+                "stop_price",
+                "take_profit_price",
+                "maximum_leverage",
+                "maximum_acceptable_loss",
+                "maximum_notional",
+                "theoretical_max_loss",
+                "order_count",
+                "selected_constraint",
+            )
+        },
+        "execution": projected_execution,
+        "freshness": {
+            "generated_at": park.get("generated_at"),
+            "market_fresh": market.get("fresh"),
+            "safety_status": safety.get("status"),
+            "safety_age_seconds": safety.get("age_seconds"),
+        },
+    }
 
 
 def project_market_read_model(value: Any) -> dict[str, Any]:
