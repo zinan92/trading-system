@@ -188,6 +188,10 @@ class ParkStrategyLifecycleLedger:
         )
         digest = _text(plan.get("plan_digest"), "plan_digest")
         existing = self.active_plan()
+        if existing and existing.get("state") == "PAUSED":
+            # A terminal revision is sealed and may be followed by a new
+            # Park-confirmed revision; its immutable identity is not reused.
+            existing = None
         if existing:
             assert_immutable_revision(existing, {**existing, **dict(plan), **required})
             return dict(existing)
@@ -251,6 +255,49 @@ class ParkStrategyLifecycleLedger:
             "state": "BOUNDARY_TRIGGERED",
             "ordered_actions": ordered_actions,
             "position_authority": position_authority,
+            "automatic_reopen": False,
+            "direction_inference": False,
+        }
+        _append(self.path, row)
+        return dict(row)
+
+    def terminal_action_plan(
+        self,
+        *,
+        strategy_session_id: str,
+        strategy_revision_id: str,
+        trigger: str,
+        observed_price: float,
+        trusted_market: bool,
+        fresh_tick: bool,
+    ) -> dict[str, Any]:
+        """Record a non-boundary terminal trigger such as DCA TP/SL."""
+
+        identity = ownership_ref(strategy_session_id, strategy_revision_id)
+        active = self.active_plan()
+        if not active or any(active.get(key) != value for key, value in identity.items()):
+            raise ParkStrategyLifecycleError("stale_strategy", "terminal trigger does not match the active strategy")
+        if not trusted_market or not fresh_tick:
+            raise ParkStrategyLifecycleError("market_not_authoritative", "terminal trigger requires trusted fresh market")
+        existing = next(
+            (row for row in self.rows() if row.get("event") == "terminal_action_plan" and all(row.get(k) == v for k, v in identity.items())),
+            None,
+        )
+        if existing:
+            return dict(existing)
+        seed = f"{identity['strategy_session_id']}|{identity['strategy_revision_id']}|{trigger}|{observed_price}"
+        row = {
+            "schema_version": PARK_ACTION_PLAN_SCHEMA,
+            "event": "terminal_action_plan",
+            **identity,
+            "action_plan_id": "park-terminal-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24],
+            "trigger": str(trigger),
+            "boundary": None,
+            "observed_price": float(observed_price),
+            "authority": "exact_park_confirmed_terminal",
+            "state": "TERMINAL_TRIGGERED",
+            "ordered_actions": list(_TERMINAL_ACTIONS),
+            "position_authority": "close_strategy_owned_positions",
             "automatic_reopen": False,
             "direction_inference": False,
         }

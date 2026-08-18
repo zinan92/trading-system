@@ -324,6 +324,20 @@ class ParkTelegramRouter:
                 normalized = normalize_park_input(candidate)
             else:
                 normalized = normalize_park_input(text)
+            if normalized.get("strategy_type") == "dca" and (
+                normalized.get("stop_price") in (None, "")
+                or normalized.get("take_profit_price") in (None, "")
+            ):
+                return self._block(
+                    code="dca_exit_levels_missing",
+                    message=(
+                        "DCA 必须明确提供一个策略级止损和一个策略级止盈；系统不会用区间边界猜测。\n\n"
+                        "例如：做空 DCA，区间 4444~4200，最大10倍杠杆，止损4450，止盈4210"
+                    ),
+                    binding=None,
+                    idempotency_key=f"park-dca-exits:{update_id}",
+                    provider=provider,
+                )
             observed_at = self.now()
             cycle_id = self.cycle_id_provider(observed_at)
             facts = dict(self.account_reader(self.output_root, cycle_id))

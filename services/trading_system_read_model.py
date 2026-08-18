@@ -467,7 +467,8 @@ def _project_current_strategy(
     if strategy.get("grid_rungs"):
         specification["grid_rungs"] = _json_copy(_list(strategy.get("grid_rungs")))
         specification["local_stop_authorized"] = strategy.get("local_stop_authorized") is True
-    return {
+    terminal = _json_copy(_mapping(park.get("terminal")))
+    projected = {
         "schema_version": PARK_CURRENT_STRATEGY_SCHEMA,
         "source": source,
         "active": active,
@@ -490,6 +491,9 @@ def _project_current_strategy(
             "safety_age_seconds": safety.get("age_seconds"),
         },
     }
+    if terminal:
+        projected["terminal"] = terminal
+    return projected
 
 
 def project_market_read_model(value: Any) -> dict[str, Any]:

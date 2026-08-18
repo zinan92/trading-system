@@ -40,6 +40,8 @@ class ParkDcaLifecycle:
         self.plan_digest = str(plan.get("plan_digest") or "").strip()
         if not self.session_id or not self.revision_id or not self.plan_digest:
             raise ParkDcaLifecycleError("identity_missing", "DCA plan identity is incomplete")
+        if self.normalized.get("stop_price") in (None, "") or self.normalized.get("take_profit_price") in (None, ""):
+            raise ParkDcaLifecycleError("dca_exit_levels_missing", "DCA lifecycle requires explicit strategy-level stop_price and take_profit_price")
         receipt = dict(confirmation_receipt or {})
         if (
             receipt.get("execution_authorized") is not True
@@ -60,6 +62,8 @@ class ParkDcaLifecycle:
         }
         self.lifecycle.activate(lifecycle_plan)
         self.telegram = ParkTelegramLedger(output_root, park_user_id=park_user_id, chat_id=chat_id)
+        self.stop_price = self.normalized.get("stop_price")
+        self.take_profit_price = self.normalized.get("take_profit_price")
         self._entries: list[dict[str, Any]] | None = None
 
     def entry_commands(self) -> list[dict[str, Any]]:
@@ -78,7 +82,7 @@ class ParkDcaLifecycle:
         rows: list[dict[str, Any]] = []
         for index in range(count):
             price = current + step * (index + 1) if direction == "short" else current - step * (index + 1)
-            rows.append({
+            row = {
                 "command_type": "dca_entry",
                 "entry_id": f"{self.revision_id}:entry:{index + 1}",
                 "strategy_session_id": self.session_id,
@@ -89,7 +93,8 @@ class ParkDcaLifecycle:
                 "quantity": quantity,
                 "loop_enabled": False,
                 "after_terminal": "cancel_remaining_entries",
-            })
+            }
+            rows.append(row)
         self._entries = rows
         return [dict(row) for row in rows]
 
@@ -102,27 +107,31 @@ class ParkDcaLifecycle:
         )
         if existing:
             return {"status": "terminal", "action_plan": dict(existing), "notification": self._notification(existing)}
-        upper = float(self.normalized["upper_price_boundary"])
-        lower = float(self.normalized["lower_price_boundary"])
-        if not (float(price) >= upper or float(price) <= lower):
+        if self.stop_price in (None, "") or self.take_profit_price in (None, ""):
+            return {"status": "blocked", "code": "dca_exit_levels_missing", "next_action": "await_explicit_dca_tp_sl"}
+        direction = str(self.normalized.get("direction") or "")
+        if (direction == "long" and price <= float(self.stop_price)) or (direction == "short" and price >= float(self.stop_price)):
+            trigger = "stop_price"
+        elif (direction == "long" and price >= float(self.take_profit_price)) or (direction == "short" and price <= float(self.take_profit_price)):
+            trigger = "take_profit_price"
+        else:
             return {"status": "active", "entries_frozen": False, "next_action": "monitor_trusted_fresh_market"}
-        boundary = "upper" if float(price) >= upper else "lower"
-        action = self.lifecycle.boundary_action_plan(
+        action = self.lifecycle.terminal_action_plan(
             strategy_session_id=self.session_id,
             strategy_revision_id=self.revision_id,
-            boundary=boundary,
+            trigger=trigger,
             observed_price=float(price),
             trusted_market=trusted,
             fresh_tick=fresh,
         )
-        return {"status": "terminal", "action_plan": action, "notification": self._notification(action)}
+        return {"status": "terminal", "trigger": trigger, "action_plan": action, "notification": self._notification(action)}
 
     def _notification(self, action: Mapping[str, Any]) -> dict[str, Any]:
         return self.telegram.queue_outbound(
             idempotency_key=f"park-dca-terminal:{self.session_id}:{self.revision_id}",
             message_type="dca_terminal",
             text=(
-                f"DCA terminal: {action['boundary']} boundary at {action['observed_price']}; "
+                f"DCA terminal: {action.get('trigger') or action.get('boundary')} at {action['observed_price']}; "
                 "entries frozen/canceled, positions reconcile, paused; await Park."
             ),
             binding={"strategy_session_id": self.session_id, "strategy_revision_id": self.revision_id},

@@ -31,6 +31,7 @@ from services.park_paper_mutation_gate import (
 )
 from services.park_recording_track import ParkRecordingTrack
 from services.park_strategy_snapshot import record_strategy_snapshot_terminal
+from services.park_strategy_lifecycle import ParkStrategyLifecycleLedger
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
     recording_window,
@@ -537,6 +538,10 @@ class ParkPaperRuntime:
             ("sl", "sl", "stop_price"),
             ("tp", "tp", "take_profit_price"),
         ):
+            if str(normalized.get("strategy_type") or "") == "dca":
+                # DCA has one aggregate strategy exit; do not duplicate TP/SL
+                # protection on each entry command.
+                continue
             value = source.get(source_key)
             if value in (None, ""):
                 value = normalized.get(normalized_key)
@@ -670,6 +675,25 @@ class ParkPaperRuntime:
             "paper_only": True,
             "next_action": "await_park_next_strategy",
         }
+        normalized_strategy_type = str((plan.get("normalized_input") or {}).get("strategy_type") or "")
+        if normalized_strategy_type == "dca":
+            lifecycle_ledger = ParkStrategyLifecycleLedger(self.output_root)
+            lifecycle_ledger.activate({
+                **dict(plan.get("normalized_input") or {}),
+                "strategy_session_id": session,
+                "strategy_revision_id": revision,
+                "plan_digest": digest,
+                "maximum_leverage": (plan.get("risk") or {}).get("effective_leverage"),
+                "maximum_acceptable_loss": (plan.get("risk") or {}).get("theoretical_max_loss"),
+            })
+            lifecycle_ledger.terminal_action_plan(
+                strategy_session_id=session,
+                strategy_revision_id=revision,
+                trigger=str(boundary["reason"]),
+                observed_price=current_price,
+                trusted_market=True,
+                fresh_tick=True,
+            )
         self.identity.close_session(
             strategy_session_id=session,
             strategy_revision_id=revision,
@@ -680,9 +704,11 @@ class ParkPaperRuntime:
             idempotency_key=f"park-terminal:{session}:{revision}:{boundary['reason']}",
             message_type="park_terminal",
             text=(
-                f"Park strategy paused: {boundary['reason']} at {current_price}. "
-                f"Owned positions were handled only for this exact terminal trigger; "
-                f"send a new strategy only after clean-slate checks pass."
+                f"Park strategy paused: {boundary['reason']} at {current_price}; "
+                f"cancelled={len(cancel.get('cancelled_order_ids') or [])}, "
+                f"owned_exits={len(exit_receipts)}, positions_preserved={result['positions_preserved']}, "
+                f"reconciliation={final_reconciliation.get('status')}; "
+                f"next_action=await_park_next_strategy."
             ),
             binding={"strategy_session_id": session, "strategy_revision_id": revision},
         )
@@ -778,6 +804,19 @@ class ParkPaperRuntime:
         except (TypeError, ValueError):
             return {"reason": "boundary_invalid"}
         direction = str(normalized.get("direction") or "")
+        strategy_type = str(normalized.get("strategy_type") or "")
+        stop = normalized.get("stop_price")
+        target = normalized.get("take_profit_price")
+        if strategy_type == "dca":
+            if stop in (None, "") or target in (None, ""):
+                return None
+            stop_value = float(stop)
+            target_value = float(target)
+            if (direction == "long" and price <= stop_value) or (direction == "short" and price >= stop_value):
+                return {"reason": "stop_price", "close_positions": True}
+            if (direction == "long" and price >= target_value) or (direction == "short" and price <= target_value):
+                return {"reason": "take_profit_price", "close_positions": True}
+            return None
         if price >= upper:
             return {
                 "reason": "upper_boundary_invalidated",
@@ -788,8 +827,6 @@ class ParkPaperRuntime:
                 "reason": "lower_boundary_invalidated",
                 "close_positions": direction != "neutral",
             }
-        stop = normalized.get("stop_price")
-        target = normalized.get("take_profit_price")
         if stop not in (None, ""):
             stop_value = float(stop)
             if (direction == "long" and price <= stop_value) or (direction == "short" and price >= stop_value):

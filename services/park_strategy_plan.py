@@ -60,7 +60,6 @@ def _find_labeled_number(text: str, labels: tuple[str, ...], field: str) -> floa
         for label in labels
         for pattern in (
             label + r"\s*(?:位|price)?\s*[:：=]?\s*" + _NUMBER,
-            _NUMBER + r"\s*" + label,
         )
     )
     return _find_one(text, patterns, field)
@@ -145,7 +144,7 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
 
     stop_price = body.get("stop_price")
     if stop_price is None:
-        stop_price = _find_labeled_number(text, ("止损", "stop(?:_price)?", "stop"), "stop_price")
+        stop_price = _find_labeled_number(text, ("止损", "stop(?:_price)?"), "stop_price")
     take_profit_price = body.get("take_profit_price")
     if take_profit_price is None:
         take_profit_price = _find_labeled_number(

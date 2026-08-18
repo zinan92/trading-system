@@ -246,6 +246,70 @@ def _empty_execution() -> dict[str, Any]:
     }
 
 
+def _latest_terminal(
+    root: Path,
+    *,
+    active_pair: tuple[str, str] = ("", ""),
+) -> dict[str, Any] | None:
+    active_session, active_revision = active_pair
+
+    def matches(row: Mapping[str, Any]) -> bool:
+        if not active_session or not active_revision:
+            return True
+        session = str(row.get("strategy_session_id") or row.get("session") or "")
+        revision = str(row.get("strategy_revision_id") or row.get("revision") or "")
+        return session == active_session and revision == active_revision
+
+    candidates: list[tuple[str, int, str, dict[str, Any]]] = []
+    try:
+        executions = _read_jsonl(root / "park_strategy" / "executions.jsonl")
+    except (OSError, ValueError, json.JSONDecodeError):
+        executions = []
+    for index, row in enumerate(executions):
+        if row.get("event") == "terminal_paused" and isinstance(row.get("result"), Mapping) and matches(row):
+            candidates.append((str(row.get("recorded_at") or row.get("observed_at") or ""), index, "execution", row))
+    try:
+        blockers = _read_jsonl(root / "park_strategy" / "runtime_blockers.jsonl")
+    except (OSError, ValueError, json.JSONDecodeError):
+        blockers = []
+    for index, row in enumerate(blockers, start=len(executions)):
+        code = str(row.get("code") or "")
+        if code.startswith("terminal_") and matches(row):
+            candidates.append((str(row.get("recorded_at") or row.get("observed_at") or ""), index, "blocker", row))
+    if not candidates:
+        return None
+    _, _, kind, row = max(candidates, key=lambda item: (bool(item[0]), item[0], item[1]))
+    if kind == "execution":
+        result = row.get("result") or {}
+        return {
+            "reason": result.get("terminal_reason"),
+            "observed_price": result.get("observed_price"),
+            "cancel": result.get("cancel"),
+            "exit_receipts": result.get("exit_receipts") or [],
+            "positions_preserved": result.get("positions_preserved"),
+            "reconciliation": result.get("reconciliation") or {},
+            "strategy_session_id": row.get("strategy_session_id"),
+            "strategy_revision_id": row.get("strategy_revision_id"),
+            "plan_digest": row.get("plan_digest"),
+            "next_action": result.get("next_action"),
+        }
+    code = str(row.get("code") or "")
+    return {
+        "status": "blocked",
+        "reason": row.get("reason") or row.get("terminal_reason") or code,
+        "blocker_code": code,
+        "detail": row.get("detail"),
+        "cancel": row.get("cancel") or {},
+        "exit_receipts": row.get("exit_receipts") or [],
+        "positions_preserved": row.get("positions_preserved"),
+        "reconciliation": row.get("reconciliation") or {},
+        "strategy_session_id": row.get("session") or row.get("strategy_session_id"),
+        "strategy_revision_id": row.get("revision") or row.get("strategy_revision_id"),
+        "plan_digest": row.get("digest") or row.get("plan_digest"),
+        "next_action": row.get("next_action") or "notify_park_and_wait",
+    }
+
+
 def build_park_public_read_model(
     output_root: Path,
     *,
@@ -264,7 +328,6 @@ def build_park_public_read_model(
     lifecycle: dict[str, Any] = {}
     snapshot: dict[str, Any] = {}
     safety: dict[str, Any] = {}
-
     try:
         active = dict(ParkStrategyIdentityJournal(root).active_session() or {})
     except (OSError, ValueError, json.JSONDecodeError):
@@ -272,6 +335,12 @@ def build_park_public_read_model(
 
     session_id = str(active.get("strategy_session_id") or "")
     revision_id = str(active.get("strategy_revision_id") or "")
+    terminal = _latest_terminal(root, active_pair=(session_id, revision_id))
+    if terminal and session_id and (
+        str(terminal.get("strategy_session_id") or "") != session_id
+        or str(terminal.get("strategy_revision_id") or "") != revision_id
+    ):
+        terminal = None
     if not session_id or not revision_id:
         blockers.append("active_strategy_missing")
     else:
@@ -553,6 +622,7 @@ def build_park_public_read_model(
         },
         "strategy": strategy,
         "recording": recording,
+        "terminal": terminal,
         "market": mark,
         "execution": execution,
         "safety": {
