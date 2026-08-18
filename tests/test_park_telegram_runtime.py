@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,41 @@ class _Response:
 
     def read(self) -> bytes:
         return json.dumps(self.payload).encode("utf-8")
+
+
+def test_account_reader_counts_legacy_exposure_across_all_paper_cycles(tmp_path: Path, monkeypatch) -> None:
+    output = tmp_path / "outputs"
+    adapter_root = output
+
+    class Adapter:
+        output_root = adapter_root
+
+        def snapshot(self, _cycle_id):
+            return {
+                "orders": [],
+                "positions": [],
+                "account": {"equity": 10000.0},
+                "reconciliation": {"status": "ok", "issues": []},
+            }
+
+        def reconcile(self, _cycle_id):
+            return {"status": "ok", "issues": []}
+
+    import services.park_paper_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "build_park_authoritative_adapter", lambda *_args, **_kwargs: SimpleNamespace(adapter=Adapter()))
+    snapshots = output / "dualtrack" / "nautilus_authoritative" / "snapshots"
+    snapshots.mkdir(parents=True)
+    (snapshots / "legacy-cycle.json").write_text(json.dumps([{
+        "cycle_id": "legacy-cycle",
+        "orders": [{"order_id": "legacy-order", "state": "accepted", "side": "sell", "price": 4300.0, "quantity": 1.0}],
+        "positions": [],
+    }]), encoding="utf-8")
+
+    account = default_account_reader(output, "2026-08-18_DAY")
+
+    assert account["open_or_accepted_orders"] == 1
+    assert account["snapshot"]["account_wide_legacy_exposure"]["ownership"] == "legacy_cycle_or_unknown"
 
 
 def test_transport_requires_explicit_message_receipt_and_parses_updates() -> None:

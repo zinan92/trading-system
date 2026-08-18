@@ -114,6 +114,47 @@ def default_account_reader(
         for row in snapshot.get("orders") or []
         if str(row.get("state") or "").lower() == "accepted"
     ]
+    # Clean-slate admission is account-wide, not recording-window-scoped.  A
+    # legacy cycle in another namespace must remain visible and block Park;
+    # never silently adopt, cancel, or flatten it.
+    account_wide_orders: dict[str, dict[str, Any]] = {
+        str(row.get("order_id") or f"current-order-{index}"): dict(row)
+        for index, row in enumerate(orders)
+    }
+    account_wide_positions: dict[str, dict[str, Any]] = {
+        str(row.get("position_id") or row.get("trade_id") or f"current-position-{index}"): dict(row)
+        for index, row in enumerate(positions)
+    }
+    account_wide_reconciliation_ok = reconciliation.get("status") == "ok" and not reconciliation.get("issues")
+    adapter_root = getattr(adapter, "output_root", None)
+    if adapter_root is not None:
+        snapshot_dir = Path(adapter_root) / "dualtrack" / "nautilus_authoritative" / "snapshots"
+        for path in sorted(snapshot_dir.glob("*.json")):
+            try:
+                rows = json.loads(path.read_text(encoding="utf-8"))
+                row = rows[-1] if isinstance(rows, list) and rows else rows
+                if not isinstance(row, Mapping) or not isinstance(row.get("orders"), list) or not isinstance(row.get("positions"), list):
+                    raise ValueError("account_snapshot_shape_invalid")
+                for order in row["orders"]:
+                    if not isinstance(order, Mapping):
+                        raise ValueError("account_snapshot_order_invalid")
+                    if str(order.get("state") or "").lower() == "accepted" and str(order.get("order_id") or ""):
+                        account_wide_orders[str(order["order_id"])] = dict(order)
+                for position in row["positions"]:
+                    if not isinstance(position, Mapping):
+                        raise ValueError("account_snapshot_position_invalid")
+                    if str(position.get("status") or "").lower() == "open":
+                        key = str(position.get("position_id") or position.get("trade_id") or "")
+                        if key:
+                            account_wide_positions[key] = dict(position)
+                cycle_id = str(row.get("cycle_id") or path.stem)
+                try:
+                    cycle_reconciliation = dict(adapter.reconcile(cycle_id))
+                except Exception as exc:  # noqa: BLE001 - unknown account facts block clean-slate admission.
+                    raise ParkTelegramRuntimeError("paper_account_reconciliation_invalid", type(exc).__name__) from exc
+                account_wide_reconciliation_ok = account_wide_reconciliation_ok and cycle_reconciliation.get("status") == "ok" and not cycle_reconciliation.get("issues")
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise ParkTelegramRuntimeError("paper_account_snapshot_invalid", type(exc).__name__) from exc
     account = dict(snapshot.get("account") or {})
     runtime = {}
     try:
@@ -127,12 +168,19 @@ def default_account_reader(
     ) in {"starting", "running", "replanning", "stopping"}
     return {
         "equity": account.get("equity"),
-        "reconciliation_healthy": reconciliation.get("status") == "ok" and not reconciliation.get("issues"),
-        "open_positions": len(positions),
-        "open_or_accepted_orders": len(orders),
+        "reconciliation_healthy": account_wide_reconciliation_ok,
+        "open_positions": len(account_wide_positions),
+        "open_or_accepted_orders": len(account_wide_orders),
         "unresolved_runtime": unresolved,
         "pending_terminal_actions": False,
-        "snapshot": snapshot,
+        "snapshot": {
+            **snapshot,
+            "account_wide_legacy_exposure": {
+                "orders": list(account_wide_orders.values()),
+                "positions": list(account_wide_positions.values()),
+                "ownership": "legacy_cycle_or_unknown",
+            },
+        },
         "reconciliation": reconciliation,
     }
 
