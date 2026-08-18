@@ -924,6 +924,9 @@ class ParkPaperRuntime:
         new_plan = self._plan_for_digest(new_digest)
         if not new_plan or not new_session or not new_revision:
             return self._reverse_blocked(request, "reverse_new_plan_missing", "Reverse 新计划或身份不完整；未执行切换。", observed_at=observed_at)
+        new_confirmation = self._confirmed_for(new_digest, new_session, new_revision)
+        if not new_confirmation:
+            return self._reverse_blocked(request, "reverse_new_confirmation_missing", "Reverse 新策略确认回执缺失；未执行切换。", observed_at=observed_at)
         try:
             market = dict(self.market_reader() if self.market_reader else self._default_market_reader())
             if market.get("trusted") is not True or market.get("fresh") is not True:
