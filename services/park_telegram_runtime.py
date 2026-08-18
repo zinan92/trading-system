@@ -20,19 +20,37 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from services.journal_store import load_json, write_json
+from services.park_codex_intent_parser import (
+    deterministic_legacy_clean_slate_candidate,
+    deterministic_neutral_grid_candidate,
+)
 from services.park_confirmation import (
     ParkConfirmationError,
     ParkConfirmationLedger,
     parse_confirmation_command,
     parse_confirmation_shortcut,
 )
-from services.park_codex_intent_parser import deterministic_neutral_grid_candidate
+from services.park_legacy_cutover import (
+    ParkLegacyCutoverError,
+    ParkLegacyCutoverLedger,
+    parse_legacy_cutover_digest,
+)
 from services.park_strategy_lifecycle import admit_clean_slate
-from services.park_strategy_plan import ParkStrategyPlanError, build_deterministic_risk_plan, normalize_park_input
-from services.park_strategy_session import ParkStrategyIdentityError, ParkStrategyIdentityJournal, recording_window
+from services.park_strategy_plan import (
+    ParkStrategyPlanError,
+    build_deterministic_risk_plan,
+    normalize_park_input,
+)
+from services.park_strategy_session import (
+    ParkStrategyIdentityError,
+    ParkStrategyIdentityJournal,
+    recording_window,
+)
 from services.park_telegram_control import ParkTelegramControlError, ParkTelegramLedger
-from services.telegram_bot_transport import TelegramBotTransport, TelegramBotTransportError
-
+from services.telegram_bot_transport import (
+    TelegramBotTransport,
+    TelegramBotTransportError,
+)
 
 PARK_TELEGRAM_RUNTIME_SCHEMA = "park-telegram-runtime-v1"
 
@@ -99,7 +117,14 @@ def default_account_reader(
     try:
         from services.park_paper_runtime import build_park_authoritative_adapter
 
-        adapter = build_park_authoritative_adapter(Path(output_root), config=config).adapter
+        build_kwargs: dict[str, Any] = {"config": config}
+        # The initial migration must be able to inspect legacy Paper state
+        # while the Park execution flag is still default-off.  The returned
+        # adapter remains mutation-gated; this is a read-only composition
+        # escape hatch, never an execution authorization.
+        if isinstance(config, Mapping) and config.get("feature_enabled") is False:
+            build_kwargs["allow_disabled_read"] = True
+        adapter = build_park_authoritative_adapter(Path(output_root), **build_kwargs).adapter
         snapshot = dict(adapter.snapshot(cycle_id))
         reconciliation = dict(adapter.reconcile(cycle_id))
     except Exception as exc:  # noqa: BLE001 - turned into a typed worker blocker.
@@ -231,6 +256,11 @@ class ParkTelegramRouter:
         self.result_path = self.output_root / "park_strategy" / "telegram_results.jsonl"
         self.identity = ParkStrategyIdentityJournal(self.output_root)
         self.confirmations = ParkConfirmationLedger(self.output_root, park_user_id=park_user_id)
+        self.legacy_cutover = ParkLegacyCutoverLedger(
+            self.output_root,
+            park_user_id=park_user_id,
+            chat_id=chat_id,
+        )
         self.market_reader = market_reader or default_market_reader
         self.config = dict(config or {})
         self.account_reader = account_reader or (
@@ -278,11 +308,180 @@ class ParkTelegramRouter:
             result = self.telegram.record_rejected_update(update=update, code=exc.code, detail=str(exc))
             return self._remember_result(update_id, result, update_digest=update_digest)
         text = _safe_text(received.get("text"))
-        if text.lower().startswith(("confirm", "reject")) or text.startswith(("确认", "拒绝")):
+        legacy_candidate = deterministic_legacy_clean_slate_candidate(text)
+        legacy_digest = parse_legacy_cutover_digest(text)
+        if legacy_candidate is not None:
+            result = self._handle_legacy_cutover(
+                text,
+                candidate=legacy_candidate,
+                active=active,
+                update_id=received.get("update_id"),
+                text_digest=str(received.get("text_digest") or _digest(text)),
+            )
+        elif legacy_digest and self.legacy_cutover.proposal_for_digest(legacy_digest):
+            result = self._handle_legacy_cutover_confirmation(
+                legacy_digest,
+                update_id=received.get("update_id"),
+            )
+        elif text.lower().startswith(("confirm", "reject")) or text.startswith(("确认", "拒绝")):
             result = self._handle_confirmation(text, active=active, update_id=received.get("update_id"))
         else:
             result = self._handle_strategy(text, active=active, update_id=received.get("update_id"))
         return self._remember_result(update_id, result, update_digest=update_digest)
+
+    def recover_pending_legacy_cutovers(self) -> list[dict[str, Any]]:
+        """Reprocess an explicit legacy phrase already ingested before a fix.
+
+        Telegram's cursor is intentionally durable.  A provider failure may
+        therefore leave a valid Park instruction behind the cursor.  Recovery
+        is limited to that exact deterministic phrase and only replaces the
+        prior typed parser result; it never replays arbitrary old commands.
+        """
+
+        recovered: list[dict[str, Any]] = []
+        for received in self.telegram.inbox_rows():
+            if received.get("event") != "inbound_received":
+                continue
+            candidate = deterministic_legacy_clean_slate_candidate(str(received.get("text") or ""))
+            if candidate is None:
+                continue
+            update_id = received.get("update_id")
+            prior = self._previous_result(update_id)
+            prior_result = dict(prior.get("result") or {}) if prior else {}
+            if prior_result.get("status") in {"legacy_cutover_confirmed", "legacy_cutover_proposal_created"}:
+                continue
+            active = self.identity.active_session()
+            result = self._handle_legacy_cutover(
+                str(received.get("text") or ""),
+                candidate=candidate,
+                active=active,
+                update_id=update_id,
+                text_digest=str(received.get("text_digest") or _digest(str(received.get("text") or ""))),
+            )
+            self._remember_result(
+                update_id,
+                result,
+                update_digest=str((prior or {}).get("_update_digest") or _digest(received)),
+            )
+            recovered.append(result)
+        return recovered
+
+    def _handle_legacy_cutover(
+        self,
+        text: str,
+        *,
+        candidate: Mapping[str, Any],
+        active: Mapping[str, Any] | None,
+        update_id: Any,
+        text_digest: str,
+    ) -> dict[str, Any]:
+        """Record and, for the bounded operator phrase, confirm exact cleanup."""
+
+        if active:
+            return self._block(
+                code="legacy_cutover_active_strategy",
+                message="已有 Park 策略处于 active，不能把旧挂单清理请求混入策略切换；先等当前策略终态。",
+                binding=active,
+                idempotency_key=f"park-legacy-cutover-blocked:{update_id}",
+            )
+        expected = candidate.get("expected_order_count")
+        if expected in (None, ""):
+            return self._block(
+                code="legacy_order_count_missing",
+                message="我需要旧挂单的明确数量才能建立精确清理清单。例如：取消这19个旧挂单，确认 clean slate，启用 Park Paper。",
+                binding=None,
+                idempotency_key=f"park-legacy-cutover-count:{update_id}",
+            )
+        try:
+            expected_count = int(expected)
+            facts = dict(self.account_reader(self.output_root, self.cycle_id_provider(self.now())))
+            if facts.get("reconciliation_healthy") is not True:
+                raise ParkLegacyCutoverError(
+                    "legacy_reconciliation_unhealthy",
+                    "authoritative Paper reconciliation is not healthy across the discovered namespaces",
+                )
+            snapshot = facts.get("snapshot") if isinstance(facts.get("snapshot"), Mapping) else {}
+            exposure = snapshot.get("account_wide_legacy_exposure") if isinstance(snapshot, Mapping) else {}
+            exposure = exposure if isinstance(exposure, Mapping) else {}
+            orders = [dict(row) for row in exposure.get("orders") or [] if isinstance(row, Mapping)]
+            positions = [dict(row) for row in exposure.get("positions") or [] if isinstance(row, Mapping)]
+            proposal = self.legacy_cutover.create_proposal(
+                update_id=int(update_id) if update_id not in (None, "") else None,
+                source_text_digest=text_digest,
+                expected_order_count=expected_count,
+                orders=orders,
+                positions=positions,
+                reconciliation=dict(facts.get("reconciliation") or {}),
+            )
+            if candidate.get("explicit_confirmation") is True:
+                decision = self.legacy_cutover.confirm(
+                    proposal,
+                    update_id=int(update_id) if update_id not in (None, "") else None,
+                    mode="bounded_explicit_clean_slate_phrase",
+                )
+                ids = ", ".join(str(row.get("order_id") or "") for row in proposal.get("orders") or [])
+                self.telegram.queue_outbound(
+                    idempotency_key=f"park-legacy-cutover-confirmed:{proposal['proposal_id']}",
+                    message_type="legacy_cutover_confirmed",
+                    text=(
+                        f"已收到 clean slate 指令：将只撤销 {expected_count} 个旧挂单（0 个持仓），不平仓、不反向。\n"
+                        f"订单集合：{ids}\n"
+                        f"cutover_digest={proposal['proposal_digest']}\n"
+                        "下一步会再次核对同一订单集合；若有漂移会自动阻塞。"
+                    ),
+                    binding=None,
+                )
+                return {"status": "legacy_cutover_confirmed", "proposal": proposal, "decision": decision}
+            self.telegram.queue_outbound(
+                idempotency_key=f"park-legacy-cutover-proposal:{proposal['proposal_id']}",
+                message_type="legacy_cutover_proposal",
+                text=(
+                    f"已生成旧挂单精确清理清单：{expected_count} 个挂单、0 个持仓。\n"
+                    f"cutover_digest={proposal['proposal_digest']}\n"
+                    f"请回复：确认清理旧挂单 {proposal['proposal_digest']}"
+                ),
+                binding=None,
+            )
+            return {"status": "legacy_cutover_proposal_created", "proposal": proposal}
+        except (ParkLegacyCutoverError, ParkTelegramRuntimeError, ValueError, TypeError) as exc:
+            return self._block(
+                code=getattr(exc, "code", "legacy_cutover_blocked"),
+                message=f"Park Paper clean slate 未接受：{str(exc)}",
+                binding=None,
+                idempotency_key=f"park-legacy-cutover-rejected:{update_id}",
+            )
+
+    def _handle_legacy_cutover_confirmation(self, digest: str, *, update_id: Any) -> dict[str, Any]:
+        proposal = self.legacy_cutover.proposal_for_digest(digest)
+        if proposal is None:
+            return self._block(
+                code="legacy_cutover_digest_unknown",
+                message="这个 clean-slate digest 已不存在或不是当前待处理清单；系统不会猜测旧订单。",
+                binding=None,
+                idempotency_key=f"park-legacy-cutover-digest:{update_id}",
+            )
+        try:
+            decision = self.legacy_cutover.confirm(
+                proposal,
+                update_id=int(update_id) if update_id not in (None, "") else None,
+                mode="explicit_cutover_digest",
+            )
+            self.telegram.queue_outbound(
+                idempotency_key=f"park-legacy-cutover-confirmed:{proposal['proposal_id']}",
+                message_type="legacy_cutover_confirmed",
+                text=(
+                    f"已确认精确清理清单 {proposal['proposal_digest']}；下一次 Paper tick 会重新核对后只撤销这些旧挂单。"
+                ),
+                binding=None,
+            )
+            return {"status": "legacy_cutover_confirmed", "proposal": proposal, "decision": decision}
+        except ParkLegacyCutoverError as exc:
+            return self._block(
+                code=exc.code,
+                message=f"Park Paper clean slate 未确认：{str(exc)}",
+                binding=None,
+                idempotency_key=f"park-legacy-cutover-confirmation:{update_id}",
+            )
 
     def _previous_result(self, update_id: Any) -> dict[str, Any] | None:
         if update_id in (None, ""):
@@ -795,8 +994,9 @@ class ParkTelegramWorker:
                 raise ParkTelegramRuntimeError("worker_already_running", "another Park Telegram worker holds the lease") from exc
             try:
                 offset = self.cursor.read()
+                recovered = self.router.recover_pending_legacy_cutovers()
                 updates = transport.get_updates(offset=offset, timeout_seconds=self.timeout_seconds)
-                handled: list[dict[str, Any]] = []
+                handled: list[dict[str, Any]] = list(recovered)
                 for update in updates:
                     handled.append(self.router.handle_update(update))
                     if update.get("update_id") not in (None, ""):

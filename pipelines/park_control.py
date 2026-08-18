@@ -17,15 +17,24 @@ from typing import Any
 
 from services.journal_store import load_json
 from services.park_codex_intent_parser import CodexCliIntentParser
+from services.park_legacy_cutover import load_effective_park_config
+from services.park_legacy_cutover_runtime import run_legacy_cutover_once
 from services.park_paper_runtime import (
     ParkPaperRuntime,
     ParkPaperRuntimeError,
     build_park_authoritative_adapter,
 )
 from services.park_safety_evidence import build_park_safety_evidence
-from services.park_telegram_runtime import ParkTelegramRouter, ParkTelegramRuntimeError, ParkTelegramWorker
+from services.park_telegram_runtime import (
+    ParkTelegramRouter,
+    ParkTelegramRuntimeError,
+    ParkTelegramWorker,
+)
 from services.scheduler_ownership import SchedulerOwnershipGuard
-from services.telegram_bot_transport import TelegramBotTransport, TelegramBotTransportError
+from services.telegram_bot_transport import (
+    TelegramBotTransport,
+    TelegramBotTransportError,
+)
 
 
 def _latest(path: Path) -> dict[str, Any]:
@@ -55,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return 79
         config = json.loads(Path(args.park_config).read_text(encoding="utf-8"))
+        config = load_effective_park_config(output_root, config)
         transport = TelegramBotTransport(chat_id=args.chat_id)
         intent_parser = CodexCliIntentParser(
             executable=os.getenv("TRADING_ORCHESTRATOR_CODEX_CLI", "/opt/homebrew/bin/codex"),
@@ -71,6 +81,17 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
         )
         telegram = ParkTelegramWorker(router, timeout_seconds=args.timeout_seconds).run_once(transport)
+        legacy_cutover = run_legacy_cutover_once(
+            output_root,
+            config=config,
+            park_user_id=args.park_user_id,
+            chat_id=args.chat_id,
+            repo_root=Path(__file__).resolve().parents[1],
+            interpreter=os.getenv("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or None,
+        )
+        # A completed exact-set receipt is the only way the default-off static
+        # config becomes effective for the next Park runtime pass.
+        config = load_effective_park_config(output_root, config)
         try:
             binding = build_park_authoritative_adapter(output_root, config=config)
             build_park_safety_evidence(
@@ -103,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             "schema_version": "park-control-v1",
             "status": "pass" if execution.get("status") != "blocked" else "blocked",
             "telegram": telegram,
+            "legacy_cutover": legacy_cutover,
             "execution": execution,
             "delivery": delivery,
             "paper_only": True,

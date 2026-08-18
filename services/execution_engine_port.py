@@ -34,6 +34,7 @@ class ExecutionEngineAdapter(Protocol):
         strategy_plan_id: str | None = None,
         ts: str | None = None,
         reason: str = "",
+        legacy_cutover_id: str | None = None,
     ) -> dict[str, Any]:
         ...
 

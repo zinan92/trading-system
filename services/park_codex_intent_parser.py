@@ -17,7 +17,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-
 PARK_CODEX_INTENT_SCHEMA = "park-codex-intent-v1"
 DEFAULT_CODEX_CLI = "/opt/homebrew/bin/codex"
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -196,6 +195,54 @@ def deterministic_neutral_grid_candidate(text: str) -> dict[str, Any] | None:
         "interpretation": "中性网格意图（确定性超时后备识别）",
         "confidence": "medium",
         "source_text": source_text,
+    }
+
+
+def deterministic_legacy_clean_slate_candidate(text: str) -> dict[str, Any] | None:
+    """Recognize the bounded, explicit legacy-order cutover instruction.
+
+    This is intentionally narrower than the Codex intent parser.  It exists
+    for the one operator phrase that must remain actionable when the optional
+    provider is unavailable: Park explicitly names the old pending orders,
+    requests a clean slate, and asks to enable the Paper track.  The returned
+    candidate is only a request; the account snapshot and exact order set are
+    re-read before any cancellation capability can be minted.
+    """
+
+    source_text = str(text or "").strip()
+    lowered = source_text.lower()
+    cancel = "取消" in source_text or "撤销" in source_text or "cancel" in lowered
+    old_orders = (
+        "旧挂单" in source_text
+        or "旧订单" in source_text
+        or ("old" in lowered and "order" in lowered)
+    )
+    clean_slate = (
+        "clean slate" in lowered
+        or "clean-slate" in lowered
+        or "清空" in source_text
+        or "清仓" in source_text
+    )
+    enable_park = (
+        "启用 park" in lowered
+        or "enable park" in lowered
+        or "启用纸面" in source_text
+        or "启用 paper" in lowered
+    )
+    if not (cancel and old_orders and clean_slate and enable_park):
+        return None
+    count_match = re.search(r"(?:这|共|共计|the)?\s*(\d+)\s*(?:个|笔|条)?\s*(?:旧挂单|旧订单|old\s+orders?)", source_text, re.IGNORECASE)
+    if count_match is None:
+        count_match = re.search(r"(\d+)\s*(?:old\s+orders?|挂单|订单)", source_text, re.IGNORECASE)
+    expected_count = int(count_match.group(1)) if count_match else None
+    if expected_count is not None and expected_count <= 0:
+        return None
+    return {
+        "schema_version": PARK_CODEX_INTENT_SCHEMA,
+        "intent": "legacy_clean_slate_cutover",
+        "expected_order_count": expected_count,
+        "source_text": source_text,
+        "explicit_confirmation": "确认" in source_text or "confirm" in lowered,
     }
 
 
