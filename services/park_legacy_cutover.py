@@ -214,7 +214,12 @@ class ParkLegacyCutoverLedger:
         proposal_id = "legacy-cutover-" + proposal_digest.removeprefix("sha256:")[:24]
         existing = self._latest_for(proposal_id)
         if existing and existing.get("event") in {"proposal", "confirmed"}:
-            return existing
+            try:
+                still_valid = float(existing.get("expires_at") or 0) > time.time()
+            except (TypeError, ValueError):
+                still_valid = False
+            if still_valid:
+                return existing
         if existing and existing.get("event") == "completed":
             original = next(
                 (

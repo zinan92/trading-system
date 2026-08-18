@@ -116,6 +116,44 @@ def test_router_recovers_old_ingested_message_after_provider_misclassification(t
     assert router.legacy_cutover.confirmed_pending()[0]["proposal_digest"].startswith("sha256:")
 
 
+def test_router_rebuilds_expired_confirmed_cutover_from_same_inbox_message(
+    tmp_path: Path, monkeypatch
+) -> None:
+    orders = [
+        {
+            "order_id": "old-1",
+            "cycle_id": "2026-08-18_DAY",
+            "strategy_plan_id": "legacy-plan",
+            "state": "accepted",
+            "side": "sell",
+            "price": 4400.0,
+            "quantity": 1.0,
+        }
+    ]
+    clock = {"value": 1000.0}
+    monkeypatch.setattr("services.park_legacy_cutover.time.time", lambda: clock["value"])
+    router = ParkTelegramRouter(
+        tmp_path,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        account_reader=lambda *_args, **_kwargs: _facts(orders),
+        now=lambda: "2026-08-18T03:00:00+00:00",
+    )
+    update = _update(10, "取消这1个旧挂单，确认 clean slate，启用 Park Paper")
+    router.telegram.ingest_update(update)
+    router._remember_result(10, {"status": "blocked", "code": "missing_direction"}, update_digest="sha256:old")
+    first = router.recover_pending_legacy_cutovers()
+    assert first[0]["status"] == "legacy_cutover_confirmed"
+    first_proposal = first[0]["proposal"]["proposal_id"]
+    clock["value"] = 2000.0
+
+    recovered = router.recover_pending_legacy_cutovers()
+
+    assert recovered[0]["status"] == "legacy_cutover_confirmed"
+    assert recovered[0]["proposal"]["proposal_id"] == first_proposal
+    assert router.legacy_cutover.confirmed_pending()[0]["expires_at"] > clock["value"]
+
+
 def test_legacy_cutover_requires_exact_set_and_never_flattens(tmp_path: Path, monkeypatch) -> None:
     orders = [
         {
