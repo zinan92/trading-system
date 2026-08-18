@@ -524,6 +524,9 @@ def test_worker_recovers_explicit_dca_after_provider_type_misclassification(tmp_
 
     assert recovered[0]["status"] == "blocked"
     assert recovered[0]["code"] == "dca_exit_levels_missing"
+    pending = router.telegram.pending_outbound()
+    assert any("止损" in str(row.get("text") or "") for row in pending)
+    assert any("strategy-recovery" in str(row.get("idempotency_key") or "") for row in pending)
     assert not (output / "park_strategy" / "identity.jsonl").exists()
     assert not (output / "park_strategy" / "plans.jsonl").exists()
 
