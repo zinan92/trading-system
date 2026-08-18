@@ -211,6 +211,74 @@ def test_stable_and_legacy_gets_delegate_to_the_same_named_assembler(
     ]
 
 
+def test_stable_read_model_includes_persisted_park_strategy_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    source = _source()
+    park = {
+        "generated_at": "2026-08-18T01:02:04+00:00",
+        "status": "ok",
+        "blockers": [],
+        "strategy": {
+            "active": True,
+            "state": "RUNNING",
+            "strategy_session_id": "session-api-1",
+            "strategy_revision_id": "revision-api-2",
+            "plan_digest": "sha256:api-plan",
+            "strategy_type": "dca",
+            "direction": "long",
+            "lower_price_boundary": 3800.0,
+            "upper_price_boundary": 4000.0,
+            "stop_price": 3800.0,
+            "take_profit_price": 4050.0,
+            "maximum_leverage": 5.0,
+            "maximum_acceptable_loss": 250.0,
+            "maximum_notional": 20_000.0,
+            "theoretical_max_loss": 240.0,
+            "order_count": 4,
+            "selected_constraint": "maximum_acceptable_loss",
+        },
+        "execution": {
+            "counts": {
+                "accepted_orders": 3,
+                "filled_orders": 1,
+                "fills": 1,
+                "open_positions": 1,
+                "closed_positions": 0,
+            },
+            "reconciliation": {"status": "ok", "issues": []},
+        },
+        "market": {"price": 3900.0, "fresh": True},
+        "safety": {"status": "pass", "age_seconds": 2.0},
+    }
+    monkeypatch.setattr(
+        dashboard_server,
+        "_assemble_strategy_console_snapshot",
+        lambda **_kwargs: source,
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "build_park_public_read_model",
+        lambda *_args, **_kwargs: park,
+    )
+    write_json(output / "dualtrack" / "risk_decisions" / "current.json", [_risk()])
+
+    response = dashboard_server.build_trading_system_read_model_response(
+        output_root=output,
+        as_of="2026-08-18T01:02:04+00:00",
+    )
+
+    assert response["current_strategy"]["source"] == "park_strategy_session"
+    assert response["current_strategy"]["identity"] == {
+        "strategy_session_id": "session-api-1",
+        "strategy_revision_id": "revision-api-2",
+        "plan_digest": "sha256:api-plan",
+    }
+    assert response["contract"]["source_identities"]["strategy_session_id"] == "session-api-1"
+
+
 def test_new_endpoint_uses_history_for_lifecycle_and_pnl_but_current_cycle_for_positions(
     tmp_path: Path,
     monkeypatch,

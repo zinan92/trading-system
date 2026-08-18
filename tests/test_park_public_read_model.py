@@ -130,6 +130,13 @@ def test_public_read_model_projects_persisted_facts_without_writes(tmp_path: Pat
     assert result["strategy"]["strategy_session_id"] == "session-1"
     assert result["strategy"]["direction"] == "neutral"
     assert result["strategy"]["maximum_leverage"] == 20.0
+    assert result["strategy"]["grid_entry_range"] == {
+        "lower": 4111.29032258,
+        "upper": 4438.70967742,
+    }
+    assert result["strategy"]["grid_spacing"] == 11.29032258
+    assert result["strategy"]["grid_rung_count"] == 30
+    assert result["strategy"]["grid_rung_prices"][:2] == [4111.29032258, 4122.58064516]
     assert result["execution"]["counts"] == {
         "accepted_orders": 1,
         "filled_orders": 1,
@@ -173,3 +180,64 @@ def test_public_read_model_fails_closed_on_corrupt_snapshot(tmp_path: Path) -> N
     assert "park_snapshot_invalid" in result["blockers"]
     assert "authoritative_snapshot_missing" in result["blockers"]
     assert result["execution"]["engine"] == "unavailable"
+
+
+def test_public_read_model_fails_closed_on_malformed_grid_geometry(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    plan_path = output / "park_strategy" / "plans.jsonl"
+    latest = json.loads(plan_path.read_text(encoding="utf-8").splitlines()[-1])
+    latest["risk"]["order_count"] = "not-a-count"
+    _append_jsonl(plan_path, [latest])
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["status"] == "blocked"
+    assert "grid_geometry_invalid" in result["blockers"]
+    assert result["strategy"]["grid_entry_range"] is None
+    assert result["strategy"]["grid_rung_prices"] == []
+
+
+def test_public_read_model_rejects_non_integral_grid_count(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    plan_path = output / "park_strategy" / "plans.jsonl"
+    latest = json.loads(plan_path.read_text(encoding="utf-8").splitlines()[-1])
+    latest["risk"]["order_count"] = 19.5
+    _append_jsonl(plan_path, [latest])
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["status"] == "blocked"
+    assert "grid_geometry_invalid" in result["blockers"]
+    assert result["strategy"]["grid_rung_count"] == 0
+
+
+def test_public_read_model_rejects_lifecycle_and_normalized_strategy_mismatch(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    lifecycle_path = output / "park_strategy" / "lifecycle.jsonl"
+    lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8").splitlines()[-1])
+    lifecycle["strategy_type"] = "dca"
+    _append_jsonl(lifecycle_path, [lifecycle])
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["status"] == "blocked"
+    assert "strategy_type_mismatch" in result["blockers"]
+
+
+def test_public_read_model_uses_lifecycle_boundaries_and_blocks_mismatch(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    lifecycle_path = output / "park_strategy" / "lifecycle.jsonl"
+    lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8").splitlines()[-1])
+    lifecycle["upper_price_boundary"] = 4500.0
+    _append_jsonl(lifecycle_path, [lifecycle])
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["status"] == "blocked"
+    assert "strategy_boundary_mismatch" in result["blockers"]
+    assert result["strategy"]["upper_price_boundary"] == 4500.0
+    assert result["strategy"]["grid_entry_range"]["upper"] < 4500.0

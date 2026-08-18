@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -201,6 +202,76 @@ def build_park_public_read_model(
 
     normalized = dict(plan.get("normalized_input") or {})
     risk = dict(plan.get("risk") or {})
+    normalized_strategy_type = str(normalized.get("strategy_type") or "").lower()
+    lifecycle_strategy_type = str(lifecycle.get("strategy_type") or "").lower()
+    strategy_type = lifecycle_strategy_type or normalized_strategy_type
+    if (
+        lifecycle_strategy_type
+        and normalized_strategy_type
+        and lifecycle_strategy_type != normalized_strategy_type
+    ):
+        blockers.append("strategy_type_mismatch")
+    normalized_lower_boundary = normalized.get("lower_price_boundary")
+    normalized_upper_boundary = normalized.get("upper_price_boundary")
+    lower_boundary = lifecycle.get("lower_price_boundary")
+    upper_boundary = lifecycle.get("upper_price_boundary")
+    if lower_boundary is None:
+        lower_boundary = normalized_lower_boundary
+    if upper_boundary is None:
+        upper_boundary = normalized_upper_boundary
+    try:
+        boundary_mismatch = (
+            lifecycle.get("lower_price_boundary") is not None
+            and normalized_lower_boundary is not None
+            and float(lifecycle["lower_price_boundary"]) != float(normalized_lower_boundary)
+        ) or (
+            lifecycle.get("upper_price_boundary") is not None
+            and normalized_upper_boundary is not None
+            and float(lifecycle["upper_price_boundary"]) != float(normalized_upper_boundary)
+        )
+    except (TypeError, ValueError, OverflowError):
+        boundary_mismatch = True
+    if boundary_mismatch:
+        blockers.append("strategy_boundary_mismatch")
+    raw_grid_count = risk.get("order_count") or normalized.get("order_count") or 0
+    try:
+        if isinstance(raw_grid_count, bool):
+            raise ValueError("boolean is not a grid count")
+        numeric_grid_count = float(raw_grid_count)
+        if not math.isfinite(numeric_grid_count) or numeric_grid_count <= 0 or not numeric_grid_count.is_integer():
+            raise ValueError("grid count must be a positive integer")
+        grid_count = int(numeric_grid_count)
+    except (TypeError, ValueError, OverflowError):
+        grid_count = 0
+        blockers.append("grid_geometry_invalid")
+    grid_entry_range: dict[str, float] | None = None
+    grid_spacing: float | None = None
+    grid_rung_prices: list[float] = []
+    if strategy_type == "grid":
+        try:
+            lower = float(lower_boundary)
+            upper = float(upper_boundary)
+            valid_geometry = (
+                math.isfinite(lower)
+                and math.isfinite(upper)
+                and upper > lower
+                and grid_count > 0
+            )
+        except (TypeError, ValueError, OverflowError):
+            valid_geometry = False
+            lower = upper = 0.0
+        if not valid_geometry:
+            blockers.append("grid_geometry_invalid")
+        else:
+            grid_spacing = round((upper - lower) / (grid_count + 1), 8)
+            grid_entry_range = {
+                "lower": round(lower + grid_spacing, 8),
+                "upper": round(upper - grid_spacing, 8),
+            }
+            grid_rung_prices = [
+                round(lower + grid_spacing * (index + 1), 8)
+                for index in range(grid_count)
+            ]
     strategy = {
         "active": bool(session_id and lifecycle),
         "state": lifecycle.get("state") or "IDLE_CLEAN",
@@ -219,6 +290,10 @@ def build_park_public_read_model(
         "theoretical_max_loss": risk.get("theoretical_max_loss"),
         "order_count": risk.get("order_count"),
         "selected_constraint": risk.get("selected_constraint"),
+        "grid_entry_range": grid_entry_range,
+        "grid_spacing": grid_spacing,
+        "grid_rung_count": grid_count if strategy_type == "grid" else None,
+        "grid_rung_prices": grid_rung_prices,
     }
 
     orders = _compact_rows(

@@ -30,3 +30,21 @@
   state as healthy.
 - Preserve user/runtime artifacts and unrelated working-tree changes. Stage
   explicit paths only; do not use `git add -A`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues for `zinan92/trading-system`.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five canonical triage labels defined in
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context domain model. Read `CONTEXT.md` and
+relevant records under `docs/adr/` before planning or implementation. See
+`docs/agents/domain.md`.

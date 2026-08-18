@@ -808,8 +808,9 @@ def test_inherited_running_order_resolves_protection_from_its_originating_plan()
 
 
 def test_mismatched_risk_observation_is_never_presented_as_current_permission() -> None:
+    source = _source()
     model = project_trading_system_read_model(
-        _source(),
+        source,
         risk_decision=_risk("old-risk"),
         broker=_broker(),
         generated_at="2026-07-18T01:02:04+00:00",
@@ -945,3 +946,196 @@ def test_projector_contains_no_provider_or_engine_selection_branches() -> None:
 
     for token in ("binance", "tiger", "legacy_paper", "nautilus_paper"):
         assert token not in text
+
+
+def test_read_model_projects_active_park_strategy_as_current_strategy() -> None:
+    park = {
+        "schema_version": "park-paper-public-read-model-v1",
+        "generated_at": "2026-08-18T01:02:04+00:00",
+        "status": "ok",
+        "blockers": [],
+        "strategy": {
+            "active": True,
+            "state": "ACTIVE_LOCKED",
+            "strategy_session_id": "session-park-1",
+            "strategy_revision_id": "revision-park-3",
+            "plan_digest": "sha256:park-plan",
+            "strategy_type": "grid",
+            "direction": "short",
+            "lower_price_boundary": 3800.0,
+            "upper_price_boundary": 4000.0,
+            "stop_price": 4000.0,
+            "take_profit_price": None,
+            "maximum_leverage": 10.0,
+            "maximum_acceptable_loss": 500.0,
+            "maximum_notional": 40_000.0,
+            "theoretical_max_loss": 480.0,
+            "order_count": 19,
+            "selected_constraint": "maximum_acceptable_loss",
+            "grid_entry_range": {"lower": 3810.0, "upper": 3990.0},
+            "grid_spacing": 10.0,
+            "grid_rung_count": 19,
+            "grid_rung_prices": [3810.0, 3820.0, 3830.0],
+        },
+        "execution": {
+            "counts": {
+                "accepted_orders": 12,
+                "filled_orders": 3,
+                "fills": 7,
+                "open_positions": 2,
+                "closed_positions": 1,
+            },
+            "reconciliation": {"status": "ok", "issues": []},
+        },
+        "market": {"price": 3910.0, "fresh": True, "source": "trusted-paper-market"},
+        "safety": {"status": "pass", "age_seconds": 4.0, "paper_only": True},
+    }
+
+    model = project_trading_system_read_model(
+        _source(),
+        risk_decision=_risk(),
+        broker=_broker(),
+        park=park,
+        generated_at="2026-08-18T01:02:04+00:00",
+    ).to_dict()
+
+    assert model["current_strategy"] == {
+        "schema_version": "park-current-strategy-summary-v1",
+        "source": "park_strategy_session",
+        "active": True,
+        "status": "active_locked",
+        "status_label": "运行中",
+        "contract_status": "authoritative",
+        "blockers": [],
+        "identity": {
+            "strategy_session_id": "session-park-1",
+            "strategy_revision_id": "revision-park-3",
+            "plan_digest": "sha256:park-plan",
+        },
+        "specification": {
+            "strategy_type": "grid",
+            "direction": "short",
+            "lower_price_boundary": 3800.0,
+            "upper_price_boundary": 4000.0,
+            "stop_price": 4000.0,
+            "take_profit_price": None,
+            "maximum_leverage": 10.0,
+            "maximum_acceptable_loss": 500.0,
+            "maximum_notional": 40_000.0,
+            "theoretical_max_loss": 480.0,
+            "order_count": 19,
+            "selected_constraint": "maximum_acceptable_loss",
+            "grid_entry_range": {"lower": 3810.0, "upper": 3990.0},
+            "grid_spacing": 10.0,
+            "grid_rung_count": 19,
+            "grid_rung_prices": [3810.0, 3820.0, 3830.0],
+        },
+        "execution": {
+            "accepted_order_count": 12,
+            "filled_order_count": 3,
+            "fill_count": 7,
+            "open_position_count": 2,
+            "closed_position_count": 1,
+            "reconciliation_status": "ok",
+        },
+        "freshness": {
+            "generated_at": "2026-08-18T01:02:04+00:00",
+            "market_fresh": True,
+            "safety_status": "pass",
+            "safety_age_seconds": 4.0,
+        },
+    }
+    assert model["contract"]["source_identities"]["strategy_session_id"] == "session-park-1"
+    assert model["contract"]["source_identities"]["strategy_revision_id"] == "revision-park-3"
+
+
+def test_read_model_exposes_legacy_exposure_as_a_cutover_blocker() -> None:
+    park = {
+        "schema_version": "park-paper-public-read-model-v1",
+        "generated_at": "2026-08-18T01:02:04+00:00",
+        "status": "blocked",
+        "blockers": ["active_strategy_missing"],
+        "strategy": {
+            "active": False,
+            "state": "IDLE_CLEAN",
+            "strategy_session_id": None,
+            "strategy_revision_id": None,
+            "plan_digest": None,
+        },
+        "execution": {
+            "counts": {
+                "accepted_orders": 0,
+                "filled_orders": 0,
+                "fills": 0,
+                "open_positions": 0,
+                "closed_positions": 0,
+            },
+            "reconciliation": {"status": "missing", "issues": ["snapshot_missing"]},
+        },
+        "market": {},
+        "safety": {"status": "missing", "age_seconds": None, "paper_only": None},
+    }
+
+    model = project_trading_system_read_model(
+        _source(open_trade=True),
+        risk_decision=_risk(),
+        broker=_broker(),
+        park=park,
+        generated_at="2026-08-18T01:02:04+00:00",
+    ).to_dict()
+
+    current = model["current_strategy"]
+    assert current["source"] == "legacy_exposure_blocker"
+    assert current["active"] is False
+    assert current["status"] == "migration_blocked"
+    assert current["status_label"] == "迁移阻塞"
+    assert current["contract_status"] == "blocked"
+    assert current["blockers"] == [
+        "active_strategy_missing",
+        "legacy_cycle_exposure_without_park_identity",
+    ]
+    assert current["identity"] == {
+        "strategy_session_id": None,
+        "strategy_revision_id": None,
+        "plan_digest": None,
+    }
+    assert set(current["specification"].values()) == {None}
+    assert current["execution"]["accepted_order_count"] == 25
+    assert current["execution"]["open_position_count"] == 1
+    assert "legacy_cycle_exposure_without_park_identity" in model["completeness"]["issues"]
+
+
+def test_read_model_distinguishes_missing_park_evidence_from_clean_idle() -> None:
+    park = {
+        "generated_at": "2026-08-18T01:02:04+00:00",
+        "status": "blocked",
+        "blockers": ["active_strategy_missing", "safety_evidence_not_passing"],
+        "strategy": {
+            "active": False,
+            "state": "IDLE_CLEAN",
+            "strategy_session_id": None,
+            "strategy_revision_id": None,
+            "plan_digest": None,
+        },
+        "execution": {"counts": {}, "reconciliation": {"status": "missing"}},
+        "market": {},
+        "safety": {"status": "missing"},
+    }
+
+    source = _source()
+    source["production_execution"]["orders"] = []
+    source["production_execution"]["accounting_snapshot"]["positions"] = []
+    source["production_execution"]["accounting_snapshot"]["counts"]["open_position_count"] = 0
+    model = project_trading_system_read_model(
+        source,
+        risk_decision=_risk(),
+        broker=_broker(),
+        park=park,
+        generated_at="2026-08-18T01:02:04+00:00",
+    ).to_dict()
+
+    current = model["current_strategy"]
+    assert current["status"] == "evidence_blocked"
+    assert current["status_label"] == "证据阻塞"
+    assert current["contract_status"] == "blocked"
+    assert current["active"] is False
