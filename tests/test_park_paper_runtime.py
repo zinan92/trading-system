@@ -555,6 +555,37 @@ def test_reverse_rejects_material_market_drift_before_old_mutation() -> None:
     assert "market price drifted" in drift
 
 
+def test_blocked_reverse_freezes_old_strategy_from_new_entries(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    identity = ParkStrategyIdentityJournal(output)
+    identity.start_clean_session(
+        observed_at="2026-08-14T10:00:00+00:00",
+        plan_digest="sha256:" + "1" * 64,
+        reconciliation_healthy=True,
+        strategy_session_id="session-old",
+        strategy_revision_id="revision-old",
+    )
+    reverse_path = output / "park_strategy" / "reverse_requests.jsonl"
+    reverse_path.parent.mkdir(parents=True, exist_ok=True)
+    reverse_path.write_text(json.dumps({
+        "event": "reverse_request",
+        "request_id": "reverse-blocked",
+        "status": "blocked",
+        "blocker_code": "reverse_foreign_exposure",
+        "detail": "foreign exposure",
+        "old_strategy": {"strategy_session_id": "session-old", "strategy_revision_id": "revision-old", "plan_digest": "sha256:" + "1" * 64},
+    }) + "\n", encoding="utf-8")
+    adapter = FakePaperAdapter()
+    market = {"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "provider": "paper-provider", "observed_at": "2026-08-14T10:01:00+00:00", "symbol": "GOLD"}
+    runtime = _runtime(output, adapter, market)
+
+    result = runtime.run_once()
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "reverse_transition_blocked"
+    assert adapter.submit_calls == []
+
+
 def test_dca_terminal_retry_keeps_first_persisted_trigger_after_reconciliation_failure(tmp_path: Path) -> None:
     class DriftOnceAdapter(FakePaperAdapter):
         def __init__(self) -> None:
