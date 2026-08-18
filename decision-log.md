@@ -15814,3 +15814,43 @@ auditable datafeed port; broker execution remains a separate port.
 - Before/after facts remain equal: cycle `2026-08-17_DAY`, runtime running,
   plan v2, 19 accepted/open orders, 0 positions, reconciliation `ok`, and no
   control action.
+
+# 2026-08-18 — Keep Recording Windows non-destructive for continuous Park execution (#744)
+
+## Decision
+
+- Treat Beijing 09:00–21:00 and 21:00–09:00 slices as Recording Windows only.
+  They close a facts/package/review record and never create a new execution
+  identity or routine handoff.
+- Preserve the exact Park Strategy Session, Strategy Revision, plan digest,
+  open orders, open positions, and protective exit authority across a boundary.
+  A strategy changes only on its explicit terminal condition or a new Park
+  strategy/revision; no boundary-driven cancel, flatten, stop, reverse, or
+  replan is allowed.
+- Keep recording failures independent from execution: package/review/facts
+  failures are durable blockers and Telegram notifications, retry and late
+  amendment remain available, and unresolved facts suppress only new exposure
+  while exits and reconciliation continue.
+- Require the public read model to show the current `Recording Window` even
+  before package close, bind evidence to the active session/revision, and fail
+  closed if a package claims any `execution_mutations`.
+
+## Gotchas
+
+- A previous window's blocker must not contaminate the next in-progress window.
+  Resolution therefore uses the latest package revision for each window and a
+  durable facts-recovery record, never any stale earlier complete row.
+- A complete package is not treated as final while its review write is
+  pending or blocked.  Missing categories remain visible and late events amend
+  the package instead of fabricating evidence.
+
+## Verification
+
+- PR #754 merged as `main@fe1cdc168aa8b4c9681909bac2f966bf2e88466e` (tree
+  `219a87973c6f7f0684c0e4bdfd5a9246c6cbe18f`).
+- Focused Park/Recording Window/public-read/Dashboard validation passed (188
+  tests); `git diff --check` and staged gitleaks passed; parallel standards and
+  spec reviews found no remaining #744 blockers.
+- This repository merge is not a live-readiness claim.  The next step is an
+  exact-SHA Goldbot Paper deployment and read-only runtime verification; no
+  live, exchange-key, Cloud order, or position mutation was performed.
