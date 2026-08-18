@@ -986,12 +986,18 @@ class ParkPaperRuntime:
                 snapshot = rows[-1] if isinstance(rows, list) and rows else rows
                 if not isinstance(snapshot, Mapping):
                     raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"snapshot is not an object: {path.name}")
+                orders = snapshot.get("orders")
+                positions = snapshot.get("positions")
+                if not isinstance(orders, list) or not isinstance(positions, list):
+                    raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"snapshot shape is incomplete: {path.name}")
+                if any(not isinstance(row, Mapping) for row in [*orders, *positions]):
+                    raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"snapshot rows are malformed: {path.name}")
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"cannot read authoritative snapshot: {path.name}") from exc
-            for row in snapshot.get("orders") or []:
+            for row in orders:
                 if str(row.get("state") or "").lower() == "accepted" and not self._order_owned(row, session, revision, digest):
                     foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "order", "id": row.get("order_id")})
-            for row in snapshot.get("positions") or []:
+            for row in positions:
                 if str(row.get("status") or "").lower() == "open" and not self._position_owned(row, session, revision, digest):
                     foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "position", "id": row.get("position_id")})
         return foreign
