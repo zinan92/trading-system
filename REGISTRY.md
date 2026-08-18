@@ -13,6 +13,21 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-17)
+- #742 / PR #751 adds the authoritative `park-current-strategy-summary-v1`
+  projection and a top-level Current Strategy card. Exact `main@ebdbdd7aeb5ee805870d2a996bfa7fef1d0a5b5d`
+  is deployed to Goldbot Paper with source tree
+  `2d26fb42dbf1b6d1f85a7b19413200e1157301b7`; loopback Dashboard responses
+  contain `currentStrategyCard` and `parkAiChatCard`, the anonymous AI route
+  remains 401, and the public edge returns 302 `/login`. Cloud Paper
+  preflight and boot receipts bind the exact SHA with zero control actions.
+  Dashboard/Gateway/Cloudflare Tunnel/Datafeed are active; live-tick was not
+  manually restarted, and its next scheduled attempt passed after a stale
+  preflight receipt was replaced in the persistent output root. The current
+  read model honestly shows 19 legacy accepted orders, 0 positions,
+  reconciliation `ok`, and a migration blocker rather than a valid Park
+  Strategy Session. Full facts are in
+  [`docs/evidence/issue-742-current-strategy-release-2026-08-18.md`](docs/evidence/issue-742-current-strategy-release-2026-08-18.md).
+  Next frontier: #744.
 - #737 / PR #738 adds the additive Park Dashboard AI strategy chat and moves
   it to the top of Goldbot V5, before account metrics.  The exact merged
   `main@a91505c7e557ea468984a9eebef13cac2600a4f9` is deployed to the Cloud
