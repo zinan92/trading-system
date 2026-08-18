@@ -99,11 +99,11 @@ def test_neutral_grid_levels_are_explicitly_bilateral_and_protected(tmp_path: Pa
     )
 
 
-def test_neutral_boundary_preserves_positions_in_action_plan(tmp_path: Path) -> None:
+def test_neutral_hard_stop_closes_owned_positions_in_action_plan(tmp_path: Path) -> None:
     grid = _neutral_grid(tmp_path)
     result = grid.observe(price=4450, trusted=True, fresh=True)
-    assert result["action_plan"]["position_authority"] == "preserve_strategy_owned_positions"
-    assert "preserve_strategy_owned_positions" in result["action_plan"]["ordered_actions"]
+    assert result["action_plan"]["position_authority"] == "close_strategy_owned_positions"
+    assert "close_all_strategy_owned_positions" in result["action_plan"]["ordered_actions"]
 
 
 def test_both_boundaries_terminal_and_notification_idempotent(tmp_path: Path) -> None:
@@ -146,6 +146,7 @@ def test_authoritative_grid_geometry_omits_local_stops_by_default_and_checks_ris
     levels = grid.levels()
     assert all("sl" not in row for row in levels)
     assert [row["tp"] for row in levels] == [4220.0, 4230.0]
+    assert all(row["grid_generation"] == 1 and row["grid_rearm_enabled"] is True for row in levels)
 
     bad_receipt = {**receipt, "risk_digest": "sha256:" + "b" * 64}
     with pytest.raises(ParkGridLifecycleError, match="exact Park plan"):

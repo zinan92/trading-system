@@ -93,6 +93,9 @@ class ParkGridLifecycle:
                 level = {
                     "command_type": "grid_level",
                     "level_id": f"{self.revision_id}:grid:{int(rung.get('rung') or len(levels) + 1)}",
+                    "grid_line_id": f"{self.revision_id}:grid:{int(rung.get('rung') or len(levels) + 1)}",
+                    "grid_generation": 1,
+                    "grid_rearm_enabled": True,
                     "strategy_session_id": self.session_id,
                     "strategy_revision_id": self.revision_id,
                     "plan_digest": self.plan_digest,
@@ -147,6 +150,9 @@ class ParkGridLifecycle:
                 {
                     "command_type": "grid_level",
                     "level_id": f"{self.revision_id}:grid:{index + 1}",
+                    "grid_line_id": f"{self.revision_id}:grid:{index + 1}",
+                    "grid_generation": 1,
+                    "grid_rearm_enabled": True,
                     "strategy_session_id": self.session_id,
                     "strategy_revision_id": self.revision_id,
                     "plan_digest": self.plan_digest,

@@ -247,7 +247,7 @@ def test_expired_unconfirmed_runtime_session_stays_blocked_with_exposure(
     assert adapter.submit_calls == []
 
 
-def test_confirmed_neutral_grid_submits_both_owned_legs_and_preserves_boundary_positions(tmp_path: Path) -> None:
+def test_confirmed_neutral_grid_submits_both_owned_legs_and_flattens_at_hard_stop(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     market = {
         "price": 4300.0,
@@ -299,9 +299,14 @@ def test_confirmed_neutral_grid_submits_both_owned_legs_and_preserves_boundary_p
     paused = runtime.run_once()
     assert paused["status"] == "paused"
     assert paused["terminal_reason"] == "upper_boundary_invalidated"
-    assert paused["positions_preserved"] == 1
+    assert paused["positions_preserved"] == 0
     assert len(adapter.cancel_calls) == 1
-    assert not any(command["event"] in {"exit", "stop", "target", "flatten"} for command in adapter.submit_calls)
+    assert adapter.submit_calls[-1]["event"] == "stop"
+    lifecycle_rows = json.loads(
+        (output / "park_strategy" / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+    )
+    assert lifecycle_rows["event"] == "terminal_action_plan"
+    assert lifecycle_rows["boundary"] == "upper"
 
 
 def test_explicit_stop_and_take_profit_are_parsed_but_never_inferred() -> None:

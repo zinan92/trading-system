@@ -234,16 +234,8 @@ class ParkStrategyLifecycleLedger:
             return dict(existing)
         seed = f"{identity['strategy_session_id']}|{identity['strategy_revision_id']}|{boundary}|{observed_price}"
         action_plan_id = "park-terminal-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
-        neutral = str(active.get("direction") or "") == "neutral"
         ordered_actions = list(_TERMINAL_ACTIONS)
         position_authority = "close_strategy_owned_positions"
-        if neutral:
-            # A neutral Grid is invalidated at either range edge, but an edge
-            # touch is not an instruction to invent a directional exit.  Keep
-            # the owned position facts for reconciliation and Park's next
-            # explicit decision while still freezing/canceling new exposure.
-            ordered_actions[2] = "preserve_strategy_owned_positions"
-            position_authority = "preserve_strategy_owned_positions"
         row = {
             "schema_version": PARK_ACTION_PLAN_SCHEMA,
             "event": "terminal_action_plan",
