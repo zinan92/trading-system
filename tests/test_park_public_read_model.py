@@ -367,6 +367,43 @@ def test_public_read_model_projects_terminal_result_for_park_revision(tmp_path: 
     assert result["terminal"]["next_action"] == "await_park_next_strategy"
 
 
+def test_public_read_model_prefers_current_terminal_blocker_over_old_terminal(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    _append_jsonl(
+        output / "park_strategy" / "executions.jsonl",
+        [
+            {
+                "event": "terminal_paused",
+                "strategy_session_id": "session-old",
+                "strategy_revision_id": "revision-old",
+                "recorded_at": "2026-08-16T22:00:00+00:00",
+                "result": {"terminal_reason": "take_profit_price"},
+            }
+        ],
+    )
+    _append_jsonl(
+        output / "park_strategy" / "runtime_blockers.jsonl",
+        [
+            {
+                "event": "runtime_blocked",
+                "code": "terminal_reconciliation_blocked",
+                "session": "session-1",
+                "revision": "revision-1",
+                "recorded_at": "2026-08-17T00:00:30+00:00",
+                "reason": "stop_price",
+                "reconciliation": {"status": "blocked", "issues": ["open_order"]},
+                "next_action": "notify_park_and_wait",
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["terminal"]["blocker_code"] == "terminal_reconciliation_blocked"
+    assert result["terminal"]["strategy_session_id"] == "session-1"
+
+
 def test_public_read_model_projects_active_recording_window_before_package_close(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     _fixture(output)
