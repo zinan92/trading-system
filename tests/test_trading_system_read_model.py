@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
+import pytest
+
 from schemas.accounting import build_accounting_snapshot
 from services.accounting_projection_core import OPEN_ORDER_STATES
 from services.order_lifecycle import LEGAL_TRANSITIONS, ORDER_STATES, TERMINAL_STATES
@@ -327,6 +329,92 @@ def test_read_model_copies_canonical_counts_and_projects_running_strategy() -> N
     assert model["execution"]["trades"][0]["close_reason"] == "tp"
     assert model["execution"]["trades"][0]["close_reason_label"] == "TP"
     assert source == before
+
+
+def _yesterday_report(*, status: str = "complete", net: float = 12.5, fees: float | None = 0.5, funding: float | None = -0.1) -> dict:
+    execution = {
+        "realized_pnl": net,
+        "trade_count": 3,
+        "fill_count": 6,
+    }
+    if fees is not None:
+        execution["fees"] = fees
+    if funding is not None:
+        execution["funding"] = funding
+    return {
+        "schema_version": "trading-daily-24h-v1",
+        "status": status,
+        "report_date": "2026-07-17",
+        "execution": execution,
+        "provenance": {
+            "cycle_packages": [
+                {"cycle_id": "2026-07-16_NIGHT", "package_hash": "sha256:package-1"},
+                {"cycle_id": "2026-07-17_DAY", "package_hash": "sha256:package-2"},
+                {"cycle_id": "2026-07-17_NIGHT", "package_hash": "sha256:package-3"},
+            ]
+        },
+        "report_hash": "sha256:report-1",
+    }
+
+
+@pytest.mark.parametrize("net", [12.5, -4.25, 0.0])
+def test_read_model_projects_complete_yesterday_pnl_without_unrealized_or_shadow(net: float) -> None:
+    source = _source()
+    source["daily_reports"] = {
+        "source": "terminal_cycle_packages",
+        "reports": [_yesterday_report(net=net)],
+    }
+
+    model = project_trading_system_read_model(
+        source,
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    yesterday = model["yesterday_pnl"]
+    assert yesterday["status"] == "complete"
+    assert yesterday["report_date"] == "2026-07-17"
+    assert yesterday["net_realized_pnl"] == net
+    assert yesterday["fees"] == 0.5
+    assert yesterday["funding"] == -0.1
+    assert yesterday["trade_count"] == 3
+    assert yesterday["fill_count"] == 6
+    assert yesterday["includes_unrealized"] is False
+    assert len(yesterday["supporting_packages"]) == 3
+
+
+def test_read_model_marks_yesterday_pnl_partial_when_cost_evidence_is_missing() -> None:
+    source = _source()
+    source["daily_reports"] = {
+        "reports": [_yesterday_report(fees=None, funding=None)],
+    }
+
+    model = project_trading_system_read_model(
+        source,
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    yesterday = model["yesterday_pnl"]
+    assert yesterday["status"] == "partial"
+    assert yesterday["net_realized_pnl"] == 12.5
+    assert yesterday["fees"] is None
+    assert yesterday["funding"] is None
+    assert "yesterday_fees_missing" in yesterday["blockers"]
+    assert "yesterday_funding_missing" in yesterday["blockers"]
+
+
+def test_read_model_never_renders_missing_yesterday_pnl_as_zero() -> None:
+    source = _source()
+    source["daily_reports"] = {"reports": []}
+
+    model = project_trading_system_read_model(
+        source,
+        generated_at="2026-07-18T01:02:04+00:00",
+    ).to_dict()
+
+    yesterday = model["yesterday_pnl"]
+    assert yesterday["status"] == "evidence_insufficient"
+    assert yesterday["net_realized_pnl"] is None
+    assert yesterday["report_date"] == "2026-07-17"
 
 
 def test_read_model_quarantines_an_inverted_completed_trade_from_normal_counts() -> None:

@@ -328,6 +328,20 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
         "safety": {"status": "pass", "age_seconds": 4.0},
     }
     model = _read_model("accepted", full_orders=True, park=park)
+    model["yesterday_pnl"] = {
+        "status": "complete",
+        "status_label": "证据完整",
+        "report_date": "2026-08-17",
+        "net_realized_pnl": 12.5,
+        "fees": 0.5,
+        "funding": -0.1,
+        "trade_count": 3,
+        "fill_count": 6,
+        "includes_unrealized": False,
+        "report_hash": "sha256:report-browser",
+        "supporting_packages": [{"cycle_id": "2026-08-17_DAY"}, {"cycle_id": "2026-08-17_NIGHT"}],
+        "blockers": [],
+    }
     browser_errors: list[str] = []
 
     def fulfill_read_model(route) -> None:
@@ -361,6 +375,8 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
 
         card = page.locator("#currentStrategyCard")
         copy = card.inner_text()
+        yesterday = page.locator("#yesterdayPnlCard")
+        yesterday_copy = yesterday.inner_text()
         assert page.evaluate(
             "() => document.querySelector('#currentStrategyCard').compareDocumentPosition(document.querySelector('#parkAiChatCard')) & Node.DOCUMENT_POSITION_FOLLOWING"
         )
@@ -378,8 +394,75 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
         assert "revision-browser-4" in copy
         assert "行情可信" in copy and "对账 ok" in copy and "4 秒前" in copy
         assert "Recording Window 2026-08-18_DAY · complete" in copy
+        assert "2026-08-17 · +12.50 USD" in yesterday_copy
+        assert "证据完整" in yesterday_copy
+        assert "手续费" in yesterday_copy and "+0.50" in yesterday_copy
+        assert "资金费" in yesterday_copy and "-0.10" in yesterday_copy
+        page.locator("[data-yesterday-review]").click()
+        assert page.locator("#tabs [data-tab=review]").get_attribute("class") == "on"
+        assert "2026-08-17" in page.locator("#yesterdayReviewContext").inner_text()
+        assert "2026-08-17_DAY" in page.locator("#yesterdayReviewContext").inner_text()
+        assert page.evaluate(
+            "() => document.querySelector('#yesterdayPnlCard').compareDocumentPosition(document.querySelector('#parkAiChatCard')) & Node.DOCUMENT_POSITION_FOLLOWING"
+        )
         assert "Draft" not in copy and "推荐" not in copy
         assert browser_errors == []
+        browser.close()
+
+
+@pytest.mark.parametrize(
+    ("net", "status", "fees", "funding", "expected"),
+    [
+        (-4.25, "complete", -0.5, 0.1, "-4.25 USD"),
+        (0.0, "complete", 0.0, 0.0, "0.00 USD"),
+        (9.75, "partial", None, None, "9.75 USD"),
+    ],
+)
+def test_gridmind_yesterday_pnl_renders_negative_zero_and_partial_evidence(
+    net: float,
+    status: str,
+    fees: float | None,
+    funding: float | None,
+    expected: str,
+) -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True)
+    model["yesterday_pnl"] = {
+        "status": status,
+        "status_label": "证据完整" if status == "complete" else "部分证据",
+        "report_date": "2026-08-17",
+        "net_realized_pnl": net,
+        "fees": fees,
+        "funding": funding,
+        "trade_count": 3,
+        "fill_count": 6,
+        "includes_unrealized": False,
+        "report_hash": "sha256:report-browser",
+        "supporting_packages": [{"cycle_id": "2026-08-17_DAY"}],
+        "blockers": [] if status == "complete" else ["yesterday_fees_missing", "yesterday_funding_missing"],
+    }
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        copy = page.locator("#yesterdayPnlCard").inner_text()
+        assert expected in copy
+        assert ("证据完整" if status == "complete" else "部分证据") in copy
+        if status == "partial":
+            assert "手续费" in copy and "--" in copy
         browser.close()
 
 
@@ -418,6 +501,7 @@ def test_gridmind_surfaces_legacy_exposure_as_a_visible_migration_blocker() -> N
         page.locator("#currentStrategyCard").wait_for(state="visible")
 
         copy = page.locator("#currentStrategyCard").inner_text()
+        yesterday_copy = page.locator("#yesterdayPnlCard").inner_text()
         assert "现有执行暴露" in copy
         assert "迁移阻塞" in copy
         assert "25 挂单" in copy and "1 持仓" in copy
@@ -472,12 +556,16 @@ def test_gridmind_distinguishes_evidence_blocked_from_clean_idle() -> None:
         page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
         page.locator("#currentStrategyCard").wait_for(state="visible")
         copy = page.locator("#currentStrategyCard").inner_text()
+        yesterday_copy = page.locator("#yesterdayPnlCard").inner_text()
         assert "策略证据阻塞" in copy
         assert "证据阻塞" in copy
         assert "暂无 Park Strategy" not in copy
         assert "阻塞: safety_evidence_not_passing" in copy
         assert "Recording Window 2026-08-18_DAY · blocked" in copy
         assert "Recording Window 阻塞: recording_package_blocked" in copy
+        assert "2026-07-17 · --" in yesterday_copy
+        assert "证据不足" in yesterday_copy
+        assert "阻塞: yesterday_daily_report_missing" in yesterday_copy
         assert browser_errors == []
         browser.close()
 

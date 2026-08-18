@@ -137,6 +137,9 @@ class TradingDaily24hReportBuilder:
         position_ids: set[str] = set()
         fill_ids: set[str] = set()
         starting_cash_values: list[float] = []
+        fee_values: list[float] = []
+        funding_values: list[float] = []
+        gross_realized_values: list[float] = []
         provenance: list[dict[str, Any]] = []
 
         for package in packages:
@@ -144,6 +147,15 @@ class TradingDaily24hReportBuilder:
             execution = package["execution"]
             account = execution.get("account") or {}
             starting_cash_values.append(_finite(account.get("starting_cash"), f"{cycle_id} starting cash"))
+            if account.get("fees") not in (None, ""):
+                fee_values.append(_finite(account.get("fees"), f"{cycle_id} fees"))
+            if account.get("funding") not in (None, ""):
+                funding_values.append(_finite(account.get("funding"), f"{cycle_id} funding"))
+            package_pnl = execution.get("pnl") or {}
+            if package_pnl.get("gross_realized_pnl") not in (None, ""):
+                gross_realized_values.append(
+                    _finite(package_pnl.get("gross_realized_pnl"), f"{cycle_id} gross realized PnL")
+                )
             provenance.append({
                 "cycle_id": cycle_id,
                 "package_hash": str(package.get("package_hash") or ""),
@@ -188,6 +200,13 @@ class TradingDaily24hReportBuilder:
         base_cash = starting_cash_values[0] if starting_cash_values else 0.0
         if base_cash <= 0 or any(not math.isclose(value, base_cash, abs_tol=1e-6) for value in starting_cash_values):
             raise ValueError("cycle package starting cash is missing or inconsistent")
+        if len(fee_values) == len(packages) and len(funding_values) == len(packages) and len(gross_realized_values) == len(packages):
+            expected_net = round(sum(gross_realized_values) - sum(fee_values) + sum(funding_values), 8)
+            if not math.isclose(realized, expected_net, abs_tol=1e-6):
+                raise ValueError(
+                    "authoritative net realized PnL does not match gross - fees + funding"
+                    f"; net={realized}; expected={expected_net}"
+                )
         total_notional = sum(float(row["_notional"]) for row in fills_in_day)
         ending_equity = base_cash + realized
         payload: dict[str, Any] = {
@@ -217,6 +236,15 @@ class TradingDaily24hReportBuilder:
                 "package_count": len(provenance),
             },
         }
+        if len(fee_values) == len(packages):
+            payload["execution"]["fees"] = round(sum(fee_values), 8)
+            payload["execution"]["fees_source"] = "terminal_cycle_packages.execution.account"
+        if len(funding_values) == len(packages):
+            payload["execution"]["funding"] = round(sum(funding_values), 8)
+            payload["execution"]["funding_source"] = "terminal_cycle_packages.execution.account"
+        if len(gross_realized_values) == len(packages):
+            payload["execution"]["gross_realized_pnl"] = round(sum(gross_realized_values), 8)
+            payload["execution"]["gross_realized_pnl_source"] = "terminal_cycle_packages.execution.pnl"
         payload["report_hash"] = _hash_payload(payload)
         return payload
 

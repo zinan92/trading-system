@@ -16,6 +16,9 @@ def _write_package(
     positions: list[dict],
     fills: list[dict],
     realized: float,
+    fees: float | None = None,
+    funding: float | None = None,
+    gross_realized: float | None = None,
 ) -> dict:
     payload = {
         "schema_version": "strategy-cycle-package-v1",
@@ -29,8 +32,17 @@ def _write_package(
             "orders": [],
             "fills": fills,
             "positions": positions,
-            "account": {"starting_cash": 10_000.0, "ending_cash": 10_000.0 + realized},
-            "pnl": {"realized": realized, "unrealized": 0.0},
+            "account": {
+                "starting_cash": 10_000.0,
+                "ending_cash": 10_000.0 + realized,
+                **({"fees": fees} if fees is not None else {}),
+                **({"funding": funding} if funding is not None else {}),
+            },
+            "pnl": {
+                "realized": realized,
+                "unrealized": 0.0,
+                **({"gross_realized_pnl": gross_realized} if gross_realized is not None else {}),
+            },
             "reconciliation": {"status": "ok", "issues": []},
         },
         "traceability": {
@@ -148,6 +160,69 @@ def test_beijing_day_uses_closed_positions_for_pnl_and_fills_only_for_events(
     assert "fills 仅用于次数和名义金额" in text
     assert packages[0]["package_hash"] in text
     assert payload["report_hash"] in text
+
+
+def test_daily_report_carries_explicit_fees_and_funding_when_all_packages_observe_them(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "outputs"
+    for cycle_id, entry_ts, exit_ts, realized in (
+        ("2026-07-16_NIGHT", "2026-07-16T18:00:00+00:00", "2026-07-16T19:00:00+00:00", 3.0),
+        ("2026-07-17_DAY", "2026-07-17T02:00:00+00:00", "2026-07-17T03:00:00+00:00", -1.0),
+        ("2026-07-17_NIGHT", "2026-07-17T14:00:00+00:00", "2026-07-17T15:00:00+00:00", 4.0),
+    ):
+        _write_package(
+            output,
+            cycle_id,
+            positions=[_position(cycle_id, "1", exit_ts=exit_ts, realized=realized)],
+            fills=_fills(cycle_id, entry_ts=entry_ts, exit_ts=exit_ts),
+            realized=realized,
+            fees=0.5,
+            funding=-0.1,
+            gross_realized=realized + 0.6,
+        )
+
+    TradingDaily24hReportBuilder(output).build(
+        now=datetime(2026, 7, 18, 1, 3, tzinfo=timezone.utc),
+        report_date="2026-07-17",
+    )
+    payload = load_json(output / "dualtrack" / "daily_reports" / "2026-07-17.json")[-1]
+
+    assert payload["execution"]["realized_pnl"] == 6.0
+    assert payload["execution"]["gross_realized_pnl"] == 7.8
+    assert payload["execution"]["fees"] == 1.5
+    assert payload["execution"]["funding"] == -0.3
+
+
+def test_daily_report_fails_closed_on_net_cost_identity_mismatch(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    for cycle_id, entry_ts, exit_ts, realized in (
+        ("2026-07-16_NIGHT", "2026-07-16T18:00:00+00:00", "2026-07-16T19:00:00+00:00", 3.0),
+        ("2026-07-17_DAY", "2026-07-17T02:00:00+00:00", "2026-07-17T03:00:00+00:00", -1.0),
+        ("2026-07-17_NIGHT", "2026-07-17T14:00:00+00:00", "2026-07-17T15:00:00+00:00", 4.0),
+    ):
+        _write_package(
+            output,
+            cycle_id,
+            positions=[_position(cycle_id, "1", exit_ts=exit_ts, realized=realized)],
+            fills=_fills(cycle_id, entry_ts=entry_ts, exit_ts=exit_ts),
+            realized=realized,
+            fees=0.5,
+            funding=-0.1,
+            gross_realized=realized + 0.6,
+        )
+    package_path = output / "dualtrack" / "strategy_cycle_packages" / "2026-07-17_DAY.json"
+    tampered = load_json(package_path)[-1]
+    tampered["execution"]["pnl"]["gross_realized_pnl"] = 99.0
+    tampered.pop("package_hash", None)
+    tampered["package_hash"] = _hash_payload(tampered)
+    write_json(package_path, [tampered])
+
+    with pytest.raises(ValueError, match=r"gross - fees \+ funding"):
+        TradingDaily24hReportBuilder(output).build(
+            now=datetime(2026, 7, 18, 1, 3, tzinfo=timezone.utc),
+            report_date="2026-07-17",
+        )
 
 
 def test_daily_report_is_idempotent_and_dashboard_exposes_same_nav(tmp_path: Path) -> None:
