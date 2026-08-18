@@ -358,6 +358,10 @@ class ParkTelegramRouter:
         prior typed parser result; it never replays arbitrary old commands.
         """
 
+        if any(row.get("event") == "completed" for row in self.legacy_cutover.rows()):
+            # The legacy migration is sealed. Do not replay its historical
+            # message on every later tick and emit stale count-mismatch noise.
+            return []
         recovered: list[dict[str, Any]] = []
         for received in self.telegram.inbox_rows():
             if received.get("event") != "inbound_received":
@@ -387,6 +391,32 @@ class ParkTelegramRouter:
                 active=active,
                 update_id=update_id,
                 text_digest=str(received.get("text_digest") or _digest(str(received.get("text") or ""))),
+            )
+            self._remember_result(
+                update_id,
+                result,
+                update_digest=str((prior or {}).get("_update_digest") or _digest(received)),
+            )
+            recovered.append(result)
+        return recovered
+
+    def recover_pending_strategy_inputs(self) -> list[dict[str, Any]]:
+        """Reprocess a strategy message misclassified by an unavailable provider."""
+
+        recovered: list[dict[str, Any]] = []
+        for received in self.telegram.inbox_rows():
+            if received.get("event") != "inbound_received":
+                continue
+            update_id = received.get("update_id")
+            prior = self._previous_result(update_id)
+            prior_result = dict(prior.get("result") or {}) if prior else {}
+            if prior_result.get("code") != "ambiguous_strategy_type":
+                continue
+            active = self.identity.active_session()
+            result = self._handle_strategy(
+                _safe_text(received.get("text")),
+                active=active,
+                update_id=update_id,
             )
             self._remember_result(
                 update_id,
@@ -1025,6 +1055,7 @@ class ParkTelegramWorker:
             try:
                 offset = self.cursor.read()
                 recovered = self.router.recover_pending_legacy_cutovers()
+                recovered.extend(self.router.recover_pending_strategy_inputs())
                 polling_error: dict[str, Any] | None = None
                 try:
                     updates = transport.get_updates(offset=offset, timeout_seconds=self.timeout_seconds)

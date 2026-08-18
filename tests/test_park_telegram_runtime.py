@@ -488,6 +488,46 @@ def test_worker_keeps_durable_recovery_when_telegram_poll_fails(tmp_path: Path, 
     assert result["next_action"] == "retry_telegram_poll"
 
 
+def test_worker_recovers_explicit_dca_after_provider_type_misclassification(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: {
+            "price": 4300.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "paper-feed",
+            "observed_at": "2026-08-14T10:00:00+00:00",
+        },
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: "2026-08-14T10:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-14_DAY",
+    )
+    update = _update(31, "现在行情是震荡向上 做4200 4400的做多dca吧，然后最大10倍杠杆")
+    router.telegram.ingest_update(update)
+    router._remember_result(
+        31,
+        {"status": "blocked", "code": "ambiguous_strategy_type"},
+        update_digest="sha256:previous",
+    )
+
+    recovered = router.recover_pending_strategy_inputs()
+
+    assert recovered[0]["status"] == "blocked"
+    assert recovered[0]["code"] == "dca_exit_levels_missing"
+    assert not (output / "park_strategy" / "identity.jsonl").exists()
+    assert not (output / "park_strategy" / "plans.jsonl").exists()
+
+
 def test_duplicate_update_id_with_changed_content_is_blocked_and_audited(tmp_path: Path) -> None:
     router = ParkTelegramRouter(
         tmp_path / "outputs",
