@@ -416,7 +416,10 @@ class ParkTelegramRouter:
             result = self._handle_strategy(
                 _safe_text(received.get("text")),
                 active=active,
-                update_id=update_id,
+                # Keep the original Telegram update id in the durable result,
+                # but give the repaired response a fresh outbound key so an
+                # old misclassification cannot mask the new guidance text.
+                update_id=f"{update_id}:strategy-recovery",
             )
             self._remember_result(
                 update_id,
