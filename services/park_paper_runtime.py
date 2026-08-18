@@ -23,23 +23,25 @@ from services.park_confirmation import ParkConfirmationLedger
 from services.park_cutover_guard import evaluate_park_cutover, load_default_config
 from services.park_dca_track import ParkDcaLifecycle
 from services.park_grid_track import ParkGridLifecycle
-from services.park_paper_preflight import ParkPaperPreflightError, build_park_paper_preflight
 from services.park_paper_mutation_gate import (
     ParkPaperAdapterBinding,
     ParkPaperMutationCapability,
     _mint_park_paper_capability,
 )
+from services.park_paper_preflight import (
+    ParkPaperPreflightError,
+    build_park_paper_preflight,
+)
 from services.park_recording_track import ParkRecordingTrack
-from services.park_strategy_snapshot import record_strategy_snapshot_terminal
 from services.park_strategy_lifecycle import ParkStrategyLifecycleLedger
 from services.park_strategy_plan import build_deterministic_risk_plan
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
     recording_window,
 )
+from services.park_strategy_snapshot import record_strategy_snapshot_terminal
 from services.park_telegram_control import ParkTelegramLedger
 from services.strategy_control_plane import production_mutation_lock
-
 
 PARK_PAPER_RUNTIME_SCHEMA = "park-paper-runtime-v1"
 _SAFE_NAMESPACE = re.compile(r"[^a-zA-Z0-9_-]+")
@@ -1970,12 +1972,13 @@ def build_park_authoritative_adapter(
     *,
     config: Mapping[str, Any] | None = None,
     environ: Mapping[str, str] | None = None,
+    allow_disabled_read: bool = False,
 ) -> ParkPaperAdapterBinding:
     """Build only the direct attended Nautilus Paper adapter; never a wrapper."""
 
     settings = dict(config or load_default_config())
     environment = dict(os.environ if environ is None else environ)
-    if settings.get("feature_enabled") is not True:
+    if settings.get("feature_enabled") is not True and not allow_disabled_read:
         raise ParkPaperRuntimeError("park_track_disabled", "Park Strategy Track is disabled")
     if settings.get("runtime_mode") != "paper_only" or settings.get("control_plane") != "telegram":
         raise ParkPaperRuntimeError("park_contract_invalid", "Park runtime contract is not Paper-only Telegram-only")

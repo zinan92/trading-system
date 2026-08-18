@@ -12,19 +12,21 @@ from pathlib import Path
 from typing import Any, Callable
 
 from services.config_loader import ROOT
+from services.dualtrack_config import dualtrack_config
 from services.dualtrack_execution_contract import (
     ImmutableFillGuardError,
     canonical_market_event,
     normalize_execution_command,
 )
-from services.dualtrack_config import dualtrack_config
 from services.dualtrack_grid_core import GridLineLifecycle
 from services.dualtrack_shadow_input import build_shadow_input
 from services.journal_store import load_json, write_json
 from services.park_paper_mutation_gate import ParkPaperMutationGate
 from services.park_paper_preflight import validate_park_paper_preflight
-from services.risk_port import action_class_for_command, build_paper_safe_action_market_gate
-
+from services.risk_port import (
+    action_class_for_command,
+    build_paper_safe_action_market_gate,
+)
 
 ReplayExecutor = Callable[[Path, Path, Path], dict[str, Any]]
 REPLAY_VERSION = "dualtrack-nautilus-replay-v8"
@@ -349,8 +351,15 @@ class NautilusExecutionAdapter:
         strategy_plan_id: str | None = None,
         ts: str | None = None,
         reason: str = "",
+        legacy_cutover_id: str | None = None,
     ) -> dict[str, Any]:
-        self._require_mutation_authority(cycle_id=cycle_id, strategy_plan_id=strategy_plan_id)
+        operation = "cancel_legacy_orders" if legacy_cutover_id else None
+        self._require_mutation_authority(
+            cycle_id=cycle_id,
+            strategy_plan_id=strategy_plan_id,
+            operation=operation,
+            legacy_cutover_id=legacy_cutover_id,
+        )
         requested_ids = {str(value) for value in (order_ids or []) if str(value)}
         rows = load_json(self._commands_path(cycle_id))
         accepted_ids = {
@@ -384,8 +393,10 @@ class NautilusExecutionAdapter:
             source_command = dict(source_row.get("command") or {})
             self._require_mutation_authority(
                 cycle_id=cycle_id,
-                command=source_command,
+                command={**source_command, "legacy_cutover_id": legacy_cutover_id} if legacy_cutover_id else source_command,
                 strategy_plan_id=strategy_plan_id,
+                operation=operation,
+                legacy_cutover_id=legacy_cutover_id,
             )
             target_command_id = str(source_row.get("command_id") or "")
             cancel_source_id = f"nautilus-cancel:{target_command_id}:{timestamp}:{reason}"
@@ -396,6 +407,7 @@ class NautilusExecutionAdapter:
                 "cancel_order_id": target_command_id,
                 "authoritative_order_id": match_id,
                 "reason": str(reason or ""),
+                **({"legacy_cutover_id": str(legacy_cutover_id)} if legacy_cutover_id else {}),
                 "source_fill_id": cancel_source_id,
                 "safe_action_market_gate": build_paper_safe_action_market_gate(
                     action_class_for_command({"event": "cancel"}),
@@ -589,7 +601,7 @@ class NautilusExecutionAdapter:
         self._require_mutation_authority(cycle_id=cycle_id)
         return self._flush(cycle_id, reject_pending_market_events=False)
 
-    def flush_commands(self, cycle_id: str) -> dict[str, Any]:
+    def flush_commands(self, cycle_id: str, *, legacy_cutover_id: str | None = None) -> dict[str, Any]:
         """Replay persisted commands only when no market event is awaiting replay.
 
         Control-plane mutations must never acknowledge a market event as a side
@@ -598,7 +610,11 @@ class NautilusExecutionAdapter:
         remains pending for the normal market-event path.
         """
 
-        self._require_mutation_authority(cycle_id=cycle_id)
+        self._require_mutation_authority(
+            cycle_id=cycle_id,
+            operation="cancel_legacy_orders" if legacy_cutover_id else None,
+            legacy_cutover_id=legacy_cutover_id,
+        )
         return self._flush(cycle_id, reject_pending_market_events=True)
 
     def _require_mutation_authority(
@@ -607,12 +623,16 @@ class NautilusExecutionAdapter:
         cycle_id: str | None = None,
         command: dict[str, Any] | None = None,
         strategy_plan_id: str | None = None,
+        operation: str | None = None,
+        legacy_cutover_id: str | None = None,
     ) -> None:
         if self.mutation_gate is not None:
             self.mutation_gate.require(
                 cycle_id=cycle_id,
                 command=command,
                 strategy_plan_id=strategy_plan_id,
+                operation=operation,
+                legacy_cutover_id=legacy_cutover_id,
             )
 
     def _flush(
