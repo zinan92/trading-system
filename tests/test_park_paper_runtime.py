@@ -469,6 +469,58 @@ def test_dca_explicit_take_profit_terminal_closes_owned_position_and_notifies_re
     assert all("sl" not in command and "tp" not in command for command in adapter.submit_calls[:-1])
 
 
+def test_dca_terminal_retry_keeps_first_persisted_trigger_after_reconciliation_failure(tmp_path: Path) -> None:
+    class DriftOnceAdapter(FakePaperAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reconcile_calls = 0
+            self.fail_terminal = False
+
+        def reconcile(self, cycle_id: str) -> dict:
+            self.reconcile_calls += 1
+            if self.fail_terminal and self.reconcile_calls == 5:
+                return {"status": "drift", "issues": ["terminal_test_drift"], "cycle_id": cycle_id}
+            return super().reconcile(cycle_id)
+
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T10:00:00+00:00",
+        "symbol": "GOLD",
+    }
+    router = _router(output, market)
+    adapter = DriftOnceAdapter()
+    runtime = _runtime(output, adapter, market)
+    proposal = router.handle_update(_update(26, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
+    router.handle_update(_update(27, f"confirm {proposal['proposal']['plan_digest']}"))
+    assert runtime.run_once()["status"] == "active"
+    adapter.fail_terminal = True
+    market.update({"price": 4444.0, "observed_at": "2026-08-14T10:01:00+00:00"})
+
+    blocked = runtime.run_once()
+
+    assert blocked["status"] == "blocked"
+    assert blocked["code"] == "terminal_reconciliation_blocked"
+    lifecycle = [
+        json.loads(line)
+        for line in (output / "park_strategy" / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert lifecycle[-1]["event"] == "terminal_action_plan"
+    assert lifecycle[-1]["trigger"] == "stop_price"
+
+    adapter.fail_terminal = False
+    market.update({"price": 4300.0, "observed_at": "2026-08-14T10:02:00+00:00"})
+    recovered = runtime.run_once()
+
+    assert recovered["status"] == "paused"
+    assert recovered["terminal_reason"] == "stop_price"
+    assert lifecycle[-1]["trigger"] == "stop_price"
+
+
 def test_direct_adapter_factory_is_default_deny_without_park_release_or_runtime(tmp_path: Path) -> None:
     try:
         build_park_authoritative_adapter(tmp_path, config={**_config(), "feature_enabled": False}, environ={})

@@ -189,6 +189,7 @@ class ParkPaperRuntime:
                 digest=digest,
                 observed_at=observed_at,
             )
+        pending_terminal = self._pending_terminal_action(session, revision)
         confirmation = self._confirmed_for(digest, session, revision)
         if confirmation is None:
             expired = self._release_expired_unconfirmed_session(
@@ -306,7 +307,11 @@ class ParkPaperRuntime:
                 gate=gate,
             )
             try:
-                pre_terminal = self._terminal_reason(plan, current_price)
+                pre_terminal = (
+                    self._boundary_from_terminal_action(pending_terminal, current_price)
+                    if pending_terminal
+                    else self._terminal_reason(plan, current_price)
+                )
                 has_prior_entries = any(
                     row.get("event") == "entry_submitted"
                     and _owned(row, session, revision, digest)
@@ -314,7 +319,7 @@ class ParkPaperRuntime:
                 )
                 submitted = (
                     []
-                    if recording_failures or (pre_terminal and not has_prior_entries)
+                    if recording_failures or pre_terminal
                     else self._submit_entries_if_needed(
                         plan=plan,
                         confirmation=confirmation,
@@ -355,7 +360,11 @@ class ParkPaperRuntime:
                     snapshot=snapshot,
                     reconciliation=reconciliation,
                 )
-            boundary = self._terminal_reason(plan, current_price)
+            boundary = (
+                self._boundary_from_terminal_action(pending_terminal, current_price)
+                if pending_terminal
+                else self._terminal_reason(plan, current_price)
+            )
             if boundary:
                 terminal = self._terminal(
                     plan=plan,
@@ -567,6 +576,45 @@ class ParkPaperRuntime:
         snapshot: Mapping[str, Any],
         reconciliation: Mapping[str, Any],
     ) -> dict[str, Any]:
+        lifecycle_ledger: ParkStrategyLifecycleLedger | None = None
+        normalized_strategy_type = str((plan.get("normalized_input") or {}).get("strategy_type") or "")
+        if normalized_strategy_type in {"dca", "grid"}:
+            lifecycle_ledger = ParkStrategyLifecycleLedger(self.output_root)
+            pending_action = lifecycle_ledger.pending_terminal_action(
+                strategy_session_id=session,
+                strategy_revision_id=revision,
+            )
+            if pending_action:
+                boundary = self._boundary_from_terminal_action(pending_action, current_price)
+            else:
+                lifecycle_ledger.activate({
+                    **dict(plan.get("normalized_input") or {}),
+                    "strategy_session_id": session,
+                    "strategy_revision_id": revision,
+                    "plan_digest": digest,
+                    "maximum_leverage": (plan.get("risk") or {}).get("effective_leverage"),
+                    "maximum_acceptable_loss": (plan.get("risk") or {}).get("theoretical_max_loss"),
+                })
+                if normalized_strategy_type == "dca":
+                    lifecycle_ledger.terminal_action_plan(
+                        strategy_session_id=session,
+                        strategy_revision_id=revision,
+                        trigger=str(boundary["reason"]),
+                        observed_price=current_price,
+                        trusted_market=True,
+                        fresh_tick=True,
+                    )
+                else:
+                    reason = str(boundary["reason"])
+                    boundary_name = "upper" if reason.startswith("upper_") else "lower"
+                    lifecycle_ledger.boundary_action_plan(
+                        strategy_session_id=session,
+                        strategy_revision_id=revision,
+                        boundary=boundary_name,
+                        observed_price=current_price,
+                        trusted_market=True,
+                        fresh_tick=True,
+                    )
         terminal_key = f"{session}:{revision}:{boundary['reason']}"
         existing = next(
             (
@@ -678,37 +726,6 @@ class ParkPaperRuntime:
             "paper_only": True,
             "next_action": "await_park_next_strategy",
         }
-        normalized_strategy_type = str((plan.get("normalized_input") or {}).get("strategy_type") or "")
-        if normalized_strategy_type in {"dca", "grid"}:
-            lifecycle_ledger = ParkStrategyLifecycleLedger(self.output_root)
-            lifecycle_ledger.activate({
-                **dict(plan.get("normalized_input") or {}),
-                "strategy_session_id": session,
-                "strategy_revision_id": revision,
-                "plan_digest": digest,
-                "maximum_leverage": (plan.get("risk") or {}).get("effective_leverage"),
-                "maximum_acceptable_loss": (plan.get("risk") or {}).get("theoretical_max_loss"),
-            })
-            if normalized_strategy_type == "dca":
-                lifecycle_ledger.terminal_action_plan(
-                    strategy_session_id=session,
-                    strategy_revision_id=revision,
-                    trigger=str(boundary["reason"]),
-                    observed_price=current_price,
-                    trusted_market=True,
-                    fresh_tick=True,
-                )
-            else:
-                reason = str(boundary["reason"])
-                boundary_name = "upper" if reason.startswith("upper_") else "lower"
-                lifecycle_ledger.boundary_action_plan(
-                    strategy_session_id=session,
-                    strategy_revision_id=revision,
-                    boundary=boundary_name,
-                    observed_price=current_price,
-                    trusted_market=True,
-                    fresh_tick=True,
-                )
         self.identity.close_session(
             strategy_session_id=session,
             strategy_revision_id=revision,
@@ -855,6 +872,28 @@ class ParkPaperRuntime:
             if (direction == "long" and price >= target_value) or (direction == "short" and price <= target_value):
                 return {"reason": "take_profit_price", "close_positions": True}
         return None
+
+    def _pending_terminal_action(self, session: str, revision: str) -> dict[str, Any] | None:
+        return ParkStrategyLifecycleLedger(self.output_root).pending_terminal_action(
+            strategy_session_id=session,
+            strategy_revision_id=revision,
+        )
+
+    @staticmethod
+    def _boundary_from_terminal_action(action: Mapping[str, Any] | None, current_price: float) -> dict[str, Any] | None:
+        if not action:
+            return None
+        trigger = str(action.get("trigger") or "")
+        if not trigger:
+            boundary = str(action.get("boundary") or "")
+            trigger = f"{boundary}_boundary_invalidated" if boundary in {"upper", "lower"} else ""
+        if not trigger:
+            return None
+        return {
+            "reason": trigger,
+            "close_positions": action.get("position_authority") == "close_strategy_owned_positions",
+            "observed_price": action.get("observed_price", current_price),
+        }
 
     def _admission(
         self,

@@ -172,6 +172,23 @@ class ParkStrategyLifecycleLedger:
     def rows(self) -> list[dict[str, Any]]:
         return _rows(self.path)
 
+    def pending_terminal_action(
+        self,
+        *,
+        strategy_session_id: str,
+        strategy_revision_id: str,
+    ) -> dict[str, Any] | None:
+        identity = ownership_ref(strategy_session_id, strategy_revision_id)
+        return next(
+            (
+                dict(row)
+                for row in reversed(self.rows())
+                if row.get("event") == "terminal_action_plan"
+                and all(row.get(key) == value for key, value in identity.items())
+            ),
+            None,
+        )
+
     def active_plan(self) -> dict[str, Any] | None:
         active: dict[str, Any] | None = None
         for row in self.rows():
