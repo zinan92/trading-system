@@ -280,6 +280,32 @@ class ParkPaperRuntime:
             )
         cycle_id = park_paper_namespace(session)
         with production_mutation_lock(self.output_root):
+            latest_active = self.identity.active_session()
+            latest_pending_reverse = self._pending_reverse_request()
+            if latest_pending_reverse:
+                return self._process_reverse_request(
+                    latest_pending_reverse,
+                    active=latest_active,
+                    observed_at=observed_at,
+                    recording_failures=recording_failures,
+                    recording_blocker=recording_blocker,
+                )
+            if not latest_active or any(
+                str(latest_active.get(key) or "") != expected
+                for key, expected in (
+                    ("strategy_session_id", session),
+                    ("strategy_revision_id", revision),
+                    ("plan_digest", digest),
+                )
+            ):
+                return self._blocked(
+                    "stale_strategy_identity",
+                    "strategy identity changed while waiting for the production mutation lock",
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    observed_at=observed_at,
+                )
             try:
                 snapshot = dict(
                     self.adapter.snapshot(
@@ -1021,6 +1047,10 @@ class ParkPaperRuntime:
                 ts=observed_at,
                 reason="park_reverse_entries",
             ) if entry_ids else {"status": "idempotent", "cancelled_order_ids": []}
+            if entry_ids:
+                entry_cancel_event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at)
+                entry_cancel_event["event_id"] = _digest({"base_event_id": entry_cancel_event["event_id"], "entry_cancel": request.get("request_id")})
+                self.adapter.process_market_event(entry_cancel_event)
             exits: list[dict[str, Any]] = []
             for position in snapshot.get("positions") or []:
                 if str(position.get("status") or "").lower() == "open" and self._position_owned(position, old_session, old_revision, old_digest):
@@ -1040,14 +1070,6 @@ class ParkPaperRuntime:
                 event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at)
                 event["event_id"] = _digest({"base_event_id": event["event_id"], "reverse": request.get("request_id")})
                 self.adapter.process_market_event(event)
-            orphan_cancel = self.adapter.cancel_orders(
-                cycle_id,
-                order_ids=sorted(exit_ids),
-                strategy_plan_id=old_digest,
-                ts=observed_at,
-                reason="park_reverse_orphaned_exits",
-            ) if exit_ids else {"status": "idempotent", "cancelled_order_ids": []}
-            cancel = {**cancel, "orphaned_exit_cancel": orphan_cancel}
             final_snapshot = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
             final_reconciliation = dict(self.adapter.reconcile(cycle_id))
             remaining_orders = [
@@ -1066,6 +1088,32 @@ class ParkPaperRuntime:
                 row for row in final_snapshot.get("positions") or []
                 if str(row.get("status") or "").lower() == "open"
             ]
+            if remaining_positions or all_remaining_positions or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
+                return self._reverse_blocked(request, "reverse_transition_blocked", "旧策略未能归零并通过对账；新策略保持 inactive。", observed_at=observed_at, session=old_session, revision=old_revision, digest=old_digest)
+            orphan_cancel = self.adapter.cancel_orders(
+                cycle_id,
+                order_ids=sorted(exit_ids),
+                strategy_plan_id=old_digest,
+                ts=observed_at,
+                reason="park_reverse_orphaned_exits",
+            ) if exit_ids else {"status": "idempotent", "cancelled_order_ids": []}
+            if exit_ids:
+                orphan_event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at)
+                orphan_event["event_id"] = _digest({"base_event_id": orphan_event["event_id"], "orphan_cancel": request.get("request_id")})
+                self.adapter.process_market_event(orphan_event)
+            cancel = {**cancel, "orphaned_exit_cancel": orphan_cancel}
+            final_snapshot = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
+            final_reconciliation = dict(self.adapter.reconcile(cycle_id))
+            remaining_orders = [
+                row for row in final_snapshot.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted" and self._order_owned(row, old_session, old_revision, old_digest)
+            ]
+            remaining_positions = [
+                row for row in final_snapshot.get("positions") or []
+                if str(row.get("status") or "").lower() == "open" and self._position_owned(row, old_session, old_revision, old_digest)
+            ]
+            all_remaining_orders = [row for row in final_snapshot.get("orders") or [] if str(row.get("state") or "").lower() == "accepted"]
+            all_remaining_positions = [row for row in final_snapshot.get("positions") or [] if str(row.get("status") or "").lower() == "open"]
             if remaining_orders or remaining_positions or all_remaining_orders or all_remaining_positions or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
                 return self._reverse_blocked(request, "reverse_transition_blocked", "旧策略未能归零并通过对账；新策略保持 inactive。", observed_at=observed_at, session=old_session, revision=old_revision, digest=old_digest)
             old_plan = self._plan_for_digest(old_digest) or {}
