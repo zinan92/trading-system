@@ -531,6 +531,55 @@ def test_worker_recovers_explicit_dca_after_provider_type_misclassification(tmp_
     assert not (output / "park_strategy" / "plans.jsonl").exists()
 
 
+def test_worker_refreshes_stale_missing_risk_guidance_once(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: {
+            "price": 4300.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "paper-feed",
+            "observed_at": "2026-08-14T10:00:00+00:00",
+        },
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: "2026-08-14T10:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-14_DAY",
+    )
+    update = _update(32, "现在行情是震荡向上 做4200 4400的做多dca吧")
+    router.telegram.ingest_update(update)
+    router.telegram.queue_outbound(
+        idempotency_key="park-strategy-rejected:32",
+        message_type="park_blocker",
+        text="Park strategy not accepted: strategy type is ambiguous",
+    )
+    router._remember_result(
+        32,
+        {"status": "blocked", "code": "missing_risk_authority"},
+        update_digest="sha256:previous",
+    )
+
+    first = router.recover_pending_strategy_inputs()
+    second = router.recover_pending_strategy_inputs()
+
+    assert first[0]["code"] == "missing_risk_authority"
+    assert second == []
+    assert any(
+        row.get("idempotency_key") == "park-strategy-rejected:32:strategy-recovery"
+        and "风险上限" in str(row.get("text") or "")
+        for row in router.telegram.outbox_rows()
+    )
+
+
 def test_duplicate_update_id_with_changed_content_is_blocked_and_audited(tmp_path: Path) -> None:
     router = ParkTelegramRouter(
         tmp_path / "outputs",
