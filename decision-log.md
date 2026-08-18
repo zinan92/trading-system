@@ -1,5 +1,40 @@
 # Decision Log
 
+## Deploy authoritative Current Strategy projection as Paper-safe read-only evidence (Issue #742)
+
+Date: 2026-08-18
+
+### Decision
+
+- The Dashboard now consumes a dedicated Park Strategy Session/Revision
+  projection for the top Current Strategy card.
+- Missing Park identity with real legacy exposure is rendered as a migration
+  blocker with exact counts, never as a valid Park strategy or clean idle.
+- The release was deployed to Goldbot Paper at exact main SHA
+  `ebdbdd7aeb5ee805870d2a996bfa7fef1d0a5b5d`; presentation services were
+  reloaded, but no order or position lifecycle action was used for deployment.
+
+### Gotchas
+
+- The first post-reload live-tick attempt fail-closed because its boot gate saw
+  the prior blocked preflight receipt. Re-running Cloud preflight against the
+  persistent `/var/lib/gridmind/outputs` path produced a pass receipt; the next
+  scheduled tick passed and completed normally.
+- The deployed read model remains degraded on the existing legacy exposure and
+  market-trust facts. This is evidence of the remaining cutover work, not a
+  claim that the Park runtime is already active.
+
+### Verification
+
+- Evidence: [`docs/evidence/issue-742-current-strategy-release-2026-08-18.md`](docs/evidence/issue-742-current-strategy-release-2026-08-18.md)
+- Focused suite: 171 passed; gitleaks and diff-check passed.
+- Cloud preflight/boot: exact source/tree, Paper-only, zero control actions.
+- Public/loopback: top card markers present, AI route 401 without session,
+  public edge 302 `/login`.
+
+- Next implementation frontier is #744, which removes Recording Window
+  mutation from the active Park path.
+
 ## Keep Park Dashboard AI chat additive, exact-confirmed, and Paper-only (Issue #737)
 
 Date: 2026-08-17
