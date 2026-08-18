@@ -13,6 +13,17 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #749 / PR #780 routes the managed Cloud Paper tick through
+  `pipelines.park_control` instead of the legacy cycle runner.  Scheduler
+  ownership is verified before Telegram ingress; the Park account reader
+  scans every authoritative Paper cycle and calls its reconciliation, exposing
+  exact legacy orders/positions as a blocker rather than adopting or hiding
+  them.  Passive/default-off installation and source/boot/Paper gates remain
+  intact.  Merged on exact
+  `main@e86899bed2f483596028c7ac80099343524064b7` (tree
+  `89e35c0c59496ebd43fa6de3b6008beec239620f`) after 50 focused tests,
+  diff-check, gitleaks, and focused spec/safety review passed.  Exact-SHA
+  Paper deployment is the next runtime step.  Next frontier: #750.
 - #776 / PR #777 hardens the confirmed Reverse transition.  Reverse now
   re-reads pending/blocked state and active identity inside the production
   mutation lock; a blocked request freezes the old path from new entries.

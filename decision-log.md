@@ -16053,3 +16053,29 @@ auditable datafeed port; broker execution remains a separate port.
 - Paper-only evidence; no live, exchange-key, Cloud order, or position
   mutation was performed.  Exact-SHA deployment and natural-tick verification
   remain separate operational evidence.
+
+# 2026-08-18 — Route the managed Paper scheduler through Park control (#749)
+
+## Decision
+
+- The managed `gridmind-live-tick.service` invokes `pipelines.park_control`,
+  not `dualtrack_cycle_runner`.  The existing source-bound boot gate and
+  passive/default-off installer remain required; the legacy runner is not an
+  active Park execution path.
+- `SchedulerOwnershipGuard` runs before Telegram polling or any adapter
+  construction.  Owner mismatch, paused ownership, or missing Cloud owner
+  blocks without ingesting commands.
+- Park clean-slate admission is account-wide.  It scans authoritative Paper
+  snapshots across cycles, validates shape, calls `reconcile(cycle_id)` for
+  each, and exposes exact legacy orders/positions and ownership as blockers.
+  Unknown or malformed evidence is fail-closed; no legacy exposure is
+  cancelled, flattened, adopted, or hidden.
+
+## Verification
+
+- PR #780 merged as `main@e86899bed2f483596028c7ac80099343524064b7` (tree
+  `89e35c0c59496ebd43fa6de3b6008beec239620f`) after 50 focused tests,
+  diff-check, gitleaks, and focused spec/safety review passed.
+- This remains Paper-only and default-off at installation.  No live,
+  exchange-key, Cloud order, or position mutation was performed by the merge;
+  exact-SHA deployment and natural-tick verification remain separate evidence.
