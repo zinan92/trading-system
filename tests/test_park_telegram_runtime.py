@@ -71,6 +71,7 @@ def test_account_reader_counts_legacy_exposure_across_all_paper_cycles(tmp_path:
 
     assert account["open_or_accepted_orders"] == 1
     assert account["snapshot"]["account_wide_legacy_exposure"]["ownership"] == "legacy_cycle_or_unknown"
+    assert account["snapshot"]["account_wide_legacy_exposure"]["orders"][0]["cycle_id"] == "legacy-cycle"
 
 
 def test_transport_requires_explicit_message_receipt_and_parses_updates() -> None:

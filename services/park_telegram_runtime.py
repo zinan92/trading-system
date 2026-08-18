@@ -143,7 +143,10 @@ def default_account_reader(
     # legacy cycle in another namespace must remain visible and block Park;
     # never silently adopt, cancel, or flatten it.
     account_wide_orders: dict[str, dict[str, Any]] = {
-        str(row.get("order_id") or f"current-order-{index}"): dict(row)
+        str(row.get("order_id") or f"current-order-{index}"): {
+            **dict(row),
+            "cycle_id": str(row.get("cycle_id") or cycle_id),
+        }
         for index, row in enumerate(orders)
     }
     account_wide_positions: dict[str, dict[str, Any]] = {
@@ -160,11 +163,17 @@ def default_account_reader(
                 row = rows[-1] if isinstance(rows, list) and rows else rows
                 if not isinstance(row, Mapping) or not isinstance(row.get("orders"), list) or not isinstance(row.get("positions"), list):
                     raise ValueError("account_snapshot_shape_invalid")
+                snapshot_cycle_id = str(row.get("cycle_id") or path.stem).strip()
+                if not snapshot_cycle_id:
+                    raise ValueError("account_snapshot_cycle_id_missing")
                 for order in row["orders"]:
                     if not isinstance(order, Mapping):
                         raise ValueError("account_snapshot_order_invalid")
                     if str(order.get("state") or "").lower() == "accepted" and str(order.get("order_id") or ""):
-                        account_wide_orders[str(order["order_id"])] = dict(order)
+                        account_wide_orders[str(order["order_id"])] = {
+                            **dict(order),
+                            "cycle_id": str(order.get("cycle_id") or snapshot_cycle_id),
+                        }
                 for position in row["positions"]:
                     if not isinstance(position, Mapping):
                         raise ValueError("account_snapshot_position_invalid")
@@ -172,9 +181,8 @@ def default_account_reader(
                         key = str(position.get("position_id") or position.get("trade_id") or "")
                         if key:
                             account_wide_positions[key] = dict(position)
-                cycle_id = str(row.get("cycle_id") or path.stem)
                 try:
-                    cycle_reconciliation = dict(adapter.reconcile(cycle_id))
+                    cycle_reconciliation = dict(adapter.reconcile(snapshot_cycle_id))
                 except Exception as exc:  # noqa: BLE001 - unknown account facts block clean-slate admission.
                     raise ParkTelegramRuntimeError("paper_account_reconciliation_invalid", type(exc).__name__) from exc
                 account_wide_reconciliation_ok = account_wide_reconciliation_ok and cycle_reconciliation.get("status") == "ok" and not cycle_reconciliation.get("issues")
