@@ -461,6 +461,33 @@ def test_worker_persists_cursor_and_replays_duplicate_without_new_result(tmp_pat
     assert transport.sent == 1
 
 
+def test_worker_keeps_durable_recovery_when_telegram_poll_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    router = ParkTelegramRouter(
+        tmp_path / "outputs",
+        park_user_id="park-user",
+        chat_id="park-chat",
+    )
+    monkeypatch.setattr(
+        router,
+        "recover_pending_legacy_cutovers",
+        lambda: [{"status": "legacy_cutover_confirmed"}],
+    )
+
+    class UnavailableTransport:
+        def get_updates(self, **_kwargs):
+            raise TelegramBotTransportError("transport_unavailable", "timeout")
+
+        def send_message(self, text: str, *, chat_id: str):
+            raise TelegramBotTransportError("transport_unavailable", "timeout")
+
+    result = ParkTelegramWorker(router, timeout_seconds=3).run_once(UnavailableTransport())
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "transport_unavailable"
+    assert result["updates_handled"] == [{"status": "legacy_cutover_confirmed"}]
+    assert result["next_action"] == "retry_telegram_poll"
+
+
 def test_duplicate_update_id_with_changed_content_is_blocked_and_audited(tmp_path: Path) -> None:
     router = ParkTelegramRouter(
         tmp_path / "outputs",

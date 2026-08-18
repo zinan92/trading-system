@@ -1025,7 +1025,20 @@ class ParkTelegramWorker:
             try:
                 offset = self.cursor.read()
                 recovered = self.router.recover_pending_legacy_cutovers()
-                updates = transport.get_updates(offset=offset, timeout_seconds=self.timeout_seconds)
+                polling_error: dict[str, Any] | None = None
+                try:
+                    updates = transport.get_updates(offset=offset, timeout_seconds=self.timeout_seconds)
+                except TelegramBotTransportError as exc:
+                    # A durable confirmation may still be consumed by the
+                    # deterministic Park cleanup/runtime path.  Keep the
+                    # transport failure explicit and let the next tick retry
+                    # polling and delivery; never infer a new command.
+                    updates = []
+                    polling_error = {
+                        "code": exc.code,
+                        "detail": type(exc).__name__,
+                        "next_action": "retry_telegram_poll",
+                    }
                 handled: list[dict[str, Any]] = list(recovered)
                 for update in updates:
                     handled.append(self.router.handle_update(update))
@@ -1034,7 +1047,8 @@ class ParkTelegramWorker:
                 delivery = self.router.drain_outbound(transport)
                 return {
                     "schema_version": PARK_TELEGRAM_RUNTIME_SCHEMA,
-                    "status": "pass",
+                    "status": "blocked" if polling_error else "pass",
+                    **(polling_error or {}),
                     "updates_received": len(updates),
                     "updates_handled": handled,
                     "next_offset": self.cursor.read(),
