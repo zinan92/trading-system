@@ -368,7 +368,17 @@ class ParkTelegramRouter:
             update_id = received.get("update_id")
             prior = self._previous_result(update_id)
             prior_result = dict(prior.get("result") or {}) if prior else {}
-            if prior_result.get("status") in {"legacy_cutover_confirmed", "legacy_cutover_proposal_created"}:
+            prior_proposal = prior_result.get("proposal") if isinstance(prior_result.get("proposal"), Mapping) else {}
+            prior_proposal_id = str(prior_proposal.get("proposal_id") or "")
+            pending_ids = {
+                str(row.get("proposal_id") or "")
+                for row in self.legacy_cutover.confirmed_pending()
+            }
+            if (
+                prior_result.get("status") in {"legacy_cutover_confirmed", "legacy_cutover_proposal_created"}
+                and prior_proposal_id
+                and prior_proposal_id in pending_ids
+            ):
                 continue
             active = self.identity.active_session()
             result = self._handle_legacy_cutover(
