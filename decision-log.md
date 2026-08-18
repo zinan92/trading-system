@@ -1,5 +1,42 @@
 # Decision Log
 
+## Complete Park legacy clean-slate cutover and leave the runtime idle (Issues #783-#800)
+
+Date: 2026-08-18
+
+### Decision
+
+- Park's persisted Telegram instruction was recovered deterministically after
+  Codex/provider and Telegram polling failures. Expired intermediate proposals
+  were rebuilt from the same authenticated inbox message, never from a guessed
+  order count.
+- The authoritative Paper snapshot was re-read with outer snapshot cycle IDs,
+  exact order-set digest, zero positions, healthy reconciliation, explicit
+  instrument/fee preflight, scheduler owner proof, and a live-tick unit that
+  contains Park control but no legacy cycle runner.
+- Only the cancellation-scoped capability was minted. It cancelled exactly 19
+  accepted legacy entries, flushed the Paper command ledger, and verified zero
+  accepted orders and zero open positions. No flatten, reverse, new strategy,
+  live, Shadow, Feishu, or autonomous mutation occurred.
+- The checked-in config remains default-off; a durable completed receipt makes
+  the effective Park Paper runtime eligible. Subsequent natural ticks pass and
+  remain idle with `await_new_park_strategy`.
+
+### Verification
+
+- Current Cloud source: `main@f41fb77fbfbd66f95dd677f61c256116952fe01e`, tree
+  `8b434551fd4a20975fe9ad3b032f7dbb478b0967`.
+- Completion receipt: proposal digest
+  `sha256:6aeaee73368a24b67712b18752c9775e6c5133db7bcc05defe2cacbe93ffda7f`,
+  `cancelled_order_count=19`, `clean_slate_verified=true`,
+  `enabled_park_paper=true`.
+- Telegram completion delivered as transport message `40`; timer enabled and
+  active; later natural ticks report `park_control=pass`, `execution=idle`,
+  `orders_created=0`, and `positions_created=0`.
+- Remaining #750 requirement: run a genuine Park-confirmed strategy through
+  the 09:00/21:00 Recording Window boundaries and prove session/revision
+  continuity. This is intentionally not claimed while the runtime is idle.
+
 ## Recover Park's explicit legacy clean-slate instruction (Issue #783)
 
 Date: 2026-08-18
