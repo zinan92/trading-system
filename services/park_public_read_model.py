@@ -202,12 +202,25 @@ def build_park_public_read_model(
 
     normalized = dict(plan.get("normalized_input") or {})
     risk = dict(plan.get("risk") or {})
-    strategy_type = str(normalized.get("strategy_type") or "").lower()
+    normalized_strategy_type = str(normalized.get("strategy_type") or "").lower()
+    lifecycle_strategy_type = str(lifecycle.get("strategy_type") or "").lower()
+    strategy_type = lifecycle_strategy_type or normalized_strategy_type
+    if (
+        lifecycle_strategy_type
+        and normalized_strategy_type
+        and lifecycle_strategy_type != normalized_strategy_type
+    ):
+        blockers.append("strategy_type_mismatch")
     lower_boundary = normalized.get("lower_price_boundary")
     upper_boundary = normalized.get("upper_price_boundary")
     raw_grid_count = risk.get("order_count") or normalized.get("order_count") or 0
     try:
-        grid_count = int(raw_grid_count)
+        if isinstance(raw_grid_count, bool):
+            raise ValueError("boolean is not a grid count")
+        numeric_grid_count = float(raw_grid_count)
+        if not math.isfinite(numeric_grid_count) or numeric_grid_count <= 0 or not numeric_grid_count.is_integer():
+            raise ValueError("grid count must be a positive integer")
+        grid_count = int(numeric_grid_count)
     except (TypeError, ValueError, OverflowError):
         grid_count = 0
         blockers.append("grid_geometry_invalid")
