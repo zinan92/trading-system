@@ -7,7 +7,10 @@ from services.park_legacy_cutover import (
     ParkLegacyCutoverLedger,
     load_effective_park_config,
 )
-from services.park_legacy_cutover_runtime import run_legacy_cutover_once
+from services.park_legacy_cutover_runtime import (
+    inspect_legacy_runner_quarantine,
+    run_legacy_cutover_once,
+)
 from services.park_paper_mutation_gate import (
     _mint_park_paper_capability,
     _new_park_paper_mutation_gate,
@@ -287,3 +290,15 @@ def test_legacy_mutation_scope_cannot_submit_or_use_normal_operation() -> None:
         assert "legacy cutover" in str(exc)
     else:
         raise AssertionError("legacy cutover capability must reject normal mutations")
+
+
+def test_legacy_runner_quarantine_requires_park_control_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "services.scheduler_ownership.SchedulerOwnershipGuard.verify",
+        lambda _self: {"ok": True, "owner_id": "cloud-primary"},
+    )
+    unit = tmp_path / "gridmind-live-tick.service"
+    unit.write_text("ExecStart=/opt/app -m pipelines.park_control --timeout-seconds 20\n", encoding="utf-8")
+    assert inspect_legacy_runner_quarantine(tmp_path, unit_path=unit)["ok"] is True
+    unit.write_text("ExecStart=/opt/app -m pipelines.dualtrack_cycle_runner --event live-tick\n", encoding="utf-8")
+    assert inspect_legacy_runner_quarantine(tmp_path, unit_path=unit)["ok"] is False
