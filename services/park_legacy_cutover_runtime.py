@@ -18,7 +18,11 @@ from services.park_paper_mutation_gate import _mint_park_paper_capability
 from services.park_safety_evidence import build_park_safety_evidence
 from services.park_strategy_session import ParkStrategyIdentityJournal
 from services.park_telegram_control import ParkTelegramLedger
+from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.strategy_control_plane import production_mutation_lock
+
+
+LEGACY_TICK_UNIT_PATH = Path("/etc/systemd/system/gridmind-live-tick.service")
 
 
 def _utc_now() -> str:
@@ -45,6 +49,36 @@ def _queue_message(output_root: Path, *, park_user_id: str, chat_id: str, key: s
         text=text,
         binding=None,
     )
+
+
+def inspect_legacy_runner_quarantine(output_root: Path, *, unit_path: Path = LEGACY_TICK_UNIT_PATH) -> dict[str, Any]:
+    """Prove the Cloud scheduler cannot concurrently run the legacy runner."""
+
+    try:
+        ownership = SchedulerOwnershipGuard(Path(output_root)).verify()
+    except Exception as exc:  # noqa: BLE001 - ownership uncertainty blocks cleanup.
+        return {"ok": False, "code": "scheduler_ownership_unavailable", "detail": type(exc).__name__}
+    if ownership.get("ok") is not True:
+        return {
+            "ok": False,
+            "code": "scheduler_ownership_blocked",
+            "detail": str(ownership.get("blocker") or "ownership guard did not pass"),
+            "ownership": ownership,
+        }
+    try:
+        unit_text = Path(unit_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        return {"ok": False, "code": "legacy_tick_unit_unavailable", "detail": type(exc).__name__}
+    has_park_control = "pipelines.park_control" in unit_text
+    has_legacy_runner = "pipelines.dualtrack_cycle_runner" in unit_text
+    return {
+        "ok": has_park_control and not has_legacy_runner,
+        "code": "ok" if has_park_control and not has_legacy_runner else "legacy_runner_not_quarantined",
+        "unit_path": str(unit_path),
+        "park_control": has_park_control,
+        "legacy_cycle_runner": has_legacy_runner,
+        "ownership": ownership,
+    }
 
 
 def run_legacy_cutover_once(
@@ -138,6 +172,9 @@ def run_legacy_cutover_once(
                 raise ParkLegacyCutoverError("legacy_positions_present", "a position appeared; cutover will not flatten it")
             if facts.get("reconciliation_healthy") is not True:
                 raise ParkLegacyCutoverError("legacy_reconciliation_unhealthy", "authoritative Paper reconciliation is not healthy")
+            quarantine = inspect_legacy_runner_quarantine(output_root) if facts.get("unresolved_runtime") is True else {"ok": True, "code": "not_required"}
+            if quarantine.get("ok") is not True:
+                raise ParkLegacyCutoverError("legacy_runner_not_quarantined", str(quarantine.get("detail") or quarantine.get("code") or "legacy runner quarantine is unproven"))
             market = dict(read_market())
             if market.get("trusted") is not True or market.get("fresh") is not True:
                 raise ParkLegacyCutoverError("market_not_authoritative", "legacy cutover retains the trusted fresh market gate")
@@ -161,6 +198,8 @@ def run_legacy_cutover_once(
                     "park_risk_confirmation": True,
                 }
             )
+            if facts.get("unresolved_runtime") is True and quarantine.get("ok") is True:
+                evidence["stale_cycle_state"] = True
             gate = evaluate_park_cutover(effective_config, safety_evidence=evidence)
             if gate.get("status") != "pass":
                 raise ParkLegacyCutoverError("park_cutover_blocked", ",".join(str(value) for value in gate.get("blockers") or []))
@@ -225,6 +264,7 @@ def run_legacy_cutover_once(
                     "release_sha": str(evidence.get("release_sha") or ""),
                     "source_tree_sha": str(evidence.get("source_tree_sha") or ""),
                 },
+                legacy_runner_quarantine=quarantine,
                 release_sha=str(evidence.get("release_sha") or ""),
                 source_tree_sha=str(evidence.get("source_tree_sha") or ""),
                 retryable=False,
