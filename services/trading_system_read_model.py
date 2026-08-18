@@ -468,6 +468,7 @@ def _project_current_strategy(
         specification["grid_rungs"] = _json_copy(_list(strategy.get("grid_rungs")))
         specification["local_stop_authorized"] = strategy.get("local_stop_authorized") is True
     terminal = _json_copy(_mapping(park.get("terminal")))
+    reverse = _json_copy(_mapping(park.get("reverse")))
     projected = {
         "schema_version": PARK_CURRENT_STRATEGY_SCHEMA,
         "source": source,
@@ -493,6 +494,8 @@ def _project_current_strategy(
     }
     if terminal:
         projected["terminal"] = terminal
+    if reverse:
+        projected["reverse"] = reverse
     return projected
 
 

@@ -32,6 +32,7 @@ from services.park_paper_mutation_gate import (
 from services.park_recording_track import ParkRecordingTrack
 from services.park_strategy_snapshot import record_strategy_snapshot_terminal
 from services.park_strategy_lifecycle import ParkStrategyLifecycleLedger
+from services.park_strategy_plan import build_deterministic_risk_plan
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
     recording_window,
@@ -161,6 +162,15 @@ class ParkPaperRuntime:
                 strategy_revision_id=active_for_recording.get("strategy_revision_id"),
             )
         active = self.identity.active_session()
+        pending_reverse = self._pending_reverse_request()
+        if pending_reverse:
+            return self._process_reverse_request(
+                pending_reverse,
+                active=active,
+                observed_at=observed_at,
+                recording_failures=recording_failures,
+                recording_blocker=recording_blocker,
+            )
         if not active:
             return self._result(
                 "idle",
@@ -804,7 +814,7 @@ class ParkPaperRuntime:
         return {
             "cycle_id": cycle_id,
             "ts": observed_at,
-            "event": "stop" if reason in {
+            "event": "flatten" if reason == "reverse" else "stop" if reason in {
                 "stop_price",
                 "upper_boundary_invalidated",
                 "lower_boundary_invalidated",
@@ -878,6 +888,235 @@ class ParkPaperRuntime:
             strategy_session_id=session,
             strategy_revision_id=revision,
         )
+
+    def _pending_reverse_request(self) -> dict[str, Any] | None:
+        latest: dict[str, dict[str, Any]] = {}
+        for row in _read_jsonl(self.output_root / "park_strategy" / "reverse_requests.jsonl"):
+            request_id = str(row.get("request_id") or "")
+            if request_id:
+                latest[request_id] = dict(row)
+        return next(
+            (row for row in reversed(list(latest.values())) if row.get("status") == "confirmed_pending_transition"),
+            None,
+        )
+
+    def _process_reverse_request(
+        self,
+        request: Mapping[str, Any],
+        *,
+        active: Mapping[str, Any] | None,
+        observed_at: str,
+        recording_failures: list[dict[str, str]],
+        recording_blocker: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        old = dict(request.get("old_strategy") or {})
+        old_session = str(old.get("strategy_session_id") or "")
+        old_revision = str(old.get("strategy_revision_id") or "")
+        old_digest = str(old.get("plan_digest") or "")
+        new_session = str(request.get("new_strategy_session_id") or "")
+        new_revision = str(request.get("new_strategy_revision_id") or "")
+        new_digest = str(request.get("new_plan_digest") or "")
+        if not active or (
+            str(active.get("strategy_session_id") or "") != old_session
+            or str(active.get("strategy_revision_id") or "") != old_revision
+            or str(active.get("plan_digest") or "") != old_digest
+        ):
+            return self._reverse_blocked(request, "reverse_old_identity_mismatch", "旧策略身份已变化；新策略保持 inactive。", observed_at=observed_at)
+        new_plan = self._plan_for_digest(new_digest)
+        if not new_plan or not new_session or not new_revision:
+            return self._reverse_blocked(request, "reverse_new_plan_missing", "Reverse 新计划或身份不完整；未执行切换。", observed_at=observed_at)
+        new_confirmation = self._confirmed_for(new_digest, new_session, new_revision)
+        if not new_confirmation:
+            return self._reverse_blocked(request, "reverse_new_confirmation_missing", "Reverse 新策略确认回执缺失；未执行切换。", observed_at=observed_at)
+        try:
+            market = dict(self.market_reader() if self.market_reader else self._default_market_reader())
+            if market.get("trusted") is not True or market.get("fresh") is not True:
+                raise ParkPaperRuntimeError("market_not_authoritative", "Reverse requires trusted fresh market")
+            current_price = float(market.get("price"))
+            cycle_id = park_paper_namespace(old_session)
+            snapshot = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
+            reconciliation = dict(self.adapter.reconcile(cycle_id))
+        except Exception as exc:  # noqa: BLE001 - no mutation on unknown state.
+            return self._reverse_blocked(request, "reverse_state_unavailable", type(exc).__name__, observed_at=observed_at)
+        if reconciliation.get("status") != "ok" or reconciliation.get("issues"):
+            return self._reverse_blocked(request, "reverse_reconciliation_blocked", "旧策略对账未通过；未执行切换。", observed_at=observed_at)
+        drift = self._reverse_plan_drift(new_plan, market=market, account=snapshot.get("account") or {})
+        if drift:
+            return self._reverse_blocked(request, "reverse_plan_drift", drift, observed_at=observed_at)
+        old_confirmation = self._confirmed_for(old_digest, old_session, old_revision)
+        if not old_confirmation:
+            return self._reverse_blocked(request, "reverse_old_confirmation_missing", "旧策略确认回执缺失；未执行切换。", observed_at=observed_at)
+        gate = self._admission(
+            market=market,
+            snapshot=snapshot,
+            reconciliation=reconciliation,
+            confirmation=old_confirmation,
+        )
+        if gate.get("status") != "pass":
+            return self._reverse_blocked(request, "reverse_cutover_blocked", ",".join(str(item) for item in gate.get("blockers") or []), observed_at=observed_at)
+        self._grant_adapter_mutation(
+            session=old_session,
+            revision=old_revision,
+            digest=old_digest,
+            cycle_id=cycle_id,
+            confirmation=old_confirmation,
+            gate=gate,
+        )
+        try:
+            accepted_ids = {
+                str(row.get("order_id") or "")
+                for row in snapshot.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+                and self._order_owned(row, old_session, old_revision, old_digest)
+            }
+            cancel = self.adapter.cancel_orders(
+                cycle_id,
+                order_ids=sorted(accepted_ids),
+                strategy_plan_id=old_digest,
+                ts=observed_at,
+                reason="park_reverse",
+            ) if accepted_ids else {"status": "idempotent", "cancelled_order_ids": []}
+            exits: list[dict[str, Any]] = []
+            for position in snapshot.get("positions") or []:
+                if str(position.get("status") or "").lower() == "open" and self._position_owned(position, old_session, old_revision, old_digest):
+                    exits.append(self.adapter.submit_order(self._exit_command(
+                        position,
+                        plan=self._plan_for_digest(old_digest) or {},
+                        session=old_session,
+                        revision=old_revision,
+                        digest=old_digest,
+                        cycle_id=cycle_id,
+                        current_price=current_price,
+                        market=market,
+                        observed_at=observed_at,
+                        reason="reverse",
+                    )))
+            if exits:
+                event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at)
+                event["event_id"] = _digest({"base_event_id": event["event_id"], "reverse": request.get("request_id")})
+                self.adapter.process_market_event(event)
+            final_snapshot = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
+            final_reconciliation = dict(self.adapter.reconcile(cycle_id))
+            remaining_orders = [
+                row for row in final_snapshot.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted" and self._order_owned(row, old_session, old_revision, old_digest)
+            ]
+            remaining_positions = [
+                row for row in final_snapshot.get("positions") or []
+                if str(row.get("status") or "").lower() == "open" and self._position_owned(row, old_session, old_revision, old_digest)
+            ]
+            if remaining_orders or remaining_positions or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
+                return self._reverse_blocked(request, "reverse_transition_blocked", "旧策略未能归零并通过对账；新策略保持 inactive。", observed_at=observed_at, session=old_session, revision=old_revision, digest=old_digest)
+            old_plan = self._plan_for_digest(old_digest) or {}
+            lifecycle_ledger = ParkStrategyLifecycleLedger(self.output_root)
+            lifecycle_ledger.activate({
+                **dict(old_plan.get("normalized_input") or {}),
+                "strategy_session_id": old_session,
+                "strategy_revision_id": old_revision,
+                "plan_digest": old_digest,
+                "maximum_leverage": (old_plan.get("risk") or {}).get("effective_leverage"),
+                "maximum_acceptable_loss": (old_plan.get("risk") or {}).get("theoretical_max_loss"),
+            })
+            lifecycle_ledger.terminal_action_plan(
+                strategy_session_id=old_session,
+                strategy_revision_id=old_revision,
+                trigger="reverse_confirmed",
+                observed_price=current_price,
+                trusted_market=True,
+                fresh_tick=True,
+            )
+            self.identity.close_session(
+                strategy_session_id=old_session,
+                strategy_revision_id=old_revision,
+                observed_at=observed_at,
+                reason="reverse_confirmed",
+            )
+            self.identity.start_clean_session(
+                observed_at=observed_at,
+                plan_digest=new_digest,
+                reconciliation_healthy=True,
+                open_positions=0,
+                open_or_accepted_orders=0,
+                unresolved_runtime=False,
+                pending_terminal_actions=False,
+                strategy_session_id=new_session,
+                strategy_revision_id=new_revision,
+            )
+            record_strategy_snapshot_terminal(
+                self.output_root,
+                strategy_session_id=old_session,
+                strategy_revision_id=old_revision,
+                plan_digest=old_digest,
+                reason="reverse_confirmed",
+                observed_at=observed_at,
+            )
+            _append_jsonl(
+                self.output_root / "park_strategy" / "reverse_requests.jsonl",
+                {**dict(request), "status": "transitioned", "transitioned_at": observed_at, "old_reconciliation": final_reconciliation, "cancel": cancel, "exits": exits},
+            )
+            self.telegram.queue_outbound(
+                idempotency_key=f"park-reverse-transition:{request.get('request_id')}",
+                message_type="reverse_transitioned",
+                text="Park Reverse 已完成：旧策略已撤入口、平旧仓并通过对账；新策略将在下一次可信 tick 进入执行。",
+                binding={"strategy_session_id": new_session, "strategy_revision_id": new_revision},
+            )
+            return self._result(
+                "reverse_transitioned",
+                observed_at=observed_at,
+                session=new_session,
+                revision=new_revision,
+                digest=new_digest,
+                old_session=old_session,
+                old_revision=old_revision,
+                next_action="continue_trusted_fresh_ticks",
+                recording_failures=recording_failures,
+                recording_blocker=recording_blocker,
+                paper_only=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - partial transition is durable and blocked.
+            return self._reverse_blocked(request, "reverse_transition_blocked", type(exc).__name__, observed_at=observed_at, session=old_session, revision=old_revision, digest=old_digest)
+        finally:
+            self._revoke_adapter_mutation()
+
+    def _reverse_blocked(self, request: Mapping[str, Any], code: str, detail: str, *, observed_at: str, session: str = "", revision: str = "", digest: str = "") -> dict[str, Any]:
+        _append_jsonl(
+            self.output_root / "park_strategy" / "reverse_requests.jsonl",
+            {**dict(request), "status": "blocked", "blocker_code": code, "detail": str(detail)[:500], "blocked_at": observed_at, "paper_only": True},
+        )
+        return self._blocked(code, detail, session=session, revision=revision, digest=digest, observed_at=observed_at)
+
+    @staticmethod
+    def _reverse_plan_drift(plan: Mapping[str, Any], *, market: Mapping[str, Any], account: Mapping[str, Any]) -> str | None:
+        stored_market = plan.get("market") if isinstance(plan.get("market"), Mapping) else {}
+        stored_risk = plan.get("risk") if isinstance(plan.get("risk"), Mapping) else {}
+        try:
+            planned_price = float(stored_market.get("price"))
+            current_price = float(market.get("price"))
+        except (TypeError, ValueError):
+            return "confirmed Reverse plan is missing authoritative market evidence"
+        if abs(current_price - planned_price) > max(1e-8, abs(planned_price) * 0.005):
+            return "confirmed Reverse plan market price drifted beyond 0.5%; reconfirm Park's full specification"
+        normalized = dict(plan.get("normalized_input") or {})
+        try:
+            rebuilt = build_deterministic_risk_plan(
+                normalized,
+                market=dict(market),
+                account_equity=account.get("equity"),
+            )
+        except Exception as exc:  # noqa: BLE001 - deterministic rebuild is a hard gate.
+            return f"confirmed Reverse risk rebuild failed: {type(exc).__name__}"
+        fresh_risk = dict(rebuilt.get("risk") or {})
+        for field in ("maximum_notional", "theoretical_max_loss", "effective_leverage", "order_count"):
+            if field not in stored_risk or stored_risk.get(field) in (None, ""):
+                return f"confirmed Reverse plan is missing risk evidence: {field}"
+            try:
+                expected = float(stored_risk[field])
+                observed = float(fresh_risk[field])
+            except (TypeError, ValueError):
+                return f"confirmed Reverse risk evidence is invalid: {field}"
+            if abs(expected - observed) > max(1e-8, abs(expected) * 1e-6):
+                return f"confirmed Reverse risk drifted: {field}; reconfirm Park's full specification"
+        return None
 
     @staticmethod
     def _boundary_from_terminal_action(action: Mapping[str, Any] | None, current_price: float) -> dict[str, Any] | None:
