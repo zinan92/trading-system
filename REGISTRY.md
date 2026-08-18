@@ -13,18 +13,20 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
-- #783 / PR #784 adds a provider-independent, exact-set legacy clean-slate
-  cutover for the already-ingested Telegram instruction
-  `取消这19个旧挂单，确认 clean slate，启用 Park Paper`.  The recovery path
-  is Paper-only and cancellation-only: it re-reads the same accepted order
-  IDs, refuses any position/identity/reconciliation drift, flushes exact
-  cancel commands, verifies zero accepted orders and zero positions, and only
-  then makes the default-off Park config effective.  No strategy, flatten,
-  reverse, live, Shadow, Feishu, or autonomous mutation is part of the story.
-  Focused validation is 86 passed plus diff-check; merged on
-  `main@3fbcc6279a3001aafe3e48b6c4ac269fd68d0161`.  Cloud deployment and the
-  natural Telegram recovery tick remain the next runtime evidence; the
-  current read-only Cloud state is still 19 accepted orders and 0 positions.
+- #783 final delivery (#784, #788, #790, #792, #794, #796, #798, #800)
+  recovers Park's already-ingested instruction
+  `取消这19个旧挂单，确认 clean slate，启用 Park Paper` without requiring a
+  repeat message. The Paper-only cancellation path preserves exact order and
+  cycle identity, explicit instrument/fee preflight, runner-quarantine proof,
+  Telegram-poll recovery, and all existing safety gates. Cloud is deployed at
+  `main@f41fb77fbfbd66f95dd677f61c256116952fe01e` (tree
+  `8b434551fd4a20975fe9ad3b032f7dbb478b0967`); the natural timer completed a
+  durable receipt with 19 exact cancellations, 0 accepted orders, 0 open
+  positions, reconciliation pass, and Telegram delivery receipt. Park Paper
+  is enabled effectively and the runtime is idle awaiting Park's next
+  strategy. The remaining #750 evidence is a continuous-session soak with an
+  actual Park strategy across recording boundaries; no strategy is invented
+  to manufacture that evidence.
 - #749 / PR #780 routes the managed Cloud Paper tick through
   `pipelines.park_control` instead of the legacy cycle runner.  Scheduler
   ownership is verified before Telegram ingress; the Park account reader
