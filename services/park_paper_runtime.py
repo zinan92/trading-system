@@ -1050,9 +1050,9 @@ class ParkPaperRuntime:
                 "detail": str(exc)[:300],
             }
             return failure, None
-        blocked = [
-            row
-            for row in rows
+        blocked_indices = [
+            index
+            for index, row in enumerate(rows)
             if row.get("code") == "recording_facts_blocked"
             and str(row.get("strategy_session_id") or "") == session
             and str(row.get("strategy_revision_id") or "") == revision
@@ -1062,19 +1062,20 @@ class ParkPaperRuntime:
                 if isinstance(item, Mapping)
             )
         ]
-        if not blocked:
+        if not blocked_indices:
             return None, None
-        recoveries = [
-            row
-            for row in rows
+        recovery_indices = [
+            index
+            for index, row in enumerate(rows)
             if row.get("code") == "recording_facts_recovered"
             and str(row.get("strategy_session_id") or "") == session
             and str(row.get("strategy_revision_id") or "") == revision
             and str(row.get("record_window_id") or "") == window_id
         ]
-        latest_blocker = blocked[-1]
-        if recoveries and recoveries[-1].get("recorded_at", "") > latest_blocker.get("recorded_at", ""):
+        latest_blocker_index = blocked_indices[-1]
+        if recovery_indices and recovery_indices[-1] > latest_blocker_index:
             return None, None
+        latest_blocker = rows[latest_blocker_index]
         failure = {
             "record_window_id": window_id,
             "error_type": "recording_facts_blocked",
@@ -1097,8 +1098,9 @@ class ParkPaperRuntime:
             rows = _read_jsonl(self.blocker_path)
         except Exception:
             return
-        blocked = [
-            row for row in rows
+        blocked_indices = [
+            index
+            for index, row in enumerate(rows)
             if row.get("code") == "recording_facts_blocked"
             and str(row.get("strategy_session_id") or "") == session
             and str(row.get("strategy_revision_id") or "") == revision
@@ -1108,16 +1110,16 @@ class ParkPaperRuntime:
                 if isinstance(item, Mapping)
             )
         ]
-        recoveries = [
-            row for row in rows
+        recovery_indices = [
+            index
+            for index, row in enumerate(rows)
             if row.get("code") == "recording_facts_recovered"
             and str(row.get("strategy_session_id") or "") == session
             and str(row.get("strategy_revision_id") or "") == revision
             and str(row.get("record_window_id") or "") == window_id
         ]
-        if blocked and (
-            not recoveries
-            or recoveries[-1].get("recorded_at", "") <= blocked[-1].get("recorded_at", "")
+        if blocked_indices and (
+            not recovery_indices or recovery_indices[-1] <= blocked_indices[-1]
         ):
             try:
                 _append_jsonl(

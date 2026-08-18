@@ -618,6 +618,10 @@ def test_recording_facts_failure_gates_new_entries_until_recovered(
     assert second["submitted"] == []
     assert len(adapter.submit_calls) == submitted_count
 
+    third = runtime.run_once()
+    assert third["recording_failures"] == []
+    assert third["next_action"] == "continue_trusted_fresh_ticks"
+
 
 def test_runtime_retries_blocked_recording_after_late_event_without_mutation(
     tmp_path: Path,

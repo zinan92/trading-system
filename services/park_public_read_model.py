@@ -153,19 +153,21 @@ def _recording_projection(
         if row.get("status") == "complete"
         and str(row.get("review_status") or "complete") == "complete"
     }
-    if blocker and blocker.get("code") == "recording_facts_blocked" and blocker_windows:
+    if blocker and blocker_windows:
         recovered_windows = {
             window_id
             for window_id in blocker_windows
             if any(
                 str(row.get("record_window_id") or "") == window_id
                 and matches(row)
-                and str(row.get("recorded_at") or "") > str(blocker.get("recorded_at") or "")
+                and str(row.get("recorded_at") or "") >= str(blocker.get("recorded_at") or "")
                 for row in blockers
                 if row.get("code") == "recording_facts_recovered"
             )
         }
-        if blocker_windows.issubset(resolved_windows | recovered_windows):
+        if blocker.get("code") == "recording_facts_blocked" and blocker_windows.issubset(resolved_windows | recovered_windows):
+            blocker = {}
+        elif blocker.get("code") == "recording_package_blocked" and blocker_windows.issubset(resolved_windows):
             blocker = {}
     if package.get("status") == "complete" and package_review_status == "complete" and blocker:
         blocked_windows = {
