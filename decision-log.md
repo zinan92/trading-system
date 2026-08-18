@@ -16028,3 +16028,28 @@ auditable datafeed port; broker execution remains a separate port.
 - This remains Paper-only.  No live, exchange-key, Cloud order, or position
   mutation was performed; exact-SHA deployment and natural-tick verification
   remain separate operational evidence.
+
+# 2026-08-18 — Harden Reverse cleanup and evidence gates (#776)
+
+## Decision
+
+- Reverse and ordinary Park ticks share one `production_mutation_lock`; every
+  Reverse retry re-reads the latest identity and request state inside that
+  lock.  A blocked Reverse freezes the old path from creating new entries until
+  Park provides a new instruction.
+- Cancel only exact old entry orders first.  Keep protective exits while old
+  positions are being flattened; after flat reconciliation, cancel orphaned
+  exits and require a second snapshot/reconciliation before starting the new
+  revision.
+- Check authoritative snapshots across all Paper cycles for foreign accepted
+  orders/open positions.  Missing, malformed, or schema-invalid account-wide
+  evidence is a durable fail-closed blocker, never an empty portfolio.
+
+## Verification
+
+- PR #777 merged as `main@b11014584349adf3b05fef31a565c96632f7dd05` (tree
+  `3759842fee0f7fc807771fc7db1cf9aae8faa0e5`) after 145 focused tests,
+  diff-check, gitleaks, and focused spec/safety review passed.
+- Paper-only evidence; no live, exchange-key, Cloud order, or position
+  mutation was performed.  Exact-SHA deployment and natural-tick verification
+  remain separate operational evidence.

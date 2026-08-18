@@ -13,6 +13,19 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #776 / PR #777 hardens the confirmed Reverse transition.  Reverse now
+  re-reads pending/blocked state and active identity inside the production
+  mutation lock; a blocked request freezes the old path from new entries.
+  Entry cancellation is separate from protective exits: old positions are
+  flattened and reconciled first, then orphan exits are cancelled and a second
+  reconciliation gates activation.  Foreign exposure across authoritative
+  Paper cycles and malformed account-wide snapshots fail closed with durable
+  blockers.  Merged on exact
+  `main@b11014584349adf3b05fef31a565c96632f7dd05` (tree
+  `3759842fee0f7fc807771fc7db1cf9aae8faa0e5`) after 145 focused tests,
+  diff-check, gitleaks, and focused spec/safety review passed.  Exact-SHA Paper
+  deployment and natural-tick verification are the next runtime steps.
+  Next frontier: #749 / #750.
 - #748 / PR #773 delivers explicit Park-confirmed Reverse.  A direction
   change is recognized only when Park writes the new direction; the complete
   candidate/risk snapshot and digest are confirmed before any old mutation.
