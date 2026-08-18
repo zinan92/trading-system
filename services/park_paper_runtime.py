@@ -32,6 +32,7 @@ from services.park_paper_mutation_gate import (
 from services.park_recording_track import ParkRecordingTrack
 from services.park_strategy_snapshot import record_strategy_snapshot_terminal
 from services.park_strategy_lifecycle import ParkStrategyLifecycleLedger
+from services.park_strategy_plan import build_deterministic_risk_plan
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
     recording_window,
@@ -939,6 +940,9 @@ class ParkPaperRuntime:
             return self._reverse_blocked(request, "reverse_state_unavailable", type(exc).__name__, observed_at=observed_at)
         if reconciliation.get("status") != "ok" or reconciliation.get("issues"):
             return self._reverse_blocked(request, "reverse_reconciliation_blocked", "旧策略对账未通过；未执行切换。", observed_at=observed_at)
+        drift = self._reverse_plan_drift(new_plan, market=market, account=snapshot.get("account") or {})
+        if drift:
+            return self._reverse_blocked(request, "reverse_plan_drift", drift, observed_at=observed_at)
         old_confirmation = self._confirmed_for(old_digest, old_session, old_revision)
         if not old_confirmation:
             return self._reverse_blocked(request, "reverse_old_confirmation_missing", "旧策略确认回执缺失；未执行切换。", observed_at=observed_at)
@@ -1080,6 +1084,39 @@ class ParkPaperRuntime:
             {**dict(request), "status": "blocked", "blocker_code": code, "detail": str(detail)[:500], "blocked_at": observed_at, "paper_only": True},
         )
         return self._blocked(code, detail, session=session, revision=revision, digest=digest, observed_at=observed_at)
+
+    @staticmethod
+    def _reverse_plan_drift(plan: Mapping[str, Any], *, market: Mapping[str, Any], account: Mapping[str, Any]) -> str | None:
+        stored_market = plan.get("market") if isinstance(plan.get("market"), Mapping) else {}
+        stored_risk = plan.get("risk") if isinstance(plan.get("risk"), Mapping) else {}
+        try:
+            planned_price = float(stored_market.get("price"))
+            current_price = float(market.get("price"))
+        except (TypeError, ValueError):
+            return "confirmed Reverse plan is missing authoritative market evidence"
+        if abs(current_price - planned_price) > max(1e-8, abs(planned_price) * 0.005):
+            return "confirmed Reverse plan market price drifted beyond 0.5%; reconfirm Park's full specification"
+        normalized = dict(plan.get("normalized_input") or {})
+        try:
+            rebuilt = build_deterministic_risk_plan(
+                normalized,
+                market=dict(market),
+                account_equity=account.get("equity"),
+            )
+        except Exception as exc:  # noqa: BLE001 - deterministic rebuild is a hard gate.
+            return f"confirmed Reverse risk rebuild failed: {type(exc).__name__}"
+        fresh_risk = dict(rebuilt.get("risk") or {})
+        for field in ("maximum_notional", "theoretical_max_loss", "effective_leverage", "order_count"):
+            if field not in stored_risk or stored_risk.get(field) in (None, ""):
+                return f"confirmed Reverse plan is missing risk evidence: {field}"
+            try:
+                expected = float(stored_risk[field])
+                observed = float(fresh_risk[field])
+            except (TypeError, ValueError):
+                return f"confirmed Reverse risk evidence is invalid: {field}"
+            if abs(expected - observed) > max(1e-8, abs(expected) * 1e-6):
+                return f"confirmed Reverse risk drifted: {field}; reconfirm Park's full specification"
+        return None
 
     @staticmethod
     def _boundary_from_terminal_action(action: Mapping[str, Any] | None, current_price: float) -> dict[str, Any] | None:

@@ -505,8 +505,9 @@ def test_confirmed_reverse_flattens_old_owned_exposure_before_starting_new_revis
         "plan_digest": new_digest,
         "strategy_session_id": "session-new",
         "strategy_revision_id": "revision-new",
-        "normalized_input": {"strategy_type": "dca", "direction": "long", "upper_price_boundary": 4500.0, "lower_price_boundary": 4200.0, "stop_price": 4100.0, "take_profit_price": 4600.0},
-        "risk": {"effective_leverage": 5.0, "theoretical_max_loss": 100.0, "order_count": 1, "per_order_quantity": 1.0},
+        "normalized_input": {"strategy_type": "dca", "direction": "long", "upper_price_boundary": 4500.0, "lower_price_boundary": 4200.0, "stop_price": 4100.0, "take_profit_price": 4600.0, "maximum_leverage": 5.0, "order_count": 1},
+        "market": {"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "observed_at": "2026-08-14T10:01:00+00:00"},
+        "risk": {"maximum_notional": 50000.0, "effective_leverage": 5.0, "theoretical_max_loss": 2325.58139535, "order_count": 1, "per_order_quantity": 11.627906976744},
     }
     plans_path.write_text("\n".join(json.dumps(row) for row in (old_plan, new_plan)) + "\n", encoding="utf-8")
     confirmations_path = output / "park_strategy" / "confirmations.jsonl"
@@ -535,6 +536,23 @@ def test_confirmed_reverse_flattens_old_owned_exposure_before_starting_new_revis
     assert adapter.cancel_calls and adapter.cancel_calls[0]["order_ids"] == ["old-order"]
     assert any(command["event"] == "flatten" for command in adapter.submit_calls)
     assert adapter.positions[0]["status"] == "closed"
+
+
+def test_reverse_rejects_material_market_drift_before_old_mutation() -> None:
+    plan = {
+        "market": {"price": 4000.0},
+        "normalized_input": {"strategy_type": "dca", "direction": "long", "upper_price_boundary": 4500.0, "lower_price_boundary": 4200.0, "stop_price": 4100.0, "take_profit_price": 4600.0, "maximum_leverage": 5.0, "order_count": 1},
+        "risk": {"maximum_notional": 50000.0, "theoretical_max_loss": 2325.58139535, "effective_leverage": 5.0, "order_count": 1},
+    }
+
+    drift = ParkPaperRuntime._reverse_plan_drift(
+        plan,
+        market={"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "observed_at": "2026-08-14T10:01:00+00:00"},
+        account={"equity": 10000.0},
+    )
+
+    assert drift is not None
+    assert "market price drifted" in drift
 
 
 def test_dca_terminal_retry_keeps_first_persisted_trigger_after_reconciliation_failure(tmp_path: Path) -> None:
