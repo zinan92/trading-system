@@ -395,6 +395,64 @@ def test_active_identity_is_not_silently_superseded(tmp_path):
     assert service.identity.active_session()["strategy_session_id"] == "session-old"
 
 
+def test_reverse_direction_must_be_explicitly_written_by_park(tmp_path):
+    service = _service(
+        tmp_path,
+        provider=FakeProvider(_candidate(direction="long", stop_price=4200, take_profit_price=4500)),
+    )
+    service.identity.start_clean_session(
+        observed_at="2026-08-17T03:00:00+00:00",
+        plan_digest="sha256:" + "1" * 64,
+        reconciliation_healthy=True,
+        strategy_session_id="session-old",
+        strategy_revision_id="revision-old",
+    )
+    plan_path = tmp_path / "outputs" / "park_strategy" / "plans.jsonl"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps({"event": "plan_proposed", "plan_digest": "sha256:" + "1" * 64, "normalized_input": {"direction": "short", "strategy_type": "dca"}}) + "\n")
+
+    result = service.handle_message("方向变了，区间 4200~4500，最大10倍杠杆")
+
+    assert result["status"] == "needs_clarification"
+    assert result["code"] == "reverse_direction_explicit_required"
+    assert result["confirmable"] is False
+
+
+def test_explicit_reverse_confirmation_creates_durable_pending_transition(tmp_path):
+    service = _service(
+        tmp_path,
+        provider=FakeProvider(_candidate(direction="long", stop_price=4200, take_profit_price=4500)),
+        account=_account(
+            positions=[{"position_id": "old-pos", "trade_id": "old-trade", "status": "open", "side": "short", "remaining_units": 1.0, "entry_price": 4250.0, "notional": 4250.0}],
+            orders=[{"order_id": "old-order", "state": "accepted", "side": "sell", "price": 4300.0, "quantity": 1.0, "notional": 4300.0}],
+        ),
+    )
+    service.identity.start_clean_session(
+        observed_at="2026-08-17T03:00:00+00:00",
+        plan_digest="sha256:" + "1" * 64,
+        reconciliation_healthy=True,
+        strategy_session_id="session-old",
+        strategy_revision_id="revision-old",
+    )
+    plan_path = tmp_path / "outputs" / "park_strategy" / "plans.jsonl"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps({"event": "plan_proposed", "plan_digest": "sha256:" + "1" * 64, "normalized_input": {"direction": "short", "strategy_type": "dca"}}) + "\n")
+
+    first = service.handle_message("反转做多 DCA，区间 4200~4500，最大10倍杠杆，止损4200，止盈4500")
+    assert first["status"] == "needs_disposition"
+    ready = service.handle_message("旧仓全部平仓，撤掉未成交挂单，保留止盈止损")
+    assert ready["confirmable"] is True
+
+    confirmed = service.confirm(ready["draft"]["draft_id"], ready["draft"]["plan_digest"])
+
+    assert confirmed["status"] == "reverse_confirmed"
+    assert confirmed["reverse"]["status"] == "confirmed_pending_transition"
+    assert service.identity.active_session()["strategy_session_id"] == "session-old"
+    requests = [json.loads(line) for line in (tmp_path / "outputs" / "park_strategy" / "reverse_requests.jsonl").read_text().splitlines()]
+    assert requests[-1]["status"] == "confirmed_pending_transition"
+    assert requests[-1]["old_strategy"]["strategy_session_id"] == "session-old"
+
+
 def test_confirmation_failure_after_snapshot_has_no_execution_authority(tmp_path, monkeypatch):
     service = _service(tmp_path)
     draft = service.handle_message("做空 DCA，区间 4444~4200，最大10倍杠杆")

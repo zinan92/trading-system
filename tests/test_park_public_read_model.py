@@ -367,6 +367,31 @@ def test_public_read_model_projects_terminal_result_for_park_revision(tmp_path: 
     assert result["terminal"]["next_action"] == "await_park_next_strategy"
 
 
+def test_public_read_model_projects_pending_reverse_request(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    _append_jsonl(
+        output / "park_strategy" / "reverse_requests.jsonl",
+        [
+            {
+                "schema_version": "park-reverse-request-v1",
+                "event": "reverse_request",
+                "request_id": "reverse-1",
+                "status": "confirmed_pending_transition",
+                "old_strategy": {"strategy_session_id": "session-1", "strategy_revision_id": "revision-1"},
+                "new_strategy_session_id": "session-new",
+                "new_strategy_revision_id": "revision-new",
+                "new_plan_digest": "sha256:" + "c" * 64,
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["reverse"]["status"] == "confirmed_pending_transition"
+    assert result["reverse"]["next_action"] == "await_paper_reverse_transition"
+
+
 def test_public_read_model_prefers_current_terminal_blocker_over_old_terminal(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     _fixture(output)

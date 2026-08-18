@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -45,6 +46,7 @@ from services.dashboard_ai_provider import (
 
 PARK_AI_CHAT_SCHEMA = "park-dashboard-ai-chat-v1"
 PARK_AI_SNAPSHOT_SCHEMA = "park-strategy-snapshot-v1"
+PARK_REVERSE_REQUEST_SCHEMA = "park-reverse-request-v1"
 DEFAULT_DRAFT_TTL_SECONDS = 30 * 60
 MAX_MESSAGE_CHARS = 8_000
 _AI_CHAT_LOCK = threading.RLock()
@@ -90,6 +92,21 @@ def _confirmation_receipt_digest(proposal_id: str, plan_digest: str, confirmed_a
     return "sha256:" + hashlib.sha256(
         f"{proposal_id}|{plan_digest}|confirmed|{confirmed_at}".encode("utf-8")
     ).hexdigest()
+
+
+def _explicit_direction_from_text(text: str) -> str | None:
+    """Return a direction only when Park wrote it explicitly."""
+
+    source = str(text or "").strip().lower()
+    if not source:
+        return None
+    if "中性" in source or "neutral" in source:
+        return "neutral"
+    if "做多" in source or re.search(r"\blong\b", source):
+        return "long"
+    if "做空" in source or re.search(r"\bshort\b", source):
+        return "short"
+    return None
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -300,6 +317,7 @@ class ParkAiChatService:
         self.draft_path = self.output_root / "park_strategy" / "dashboard_ai_draft.json"
         self.chat_path = self.output_root / "park_strategy" / "dashboard_ai_chat.jsonl"
         self.snapshot_path = self.output_root / "park_strategy" / "strategy_snapshots.jsonl"
+        self.reverse_path = self.output_root / "park_strategy" / "reverse_requests.jsonl"
         self.identity = ParkStrategyIdentityJournal(self.output_root)
 
     @_serialized
@@ -459,11 +477,48 @@ class ParkAiChatService:
                 provider=metadata,
                 draft=draft,
             )
+        reverse_requested = False
+        if active:
+            old_summary = self._active_strategy_summary(active)
+            old_direction = str(old_summary.get("direction") or "").lower()
+            new_direction = str(normalized.get("direction") or "").lower()
+            if old_direction and new_direction and old_direction != new_direction:
+                if _explicit_direction_from_text(combined) != new_direction:
+                    draft = draft or self._new_draft(combined, normalized, active=active, provider=metadata)
+                    draft.update({
+                        "source_text": combined,
+                        "normalized": normalized,
+                        "provider": metadata,
+                        "requires_disposition": True,
+                        "reverse_requested": False,
+                        "clarification_code": "reverse_direction_explicit_required",
+                        "clarification_detail": "Reverse requires Park to explicitly state the new direction.",
+                        "confirmable": False,
+                    })
+                    self._save_draft(draft)
+                    return self._clarification(
+                        "reverse_direction_explicit_required",
+                        "当前策略方向与候选方向不同。请明确写出新方向，例如：反转做多 DCA，或开启 short Grid。",
+                        source_text=combined,
+                        provider=metadata,
+                        draft=draft,
+                    )
+                reverse_requested = True
         draft = draft or self._new_draft(combined, normalized, active=active or has_existing_exposure, provider=metadata)
         draft["source_text"] = combined
         draft["normalized"] = normalized
         draft["provider"] = metadata
         draft["requires_disposition"] = bool(active or has_existing_exposure)
+        draft["reverse_requested"] = bool(reverse_requested or draft.get("reverse_requested"))
+        if active and draft["reverse_requested"]:
+            old_summary = self._active_strategy_summary(active)
+            draft["old_strategy"] = {
+                "strategy_session_id": active.get("strategy_session_id"),
+                "strategy_revision_id": active.get("strategy_revision_id"),
+                "plan_digest": active.get("plan_digest"),
+                "direction": old_summary.get("direction"),
+                "strategy_type": old_summary.get("strategy_type"),
+            }
         if active:
             return self._complete_draft(draft, actor=actor)
         result = self._complete_draft(draft, actor=actor)
@@ -521,12 +576,13 @@ class ParkAiChatService:
             return self._blocked(exc.code, str(exc))
         if str(plan.get("plan_digest")) != expected:
             return self._blocked("plan_changed", "最新行情或组合风险使计划 digest 发生变化，请重新确认。")
-        if self._has_existing_exposure(context.get("account") or {}):
+        reverse_requested = bool(draft.get("reverse_requested"))
+        if self._has_existing_exposure(context.get("account") or {}) and not reverse_requested:
             return self._blocked(
                 "portfolio_reconciliation_required",
                 "已有 orders/positions 尚未完成归属处理；系统不会静默切换执行身份。请先完成处置并重新确认。",
             )
-        if active:
+        if active and not reverse_requested:
             # The existing Paper runtime has one active execution identity.
             # A web draft may record the requested disposition, but it must
             # never close or supersede that identity implicitly.  The old
@@ -550,19 +606,21 @@ class ParkAiChatService:
         session_started = False
         snapshot_persisted = False
         decision_committed = False
+        reverse_request: dict[str, Any] | None = None
         try:
-            self.identity.start_clean_session(
-                observed_at=self.now(),
-                plan_digest=expected,
-                reconciliation_healthy=facts.get("reconciliation_healthy") is True,
-                open_positions=int(facts.get("open_positions") or 0),
-                open_or_accepted_orders=int(facts.get("open_or_accepted_orders") or 0),
-                unresolved_runtime=bool(facts.get("unresolved_runtime")),
-                pending_terminal_actions=bool(facts.get("pending_terminal_actions")),
-                strategy_session_id=session_id,
-                strategy_revision_id=revision_id,
-            )
-            session_started = True
+            if not reverse_requested:
+                self.identity.start_clean_session(
+                    observed_at=self.now(),
+                    plan_digest=expected,
+                    reconciliation_healthy=facts.get("reconciliation_healthy") is True,
+                    open_positions=int(facts.get("open_positions") or 0),
+                    open_or_accepted_orders=int(facts.get("open_or_accepted_orders") or 0),
+                    unresolved_runtime=bool(facts.get("unresolved_runtime")),
+                    pending_terminal_actions=bool(facts.get("pending_terminal_actions")),
+                    strategy_session_id=session_id,
+                    strategy_revision_id=revision_id,
+                )
+                session_started = True
             _append_jsonl(self.output_root / "park_strategy" / "plans.jsonl", {"event": "plan_proposed", **plan, "created_at": self.now(), "source": "dashboard_ai"})
             confirmation = ParkConfirmationLedger(self.output_root, park_user_id=self.park_user_id)
             proposal_id = f"park-proposal-{expected.removeprefix('sha256:')[:24]}"
@@ -601,6 +659,22 @@ class ParkAiChatService:
                 payload={"snapshot_id": snapshot["snapshot_id"], "plan_digest": snapshot.get("plan_digest")},
             )
             _append_jsonl(self.chat_path, {"event": "strategy_confirmation_prepared", "snapshot_id": snapshot["snapshot_id"], "source_text": draft.get("source_text"), "recorded_at": self.now(), "actor": actor, "provider": draft.get("provider")})
+            if reverse_requested:
+                reverse_request = {
+                    "schema_version": PARK_REVERSE_REQUEST_SCHEMA,
+                    "event": "reverse_request",
+                    "request_id": f"reverse-{expected.removeprefix('sha256:')[:24]}",
+                    "status": "prepared",
+                    "old_strategy": dict(draft.get("old_strategy") or {}),
+                    "new_strategy_session_id": session_id,
+                    "new_strategy_revision_id": revision_id,
+                    "new_plan_digest": expected,
+                    "disposition": dict(draft.get("disposition") or {}),
+                    "snapshot_id": snapshot["snapshot_id"],
+                    "prepared_at": self.now(),
+                    "paper_only": True,
+                }
+                _append_jsonl(self.reverse_path, reverse_request)
             decision = confirmation.decide(
                 proposal_id=proposal_id,
                 park_user_id=self.park_user_id,
@@ -610,6 +684,15 @@ class ParkAiChatService:
             )
             if str(decision.get("receipt_digest") or "") != expected_receipt:
                 raise ParkAiChatError("confirmation_receipt_mismatch", "confirmation receipt did not match the prepared snapshot")
+            if reverse_request is not None:
+                reverse_request = {
+                    **reverse_request,
+                    "status": "confirmed_pending_transition",
+                    "proposal_id": proposal_id,
+                    "confirmation_receipt_digest": expected_receipt,
+                    "confirmed_at": self.now(),
+                }
+                _append_jsonl(self.reverse_path, reverse_request)
             decision_committed = True
             try:
                 _append_jsonl(self.chat_path, {"event": "strategy_accepted", "snapshot_id": snapshot["snapshot_id"], "source_text": draft.get("source_text"), "recorded_at": self.now(), "actor": actor, "provider": draft.get("provider")})
@@ -649,7 +732,19 @@ class ParkAiChatService:
                 pass
             return self._blocked("strategy_commit_blocked", f"策略确认持久化未完成（{type(exc).__name__}）；未提交新的 Paper 执行权。")
         self._delete_draft()
-        return {"status": "confirmed", "snapshot": self._public_snapshot(snapshot), "proposal": proposal, "decision": decision, "paper_only": True}
+        result = {"status": "confirmed", "snapshot": self._public_snapshot(snapshot), "proposal": proposal, "decision": decision, "paper_only": True}
+        if reverse_request is not None:
+            result["status"] = "reverse_confirmed"
+            result["reverse"] = {
+                "request_id": reverse_request.get("request_id"),
+                "status": reverse_request.get("status"),
+                "old_strategy": reverse_request.get("old_strategy"),
+                "new_strategy_session_id": reverse_request.get("new_strategy_session_id"),
+                "new_strategy_revision_id": reverse_request.get("new_strategy_revision_id"),
+                "new_plan_digest": reverse_request.get("new_plan_digest"),
+                "next_action": "await_paper_reverse_transition",
+            }
+        return result
 
     @_serialized
     def reject(self, draft_id: str, *, actor: str | None = None) -> dict[str, Any]:
@@ -873,6 +968,24 @@ class ParkAiChatService:
             "orders": list((account.get("snapshot") or {}).get("orders") or []),
         }
 
+    def _active_strategy_summary(self, active: Mapping[str, Any] | None) -> dict[str, Any]:
+        if not active:
+            return {}
+        digest = str(active.get("plan_digest") or "")
+        plan = next(
+            (
+                row
+                for row in reversed(_read_jsonl(self.output_root / "park_strategy" / "plans.jsonl"))
+                if row.get("event") == "plan_proposed" and str(row.get("plan_digest") or "") == digest
+            ),
+            {},
+        )
+        normalized = dict(plan.get("normalized_input") or {})
+        return {
+            "direction": active.get("direction") or normalized.get("direction"),
+            "strategy_type": active.get("strategy_type") or normalized.get("strategy_type"),
+        }
+
     def _new_draft(self, source_text: str, normalized: Mapping[str, Any], *, active: Mapping[str, Any] | None, provider: Mapping[str, Any]) -> dict[str, Any]:
         return {
             "schema_version": PARK_AI_CHAT_SCHEMA,
@@ -1080,6 +1193,7 @@ class ParkAiChatService:
             "missing_price_boundary": "请补充价格区间，例如：区间 4444~4200",
             "missing_risk_authority": "请补充最大杠杆或最大可接受亏损，例如：最大10倍杠杆",
             "dca_exit_fields_required": "DCA 还缺明确止损和止盈，例如：止损4444，止盈4100",
+            "reverse_direction_explicit_required": "例如：旧仓先平掉，然后反转做多 DCA，区间 4200~4500，止损4100，止盈4600，最大10倍杠杆",
         }
         return {
             "status": "needs_clarification",

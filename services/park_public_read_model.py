@@ -310,6 +310,36 @@ def _latest_terminal(
     }
 
 
+def _latest_reverse_request(root: Path) -> dict[str, Any] | None:
+    try:
+        rows = _read_jsonl(root / "park_strategy" / "reverse_requests.jsonl")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "status": "blocked",
+            "blocker_code": "reverse_journal_invalid",
+            "next_action": "notify_park_and_wait",
+        }
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        request_id = str(row.get("request_id") or "")
+        if request_id:
+            latest[request_id] = dict(row)
+    if not latest:
+        return None
+    row = next(reversed(list(latest.values())))
+    return {
+        "request_id": row.get("request_id"),
+        "status": row.get("status"),
+        "old_strategy": row.get("old_strategy") or {},
+        "new_strategy_session_id": row.get("new_strategy_session_id"),
+        "new_strategy_revision_id": row.get("new_strategy_revision_id"),
+        "new_plan_digest": row.get("new_plan_digest"),
+        "blocker_code": row.get("blocker_code"),
+        "detail": row.get("detail"),
+        "next_action": "await_paper_reverse_transition" if row.get("status") == "confirmed_pending_transition" else "notify_park_and_wait" if row.get("status") == "blocked" else "continue_trusted_fresh_ticks",
+    }
+
+
 def build_park_public_read_model(
     output_root: Path,
     *,
@@ -336,6 +366,7 @@ def build_park_public_read_model(
     session_id = str(active.get("strategy_session_id") or "")
     revision_id = str(active.get("strategy_revision_id") or "")
     terminal = _latest_terminal(root, active_pair=(session_id, revision_id))
+    reverse = _latest_reverse_request(root)
     if terminal and session_id and (
         str(terminal.get("strategy_session_id") or "") != session_id
         or str(terminal.get("strategy_revision_id") or "") != revision_id
@@ -623,6 +654,7 @@ def build_park_public_read_model(
         "strategy": strategy,
         "recording": recording,
         "terminal": terminal,
+        "reverse": reverse,
         "market": mark,
         "execution": execution,
         "safety": {

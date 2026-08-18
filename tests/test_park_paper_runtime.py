@@ -469,6 +469,74 @@ def test_dca_explicit_take_profit_terminal_closes_owned_position_and_notifies_re
     assert all("sl" not in command and "tp" not in command for command in adapter.submit_calls[:-1])
 
 
+def test_confirmed_reverse_flattens_old_owned_exposure_before_starting_new_revision(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T10:01:00+00:00",
+        "symbol": "GOLD",
+    }
+    old_digest = "sha256:" + "1" * 64
+    new_digest = "sha256:" + "2" * 64
+    identity = ParkStrategyIdentityJournal(output)
+    identity.start_clean_session(
+        observed_at="2026-08-14T10:00:00+00:00",
+        plan_digest=old_digest,
+        reconciliation_healthy=True,
+        strategy_session_id="session-old",
+        strategy_revision_id="revision-old",
+    )
+    plans_path = output / "park_strategy" / "plans.jsonl"
+    plans_path.parent.mkdir(parents=True, exist_ok=True)
+    old_plan = {
+        "event": "plan_proposed",
+        "plan_digest": old_digest,
+        "strategy_session_id": "session-old",
+        "strategy_revision_id": "revision-old",
+        "normalized_input": {"strategy_type": "dca", "direction": "short", "upper_price_boundary": 4444.0, "lower_price_boundary": 4200.0, "stop_price": 4450.0, "take_profit_price": 4100.0},
+        "risk": {"effective_leverage": 5.0, "theoretical_max_loss": 100.0, "order_count": 1, "per_order_quantity": 1.0},
+    }
+    new_plan = {
+        "event": "plan_proposed",
+        "plan_digest": new_digest,
+        "strategy_session_id": "session-new",
+        "strategy_revision_id": "revision-new",
+        "normalized_input": {"strategy_type": "dca", "direction": "long", "upper_price_boundary": 4500.0, "lower_price_boundary": 4200.0, "stop_price": 4100.0, "take_profit_price": 4600.0},
+        "risk": {"effective_leverage": 5.0, "theoretical_max_loss": 100.0, "order_count": 1, "per_order_quantity": 1.0},
+    }
+    plans_path.write_text("\n".join(json.dumps(row) for row in (old_plan, new_plan)) + "\n", encoding="utf-8")
+    confirmations_path = output / "park_strategy" / "confirmations.jsonl"
+    confirmations_path.write_text("\n".join(json.dumps({"event": "confirmed", "plan_digest": digest, "strategy_session_id": session, "strategy_revision_id": revision, "execution_authorized": True}) for digest, session, revision in ((old_digest, "session-old", "revision-old"), (new_digest, "session-new", "revision-new"))) + "\n", encoding="utf-8")
+    reverse_path = output / "park_strategy" / "reverse_requests.jsonl"
+    reverse_path.write_text(json.dumps({
+        "schema_version": "park-reverse-request-v1",
+        "event": "reverse_request",
+        "request_id": "reverse-test",
+        "status": "confirmed_pending_transition",
+        "old_strategy": {"strategy_session_id": "session-old", "strategy_revision_id": "revision-old", "plan_digest": old_digest},
+        "new_strategy_session_id": "session-new",
+        "new_strategy_revision_id": "revision-new",
+        "new_plan_digest": new_digest,
+        "disposition": {"position_action": "flatten", "entry_action": "cancel", "exit_action": "keep"},
+    }) + "\n", encoding="utf-8")
+    adapter = FakePaperAdapter()
+    adapter.orders.append({"order_id": "old-order", "state": "accepted", "side": "sell", "event": "entry", "price": 4300.0, "quantity": 1.0, "strategy_session_id": "session-old", "strategy_revision_id": "revision-old", "plan_digest": old_digest})
+    adapter.positions.append({"position_id": "old-position", "trade_id": "old-trade", "status": "open", "side": "short", "remaining_units": 1.0, "entry_price": 4300.0, "strategy_session_id": "session-old", "strategy_revision_id": "revision-old", "plan_digest": old_digest})
+    runtime = _runtime(output, adapter, market)
+
+    result = runtime.run_once()
+
+    assert result["status"] == "reverse_transitioned"
+    assert identity.active_session()["strategy_session_id"] == "session-new"
+    assert adapter.cancel_calls and adapter.cancel_calls[0]["order_ids"] == ["old-order"]
+    assert any(command["event"] == "flatten" for command in adapter.submit_calls)
+    assert adapter.positions[0]["status"] == "closed"
+
+
 def test_dca_terminal_retry_keeps_first_persisted_trigger_after_reconciliation_failure(tmp_path: Path) -> None:
     class DriftOnceAdapter(FakePaperAdapter):
         def __init__(self) -> None:
