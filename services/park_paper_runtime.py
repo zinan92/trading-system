@@ -985,9 +985,9 @@ class ParkPaperRuntime:
                 rows = json.loads(path.read_text(encoding="utf-8"))
                 snapshot = rows[-1] if isinstance(rows, list) and rows else rows
                 if not isinstance(snapshot, Mapping):
-                    continue
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
+                    raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"snapshot is not an object: {path.name}")
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"cannot read authoritative snapshot: {path.name}") from exc
             for row in snapshot.get("orders") or []:
                 if str(row.get("state") or "").lower() == "accepted" and not self._order_owned(row, session, revision, digest):
                     foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "order", "id": row.get("order_id")})
@@ -1048,7 +1048,11 @@ class ParkPaperRuntime:
         ]
         if foreign_orders or foreign_positions:
             return self._reverse_blocked(request, "reverse_foreign_exposure", "非旧策略的挂单或持仓仍存在；新 revision 保持 inactive。", observed_at=observed_at)
-        if self._account_wide_foreign_exposure(old_session, old_revision, old_digest):
+        try:
+            account_wide_foreign = self._account_wide_foreign_exposure(old_session, old_revision, old_digest)
+        except ParkPaperRuntimeError as exc:
+            return self._reverse_blocked(request, exc.code, str(exc), observed_at=observed_at)
+        if account_wide_foreign:
             return self._reverse_blocked(request, "reverse_foreign_exposure", "其他 Paper session/cycle 仍有挂单或持仓；新 revision 保持 inactive。", observed_at=observed_at)
         drift = self._reverse_plan_drift(new_plan, market=market, account=snapshot.get("account") or {})
         if drift:

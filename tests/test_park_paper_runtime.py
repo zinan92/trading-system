@@ -603,6 +603,20 @@ def test_reverse_account_wide_gate_sees_foreign_cycle_snapshot(tmp_path: Path) -
     assert foreign == [{"cycle_id": "park-session-other", "kind": "order", "id": "foreign-order"}]
 
 
+def test_reverse_account_wide_gate_blocks_corrupt_foreign_snapshot(tmp_path: Path) -> None:
+    adapter = FakePaperAdapter()
+    adapter.output_root = tmp_path / "outputs"
+    snapshot_dir = adapter.output_root / "dualtrack" / "nautilus_authoritative" / "snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    (snapshot_dir / "corrupt-cycle.json").write_text("not-json", encoding="utf-8")
+    runtime = _runtime(tmp_path / "runtime", adapter, {"price": 4300.0, "trusted": True, "fresh": True, "source": "paper-feed", "provider": "paper-provider", "observed_at": "2026-08-14T10:00:00+00:00"})
+
+    with pytest.raises(Exception) as exc:
+        runtime._account_wide_foreign_exposure("session-old", "revision-old", "sha256:" + "1" * 64)
+
+    assert getattr(exc.value, "code", "") == "reverse_account_wide_evidence_invalid"
+
+
 def test_dca_terminal_retry_keeps_first_persisted_trigger_after_reconciliation_failure(tmp_path: Path) -> None:
     class DriftOnceAdapter(FakePaperAdapter):
         def __init__(self) -> None:
