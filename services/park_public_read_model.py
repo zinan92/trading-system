@@ -211,8 +211,28 @@ def build_park_public_read_model(
         and lifecycle_strategy_type != normalized_strategy_type
     ):
         blockers.append("strategy_type_mismatch")
-    lower_boundary = normalized.get("lower_price_boundary")
-    upper_boundary = normalized.get("upper_price_boundary")
+    normalized_lower_boundary = normalized.get("lower_price_boundary")
+    normalized_upper_boundary = normalized.get("upper_price_boundary")
+    lower_boundary = lifecycle.get("lower_price_boundary")
+    upper_boundary = lifecycle.get("upper_price_boundary")
+    if lower_boundary is None:
+        lower_boundary = normalized_lower_boundary
+    if upper_boundary is None:
+        upper_boundary = normalized_upper_boundary
+    try:
+        boundary_mismatch = (
+            lifecycle.get("lower_price_boundary") is not None
+            and normalized_lower_boundary is not None
+            and float(lifecycle["lower_price_boundary"]) != float(normalized_lower_boundary)
+        ) or (
+            lifecycle.get("upper_price_boundary") is not None
+            and normalized_upper_boundary is not None
+            and float(lifecycle["upper_price_boundary"]) != float(normalized_upper_boundary)
+        )
+    except (TypeError, ValueError, OverflowError):
+        boundary_mismatch = True
+    if boundary_mismatch:
+        blockers.append("strategy_boundary_mismatch")
     raw_grid_count = risk.get("order_count") or normalized.get("order_count") or 0
     try:
         if isinstance(raw_grid_count, bool):

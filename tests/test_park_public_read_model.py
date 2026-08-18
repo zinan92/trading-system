@@ -225,3 +225,19 @@ def test_public_read_model_rejects_lifecycle_and_normalized_strategy_mismatch(tm
 
     assert result["status"] == "blocked"
     assert "strategy_type_mismatch" in result["blockers"]
+
+
+def test_public_read_model_uses_lifecycle_boundaries_and_blocks_mismatch(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    lifecycle_path = output / "park_strategy" / "lifecycle.jsonl"
+    lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8").splitlines()[-1])
+    lifecycle["upper_price_boundary"] = 4500.0
+    _append_jsonl(lifecycle_path, [lifecycle])
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["status"] == "blocked"
+    assert "strategy_boundary_mismatch" in result["blockers"]
+    assert result["strategy"]["upper_price_boundary"] == 4500.0
+    assert result["strategy"]["grid_entry_range"]["upper"] < 4500.0
