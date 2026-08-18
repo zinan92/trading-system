@@ -58,6 +58,42 @@ class ParkGridLifecycle:
     def levels(self) -> list[dict[str, Any]]:
         if self._levels is not None:
             return [dict(row) for row in self._levels]
+        geometry = (self.plan.get("risk") or {}).get("grid_rungs")
+        if isinstance(geometry, list) and geometry:
+            quantity = float((self.plan.get("risk") or {}).get("per_order_quantity") or 0)
+            if quantity <= 0:
+                raise ParkGridLifecycleError("risk_incomplete", "Grid risk plan has no executable quantity")
+            levels = []
+            direction = str(self.normalized.get("direction") or "")
+            for rung in geometry:
+                if not isinstance(rung, Mapping):
+                    raise ParkGridLifecycleError("grid_geometry_invalid", "Grid rung evidence is malformed")
+                price = float(rung.get("price") or 0)
+                take_profit = float(rung.get("take_profit") or 0)
+                hard_stop = float(rung.get("hard_stop") or 0)
+                if price <= 0 or take_profit <= 0 or hard_stop <= 0:
+                    raise ParkGridLifecycleError("grid_geometry_invalid", "Grid rung prices must be positive")
+                side = str(rung.get("side") or "")
+                if side not in {"buy", "sell"}:
+                    raise ParkGridLifecycleError("grid_geometry_invalid", "Grid rung side is invalid")
+                levels.append({
+                    "command_type": "grid_level",
+                    "level_id": f"{self.revision_id}:grid:{int(rung.get('rung') or len(levels) + 1)}",
+                    "strategy_session_id": self.session_id,
+                    "strategy_revision_id": self.revision_id,
+                    "plan_digest": self.plan_digest,
+                    "direction": direction,
+                    "side": side,
+                    "price": price,
+                    "quantity": quantity,
+                    "tp": take_profit,
+                    "sl": hard_stop,
+                    "geometry_locked": True,
+                })
+            if direction == "neutral" and {row["side"] for row in levels} != {"buy", "sell"}:
+                raise ParkGridLifecycleError("neutral_grid_requires_two_legs", "neutral Grid must contain both buy and sell entries")
+            self._levels = levels
+            return [dict(row) for row in self._levels]
         count = int((self.plan.get("risk") or {}).get("order_count") or self.normalized.get("order_count") or 1)
         if count <= 0:
             raise ParkGridLifecycleError("invalid_grid_count", "Grid count must be positive")

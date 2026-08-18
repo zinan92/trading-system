@@ -669,12 +669,23 @@ class ParkTelegramRouter:
                 f"neutral_legs=buy→{legs.get('long', {}).get('boundary')} / "
                 f"sell→{legs.get('short', {}).get('boundary')}\n"
             )
+        grid_detail = ""
+        if normalized.get("strategy_type") == "grid":
+            geometry = dict(risk.get("grid_entry_range") or {})
+            hard_stop = risk.get("hard_stop")
+            grid_detail = (
+                f"entry_range={geometry.get('lower')}~{geometry.get('upper')} "
+                f"spacing={risk.get('grid_spacing')} rungs={risk.get('order_count')}\n"
+                f"grid_hard_stop={hard_stop} tp_geometry=next_rung_then_boundary "
+                f"rung_prices={risk.get('grid_rung_prices')}\n"
+            )
         return "".join(
             (
                 "Park proposal (Paper-only; confirm this plan in plain language or with its digest)\n",
                 f"direction={normalized.get('direction')} type={normalized.get('strategy_type')}\n",
                 f"range={normalized.get('upper_price_boundary')}~{normalized.get('lower_price_boundary')} current={dict(plan.get('market') or {}).get('price')}\n",
                 neutral_detail,
+                grid_detail,
                 f"max_notional={risk.get('maximum_notional')} effective_leverage={risk.get('effective_leverage')}x\n",
                 f"theoretical_max_loss={risk.get('theoretical_max_loss')} order_count={risk.get('order_count')} quantity_each={risk.get('per_order_quantity')}\n",
                 f"plan_digest={proposal.get('plan_digest')}\n",

@@ -243,6 +243,39 @@ def test_public_read_model_uses_lifecycle_boundaries_and_blocks_mismatch(tmp_pat
     assert result["strategy"]["grid_entry_range"]["upper"] < 4500.0
 
 
+def test_public_read_model_projects_plan_authoritative_grid_geometry(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    plan_path = output / "park_strategy" / "plans.jsonl"
+    plan = json.loads(plan_path.read_text(encoding="utf-8").splitlines()[-1])
+    plan["risk"].update(
+        {
+            "order_count": 34,
+            "grid_spacing": 10.0,
+            "grid_entry_range": {"lower": 4110.0, "upper": 4440.0},
+            "grid_rung_prices": [4110.0 + index * 10.0 for index in range(34)],
+            "grid_rungs": [
+                {
+                    "rung": index + 1,
+                    "price": 4110.0 + index * 10.0,
+                    "side": "buy" if index < 15 else "sell",
+                    "take_profit": 4120.0 + index * 10.0 if index < 15 else 4100.0 + index * 10.0,
+                    "hard_stop": 4100.0 if index < 15 else 4450.0,
+                }
+                for index in range(34)
+            ],
+        }
+    )
+    _append_jsonl(plan_path, [plan])
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["strategy"]["grid_entry_range"] == {"lower": 4110.0, "upper": 4440.0}
+    assert result["strategy"]["grid_spacing"] == 10.0
+    assert result["strategy"]["grid_rung_count"] == 34
+    assert result["strategy"]["grid_rung_prices"] == [4110.0 + index * 10.0 for index in range(34)]
+
+
 def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     _fixture(output)

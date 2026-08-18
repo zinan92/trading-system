@@ -26,14 +26,14 @@ def test_normalizes_parks_chinese_short_dca_input() -> None:
     assert normalized["maximum_acceptable_loss"] is None
 
 
-def test_normalizes_english_grid_input_and_never_invents_stop() -> None:
+def test_normalizes_english_grid_input_with_deterministic_boundary_hard_stop() -> None:
     normalized = normalize_park_input({
         "direction": "long", "strategy_type": "grid",
         "upper_price_boundary": 4444, "lower_price_boundary": 4200,
         "maximum_acceptable_loss": 100,
     })
     assert normalized["strategy_type"] == "grid"
-    assert normalized["stop_price"] is None
+    assert normalized["stop_price"] == 4200.0
     assert normalized["take_profit_price"] is None
 
 
@@ -56,6 +56,45 @@ def test_neutral_grid_risk_plan_is_bilateral_and_conservative() -> None:
     assert risk["legs"]["short"]["boundary"] == 4450.0
     assert risk["effective_leverage"] <= 20.0
     assert risk["theoretical_max_loss"] > 0
+
+
+def test_grid_explicit_spacing_builds_inset_rungs_and_full_depth_loss() -> None:
+    normalized = normalize_park_input({
+        "direction": "neutral",
+        "strategy_type": "grid",
+        "upper_price_boundary": 4000,
+        "lower_price_boundary": 3800,
+        "grid_spacing": 10,
+        "maximum_leverage": 10,
+        "maximum_acceptable_loss": 100,
+    })
+    assert normalized["order_count"] == 19
+    plan = build_deterministic_risk_plan(normalized, market={**MARKET, "price": 3900.0}, account_equity=1000)
+    risk = plan["risk"]
+    assert risk["grid_entry_range"] == {"lower": 3810.0, "upper": 3990.0}
+    assert risk["grid_spacing"] == 10.0
+    assert risk["grid_rung_prices"] == [3810.0 + 10.0 * index for index in range(19)]
+    assert len(risk["grid_rungs"]) == 19
+    assert all(3800 < rung["price"] < 4000 for rung in risk["grid_rungs"])
+    assert {rung["side"] for rung in risk["grid_rungs"]} == {"buy", "sell"}
+    assert risk["grid_loss_model"] == "full_depth_all_rungs_to_hard_stop"
+    assert risk["theoretical_max_loss"] <= 100.0 + 1e-8
+    assert risk["hard_stop"] == {"long": 3800.0, "short": 4000.0}
+
+
+def test_grid_explicit_hard_stop_overrides_boundary_default() -> None:
+    normalized = normalize_park_input({
+        "direction": "long",
+        "strategy_type": "grid",
+        "upper_price_boundary": 4000,
+        "lower_price_boundary": 3800,
+        "grid_spacing": 10,
+        "maximum_leverage": 10,
+        "stop_price": 3850,
+    })
+    plan = build_deterministic_risk_plan(normalized, market={**MARKET, "price": 3900.0}, account_equity=1000)
+    assert plan["risk"]["hard_stop"] == 3850.0
+    assert all(rung["hard_stop"] == 3850.0 for rung in plan["risk"]["grid_rungs"])
 
 
 def test_neutral_direction_cannot_be_reinterpreted_as_dca() -> None:

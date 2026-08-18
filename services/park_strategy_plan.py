@@ -153,9 +153,37 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
             ("止盈", "take(?:_profit)?(?:_price)?", "tp"),
             "take_profit_price",
         )
+    grid_spacing = body.get("grid_spacing") or body.get("spacing")
+    if grid_spacing is None and strategy_type == "grid":
+        grid_spacing = _find_labeled_number(
+            text,
+            ("网格间距", "间距", "grid[_ ]?spacing", "spacing"),
+            "grid_spacing",
+        )
+    if strategy_type == "grid" and direction in {"long", "short"} and stop_price is None:
+        # Grid's default hard stop is the adverse outer boundary.  This is a
+        # deterministic strategy rule, not an AI authorization or a local
+        # per-rung stop.
+        stop_price = lower if direction == "long" else upper
     raw_order_count = body.get("order_count")
     if raw_order_count in (None, ""):
         raw_order_count = DEFAULT_NEUTRAL_GRID_ORDER_COUNT if direction == "neutral" and strategy_type == "grid" else 1
+    if strategy_type == "grid" and grid_spacing is not None:
+        spacing_value = _number(grid_spacing, "grid_spacing")
+        intervals = (upper_value - lower_value) / spacing_value
+        rounded_intervals = int(round(intervals))
+        if rounded_intervals < 2 or abs(intervals - rounded_intervals) > 1e-9:
+            raise ParkStrategyPlanError(
+                "grid_spacing_not_integral",
+                "grid spacing must divide the authorized boundary width into complete intervals",
+            )
+        derived_count = rounded_intervals - 1
+        if body.get("order_count") not in (None, "") and int(raw_order_count) != derived_count:
+            raise ParkStrategyPlanError(
+                "grid_geometry_mismatch",
+                "grid order_count conflicts with the explicitly provided spacing and boundaries",
+            )
+        raw_order_count = derived_count
     result: dict[str, Any] = {
         "schema_version": PARK_PLAN_SCHEMA,
         "direction": direction,
@@ -166,6 +194,7 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "maximum_acceptable_loss": _number(max_loss, "maximum_acceptable_loss") if max_loss is not None else None,
         "stop_price": _number(stop_price, "stop_price") if stop_price is not None else None,
         "take_profit_price": _number(take_profit_price, "take_profit_price") if take_profit_price is not None else None,
+        "grid_spacing": _number(grid_spacing, "grid_spacing") if grid_spacing is not None else None,
         "order_count": int(raw_order_count),
         "source_text": text or None,
     }
@@ -194,6 +223,152 @@ def _market_price(market: Mapping[str, Any]) -> tuple[float, str, str]:
     return _number(market.get("price"), "current_price"), source, observed_at
 
 
+def _build_grid_risk_plan(
+    normalized: Mapping[str, Any],
+    *,
+    current_price: float,
+    source: str,
+    observed_at: str,
+    equity: float,
+    lower: float,
+    upper: float,
+) -> dict[str, Any]:
+    """Build full-depth Grid geometry and hard-loss sizing."""
+
+    direction = str(normalized.get("direction") or "")
+    spacing_value = normalized.get("grid_spacing")
+    order_count = int(normalized.get("order_count") or 0)
+    if spacing_value not in (None, ""):
+        spacing = _number(spacing_value, "grid_spacing")
+        intervals = (upper - lower) / spacing
+        rounded_intervals = int(round(intervals))
+        if rounded_intervals < 2 or abs(intervals - rounded_intervals) > 1e-9:
+            raise ParkStrategyPlanError("grid_spacing_not_integral", "grid spacing must divide the boundary width")
+        derived_count = rounded_intervals - 1
+        if order_count not in {0, derived_count}:
+            raise ParkStrategyPlanError("grid_geometry_mismatch", "grid count and spacing disagree")
+        order_count = derived_count
+    elif order_count <= 0:
+        raise ParkStrategyPlanError("invalid_order_count", "Grid order_count must be positive")
+    else:
+        spacing = round((upper - lower) / (order_count + 1), 12)
+    if order_count <= 0 or spacing <= 0:
+        raise ParkStrategyPlanError("grid_geometry_invalid", "Grid geometry must contain positive rungs")
+    entry_lower = round(lower + spacing, 12)
+    entry_upper = round(upper - spacing, 12)
+    prices = [round(lower + spacing * (index + 1), 12) for index in range(order_count)]
+    if not prices or any(price <= lower or price >= upper for price in prices):
+        raise ParkStrategyPlanError("grid_geometry_invalid", "Grid entries must be strictly inside boundaries")
+    if not lower < current_price < upper:
+        raise ParkStrategyPlanError("grid_requires_interior_price", "Grid requires the trusted current price inside its range")
+
+    explicit_stop = normalized.get("stop_price")
+    if direction == "long":
+        hard_stop: float | dict[str, float] = _number(explicit_stop or lower, "stop_price")
+        if hard_stop >= current_price:
+            raise ParkStrategyPlanError("invalid_stop_price", "long Grid hard stop must be below current price")
+    elif direction == "short":
+        hard_stop = _number(explicit_stop or upper, "stop_price")
+        if hard_stop <= current_price:
+            raise ParkStrategyPlanError("invalid_stop_price", "short Grid hard stop must be above current price")
+    else:
+        if explicit_stop not in (None, "") or normalized.get("take_profit_price") not in (None, ""):
+            raise ParkStrategyPlanError("neutral_grid_boundary_only", "neutral Grid hard stops are its two outer boundaries")
+        hard_stop = {"long": lower, "short": upper}
+
+    rungs: list[dict[str, Any]] = []
+    for index, price in enumerate(prices):
+        if direction == "neutral":
+            side = "buy" if price < current_price else "sell"
+        else:
+            side = "buy" if direction == "long" else "sell"
+        if side == "buy":
+            take_profit = prices[index + 1] if index + 1 < len(prices) else upper
+            stop = hard_stop["long"] if isinstance(hard_stop, dict) else hard_stop
+        else:
+            take_profit = prices[index - 1] if index > 0 else lower
+            stop = hard_stop["short"] if isinstance(hard_stop, dict) else hard_stop
+        rungs.append({
+            "rung": index + 1,
+            "price": price,
+            "side": side,
+            "take_profit": round(take_profit, 12),
+            "hard_stop": round(float(stop), 12),
+        })
+    if direction == "neutral" and {rung["side"] for rung in rungs} != {"buy", "sell"}:
+        raise ParkStrategyPlanError("neutral_grid_requires_two_legs", "neutral Grid must contain both buy and sell rungs")
+
+    quantity_price_basis = upper if direction == "neutral" else current_price
+    loss_rate = sum(abs(rung["price"] - rung["hard_stop"]) for rung in rungs) / (order_count * quantity_price_basis)
+    if loss_rate <= 0:
+        raise ParkStrategyPlanError("grid_loss_geometry_invalid", "Grid hard-stop loss geometry is not positive")
+    maximum_leverage = normalized.get("maximum_leverage")
+    leverage_cap = round(equity * float(maximum_leverage), 12) if maximum_leverage is not None else None
+    maximum_loss = normalized.get("maximum_acceptable_loss")
+    loss_cap = round(float(maximum_loss) / loss_rate, 12) if maximum_loss is not None else None
+    caps = [cap for cap in (leverage_cap, loss_cap) if cap is not None]
+    if not caps:
+        raise ParkStrategyPlanError("missing_risk_authority", "no usable maximum leverage or loss cap")
+    maximum_notional = min(caps)
+    selected_constraint = "maximum_leverage" if loss_cap is None or (leverage_cap is not None and leverage_cap <= loss_cap) else "maximum_acceptable_loss"
+    per_order_notional = round(maximum_notional / order_count, 12)
+    per_order_quantity = round(per_order_notional / quantity_price_basis, 12)
+    theoretical_max_loss = round(sum(abs(rung["price"] - rung["hard_stop"]) * per_order_quantity for rung in rungs), 12)
+    if maximum_loss is not None:
+        theoretical_max_loss = min(theoretical_max_loss, round(float(maximum_loss), 12))
+    normalized_input = dict(normalized)
+    normalized_input.update({
+        "order_count": order_count,
+        "grid_spacing": spacing,
+        "grid_entry_lower": entry_lower,
+        "grid_entry_upper": entry_upper,
+    })
+    risk = {
+        "account_equity": equity,
+        "leverage_cap_notional": leverage_cap,
+        "maximum_loss_cap_notional": loss_cap,
+        "selected_constraint": selected_constraint,
+        "maximum_notional": maximum_notional,
+        "effective_leverage": round(maximum_notional / equity, 12),
+        "theoretical_max_loss": theoretical_max_loss,
+        "risk_boundary": {"lower": lower, "upper": upper} if direction == "neutral" else hard_stop,
+        "risk_boundary_source": "explicit_stop_price" if explicit_stop not in (None, "") else "authorized_price_boundaries",
+        "hard_stop": hard_stop,
+        "hard_stop_source": "explicit_stop_price" if explicit_stop not in (None, "") else "authorized_price_boundary",
+        "order_count": order_count,
+        "per_order_notional": per_order_notional,
+        "quantity_price_basis": quantity_price_basis,
+        "per_order_quantity": per_order_quantity,
+        "grid_spacing": spacing,
+        "grid_entry_range": {"lower": entry_lower, "upper": entry_upper},
+        "grid_rung_prices": prices,
+        "grid_rungs": rungs,
+        "grid_loss_model": "full_depth_all_rungs_to_hard_stop",
+    }
+    if direction == "neutral":
+        risk["legs"] = {
+            "long": {"boundary": lower, "hard_stop": lower},
+            "short": {"boundary": upper, "hard_stop": upper},
+        }
+    plan = {
+        "schema_version": PARK_PLAN_SCHEMA,
+        "strategy_session_id": str(normalized.get("strategy_session_id") or "").strip() or None,
+        "strategy_revision_id": str(normalized.get("strategy_revision_id") or "").strip() or None,
+        "normalized_input": normalized_input,
+        "market": {"price": current_price, "source": source, "observed_at": observed_at},
+        "risk": risk,
+        "invalidation": {
+            "trigger": "touch_or_cross",
+            "upper_price_boundary": upper,
+            "lower_price_boundary": lower,
+            "hard_stop": hard_stop,
+            "automatic_reopen": False,
+        },
+    }
+    plan["plan_digest"] = "sha256:" + hashlib.sha256(_canonical(plan).encode("utf-8")).hexdigest()
+    return plan
+
+
 def build_deterministic_risk_plan(
     normalized: Mapping[str, Any],
     *,
@@ -216,6 +391,16 @@ def build_deterministic_risk_plan(
     lower = _number(normalized.get("lower_price_boundary"), "lower_price_boundary")
     if not lower <= current_price <= upper:
         raise ParkStrategyPlanError("current_price_outside_range", "strategy is already outside its authorized range")
+    if strategy_type == "grid":
+        return _build_grid_risk_plan(
+            normalized,
+            current_price=current_price,
+            source=source,
+            observed_at=observed_at,
+            equity=equity,
+            lower=lower,
+            upper=upper,
+        )
     explicit_stop = normalized.get("stop_price")
     explicit_take_profit = normalized.get("take_profit_price")
     if direction == "neutral" and (explicit_stop not in (None, "") or explicit_take_profit not in (None, "")):
