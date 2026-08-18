@@ -15977,3 +15977,27 @@ auditable datafeed port; broker execution remains a separate port.
 - This merge remains Paper-only.  No live, exchange-key, Cloud order, or
   position mutation was performed; exact-SHA Paper deployment and natural-tick
   verification remain separate operational evidence.
+
+# 2026-08-18 — Preserve the first terminal trigger across retries (#769)
+
+## Decision
+
+- Persist a DCA TP/SL or Grid Hard Stop action plan before any cancel, stop, or
+  exit mutation.  If the operation partially fails, the durable action plan is
+  the sole authority for every retry; a later mark cannot replace its trigger
+  with the other TP/SL side or a different boundary.
+- A pending terminal action is retried even when the current mark has moved
+  away from the original level.  Retry skips entry lifecycle construction and
+  cannot create new entries or a new generation while the terminal action is
+  unresolved.  Final result, notification, and closure reason remain bound to
+  the original session/revision and trigger.
+
+## Verification
+
+- PR #770 merged as `main@871aba6fbc0c84d483e916a343f082db9e3b6264` (tree
+  `ffa57f7a5928f50cd8a9b2ac1608cd1917820ecd`) after 67 terminal-focused and
+  214 Park/Nautilus upstream tests passed; diff-check, compileall, gitleaks,
+  and focused spec/safety review passed.
+- This remains Paper-only evidence.  No live, exchange-key, Cloud order, or
+  position mutation was performed; exact-SHA deployment and natural-tick
+  verification remain separate operational evidence.

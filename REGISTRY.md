@@ -13,6 +13,16 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #769 / PR #770 makes terminal retries deterministic after partial Paper
+  failure.  DCA/Grid terminal action plans are persisted before cancel/stop
+  mutations; a pending plan remains the sole TP/SL or Hard Stop trigger even
+  if the current mark moves away, and retry skips entry lifecycle reactivation
+  or new entries.  Merged on exact
+  `main@871aba6fbc0c84d483e916a343f082db9e3b6264` (tree
+  `ffa57f7a5928f50cd8a9b2ac1608cd1917820ecd`) after 67 terminal-focused and
+  214 Park/Nautilus upstream tests, diff-check, compileall, gitleaks, and
+  focused spec/safety review passed.  Exact-SHA Paper deployment and natural
+  tick verification are the next runtime steps.  Next frontier: #748 / #749 / #750.
 - #747 / PR #766 completes the authoritative Park Grid execution slice.  Each
   confirmed rung carries immutable line/generation/re-arm identity into Paper;
   a complete, reconciled target fill re-arms the same price/TP/quantity, while
