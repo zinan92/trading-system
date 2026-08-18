@@ -4,7 +4,7 @@ import copy
 from pathlib import Path
 
 from services.park_paper_runtime import ParkPaperRuntime, build_park_authoritative_adapter
-from services.park_recording_track import REQUIRED_CATEGORIES
+from services.park_recording_track import ParkRecordingError, REQUIRED_CATEGORIES
 from services.park_strategy_plan import normalize_park_input
 from services.park_strategy_plan import build_deterministic_risk_plan
 from services.park_strategy_session import ParkStrategyIdentityJournal
@@ -483,6 +483,74 @@ def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identi
     assert adapter.cancel_calls == []
     assert adapter.submit_calls and len(adapter.submit_calls) == 1
     assert any(row.get("record_window_id") == "2026-08-14_DAY" for row in runtime.recording.packages())
+
+
+def test_recording_package_failure_blocks_evidence_without_execution_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T12:59:00+00:00",
+        "symbol": "GOLD",
+    }
+    now_ref = {"value": "2026-08-14T12:59:00+00:00"}
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: dict(market),
+        account_reader=lambda _root, _cycle: {
+            "equity": 10000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: now_ref["value"],
+        cycle_id_provider=lambda _now: "2026-08-14_DAY",
+    )
+    adapter = FakePaperAdapter()
+    runtime = ParkPaperRuntime(
+        output,
+        adapter=adapter,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        config=_config(),
+        market_reader=lambda: dict(market),
+        now=lambda: now_ref["value"],
+        safety_evidence_reader=_evidence,
+    )
+    proposal = router.handle_update(_update(17, "short DCA 10x 4444~4200"))
+    router.handle_update(_update(18, f"confirm {proposal['proposal']['plan_digest']}"))
+    assert runtime.run_once()["status"] == "active"
+    active_before = ParkStrategyIdentityJournal(output).active_session()
+    submit_count = len(adapter.submit_calls)
+    cancel_count = len(adapter.cancel_calls)
+
+    def fail_close(**_kwargs):
+        raise ParkRecordingError("package_write_failed", "test package failure")
+
+    monkeypatch.setattr(runtime.recording, "close_package", fail_close)
+    now_ref["value"] = "2026-08-14T13:01:00+00:00"
+    market["observed_at"] = now_ref["value"]
+
+    result = runtime.run_once()
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "recording_package_blocked"
+    assert len(adapter.submit_calls) == submit_count
+    assert len(adapter.cancel_calls) == cancel_count
+    assert ParkStrategyIdentityJournal(output).active_session() == active_before
+    blockers = (output / "park_strategy" / "runtime_blockers.jsonl").read_text(encoding="utf-8")
+    assert "recording_package_blocked" in blockers
+    assert any(row.get("message_type") == "park_blocker" for row in runtime.telegram.outbox_rows())
 
 
 def test_multi_session_recording_close_keeps_new_active_identity_open(tmp_path: Path) -> None:

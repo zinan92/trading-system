@@ -241,3 +241,54 @@ def test_public_read_model_uses_lifecycle_boundaries_and_blocks_mismatch(tmp_pat
     assert "strategy_boundary_mismatch" in result["blockers"]
     assert result["strategy"]["upper_price_boundary"] == 4500.0
     assert result["strategy"]["grid_entry_range"]["upper"] < 4500.0
+
+
+def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    (recording_root / "packages.jsonl").write_text(
+        json.dumps(
+            {
+                "record_window_id": "2026-08-14_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "blocked_incomplete",
+                "missing_categories": ["fills"],
+                "strategy_open": True,
+                "positions_open": 2,
+                "execution_mutations": [],
+                "next_action": "collect_missing_evidence",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (output / "park_strategy" / "runtime_blockers.jsonl").write_text(
+        json.dumps(
+            {
+                "code": "recording_package_blocked",
+                "recording_windows": [{"record_window_id": "2026-08-14_DAY"}],
+                "next_action": "notify_park_and_wait",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"] == {
+        "status": "blocked",
+        "record_window_id": "2026-08-14_DAY",
+        "strategy_session_id": "session-1",
+        "strategy_revision_id": "revision-1",
+        "package_status": "blocked_incomplete",
+        "missing_categories": ["fills"],
+        "strategy_open": True,
+        "positions_open": 2,
+        "execution_mutations": [],
+        "next_action": "notify_park_and_wait",
+        "blocker_code": "recording_package_blocked",
+    }

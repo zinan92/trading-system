@@ -79,6 +79,51 @@ def _compact_rows(rows: Any, fields: tuple[str, ...]) -> list[dict[str, Any]]:
     ]
 
 
+def _recording_projection(root: Path) -> dict[str, Any]:
+    try:
+        packages = _read_jsonl(root / "park_strategy" / "recording" / "packages.jsonl")
+        blockers = _read_jsonl(root / "park_strategy" / "runtime_blockers.jsonl")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "status": "blocked",
+            "record_window_id": None,
+            "strategy_session_id": None,
+            "strategy_revision_id": None,
+            "package_status": None,
+            "missing_categories": [],
+            "strategy_open": None,
+            "positions_open": None,
+            "execution_mutations": [],
+            "next_action": "notify_park_and_wait",
+            "blocker_code": "recording_journal_invalid",
+        }
+    package = dict(packages[-1]) if packages else {}
+    blocker = next(
+        (
+            row
+            for row in reversed(blockers)
+            if str(row.get("code") or "").startswith("recording_")
+        ),
+        {},
+    )
+    package_status = str(package.get("status") or "") or None
+    blocker_code = str(blocker.get("code") or "") or None
+    status = "blocked" if blocker_code or package_status == "blocked_incomplete" else "complete" if package_status else "none"
+    return {
+        "status": status,
+        "record_window_id": package.get("record_window_id"),
+        "strategy_session_id": package.get("strategy_session_id"),
+        "strategy_revision_id": package.get("strategy_revision_id"),
+        "package_status": package_status,
+        "missing_categories": list(package.get("missing_categories") or []),
+        "strategy_open": package.get("strategy_open"),
+        "positions_open": package.get("positions_open"),
+        "execution_mutations": list(package.get("execution_mutations") or []),
+        "next_action": "notify_park_and_wait" if blocker_code else package.get("next_action"),
+        "blocker_code": blocker_code,
+    }
+
+
 def _empty_execution() -> dict[str, Any]:
     return {
         "engine": "unavailable",
@@ -199,6 +244,10 @@ def build_park_public_read_model(
         blockers.append("safety_timestamp_invalid")
     elif safety_age > PARK_PUBLIC_MAX_AGE_SECONDS:
         blockers.append("persisted_snapshot_stale")
+
+    recording = _recording_projection(root)
+    if recording["status"] == "blocked" and recording.get("blocker_code"):
+        blockers.append(str(recording["blocker_code"]))
 
     normalized = dict(plan.get("normalized_input") or {})
     risk = dict(plan.get("risk") or {})
@@ -352,6 +401,7 @@ def build_park_public_read_model(
             "mutations_allowed": False,
         },
         "strategy": strategy,
+        "recording": recording,
         "market": mark,
         "execution": execution,
         "safety": {

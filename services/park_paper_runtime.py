@@ -149,7 +149,20 @@ class ParkPaperRuntime:
 
     def run_once(self) -> dict[str, Any]:
         observed_at = self.now()
-        self._close_due_recording_packages(observed_at)
+        recording_failures = self._close_due_recording_packages(observed_at)
+        if recording_failures:
+            active = self.identity.active_session() or {}
+            return self._blocked(
+                "recording_package_blocked",
+                "; ".join(
+                    f"{row['record_window_id']}: {row['detail']}"
+                    for row in recording_failures
+                ),
+                observed_at=observed_at,
+                strategy_session_id=active.get("strategy_session_id"),
+                strategy_revision_id=active.get("strategy_revision_id"),
+                recording_windows=recording_failures,
+            )
         active = self.identity.active_session()
         if not active:
             return self._result("idle", observed_at=observed_at, next_action="await_new_park_strategy")
@@ -1051,11 +1064,12 @@ class ParkPaperRuntime:
                 payload=payload,
             )
 
-    def _close_due_recording_packages(self, observed_at: str) -> None:
+    def _close_due_recording_packages(self, observed_at: str) -> list[dict[str, str]]:
         try:
             current = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
         except ValueError:
-            return
+            return []
+        failures: list[dict[str, str]] = []
         manifests = [row for row in self.recording.events() if row.get("event") == "manifest_started"]
         packages = {str(row.get("record_window_id")) for row in self.recording.packages()}
         manifests_by_window: dict[str, list[dict[str, Any]]] = {}
@@ -1116,15 +1130,25 @@ class ParkPaperRuntime:
                     row for row in reversed(window_events) if row.get("category") == "positions"
                 ]
             payload = dict((latest_positions[0] if latest_positions else {}).get("payload") or {})
-            package = self.recording.close_package(
-                record_window_id=window_id,
-                strategy_session_id=session,
-                strategy_revision_id=revision,
-                strategy_open=strategy_open,
-                positions_open=int(payload.get("open_count") or 0),
-            )
-            review = self.recording.review(record_window_id=window_id)
-            _append_jsonl(self.review_path, {"record_window_id": window_id, "review": review, "package": package})
+            try:
+                package = self.recording.close_package(
+                    record_window_id=window_id,
+                    strategy_session_id=session,
+                    strategy_revision_id=revision,
+                    strategy_open=strategy_open,
+                    positions_open=int(payload.get("open_count") or 0),
+                )
+                review = self.recording.review(record_window_id=window_id)
+                _append_jsonl(self.review_path, {"record_window_id": window_id, "review": review, "package": package})
+            except Exception as exc:  # noqa: BLE001 - package failure must not mutate execution.
+                failures.append(
+                    {
+                        "record_window_id": window_id,
+                        "error_type": type(exc).__name__,
+                        "detail": str(exc)[:300],
+                    }
+                )
+        return failures
 
     def _blocked(self, code: str, detail: str, **context: Any) -> dict[str, Any]:
         self._revoke_adapter_mutation()
