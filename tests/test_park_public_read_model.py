@@ -335,6 +335,38 @@ def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_pa
     }
 
 
+def test_public_read_model_projects_terminal_result_for_park_revision(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    _append_jsonl(
+        output / "park_strategy" / "executions.jsonl",
+        [
+            {
+                "event": "terminal_paused",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "plan_digest": "sha256:" + "a" * 64,
+                "result": {
+                    "terminal_reason": "take_profit_price",
+                    "observed_price": 4210.0,
+                    "cancel": {"cancelled_order_ids": ["order-1"]},
+                    "exit_receipts": [{"order_id": "exit-1"}],
+                    "positions_preserved": 0,
+                    "reconciliation": {"status": "ok", "issues": []},
+                    "next_action": "await_park_next_strategy",
+                },
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["terminal"]["reason"] == "take_profit_price"
+    assert result["terminal"]["observed_price"] == 4210.0
+    assert result["terminal"]["reconciliation"]["status"] == "ok"
+    assert result["terminal"]["next_action"] == "await_park_next_strategy"
+
+
 def test_public_read_model_projects_active_recording_window_before_package_close(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     _fixture(output)

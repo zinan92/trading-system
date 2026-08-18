@@ -537,6 +537,10 @@ class ParkPaperRuntime:
             ("sl", "sl", "stop_price"),
             ("tp", "tp", "take_profit_price"),
         ):
+            if str(normalized.get("strategy_type") or "") == "dca":
+                # DCA has one aggregate strategy exit; do not duplicate TP/SL
+                # protection on each entry command.
+                continue
             value = source.get(source_key)
             if value in (None, ""):
                 value = normalized.get(normalized_key)
@@ -680,9 +684,11 @@ class ParkPaperRuntime:
             idempotency_key=f"park-terminal:{session}:{revision}:{boundary['reason']}",
             message_type="park_terminal",
             text=(
-                f"Park strategy paused: {boundary['reason']} at {current_price}. "
-                f"Owned positions were handled only for this exact terminal trigger; "
-                f"send a new strategy only after clean-slate checks pass."
+                f"Park strategy paused: {boundary['reason']} at {current_price}; "
+                f"cancelled={len(cancel.get('cancelled_order_ids') or [])}, "
+                f"owned_exits={len(exit_receipts)}, positions_preserved={result['positions_preserved']}, "
+                f"reconciliation={final_reconciliation.get('status')}; "
+                f"next_action=await_park_next_strategy."
             ),
             binding={"strategy_session_id": session, "strategy_revision_id": revision},
         )
@@ -778,6 +784,11 @@ class ParkPaperRuntime:
         except (TypeError, ValueError):
             return {"reason": "boundary_invalid"}
         direction = str(normalized.get("direction") or "")
+        strategy_type = str(normalized.get("strategy_type") or "")
+        stop = normalized.get("stop_price")
+        target = normalized.get("take_profit_price")
+        if strategy_type == "dca" and (stop in (None, "") or target in (None, "")):
+            return None
         if price >= upper:
             return {
                 "reason": "upper_boundary_invalidated",
@@ -788,8 +799,6 @@ class ParkPaperRuntime:
                 "reason": "lower_boundary_invalidated",
                 "close_positions": direction != "neutral",
             }
-        stop = normalized.get("stop_price")
-        target = normalized.get("take_profit_price")
         if stop not in (None, ""):
             stop_value = float(stop)
             if (direction == "long" and price <= stop_value) or (direction == "short" and price >= stop_value):

@@ -18,6 +18,8 @@ def _plan() -> dict:
             "upper_price_boundary": 4444.0,
             "lower_price_boundary": 4200.0,
             "order_count": 3,
+            "stop_price": 4450.0,
+            "take_profit_price": 4210.0,
         },
         "market": {"price": 4300.0},
         "risk": {"order_count": 3, "per_order_quantity": 0.25},
@@ -38,14 +40,25 @@ def _dca(tmp_path: Path) -> ParkDcaLifecycle:
     return ParkDcaLifecycle(_plan(), confirmation_receipt=_receipt(), output_root=tmp_path / "outputs", park_user_id="park", chat_id="chat")
 
 
+def _plan_without_exits() -> dict:
+    plan = _plan()
+    plan["normalized_input"] = {
+        key: value
+        for key, value in plan["normalized_input"].items()
+        if key not in {"stop_price", "take_profit_price"}
+    }
+    return plan
+
+
 def test_dca_entries_are_finite_owned_and_idempotent(tmp_path: Path) -> None:
-    dca = _dca(tmp_path)
+    dca = ParkDcaLifecycle(_plan_without_exits(), confirmation_receipt=_receipt(), output_root=tmp_path / "outputs", park_user_id="park", chat_id="chat")
     first = dca.entry_commands()
     second = dca.entry_commands()
     assert first == second
     assert len(first) == 3
     assert all(row["strategy_session_id"] == "session-1" and row["strategy_revision_id"] == "revision-1" for row in first)
     assert all(row["loop_enabled"] is False for row in first)
+    assert all("tp" not in row and "sl" not in row for row in first)
 
 
 def test_both_authorized_boundaries_terminal_and_notify_once(tmp_path: Path) -> None:
@@ -74,3 +87,22 @@ def test_stale_market_does_not_trigger_closure_and_no_reopen_api_exists(tmp_path
 def test_exact_confirmation_is_required(tmp_path: Path) -> None:
     with pytest.raises(ParkDcaLifecycleError, match="confirmation"):
         ParkDcaLifecycle(_plan(), confirmation_receipt={}, output_root=tmp_path / "outputs", park_user_id="park", chat_id="chat")
+
+
+def test_explicit_dca_tp_sl_are_owned_and_terminal_once(tmp_path: Path) -> None:
+    plan = _plan()
+    plan["normalized_input"] = {**plan["normalized_input"], "stop_price": 4450.0, "take_profit_price": 4210.0}
+    dca = ParkDcaLifecycle(
+        plan,
+        confirmation_receipt=_receipt(),
+        output_root=tmp_path / "outputs",
+        park_user_id="park",
+        chat_id="chat",
+    )
+    assert all(row["sl"] == 4450.0 and row["tp"] == 4210.0 for row in dca.entry_commands())
+    terminal = dca.on_market(price=4210.0, trusted=True, fresh=True)
+    assert terminal["status"] == "terminal"
+    assert terminal["trigger"] == "take_profit_price"
+    assert terminal["action_plan"]["automatic_reopen"] is False
+    repeated = dca.on_market(price=4200.0, trusted=True, fresh=True)
+    assert repeated["action_plan"] == terminal["action_plan"]

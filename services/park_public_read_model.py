@@ -246,6 +246,28 @@ def _empty_execution() -> dict[str, Any]:
     }
 
 
+def _latest_terminal(root: Path) -> dict[str, Any] | None:
+    try:
+        rows = _read_jsonl(root / "park_strategy" / "executions.jsonl")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    for row in reversed(rows):
+        if row.get("event") == "terminal_paused" and isinstance(row.get("result"), Mapping):
+            return {
+                "reason": row.get("result", {}).get("terminal_reason"),
+                "observed_price": row.get("result", {}).get("observed_price"),
+                "cancel": row.get("result", {}).get("cancel"),
+                "exit_receipts": row.get("result", {}).get("exit_receipts") or [],
+                "positions_preserved": row.get("result", {}).get("positions_preserved"),
+                "reconciliation": row.get("result", {}).get("reconciliation") or {},
+                "strategy_session_id": row.get("strategy_session_id"),
+                "strategy_revision_id": row.get("strategy_revision_id"),
+                "plan_digest": row.get("plan_digest"),
+                "next_action": row.get("result", {}).get("next_action"),
+            }
+    return None
+
+
 def build_park_public_read_model(
     output_root: Path,
     *,
@@ -264,6 +286,7 @@ def build_park_public_read_model(
     lifecycle: dict[str, Any] = {}
     snapshot: dict[str, Any] = {}
     safety: dict[str, Any] = {}
+    terminal = _latest_terminal(root)
 
     try:
         active = dict(ParkStrategyIdentityJournal(root).active_session() or {})
@@ -272,6 +295,11 @@ def build_park_public_read_model(
 
     session_id = str(active.get("strategy_session_id") or "")
     revision_id = str(active.get("strategy_revision_id") or "")
+    if terminal and session_id and (
+        str(terminal.get("strategy_session_id") or "") != session_id
+        or str(terminal.get("strategy_revision_id") or "") != revision_id
+    ):
+        terminal = None
     if not session_id or not revision_id:
         blockers.append("active_strategy_missing")
     else:
@@ -553,6 +581,7 @@ def build_park_public_read_model(
         },
         "strategy": strategy,
         "recording": recording,
+        "terminal": terminal,
         "market": mark,
         "execution": execution,
         "safety": {
