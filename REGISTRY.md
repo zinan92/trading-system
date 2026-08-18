@@ -13,6 +13,20 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #748 / PR #773 delivers explicit Park-confirmed Reverse.  A direction
+  change is recognized only when Park writes the new direction; the complete
+  candidate/risk snapshot and digest are confirmed before any old mutation.
+  The Paper runtime then cancels exact old entries, flattens exact old
+  positions, reconciles zero exposure, seals the old revision, and only then
+  starts the new Strategy Session/Revision.  Material market/risk drift,
+  missing confirmation, or any partial cleanup leaves the new revision
+  inactive with a durable blocker and no blind retry.  Pending/blocked Reverse
+  state is present in the Park and stable Dashboard read models.  Merged on
+  exact `main@a9553e14db3dffa8137a7f3c0c91843e21b1402a` (tree
+  `3fb4ed96ab19d4fdad6bcadd4101b3f9f85b19b1`) after 141 focused tests,
+  diff-check, compileall, gitleaks, and focused spec/safety review passed.
+  Exact-SHA Paper deployment and natural-tick verification are the next
+  runtime steps.  Next frontier: #749 / #750.
 - #769 / PR #770 makes terminal retries deterministic after partial Paper
   failure.  DCA/Grid terminal action plans are persisted before cancel/stop
   mutations; a pending plan remains the sole TP/SL or Hard Stop trigger even
