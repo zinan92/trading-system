@@ -166,6 +166,7 @@ class ParkPaperRuntime:
                 observed_at=observed_at,
                 next_action="retry_recording_package" if recording_failures else "await_new_park_strategy",
                 recording_failures=recording_failures,
+                recording_blocker=recording_blocker,
             )
         session = _text(active.get("strategy_session_id"), "strategy_session_id")
         revision = _text(active.get("strategy_revision_id"), "strategy_revision_id")
@@ -191,7 +192,7 @@ class ParkPaperRuntime:
             )
             if expired is not None:
                 return expired
-            self._record_window_facts(
+            facts_failure, facts_blocker = self._record_window_facts_safely(
                 active,
                 observed_at=observed_at,
                 status="awaiting_confirmation",
@@ -200,6 +201,7 @@ class ParkPaperRuntime:
                 snapshot=None,
                 reconciliation=None,
             )
+            all_recording_failures = recording_failures + ([facts_failure] if facts_failure else [])
             return self._result(
                 "awaiting_confirmation",
                 observed_at=observed_at,
@@ -207,6 +209,8 @@ class ParkPaperRuntime:
                 revision=revision,
                 digest=digest,
                 next_action="await_exact_park_confirmation",
+                recording_failures=all_recording_failures,
+                recording_blocker=facts_blocker or recording_blocker,
             )
 
         market_started = time.monotonic()
@@ -368,7 +372,7 @@ class ParkPaperRuntime:
                     "market_read_ms": market_elapsed_ms,
                 }
             else:
-                self._record_window_facts(
+                facts_failure, facts_blocker = self._record_window_facts_safely(
                     self.identity.active_session() or active,
                     observed_at=observed_at,
                     status="active",
@@ -377,6 +381,7 @@ class ParkPaperRuntime:
                     snapshot=snapshot,
                     reconciliation=reconciliation,
                 )
+                all_recording_failures = recording_failures + ([facts_failure] if facts_failure else [])
                 result = self._result(
                     "active",
                     observed_at=observed_at,
@@ -388,9 +393,9 @@ class ParkPaperRuntime:
                     snapshot=snapshot,
                     reconciliation=reconciliation,
                     market_read_ms=market_elapsed_ms,
-                    next_action="retry_recording_package" if recording_failures else "continue_trusted_fresh_ticks",
-                    recording_failures=recording_failures,
-                    recording_blocker=recording_blocker,
+                    next_action="retry_recording_package" if all_recording_failures else "continue_trusted_fresh_ticks",
+                    recording_failures=all_recording_failures,
+                    recording_blocker=facts_blocker or recording_blocker,
                 )
                 self._revoke_adapter_mutation()
             return result
@@ -695,7 +700,7 @@ class ParkPaperRuntime:
             reason=str(boundary["reason"]),
             observed_at=observed_at,
         )
-        self._record_window_facts(
+        facts_failure, facts_blocker = self._record_window_facts_safely(
             {**(self.identity.active_session() or {}), **{"strategy_session_id": session, "strategy_revision_id": revision}},
             observed_at=observed_at,
             status="paused",
@@ -704,6 +709,9 @@ class ParkPaperRuntime:
             snapshot=final_snapshot,
             reconciliation=final_reconciliation,
         )
+        if facts_failure:
+            result["recording_failures"] = [facts_failure]
+            result["recording_blocker"] = facts_blocker
         return result
 
     def _exit_command(
@@ -1013,6 +1021,46 @@ class ParkPaperRuntime:
             result.update({command_id, f"POS-{command_id}"})
         return result
 
+    def _record_window_facts_safely(
+        self,
+        active: Mapping[str, Any],
+        *,
+        observed_at: str,
+        status: str,
+        plan: Mapping[str, Any],
+        market: Mapping[str, Any] | None,
+        snapshot: Mapping[str, Any] | None,
+        reconciliation: Mapping[str, Any] | None,
+    ) -> tuple[dict[str, str] | None, dict[str, Any] | None]:
+        """Contain recording-journal failures without changing Paper execution."""
+
+        try:
+            self._record_window_facts(
+                active,
+                observed_at=observed_at,
+                status=status,
+                plan=plan,
+                market=market,
+                snapshot=snapshot,
+                reconciliation=reconciliation,
+            )
+        except Exception as exc:  # noqa: BLE001 - recording must not take the engine down.
+            window = recording_window(observed_at)
+            failure = {
+                "record_window_id": str(window["record_window_id"]),
+                "error_type": type(exc).__name__,
+                "detail": str(exc)[:300],
+            }
+            blocker = self._record_recording_blocker(
+                [failure],
+                observed_at=observed_at,
+                strategy_session_id=str(active.get("strategy_session_id") or "") or None,
+                strategy_revision_id=str(active.get("strategy_revision_id") or "") or None,
+                blocker_code="recording_facts_blocked",
+            )
+            return failure, blocker
+        return None, None
+
     def _record_window_facts(
         self,
         active: Mapping[str, Any],
@@ -1073,10 +1121,20 @@ class ParkPaperRuntime:
         except ValueError:
             return []
         failures: list[dict[str, str]] = []
-        manifests = [row for row in self.recording.events() if row.get("event") == "manifest_started"]
-        package_status_by_window = {
-            str(row.get("record_window_id")): str(row.get("status") or "")
-            for row in self.recording.packages()
+        try:
+            recording_events = self.recording.events()
+            recording_packages = self.recording.packages()
+        except Exception as exc:  # noqa: BLE001 - corrupt recording must be visible, not crash the tick.
+            return [
+                {
+                    "record_window_id": "unknown",
+                    "error_type": type(exc).__name__,
+                    "detail": str(exc)[:300],
+                }
+            ]
+        manifests = [row for row in recording_events if row.get("event") == "manifest_started"]
+        package_by_window = {
+            str(row.get("record_window_id")): row for row in recording_packages
         }
         manifests_by_window: dict[str, list[dict[str, Any]]] = {}
         for manifest in manifests:
@@ -1089,7 +1147,11 @@ class ParkPaperRuntime:
             str(active.get("strategy_revision_id") or ""),
         ) if active else ("", "")
         for window_id, window_manifests in manifests_by_window.items():
-            if package_status_by_window.get(window_id) == "complete":
+            package_state = package_by_window.get(window_id) or {}
+            if (
+                package_state.get("status") == "complete"
+                and str(package_state.get("review_status") or "complete") == "complete"
+            ):
                 continue
             try:
                 ends = datetime.fromisoformat(
@@ -1100,7 +1162,7 @@ class ParkPaperRuntime:
             if ends > current:
                 continue
             window_events = [
-                row for row in self.recording.events() if row.get("record_window_id") == window_id
+                row for row in recording_events if row.get("record_window_id") == window_id
             ]
             window_pairs = {
                 (
@@ -1136,6 +1198,7 @@ class ParkPaperRuntime:
                     row for row in reversed(window_events) if row.get("category") == "positions"
                 ]
             payload = dict((latest_positions[0] if latest_positions else {}).get("payload") or {})
+            package: dict[str, Any] | None = None
             try:
                 package = self.recording.close_package(
                     record_window_id=window_id,
@@ -1144,9 +1207,18 @@ class ParkPaperRuntime:
                     strategy_open=strategy_open,
                     positions_open=int(payload.get("open_count") or 0),
                 )
+                if package.get("status") != "complete":
+                    failures.append(
+                        {
+                            "record_window_id": window_id,
+                            "error_type": "recording_incomplete",
+                            "detail": ",".join(str(item) for item in package.get("missing_categories") or [])[:300],
+                        }
+                    )
                 review = self.recording.review(record_window_id=window_id)
                 _append_jsonl(self.review_path, {"record_window_id": window_id, "review": review, "package": package})
-            except Exception as exc:  # noqa: BLE001 - package failure must not mutate execution.
+                self.recording.mark_review_complete(record_window_id=window_id)
+            except Exception as exc:  # noqa: BLE001 - package/review failure must not mutate execution.
                 failures.append(
                     {
                         "record_window_id": window_id,
@@ -1154,6 +1226,17 @@ class ParkPaperRuntime:
                         "detail": str(exc)[:300],
                     }
                 )
+                if package is not None:
+                    try:
+                        self.recording.mark_review_blocked(
+                            record_window_id=window_id,
+                            error_type=type(exc).__name__,
+                            detail=str(exc),
+                        )
+                    except Exception:
+                        # The primary blocker is still returned below; a broken
+                        # package journal must never turn into execution mutation.
+                        pass
         return failures
 
     def _blocked(self, code: str, detail: str, **context: Any) -> dict[str, Any]:
@@ -1187,11 +1270,12 @@ class ParkPaperRuntime:
         observed_at: str,
         strategy_session_id: str | None,
         strategy_revision_id: str | None,
+        blocker_code: str = "recording_package_blocked",
     ) -> dict[str, Any]:
         row = {
             "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
             "event": "recording_blocked",
-            "code": "recording_package_blocked",
+            "code": blocker_code,
             "recorded_at": observed_at,
             "strategy_session_id": strategy_session_id,
             "strategy_revision_id": strategy_revision_id,
@@ -1208,9 +1292,9 @@ class ParkPaperRuntime:
         for failure in failures:
             window_id = str(failure.get("record_window_id") or "unknown")
             self.telegram.queue_outbound(
-                idempotency_key=f"park-recording-blocker:{window_id}:{failure.get('error_type')}",
+                idempotency_key=f"park-recording-blocker:{blocker_code}:{window_id}:{failure.get('error_type')}",
                 message_type="park_blocker",
-                text=f"Park Paper recording blocked: {window_id}; next_action=retry_recording_package",
+                text=f"Park Paper recording blocked: {window_id}; code={blocker_code}; next_action=retry_recording_package",
                 binding=binding,
             )
         return dict(row)

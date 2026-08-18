@@ -296,6 +296,68 @@ def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_pa
     }
 
 
+def test_public_read_model_projects_active_recording_window_before_package_close(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(
+        recording_root / "events.jsonl",
+        [
+            {
+                "event": "manifest_started",
+                "record_window_id": "2026-08-17_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "starts_at": "2026-08-17T01:00:00Z",
+                "ends_at": "2026-08-17T13:00:00Z",
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"] == {
+        "status": "in_progress",
+        "record_window_id": "2026-08-17_DAY",
+        "strategy_session_id": "session-1",
+        "strategy_revision_id": "revision-1",
+        "package_status": None,
+        "missing_categories": [],
+        "strategy_open": True,
+        "positions_open": None,
+        "execution_mutations": [],
+        "next_action": "continue_recording_window",
+        "blocker_code": None,
+    }
+
+
+def test_public_read_model_blocks_complete_package_until_review_is_durable(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(
+        recording_root / "packages.jsonl",
+        [
+            {
+                "record_window_id": "2026-08-17_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "complete",
+                "review_status": "pending",
+                "execution_mutations": [],
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "blocked"
+    assert result["recording"]["blocker_code"] == "recording_review_pending"
+    assert "recording_review_pending" in result["blockers"]
+
+
 def test_public_read_model_does_not_project_an_older_session_package(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     _fixture(output)

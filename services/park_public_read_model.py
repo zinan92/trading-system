@@ -86,6 +86,7 @@ def _recording_projection(
 ) -> dict[str, Any]:
     try:
         packages = _read_jsonl(root / "park_strategy" / "recording" / "packages.jsonl")
+        events = _read_jsonl(root / "park_strategy" / "recording" / "events.jsonl")
         blockers = _read_jsonl(root / "park_strategy" / "runtime_blockers.jsonl")
     except (OSError, ValueError, json.JSONDecodeError):
         return {
@@ -118,7 +119,18 @@ def _recording_projection(
         return (session, revision) in pairs or scalar == (session, revision)
 
     matching_packages = [row for row in packages if matches(row)]
-    package = dict(matching_packages[-1]) if matching_packages else {}
+    matching_manifests = [
+        row
+        for row in events
+        if row.get("event") == "manifest_started" and matches(row)
+    ]
+    latest_manifest = dict(matching_manifests[-1]) if matching_manifests else {}
+    latest_window_id = str(latest_manifest.get("record_window_id") or "")
+    window_packages = [
+        row for row in matching_packages
+        if not latest_window_id or str(row.get("record_window_id") or "") == latest_window_id
+    ]
+    package = dict(window_packages[-1]) if window_packages else {}
     blocker = next(
         (
             row
@@ -128,7 +140,8 @@ def _recording_projection(
         ),
         {},
     )
-    if package.get("status") == "complete" and blocker:
+    package_review_status = str(package.get("review_status") or "complete") if package else None
+    if package.get("status") == "complete" and package_review_status == "complete" and blocker:
         blocked_windows = {
             str(row.get("record_window_id") or "")
             for row in blocker.get("recording_windows") or []
@@ -152,18 +165,30 @@ def _recording_projection(
         }
     package_status = str(package.get("status") or "") or None
     blocker_code = str(blocker.get("code") or "") or None
-    status = "blocked" if blocker_code or package_status == "blocked_incomplete" else "complete" if package_status else "none"
+    if package_status == "complete" and package_review_status != "complete":
+        blocker_code = blocker_code or "recording_review_pending"
+    if blocker_code or package_status == "blocked_incomplete":
+        status = "blocked"
+    elif package_status == "complete":
+        status = "complete"
+    elif latest_manifest:
+        # A live Recording Window exists before its 12h package is closed.
+        # It is evidence in progress, never a strategy transition.
+        status = "in_progress"
+    else:
+        status = "none"
+    active_recording = latest_manifest or package
     return {
         "status": status,
-        "record_window_id": package.get("record_window_id"),
-        "strategy_session_id": package.get("strategy_session_id"),
-        "strategy_revision_id": package.get("strategy_revision_id"),
+        "record_window_id": active_recording.get("record_window_id"),
+        "strategy_session_id": active_recording.get("strategy_session_id") or (active_pair[0] if latest_manifest else None),
+        "strategy_revision_id": active_recording.get("strategy_revision_id") or (active_pair[1] if latest_manifest else None),
         "package_status": package_status,
         "missing_categories": list(package.get("missing_categories") or []),
-        "strategy_open": package.get("strategy_open"),
+        "strategy_open": package.get("strategy_open") if package else True if latest_manifest else None,
         "positions_open": package.get("positions_open"),
         "execution_mutations": list(package.get("execution_mutations") or []),
-        "next_action": "notify_park_and_wait" if blocker_code else package.get("next_action"),
+        "next_action": "notify_park_and_wait" if blocker_code else package.get("next_action") or "continue_recording_window" if latest_manifest else None,
         "blocker_code": blocker_code,
     }
 

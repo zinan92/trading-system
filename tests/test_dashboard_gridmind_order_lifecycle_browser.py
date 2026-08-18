@@ -377,7 +377,7 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
         assert "session-browser-park" in copy
         assert "revision-browser-4" in copy
         assert "行情可信" in copy and "对账 ok" in copy and "4 秒前" in copy
-        assert "Recording 2026-08-18_DAY · complete" in copy
+        assert "Recording Window 2026-08-18_DAY · complete" in copy
         assert "Draft" not in copy and "推荐" not in copy
         assert browser_errors == []
         browser.close()
@@ -476,8 +476,8 @@ def test_gridmind_distinguishes_evidence_blocked_from_clean_idle() -> None:
         assert "证据阻塞" in copy
         assert "暂无 Park Strategy" not in copy
         assert "阻塞: safety_evidence_not_passing" in copy
-        assert "Recording 2026-08-18_DAY · blocked" in copy
-        assert "Recording 阻塞: recording_package_blocked" in copy
+        assert "Recording Window 2026-08-18_DAY · blocked" in copy
+        assert "Recording Window 阻塞: recording_package_blocked" in copy
         assert browser_errors == []
         browser.close()
 
