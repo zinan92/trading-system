@@ -147,9 +147,12 @@ def _recording_projection(
         for item in blocker.get("recording_windows") or []
         if isinstance(item, Mapping)
     }
+    latest_package_by_window: dict[str, dict[str, Any]] = {}
+    for row in matching_packages:
+        latest_package_by_window[str(row.get("record_window_id") or "")] = row
     resolved_windows = {
-        str(row.get("record_window_id") or "")
-        for row in matching_packages
+        window_id
+        for window_id, row in latest_package_by_window.items()
         if row.get("status") == "complete"
         and str(row.get("review_status") or "complete") == "complete"
     }
