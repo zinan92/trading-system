@@ -278,6 +278,8 @@ def test_public_read_model_projects_plan_authoritative_grid_geometry(tmp_path: P
     assert result["strategy"]["grid_rung_prices"] == [4110.0 + index * 10.0 for index in range(34)]
     assert result["strategy"]["stop_price"] == {"long": 4100.0, "short": 4450.0}
     assert result["strategy"]["hard_stop_source"] == "authorized_price_boundary"
+    assert len(result["strategy"]["grid_rungs"]) == 34
+    assert result["strategy"]["local_stop_authorized"] is False
 
 
 def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_path: Path) -> None:

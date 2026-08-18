@@ -462,6 +462,11 @@ def _project_current_strategy(
     }
     if strategy.get("hard_stop_source") not in (None, ""):
         specification["hard_stop_source"] = strategy.get("hard_stop_source")
+    if strategy.get("hard_stop") is not None:
+        specification["hard_stop"] = strategy.get("hard_stop")
+    if strategy.get("grid_rungs"):
+        specification["grid_rungs"] = _json_copy(_list(strategy.get("grid_rungs")))
+        specification["local_stop_authorized"] = strategy.get("local_stop_authorized") is True
     return {
         "schema_version": PARK_CURRENT_STRATEGY_SCHEMA,
         "source": source,

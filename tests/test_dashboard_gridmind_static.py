@@ -186,6 +186,8 @@ def test_gridmind_adds_an_additive_park_ai_chat_without_replacing_existing_contr
     assert "Grid Entry Range" in html
     assert "Grid Hard Stop" in html
     assert "TP geometry" in html
+    assert "Risk Digest" in html
+    assert "Local stop" in html
 
 
 def test_gridmind_places_park_ai_chat_at_the_top_of_the_console() -> None:

@@ -95,6 +95,20 @@ def test_grid_explicit_hard_stop_overrides_boundary_default() -> None:
     plan = build_deterministic_risk_plan(normalized, market={**MARKET, "price": 3900.0}, account_equity=1000)
     assert plan["risk"]["hard_stop"] == 3850.0
     assert all(rung["hard_stop"] == 3850.0 for rung in plan["risk"]["grid_rungs"])
+    assert plan["risk"]["hard_stop_source"] == "explicit_stop_price"
+
+
+def test_grid_default_hard_stop_provenance_is_boundary_not_explicit() -> None:
+    normalized = normalize_park_input({
+        "direction": "long",
+        "strategy_type": "grid",
+        "upper_price_boundary": 4000,
+        "lower_price_boundary": 3800,
+        "grid_spacing": 10,
+        "maximum_leverage": 10,
+    })
+    plan = build_deterministic_risk_plan(normalized, market={**MARKET, "price": 3900.0}, account_equity=1000)
+    assert plan["risk"]["hard_stop_source"] == "authorized_price_boundary"
 
 
 def test_neutral_grid_accepts_explicit_per_leg_hard_stop_override() -> None:
@@ -110,6 +124,21 @@ def test_neutral_grid_accepts_explicit_per_leg_hard_stop_override() -> None:
     plan = build_deterministic_risk_plan(normalized, market={**MARKET, "price": 3900.0}, account_equity=1000)
     assert plan["risk"]["hard_stop"] == {"long": 3820.0, "short": 3980.0}
     assert plan["risk"]["hard_stop_source"] == "explicit_stop_price"
+
+
+def test_short_grid_full_depth_notional_stays_within_leverage_cap() -> None:
+    normalized = normalize_park_input({
+        "direction": "short",
+        "strategy_type": "grid",
+        "upper_price_boundary": 4000,
+        "lower_price_boundary": 3800,
+        "grid_spacing": 10,
+        "maximum_leverage": 10,
+    })
+    plan = build_deterministic_risk_plan(normalized, market={**MARKET, "price": 3850.0}, account_equity=1000)
+    risk = plan["risk"]
+    actual_notional = sum(rung["price"] * risk["per_order_quantity"] for rung in risk["grid_rungs"])
+    assert actual_notional <= risk["maximum_notional"] + 1e-8
 
 
 def test_neutral_direction_cannot_be_reinterpreted_as_dca() -> None:

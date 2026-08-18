@@ -471,6 +471,7 @@ def build_park_public_read_model(
         "lower_price_boundary": lifecycle.get("lower_price_boundary") or normalized.get("lower_price_boundary"),
         "upper_price_boundary": lifecycle.get("upper_price_boundary") or normalized.get("upper_price_boundary"),
         "stop_price": lifecycle.get("stop_price") or normalized.get("stop_price") or risk.get("hard_stop"),
+        "hard_stop": risk.get("hard_stop"),
         "hard_stop_source": risk.get("hard_stop_source"),
         "take_profit_price": lifecycle.get("take_profit_price") or normalized.get("take_profit_price"),
         "maximum_leverage": lifecycle.get("maximum_leverage") or normalized.get("maximum_leverage"),
@@ -483,6 +484,16 @@ def build_park_public_read_model(
         "grid_spacing": grid_spacing,
         "grid_rung_count": grid_count if strategy_type == "grid" else None,
         "grid_rung_prices": grid_rung_prices,
+        "grid_rungs": [
+            {
+                key: row.get(key)
+                for key in ("rung", "price", "side", "take_profit", "hard_stop", "local_stop")
+                if row.get(key) is not None
+            }
+            for row in (risk.get("grid_rungs") or [])
+            if isinstance(row, Mapping)
+        ] if strategy_type == "grid" else [],
+        "local_stop_authorized": risk.get("local_stop_authorized") is True,
     }
 
     orders = _compact_rows(

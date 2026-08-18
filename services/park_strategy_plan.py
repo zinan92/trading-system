@@ -163,11 +163,15 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     local_stop_authorized = body.get("local_stop_authorized") is True or body.get("per_order_stop_authorized") is True
     if not local_stop_authorized and text:
         local_stop_authorized = bool(re.search(r"(?:逐单|每单|local|per[-_ ]order)\s*(?:止损|stop)", text, re.IGNORECASE))
+    stop_was_explicit = stop_price is not None
     if strategy_type == "grid" and direction in {"long", "short"} and stop_price is None:
         # Grid's default hard stop is the adverse outer boundary.  This is a
         # deterministic strategy rule, not an AI authorization or a local
         # per-rung stop.
         stop_price = lower if direction == "long" else upper
+    hard_stop_source = (
+        "explicit_stop_price" if stop_was_explicit else "authorized_price_boundary"
+    ) if strategy_type == "grid" else None
     raw_order_count = body.get("order_count")
     if raw_order_count in (None, ""):
         raw_order_count = DEFAULT_NEUTRAL_GRID_ORDER_COUNT if direction == "neutral" and strategy_type == "grid" else 1
@@ -209,6 +213,8 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "order_count": int(raw_order_count),
         "source_text": text or None,
     }
+    if hard_stop_source is not None:
+        result["hard_stop_source"] = hard_stop_source
     if result["order_count"] <= 0:
         raise ParkStrategyPlanError("invalid_order_count", "order_count must be positive")
     return result
@@ -324,7 +330,9 @@ def _build_grid_risk_plan(
     if direction == "neutral" and {rung["side"] for rung in rungs} != {"buy", "sell"}:
         raise ParkStrategyPlanError("neutral_grid_requires_two_legs", "neutral Grid must contain both buy and sell rungs")
 
-    quantity_price_basis = upper if direction == "neutral" else current_price
+    # Quantity is floored from the highest fillable rung so the sum of every
+    # rung's actual price*quantity cannot exceed the authorized notional cap.
+    quantity_price_basis = upper
     loss_rate = sum(abs(rung["price"] - rung["hard_stop"]) for rung in rungs) / (order_count * quantity_price_basis)
     if loss_rate <= 0:
         raise ParkStrategyPlanError("grid_loss_geometry_invalid", "Grid hard-stop loss geometry is not positive")
@@ -360,7 +368,7 @@ def _build_grid_risk_plan(
         "risk_boundary": {"lower": lower, "upper": upper} if direction == "neutral" else hard_stop,
         "risk_boundary_source": "explicit_stop_price" if explicit_stop not in (None, "") else "authorized_price_boundaries",
         "hard_stop": hard_stop,
-        "hard_stop_source": "explicit_stop_price" if explicit_stop not in (None, "") else "authorized_price_boundary",
+        "hard_stop_source": normalized.get("hard_stop_source") or ("explicit_stop_price" if explicit_stop not in (None, "") else "authorized_price_boundary"),
         "order_count": order_count,
         "per_order_notional": per_order_notional,
         "quantity_price_basis": quantity_price_basis,

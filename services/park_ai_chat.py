@@ -1013,6 +1013,7 @@ class ParkAiChatService:
             "strategy_session_id": plan.get("strategy_session_id"),
             "strategy_revision_id": plan.get("strategy_revision_id"),
             "plan_digest": plan.get("plan_digest"),
+            "risk_digest": _digest(plan.get("risk") or {}),
             "source_text": draft.get("source_text"),
             "normalized_input": dict(plan.get("normalized_input") or {}),
             "market": dict(plan.get("market") or {}),
@@ -1030,7 +1031,7 @@ class ParkAiChatService:
 
     @staticmethod
     def _public_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
-        payload = {key: snapshot.get(key) for key in ("snapshot_id", "status", "strategy_session_id", "strategy_revision_id", "plan_digest", "normalized_input", "market", "risk", "portfolio", "timeline", "paper_only", "sealed", "snapshot_digest")}
+        payload = {key: snapshot.get(key) for key in ("snapshot_id", "status", "strategy_session_id", "strategy_revision_id", "plan_digest", "risk_digest", "normalized_input", "market", "risk", "portfolio", "timeline", "paper_only", "sealed", "snapshot_digest")}
         digest = str(snapshot.get("snapshot_digest") or "")
         if digest:
             source = {key: value for key, value in snapshot.items() if key != "snapshot_digest"}
