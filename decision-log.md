@@ -1,5 +1,37 @@
 # Decision Log
 
+## Recover Park's explicit legacy clean-slate instruction (Issue #783)
+
+Date: 2026-08-18
+
+### Decision
+
+- The phrase `取消这19个旧挂单，确认 clean slate，启用 Park Paper` is a
+  bounded operator command, not a strategy draft.  It is recognized
+  deterministically when the optional Codex CLI is unavailable, and the
+  durable Telegram cursor may recover only this exact previously ingested
+  phrase after a provider misclassification.
+- A proposal records the exact accepted order IDs, cycle IDs, count, digest,
+  zero-position evidence, and reconciliation reference.  Re-execution requires
+  the same set; any drift blocks rather than widening the cancellation scope.
+- The only mutation capability is `cancel_legacy_orders`; it cannot submit an
+  entry, flatten a position, or reverse.  Commands are flushed and the account
+  is read again before a completed receipt is written.
+- The checked-in Park config stays `feature_enabled: false` until a completed
+  exact-set receipt proves zero accepted orders/positions and all existing
+  Paper, market, reconciliation, immutable-fill, release-SHA, boot, owner,
+  and Supervisor fail-closed gates pass.
+
+### Verification
+
+- PR #784 merged on `main@3fbcc6279a3001aafe3e48b6c4ac269fd68d0161`.
+- Focused suite: 86 passed; new runbook:
+  [`docs/runbooks/park-legacy-clean-slate-cutover-v1.md`](docs/runbooks/park-legacy-clean-slate-cutover-v1.md).
+- Before deployment, read-only Cloud snapshot: 19 accepted Paper orders, 0
+  open positions.  Exact Cloud cancellation and Park enablement are not
+  claimed until the new SHA is deployed and a natural tick leaves durable
+  completion evidence.
+
 ## Deploy authoritative Current Strategy projection as Paper-safe read-only evidence (Issue #742)
 
 Date: 2026-08-18
