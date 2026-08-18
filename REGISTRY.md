@@ -13,6 +13,20 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #746 / PR #763 completes the DCA terminal lifecycle as a strategy-level
+  contract.  Telegram and the lifecycle constructor require explicit Park
+  `stop_price` and `take_profit_price`; DCA entry commands do not duplicate
+  aggregate exits, and outer DCA range boundaries do not infer termination.
+  A trusted/fresh explicit TP/SL touch records an idempotent terminal action
+  plan, freezes/cancels remaining owned entries, closes only positions owned by
+  the exact session/revision/digest, reconciles, seals the terminal result, and
+  notifies Park to choose the next strategy.  No reopen, direction inference,
+  live, exchange-key, or non-Paper mutation was added.  Merged on exact
+  `main@152af311a8876c0f6df61e1c8a6e04de95b6bd09` (tree
+  `25f62908934883b5aeb9cc72bf3963713c0ca55b`) after 58 focused DCA/read-model
+  tests, 169 Park tests, `git diff --check`, gitleaks, and standards/spec
+  review passed.  Exact-SHA Paper deployment and natural-tick verification are
+  the next runtime steps.  Next frontier: #747 / #748 / #749 / #750.
 - #744 / PR #754 preserves the continuous Park Strategy Session/Revision across
   the Beijing 09:00/21:00 Recording Window boundaries.  Recording Window
   package close, retry, late amendment, and review failure are recording-only;

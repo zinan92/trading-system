@@ -15911,3 +15911,38 @@ auditable datafeed port; broker execution remains a separate port.
 - This is Paper planning/read-only evidence only.  No live, exchange-key,
   order, position, or Cloud mutation was performed; exact-SHA Paper deployment
   remains the next runtime verification step.
+
+# 2026-08-18 — Make DCA terminal exits strategy-level and auditable (#746)
+
+## Decision
+
+- A DCA plan is not executable unless Park explicitly supplies both one
+  strategy-level `stop_price` and one strategy-level `take_profit_price`.
+  Missing exits are a durable guided blocker; the parser/runtime never guesses
+  them from the DCA range or direction.
+- DCA entries remain finite, immutable, and owned by the exact
+  `strategy_session_id` / `strategy_revision_id` / `plan_digest`.  Entry
+  commands carry no duplicated per-entry `tp`/`sl`; the aggregate strategy exit
+  is evaluated from trusted, fresh market evidence.
+- DCA range boundaries are not implicit terminal triggers.  Only the explicit
+  strategy TP or SL ends the revision.  Once touched, the ordered terminal
+  plan freezes new entries, cancels remaining owned entries, closes only owned
+  positions, reconciles, persists the closure, notifies Park, and forbids
+  automatic reopen or inferred reversal.  A new revision may be activated only
+  after the prior revision is sealed/paused.
+- Terminal success and terminal reconciliation blockers are both projected by
+  the read-only model, selected for the current session/revision, and shown
+  with reason, cancellation/exit evidence, reconciliation, blocker, and next
+  action.  A prior revision's terminal record cannot mask a current revision's
+  blocker.
+
+## Verification
+
+- PR #763 merged as `main@152af311a8876c0f6df61e1c8a6e04de95b6bd09` (tree
+  `25f62908934883b5aeb9cc72bf3963713c0ca55b`) after 58 focused DCA/read-model
+  tests and 169 Park tests passed; `git diff --check`, gitleaks, and the
+  standards/spec review passed.
+- This merge changes Paper planning/runtime evidence only.  No live,
+  exchange-key, Cloud order, or position mutation was performed; exact-SHA
+  Paper deployment and natural-tick verification remain separate operational
+  evidence.
