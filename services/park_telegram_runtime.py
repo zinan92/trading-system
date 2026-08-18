@@ -196,15 +196,27 @@ def default_account_reader(
         runtime = StrategyControlPlane(Path(output_root)).runtime_state(cycle_id)
     except Exception:
         runtime = {}
-    unresolved = bool(runtime.get("previous_runtime_unresolved")) or str(
-        runtime.get("actual_state") or ""
-    ) in {"starting", "running", "replanning", "stopping"}
+    last_control_event = runtime.get("last_control_event")
+    last_control_event = last_control_event if isinstance(last_control_event, Mapping) else {}
+    runtime_after = last_control_event.get("runtime_after")
+    runtime_after = runtime_after if isinstance(runtime_after, Mapping) else {}
+    proven_stale_record = (
+        runtime.get("stale_cycle") is True
+        and runtime.get("previous_runtime_unresolved") is False
+        and str(runtime_after.get("actual_state") or "") == "stopped"
+        and str(runtime_after.get("desired_state") or "") == "stopped"
+    )
+    unresolved = bool(runtime.get("previous_runtime_unresolved")) or (
+        str(runtime.get("actual_state") or "") in {"starting", "running", "replanning", "stopping"}
+        and not proven_stale_record
+    )
     return {
         "equity": account.get("equity"),
         "reconciliation_healthy": account_wide_reconciliation_ok,
         "open_positions": len(account_wide_positions),
         "open_or_accepted_orders": len(account_wide_orders),
         "unresolved_runtime": unresolved,
+        "legacy_runtime_stale_record": proven_stale_record,
         "pending_terminal_actions": False,
         "snapshot": {
             **snapshot,
