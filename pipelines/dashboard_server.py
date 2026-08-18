@@ -1554,6 +1554,17 @@ def _assemble_strategy_console_snapshot(
     )
     safe_repair_queue = SafeRepairQueue(output).read_model()
     cycle_decision = CycleDecisionLedger(output).read(cycle_id) or {}
+    try:
+        daily_reports = build_strategy_console_daily_reports_response(output_root=output)
+    except Exception as exc:  # noqa: BLE001 - the read model must expose evidence loss, not hide it.
+        daily_reports = {
+            "schema_version": "strategy-daily-reports-v1",
+            "reports": [],
+            "latest": None,
+            "source": "terminal_cycle_packages",
+            "status": "blocked",
+            "blockers": [f"daily_report_read_failed:{type(exc).__name__}"],
+        }
     return {
         "schema_version": "strategy-production-console-v1",
         "cycle": cycle,
@@ -1580,7 +1591,7 @@ def _assemble_strategy_console_snapshot(
         "ledger": ledger,
         "cycle_packages": cycle_packages,
         "review_cycle_id": review_cycle_id,
-        "daily_reports": build_strategy_console_daily_reports_response(output_root=output),
+        "daily_reports": daily_reports,
         "strategy_shadows": shadows,
         "strategy_shadow_promotion": shadow_promotion,
         "safe_repair_queue": safe_repair_queue,

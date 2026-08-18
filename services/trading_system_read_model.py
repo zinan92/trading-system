@@ -12,7 +12,7 @@ import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any
 
@@ -155,6 +155,11 @@ def project_trading_system_read_model(
         execution=execution,
         completeness_issues=completeness_issues,
     )
+    yesterday_pnl = _project_yesterday_pnl(
+        source.get("daily_reports"),
+        cycle=cycle,
+        generated_at=generated_at,
+    )
     broker_view = _json_copy(_mapping(broker))
     if not broker_view:
         completeness_issues.append("broker_read_model_missing")
@@ -163,6 +168,7 @@ def project_trading_system_read_model(
         "cycle": cycle,
         "market": market,
         "current_strategy": current_strategy,
+        "yesterday_pnl": yesterday_pnl,
         "strategy": {
             "plan": plan,
             "summary": strategy_summary,
@@ -227,6 +233,142 @@ def project_trading_system_read_model(
         },
     }
     return TradingSystemReadModel(payload=_freeze(_json_copy(payload)))
+
+
+def _project_yesterday_pnl(
+    value: Any,
+    *,
+    cycle: Mapping[str, Any],
+    generated_at: str | None,
+) -> dict[str, Any]:
+    """Project the previous complete Beijing day without using live account state."""
+
+    reference_date = _reference_beijing_date(cycle, generated_at)
+    target_date = reference_date - timedelta(days=1) if reference_date else None
+    result: dict[str, Any] = {
+        "schema_version": "yesterday-pnl-v1",
+        "status": "evidence_insufficient",
+        "status_label": "证据不足",
+        "report_date": target_date.isoformat() if target_date else None,
+        "timezone": "Asia/Shanghai",
+        "net_realized_pnl": None,
+        "gross_realized_pnl": None,
+        "fees": None,
+        "funding": None,
+        "trade_count": None,
+        "fill_count": None,
+        "includes_unrealized": False,
+        "source": "terminal_cycle_packages.daily_report",
+        "report_hash": None,
+        "supporting_packages": [],
+        "blockers": [],
+        "next_action": "wait_for_complete_daily_report",
+    }
+    if target_date is None:
+        result["blockers"] = ["reference_beijing_date_missing"]
+        return result
+
+    reports_value = _mapping(value)
+    reports = [row for row in _list(reports_value.get("reports")) if _mapping(row)]
+    report = next(
+        (
+            dict(row)
+            for row in reports
+            if str(row.get("report_date") or "") == target_date.isoformat()
+        ),
+        None,
+    )
+    if report is None:
+        result["blockers"] = ["yesterday_daily_report_missing"]
+        return result
+
+    result["report_hash"] = report.get("report_hash")
+    provenance = _mapping(report.get("provenance"))
+    result["supporting_packages"] = [
+        {
+            key: reference.get(key)
+            for key in ("cycle_id", "package_hash", "strategy_plan_id", "strategy_plan_version")
+            if reference.get(key) not in (None, "")
+        }
+        for reference in _list(provenance.get("cycle_packages"))
+        if _mapping(reference)
+    ]
+    blockers = [str(item) for item in _list(report.get("blockers")) if str(item)]
+    if str(report.get("status") or "") != "complete":
+        blockers.append("yesterday_daily_report_incomplete")
+    execution = _mapping(report.get("execution"))
+    net_realized = _finite_or_none(execution.get("realized_pnl"))
+    gross_realized = _finite_or_none(execution.get("gross_realized_pnl"))
+    fees = _finite_or_none(execution.get("fees"))
+    funding = _finite_or_none(execution.get("funding"))
+    trade_count = _integer_or_none(execution.get("trade_count"))
+    fill_count = _integer_or_none(execution.get("fill_count"))
+    result.update(
+        {
+            "net_realized_pnl": net_realized,
+            "gross_realized_pnl": gross_realized,
+            "fees": fees,
+            "funding": funding,
+            "trade_count": trade_count,
+            "fill_count": fill_count,
+        }
+    )
+    if net_realized is None:
+        blockers.append("yesterday_net_realized_missing")
+    if trade_count is None:
+        blockers.append("yesterday_trade_count_missing")
+    if fill_count is None:
+        blockers.append("yesterday_fill_count_missing")
+    if fees is None:
+        blockers.append("yesterday_fees_missing")
+    if funding is None:
+        blockers.append("yesterday_funding_missing")
+    if not result["supporting_packages"]:
+        blockers.append("yesterday_package_provenance_missing")
+    result["blockers"] = list(dict.fromkeys(blockers))
+    if not result["blockers"]:
+        result["status"] = "complete"
+        result["status_label"] = "证据完整"
+        result["next_action"] = "open_supporting_review"
+    elif net_realized is not None:
+        result["status"] = "partial"
+        result["status_label"] = "部分证据"
+        result["next_action"] = "repair_yesterday_evidence"
+    return result
+
+
+def _reference_beijing_date(
+    cycle: Mapping[str, Any],
+    generated_at: str | None,
+) -> date | None:
+    cycle_id = str(cycle.get("cycle_id") or "")
+    try:
+        if len(cycle_id) >= 10:
+            return date.fromisoformat(cycle_id[:10])
+    except ValueError:
+        pass
+    value = str(generated_at or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    from zoneinfo import ZoneInfo
+
+    return parsed.astimezone(ZoneInfo("Asia/Shanghai")).date()
+
+
+def _finite_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(number, 8) if math.isfinite(number) else None
 
 
 def _project_current_strategy(
