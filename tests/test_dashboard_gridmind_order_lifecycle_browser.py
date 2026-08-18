@@ -417,3 +417,108 @@ def test_gridmind_surfaces_legacy_exposure_as_a_visible_migration_blocker() -> N
         assert "暂无 Park Strategy" not in copy
         assert browser_errors == []
         browser.close()
+
+
+def test_gridmind_distinguishes_evidence_blocked_from_clean_idle() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True)
+    model["current_strategy"] = {
+        "schema_version": "park-current-strategy-summary-v1",
+        "source": "park_strategy_session",
+        "active": False,
+        "status": "evidence_blocked",
+        "status_label": "证据阻塞",
+        "contract_status": "blocked",
+        "blockers": ["safety_evidence_not_passing", "boot_not_verified"],
+        "identity": {"strategy_session_id": None, "strategy_revision_id": None, "plan_digest": None},
+        "specification": {},
+        "execution": {"accepted_order_count": 0, "fill_count": 0, "open_position_count": 0},
+        "freshness": {"market_fresh": False, "safety_status": "missing"},
+    }
+    browser_errors: list[str] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.on("console", lambda message: browser_errors.append(message.text) if message.type == "error" else None)
+        page.on("pageerror", lambda error: browser_errors.append(str(error)))
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator("#currentStrategyCard").wait_for(state="visible")
+        copy = page.locator("#currentStrategyCard").inner_text()
+        assert "策略证据阻塞" in copy
+        assert "证据阻塞" in copy
+        assert "暂无 Park Strategy" not in copy
+        assert "阻塞: safety_evidence_not_passing" in copy
+        assert browser_errors == []
+        browser.close()
+
+
+def test_gridmind_shows_dca_tp_sl_without_grid_only_facts() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    park = {
+        "generated_at": "2026-08-18T01:02:04+00:00",
+        "status": "ok",
+        "blockers": [],
+        "strategy": {
+            "active": True,
+            "state": "ACTIVE_LOCKED",
+            "strategy_session_id": "session-dca-browser",
+            "strategy_revision_id": "revision-dca-1",
+            "plan_digest": "sha256:dca-browser",
+            "strategy_type": "dca",
+            "direction": "long",
+            "lower_price_boundary": 3800.0,
+            "upper_price_boundary": 4000.0,
+            "stop_price": 3800.0,
+            "take_profit_price": 4050.0,
+            "maximum_leverage": 5.0,
+            "theoretical_max_loss": 240.0,
+        },
+        "execution": {"counts": {"accepted_orders": 2, "filled_orders": 1, "fills": 1, "open_positions": 1, "closed_positions": 0}, "reconciliation": {"status": "ok"}},
+        "market": {"price": 3900.0, "fresh": True},
+        "safety": {"status": "pass", "age_seconds": 3.0},
+    }
+    model = _read_model("accepted", full_orders=True, park=park)
+    browser_errors: list[str] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.on("console", lambda message: browser_errors.append(message.text) if message.type == "error" else None)
+        page.on("pageerror", lambda error: browser_errors.append(str(error)))
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator("#currentStrategyCard").wait_for(state="visible")
+        copy = page.locator("#currentStrategyCard").inner_text()
+        assert "Long · DCA" in copy
+        assert "DCA TP / SL" in copy
+        assert "TP 4,050 · SL 3,800" in copy
+        assert "Grid Entry Range" not in copy
+        assert "Grid Spacing" not in copy
+        assert browser_errors == []
+        browser.close()

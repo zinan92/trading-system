@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -204,28 +205,40 @@ def build_park_public_read_model(
     strategy_type = str(normalized.get("strategy_type") or "").lower()
     lower_boundary = normalized.get("lower_price_boundary")
     upper_boundary = normalized.get("upper_price_boundary")
-    grid_count = int(risk.get("order_count") or normalized.get("order_count") or 0)
+    raw_grid_count = risk.get("order_count") or normalized.get("order_count") or 0
+    try:
+        grid_count = int(raw_grid_count)
+    except (TypeError, ValueError, OverflowError):
+        grid_count = 0
+        blockers.append("grid_geometry_invalid")
     grid_entry_range: dict[str, float] | None = None
     grid_spacing: float | None = None
     grid_rung_prices: list[float] = []
-    if (
-        strategy_type == "grid"
-        and lower_boundary is not None
-        and upper_boundary is not None
-        and grid_count > 0
-    ):
-        grid_spacing = round(
-            (float(upper_boundary) - float(lower_boundary)) / (grid_count + 1),
-            8,
-        )
-        grid_entry_range = {
-            "lower": round(float(lower_boundary) + grid_spacing, 8),
-            "upper": round(float(upper_boundary) - grid_spacing, 8),
-        }
-        grid_rung_prices = [
-            round(float(lower_boundary) + grid_spacing * (index + 1), 8)
-            for index in range(grid_count)
-        ]
+    if strategy_type == "grid":
+        try:
+            lower = float(lower_boundary)
+            upper = float(upper_boundary)
+            valid_geometry = (
+                math.isfinite(lower)
+                and math.isfinite(upper)
+                and upper > lower
+                and grid_count > 0
+            )
+        except (TypeError, ValueError, OverflowError):
+            valid_geometry = False
+            lower = upper = 0.0
+        if not valid_geometry:
+            blockers.append("grid_geometry_invalid")
+        else:
+            grid_spacing = round((upper - lower) / (grid_count + 1), 8)
+            grid_entry_range = {
+                "lower": round(lower + grid_spacing, 8),
+                "upper": round(upper - grid_spacing, 8),
+            }
+            grid_rung_prices = [
+                round(lower + grid_spacing * (index + 1), 8)
+                for index in range(grid_count)
+            ]
     strategy = {
         "active": bool(session_id and lifecycle),
         "state": lifecycle.get("state") or "IDLE_CLEAN",

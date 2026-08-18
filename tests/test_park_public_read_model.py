@@ -180,3 +180,19 @@ def test_public_read_model_fails_closed_on_corrupt_snapshot(tmp_path: Path) -> N
     assert "park_snapshot_invalid" in result["blockers"]
     assert "authoritative_snapshot_missing" in result["blockers"]
     assert result["execution"]["engine"] == "unavailable"
+
+
+def test_public_read_model_fails_closed_on_malformed_grid_geometry(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    plan_path = output / "park_strategy" / "plans.jsonl"
+    latest = json.loads(plan_path.read_text(encoding="utf-8").splitlines()[-1])
+    latest["risk"]["order_count"] = "not-a-count"
+    _append_jsonl(plan_path, [latest])
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["status"] == "blocked"
+    assert "grid_geometry_invalid" in result["blockers"]
+    assert result["strategy"]["grid_entry_range"] is None
+    assert result["strategy"]["grid_rung_prices"] == []
