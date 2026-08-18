@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from services.park_paper_runtime import ParkPaperRuntime, build_park_authoritative_adapter
+from services.park_paper_runtime import (
+    ParkPaperRuntime,
+    build_park_authoritative_adapter,
+    prepare_park_paper_config,
+)
 from services.park_recording_track import ParkRecordingError, REQUIRED_CATEGORIES
 from services.park_strategy_plan import normalize_park_input
 from services.park_strategy_plan import build_deterministic_risk_plan
@@ -691,6 +695,41 @@ def test_direct_adapter_factory_is_default_deny_without_park_release_or_runtime(
         assert getattr(exc, "code", "") == "park_track_disabled"
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("disabled Park config must not build an adapter")
+
+
+def test_prepare_park_paper_config_resolves_explicit_instrument_and_fee_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "services.dualtrack_config.dualtrack_config",
+        lambda: {
+            "execution_shadow": {
+                "nautilus": {
+                    "instrument_endpoint": "http://127.0.0.1:8100/api/instruments/commodity/XAUUSDT",
+                    "instrument_source": "binance_usdm_futures",
+                }
+            },
+            "paper_fee_model": {
+                "maker_fee_rate": "0",
+                "taker_fee_rate": "0.000400",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "services.dualtrack_instrument_source.fetch_execution_instrument_definition",
+        lambda **_kwargs: {"schema_version": "instrument-definition-v1", "instrument_id": "XAUUSDT.BINANCE"},
+    )
+
+    resolved = prepare_park_paper_config({"feature_enabled": False})
+
+    assert resolved["paper_execution"]["instrument"]["instrument_id"] == "XAUUSDT.BINANCE"
+    assert resolved["paper_execution"]["paper_fee_model"] == {
+        "mode": "paper_contract",
+        "maker_fee_rate": "0",
+        "taker_fee_rate": "0.000400",
+        "funding_rate": "0",
+        "source": "park_paper_config",
+        "environment": "paper",
+        "real_money_eligible": False,
+    }
 
 
 def test_direct_adapter_factory_allows_disabled_read_without_attended_switch(
