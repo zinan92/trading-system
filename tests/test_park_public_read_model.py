@@ -241,3 +241,386 @@ def test_public_read_model_uses_lifecycle_boundaries_and_blocks_mismatch(tmp_pat
     assert "strategy_boundary_mismatch" in result["blockers"]
     assert result["strategy"]["upper_price_boundary"] == 4500.0
     assert result["strategy"]["grid_entry_range"]["upper"] < 4500.0
+
+
+def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    (recording_root / "packages.jsonl").write_text(
+        json.dumps(
+            {
+                "record_window_id": "2026-08-14_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "blocked_incomplete",
+                "missing_categories": ["fills"],
+                "strategy_open": True,
+                "positions_open": 2,
+                "execution_mutations": [],
+                "next_action": "collect_missing_evidence",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (output / "park_strategy" / "runtime_blockers.jsonl").write_text(
+        json.dumps(
+            {
+                "code": "recording_package_blocked",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "recording_windows": [{"record_window_id": "2026-08-14_DAY"}],
+                "next_action": "notify_park_and_wait",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"] == {
+        "status": "blocked",
+        "record_window_id": "2026-08-14_DAY",
+        "strategy_session_id": "session-1",
+        "strategy_revision_id": "revision-1",
+        "package_status": "blocked_incomplete",
+        "missing_categories": ["fills"],
+        "strategy_open": True,
+        "positions_open": 2,
+        "execution_mutations": [],
+        "next_action": "notify_park_and_wait",
+        "blocker_code": "recording_package_blocked",
+    }
+
+
+def test_public_read_model_projects_active_recording_window_before_package_close(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(
+        recording_root / "packages.jsonl",
+        [
+            {
+                "record_window_id": "2026-08-16_NIGHT",
+                "strategy_session_id": "session-old",
+                "strategy_revision_id": "revision-old",
+                "status": "complete",
+                "execution_mutations": [],
+            }
+        ],
+    )
+    _append_jsonl(
+        recording_root / "events.jsonl",
+        [
+            {
+                "event": "manifest_started",
+                "record_window_id": "2026-08-17_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "starts_at": "2026-08-17T01:00:00Z",
+                "ends_at": "2026-08-17T13:00:00Z",
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"] == {
+        "status": "in_progress",
+        "record_window_id": "2026-08-17_DAY",
+        "strategy_session_id": "session-1",
+        "strategy_revision_id": "revision-1",
+        "package_status": None,
+        "missing_categories": [],
+        "strategy_open": True,
+        "positions_open": None,
+        "execution_mutations": [],
+        "next_action": "continue_recording_window",
+        "blocker_code": None,
+    }
+
+
+def test_public_read_model_clears_recovered_prior_window_blocker_for_new_window(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(
+        recording_root / "packages.jsonl",
+        [
+            {
+                "record_window_id": "2026-08-16_NIGHT",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "complete",
+                "execution_mutations": [],
+            }
+        ],
+    )
+    _append_jsonl(
+        recording_root / "events.jsonl",
+        [
+            {
+                "event": "manifest_started",
+                "record_window_id": "2026-08-17_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "starts_at": "2026-08-17T01:00:00Z",
+                "ends_at": "2026-08-17T13:00:00Z",
+            }
+        ],
+    )
+    _append_jsonl(
+        output / "park_strategy" / "runtime_blockers.jsonl",
+        [
+            {
+                "code": "recording_facts_blocked",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "recording_windows": [{"record_window_id": "2026-08-16_NIGHT"}],
+            },
+            {
+                "code": "recording_facts_recovered",
+                "record_window_id": "2026-08-16_NIGHT",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+            },
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "in_progress"
+    assert result["recording"]["record_window_id"] == "2026-08-17_DAY"
+    assert result["recording"]["blocker_code"] is None
+
+
+def test_public_read_model_clears_completed_package_blocker_for_new_window(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(
+        recording_root / "packages.jsonl",
+        [
+            {
+                "record_window_id": "2026-08-16_NIGHT",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "complete",
+                "review_status": "complete",
+                "execution_mutations": [],
+            }
+        ],
+    )
+    _append_jsonl(
+        recording_root / "events.jsonl",
+        [
+            {
+                "event": "manifest_started",
+                "record_window_id": "2026-08-17_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "starts_at": "2026-08-17T01:00:00Z",
+                "ends_at": "2026-08-17T13:00:00Z",
+            }
+        ],
+    )
+    _append_jsonl(
+        output / "park_strategy" / "runtime_blockers.jsonl",
+        [
+            {
+                "code": "recording_package_blocked",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "recording_windows": [{"record_window_id": "2026-08-16_NIGHT"}],
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "in_progress"
+    assert result["recording"]["record_window_id"] == "2026-08-17_DAY"
+    assert result["recording"]["blocker_code"] is None
+
+
+def test_public_read_model_does_not_use_stale_complete_package_to_clear_blocker(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(
+        recording_root / "packages.jsonl",
+        [
+            {
+                "record_window_id": "2026-08-16_NIGHT",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "complete",
+                "review_status": "complete",
+                "execution_mutations": [],
+            },
+            {
+                "record_window_id": "2026-08-16_NIGHT",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "blocked_incomplete",
+                "review_status": "blocked",
+                "missing_categories": ["review"],
+                "execution_mutations": [],
+            },
+        ],
+    )
+    _append_jsonl(
+        recording_root / "events.jsonl",
+        [
+            {
+                "event": "manifest_started",
+                "record_window_id": "2026-08-17_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "starts_at": "2026-08-17T01:00:00Z",
+                "ends_at": "2026-08-17T13:00:00Z",
+            }
+        ],
+    )
+    _append_jsonl(
+        output / "park_strategy" / "runtime_blockers.jsonl",
+        [
+            {
+                "code": "recording_package_blocked",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "recording_windows": [{"record_window_id": "2026-08-16_NIGHT"}],
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "blocked"
+    assert result["recording"]["blocker_code"] == "recording_package_blocked"
+
+
+def test_public_read_model_blocks_package_with_execution_mutations(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(
+        recording_root / "packages.jsonl",
+        [
+            {
+                "record_window_id": "2026-08-17_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "complete",
+                "review_status": "complete",
+                "execution_mutations": ["cancel"],
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "blocked"
+    assert result["recording"]["blocker_code"] == "recording_execution_mutation_detected"
+    assert "recording_execution_mutation_detected" in result["blockers"]
+
+
+def test_public_read_model_blocks_complete_package_until_review_is_durable(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(
+        recording_root / "packages.jsonl",
+        [
+            {
+                "record_window_id": "2026-08-17_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "complete",
+                "review_status": "pending",
+                "execution_mutations": [],
+            }
+        ],
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "blocked"
+    assert result["recording"]["blocker_code"] == "recording_review_pending"
+    assert "recording_review_pending" in result["blockers"]
+
+
+def test_public_read_model_does_not_project_an_older_session_package(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    (recording_root / "packages.jsonl").write_text(
+        json.dumps(
+            {
+                "record_window_id": "2026-08-14_DAY",
+                "strategy_session_id": "session-old",
+                "strategy_revision_id": "revision-old",
+                "strategy_session_ids": ["session-old"],
+                "strategy_revision_ids": ["revision-old"],
+                "status": "complete",
+                "execution_mutations": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "blocked"
+    assert result["recording"]["record_window_id"] is None
+    assert result["recording"]["blocker_code"] == "recording_identity_missing"
+
+
+def test_public_read_model_clears_recovered_same_window_blocker(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    (recording_root / "packages.jsonl").write_text(
+        json.dumps(
+            {
+                "record_window_id": "2026-08-14_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "complete",
+                "strategy_open": True,
+                "positions_open": 1,
+                "execution_mutations": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (output / "park_strategy" / "runtime_blockers.jsonl").write_text(
+        json.dumps(
+            {
+                "code": "recording_package_blocked",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "recording_windows": [{"record_window_id": "2026-08-14_DAY"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "complete"
+    assert result["recording"]["blocker_code"] is None

@@ -1038,6 +1038,7 @@ def test_read_model_projects_active_park_strategy_as_current_strategy() -> None:
             "closed_position_count": 1,
             "reconciliation_status": "ok",
         },
+        "recording": {},
         "freshness": {
             "generated_at": "2026-08-18T01:02:04+00:00",
             "market_fresh": True,

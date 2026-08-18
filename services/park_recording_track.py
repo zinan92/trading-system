@@ -212,12 +212,19 @@ class ParkRecordingTrack:
         session_ids = [item[0] for item in identities]
         revision_ids = [item[1] for item in identities]
         existing = next((row for row in self.packages() if row.get("record_window_id") == window), None)
-        if existing:
+        existing_review_status = str(existing.get("review_status") or "complete") if existing else "pending"
+        if existing and existing.get("status") == "complete" and existing_review_status == "complete":
             existing_pairs = set(zip(existing.get("strategy_session_ids") or [], existing.get("strategy_revision_ids") or []))
             if set(identities).issubset(existing_pairs):
                 return dict(existing)
         categories = {str(row.get("category")) for row in window_events if row.get("event") in {"fact", "late_amendment"}}
         missing = sorted(set(REQUIRED_CATEGORIES) - categories)
+        if existing and existing.get("status") == "blocked_incomplete":
+            if (
+                int(existing.get("evidence_count") or 0) == len(window_events)
+                and list(existing.get("missing_categories") or []) == missing
+            ):
+                return dict(existing)
         package = {
             "schema_version": PARK_RECORDING_SCHEMA,
             "event": "package_amended" if existing else "package_closed",
@@ -236,10 +243,61 @@ class ParkRecordingTrack:
             "watermark": max((float(row.get("recorded_at") or 0) for row in window_events), default=time.time()),
             "revision": int(existing.get("revision") or 0) + 1 if existing else 0,
             "execution_mutations": [],
+            # Any newly written package revision needs a freshly persisted
+            # review; a prior review must not make this revision look complete.
+            "review_status": "pending",
             "next_action": "review_recorded_evidence" if not missing else "collect_missing_evidence",
         }
         _append(self.package_path, package)
         return dict(package)
+
+    def mark_review_complete(self, *, record_window_id: str) -> dict[str, Any]:
+        """Durably mark the review artifact after its journal write succeeds."""
+
+        window = _text(record_window_id, "record_window_id")
+        package = next((row for row in reversed(self.packages()) if row.get("record_window_id") == window), None)
+        if not package:
+            raise ParkRecordingError("package_missing", "recording package does not exist")
+        if package.get("review_status") == "complete":
+            return dict(package)
+        amended = {
+            **package,
+            "event": "package_amended",
+            "review_status": "complete",
+            "review_recorded_at": time.time(),
+            "revision": int(package.get("revision") or 0) + 1,
+        }
+        _append(self.package_path, amended)
+        return amended
+
+    def mark_review_blocked(
+        self,
+        *,
+        record_window_id: str,
+        error_type: str,
+        detail: str,
+    ) -> dict[str, Any] | None:
+        """Keep review persistence failures visible instead of leaving false-complete evidence."""
+
+        window = _text(record_window_id, "record_window_id")
+        package = next((row for row in reversed(self.packages()) if row.get("record_window_id") == window), None)
+        if not package:
+            return None
+        missing = list(package.get("missing_categories") or [])
+        if "review" not in missing:
+            missing.append("review")
+        amended = {
+            **package,
+            "event": "package_amended",
+            "status": "blocked_incomplete",
+            "missing_categories": sorted(set(missing)),
+            "review_status": "blocked",
+            "review_error": {"error_type": str(error_type), "detail": str(detail)[:300]},
+            "next_action": "collect_missing_evidence",
+            "revision": int(package.get("revision") or 0) + 1,
+        }
+        _append(self.package_path, amended)
+        return amended
 
     def amend_late_event(self, **kwargs: Any) -> dict[str, Any]:
         kwargs["late"] = True
@@ -265,6 +323,8 @@ class ParkRecordingTrack:
             )
             session_ids = [item[0] for item in identities]
             revision_ids = [item[1] for item in identities]
+            categories = {str(event.get("category")) for event in window_events if event.get("event") in {"fact", "late_amendment"}}
+            missing = sorted(set(REQUIRED_CATEGORIES) - categories)
             package_revision = int(package.get("revision") or 0) + 1
             amended = {
                 **package,
@@ -277,6 +337,10 @@ class ParkRecordingTrack:
                 "evidence_count": len(window_events),
                 "watermark": max(float(package.get("watermark") or 0), float(row["recorded_at"])),
                 "amendment_event_digest": row["payload_digest"],
+                "status": "complete" if not missing else "blocked_incomplete",
+                "missing_categories": missing,
+                "review_status": "pending",
+                "next_action": "review_recorded_evidence" if not missing else "collect_missing_evidence",
             }
             _append(self.package_path, amended)
             return amended

@@ -79,6 +79,154 @@ def _compact_rows(rows: Any, fields: tuple[str, ...]) -> list[dict[str, Any]]:
     ]
 
 
+def _recording_projection(
+    root: Path,
+    *,
+    active_pair: tuple[str, str] = ("", ""),
+) -> dict[str, Any]:
+    try:
+        packages = _read_jsonl(root / "park_strategy" / "recording" / "packages.jsonl")
+        events = _read_jsonl(root / "park_strategy" / "recording" / "events.jsonl")
+        blockers = _read_jsonl(root / "park_strategy" / "runtime_blockers.jsonl")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "status": "blocked",
+            "record_window_id": None,
+            "strategy_session_id": None,
+            "strategy_revision_id": None,
+            "package_status": None,
+            "missing_categories": [],
+            "strategy_open": None,
+            "positions_open": None,
+            "execution_mutations": [],
+            "next_action": "notify_park_and_wait",
+            "blocker_code": "recording_journal_invalid",
+        }
+    def matches(row: Mapping[str, Any]) -> bool:
+        session, revision = active_pair
+        if not session or not revision:
+            return False
+        pairs = set(
+            zip(
+                row.get("strategy_session_ids") or [],
+                row.get("strategy_revision_ids") or [],
+            )
+        )
+        scalar = (
+            str(row.get("strategy_session_id") or ""),
+            str(row.get("strategy_revision_id") or ""),
+        )
+        return (session, revision) in pairs or scalar == (session, revision)
+
+    matching_packages = [row for row in packages if matches(row)]
+    matching_manifests = [
+        row
+        for row in events
+        if row.get("event") == "manifest_started" and matches(row)
+    ]
+    latest_manifest = dict(matching_manifests[-1]) if matching_manifests else {}
+    latest_window_id = str(latest_manifest.get("record_window_id") or "")
+    window_packages = [
+        row for row in matching_packages
+        if not latest_window_id or str(row.get("record_window_id") or "") == latest_window_id
+    ]
+    package = dict(window_packages[-1]) if window_packages else {}
+    blocker = next(
+        (
+            row
+            for row in reversed(blockers)
+            if str(row.get("code") or "").startswith("recording_")
+            and str(row.get("code") or "") != "recording_facts_recovered"
+            and matches(row)
+        ),
+        {},
+    )
+    package_review_status = str(package.get("review_status") or "complete") if package else None
+    blocker_windows = {
+        str(item.get("record_window_id") or "")
+        for item in blocker.get("recording_windows") or []
+        if isinstance(item, Mapping)
+    }
+    latest_package_by_window: dict[str, dict[str, Any]] = {}
+    for row in matching_packages:
+        latest_package_by_window[str(row.get("record_window_id") or "")] = row
+    resolved_windows = {
+        window_id
+        for window_id, row in latest_package_by_window.items()
+        if row.get("status") == "complete"
+        and str(row.get("review_status") or "complete") == "complete"
+    }
+    if blocker and blocker_windows:
+        recovered_windows = {
+            window_id
+            for window_id in blocker_windows
+            if any(
+                str(row.get("record_window_id") or "") == window_id
+                and matches(row)
+                and str(row.get("recorded_at") or "") >= str(blocker.get("recorded_at") or "")
+                for row in blockers
+                if row.get("code") == "recording_facts_recovered"
+            )
+        }
+        if blocker.get("code") == "recording_facts_blocked" and blocker_windows.issubset(resolved_windows | recovered_windows):
+            blocker = {}
+        elif blocker.get("code") == "recording_package_blocked" and blocker_windows.issubset(resolved_windows):
+            blocker = {}
+    if package.get("status") == "complete" and package_review_status == "complete" and blocker:
+        blocked_windows = {
+            str(row.get("record_window_id") or "")
+            for row in blocker.get("recording_windows") or []
+            if isinstance(row, Mapping)
+        }
+        if str(package.get("record_window_id") or "") in blocked_windows:
+            blocker = {}
+    if active_pair != ("", "") and packages and not package and not latest_manifest:
+        return {
+            "status": "blocked",
+            "record_window_id": None,
+            "strategy_session_id": active_pair[0],
+            "strategy_revision_id": active_pair[1],
+            "package_status": None,
+            "missing_categories": [],
+            "strategy_open": None,
+            "positions_open": None,
+            "execution_mutations": [],
+            "next_action": "notify_park_and_wait",
+            "blocker_code": "recording_identity_missing",
+        }
+    package_status = str(package.get("status") or "") or None
+    blocker_code = str(blocker.get("code") or "") or None
+    execution_mutations = list(package.get("execution_mutations") or [])
+    if execution_mutations:
+        blocker_code = blocker_code or "recording_execution_mutation_detected"
+    if package_status == "complete" and package_review_status != "complete":
+        blocker_code = blocker_code or "recording_review_pending"
+    if blocker_code or package_status == "blocked_incomplete":
+        status = "blocked"
+    elif package_status == "complete":
+        status = "complete"
+    elif latest_manifest:
+        # A live Recording Window exists before its 12h package is closed.
+        # It is evidence in progress, never a strategy transition.
+        status = "in_progress"
+    else:
+        status = "none"
+    active_recording = latest_manifest or package
+    return {
+        "status": status,
+        "record_window_id": active_recording.get("record_window_id"),
+        "strategy_session_id": active_recording.get("strategy_session_id") or (active_pair[0] if latest_manifest else None),
+        "strategy_revision_id": active_recording.get("strategy_revision_id") or (active_pair[1] if latest_manifest else None),
+        "package_status": package_status,
+        "missing_categories": list(package.get("missing_categories") or []),
+        "strategy_open": package.get("strategy_open") if package else True if latest_manifest else None,
+        "positions_open": package.get("positions_open"),
+        "execution_mutations": execution_mutations,
+        "next_action": "notify_park_and_wait" if blocker_code else package.get("next_action") or "continue_recording_window" if latest_manifest else None,
+        "blocker_code": blocker_code,
+    }
+
+
 def _empty_execution() -> dict[str, Any]:
     return {
         "engine": "unavailable",
@@ -199,6 +347,13 @@ def build_park_public_read_model(
         blockers.append("safety_timestamp_invalid")
     elif safety_age > PARK_PUBLIC_MAX_AGE_SECONDS:
         blockers.append("persisted_snapshot_stale")
+
+    recording = _recording_projection(
+        root,
+        active_pair=(session_id, revision_id),
+    )
+    if recording["status"] == "blocked" and recording.get("blocker_code"):
+        blockers.append(str(recording["blocker_code"]))
 
     normalized = dict(plan.get("normalized_input") or {})
     risk = dict(plan.get("risk") or {})
@@ -352,6 +507,7 @@ def build_park_public_read_model(
             "mutations_allowed": False,
         },
         "strategy": strategy,
+        "recording": recording,
         "market": mark,
         "execution": execution,
         "safety": {

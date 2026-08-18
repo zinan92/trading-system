@@ -317,6 +317,13 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
             },
             "reconciliation": {"status": "ok", "issues": []},
         },
+        "recording": {
+            "status": "complete",
+            "record_window_id": "2026-08-18_DAY",
+            "package_status": "complete",
+            "next_action": "review_recorded_evidence",
+            "blocker_code": None,
+        },
         "market": {"price": 3910.0, "fresh": True},
         "safety": {"status": "pass", "age_seconds": 4.0},
     }
@@ -370,6 +377,7 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
         assert "session-browser-park" in copy
         assert "revision-browser-4" in copy
         assert "行情可信" in copy and "对账 ok" in copy and "4 秒前" in copy
+        assert "Recording Window 2026-08-18_DAY · complete" in copy
         assert "Draft" not in copy and "推荐" not in copy
         assert browser_errors == []
         browser.close()
@@ -433,6 +441,12 @@ def test_gridmind_distinguishes_evidence_blocked_from_clean_idle() -> None:
         "identity": {"strategy_session_id": None, "strategy_revision_id": None, "plan_digest": None},
         "specification": {},
         "execution": {"accepted_order_count": 0, "fill_count": 0, "open_position_count": 0},
+        "recording": {
+            "status": "blocked",
+            "record_window_id": "2026-08-18_DAY",
+            "package_status": "blocked_incomplete",
+            "blocker_code": "recording_package_blocked",
+        },
         "freshness": {"market_fresh": False, "safety_status": "missing"},
     }
     browser_errors: list[str] = []
@@ -462,6 +476,46 @@ def test_gridmind_distinguishes_evidence_blocked_from_clean_idle() -> None:
         assert "证据阻塞" in copy
         assert "暂无 Park Strategy" not in copy
         assert "阻塞: safety_evidence_not_passing" in copy
+        assert "Recording Window 2026-08-18_DAY · blocked" in copy
+        assert "Recording Window 阻塞: recording_package_blocked" in copy
+        assert browser_errors == []
+        browser.close()
+
+
+def test_gridmind_shows_recording_window_in_progress_without_strategy_transition() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True)
+    model["current_strategy"]["recording"] = {
+        "status": "in_progress",
+        "record_window_id": "2026-08-18_NIGHT",
+        "package_status": None,
+        "next_action": "continue_recording_window",
+        "blocker_code": None,
+    }
+    browser_errors: list[str] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.on("console", lambda message: browser_errors.append(message.text) if message.type == "error" else None)
+        page.on("pageerror", lambda error: browser_errors.append(str(error)))
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        copy = page.locator("#currentStrategyCard").inner_text()
+        assert "Recording Window 2026-08-18_NIGHT · in_progress" in copy
+        assert "Recording Window 阻塞" not in copy
         assert browser_errors == []
         browser.close()
 

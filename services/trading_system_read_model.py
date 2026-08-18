@@ -238,6 +238,7 @@ def _project_current_strategy(
     park = _mapping(park_value)
     strategy = _mapping(park.get("strategy"))
     park_execution = _mapping(park.get("execution"))
+    recording = _json_copy(_mapping(park.get("recording")))
     counts = _mapping(park_execution.get("counts"))
     reconciliation = _mapping(park_execution.get("reconciliation"))
     market = _mapping(park.get("market"))
@@ -331,6 +332,7 @@ def _project_current_strategy(
             )
         },
         "execution": projected_execution,
+        "recording": recording,
         "freshness": {
             "generated_at": park.get("generated_at"),
             "market_fresh": market.get("fresh"),
