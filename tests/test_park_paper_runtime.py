@@ -204,7 +204,7 @@ def test_expired_unconfirmed_runtime_session_is_released_without_mutation(
     router = _router(output, market)
     adapter = FakePaperAdapter()
     runtime = _runtime(output, adapter, market)
-    proposal = router.handle_update(_update(5, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(5, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     assert proposal["status"] == "proposal_created"
 
     clock["value"] = 2000.0
@@ -236,7 +236,7 @@ def test_expired_unconfirmed_runtime_session_stays_blocked_with_exposure(
     adapter = FakePaperAdapter()
     adapter.positions.append({"position_id": "external-1", "status": "open", "remaining_units": 1.0})
     runtime = _runtime(output, adapter, market)
-    assert router.handle_update(_update(6, "short DCA 10x 4444~4200 stop 4450 tp 4210"))["status"] == "proposal_created"
+    assert router.handle_update(_update(6, "short DCA 10x 4444~4200 stop 4444 tp 4200"))["status"] == "proposal_created"
 
     clock["value"] = 2000.0
     blocked = runtime.run_once()
@@ -337,7 +337,7 @@ def test_boundary_cancels_entries_closes_only_owned_positions_and_pauses(tmp_pat
     router = _router(output, market)
     adapter = FakePaperAdapter()
     runtime = _runtime(output, adapter, market)
-    proposal = router.handle_update(_update(3, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(3, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     router.handle_update(_update(4, f"confirm {proposal['proposal']['plan_digest']}"))
     assert runtime.run_once()["status"] == "active"
     active_session = ParkStrategyIdentityJournal(output).active_session()
@@ -357,10 +357,10 @@ def test_boundary_cancels_entries_closes_only_owned_positions_and_pauses(tmp_pat
     market.update({"price": 4444.0, "observed_at": "2026-08-14T10:01:00+00:00"})
     paused = runtime.run_once()
     assert paused["status"] == "paused"
-    assert paused["terminal_reason"] == "upper_boundary_invalidated"
+    assert paused["terminal_reason"] == "stop_price"
     assert len(adapter.cancel_calls) == 1
     assert len(adapter.submit_calls) == 2
-    assert adapter.submit_calls[-1]["event"] == "target"
+    assert adapter.submit_calls[-1]["event"] == "stop"
     assert adapter.submit_calls[-1]["target_position_id"] == "park-position-1"
     assert ParkStrategyIdentityJournal(output).active_session() is None
     assert router.telegram.pending_outbound()
@@ -382,7 +382,7 @@ def test_missing_cutover_evidence_blocks_before_any_mutation(tmp_path: Path) -> 
     }
     router = _router(output, market)
     adapter = FakePaperAdapter()
-    proposal = router.handle_update(_update(5, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(5, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     router.handle_update(_update(6, f"confirm {proposal['proposal']['plan_digest']}"))
     runtime = ParkPaperRuntime(
         output,
@@ -415,7 +415,7 @@ def test_confirmation_that_arrives_after_boundary_does_not_open_then_cancel(tmp_
     router = _router(output, market)
     adapter = FakePaperAdapter()
     runtime = _runtime(output, adapter, market)
-    proposal = router.handle_update(_update(9, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(9, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     market.update({"price": 4444.0, "observed_at": "2026-08-14T10:01:00+00:00"})
     router.handle_update(_update(10, f"confirm {proposal['proposal']['plan_digest']}"))
 
@@ -524,7 +524,7 @@ def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identi
         now=lambda: now_ref["value"],
         safety_evidence_reader=_evidence,
     )
-    proposal = router.handle_update(_update(7, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(7, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     router.handle_update(_update(8, f"confirm {proposal['proposal']['plan_digest']}"))
     assert runtime.run_once()["status"] == "active"
     active_before = ParkStrategyIdentityJournal(output).active_session()
@@ -593,7 +593,7 @@ def test_recording_package_failure_blocks_evidence_without_execution_mutation(
         now=lambda: now_ref["value"],
         safety_evidence_reader=_evidence,
     )
-    proposal = router.handle_update(_update(17, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(17, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     router.handle_update(_update(18, f"confirm {proposal['proposal']['plan_digest']}"))
     assert runtime.run_once()["status"] == "active"
     active_before = ParkStrategyIdentityJournal(output).active_session()
@@ -637,7 +637,7 @@ def test_recording_facts_failure_gates_new_entries_until_recovered(
     router = _router(output, market)
     adapter = FakePaperAdapter()
     runtime = _runtime(output, adapter, market)
-    proposal = router.handle_update(_update(21, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(21, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     router.handle_update(_update(22, f"confirm {proposal['proposal']['plan_digest']}"))
     original_record_window_facts = runtime._record_window_facts
 
@@ -704,7 +704,7 @@ def test_runtime_retries_blocked_recording_after_late_event_without_mutation(
         now=lambda: now_ref["value"],
         safety_evidence_reader=_evidence,
     )
-    proposal = router.handle_update(_update(19, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(19, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     router.handle_update(_update(20, f"confirm {proposal['proposal']['plan_digest']}"))
 
     original_record_event = runtime.recording.record_event

@@ -31,6 +31,7 @@ from services.park_paper_mutation_gate import (
 )
 from services.park_recording_track import ParkRecordingTrack
 from services.park_strategy_snapshot import record_strategy_snapshot_terminal
+from services.park_strategy_lifecycle import ParkStrategyLifecycleLedger
 from services.park_strategy_session import (
     ParkStrategyIdentityJournal,
     recording_window,
@@ -674,6 +675,25 @@ class ParkPaperRuntime:
             "paper_only": True,
             "next_action": "await_park_next_strategy",
         }
+        normalized_strategy_type = str((plan.get("normalized_input") or {}).get("strategy_type") or "")
+        if normalized_strategy_type == "dca":
+            lifecycle_ledger = ParkStrategyLifecycleLedger(self.output_root)
+            lifecycle_ledger.activate({
+                **dict(plan.get("normalized_input") or {}),
+                "strategy_session_id": session,
+                "strategy_revision_id": revision,
+                "plan_digest": digest,
+                "maximum_leverage": (plan.get("risk") or {}).get("effective_leverage"),
+                "maximum_acceptable_loss": (plan.get("risk") or {}).get("theoretical_max_loss"),
+            })
+            lifecycle_ledger.terminal_action_plan(
+                strategy_session_id=session,
+                strategy_revision_id=revision,
+                trigger=str(boundary["reason"]),
+                observed_price=current_price,
+                trusted_market=True,
+                fresh_tick=True,
+            )
         self.identity.close_session(
             strategy_session_id=session,
             strategy_revision_id=revision,
@@ -787,7 +807,15 @@ class ParkPaperRuntime:
         strategy_type = str(normalized.get("strategy_type") or "")
         stop = normalized.get("stop_price")
         target = normalized.get("take_profit_price")
-        if strategy_type == "dca" and (stop in (None, "") or target in (None, "")):
+        if strategy_type == "dca":
+            if stop in (None, "") or target in (None, ""):
+                return None
+            stop_value = float(stop)
+            target_value = float(target)
+            if (direction == "long" and price <= stop_value) or (direction == "short" and price >= stop_value):
+                return {"reason": "stop_price", "close_positions": True}
+            if (direction == "long" and price >= target_value) or (direction == "short" and price <= target_value):
+                return {"reason": "take_profit_price", "close_positions": True}
             return None
         if price >= upper:
             return {

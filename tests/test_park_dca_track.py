@@ -51,7 +51,7 @@ def _plan_without_exits() -> dict:
 
 
 def test_dca_entries_are_finite_owned_and_idempotent(tmp_path: Path) -> None:
-    dca = ParkDcaLifecycle(_plan_without_exits(), confirmation_receipt=_receipt(), output_root=tmp_path / "outputs", park_user_id="park", chat_id="chat")
+    dca = _dca(tmp_path)
     first = dca.entry_commands()
     second = dca.entry_commands()
     assert first == second
@@ -60,19 +60,24 @@ def test_dca_entries_are_finite_owned_and_idempotent(tmp_path: Path) -> None:
     assert all(row["loop_enabled"] is False for row in first)
     assert all("tp" not in row and "sl" not in row for row in first)
 
+    with pytest.raises(ParkDcaLifecycleError, match="explicit strategy-level"):
+        ParkDcaLifecycle(_plan_without_exits(), confirmation_receipt=_receipt(), output_root=tmp_path / "missing", park_user_id="park", chat_id="chat")
+
 
 def test_both_authorized_boundaries_terminal_and_notify_once(tmp_path: Path) -> None:
     upper = _dca(tmp_path / "upper")
     first = upper.on_market(price=4444, trusted=True, fresh=True)
     second = upper.on_market(price=4500, trusted=True, fresh=True)
-    assert first["status"] == "terminal"
-    assert first["action_plan"]["boundary"] == "upper"
-    assert first["notification"] == second["notification"]
+    assert first["status"] == "active"
+    assert second["status"] == "terminal"
+    assert second["trigger"] == "stop_price"
+    assert second["action_plan"]["trigger"] == "stop_price"
     assert len(upper.telegram.outbox_rows()) == 1
 
     lower = _dca(tmp_path / "lower")
     result = lower.on_market(price=4199, trusted=True, fresh=True)
-    assert result["action_plan"]["boundary"] == "lower"
+    assert result["status"] == "terminal"
+    assert result["trigger"] == "take_profit_price"
 
 
 def test_stale_market_does_not_trigger_closure_and_no_reopen_api_exists(tmp_path: Path) -> None:
@@ -99,7 +104,7 @@ def test_explicit_dca_tp_sl_are_owned_and_terminal_once(tmp_path: Path) -> None:
         park_user_id="park",
         chat_id="chat",
     )
-    assert all(row["sl"] == 4450.0 and row["tp"] == 4210.0 for row in dca.entry_commands())
+    assert all("sl" not in row and "tp" not in row for row in dca.entry_commands())
     terminal = dca.on_market(price=4210.0, trusted=True, fresh=True)
     assert terminal["status"] == "terminal"
     assert terminal["trigger"] == "take_profit_price"

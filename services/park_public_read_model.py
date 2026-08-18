@@ -265,6 +265,27 @@ def _latest_terminal(root: Path) -> dict[str, Any] | None:
                 "plan_digest": row.get("plan_digest"),
                 "next_action": row.get("result", {}).get("next_action"),
             }
+    try:
+        blockers = _read_jsonl(root / "park_strategy" / "runtime_blockers.jsonl")
+    except (OSError, ValueError, json.JSONDecodeError):
+        blockers = []
+    for row in reversed(blockers):
+        code = str(row.get("code") or "")
+        if code.startswith("terminal_"):
+            return {
+                "status": "blocked",
+                "reason": row.get("reason") or row.get("terminal_reason") or code,
+                "blocker_code": code,
+                "detail": row.get("detail"),
+                "cancel": row.get("cancel") or {},
+                "exit_receipts": row.get("exit_receipts") or [],
+                "positions_preserved": row.get("positions_preserved"),
+                "reconciliation": row.get("reconciliation") or {},
+                "strategy_session_id": row.get("session") or row.get("strategy_session_id"),
+                "strategy_revision_id": row.get("revision") or row.get("strategy_revision_id"),
+                "plan_digest": row.get("digest") or row.get("plan_digest"),
+                "next_action": row.get("next_action") or "notify_park_and_wait",
+            }
     return None
 
 

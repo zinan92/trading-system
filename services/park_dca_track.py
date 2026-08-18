@@ -40,6 +40,8 @@ class ParkDcaLifecycle:
         self.plan_digest = str(plan.get("plan_digest") or "").strip()
         if not self.session_id or not self.revision_id or not self.plan_digest:
             raise ParkDcaLifecycleError("identity_missing", "DCA plan identity is incomplete")
+        if self.normalized.get("stop_price") in (None, "") or self.normalized.get("take_profit_price") in (None, ""):
+            raise ParkDcaLifecycleError("dca_exit_levels_missing", "DCA lifecycle requires explicit strategy-level stop_price and take_profit_price")
         receipt = dict(confirmation_receipt or {})
         if (
             receipt.get("execution_authorized") is not True
@@ -92,10 +94,6 @@ class ParkDcaLifecycle:
                 "loop_enabled": False,
                 "after_terminal": "cancel_remaining_entries",
             }
-            if self.stop_price not in (None, ""):
-                row["sl"] = float(self.stop_price)
-            if self.take_profit_price not in (None, ""):
-                row["tp"] = float(self.take_profit_price)
             rows.append(row)
         self._entries = rows
         return [dict(row) for row in rows]
@@ -111,19 +109,6 @@ class ParkDcaLifecycle:
             return {"status": "terminal", "action_plan": dict(existing), "notification": self._notification(existing)}
         if self.stop_price in (None, "") or self.take_profit_price in (None, ""):
             return {"status": "blocked", "code": "dca_exit_levels_missing", "next_action": "await_explicit_dca_tp_sl"}
-        upper = float(self.normalized["upper_price_boundary"])
-        lower = float(self.normalized["lower_price_boundary"])
-        if float(price) >= upper or float(price) <= lower:
-            boundary = "upper" if float(price) >= upper else "lower"
-            action = self.lifecycle.boundary_action_plan(
-                strategy_session_id=self.session_id,
-                strategy_revision_id=self.revision_id,
-                boundary=boundary,
-                observed_price=float(price),
-                trusted_market=trusted,
-                fresh_tick=fresh,
-            )
-            return {"status": "terminal", "trigger": f"{boundary}_boundary", "action_plan": action, "notification": self._notification(action)}
         direction = str(self.normalized.get("direction") or "")
         if (direction == "long" and price <= float(self.stop_price)) or (direction == "short" and price >= float(self.stop_price)):
             trigger = "stop_price"
@@ -140,16 +125,6 @@ class ParkDcaLifecycle:
             fresh_tick=fresh,
         )
         return {"status": "terminal", "trigger": trigger, "action_plan": action, "notification": self._notification(action)}
-        boundary = "upper" if float(price) >= upper else "lower"
-        action = self.lifecycle.boundary_action_plan(
-            strategy_session_id=self.session_id,
-            strategy_revision_id=self.revision_id,
-            boundary=boundary,
-            observed_price=float(price),
-            trusted_market=trusted,
-            fresh_tick=fresh,
-        )
-        return {"status": "terminal", "trigger": f"{boundary}_boundary", "action_plan": action, "notification": self._notification(action)}
 
     def _notification(self, action: Mapping[str, Any]) -> dict[str, Any]:
         return self.telegram.queue_outbound(

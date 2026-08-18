@@ -245,7 +245,7 @@ def test_router_accepts_bounded_confirmation_shortcut_for_current_proposal(tmp_p
         now=lambda: "2026-08-14T10:00:00+00:00",
         cycle_id_provider=lambda now: "2026-08-14_DAY",
     )
-    proposal = router.handle_update(_update(10, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    proposal = router.handle_update(_update(10, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
 
     confirmed = router.handle_update(_update(11, "确认当前计划"))
 
@@ -282,10 +282,10 @@ def test_router_releases_expired_unconfirmed_session_only_on_clean_slate(
         now=lambda: "2026-08-14T10:00:00+00:00",
         cycle_id_provider=lambda now: "2026-08-14_DAY",
     )
-    first = router.handle_update(_update(20, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    first = router.handle_update(_update(20, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     clock["value"] = 2000.0
 
-    replacement = router.handle_update(_update(21, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    replacement = router.handle_update(_update(21, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
 
     assert first["status"] == "proposal_created"
     assert replacement["status"] == "proposal_created"
@@ -323,7 +323,7 @@ def test_confirmation_is_exact_idempotent_and_still_zero_execution(tmp_path: Pat
         now=lambda: "2026-08-14T10:00:00+00:00",
         cycle_id_provider=lambda now: "2026-08-14_DAY",
     )
-    proposal = router.handle_update(_update(2, "short DCA 10x 4444~4200 stop 4450 tp 4210"))["proposal"]
+    proposal = router.handle_update(_update(2, "short DCA 10x 4444~4200 stop 4444 tp 4200"))["proposal"]
     command = f"confirm {proposal['plan_digest']}"
     first = router.handle_update(_update(3, command))
     duplicate = router.handle_update(_update(3, command))
@@ -362,7 +362,7 @@ def test_worker_persists_cursor_and_replays_duplicate_without_new_result(tmp_pat
 
     class FakeTransport:
         def __init__(self) -> None:
-            self.updates = [[_update(20, "short DCA 10x 4444~4200 stop 4450 tp 4210")], [_update(20, "short DCA 10x 4444~4200 stop 4450 tp 4210")]]
+            self.updates = [[_update(20, "short DCA 10x 4444~4200 stop 4444 tp 4200")], [_update(20, "short DCA 10x 4444~4200 stop 4444 tp 4200")]]
             self.sent = 0
 
         def get_updates(self, **_kwargs):
@@ -405,7 +405,7 @@ def test_duplicate_update_id_with_changed_content_is_blocked_and_audited(tmp_pat
         now=lambda: "2026-08-14T10:00:00+00:00",
         cycle_id_provider=lambda now: "2026-08-14_DAY",
     )
-    first = router.handle_update(_update(21, "short DCA 10x 4444~4200 stop 4450 tp 4210"))
+    first = router.handle_update(_update(21, "short DCA 10x 4444~4200 stop 4444 tp 4200"))
     conflict = router.handle_update(_update(21, "short Grid 10x 4444~4200"))
 
     assert first["status"] == "proposal_created"
@@ -426,7 +426,7 @@ def test_unauthorized_update_is_persisted_and_never_notified_to_attacker(tmp_pat
         market_reader=lambda: {},
         account_reader=lambda _root, _cycle: {},
     )
-    result = router.handle_update(_update(30, "short DCA 10x 4444~4200 stop 4450 tp 4210", user="intruder"))
+    result = router.handle_update(_update(30, "short DCA 10x 4444~4200 stop 4444 tp 4200", user="intruder"))
     assert result["event"] == "inbound_rejected"
     assert result["code"] == "unauthorized_user"
     assert router.telegram.pending_outbound() == []

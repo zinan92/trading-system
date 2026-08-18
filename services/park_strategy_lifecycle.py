@@ -188,6 +188,10 @@ class ParkStrategyLifecycleLedger:
         )
         digest = _text(plan.get("plan_digest"), "plan_digest")
         existing = self.active_plan()
+        if existing and existing.get("state") == "PAUSED":
+            # A terminal revision is sealed and may be followed by a new
+            # Park-confirmed revision; its immutable identity is not reused.
+            existing = None
         if existing:
             assert_immutable_revision(existing, {**existing, **dict(plan), **required})
             return dict(existing)
