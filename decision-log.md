@@ -15854,3 +15854,32 @@ auditable datafeed port; broker execution remains a separate port.
 - This repository merge is not a live-readiness claim.  The next step is an
   exact-SHA Goldbot Paper deployment and read-only runtime verification; no
   live, exchange-key, Cloud order, or position mutation was performed.
+
+# 2026-08-18 — Show authoritative Yesterday PnL without mixing live state (#743)
+
+## Decision
+
+- Define Yesterday as the previous complete Beijing calendar day, independent
+  of the current Recording Window.  Read it only from the terminal daily report
+  built from closed cycle packages and their validated hashes/provenance.
+- Display net realised PnL with explicit gross, fees, and funding evidence;
+  require the identity `net = gross - fees + funding`.  If cost evidence is
+  missing or contradictory, mark the card partial/evidence-insufficient and
+  never coerce the value to zero.
+- Exclude current unrealised PnL, cumulative PnL, current account equity,
+  Shadow/replay results, and any execution control action from the card.
+- Let the read-only card open a review context that names the report date and
+  supporting 12h package IDs; it cannot start, stop, cancel, flatten, or alter
+  a strategy.
+
+## Verification
+
+- PR #757 merged as `main@cea5500472637a59706172a9b6bd81d35c1807fb` (tree
+  `03d0d26fca1742852f2720d8b19c8e2221760814`).
+- Focused read-model, daily-report, Dashboard server, and browser validation
+  passed (161 tests); zero/negative/partial/missing cases and net-cost mismatch
+  are covered.  `git diff --check`, gitleaks, and parallel standards/spec
+  reviews passed.
+- This merge is Paper/read-only UI evidence only; no live, exchange-key,
+  order, or position mutation was performed.  Exact-SHA Paper deployment is
+  the next runtime step.
