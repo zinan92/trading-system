@@ -39,6 +39,17 @@
   `git diff --check`, gitleaks, and parallel standards/spec review passed.
   Exact-SHA Paper deployment is the next runtime verification step; no
   execution control action was added.  Next frontier: #745 / #746.
+- #745 / PR #760 makes Park Grid planning deterministic: explicit Boundary,
+  inset Entry Range, authoritative Rungs, per-rung TP geometry, bilateral
+  Neutral Hard Stops, default-vs-explicit Hard Stop provenance, and full-depth
+  loss sizing under the stricter leverage/loss cap.  Local per-order stops are
+  absent unless Park authorizes them.  Risk Digest is visible in the Draft and
+  checked before lifecycle admission.  Merged on exact
+  `main@72e325c6e31dad959e804c3f1234391446b66ed0` (tree
+  `c39fe37b9be2999ead3389c425385cae72441e62`) after 210 focused tests,
+  `git diff --check`, gitleaks, and parallel standards/spec review passed.
+  Exact-SHA Paper deployment is the next runtime verification step; no live or
+  execution mutation was added.  Next frontier: #746.
 - #742 / PR #751 adds the authoritative `park-current-strategy-summary-v1`
   projection and a top-level Current Strategy card. Exact `main@ebdbdd7aeb5ee805870d2a996bfa7fef1d0a5b5d`
   is deployed to Goldbot Paper with source tree

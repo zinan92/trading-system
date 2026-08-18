@@ -15883,3 +15883,31 @@ auditable datafeed port; broker execution remains a separate port.
 - This merge is Paper/read-only UI evidence only; no live, exchange-key,
   order, or position mutation was performed.  Exact-SHA Paper deployment is
   the next runtime step.
+
+# 2026-08-18 — Make Park Grid geometry and full-depth risk explicit (#745)
+
+## Decision
+
+- Keep Grid Boundary separate from the strictly inset Entry Range.  Explicit
+  spacing divides the authorized width into complete Rungs; no outer boundary
+  is an entry.  Each rung carries its side and next-rung-or-boundary TP.
+- Treat the strategy-level Hard Stop as the outer invalidation boundary by
+  default: lower for Long, upper for Short, both legs for Neutral.  Park may
+  explicitly override it; the source is retained.  Local per-order stops are
+  absent unless Park explicitly authorizes them.
+- Size every fillable rung to the highest fillable price basis and calculate
+  worst-case loss across the full depth.  The stricter maximum leverage or
+  maximum acceptable loss cap controls; invalid geometry, missing equity, and
+  missing authoritative rungs fail closed.
+- Bind the confirmation Risk Digest to the exact risk plan and display the
+  full geometry/risk evidence in the Draft before confirmation.
+
+## Verification
+
+- PR #760 merged as `main@72e325c6e31dad959e804c3f1234391446b66ed0` (tree
+  `c39fe37b9be2999ead3389c425385cae72441e62`).
+- Park/Grid/Dashboard focused validation passed (210 tests); `git diff --check`,
+  gitleaks, and parallel standards/spec reviews passed.
+- This is Paper planning/read-only evidence only.  No live, exchange-key,
+  order, position, or Cloud mutation was performed; exact-SHA Paper deployment
+  remains the next runtime verification step.
