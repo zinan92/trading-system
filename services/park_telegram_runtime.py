@@ -410,7 +410,10 @@ class ParkTelegramRouter:
             update_id = received.get("update_id")
             prior = self._previous_result(update_id)
             prior_result = dict(prior.get("result") or {}) if prior else {}
-            if prior_result.get("code") != "ambiguous_strategy_type":
+            if prior_result.get("code") not in {"ambiguous_strategy_type", "missing_risk_authority"}:
+                continue
+            recovery_key = f"park-strategy-rejected:{update_id}:strategy-recovery"
+            if any(row.get("idempotency_key") == recovery_key for row in self.telegram.outbox_rows()):
                 continue
             active = self.identity.active_session()
             result = self._handle_strategy(
