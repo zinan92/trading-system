@@ -250,6 +250,8 @@ def _project_current_strategy(
         "terminal": "已终止",
         "closed": "已终止",
         "idle_clean": "暂无策略",
+        "active_locked": "运行中",
+        "evidence_blocked": "证据阻塞",
         "migration_blocked": "迁移阻塞",
     }
     blockers = [str(item) for item in _list(park.get("blockers")) if str(item)]
@@ -273,6 +275,8 @@ def _project_current_strategy(
         completeness_issues.append("legacy_cycle_exposure_without_park_identity")
     else:
         source = "park_strategy_session"
+        if blockers:
+            state = "evidence_blocked"
         contract_status = "blocked" if blockers else "idle"
     if legacy_exposure:
         projected_execution = {
@@ -320,6 +324,10 @@ def _project_current_strategy(
                 "theoretical_max_loss",
                 "order_count",
                 "selected_constraint",
+                "grid_entry_range",
+                "grid_spacing",
+                "grid_rung_count",
+                "grid_rung_prices",
             )
         },
         "execution": projected_execution,

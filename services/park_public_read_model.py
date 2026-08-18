@@ -201,6 +201,31 @@ def build_park_public_read_model(
 
     normalized = dict(plan.get("normalized_input") or {})
     risk = dict(plan.get("risk") or {})
+    strategy_type = str(normalized.get("strategy_type") or "").lower()
+    lower_boundary = normalized.get("lower_price_boundary")
+    upper_boundary = normalized.get("upper_price_boundary")
+    grid_count = int(risk.get("order_count") or normalized.get("order_count") or 0)
+    grid_entry_range: dict[str, float] | None = None
+    grid_spacing: float | None = None
+    grid_rung_prices: list[float] = []
+    if (
+        strategy_type == "grid"
+        and lower_boundary is not None
+        and upper_boundary is not None
+        and grid_count > 0
+    ):
+        grid_spacing = round(
+            (float(upper_boundary) - float(lower_boundary)) / (grid_count + 1),
+            8,
+        )
+        grid_entry_range = {
+            "lower": round(float(lower_boundary) + grid_spacing, 8),
+            "upper": round(float(upper_boundary) - grid_spacing, 8),
+        }
+        grid_rung_prices = [
+            round(float(lower_boundary) + grid_spacing * (index + 1), 8)
+            for index in range(grid_count)
+        ]
     strategy = {
         "active": bool(session_id and lifecycle),
         "state": lifecycle.get("state") or "IDLE_CLEAN",
@@ -219,6 +244,10 @@ def build_park_public_read_model(
         "theoretical_max_loss": risk.get("theoretical_max_loss"),
         "order_count": risk.get("order_count"),
         "selected_constraint": risk.get("selected_constraint"),
+        "grid_entry_range": grid_entry_range,
+        "grid_spacing": grid_spacing,
+        "grid_rung_count": grid_count if strategy_type == "grid" else None,
+        "grid_rung_prices": grid_rung_prices,
     }
 
     orders = _compact_rows(

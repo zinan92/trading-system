@@ -130,6 +130,13 @@ def test_public_read_model_projects_persisted_facts_without_writes(tmp_path: Pat
     assert result["strategy"]["strategy_session_id"] == "session-1"
     assert result["strategy"]["direction"] == "neutral"
     assert result["strategy"]["maximum_leverage"] == 20.0
+    assert result["strategy"]["grid_entry_range"] == {
+        "lower": 4111.29032258,
+        "upper": 4438.70967742,
+    }
+    assert result["strategy"]["grid_spacing"] == 11.29032258
+    assert result["strategy"]["grid_rung_count"] == 30
+    assert result["strategy"]["grid_rung_prices"][:2] == [4111.29032258, 4122.58064516]
     assert result["execution"]["counts"] == {
         "accepted_orders": 1,
         "filled_orders": 1,

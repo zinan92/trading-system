@@ -302,6 +302,10 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
             "theoretical_max_loss": 480.0,
             "order_count": 19,
             "selected_constraint": "maximum_acceptable_loss",
+            "grid_entry_range": {"lower": 3810.0, "upper": 3990.0},
+            "grid_spacing": 10.0,
+            "grid_rung_count": 19,
+            "grid_rung_prices": [3810.0, 3820.0, 3830.0],
         },
         "execution": {
             "counts": {
@@ -357,6 +361,8 @@ def test_gridmind_shows_the_active_park_strategy_at_the_top() -> None:
         assert "运行中" in copy
         assert "Short · Grid" in copy
         assert "3,800 – 4,000" in copy
+        assert "Grid Entry Range" in copy and "3,810 – 3,990" in copy
+        assert "Grid Spacing" in copy and "10 · 19 Rungs" in copy
         assert "Hard Stop 4,000" in copy
         assert "10x" in copy
         assert "最大理论亏损" in copy and "480 USD" in copy
