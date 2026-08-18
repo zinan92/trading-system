@@ -103,7 +103,21 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     if raw_type is not None:
         strategy_type = _TYPE_ALIASES.get(str(raw_type).strip().lower())
     if text:
-        matches = [normalized for alias, normalized in _TYPE_ALIASES.items() if alias in text.lower()]
+        lowered_text = text.lower()
+        # Explicit strategy words win over market-regime commentary.  Park
+        # can say "震荡向上 ... 做多 DCA"; the former describes the tape, while
+        # the latter is the execution type.  Only explicit DCA/Grid tokens
+        # participate in this precedence rule; two explicit types remain an
+        # ambiguity and still fail closed.
+        explicit_matches = [
+            normalized
+            for alias, normalized in _TYPE_ALIASES.items()
+            if normalized in {"dca", "grid"}
+            and (alias in {"dca", "grid"} and re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", lowered_text))
+        ]
+        matches = explicit_matches or [
+            normalized for alias, normalized in _TYPE_ALIASES.items() if alias in lowered_text
+        ]
         if len(set(matches)) > 1:
             raise ParkStrategyPlanError("ambiguous_strategy_type", "strategy type is ambiguous")
         if matches:

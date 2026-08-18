@@ -26,6 +26,16 @@ def test_normalizes_parks_chinese_short_dca_input() -> None:
     assert normalized["maximum_acceptable_loss"] is None
 
 
+def test_explicit_dca_wins_over_market_regime_wording() -> None:
+    normalized = normalize_park_input(
+        "现在行情是震荡向上 做4200 4400的做多dca吧，然后最大10倍杠杆"
+    )
+    assert normalized["direction"] == "long"
+    assert normalized["strategy_type"] == "dca"
+    assert normalized["upper_price_boundary"] == 4400.0
+    assert normalized["lower_price_boundary"] == 4200.0
+
+
 def test_normalizes_english_grid_input_with_deterministic_boundary_hard_stop() -> None:
     normalized = normalize_park_input({
         "direction": "long", "strategy_type": "grid",
