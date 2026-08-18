@@ -164,6 +164,9 @@ def test_gridmind_adds_an_additive_park_ai_chat_without_replacing_existing_contr
     html = _html()
 
     for element_id in (
+        "yesterdayPnlCard",
+        "yesterdayPnlFacts",
+        "yesterdayPnlEvidence",
         "parkAiChatCard",
         "parkAiChatMessages",
         "parkAiChatInput",
@@ -180,15 +183,19 @@ def test_gridmind_adds_an_additive_park_ai_chat_without_replacing_existing_contr
     assert "DEEPSEEK_API_KEY" not in html
     assert 'body:JSON.stringify({action,...payload})' in html
     assert 'post("confirm",{draft_id:pending.draft_id,plan_digest:pending.plan_digest})' in html
+    assert "Grid Entry Range" in html
+    assert "Grid Hard Stop" in html
+    assert "TP geometry" in html
 
 
 def test_gridmind_places_park_ai_chat_at_the_top_of_the_console() -> None:
     html = _html()
 
     ai_card = html.index('id="parkAiChatCard"')
+    yesterday_card = html.index('id="yesterdayPnlCard"')
     metrics = html.index('<section class="metrics"')
     workspace = html.index('<main class="workspace"')
-    assert ai_card < metrics < workspace
+    assert yesterday_card < ai_card < metrics < workspace
     assert 'class="card park-ai-chat-card top-ai-card"' in html
     assert ".top-ai-card{border:1px solid rgba(152,94,255,.42)" in html
 

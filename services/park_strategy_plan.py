@@ -160,6 +160,9 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
             ("网格间距", "间距", "grid[_ ]?spacing", "spacing"),
             "grid_spacing",
         )
+    local_stop_authorized = body.get("local_stop_authorized") is True or body.get("per_order_stop_authorized") is True
+    if not local_stop_authorized and text:
+        local_stop_authorized = bool(re.search(r"(?:逐单|每单|local|per[-_ ]order)\s*(?:止损|stop)", text, re.IGNORECASE))
     if strategy_type == "grid" and direction in {"long", "short"} and stop_price is None:
         # Grid's default hard stop is the adverse outer boundary.  This is a
         # deterministic strategy rule, not an AI authorization or a local
@@ -184,6 +187,13 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
                 "grid order_count conflicts with the explicitly provided spacing and boundaries",
             )
         raw_order_count = derived_count
+    if isinstance(stop_price, Mapping):
+        normalized_stop_price: Any = {
+            str(key): _number(value, f"stop_price.{key}")
+            for key, value in stop_price.items()
+        }
+    else:
+        normalized_stop_price = _number(stop_price, "stop_price") if stop_price is not None else None
     result: dict[str, Any] = {
         "schema_version": PARK_PLAN_SCHEMA,
         "direction": direction,
@@ -192,9 +202,10 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "lower_price_boundary": lower_value,
         "maximum_leverage": _number(max_leverage, "maximum_leverage") if max_leverage is not None else None,
         "maximum_acceptable_loss": _number(max_loss, "maximum_acceptable_loss") if max_loss is not None else None,
-        "stop_price": _number(stop_price, "stop_price") if stop_price is not None else None,
+        "stop_price": normalized_stop_price,
         "take_profit_price": _number(take_profit_price, "take_profit_price") if take_profit_price is not None else None,
         "grid_spacing": _number(grid_spacing, "grid_spacing") if grid_spacing is not None else None,
+        "local_stop_authorized": local_stop_authorized,
         "order_count": int(raw_order_count),
         "source_text": text or None,
     }
@@ -263,6 +274,8 @@ def _build_grid_risk_plan(
         raise ParkStrategyPlanError("grid_requires_interior_price", "Grid requires the trusted current price inside its range")
 
     explicit_stop = normalized.get("stop_price")
+    if direction != "neutral" and isinstance(explicit_stop, Mapping):
+        raise ParkStrategyPlanError("invalid_stop_price", "Long/Short Grid hard stop must be one price")
     if direction == "long":
         hard_stop: float | dict[str, float] = _number(explicit_stop or lower, "stop_price")
         if hard_stop >= current_price:
@@ -272,9 +285,21 @@ def _build_grid_risk_plan(
         if hard_stop <= current_price:
             raise ParkStrategyPlanError("invalid_stop_price", "short Grid hard stop must be above current price")
     else:
-        if explicit_stop not in (None, "") or normalized.get("take_profit_price") not in (None, ""):
-            raise ParkStrategyPlanError("neutral_grid_boundary_only", "neutral Grid hard stops are its two outer boundaries")
-        hard_stop = {"long": lower, "short": upper}
+        if isinstance(explicit_stop, Mapping):
+            if set(explicit_stop) != {"long", "short"}:
+                raise ParkStrategyPlanError("neutral_grid_hard_stop_incomplete", "neutral Grid explicit hard stop must provide long and short legs")
+            hard_stop = {
+                "long": _number(explicit_stop["long"], "stop_price.long"),
+                "short": _number(explicit_stop["short"], "stop_price.short"),
+            }
+            if hard_stop["long"] >= current_price or hard_stop["short"] <= current_price:
+                raise ParkStrategyPlanError("invalid_stop_price", "neutral Grid hard stops must remain adverse to each leg")
+        elif explicit_stop not in (None, ""):
+            raise ParkStrategyPlanError("neutral_grid_hard_stop_incomplete", "neutral Grid explicit hard stop must provide long and short legs")
+        elif normalized.get("take_profit_price") not in (None, ""):
+            raise ParkStrategyPlanError("neutral_grid_boundary_only", "neutral Grid uses per-rung TP geometry")
+        else:
+            hard_stop = {"long": lower, "short": upper}
 
     rungs: list[dict[str, Any]] = []
     for index, price in enumerate(prices):
@@ -294,6 +319,7 @@ def _build_grid_risk_plan(
             "side": side,
             "take_profit": round(take_profit, 12),
             "hard_stop": round(float(stop), 12),
+            "local_stop": round(float(stop), 12) if bool(normalized.get("local_stop_authorized")) else None,
         })
     if direction == "neutral" and {rung["side"] for rung in rungs} != {"buy", "sell"}:
         raise ParkStrategyPlanError("neutral_grid_requires_two_legs", "neutral Grid must contain both buy and sell rungs")
@@ -343,6 +369,7 @@ def _build_grid_risk_plan(
         "grid_entry_range": {"lower": entry_lower, "upper": entry_upper},
         "grid_rung_prices": prices,
         "grid_rungs": rungs,
+        "local_stop_authorized": bool(normalized.get("local_stop_authorized")),
         "grid_loss_model": "full_depth_all_rungs_to_hard_stop",
     }
     if direction == "neutral":

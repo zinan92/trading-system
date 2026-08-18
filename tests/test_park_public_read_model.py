@@ -254,6 +254,8 @@ def test_public_read_model_projects_plan_authoritative_grid_geometry(tmp_path: P
             "grid_spacing": 10.0,
             "grid_entry_range": {"lower": 4110.0, "upper": 4440.0},
             "grid_rung_prices": [4110.0 + index * 10.0 for index in range(34)],
+            "hard_stop": {"long": 4100.0, "short": 4450.0},
+            "hard_stop_source": "authorized_price_boundary",
             "grid_rungs": [
                 {
                     "rung": index + 1,
@@ -274,6 +276,8 @@ def test_public_read_model_projects_plan_authoritative_grid_geometry(tmp_path: P
     assert result["strategy"]["grid_spacing"] == 10.0
     assert result["strategy"]["grid_rung_count"] == 34
     assert result["strategy"]["grid_rung_prices"] == [4110.0 + index * 10.0 for index in range(34)]
+    assert result["strategy"]["stop_price"] == {"long": 4100.0, "short": 4450.0}
+    assert result["strategy"]["hard_stop_source"] == "authorized_price_boundary"
 
 
 def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_path: Path) -> None:

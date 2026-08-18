@@ -97,6 +97,21 @@ def test_grid_explicit_hard_stop_overrides_boundary_default() -> None:
     assert all(rung["hard_stop"] == 3850.0 for rung in plan["risk"]["grid_rungs"])
 
 
+def test_neutral_grid_accepts_explicit_per_leg_hard_stop_override() -> None:
+    normalized = normalize_park_input({
+        "direction": "neutral",
+        "strategy_type": "grid",
+        "upper_price_boundary": 4000,
+        "lower_price_boundary": 3800,
+        "grid_spacing": 10,
+        "maximum_leverage": 10,
+        "stop_price": {"long": 3820, "short": 3980},
+    })
+    plan = build_deterministic_risk_plan(normalized, market={**MARKET, "price": 3900.0}, account_equity=1000)
+    assert plan["risk"]["hard_stop"] == {"long": 3820.0, "short": 3980.0}
+    assert plan["risk"]["hard_stop_source"] == "explicit_stop_price"
+
+
 def test_neutral_direction_cannot_be_reinterpreted_as_dca() -> None:
     with pytest.raises(ParkStrategyPlanError) as error:
         normalize_park_input({
@@ -129,7 +144,7 @@ def test_neutral_grid_uses_the_stricter_loss_cap_and_rejects_ambiguous_global_tp
             market=MARKET,
             account_equity=1000,
         )
-    assert error.value.code == "neutral_grid_boundary_only"
+    assert error.value.code == "neutral_grid_hard_stop_incomplete"
 
 
 @pytest.mark.parametrize("payload, code", [

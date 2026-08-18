@@ -688,6 +688,7 @@ class ParkTelegramRouter:
                 grid_detail,
                 f"max_notional={risk.get('maximum_notional')} effective_leverage={risk.get('effective_leverage')}x\n",
                 f"theoretical_max_loss={risk.get('theoretical_max_loss')} order_count={risk.get('order_count')} quantity_each={risk.get('per_order_quantity')}\n",
+                f"risk_digest={proposal.get('risk_digest')}\n",
                 f"plan_digest={proposal.get('plan_digest')}\n",
                 f"Reply: 确认当前计划 / 拒绝当前计划；or confirm {proposal.get('plan_digest')}",
             )

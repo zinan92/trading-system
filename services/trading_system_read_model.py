@@ -439,6 +439,29 @@ def _project_current_strategy(
             "closed_position_count": counts.get("closed_positions"),
             "reconciliation_status": reconciliation.get("status"),
         }
+    specification = {
+        key: strategy.get(key)
+        for key in (
+            "strategy_type",
+            "direction",
+            "lower_price_boundary",
+            "upper_price_boundary",
+            "stop_price",
+            "take_profit_price",
+            "maximum_leverage",
+            "maximum_acceptable_loss",
+            "maximum_notional",
+            "theoretical_max_loss",
+            "order_count",
+            "selected_constraint",
+            "grid_entry_range",
+            "grid_spacing",
+            "grid_rung_count",
+            "grid_rung_prices",
+        )
+    }
+    if strategy.get("hard_stop_source") not in (None, ""):
+        specification["hard_stop_source"] = strategy.get("hard_stop_source")
     return {
         "schema_version": PARK_CURRENT_STRATEGY_SCHEMA,
         "source": source,
@@ -452,27 +475,7 @@ def _project_current_strategy(
             "strategy_revision_id": strategy.get("strategy_revision_id"),
             "plan_digest": strategy.get("plan_digest"),
         },
-        "specification": {
-            key: strategy.get(key)
-            for key in (
-                "strategy_type",
-                "direction",
-                "lower_price_boundary",
-                "upper_price_boundary",
-                "stop_price",
-                "take_profit_price",
-                "maximum_leverage",
-                "maximum_acceptable_loss",
-                "maximum_notional",
-                "theoretical_max_loss",
-                "order_count",
-                "selected_constraint",
-                "grid_entry_range",
-                "grid_spacing",
-                "grid_rung_count",
-                "grid_rung_prices",
-            )
-        },
+        "specification": specification,
         "execution": projected_execution,
         "recording": recording,
         "freshness": {

@@ -406,6 +406,8 @@ def build_park_public_read_model(
         authoritative_rungs = [row for row in risk.get("grid_rungs") or [] if isinstance(row, Mapping)]
         authoritative_range = risk.get("grid_entry_range")
         authoritative_spacing = risk.get("grid_spacing")
+        if authoritative_spacing is not None and not authoritative_rungs:
+            blockers.append("grid_geometry_authority_missing")
         if authoritative_rungs and isinstance(authoritative_range, Mapping):
             try:
                 grid_count = len(authoritative_rungs)
@@ -444,6 +446,8 @@ def build_park_public_read_model(
             lower = upper = 0.0
         if authoritative_rungs:
             valid_geometry = True
+        elif authoritative_spacing is not None:
+            valid_geometry = False
         if not valid_geometry:
             blockers.append("grid_geometry_invalid")
         elif not authoritative_rungs:
@@ -467,6 +471,7 @@ def build_park_public_read_model(
         "lower_price_boundary": lifecycle.get("lower_price_boundary") or normalized.get("lower_price_boundary"),
         "upper_price_boundary": lifecycle.get("upper_price_boundary") or normalized.get("upper_price_boundary"),
         "stop_price": lifecycle.get("stop_price") or normalized.get("stop_price") or risk.get("hard_stop"),
+        "hard_stop_source": risk.get("hard_stop_source"),
         "take_profit_price": lifecycle.get("take_profit_price") or normalized.get("take_profit_price"),
         "maximum_leverage": lifecycle.get("maximum_leverage") or normalized.get("maximum_leverage"),
         "maximum_acceptable_loss": lifecycle.get("maximum_acceptable_loss") or normalized.get("maximum_acceptable_loss"),

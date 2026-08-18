@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from services.park_grid_track import ParkGridLifecycle, ParkGridLifecycleError
+from services.park_grid_track import ParkGridLifecycle, ParkGridLifecycleError, _risk_digest
 
 
 def _plan() -> dict:
@@ -125,3 +125,28 @@ def test_stale_market_cannot_reassess_or_close(tmp_path: Path) -> None:
         grid.observe(price=4444, trusted=False, fresh=True)
     with pytest.raises(ParkGridLifecycleError, match="confirmation"):
         ParkGridLifecycle(_plan(), confirmation_receipt={}, output_root=tmp_path / "bad", park_user_id="park", chat_id="chat")
+
+
+def test_authoritative_grid_geometry_omits_local_stops_by_default_and_checks_risk_digest(tmp_path: Path) -> None:
+    plan = _plan()
+    plan["risk"].update(
+        {
+            "grid_spacing": 10.0,
+            "grid_entry_range": {"lower": 4210.0, "upper": 4430.0},
+            "grid_rungs": [
+                {"rung": 1, "price": 4210.0, "side": "buy", "take_profit": 4220.0, "hard_stop": 4200.0},
+                {"rung": 2, "price": 4220.0, "side": "buy", "take_profit": 4230.0, "hard_stop": 4200.0},
+            ],
+            "local_stop_authorized": False,
+        }
+    )
+    receipt = _receipt()
+    receipt["risk_digest"] = _risk_digest(plan["risk"])
+    grid = ParkGridLifecycle(plan, confirmation_receipt=receipt, output_root=tmp_path / "outputs", park_user_id="park", chat_id="chat")
+    levels = grid.levels()
+    assert all("sl" not in row for row in levels)
+    assert [row["tp"] for row in levels] == [4220.0, 4230.0]
+
+    bad_receipt = {**receipt, "risk_digest": "sha256:" + "b" * 64}
+    with pytest.raises(ParkGridLifecycleError, match="exact Park plan"):
+        ParkGridLifecycle(plan, confirmation_receipt=bad_receipt, output_root=tmp_path / "bad", park_user_id="park", chat_id="chat")
