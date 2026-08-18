@@ -149,7 +149,7 @@ def _recording_projection(
         }
         if str(package.get("record_window_id") or "") in blocked_windows:
             blocker = {}
-    if active_pair != ("", "") and packages and not package:
+    if active_pair != ("", "") and packages and not package and not latest_manifest:
         return {
             "status": "blocked",
             "record_window_id": None,

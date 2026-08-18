@@ -482,6 +482,44 @@ def test_gridmind_distinguishes_evidence_blocked_from_clean_idle() -> None:
         browser.close()
 
 
+def test_gridmind_shows_recording_window_in_progress_without_strategy_transition() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True)
+    model["current_strategy"]["recording"] = {
+        "status": "in_progress",
+        "record_window_id": "2026-08-18_NIGHT",
+        "package_status": None,
+        "next_action": "continue_recording_window",
+        "blocker_code": None,
+    }
+    browser_errors: list[str] = []
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.on("console", lambda message: browser_errors.append(message.text) if message.type == "error" else None)
+        page.on("pageerror", lambda error: browser_errors.append(str(error)))
+        page.add_init_script("window.setInterval = () => 0")
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        copy = page.locator("#currentStrategyCard").inner_text()
+        assert "Recording Window 2026-08-18_NIGHT · in_progress" in copy
+        assert "Recording Window 阻塞" not in copy
+        assert browser_errors == []
+        browser.close()
+
+
 def test_gridmind_shows_dca_tp_sl_without_grid_only_facts() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     park = {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -496,6 +497,15 @@ def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identi
     assert ParkStrategyIdentityJournal(output).active_session()["strategy_session_id"] == active_before["strategy_session_id"]
     assert adapter.cancel_calls == []
     assert adapter.submit_calls and len(adapter.submit_calls) == 1
+    execution_events = [
+        json.loads(line)
+        for line in (output / "park_strategy" / "executions.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert not any(
+        row.get("event") in {"cancel", "flatten", "stop", "reverse", "handoff", "terminal_paused"}
+        for row in execution_events
+    )
     assert any(row.get("record_window_id") == record_window_id for row in runtime.recording.packages())
 
 

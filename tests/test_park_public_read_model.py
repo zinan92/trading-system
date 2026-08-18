@@ -302,6 +302,18 @@ def test_public_read_model_projects_active_recording_window_before_package_close
     recording_root = output / "park_strategy" / "recording"
     recording_root.mkdir(parents=True, exist_ok=True)
     _append_jsonl(
+        recording_root / "packages.jsonl",
+        [
+            {
+                "record_window_id": "2026-08-16_NIGHT",
+                "strategy_session_id": "session-old",
+                "strategy_revision_id": "revision-old",
+                "status": "complete",
+                "execution_mutations": [],
+            }
+        ],
+    )
+    _append_jsonl(
         recording_root / "events.jsonl",
         [
             {
