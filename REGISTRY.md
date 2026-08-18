@@ -13,6 +13,20 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #747 / PR #766 completes the authoritative Park Grid execution slice.  Each
+  confirmed rung carries immutable line/generation/re-arm identity into Paper;
+  a complete, reconciled target fill re-arms the same price/TP/quantity, while
+  partial, stale, duplicated, cancelled, or terminal evidence cannot create a
+  generation.  Long, Short, and Neutral boundaries are true Grid Hard Stops:
+  only exact revision-owned entries/positions are cancelled/stopped, the
+  lifecycle action plan is persisted, reconciliation is required, and Park is
+  notified.  A sealed session/revision cannot be reused; the next strategy
+  needs a new identity.  Merged on exact
+  `main@520c4e278a1de90eaa7fcb605ff2465100d7bda6` (tree
+  `00b6a63444a941762528225d4fe71f01ce38b270`) after 72 focused tests and 212
+  Park/Nautilus upstream tests, diff-check, compileall, gitleaks, and focused
+  spec/safety review passed.  Exact-SHA Paper deployment and natural-tick
+  verification are the next runtime steps.  Next frontier: #748 / #749 / #750.
 - #746 / PR #763 completes the DCA terminal lifecycle as a strategy-level
   contract.  Telegram and the lifecycle constructor require explicit Park
   `stop_price` and `take_profit_price`; DCA entry commands do not duplicate
