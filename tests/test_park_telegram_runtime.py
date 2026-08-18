@@ -141,6 +141,48 @@ def test_default_account_reader_uses_park_authoritative_adapter_and_external_con
     assert result["reconciliation_healthy"] is True
 
 
+@pytest.mark.parametrize(
+    ("runtime", "expected_unresolved"),
+    (
+        (
+            {
+                "actual_state": "running",
+                "stale_cycle": True,
+                "previous_runtime_unresolved": False,
+                "last_control_event": {"runtime_after": {"actual_state": "stopped", "desired_state": "stopped"}},
+            },
+            False,
+        ),
+        ({"actual_state": "running", "stale_cycle": False, "previous_runtime_unresolved": False}, True),
+    ),
+)
+def test_account_reader_distinguishes_proven_stale_legacy_record_from_unresolved_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime: dict, expected_unresolved: bool
+) -> None:
+    class Adapter:
+        output_root = tmp_path
+
+        def snapshot(self, _cycle_id):
+            return {"account": {"equity": 1000}, "orders": [], "positions": []}
+
+        def reconcile(self, _cycle_id):
+            return {"status": "ok", "issues": []}
+
+    monkeypatch.setattr(
+        "services.park_paper_runtime.build_park_authoritative_adapter",
+        lambda *_args, **_kwargs: SimpleNamespace(adapter=Adapter()),
+    )
+    monkeypatch.setattr(
+        "services.strategy_control_plane.StrategyControlPlane.runtime_state",
+        lambda _self, _cycle_id: runtime,
+    )
+
+    result = default_account_reader(tmp_path, "2026-08-18_DAY")
+
+    assert result["unresolved_runtime"] is expected_unresolved
+    assert result["legacy_runtime_stale_record"] is (not expected_unresolved)
+
+
 def test_router_passes_park_config_to_default_account_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[object] = []
 
