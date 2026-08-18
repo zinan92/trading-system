@@ -12,7 +12,22 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
-## 现在在哪里(2026-08-17)
+## 现在在哪里(2026-08-18)
+- #744 / PR #754 preserves the continuous Park Strategy Session/Revision across
+  the Beijing 09:00/21:00 Recording Window boundaries.  Recording Window
+  package close, retry, late amendment, and review failure are recording-only;
+  they do not cancel, flatten, stop, reverse, hand off, or change strategy
+  identity.  Incomplete facts gate only new exposure until a durable recovery
+  record exists; existing protective paths remain available.  The public
+  projection shows an active `in_progress` Recording Window before package
+  close, filters evidence by the active session/revision, and fails closed on
+  non-empty `execution_mutations`.  Merged on exact
+  `main@fe1cdc168aa8b4c9681909bac2f966bf2e88466e` (tree
+  `219a87973c6f7f0684c0e4bdfd5a9246c6cbe18f`) after 188 focused tests,
+  `git diff --check`, gitleaks, and parallel standards/spec review passed.
+  Exact-SHA Paper deployment is the next runtime verification step; no live,
+  exchange-key, Cloud order, or position mutation was performed by this merge.
+  Next frontier: #743 / #745 / #746.
 - #742 / PR #751 adds the authoritative `park-current-strategy-summary-v1`
   projection and a top-level Current Strategy card. Exact `main@ebdbdd7aeb5ee805870d2a996bfa7fef1d0a5b5d`
   is deployed to Goldbot Paper with source tree
