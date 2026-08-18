@@ -23,6 +23,7 @@ from services.park_paper_runtime import (
     ParkPaperRuntime,
     ParkPaperRuntimeError,
     build_park_authoritative_adapter,
+    prepare_park_paper_config,
 )
 from services.park_safety_evidence import build_park_safety_evidence
 from services.park_telegram_runtime import (
@@ -65,6 +66,12 @@ def main(argv: list[str] | None = None) -> int:
             return 79
         config = json.loads(Path(args.park_config).read_text(encoding="utf-8"))
         config = load_effective_park_config(output_root, config)
+        try:
+            config = prepare_park_paper_config(config)
+        except Exception:
+            # The read-only router will persist the typed contract blocker;
+            # never invent an instrument or fee model at the process boundary.
+            pass
         transport = TelegramBotTransport(chat_id=args.chat_id)
         intent_parser = CodexCliIntentParser(
             executable=os.getenv("TRADING_ORCHESTRATOR_CODEX_CLI", "/opt/homebrew/bin/codex"),

@@ -107,6 +107,61 @@ def _owned(artifact: Mapping[str, Any], session: str, revision: str, digest: str
     )
 
 
+def prepare_park_paper_config(
+    config: Mapping[str, Any],
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Resolve the explicit Park instrument/fee contract once per control pass.
+
+    Park's checked-in track contract intentionally does not copy exchange
+    metadata by hand.  When a deployment has not yet persisted
+    ``paper_execution``, fetch the trusted execution-venue instrument from the
+    loopback datafeed and pair it with the already-reviewed Paper fee rates.
+    The resulting payload is placed in the in-memory config so preflight and
+    the adapter share one digest; a missing or synthetic definition fails
+    closed in the caller.
+    """
+
+    settings = dict(config)
+    paper_execution = settings.get("paper_execution")
+    paper_execution = dict(paper_execution) if isinstance(paper_execution, Mapping) else {}
+    dualtrack_settings: dict[str, Any] | None = None
+    if not isinstance(paper_execution.get("instrument"), Mapping) or not isinstance(
+        paper_execution.get("paper_fee_model"), Mapping
+    ):
+        from services.dualtrack_config import dualtrack_config
+
+        dualtrack_settings = dualtrack_config()
+    if not isinstance(paper_execution.get("instrument"), Mapping):
+        shadow = dict((dualtrack_settings or {}).get("execution_shadow") or {})
+        nautilus = dict(shadow.get("nautilus") or {})
+        endpoint = str(
+            nautilus.get("instrument_endpoint")
+            or "http://127.0.0.1:8100/api/instruments/commodity/XAUUSDT"
+        )
+        source = str(nautilus.get("instrument_source") or "binance_usdm_futures")
+        from services.dualtrack_instrument_source import fetch_execution_instrument_definition
+
+        paper_execution["instrument"] = fetch_execution_instrument_definition(
+            endpoint=endpoint,
+            source=source,
+        )
+    if not isinstance(paper_execution.get("paper_fee_model"), Mapping):
+        observed = dict((dualtrack_settings or {}).get("paper_fee_model") or {})
+        paper_execution["paper_fee_model"] = {
+            "mode": "paper_contract",
+            "maker_fee_rate": observed.get("maker_fee_rate", "0"),
+            "taker_fee_rate": observed.get("taker_fee_rate", "0.000400"),
+            "funding_rate": "0",
+            "source": "park_paper_config",
+            "environment": "paper",
+            "real_money_eligible": False,
+        }
+    settings["paper_execution"] = paper_execution
+    return settings
+
+
 class ParkPaperRuntime:
     """Run one bounded, idempotent Paper tick for the active Park revision."""
 
@@ -1980,6 +2035,10 @@ def build_park_authoritative_adapter(
     environment = dict(os.environ if environ is None else environ)
     if settings.get("feature_enabled") is not True and not allow_disabled_read:
         raise ParkPaperRuntimeError("park_track_disabled", "Park Strategy Track is disabled")
+    try:
+        settings = prepare_park_paper_config(settings, environ=environment)
+    except Exception as exc:  # noqa: BLE001 - instrument/fee uncertainty blocks adapter construction.
+        raise ParkPaperRuntimeError("paper_contract_unavailable", type(exc).__name__) from exc
     if settings.get("runtime_mode") != "paper_only" or settings.get("control_plane") != "telegram":
         raise ParkPaperRuntimeError("park_contract_invalid", "Park runtime contract is not Paper-only Telegram-only")
     engine_settings = dict(settings.get("execution_engine") or {})
