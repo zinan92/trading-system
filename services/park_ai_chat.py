@@ -1044,7 +1044,10 @@ class ParkAiChatService:
     def _public_draft(draft: Mapping[str, Any] | None) -> dict[str, Any] | None:
         if not draft:
             return None
-        return {key: draft.get(key) for key in ("draft_id", "strategy_session_id", "strategy_revision_id", "source_text", "normalized", "plan", "plan_digest", "provider", "requires_disposition", "disposition", "expires_at", "confirmable")}
+        payload = {key: draft.get(key) for key in ("draft_id", "strategy_session_id", "strategy_revision_id", "source_text", "normalized", "plan", "plan_digest", "provider", "requires_disposition", "disposition", "expires_at", "confirmable")}
+        plan = draft.get("plan") if isinstance(draft.get("plan"), Mapping) else {}
+        payload["risk_digest"] = _digest(dict(plan).get("risk") or {})
+        return payload
 
     @staticmethod
     def _draft_message(plan: Mapping[str, Any], draft: Mapping[str, Any]) -> str:

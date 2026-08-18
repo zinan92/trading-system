@@ -466,6 +466,75 @@ def test_gridmind_yesterday_pnl_renders_negative_zero_and_partial_evidence(
         browser.close()
 
 
+def test_gridmind_park_draft_snapshot_shows_risk_digest_and_exact_grid_geometry() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    model = _read_model("accepted", full_orders=True)
+    normalized = {
+        "direction": "neutral",
+        "strategy_type": "grid",
+        "lower_price_boundary": 3800.0,
+        "upper_price_boundary": 4000.0,
+        "order_count": 19,
+    }
+    risk = {
+        "maximum_notional": 10_000.0,
+        "theoretical_max_loss": 131.57,
+        "effective_leverage": 10.0,
+        "grid_entry_range": {"lower": 3810.0, "upper": 3990.0},
+        "grid_spacing": 10.0,
+        "order_count": 19,
+        "grid_rung_prices": [3810.0, 3820.0, 3990.0],
+        "hard_stop": {"long": 3800.0, "short": 4000.0},
+        "local_stop_authorized": False,
+        "grid_rungs": [
+            {"price": 3810.0, "take_profit": 3820.0, "side": "buy"},
+            {"price": 3990.0, "take_profit": 3980.0, "side": "sell"},
+        ],
+    }
+    draft = {
+        "draft_id": "draft-browser-grid",
+        "plan_digest": "sha256:" + "a" * 64,
+        "risk_digest": "sha256:" + "b" * 64,
+        "normalized": normalized,
+        "plan": {"normalized_input": normalized, "market": {"price": 3900.0}, "risk": risk},
+        "confirmable": True,
+    }
+
+    def fulfill_read_model(route) -> None:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(model, ensure_ascii=False))
+
+    def fulfill_market(route) -> None:
+        timeframe = route.request.url.split("timeframe=", 1)[1].split("&", 1)[0]
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({**model["market"], "timeframe": timeframe, "bars": []}))
+
+    def fulfill_ai(route) -> None:
+        if route.request.method == "POST":
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "draft_created", "draft": draft, "confirmable": True, "message": "Draft ready"}))
+        else:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"pending_draft": None, "snapshots": []}))
+
+    with _static_server() as origin, playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.chromium.launch(headless=True, channel="chrome")
+        except Exception as exc:  # pragma: no cover - depends on local browser install
+            pytest.skip(f"Playwright Chromium unavailable: {exc}")
+        page = browser.new_page(viewport={"width": 1680, "height": 1050})
+        page.route("**/api/trading-system/read-model", fulfill_read_model)
+        page.route("**/api/dualtrack/market/bars?*", fulfill_market)
+        page.route("**/api/park-paper/ai-chat", fulfill_ai)
+        page.goto(f"{origin}/dashboard-gridmind.html", wait_until="load")
+        page.locator("#parkAiChatInput").fill("中性网格 3800~4000 间距10 最大10倍杠杆")
+        page.locator("#parkAiSend").click()
+        page.locator("#parkAiSnapshot").wait_for(state="visible")
+        copy = page.locator("#parkAiSnapshot").inner_text()
+        assert "Risk Digest" in copy and "sha256:" + "b" * 64 in copy
+        assert "Grid Entry Range" in copy and "3810" in copy and "3990" in copy
+        assert "Grid Hard Stop" in copy and "3800" in copy and "4000" in copy
+        assert "TP geometry" in copy and "3810" in copy and "3990" in copy
+        assert "Local stop" in copy and "absent by default" in copy
+        browser.close()
+
+
 def test_gridmind_surfaces_legacy_exposure_as_a_visible_migration_blocker() -> None:
     playwright = pytest.importorskip("playwright.sync_api")
     model = _read_model("accepted", full_orders=True, open_trade=True)
