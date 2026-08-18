@@ -165,12 +165,24 @@ class ParkPaperRuntime:
         pending_reverse = self._pending_reverse_request()
         if pending_reverse:
             with production_mutation_lock(self.output_root):
-                return self._process_reverse_request(
-                    pending_reverse,
-                    active=active,
+                latest_active = self.identity.active_session()
+                latest_pending = self._pending_reverse_request()
+                if latest_pending:
+                    return self._process_reverse_request(
+                        latest_pending,
+                        active=latest_active,
+                        observed_at=observed_at,
+                        recording_failures=recording_failures,
+                        recording_blocker=recording_blocker,
+                    )
+                latest_blocked = self._blocked_reverse_for_active(latest_active)
+                return self._blocked(
+                    "reverse_transition_blocked",
+                    str(latest_blocked.get("detail") if latest_blocked else "Reverse state changed while waiting for the mutation lock"),
+                    session=str((latest_active or {}).get("strategy_session_id") or ""),
+                    revision=str((latest_active or {}).get("strategy_revision_id") or ""),
+                    digest=str((latest_active or {}).get("plan_digest") or ""),
                     observed_at=observed_at,
-                    recording_failures=recording_failures,
-                    recording_blocker=recording_blocker,
                 )
         blocked_reverse = self._blocked_reverse_for_active(active)
         if blocked_reverse:
@@ -289,6 +301,16 @@ class ParkPaperRuntime:
                     observed_at=observed_at,
                     recording_failures=recording_failures,
                     recording_blocker=recording_blocker,
+                )
+            latest_blocked_reverse = self._blocked_reverse_for_active(latest_active)
+            if latest_blocked_reverse:
+                return self._blocked(
+                    "reverse_transition_blocked",
+                    str(latest_blocked_reverse.get("detail") or "previous Reverse cleanup is blocked; await Park instruction"),
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    observed_at=observed_at,
                 )
             if not latest_active or any(
                 str(latest_active.get(key) or "") != expected
@@ -952,6 +974,28 @@ class ParkPaperRuntime:
             None,
         )
 
+    def _account_wide_foreign_exposure(self, session: str, revision: str, digest: str) -> list[dict[str, Any]]:
+        root = getattr(self.adapter, "output_root", None)
+        if root is None:
+            return []
+        snapshot_dir = Path(root) / "dualtrack" / "nautilus_authoritative" / "snapshots"
+        foreign: list[dict[str, Any]] = []
+        for path in sorted(snapshot_dir.glob("*.json")):
+            try:
+                rows = json.loads(path.read_text(encoding="utf-8"))
+                snapshot = rows[-1] if isinstance(rows, list) and rows else rows
+                if not isinstance(snapshot, Mapping):
+                    continue
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            for row in snapshot.get("orders") or []:
+                if str(row.get("state") or "").lower() == "accepted" and not self._order_owned(row, session, revision, digest):
+                    foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "order", "id": row.get("order_id")})
+            for row in snapshot.get("positions") or []:
+                if str(row.get("status") or "").lower() == "open" and not self._position_owned(row, session, revision, digest):
+                    foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "position", "id": row.get("position_id")})
+        return foreign
+
     def _process_reverse_request(
         self,
         request: Mapping[str, Any],
@@ -1004,6 +1048,8 @@ class ParkPaperRuntime:
         ]
         if foreign_orders or foreign_positions:
             return self._reverse_blocked(request, "reverse_foreign_exposure", "非旧策略的挂单或持仓仍存在；新 revision 保持 inactive。", observed_at=observed_at)
+        if self._account_wide_foreign_exposure(old_session, old_revision, old_digest):
+            return self._reverse_blocked(request, "reverse_foreign_exposure", "其他 Paper session/cycle 仍有挂单或持仓；新 revision 保持 inactive。", observed_at=observed_at)
         drift = self._reverse_plan_drift(new_plan, market=market, account=snapshot.get("account") or {})
         if drift:
             return self._reverse_blocked(request, "reverse_plan_drift", drift, observed_at=observed_at)
