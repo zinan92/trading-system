@@ -164,12 +164,35 @@ class ParkPaperRuntime:
         active = self.identity.active_session()
         pending_reverse = self._pending_reverse_request()
         if pending_reverse:
-            return self._process_reverse_request(
-                pending_reverse,
-                active=active,
+            with production_mutation_lock(self.output_root):
+                latest_active = self.identity.active_session()
+                latest_pending = self._pending_reverse_request()
+                if latest_pending:
+                    return self._process_reverse_request(
+                        latest_pending,
+                        active=latest_active,
+                        observed_at=observed_at,
+                        recording_failures=recording_failures,
+                        recording_blocker=recording_blocker,
+                    )
+                latest_blocked = self._blocked_reverse_for_active(latest_active)
+                return self._blocked(
+                    "reverse_transition_blocked",
+                    str(latest_blocked.get("detail") if latest_blocked else "Reverse state changed while waiting for the mutation lock"),
+                    session=str((latest_active or {}).get("strategy_session_id") or ""),
+                    revision=str((latest_active or {}).get("strategy_revision_id") or ""),
+                    digest=str((latest_active or {}).get("plan_digest") or ""),
+                    observed_at=observed_at,
+                )
+        blocked_reverse = self._blocked_reverse_for_active(active)
+        if blocked_reverse:
+            return self._blocked(
+                "reverse_transition_blocked",
+                str(blocked_reverse.get("detail") or "previous Reverse cleanup is blocked; await Park instruction"),
+                session=str(active.get("strategy_session_id") or "") if active else "",
+                revision=str(active.get("strategy_revision_id") or "") if active else "",
+                digest=str(active.get("plan_digest") or "") if active else "",
                 observed_at=observed_at,
-                recording_failures=recording_failures,
-                recording_blocker=recording_blocker,
             )
         if not active:
             return self._result(
@@ -269,6 +292,42 @@ class ParkPaperRuntime:
             )
         cycle_id = park_paper_namespace(session)
         with production_mutation_lock(self.output_root):
+            latest_active = self.identity.active_session()
+            latest_pending_reverse = self._pending_reverse_request()
+            if latest_pending_reverse:
+                return self._process_reverse_request(
+                    latest_pending_reverse,
+                    active=latest_active,
+                    observed_at=observed_at,
+                    recording_failures=recording_failures,
+                    recording_blocker=recording_blocker,
+                )
+            latest_blocked_reverse = self._blocked_reverse_for_active(latest_active)
+            if latest_blocked_reverse:
+                return self._blocked(
+                    "reverse_transition_blocked",
+                    str(latest_blocked_reverse.get("detail") or "previous Reverse cleanup is blocked; await Park instruction"),
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    observed_at=observed_at,
+                )
+            if not latest_active or any(
+                str(latest_active.get(key) or "") != expected
+                for key, expected in (
+                    ("strategy_session_id", session),
+                    ("strategy_revision_id", revision),
+                    ("plan_digest", digest),
+                )
+            ):
+                return self._blocked(
+                    "stale_strategy_identity",
+                    "strategy identity changed while waiting for the production mutation lock",
+                    session=session,
+                    revision=revision,
+                    digest=digest,
+                    observed_at=observed_at,
+                )
             try:
                 snapshot = dict(
                     self.adapter.snapshot(
@@ -900,6 +959,49 @@ class ParkPaperRuntime:
             None,
         )
 
+    def _blocked_reverse_for_active(self, active: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not active:
+            return None
+        session = str(active.get("strategy_session_id") or "")
+        revision = str(active.get("strategy_revision_id") or "")
+        return next(
+            (
+                row for row in reversed(_read_jsonl(self.output_root / "park_strategy" / "reverse_requests.jsonl"))
+                if row.get("status") == "blocked"
+                and str((row.get("old_strategy") or {}).get("strategy_session_id") or "") == session
+                and str((row.get("old_strategy") or {}).get("strategy_revision_id") or "") == revision
+            ),
+            None,
+        )
+
+    def _account_wide_foreign_exposure(self, session: str, revision: str, digest: str) -> list[dict[str, Any]]:
+        root = getattr(self.adapter, "output_root", None)
+        if root is None:
+            return []
+        snapshot_dir = Path(root) / "dualtrack" / "nautilus_authoritative" / "snapshots"
+        foreign: list[dict[str, Any]] = []
+        for path in sorted(snapshot_dir.glob("*.json")):
+            try:
+                rows = json.loads(path.read_text(encoding="utf-8"))
+                snapshot = rows[-1] if isinstance(rows, list) and rows else rows
+                if not isinstance(snapshot, Mapping):
+                    raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"snapshot is not an object: {path.name}")
+                orders = snapshot.get("orders")
+                positions = snapshot.get("positions")
+                if not isinstance(orders, list) or not isinstance(positions, list):
+                    raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"snapshot shape is incomplete: {path.name}")
+                if any(not isinstance(row, Mapping) for row in [*orders, *positions]):
+                    raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"snapshot rows are malformed: {path.name}")
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                raise ParkPaperRuntimeError("reverse_account_wide_evidence_invalid", f"cannot read authoritative snapshot: {path.name}") from exc
+            for row in orders:
+                if str(row.get("state") or "").lower() == "accepted" and not self._order_owned(row, session, revision, digest):
+                    foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "order", "id": row.get("order_id")})
+            for row in positions:
+                if str(row.get("status") or "").lower() == "open" and not self._position_owned(row, session, revision, digest):
+                    foreign.append({"cycle_id": snapshot.get("cycle_id"), "kind": "position", "id": row.get("position_id")})
+        return foreign
+
     def _process_reverse_request(
         self,
         request: Mapping[str, Any],
@@ -940,6 +1042,24 @@ class ParkPaperRuntime:
             return self._reverse_blocked(request, "reverse_state_unavailable", type(exc).__name__, observed_at=observed_at)
         if reconciliation.get("status") != "ok" or reconciliation.get("issues"):
             return self._reverse_blocked(request, "reverse_reconciliation_blocked", "旧策略对账未通过；未执行切换。", observed_at=observed_at)
+        foreign_orders = [
+            row for row in snapshot.get("orders") or []
+            if str(row.get("state") or "").lower() == "accepted"
+            and not self._order_owned(row, old_session, old_revision, old_digest)
+        ]
+        foreign_positions = [
+            row for row in snapshot.get("positions") or []
+            if str(row.get("status") or "").lower() == "open"
+            and not self._position_owned(row, old_session, old_revision, old_digest)
+        ]
+        if foreign_orders or foreign_positions:
+            return self._reverse_blocked(request, "reverse_foreign_exposure", "非旧策略的挂单或持仓仍存在；新 revision 保持 inactive。", observed_at=observed_at)
+        try:
+            account_wide_foreign = self._account_wide_foreign_exposure(old_session, old_revision, old_digest)
+        except ParkPaperRuntimeError as exc:
+            return self._reverse_blocked(request, exc.code, str(exc), observed_at=observed_at)
+        if account_wide_foreign:
+            return self._reverse_blocked(request, "reverse_foreign_exposure", "其他 Paper session/cycle 仍有挂单或持仓；新 revision 保持 inactive。", observed_at=observed_at)
         drift = self._reverse_plan_drift(new_plan, market=market, account=snapshot.get("account") or {})
         if drift:
             return self._reverse_blocked(request, "reverse_plan_drift", drift, observed_at=observed_at)
@@ -963,19 +1083,30 @@ class ParkPaperRuntime:
             gate=gate,
         )
         try:
-            accepted_ids = {
-                str(row.get("order_id") or "")
-                for row in snapshot.get("orders") or []
+            accepted_rows = [
+                row for row in snapshot.get("orders") or []
                 if str(row.get("state") or "").lower() == "accepted"
                 and self._order_owned(row, old_session, old_revision, old_digest)
+            ]
+            entry_ids = {
+                str(row.get("order_id") or "") for row in accepted_rows
+                if str(row.get("event") or "entry").lower() == "entry"
+            }
+            exit_ids = {
+                str(row.get("order_id") or "") for row in accepted_rows
+                if str(row.get("event") or "entry").lower() != "entry"
             }
             cancel = self.adapter.cancel_orders(
                 cycle_id,
-                order_ids=sorted(accepted_ids),
+                order_ids=sorted(entry_ids),
                 strategy_plan_id=old_digest,
                 ts=observed_at,
-                reason="park_reverse",
-            ) if accepted_ids else {"status": "idempotent", "cancelled_order_ids": []}
+                reason="park_reverse_entries",
+            ) if entry_ids else {"status": "idempotent", "cancelled_order_ids": []}
+            if entry_ids:
+                entry_cancel_event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at)
+                entry_cancel_event["event_id"] = _digest({"base_event_id": entry_cancel_event["event_id"], "entry_cancel": request.get("request_id")})
+                self.adapter.process_market_event(entry_cancel_event)
             exits: list[dict[str, Any]] = []
             for position in snapshot.get("positions") or []:
                 if str(position.get("status") or "").lower() == "open" and self._position_owned(position, old_session, old_revision, old_digest):
@@ -1005,7 +1136,41 @@ class ParkPaperRuntime:
                 row for row in final_snapshot.get("positions") or []
                 if str(row.get("status") or "").lower() == "open" and self._position_owned(row, old_session, old_revision, old_digest)
             ]
-            if remaining_orders or remaining_positions or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
+            all_remaining_orders = [
+                row for row in final_snapshot.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted"
+            ]
+            all_remaining_positions = [
+                row for row in final_snapshot.get("positions") or []
+                if str(row.get("status") or "").lower() == "open"
+            ]
+            if remaining_positions or all_remaining_positions or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
+                return self._reverse_blocked(request, "reverse_transition_blocked", "旧策略未能归零并通过对账；新策略保持 inactive。", observed_at=observed_at, session=old_session, revision=old_revision, digest=old_digest)
+            orphan_cancel = self.adapter.cancel_orders(
+                cycle_id,
+                order_ids=sorted(exit_ids),
+                strategy_plan_id=old_digest,
+                ts=observed_at,
+                reason="park_reverse_orphaned_exits",
+            ) if exit_ids else {"status": "idempotent", "cancelled_order_ids": []}
+            if exit_ids:
+                orphan_event = self._market_event(market, cycle_id=cycle_id, observed_at=observed_at)
+                orphan_event["event_id"] = _digest({"base_event_id": orphan_event["event_id"], "orphan_cancel": request.get("request_id")})
+                self.adapter.process_market_event(orphan_event)
+            cancel = {**cancel, "orphaned_exit_cancel": orphan_cancel}
+            final_snapshot = dict(self.adapter.snapshot(cycle_id, mark_price=current_price, mark_fresh=True, mark_source=str(market.get("source") or "")))
+            final_reconciliation = dict(self.adapter.reconcile(cycle_id))
+            remaining_orders = [
+                row for row in final_snapshot.get("orders") or []
+                if str(row.get("state") or "").lower() == "accepted" and self._order_owned(row, old_session, old_revision, old_digest)
+            ]
+            remaining_positions = [
+                row for row in final_snapshot.get("positions") or []
+                if str(row.get("status") or "").lower() == "open" and self._position_owned(row, old_session, old_revision, old_digest)
+            ]
+            all_remaining_orders = [row for row in final_snapshot.get("orders") or [] if str(row.get("state") or "").lower() == "accepted"]
+            all_remaining_positions = [row for row in final_snapshot.get("positions") or [] if str(row.get("status") or "").lower() == "open"]
+            if remaining_orders or remaining_positions or all_remaining_orders or all_remaining_positions or final_reconciliation.get("status") != "ok" or final_reconciliation.get("issues"):
                 return self._reverse_blocked(request, "reverse_transition_blocked", "旧策略未能归零并通过对账；新策略保持 inactive。", observed_at=observed_at, session=old_session, revision=old_revision, digest=old_digest)
             old_plan = self._plan_for_digest(old_digest) or {}
             lifecycle_ledger = ParkStrategyLifecycleLedger(self.output_root)
