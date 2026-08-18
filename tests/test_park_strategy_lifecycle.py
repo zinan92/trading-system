@@ -92,6 +92,27 @@ def test_boundary_plan_is_ordered_identity_bound_and_idempotent(tmp_path: Path) 
     assert len([row for row in ledger.rows() if row["event"] == "terminal_action_plan"]) == 1
 
 
+def test_sealed_revision_cannot_be_activated_again_with_same_identity(tmp_path: Path) -> None:
+    ledger = ParkStrategyLifecycleLedger(tmp_path / "outputs")
+    ledger.activate(_plan())
+    ledger.terminal_action_plan(
+        strategy_session_id="session-1",
+        strategy_revision_id="revision-1",
+        trigger="take_profit_price",
+        observed_price=4200.0,
+        trusted_market=True,
+        fresh_tick=True,
+    )
+
+    with pytest.raises(ParkStrategyLifecycleError, match="sealed strategy revision") as exc:
+        ledger.activate(_plan())
+
+    assert exc.value.code == "strategy_sealed"
+    next_revision = ledger.activate(_plan(strategy_session_id="session-2", strategy_revision_id="revision-2"))
+    assert next_revision["strategy_session_id"] == "session-2"
+    assert next_revision["strategy_revision_id"] == "revision-2"
+
+
 def test_boundary_requires_trusted_fresh_market_and_exact_active_identity(tmp_path: Path) -> None:
     ledger = ParkStrategyLifecycleLedger(tmp_path / "outputs")
     ledger.activate(_plan())

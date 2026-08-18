@@ -191,7 +191,13 @@ class ParkStrategyLifecycleLedger:
         if existing and existing.get("state") == "PAUSED":
             # A terminal revision is sealed and may be followed by a new
             # Park-confirmed revision; its immutable identity is not reused.
-            existing = None
+            if any(existing.get(key) != value for key, value in required.items()):
+                existing = None
+            else:
+                raise ParkStrategyLifecycleError(
+                    "strategy_sealed",
+                    "a sealed strategy revision cannot be activated again; create a new session and revision",
+                )
         if existing:
             assert_immutable_revision(existing, {**existing, **dict(plan), **required})
             return dict(existing)
