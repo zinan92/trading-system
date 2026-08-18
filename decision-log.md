@@ -15946,3 +15946,34 @@ auditable datafeed port; broker execution remains a separate port.
   exchange-key, Cloud order, or position mutation was performed; exact-SHA
   Paper deployment and natural-tick verification remain separate operational
   evidence.
+
+# 2026-08-18 — Execute repeatable Park Grid cycles and stop at Hard Stop (#747)
+
+## Decision
+
+- Every confirmed Grid rung carries an immutable line identity, generation, and
+  explicit re-arm authority through the Park Paper command.  The authoritative
+  replay may create the next generation only after a complete, reconciled target
+  fill for the same line; it preserves the original entry price, TP geometry,
+  quantity economics, ownership, and plan digest.
+- Partial, unverified, duplicate, stale-revision, cancelled, stopped, or
+  unreconciled evidence never re-arms.  A Hard Stop cancellation written after
+  a target also prevents a later replay pass from manufacturing another rung.
+- Grid upper/lower boundaries are true Hard Stops for Long, Short, and Neutral.
+  The terminal plan cancels remaining entries and sends stop exits only for
+  the exact session/revision/digest-owned positions, reconciles, persists the
+  boundary action plan, seals the revision, and notifies Park.  Recording
+  Windows remain irrelevant to this terminal decision.
+- A paused/sealed strategy session and revision are immutable.  Reusing the
+  same identity raises `strategy_sealed`; a next strategy must receive a new
+  session/revision identity and a new Park confirmation.
+
+## Verification
+
+- PR #766 merged as `main@520c4e278a1de90eaa7fcb605ff2465100d7bda6` (tree
+  `00b6a63444a941762528225d4fe71f01ce38b270`) after 72 focused Grid/Park/
+  Nautilus tests and 212 Park/Nautilus upstream tests passed; diff-check,
+  compileall, gitleaks, and focused spec/safety review passed.
+- This merge remains Paper-only.  No live, exchange-key, Cloud order, or
+  position mutation was performed; exact-SHA Paper deployment and natural-tick
+  verification remain separate operational evidence.
