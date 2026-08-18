@@ -24,6 +24,7 @@ from services.park_paper_runtime import (
 )
 from services.park_safety_evidence import build_park_safety_evidence
 from services.park_telegram_runtime import ParkTelegramRouter, ParkTelegramRuntimeError, ParkTelegramWorker
+from services.scheduler_ownership import SchedulerOwnershipGuard
 from services.telegram_bot_transport import TelegramBotTransport, TelegramBotTransportError
 
 
@@ -42,6 +43,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     output_root = Path(args.output_root)
     try:
+        ownership = SchedulerOwnershipGuard(output_root).verify()
+        if not ownership.get("ok"):
+            result = {
+                "schema_version": "park-control-v1",
+                "status": "blocked",
+                "code": ownership.get("blocker") or "scheduler_ownership_blocked",
+                "ownership": ownership,
+                "paper_only": True,
+            }
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 79
         config = json.loads(Path(args.park_config).read_text(encoding="utf-8"))
         transport = TelegramBotTransport(chat_id=args.chat_id)
         intent_parser = CodexCliIntentParser(
