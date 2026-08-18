@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -690,6 +691,44 @@ def test_direct_adapter_factory_is_default_deny_without_park_release_or_runtime(
         assert getattr(exc, "code", "") == "park_track_disabled"
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("disabled Park config must not build an adapter")
+
+
+def test_direct_adapter_factory_allows_disabled_read_without_attended_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Binding:
+        adapter = object()
+        authorize = lambda self, _cap: None
+        revoke = lambda self: None
+
+    def fake_builder(*_args, **kwargs):
+        seen["environ"] = dict(kwargs.get("environ") or {})
+        return Binding()
+
+    monkeypatch.setattr(
+        "services.park_paper_runtime.build_park_paper_preflight",
+        lambda *_args, **_kwargs: {"fee_model": {}, "config_digest": "sha256:preflight"},
+    )
+    monkeypatch.setattr(
+        "services.execution_plugin_composition.build_park_direct_paper_adapter",
+        fake_builder,
+    )
+    config = {
+        **_config(),
+        "feature_enabled": False,
+        "execution_engine": {"real_money_eligible": False},
+        "paper_execution": {},
+    }
+    binding = build_park_authoritative_adapter(
+        tmp_path,
+        config=config,
+        environ={"TRADING_ORCHESTRATOR_NAUTILUS_PYTHON": sys.executable},
+        allow_disabled_read=True,
+    )
+    assert binding.adapter is not None
+    assert seen["environ"]["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED"] == "1"
 
 
 @pytest.mark.parametrize(

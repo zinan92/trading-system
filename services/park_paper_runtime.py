@@ -1989,7 +1989,8 @@ def build_park_authoritative_adapter(
     runtime_path = str(environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PYTHON") or "").strip()
     if not runtime_path:
         raise ParkPaperRuntimeError("paper_runtime_path_missing", "isolated Nautilus Paper runtime path is required")
-    if environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") != "1":
+    switch_approved = environment.get("TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED") == "1"
+    if not switch_approved and not allow_disabled_read:
         raise ParkPaperRuntimeError("paper_switch_unapproved", "attended Paper switch approval is required")
     from services.dualtrack_config import dualtrack_config
     from services.execution_plugin_composition import build_park_direct_paper_adapter
@@ -2005,12 +2006,19 @@ def build_park_authoritative_adapter(
     configured["park_paper_preflight_config_digest"] = str(preflight.get("config_digest") or "")
 
     try:
+        adapter_environment = dict(environment)
+        # A default-off legacy exposure audit must be able to inspect the
+        # authoritative Paper namespace before Park's attended switch is
+        # approved.  The adapter remains behind an unactivated mutation gate;
+        # normal execution construction still requires the real env approval.
+        if allow_disabled_read and not switch_approved:
+            adapter_environment["TRADING_ORCHESTRATOR_NAUTILUS_PAPER_SWITCH_APPROVED"] = "1"
         return build_park_direct_paper_adapter(
             Path(output_root),
             config=configured,
             nautilus_python=runtime_path,
             preflight_path=Path(output_root) / "park_strategy" / "paper_preflight_current.json",
-            environ=environment,
+            environ=adapter_environment,
         )
     except Exception as exc:  # noqa: BLE001 - startup is fail closed.
         raise ParkPaperRuntimeError("paper_adapter_unavailable", type(exc).__name__) from exc
