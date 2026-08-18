@@ -136,11 +136,37 @@ def _recording_projection(
             row
             for row in reversed(blockers)
             if str(row.get("code") or "").startswith("recording_")
+            and str(row.get("code") or "") != "recording_facts_recovered"
             and matches(row)
         ),
         {},
     )
     package_review_status = str(package.get("review_status") or "complete") if package else None
+    blocker_windows = {
+        str(item.get("record_window_id") or "")
+        for item in blocker.get("recording_windows") or []
+        if isinstance(item, Mapping)
+    }
+    resolved_windows = {
+        str(row.get("record_window_id") or "")
+        for row in matching_packages
+        if row.get("status") == "complete"
+        and str(row.get("review_status") or "complete") == "complete"
+    }
+    if blocker and blocker.get("code") == "recording_facts_blocked" and blocker_windows:
+        recovered_windows = {
+            window_id
+            for window_id in blocker_windows
+            if any(
+                str(row.get("record_window_id") or "") == window_id
+                and matches(row)
+                and str(row.get("recorded_at") or "") > str(blocker.get("recorded_at") or "")
+                for row in blockers
+                if row.get("code") == "recording_facts_recovered"
+            )
+        }
+        if blocker_windows.issubset(resolved_windows | recovered_windows):
+            blocker = {}
     if package.get("status") == "complete" and package_review_status == "complete" and blocker:
         blocked_windows = {
             str(row.get("record_window_id") or "")
@@ -165,6 +191,9 @@ def _recording_projection(
         }
     package_status = str(package.get("status") or "") or None
     blocker_code = str(blocker.get("code") or "") or None
+    execution_mutations = list(package.get("execution_mutations") or [])
+    if execution_mutations:
+        blocker_code = blocker_code or "recording_execution_mutation_detected"
     if package_status == "complete" and package_review_status != "complete":
         blocker_code = blocker_code or "recording_review_pending"
     if blocker_code or package_status == "blocked_incomplete":
@@ -187,7 +216,7 @@ def _recording_projection(
         "missing_categories": list(package.get("missing_categories") or []),
         "strategy_open": package.get("strategy_open") if package else True if latest_manifest else None,
         "positions_open": package.get("positions_open"),
-        "execution_mutations": list(package.get("execution_mutations") or []),
+        "execution_mutations": execution_mutations,
         "next_action": "notify_park_and_wait" if blocker_code else package.get("next_action") or "continue_recording_window" if latest_manifest else None,
         "blocker_code": blocker_code,
     }

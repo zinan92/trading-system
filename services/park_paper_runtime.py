@@ -171,6 +171,13 @@ class ParkPaperRuntime:
         session = _text(active.get("strategy_session_id"), "strategy_session_id")
         revision = _text(active.get("strategy_revision_id"), "strategy_revision_id")
         digest = _text(active.get("plan_digest"), "plan_digest")
+        facts_gate_failure, facts_gate_blocker = self._recording_facts_gate(
+            active,
+            observed_at=observed_at,
+        )
+        if facts_gate_failure:
+            recording_failures.append(facts_gate_failure)
+            recording_blocker = recording_blocker or facts_gate_blocker
         plan = self._plan_for_digest(digest)
         if plan is None:
             return self._blocked(
@@ -1021,6 +1028,117 @@ class ParkPaperRuntime:
             result.update({command_id, f"POS-{command_id}"})
         return result
 
+    def _recording_facts_gate(
+        self,
+        active: Mapping[str, Any],
+        *,
+        observed_at: str,
+    ) -> tuple[dict[str, str] | None, dict[str, Any] | None]:
+        """Return an unresolved current-window facts failure that gates new entries."""
+
+        session = str(active.get("strategy_session_id") or "")
+        revision = str(active.get("strategy_revision_id") or "")
+        if not session or not revision:
+            return None, None
+        window_id = str(recording_window(observed_at)["record_window_id"])
+        try:
+            rows = _read_jsonl(self.blocker_path)
+        except Exception as exc:  # noqa: BLE001 - unknown evidence remains fail-closed.
+            failure = {
+                "record_window_id": window_id,
+                "error_type": type(exc).__name__,
+                "detail": str(exc)[:300],
+            }
+            return failure, None
+        blocked = [
+            row
+            for row in rows
+            if row.get("code") == "recording_facts_blocked"
+            and str(row.get("strategy_session_id") or "") == session
+            and str(row.get("strategy_revision_id") or "") == revision
+            and any(
+                str(item.get("record_window_id") or "") == window_id
+                for item in row.get("recording_windows") or []
+                if isinstance(item, Mapping)
+            )
+        ]
+        if not blocked:
+            return None, None
+        recoveries = [
+            row
+            for row in rows
+            if row.get("code") == "recording_facts_recovered"
+            and str(row.get("strategy_session_id") or "") == session
+            and str(row.get("strategy_revision_id") or "") == revision
+            and str(row.get("record_window_id") or "") == window_id
+        ]
+        latest_blocker = blocked[-1]
+        if recoveries and recoveries[-1].get("recorded_at", "") > latest_blocker.get("recorded_at", ""):
+            return None, None
+        failure = {
+            "record_window_id": window_id,
+            "error_type": "recording_facts_blocked",
+            "detail": str(latest_blocker.get("detail") or "recording facts are unresolved")[:300],
+        }
+        return failure, dict(latest_blocker)
+
+    def _record_recording_recovery_if_needed(
+        self,
+        active: Mapping[str, Any],
+        *,
+        observed_at: str,
+    ) -> None:
+        session = str(active.get("strategy_session_id") or "")
+        revision = str(active.get("strategy_revision_id") or "")
+        if not session or not revision:
+            return
+        window_id = str(recording_window(observed_at)["record_window_id"])
+        try:
+            rows = _read_jsonl(self.blocker_path)
+        except Exception:
+            return
+        blocked = [
+            row for row in rows
+            if row.get("code") == "recording_facts_blocked"
+            and str(row.get("strategy_session_id") or "") == session
+            and str(row.get("strategy_revision_id") or "") == revision
+            and any(
+                str(item.get("record_window_id") or "") == window_id
+                for item in row.get("recording_windows") or []
+                if isinstance(item, Mapping)
+            )
+        ]
+        recoveries = [
+            row for row in rows
+            if row.get("code") == "recording_facts_recovered"
+            and str(row.get("strategy_session_id") or "") == session
+            and str(row.get("strategy_revision_id") or "") == revision
+            and str(row.get("record_window_id") or "") == window_id
+        ]
+        if blocked and (
+            not recoveries
+            or recoveries[-1].get("recorded_at", "") <= blocked[-1].get("recorded_at", "")
+        ):
+            try:
+                _append_jsonl(
+                    self.blocker_path,
+                    {
+                        "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+                        "event": "recording_recovered",
+                        "code": "recording_facts_recovered",
+                        "recorded_at": observed_at,
+                        "record_window_id": window_id,
+                        "strategy_session_id": session,
+                        "strategy_revision_id": revision,
+                        "paper_only": True,
+                    },
+                )
+            except Exception:
+                # The successful facts write is still retained. If recovery
+                # journaling is unavailable, the next tick remains gated by
+                # the unresolved blocker rather than opening new exposure.
+                return
+
     def _record_window_facts_safely(
         self,
         active: Mapping[str, Any],
@@ -1059,6 +1177,7 @@ class ParkPaperRuntime:
                 blocker_code="recording_facts_blocked",
             )
             return failure, blocker
+        self._record_recording_recovery_if_needed(active, observed_at=observed_at)
         return None, None
 
     def _record_window_facts(

@@ -495,6 +495,9 @@ def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identi
     after_window = runtime.run_once()
     assert after_window["status"] == "active"
     assert ParkStrategyIdentityJournal(output).active_session()["strategy_session_id"] == active_before["strategy_session_id"]
+    active_after = ParkStrategyIdentityJournal(output).active_session()
+    assert active_after["strategy_revision_id"] == active_before["strategy_revision_id"]
+    assert active_after["plan_digest"] == active_before["plan_digest"]
     assert adapter.cancel_calls == []
     assert adapter.submit_calls and len(adapter.submit_calls) == 1
     execution_events = [
@@ -576,6 +579,44 @@ def test_recording_package_failure_blocks_evidence_without_execution_mutation(
     blockers = (output / "park_strategy" / "runtime_blockers.jsonl").read_text(encoding="utf-8")
     assert "recording_package_blocked" in blockers
     assert any(row.get("message_type") == "park_blocker" for row in runtime.telegram.outbox_rows())
+
+
+def test_recording_facts_failure_gates_new_entries_until_recovered(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "outputs"
+    market = {
+        "price": 4300.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-provider",
+        "observed_at": "2026-08-14T10:00:00+00:00",
+        "symbol": "GOLD",
+    }
+    router = _router(output, market)
+    adapter = FakePaperAdapter()
+    runtime = _runtime(output, adapter, market)
+    proposal = router.handle_update(_update(21, "short DCA 10x 4444~4200"))
+    router.handle_update(_update(22, f"confirm {proposal['proposal']['plan_digest']}"))
+    original_record_window_facts = runtime._record_window_facts
+
+    def fail_facts(*_args, **_kwargs):
+        raise ParkRecordingError("facts_write_failed", "test facts failure")
+
+    monkeypatch.setattr(runtime, "_record_window_facts", fail_facts)
+    first = runtime.run_once()
+    assert first["status"] == "active"
+    assert first["recording_blocker"]["code"] == "recording_facts_blocked"
+    submitted_count = len(adapter.submit_calls)
+
+    monkeypatch.setattr(runtime, "_record_window_facts", original_record_window_facts)
+    second = runtime.run_once()
+    assert second["status"] == "active"
+    assert second["next_action"] == "retry_recording_package"
+    assert second["submitted"] == []
+    assert len(adapter.submit_calls) == submitted_count
 
 
 def test_runtime_retries_blocked_recording_after_late_event_without_mutation(
