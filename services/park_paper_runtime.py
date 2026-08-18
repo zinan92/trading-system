@@ -150,22 +150,23 @@ class ParkPaperRuntime:
     def run_once(self) -> dict[str, Any]:
         observed_at = self.now()
         recording_failures = self._close_due_recording_packages(observed_at)
+        recording_blocker = None
         if recording_failures:
-            active = self.identity.active_session() or {}
-            return self._blocked(
-                "recording_package_blocked",
-                "; ".join(
-                    f"{row['record_window_id']}: {row['detail']}"
-                    for row in recording_failures
-                ),
+            active_for_recording = self.identity.active_session() or {}
+            recording_blocker = self._record_recording_blocker(
+                recording_failures,
                 observed_at=observed_at,
-                strategy_session_id=active.get("strategy_session_id"),
-                strategy_revision_id=active.get("strategy_revision_id"),
-                recording_windows=recording_failures,
+                strategy_session_id=active_for_recording.get("strategy_session_id"),
+                strategy_revision_id=active_for_recording.get("strategy_revision_id"),
             )
         active = self.identity.active_session()
         if not active:
-            return self._result("idle", observed_at=observed_at, next_action="await_new_park_strategy")
+            return self._result(
+                "idle",
+                observed_at=observed_at,
+                next_action="retry_recording_package" if recording_failures else "await_new_park_strategy",
+                recording_failures=recording_failures,
+            )
         session = _text(active.get("strategy_session_id"), "strategy_session_id")
         revision = _text(active.get("strategy_revision_id"), "strategy_revision_id")
         digest = _text(active.get("plan_digest"), "plan_digest")
@@ -301,7 +302,7 @@ class ParkPaperRuntime:
                 )
                 submitted = (
                     []
-                    if pre_terminal and not has_prior_entries
+                    if recording_failures or (pre_terminal and not has_prior_entries)
                     else self._submit_entries_if_needed(
                         plan=plan,
                         confirmation=confirmation,
@@ -387,7 +388,9 @@ class ParkPaperRuntime:
                     snapshot=snapshot,
                     reconciliation=reconciliation,
                     market_read_ms=market_elapsed_ms,
-                    next_action="continue_trusted_fresh_ticks",
+                    next_action="retry_recording_package" if recording_failures else "continue_trusted_fresh_ticks",
+                    recording_failures=recording_failures,
+                    recording_blocker=recording_blocker,
                 )
                 self._revoke_adapter_mutation()
             return result
@@ -1071,7 +1074,10 @@ class ParkPaperRuntime:
             return []
         failures: list[dict[str, str]] = []
         manifests = [row for row in self.recording.events() if row.get("event") == "manifest_started"]
-        packages = {str(row.get("record_window_id")) for row in self.recording.packages()}
+        package_status_by_window = {
+            str(row.get("record_window_id")): str(row.get("status") or "")
+            for row in self.recording.packages()
+        }
         manifests_by_window: dict[str, list[dict[str, Any]]] = {}
         for manifest in manifests:
             window_id = str(manifest.get("record_window_id") or "")
@@ -1083,7 +1089,7 @@ class ParkPaperRuntime:
             str(active.get("strategy_revision_id") or ""),
         ) if active else ("", "")
         for window_id, window_manifests in manifests_by_window.items():
-            if window_id in packages:
+            if package_status_by_window.get(window_id) == "complete":
                 continue
             try:
                 ends = datetime.fromisoformat(
@@ -1173,6 +1179,41 @@ class ParkPaperRuntime:
             binding=binding,
         )
         return {"schema_version": PARK_PAPER_RUNTIME_SCHEMA, "status": "blocked", **row}
+
+    def _record_recording_blocker(
+        self,
+        failures: list[dict[str, str]],
+        *,
+        observed_at: str,
+        strategy_session_id: str | None,
+        strategy_revision_id: str | None,
+    ) -> dict[str, Any]:
+        row = {
+            "schema_version": PARK_PAPER_RUNTIME_SCHEMA,
+            "event": "recording_blocked",
+            "code": "recording_package_blocked",
+            "recorded_at": observed_at,
+            "strategy_session_id": strategy_session_id,
+            "strategy_revision_id": strategy_revision_id,
+            "recording_windows": failures,
+            "paper_only": True,
+            "next_action": "retry_recording_package",
+        }
+        _append_jsonl(self.blocker_path, row)
+        binding = (
+            {"strategy_session_id": strategy_session_id, "strategy_revision_id": strategy_revision_id}
+            if strategy_session_id and strategy_revision_id
+            else None
+        )
+        for failure in failures:
+            window_id = str(failure.get("record_window_id") or "unknown")
+            self.telegram.queue_outbound(
+                idempotency_key=f"park-recording-blocker:{window_id}:{failure.get('error_type')}",
+                message_type="park_blocker",
+                text=f"Park Paper recording blocked: {window_id}; next_action=retry_recording_package",
+                binding=binding,
+            )
+        return dict(row)
 
     def _grant_adapter_mutation(
         self,

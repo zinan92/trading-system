@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
+import pytest
+
 from services.park_paper_runtime import ParkPaperRuntime, build_park_authoritative_adapter
 from services.park_recording_track import ParkRecordingError, REQUIRED_CATEGORIES
 from services.park_strategy_plan import normalize_park_input
@@ -431,7 +433,19 @@ def test_direct_adapter_factory_is_default_deny_without_park_release_or_runtime(
         raise AssertionError("disabled Park config must not build an adapter")
 
 
-def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identity(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("before", "after", "record_window_id"),
+    (
+        ("2026-08-14T08:59:00+08:00", "2026-08-14T09:01:00+08:00", "2026-08-13_NIGHT"),
+        ("2026-08-14T20:59:00+08:00", "2026-08-14T21:01:00+08:00", "2026-08-14_DAY"),
+    ),
+)
+def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identity(
+    tmp_path: Path,
+    before: str,
+    after: str,
+    record_window_id: str,
+) -> None:
     output = tmp_path / "outputs"
     market = {
         "price": 4300.0,
@@ -439,10 +453,10 @@ def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identi
         "fresh": True,
         "source": "paper-feed",
         "provider": "paper-provider",
-        "observed_at": "2026-08-14T12:59:00+00:00",
+        "observed_at": before,
         "symbol": "GOLD",
     }
-    now_ref = {"value": "2026-08-14T12:59:00+00:00"}
+    now_ref = {"value": before}
     router = ParkTelegramRouter(
         output,
         park_user_id="park-user",
@@ -475,14 +489,14 @@ def test_recording_window_boundary_only_closes_package_and_keeps_strategy_identi
     assert runtime.run_once()["status"] == "active"
     active_before = ParkStrategyIdentityJournal(output).active_session()
 
-    now_ref["value"] = "2026-08-14T13:01:00+00:00"
+    now_ref["value"] = after
     market.update({"observed_at": now_ref["value"]})
     after_window = runtime.run_once()
     assert after_window["status"] == "active"
     assert ParkStrategyIdentityJournal(output).active_session()["strategy_session_id"] == active_before["strategy_session_id"]
     assert adapter.cancel_calls == []
     assert adapter.submit_calls and len(adapter.submit_calls) == 1
-    assert any(row.get("record_window_id") == "2026-08-14_DAY" for row in runtime.recording.packages())
+    assert any(row.get("record_window_id") == record_window_id for row in runtime.recording.packages())
 
 
 def test_recording_package_failure_blocks_evidence_without_execution_mutation(
@@ -543,8 +557,9 @@ def test_recording_package_failure_blocks_evidence_without_execution_mutation(
 
     result = runtime.run_once()
 
-    assert result["status"] == "blocked"
-    assert result["code"] == "recording_package_blocked"
+    assert result["status"] == "active"
+    assert result["next_action"] == "retry_recording_package"
+    assert result["recording_blocker"]["code"] == "recording_package_blocked"
     assert len(adapter.submit_calls) == submit_count
     assert len(adapter.cancel_calls) == cancel_count
     assert ParkStrategyIdentityJournal(output).active_session() == active_before

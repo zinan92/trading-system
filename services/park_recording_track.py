@@ -212,12 +212,18 @@ class ParkRecordingTrack:
         session_ids = [item[0] for item in identities]
         revision_ids = [item[1] for item in identities]
         existing = next((row for row in self.packages() if row.get("record_window_id") == window), None)
-        if existing:
+        if existing and existing.get("status") == "complete":
             existing_pairs = set(zip(existing.get("strategy_session_ids") or [], existing.get("strategy_revision_ids") or []))
             if set(identities).issubset(existing_pairs):
                 return dict(existing)
         categories = {str(row.get("category")) for row in window_events if row.get("event") in {"fact", "late_amendment"}}
         missing = sorted(set(REQUIRED_CATEGORIES) - categories)
+        if existing and existing.get("status") == "blocked_incomplete":
+            if (
+                int(existing.get("evidence_count") or 0) == len(window_events)
+                and list(existing.get("missing_categories") or []) == missing
+            ):
+                return dict(existing)
         package = {
             "schema_version": PARK_RECORDING_SCHEMA,
             "event": "package_amended" if existing else "package_closed",
@@ -265,6 +271,8 @@ class ParkRecordingTrack:
             )
             session_ids = [item[0] for item in identities]
             revision_ids = [item[1] for item in identities]
+            categories = {str(event.get("category")) for event in window_events if event.get("event") in {"fact", "late_amendment"}}
+            missing = sorted(set(REQUIRED_CATEGORIES) - categories)
             package_revision = int(package.get("revision") or 0) + 1
             amended = {
                 **package,
@@ -277,6 +285,9 @@ class ParkRecordingTrack:
                 "evidence_count": len(window_events),
                 "watermark": max(float(package.get("watermark") or 0), float(row["recorded_at"])),
                 "amendment_event_digest": row["payload_digest"],
+                "status": "complete" if not missing else "blocked_incomplete",
+                "missing_categories": missing,
+                "next_action": "review_recorded_evidence" if not missing else "collect_missing_evidence",
             }
             _append(self.package_path, amended)
             return amended

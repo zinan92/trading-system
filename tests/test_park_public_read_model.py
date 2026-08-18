@@ -269,6 +269,8 @@ def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_pa
         json.dumps(
             {
                 "code": "recording_package_blocked",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
                 "recording_windows": [{"record_window_id": "2026-08-14_DAY"}],
                 "next_action": "notify_park_and_wait",
             }
@@ -292,3 +294,70 @@ def test_public_read_model_projects_recording_package_and_runtime_blocker(tmp_pa
         "next_action": "notify_park_and_wait",
         "blocker_code": "recording_package_blocked",
     }
+
+
+def test_public_read_model_does_not_project_an_older_session_package(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    (recording_root / "packages.jsonl").write_text(
+        json.dumps(
+            {
+                "record_window_id": "2026-08-14_DAY",
+                "strategy_session_id": "session-old",
+                "strategy_revision_id": "revision-old",
+                "strategy_session_ids": ["session-old"],
+                "strategy_revision_ids": ["revision-old"],
+                "status": "complete",
+                "execution_mutations": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "blocked"
+    assert result["recording"]["record_window_id"] is None
+    assert result["recording"]["blocker_code"] == "recording_identity_missing"
+
+
+def test_public_read_model_clears_recovered_same_window_blocker(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    _fixture(output)
+    recording_root = output / "park_strategy" / "recording"
+    recording_root.mkdir(parents=True, exist_ok=True)
+    (recording_root / "packages.jsonl").write_text(
+        json.dumps(
+            {
+                "record_window_id": "2026-08-14_DAY",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "status": "complete",
+                "strategy_open": True,
+                "positions_open": 1,
+                "execution_mutations": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (output / "park_strategy" / "runtime_blockers.jsonl").write_text(
+        json.dumps(
+            {
+                "code": "recording_package_blocked",
+                "strategy_session_id": "session-1",
+                "strategy_revision_id": "revision-1",
+                "recording_windows": [{"record_window_id": "2026-08-14_DAY"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = build_park_public_read_model(output, now=lambda: NOW)
+
+    assert result["recording"]["status"] == "complete"
+    assert result["recording"]["blocker_code"] is None

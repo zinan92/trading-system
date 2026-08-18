@@ -182,3 +182,42 @@ def test_late_event_appends_amendment_and_review_is_evidence_based(tmp_path: Pat
     assert review["pnl_claim"] is None
     assert review["did_well"]
     assert review["next_window"]
+
+
+def test_late_event_can_complete_a_blocked_package(tmp_path: Path) -> None:
+    track = _recording(tmp_path)
+    for category in REQUIRED_CATEGORIES:
+        if category == "fills":
+            continue
+        track.record_event(
+            record_window_id="2026-08-14_DAY",
+            strategy_session_id="session-1",
+            strategy_revision_id="revision-1",
+            category=category,
+            event_type=f"{category}_observed",
+            source="test",
+            occurred_at="2026-08-14T10:00:00Z",
+        )
+    package = track.close_package(
+        record_window_id="2026-08-14_DAY",
+        strategy_session_id="session-1",
+        strategy_revision_id="revision-1",
+        strategy_open=True,
+        positions_open=1,
+    )
+    assert package["status"] == "blocked_incomplete"
+
+    amended = track.amend_late_event(
+        record_window_id="2026-08-14_DAY",
+        strategy_session_id="session-1",
+        strategy_revision_id="revision-1",
+        category="fills",
+        event_type="late_fill",
+        source="test",
+        occurred_at="2026-08-14T12:30:00Z",
+        payload={"fill_id": "late-1"},
+    )
+
+    assert amended["status"] == "complete"
+    assert amended["missing_categories"] == []
+    assert amended["next_action"] == "review_recorded_evidence"

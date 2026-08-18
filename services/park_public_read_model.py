@@ -79,7 +79,11 @@ def _compact_rows(rows: Any, fields: tuple[str, ...]) -> list[dict[str, Any]]:
     ]
 
 
-def _recording_projection(root: Path) -> dict[str, Any]:
+def _recording_projection(
+    root: Path,
+    *,
+    active_pair: tuple[str, str] = ("", ""),
+) -> dict[str, Any]:
     try:
         packages = _read_jsonl(root / "park_strategy" / "recording" / "packages.jsonl")
         blockers = _read_jsonl(root / "park_strategy" / "runtime_blockers.jsonl")
@@ -97,15 +101,55 @@ def _recording_projection(root: Path) -> dict[str, Any]:
             "next_action": "notify_park_and_wait",
             "blocker_code": "recording_journal_invalid",
         }
-    package = dict(packages[-1]) if packages else {}
+    def matches(row: Mapping[str, Any]) -> bool:
+        session, revision = active_pair
+        if not session or not revision:
+            return False
+        pairs = set(
+            zip(
+                row.get("strategy_session_ids") or [],
+                row.get("strategy_revision_ids") or [],
+            )
+        )
+        scalar = (
+            str(row.get("strategy_session_id") or ""),
+            str(row.get("strategy_revision_id") or ""),
+        )
+        return (session, revision) in pairs or scalar == (session, revision)
+
+    matching_packages = [row for row in packages if matches(row)]
+    package = dict(matching_packages[-1]) if matching_packages else {}
     blocker = next(
         (
             row
             for row in reversed(blockers)
             if str(row.get("code") or "").startswith("recording_")
+            and matches(row)
         ),
         {},
     )
+    if package.get("status") == "complete" and blocker:
+        blocked_windows = {
+            str(row.get("record_window_id") or "")
+            for row in blocker.get("recording_windows") or []
+            if isinstance(row, Mapping)
+        }
+        if str(package.get("record_window_id") or "") in blocked_windows:
+            blocker = {}
+    if active_pair != ("", "") and packages and not package:
+        return {
+            "status": "blocked",
+            "record_window_id": None,
+            "strategy_session_id": active_pair[0],
+            "strategy_revision_id": active_pair[1],
+            "package_status": None,
+            "missing_categories": [],
+            "strategy_open": None,
+            "positions_open": None,
+            "execution_mutations": [],
+            "next_action": "notify_park_and_wait",
+            "blocker_code": "recording_identity_missing",
+        }
     package_status = str(package.get("status") or "") or None
     blocker_code = str(blocker.get("code") or "") or None
     status = "blocked" if blocker_code or package_status == "blocked_incomplete" else "complete" if package_status else "none"
@@ -245,7 +289,10 @@ def build_park_public_read_model(
     elif safety_age > PARK_PUBLIC_MAX_AGE_SECONDS:
         blockers.append("persisted_snapshot_stale")
 
-    recording = _recording_projection(root)
+    recording = _recording_projection(
+        root,
+        active_pair=(session_id, revision_id),
+    )
     if recording["status"] == "blocked" and recording.get("blocker_code"):
         blockers.append(str(recording["blocker_code"]))
 
