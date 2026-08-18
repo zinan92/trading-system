@@ -65,7 +65,6 @@ def test_account_reader_counts_legacy_exposure_across_all_paper_cycles(tmp_path:
         "cycle_id": "legacy-cycle",
         "orders": [{"order_id": "legacy-order", "state": "accepted", "side": "sell", "price": 4300.0, "quantity": 1.0}],
         "positions": [],
-        "reconciliation": {"status": "ok", "issues": []},
     }]), encoding="utf-8")
 
     account = default_account_reader(output, "2026-08-18_DAY")

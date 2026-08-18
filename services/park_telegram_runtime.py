@@ -147,7 +147,12 @@ def default_account_reader(
                         key = str(position.get("position_id") or position.get("trade_id") or "")
                         if key:
                             account_wide_positions[key] = dict(position)
-                account_wide_reconciliation_ok = account_wide_reconciliation_ok and (row.get("reconciliation") or {}).get("status") == "ok" and not (row.get("reconciliation") or {}).get("issues")
+                cycle_id = str(row.get("cycle_id") or path.stem)
+                try:
+                    cycle_reconciliation = dict(adapter.reconcile(cycle_id))
+                except Exception as exc:  # noqa: BLE001 - unknown account facts block clean-slate admission.
+                    raise ParkTelegramRuntimeError("paper_account_reconciliation_invalid", type(exc).__name__) from exc
+                account_wide_reconciliation_ok = account_wide_reconciliation_ok and cycle_reconciliation.get("status") == "ok" and not cycle_reconciliation.get("issues")
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 raise ParkTelegramRuntimeError("paper_account_snapshot_invalid", type(exc).__name__) from exc
     account = dict(snapshot.get("account") or {})
