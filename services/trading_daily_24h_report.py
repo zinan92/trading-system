@@ -200,6 +200,13 @@ class TradingDaily24hReportBuilder:
         base_cash = starting_cash_values[0] if starting_cash_values else 0.0
         if base_cash <= 0 or any(not math.isclose(value, base_cash, abs_tol=1e-6) for value in starting_cash_values):
             raise ValueError("cycle package starting cash is missing or inconsistent")
+        if len(fee_values) == len(packages) and len(funding_values) == len(packages) and len(gross_realized_values) == len(packages):
+            expected_net = round(sum(gross_realized_values) - sum(fee_values) + sum(funding_values), 8)
+            if not math.isclose(realized, expected_net, abs_tol=1e-6):
+                raise ValueError(
+                    "authoritative net realized PnL does not match gross - fees + funding"
+                    f"; net={realized}; expected={expected_net}"
+                )
         total_notional = sum(float(row["_notional"]) for row in fills_in_day)
         ending_equity = base_cash + realized
         payload: dict[str, Any] = {

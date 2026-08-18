@@ -194,6 +194,37 @@ def test_daily_report_carries_explicit_fees_and_funding_when_all_packages_observ
     assert payload["execution"]["funding"] == -0.3
 
 
+def test_daily_report_fails_closed_on_net_cost_identity_mismatch(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    for cycle_id, entry_ts, exit_ts, realized in (
+        ("2026-07-16_NIGHT", "2026-07-16T18:00:00+00:00", "2026-07-16T19:00:00+00:00", 3.0),
+        ("2026-07-17_DAY", "2026-07-17T02:00:00+00:00", "2026-07-17T03:00:00+00:00", -1.0),
+        ("2026-07-17_NIGHT", "2026-07-17T14:00:00+00:00", "2026-07-17T15:00:00+00:00", 4.0),
+    ):
+        _write_package(
+            output,
+            cycle_id,
+            positions=[_position(cycle_id, "1", exit_ts=exit_ts, realized=realized)],
+            fills=_fills(cycle_id, entry_ts=entry_ts, exit_ts=exit_ts),
+            realized=realized,
+            fees=0.5,
+            funding=-0.1,
+            gross_realized=realized + 0.6,
+        )
+    package_path = output / "dualtrack" / "strategy_cycle_packages" / "2026-07-17_DAY.json"
+    tampered = load_json(package_path)[-1]
+    tampered["execution"]["pnl"]["gross_realized_pnl"] = 99.0
+    tampered.pop("package_hash", None)
+    tampered["package_hash"] = _hash_payload(tampered)
+    write_json(package_path, [tampered])
+
+    with pytest.raises(ValueError, match=r"gross - fees \+ funding"):
+        TradingDaily24hReportBuilder(output).build(
+            now=datetime(2026, 7, 18, 1, 3, tzinfo=timezone.utc),
+            report_date="2026-07-17",
+        )
+
+
 def test_daily_report_is_idempotent_and_dashboard_exposes_same_nav(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     _seed_complete_beijing_day(output)
