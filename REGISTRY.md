@@ -28,6 +28,17 @@
   Exact-SHA Paper deployment is the next runtime verification step; no live,
   exchange-key, Cloud order, or position mutation was performed by this merge.
   Next frontier: #743 / #745 / #746.
+- #743 / PR #757 adds the authoritative `yesterday-pnl-v1` projection and a
+  compact top-level Yesterday PnL card.  It selects the previous complete
+  Beijing calendar day from terminal daily reports, carries explicit fees and
+  funding, validates `net = gross - fees + funding`, and keeps zero, partial,
+  and missing evidence distinct.  The read-only review link displays the
+  supporting package IDs.  Merged on exact
+  `main@cea5500472637a59706172a9b6bd81d35c1807fb` (tree
+  `03d0d26fca1742852f2720d8b19c8e2221760814`) after 161 focused tests,
+  `git diff --check`, gitleaks, and parallel standards/spec review passed.
+  Exact-SHA Paper deployment is the next runtime verification step; no
+  execution control action was added.  Next frontier: #745 / #746.
 - #742 / PR #751 adds the authoritative `park-current-strategy-summary-v1`
   projection and a top-level Current Strategy card. Exact `main@ebdbdd7aeb5ee805870d2a996bfa7fef1d0a5b5d`
   is deployed to Goldbot Paper with source tree
