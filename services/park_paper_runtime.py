@@ -547,6 +547,9 @@ class ParkPaperRuntime:
                 value = normalized.get(normalized_key)
             if value not in (None, ""):
                 command[target_key] = value
+        for key in ("grid_line_id", "grid_generation", "grid_rearm_enabled", "rearm_of_order_id"):
+            if source.get(key) not in (None, ""):
+                command[key] = source[key]
         return command
 
     def _terminal(
@@ -676,7 +679,7 @@ class ParkPaperRuntime:
             "next_action": "await_park_next_strategy",
         }
         normalized_strategy_type = str((plan.get("normalized_input") or {}).get("strategy_type") or "")
-        if normalized_strategy_type == "dca":
+        if normalized_strategy_type in {"dca", "grid"}:
             lifecycle_ledger = ParkStrategyLifecycleLedger(self.output_root)
             lifecycle_ledger.activate({
                 **dict(plan.get("normalized_input") or {}),
@@ -686,14 +689,26 @@ class ParkPaperRuntime:
                 "maximum_leverage": (plan.get("risk") or {}).get("effective_leverage"),
                 "maximum_acceptable_loss": (plan.get("risk") or {}).get("theoretical_max_loss"),
             })
-            lifecycle_ledger.terminal_action_plan(
-                strategy_session_id=session,
-                strategy_revision_id=revision,
-                trigger=str(boundary["reason"]),
-                observed_price=current_price,
-                trusted_market=True,
-                fresh_tick=True,
-            )
+            if normalized_strategy_type == "dca":
+                lifecycle_ledger.terminal_action_plan(
+                    strategy_session_id=session,
+                    strategy_revision_id=revision,
+                    trigger=str(boundary["reason"]),
+                    observed_price=current_price,
+                    trusted_market=True,
+                    fresh_tick=True,
+                )
+            else:
+                reason = str(boundary["reason"])
+                boundary_name = "upper" if reason.startswith("upper_") else "lower"
+                lifecycle_ledger.boundary_action_plan(
+                    strategy_session_id=session,
+                    strategy_revision_id=revision,
+                    boundary=boundary_name,
+                    observed_price=current_price,
+                    trusted_market=True,
+                    fresh_tick=True,
+                )
         self.identity.close_session(
             strategy_session_id=session,
             strategy_revision_id=revision,
@@ -772,7 +787,11 @@ class ParkPaperRuntime:
         return {
             "cycle_id": cycle_id,
             "ts": observed_at,
-            "event": "stop" if reason == "stop_price" else "target",
+            "event": "stop" if reason in {
+                "stop_price",
+                "upper_boundary_invalidated",
+                "lower_boundary_invalidated",
+            } else "target",
             "side": "sell" if target_side == "long" else "buy",
             "order_type": "market",
             "price": current_price,
@@ -820,12 +839,12 @@ class ParkPaperRuntime:
         if price >= upper:
             return {
                 "reason": "upper_boundary_invalidated",
-                "close_positions": direction != "neutral",
+                "close_positions": True,
             }
         if price <= lower:
             return {
                 "reason": "lower_boundary_invalidated",
-                "close_positions": direction != "neutral",
+                "close_positions": True,
             }
         if stop not in (None, ""):
             stop_value = float(stop)

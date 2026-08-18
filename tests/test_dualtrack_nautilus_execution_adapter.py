@@ -572,6 +572,62 @@ def test_authoritative_grid_rearms_same_price_for_two_complete_cycles(tmp_path: 
     assert restarted.reconcile(CYCLE_ID)["status"] == "ok"
 
 
+def test_park_grid_command_rearms_same_rung_for_multiple_cycles(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    preflight = output / "dualtrack" / "nautilus" / "instrument_preflight.json"
+    _preflight(preflight)
+
+    def replay(_preflight: Path, input_path: Path, output_path: Path) -> dict:
+        return _completed_grid_replay(input_path, output_path)
+
+    adapter = NautilusExecutionAdapter(
+        output,
+        nautilus_python=tmp_path / "unused-python",
+        storage_namespace="nautilus_authoritative",
+        preflight_path=preflight,
+        replay_executor=replay,
+    )
+    park_command = {
+        **_grid_command(),
+        "source": "park_telegram",
+        "source_fill_id": "revision-1:grid:1",
+        "strategy_session_id": "session-1",
+        "strategy_revision_id": "revision-1",
+        "plan_digest": "sha256:" + "a" * 64,
+        "grid_line_id": "revision-1:grid:1",
+        "grid_generation": 1,
+        "grid_rearm_enabled": True,
+    }
+    adapter.submit_order(park_command)
+    result = adapter.process_market_events([
+        _grid_market_event(index, price)
+        for index, price in enumerate((4000.0, 4010.0, 4000.0, 4010.0), start=1)
+    ])
+
+    commands = [
+        row for row in load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")
+        if str((row.get("command") or {}).get("event") or "entry") == "entry"
+    ]
+    assert result["snapshot"]["rearms"] == 2
+    assert [row["command"]["grid_generation"] for row in commands] == [1, 2, 3]
+    assert all(row["command"]["grid_line_id"] == "revision-1:grid:1" for row in commands)
+    assert adapter.reconcile(CYCLE_ID)["status"] == "ok"
+
+    latest = max(commands, key=lambda row: int((row.get("command") or {}).get("grid_generation") or 0))
+    adapter.cancel_orders(
+        CYCLE_ID,
+        order_ids=[latest["command_id"]],
+        ts="2026-07-10T01:05:00+00:00",
+        reason="grid_hard_stop",
+    )
+    adapter.process_market_event(_grid_market_event(5, 4000.0))
+    after_stop = load_json(adapter.root / "commands" / f"{CYCLE_ID}.json")
+    assert not [
+        row for row in after_stop
+        if str((row.get("command") or {}).get("grid_generation") or "") == "4"
+    ]
+
+
 def test_market_event_identity_evidence_is_exact_and_fail_closed(
     tmp_path: Path,
 ) -> None:
