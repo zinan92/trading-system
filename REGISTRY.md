@@ -13,6 +13,19 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #821 / PR #822 plus #823 / PR #825 deliver the bounded Telegram Trading
+  Conversation Agent. Telegram can answer read-only Paper questions, discuss
+  trading, redirect off-topic chat, preserve bounded context/candidate patches,
+  and converge to an explicit Park confirmation without treating conversation
+  or provider output as authority. Exact Cloud deployment is
+  `main@7f8bcb185e8ddb6bc6fc63022ea78cb2b91e150c` (tree
+  `24393e3a8024e65850a152866f84855bc611008e`). Source/preflight/boot gates and
+  a natural tick passed with `execution=idle`, 0 orders, and 0 positions. A
+  production DeepSeek canary answered the read-only status/price question as
+  `mode=query`; old Telegram messages were not replayed. The previous
+  unconfirmed proposal remains expired/released, and #750 still requires a
+  fresh Park-confirmed strategy crossing both 09:00 and 21:00 Recording Window
+  boundaries.
 - #817 / PR #818 makes the Telegram provider chain DeepSeek-first, with the
   bounded Codex CLI (`gpt-5.6-sol`) fallback and deterministic parsing only as
   the final safety fallback. The shared gateway is now used by Dashboard and
