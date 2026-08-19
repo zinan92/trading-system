@@ -121,6 +121,7 @@ def extract_explicit_strategy_patch(text: str) -> dict[str, Any]:
         )
     ]
     if entry_prices:
+        entry_prices = list(dict.fromkeys(entry_prices))
         patch["entry_prices"] = entry_prices
         patch["order_count"] = len(entry_prices)
     else:
