@@ -531,6 +531,84 @@ def test_worker_recovers_explicit_dca_after_provider_type_misclassification(tmp_
     assert not (output / "park_strategy" / "plans.jsonl").exists()
 
 
+def test_dca_followup_merges_stop_and_take_profit_into_pending_intent(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: {
+            "price": 4300.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "paper-feed",
+            "provider": "paper-provider",
+            "observed_at": "2026-08-14T10:00:00+00:00",
+        },
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: "2026-08-14T10:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-14_DAY",
+    )
+
+    first = router.handle_update(_update(40, "做多 4200~4400 的 DCA，然后最大10倍杠杆。"))
+    completed = router.handle_update(_update(41, "止损4190 止盈4800"))
+
+    assert first["code"] == "dca_exit_levels_missing"
+    assert completed["status"] == "proposal_created"
+    assert completed["plan"]["normalized_input"]["direction"] == "long"
+    assert completed["plan"]["normalized_input"]["strategy_type"] == "dca"
+    assert completed["plan"]["normalized_input"]["stop_price"] == 4190.0
+    assert completed["plan"]["normalized_input"]["take_profit_price"] == 4800.0
+    assert not (output / "dualtrack").exists()
+
+
+def test_recovery_merges_already_consumed_dca_and_exit_followup(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    router = ParkTelegramRouter(
+        output,
+        park_user_id="park-user",
+        chat_id="park-chat",
+        market_reader=lambda: {
+            "price": 4300.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "paper-feed",
+            "provider": "paper-provider",
+            "observed_at": "2026-08-14T10:00:00+00:00",
+        },
+        account_reader=lambda _root, _cycle: {
+            "equity": 1000.0,
+            "reconciliation_healthy": True,
+            "open_positions": 0,
+            "open_or_accepted_orders": 0,
+            "unresolved_runtime": False,
+            "pending_terminal_actions": False,
+        },
+        now=lambda: "2026-08-14T10:00:00+00:00",
+        cycle_id_provider=lambda _now: "2026-08-14_DAY",
+    )
+    first = _update(50, "做多 4200~4400 的 DCA，然后最大10倍杠杆。")
+    second = _update(51, "止损4190 止盈4800")
+    router.telegram.ingest_update(first)
+    router.telegram.ingest_update(second)
+    router._remember_result(50, {"status": "blocked", "code": "dca_exit_levels_missing"}, update_digest="sha256:first")
+    router._remember_result(51, {"status": "blocked", "code": "missing_direction"}, update_digest="sha256:second")
+
+    recovered = router.recover_pending_strategy_inputs()
+
+    assert recovered[0]["status"] == "blocked"
+    assert recovered[0]["code"] == "dca_exit_levels_missing"
+    assert recovered[1]["status"] == "proposal_created"
+    assert recovered[1]["plan"]["normalized_input"]["stop_price"] == 4190.0
+
+
 def test_worker_refreshes_stale_missing_risk_guidance_once(tmp_path: Path) -> None:
     output = tmp_path / "outputs"
     router = ParkTelegramRouter(
