@@ -679,13 +679,21 @@ class ParkTelegramRouter:
     @staticmethod
     def _looks_like_read_query(text: str) -> bool:
         lowered = str(text or "").lower()
-        return bool(
+        topic = bool(
             re.search(
-                r"价格|当前价|行情|策略.*(?:跑|运行|active|状态)|有策略|持仓|挂单|订单|盈亏|pnl|price|position|order|running strategy|status",
+                r"价格|当前价|行情|策略|有策略|持仓|挂单|订单|盈亏|pnl|price|position|order|running strategy|status",
                 lowered,
                 re.IGNORECASE,
             )
         )
+        question = bool(
+            re.search(
+                r"\?|？|多少|吗|么|有没有|是否|现在.*(?:跑|运行|状态)|当前.*(?:价格|价|状态)|what|how many|is there|current",
+                lowered,
+                re.IGNORECASE,
+            )
+        )
+        return topic and question
 
     def _conversation_context(self, active: Mapping[str, Any] | None) -> dict[str, Any]:
         try:

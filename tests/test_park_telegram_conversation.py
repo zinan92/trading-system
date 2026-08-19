@@ -156,3 +156,21 @@ def test_off_topic_conversation_is_redirected_without_strategy_parser(tmp_path: 
     assert result["mode"] == "off_topic"
     assert "交易和市场" in router.telegram.pending_outbound()[0]["text"]
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
+def test_provider_outage_does_not_misclassify_explicit_price_based_strategy_as_query(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "deepseek", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "unavailable"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+
+    result = router.handle_update(
+        _update(5, "价格跌到4200，我决定做多 DCA，区间4200~4400，最大10倍，止损4190，止盈4800")
+    )
+
+    assert result["status"] == "proposal_created"
+    assert result["proposal"]["execution_authorized"] is False
