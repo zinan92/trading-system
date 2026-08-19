@@ -13,6 +13,17 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #828 / PR #829 repairs explicit DCA field recovery at Conversation
+  Convergence. Park's multi-message user text now supplies the deterministic
+  candidate when DeepSeek's structured patch is incomplete, including exact
+  entry prices, order count, leverage, TP, and SL. DCA risk sizing and owned
+  entry commands preserve explicit entry levels. Cloud is deployed on exact
+  `main@ce3dfdccf6d5050328ff7ebf8e1cdb8a652f8429` (tree
+  `34cd316da7a7ea30072c7cd1d3c85b4b80614946`); preflight/boot and natural tick
+  pass with 0 orders and 0 positions. An isolated production canary recovered
+  the two-message short DCA into `4370,4420 / 2 orders / 5x / stop 4444 / TP
+  4200` and stopped at `ready_for_confirmation`; it created no plan or
+  execution mutation. #750 remains the next evidence frontier.
 - #821 / PR #822 plus #823 / PR #825 deliver the bounded Telegram Trading
   Conversation Agent. Telegram can answer read-only Paper questions, discuss
   trading, redirect off-topic chat, preserve bounded context/candidate patches,
