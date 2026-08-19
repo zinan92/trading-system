@@ -174,8 +174,6 @@ def test_provider_outage_does_not_misclassify_explicit_price_based_strategy_as_q
 
     assert result["status"] == "proposal_created"
     assert result["proposal"]["execution_authorized"] is False
-
-
 def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_path: Path) -> None:
     provider = ConversationProvider(
         {
