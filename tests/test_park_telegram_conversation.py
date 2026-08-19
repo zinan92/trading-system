@@ -158,6 +158,28 @@ def test_off_topic_conversation_is_redirected_without_strategy_parser(tmp_path: 
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 
 
+def test_active_strategy_does_not_block_macro_read_only_question_on_provider_fallback(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "deepseek", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "unavailable"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+    router.identity.active_session = lambda: {
+        "strategy_session_id": "session-active",
+        "strategy_revision_id": "revision-active",
+        "plan_digest": "sha256:" + "a" * 64,
+    }
+
+    result = router.handle_update(_update(20, "今晚有美联储会议或重要数据要公布吗？"))
+
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "query"
+    assert result.get("code") != "strategy_locked"
+
+
 def test_provider_outage_does_not_misclassify_explicit_price_based_strategy_as_query(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
