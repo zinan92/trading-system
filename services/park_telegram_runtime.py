@@ -235,15 +235,23 @@ def default_account_reader(
             and quarantine.get("park_control") is True
             and quarantine.get("legacy_cycle_runner") is False
             and ownership.get("ok") is True
-            and runtime.get("previous_runtime_unresolved") is not True
         ):
+            # A completed exact-set clean-slate receipt is the durable proof
+            # that the legacy namespace was reconciled and quarantined.  It
+            # intentionally supersedes stale historical runtime metadata
+            # (`previous_runtime_unresolved`) from that namespace; otherwise
+            # the same completed cutover could never admit the first new Park
+            # proposal.  Current positions/orders and the active Park identity
+            # are still checked independently below.
             legacy_cutover_completion = dict(latest_terminal)
     except (OSError, ValueError, json.JSONDecodeError):
         legacy_cutover_completion = None
-    unresolved = bool(runtime.get("previous_runtime_unresolved")) or (
-        str(runtime.get("actual_state") or "") in {"starting", "running", "replanning", "stopping"}
-        and not proven_stale_record
-        and legacy_cutover_completion is None
+    unresolved = legacy_cutover_completion is None and (
+        bool(runtime.get("previous_runtime_unresolved"))
+        or (
+            str(runtime.get("actual_state") or "") in {"starting", "running", "replanning", "stopping"}
+            and not proven_stale_record
+        )
     )
     return {
         "equity": account.get("equity"),
