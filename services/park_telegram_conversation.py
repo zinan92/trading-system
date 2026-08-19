@@ -86,9 +86,9 @@ class ParkTelegramConversationLedger:
     def rows(self) -> list[dict[str, Any]]:
         return _rows(self.path)
 
-    def history(self, *, now: float | None = None, limit: int = MAX_HISTORY_MESSAGES) -> list[dict[str, str]]:
+    def history(self, *, now: float | None = None, limit: int = MAX_HISTORY_MESSAGES) -> list[dict[str, Any]]:
         cutoff = float(now if now is not None else time.time()) - self.ttl_seconds
-        result: list[dict[str, str]] = []
+        result: list[dict[str, Any]] = []
         for row in self.rows():
             if str(row.get("park_user_id") or "") != self.park_user_id or str(row.get("chat_id") or "") != self.chat_id:
                 continue
@@ -100,8 +100,31 @@ class ParkTelegramConversationLedger:
             role = str(row.get("role") or "")
             content = str(row.get("content") or "")
             if role in {"user", "assistant"} and content:
-                result.append({"role": role, "content": content})
+                item: dict[str, Any] = {"role": role, "content": content}
+                if role == "assistant":
+                    item["mode"] = str(row.get("mode") or "")
+                    item["strategy_patch"] = dict(row.get("strategy_patch") or {})
+                    item["missing_fields"] = list(row.get("missing_fields") or [])
+                result.append(item)
         return result[-max(1, int(limit)) :]
+
+    def latest_strategy_patch(self, *, now: float | None = None) -> dict[str, Any]:
+        cutoff = float(now if now is not None else time.time()) - self.ttl_seconds
+        merged: dict[str, Any] = {}
+        for row in self.rows():
+            if row.get("event") != "assistant_message":
+                continue
+            if str(row.get("park_user_id") or "") != self.park_user_id or str(row.get("chat_id") or "") != self.chat_id:
+                continue
+            try:
+                if float(row.get("recorded_at") or 0) < cutoff:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            patch = row.get("strategy_patch")
+            if isinstance(patch, Mapping):
+                merged.update({str(key): value for key, value in patch.items() if value not in (None, "")})
+        return merged
 
     def record_user(self, *, update_id: Any, text: str, recorded_at: float | None = None) -> dict[str, Any]:
         row = {
@@ -166,6 +189,7 @@ class ParkTelegramConversationAgent:
         if not callable(converse):
             return {"status": "unavailable", "metadata": {"provider": "conversation_unavailable", "status": "not_configured"}}
         history = self.ledger.history()
+        prior_patch = self.ledger.latest_strategy_patch()
         self.ledger.record_user(update_id=update_id, text=text)
         try:
             result = dict(converse(text, context=context, history=history) or {})
@@ -186,6 +210,10 @@ class ParkTelegramConversationAgent:
         except ParkConversationContractError as exc:
             metadata = {**metadata, "status": exc.code}
             return {"status": "unavailable", "metadata": metadata}
+        if prior_patch:
+            conversation["strategy_patch"] = {
+                **prior_patch,
+                **dict(conversation.get("strategy_patch") or {}),
+            }
         self.ledger.record_assistant(update_id=update_id, conversation=conversation, provider=metadata)
         return {"status": "ok", "conversation": conversation, "metadata": metadata}
-

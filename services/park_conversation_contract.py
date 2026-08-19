@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -81,14 +82,29 @@ def build_conversation_user_payload(
     history: Sequence[Mapping[str, Any]] | None = None,
     context: Mapping[str, Any] | None = None,
 ) -> str:
+    def redact_history(value: Any) -> str:
+        text = str(value or "")[:MAX_HISTORY_MESSAGE_CHARS]
+        text = re.sub(
+            r"(?i)(api[_ -]?key|token|password|secret|authorization)\s*[:=]\s*[^\s,;]+",
+            r"\1=<REDACTED>",
+            text,
+        )
+        return re.sub(r"\b\d{8,}:[A-Za-z0-9_-]{20,}\b", "<REDACTED>", text)
+
     bounded_history = []
     for item in list(history or [])[-MAX_HISTORY_MESSAGES:]:
-        bounded_history.append(
-            {
-                "role": str(item.get("role") or "user"),
-                "content": str(item.get("content") or "")[:MAX_HISTORY_MESSAGE_CHARS],
+        history_item: dict[str, Any] = {
+            "role": str(item.get("role") or "user"),
+            "content": redact_history(item.get("content")),
+        }
+        if isinstance(item.get("strategy_patch"), Mapping):
+            history_item["strategy_patch"] = {
+                str(key): value
+                for key, value in item["strategy_patch"].items()
+                if str(key) in STRATEGY_PATCH_FIELDS
             }
-        )
+            history_item["missing_fields"] = [str(value) for value in (item.get("missing_fields") or [])[:12]]
+        bounded_history.append(history_item)
     return json.dumps(
         {
             "message": str(text or "")[:MAX_HISTORY_MESSAGE_CHARS],

@@ -200,3 +200,47 @@ def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_
     assert result["status"] == "conversation_replied"
     assert result["mode"] == "strategy_forming"
     assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
+def test_candidate_patch_is_merged_across_natural_language_turns(tmp_path: Path) -> None:
+    class MultiTurnProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def converse(self, text: str, **kwargs) -> dict:
+            self.calls += 1
+            if self.calls == 1:
+                conversation = {
+                    "mode": "strategy_forming",
+                    "assistant_reply": "我理解为做多 DCA 4200~4400、最大10倍，还需要止盈止损。",
+                    "strategy_patch": {
+                        "direction": "long",
+                        "strategy_type": "dca",
+                        "lower_price_boundary": 4200,
+                        "upper_price_boundary": 4400,
+                        "maximum_leverage": 10,
+                    },
+                    "missing_fields": ["stop_price", "take_profit_price"],
+                    "needs_confirmation": False,
+                }
+            else:
+                conversation = {
+                    "mode": "ready_for_confirmation",
+                    "assistant_reply": "现在策略完整了，是否确认执行？",
+                    "strategy_patch": {"stop_price": 4190, "take_profit_price": 4800},
+                    "missing_fields": [],
+                    "needs_confirmation": True,
+                    "explicit_execution_intent": True,
+                }
+            return {"status": "ok", "conversation": conversation, "metadata": {"provider": "deepseek", "status": "returned"}}
+
+    provider = MultiTurnProvider()
+    router = _router(tmp_path, provider)
+
+    first = router.handle_update(_update(7, "我想做多 DCA，区间4200~4400，最大10倍"))
+    second = router.handle_update(_update(8, "止损4190，止盈4800，我要执行"))
+
+    assert first["status"] == "conversation_replied"
+    assert second["status"] == "proposal_created"
+    assert second["plan"]["normalized_input"]["direction"] == "long"
+    assert second["plan"]["normalized_input"]["stop_price"] == 4190.0

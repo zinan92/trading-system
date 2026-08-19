@@ -42,7 +42,10 @@ def test_deepseek_conversation_prompt_contains_history_and_bounded_context() -> 
     provider = DeepSeekIntentProvider(api_key="secret-never-returned", opener=opener, timeout_seconds=4)
     result = provider.converse(
         "当前价格是多少？",
-        history=[{"role": "user", "content": "我在考虑做多"}],
+        history=[
+            {"role": "user", "content": "我在考虑做多 token=SECRET"},
+            {"role": "assistant", "content": "继续说", "strategy_patch": {"direction": "long"}},
+        ],
         context={"market": {"price": 4300}, "account": {"api_key": "never"}},
     )
 
@@ -51,7 +54,8 @@ def test_deepseek_conversation_prompt_contains_history_and_bounded_context() -> 
     assert captured["timeout"] == 4
     assert "Trading Conversation Agent" in body["messages"][0]["content"]
     user_payload = json.loads(body["messages"][1]["content"])
-    assert user_payload["history"][0]["content"] == "我在考虑做多"
+    assert "SECRET" not in user_payload["history"][0]["content"]
+    assert user_payload["history"][1]["strategy_patch"]["direction"] == "long"
     assert "api_key" not in json.dumps(user_payload)
 
 
