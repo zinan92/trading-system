@@ -52,6 +52,11 @@ from services.park_telegram_continuation import (
     ParkContinuationError,
     ParkTelegramContinuationLedger,
 )
+from services.park_telegram_conversation import (
+    ParkTelegramConversationAgent,
+    ParkTelegramConversationError,
+    ParkTelegramConversationLedger,
+)
 from services.telegram_bot_transport import (
     TelegramBotTransport,
     TelegramBotTransportError,
@@ -332,6 +337,12 @@ class ParkTelegramRouter:
             chat_id=chat_id,
             ttl_seconds=self.confirmation_ttl_seconds,
         )
+        self.conversation_ledger = ParkTelegramConversationLedger(
+            self.output_root,
+            park_user_id=park_user_id,
+            chat_id=chat_id,
+            ttl_seconds=max(self.confirmation_ttl_seconds, 1800),
+        )
         self.market_reader = market_reader or default_market_reader
         self.config = dict(config or {})
         self.account_reader = account_reader or (
@@ -342,6 +353,10 @@ class ParkTelegramRouter:
         # Offline/tests may omit this seam.  The production pipeline supplies
         # a bounded Codex CLI parser explicitly; its output is untrusted.
         self.intent_parser = intent_parser
+        self.conversation_agent = ParkTelegramConversationAgent(
+            self.conversation_ledger,
+            intent_parser,
+        ) if intent_parser is not None else None
         self.provider_path = self.output_root / "park_strategy" / "provider_calls.jsonl"
 
     def handle_update(self, update: Mapping[str, Any]) -> dict[str, Any]:
@@ -396,7 +411,11 @@ class ParkTelegramRouter:
         elif text.lower().startswith(("confirm", "reject")) or text.startswith(("确认", "拒绝")):
             result = self._handle_confirmation(text, active=active, update_id=received.get("update_id"))
         else:
-            result = self._handle_strategy(text, active=active, update_id=received.get("update_id"))
+            result = self._handle_conversation_or_strategy(
+                text,
+                active=active,
+                update_id=received.get("update_id"),
+            )
         return self._remember_result(update_id, result, update_digest=update_digest)
 
     def recover_pending_legacy_cutovers(self) -> list[dict[str, Any]]:
@@ -657,12 +676,167 @@ class ParkTelegramRouter:
             )
         )
 
+    @staticmethod
+    def _looks_like_read_query(text: str) -> bool:
+        lowered = str(text or "").lower()
+        return bool(
+            re.search(
+                r"价格|当前价|行情|策略.*(?:跑|运行|active|状态)|有策略|持仓|挂单|订单|盈亏|pnl|price|position|order|running strategy|status",
+                lowered,
+                re.IGNORECASE,
+            )
+        )
+
+    def _conversation_context(self, active: Mapping[str, Any] | None) -> dict[str, Any]:
+        try:
+            market = dict(self.market_reader())
+        except Exception as exc:  # noqa: BLE001 - read-only context may be unavailable.
+            market = {"status": "unavailable", "error_type": type(exc).__name__}
+        try:
+            account = dict(self.account_reader(self.output_root, self.cycle_id_provider(self.now())))
+        except Exception as exc:  # noqa: BLE001 - provider must say facts are unavailable.
+            account = {"status": "unavailable", "error_type": type(exc).__name__}
+        snapshot = account.get("snapshot") if isinstance(account.get("snapshot"), Mapping) else {}
+        strategy: dict[str, Any] = dict(active or {})
+        if active is None:
+            strategy = {"status": "none"}
+        else:
+            strategy["status"] = "active"
+            digest = str(active.get("plan_digest") or "")
+            if digest:
+                plans = _read_jsonl(self.output_root / "park_strategy" / "plans.jsonl")
+                plan = next(
+                    (
+                        row
+                        for row in reversed(plans)
+                        if str(row.get("plan_digest") or "") == digest
+                    ),
+                    None,
+                )
+                if plan is not None:
+                    strategy["plan"] = plan
+        return {
+            "market": market,
+            "strategy": strategy,
+            "execution": {"paper_only": True, "control_plane": "telegram"},
+            "account": account,
+            "positions": list(snapshot.get("positions") or []) if isinstance(snapshot, Mapping) else [],
+            "orders": list(snapshot.get("orders") or []) if isinstance(snapshot, Mapping) else [],
+        }
+
+    def _deterministic_conversation_fallback(
+        self,
+        text: str,
+        *,
+        context: Mapping[str, Any],
+        active: Mapping[str, Any] | None,
+        update_id: Any,
+    ) -> dict[str, Any]:
+        if self._looks_like_read_query(text):
+            market = context.get("market") if isinstance(context.get("market"), Mapping) else {}
+            strategy = context.get("strategy") if isinstance(context.get("strategy"), Mapping) else {}
+            account = context.get("account") if isinstance(context.get("account"), Mapping) else {}
+            price = market.get("price")
+            strategy_status = "有一张策略处于等待/运行状态" if strategy.get("status") == "active" else "当前没有已确认运行策略"
+            price_text = str(price) if price not in (None, "") else "暂时无法读取"
+            reply = (
+                f"{strategy_status}。当前 Paper 价格：{price_text}。\n"
+                f"挂单 {account.get('open_or_accepted_orders', 0)}，持仓 {account.get('open_positions', 0)}。"
+            )
+            return {
+                "status": "conversation_replied",
+                "mode": "query",
+                "message": reply,
+                "provider": {"provider": "deterministic_read_only", "status": "fallback"},
+                "execution_authorized": False,
+            }
+        if not re.search(r"交易|行情|市场|策略|价格|持仓|挂单|dca|grid|trade|market|strategy|position|order", str(text or ""), re.IGNORECASE):
+            return {
+                "status": "conversation_replied",
+                "mode": "off_topic",
+                "message": "我主要和你讨论交易、市场和 Paper 策略。我们回到交易上吧。",
+                "provider": {"provider": "deterministic_scope_guard", "status": "fallback"},
+                "execution_authorized": False,
+            }
+        return self._handle_strategy(text, active=active, update_id=update_id)
+
+    def _handle_conversation_or_strategy(
+        self,
+        text: str,
+        *,
+        active: Mapping[str, Any] | None,
+        update_id: Any,
+    ) -> dict[str, Any]:
+        if self.conversation_agent is None:
+            return self._handle_strategy(text, active=active, update_id=update_id)
+        context = self._conversation_context(active)
+        conversation_result = self.conversation_agent.evaluate(
+            text,
+            update_id=update_id,
+            context=context,
+        )
+        metadata = dict(conversation_result.get("metadata") or {})
+        self._record_provider(update_id=update_id, metadata=metadata)
+        if conversation_result.get("status") != "ok":
+            fallback = self._deterministic_conversation_fallback(
+                text,
+                context=context,
+                active=active,
+                update_id=update_id,
+            )
+            if fallback.get("status") == "conversation_replied":
+                outbound = self.telegram.queue_outbound(
+                    idempotency_key=f"park-conversation:{update_id}",
+                    message_type="conversation_reply",
+                    text=str(fallback.get("message") or ""),
+                    binding=active,
+                )
+                return {**fallback, "outbound": outbound}
+            return fallback
+        conversation = dict(conversation_result.get("conversation") or {})
+        mode = str(conversation.get("mode") or "discuss")
+        if mode != "ready_for_confirmation":
+            outbound = self.telegram.queue_outbound(
+                idempotency_key=f"park-conversation:{update_id}",
+                message_type="conversation_reply",
+                text=str(conversation.get("assistant_reply") or ""),
+                binding=active,
+            )
+            return {
+                "status": "conversation_replied",
+                "mode": mode,
+                "conversation": conversation,
+                "provider": metadata,
+                "outbound": outbound,
+                "execution_authorized": False,
+            }
+        candidate = dict(conversation.get("strategy_patch") or {})
+        result = self._handle_strategy(
+            text,
+            active=active,
+            update_id=update_id,
+            candidate=candidate,
+            provider=metadata,
+        )
+        if result.get("status") == "proposal_created":
+            outbound = self.telegram.queue_outbound(
+                idempotency_key=f"park-conversation:{update_id}:summary",
+                message_type="conversation_summary",
+                text=str(conversation.get("assistant_reply") or ""),
+                binding=result.get("session"),
+            )
+            result["conversation"] = conversation
+            result["conversation_outbound"] = outbound
+        return result
+
     def _handle_strategy(
         self,
         text: str,
         *,
         active: Mapping[str, Any] | None,
         update_id: Any,
+        candidate: Mapping[str, Any] | None = None,
+        provider: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if text.lower() in {"/start", "start", "/help", "help"}:
             return self._block(
@@ -688,11 +862,12 @@ class ParkTelegramRouter:
                 binding=active,
                 idempotency_key=f"park-strategy-locked:{update_id}",
             )
-        provider: Mapping[str, Any] | None = None
         continuation: Mapping[str, Any] | None = None
         normalized: dict[str, Any] | None = None
         try:
-            if self._looks_like_continuation(text):
+            if candidate is not None:
+                normalized = normalize_park_input({**dict(candidate), "source_text": text})
+            elif self._looks_like_continuation(text):
                 continuation = self.continuations.latest_pending()
             if continuation is not None:
                 merged = dict(continuation.get("normalized_input") or {})

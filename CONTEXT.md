@@ -72,6 +72,24 @@ _Avoid_: strategy restart, new revision
 
 ## Operator actions
 
+**Trading Conversation**:
+A bounded conversation about trading, markets, finance, and Paper facts. It
+may begin as exploration or a read-only question and does not itself create
+strategy authority.
+_Avoid_: strategy submission, execution command
+
+**Conversation Convergence**:
+The point at which Park's explicitly stated trading decision has enough
+fields for a complete candidate snapshot and the system must ask Park for
+confirmation. Convergence is not authorization.
+_Avoid_: automatic execution, model approval
+
+**Conversation Candidate**:
+An unconfirmed set of strategy fields accumulated during a Trading Conversation.
+It may be revised or abandoned and cannot create orders, positions, or a
+strategy card until Park confirms the deterministic snapshot.
+_Avoid_: active strategy, confirmed plan
+
 **Cancel**:
 Cancel unfilled entry orders while preserving the protective exits that manage
 existing positions.

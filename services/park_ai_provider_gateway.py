@@ -17,7 +17,11 @@ from services.dashboard_ai_provider import (
     DEFAULT_DEEPSEEK_URL,
     DeepSeekIntentProvider,
 )
-from services.park_codex_intent_parser import CodexCliIntentParser
+from services.park_codex_intent_parser import CodexCliConversationParser, CodexCliIntentParser
+from services.park_conversation_contract import (
+    ParkConversationContractError,
+    normalize_conversation_result,
+)
 
 
 class ParkAiProviderGateway:
@@ -67,6 +71,17 @@ class ParkAiProviderGateway:
             cwd=codex_cwd,
             codex_home=os.environ.get("CODEX_HOME") or None,
         )
+        self.conversation_codex = (
+            codex
+            if codex is not None and callable(getattr(codex, "converse", None))
+            else CodexCliConversationParser(
+                executable=configured_codex,
+                model=codex_model,
+                timeout_seconds=float(codex_timeout),
+                cwd=codex_cwd,
+                codex_home=os.environ.get("CODEX_HOME") or None,
+            )
+        )
 
     def parse(
         self,
@@ -79,6 +94,53 @@ class ParkAiProviderGateway:
             return first
         first_metadata = dict(first.get("metadata") or {})
         second = self._call(self.codex, text, context=context)
+        metadata = dict(second.get("metadata") or {})
+        metadata.setdefault("fallback_from", str(first_metadata.get("provider") or "deepseek"))
+        metadata["fallback_status"] = first_metadata.get("status")
+        metadata["fallback_elapsed_ms"] = first_metadata.get("elapsed_ms")
+        second["metadata"] = metadata
+        return second
+
+    def converse(
+        self,
+        text: str,
+        *,
+        context: Mapping[str, Any] | None = None,
+        history: list[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        first = self._call_conversation(self.deepseek, text, context=context, history=history)
+        if first.get("status") == "ok":
+            try:
+                first["conversation"] = normalize_conversation_result(
+                    first.get("conversation") or {},
+                    source_text=text,
+                )
+            except ParkConversationContractError as exc:
+                first = {
+                    "status": "unavailable",
+                    "metadata": {
+                        **dict(first.get("metadata") or {}),
+                        "status": exc.code,
+                    },
+                }
+            else:
+                return first
+        first_metadata = dict(first.get("metadata") or {})
+        second = self._call_conversation(self.conversation_codex, text, context=context, history=history)
+        if second.get("status") == "ok":
+            try:
+                second["conversation"] = normalize_conversation_result(
+                    second.get("conversation") or {},
+                    source_text=text,
+                )
+            except ParkConversationContractError as exc:
+                second = {
+                    "status": "unavailable",
+                    "metadata": {
+                        **dict(second.get("metadata") or {}),
+                        "status": exc.code,
+                    },
+                }
         metadata = dict(second.get("metadata") or {})
         metadata.setdefault("fallback_from", str(first_metadata.get("provider") or "deepseek"))
         metadata["fallback_status"] = first_metadata.get("status")
@@ -109,6 +171,27 @@ class ParkAiProviderGateway:
                     },
                 }
         except Exception as exc:  # noqa: BLE001 - provider failure is safe fallback.
+            return {
+                "status": "unavailable",
+                "metadata": {
+                    "provider": provider.__class__.__name__,
+                    "status": "adapter_error",
+                    "error_type": type(exc).__name__,
+                },
+            }
+        return dict(result or {})
+
+    @staticmethod
+    def _call_conversation(
+        provider: Any,
+        text: str,
+        *,
+        context: Mapping[str, Any] | None,
+        history: list[Mapping[str, Any]] | None,
+    ) -> dict[str, Any]:
+        try:
+            result = provider.converse(text, context=context, history=history)
+        except Exception as exc:  # noqa: BLE001 - provider failure is a safe fallback.
             return {
                 "status": "unavailable",
                 "metadata": {
