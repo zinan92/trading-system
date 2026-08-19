@@ -185,9 +185,19 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
     hard_stop_source = (
         "explicit_stop_price" if stop_was_explicit else "authorized_price_boundary"
     ) if strategy_type == "grid" else None
+    raw_entry_prices = body.get("entry_prices")
+    entry_prices: list[float] | None = None
+    if raw_entry_prices not in (None, ""):
+        if not isinstance(raw_entry_prices, (list, tuple)) or not raw_entry_prices:
+            raise ParkStrategyPlanError("invalid_entry_prices", "entry_prices must be a non-empty list")
+        entry_prices = [_number(value, "entry_price") for value in raw_entry_prices]
     raw_order_count = body.get("order_count")
     if raw_order_count in (None, ""):
-        raw_order_count = DEFAULT_NEUTRAL_GRID_ORDER_COUNT if direction == "neutral" and strategy_type == "grid" else 1
+        raw_order_count = len(entry_prices) if entry_prices is not None else (
+            DEFAULT_NEUTRAL_GRID_ORDER_COUNT if direction == "neutral" and strategy_type == "grid" else 1
+        )
+    if entry_prices is not None and int(raw_order_count) != len(entry_prices):
+        raise ParkStrategyPlanError("entry_count_mismatch", "entry_prices must match order_count")
     if strategy_type == "grid" and grid_spacing is not None:
         spacing_value = _number(grid_spacing, "grid_spacing")
         intervals = (upper_value - lower_value) / spacing_value
@@ -226,6 +236,8 @@ def normalize_park_input(payload: Mapping[str, Any] | str) -> dict[str, Any]:
         "order_count": int(raw_order_count),
         "source_text": text or None,
     }
+    if entry_prices is not None:
+        result["entry_prices"] = entry_prices
     if hard_stop_source is not None:
         result["hard_stop_source"] = hard_stop_source
     if result["order_count"] <= 0:
@@ -528,8 +540,23 @@ def build_deterministic_risk_plan(
     # Neutral entries span both sides of the current mark.  Size against the
     # highest possible entry price so the sum of accepted limit notionals never
     # exceeds the hard notional cap when sell levels are above the mark.
-    quantity_price_basis = upper if direction == "neutral" else current_price
+    explicit_entry_prices = normalized.get("entry_prices")
+    entry_prices: list[float] | None = None
+    if explicit_entry_prices not in (None, ""):
+        if not isinstance(explicit_entry_prices, (list, tuple)) or len(explicit_entry_prices) != order_count:
+            raise ParkStrategyPlanError("entry_count_mismatch", "entry_prices must match order_count")
+        entry_prices = [_number(value, "entry_price") for value in explicit_entry_prices]
+        if direction == "short" and any(left >= right for left, right in zip(entry_prices, entry_prices[1:])):
+            raise ParkStrategyPlanError("entry_order_invalid", "short DCA entry prices must ascend")
+        if direction == "long" and any(left <= right for left, right in zip(entry_prices, entry_prices[1:])):
+            raise ParkStrategyPlanError("entry_order_invalid", "long DCA entry prices must descend")
+        if any(price < lower or price > upper for price in entry_prices):
+            raise ParkStrategyPlanError("entry_outside_range", "DCA entry prices must remain within the authorized range")
+    quantity_price_basis = max(entry_prices) if entry_prices else (upper if direction == "neutral" else current_price)
     per_order_quantity = round(per_order_notional / quantity_price_basis, 12)
+    per_order_quantities = [
+        round(per_order_notional / price, 12) for price in entry_prices
+    ] if entry_prices else None
     theoretical_max_loss = round(max_notional * adverse_fraction, 12)
     risk = {
         "account_equity": equity,
@@ -546,6 +573,9 @@ def build_deterministic_risk_plan(
         "quantity_price_basis": quantity_price_basis,
         "per_order_quantity": per_order_quantity,
     }
+    if entry_prices is not None:
+        risk["entry_prices"] = entry_prices
+        risk["per_order_quantities"] = per_order_quantities
     if neutral_legs is not None:
         for leg in neutral_legs.values():
             leg["theoretical_max_loss"] = round(max_notional * float(leg["adverse_fraction"]), 12)

@@ -15,6 +15,7 @@ from services.park_conversation_contract import (
     MAX_HISTORY_MESSAGES,
     PARK_CONVERSATION_SCHEMA,
     ParkConversationContractError,
+    extract_explicit_strategy_patch,
     normalize_conversation_result,
 )
 
@@ -191,6 +192,10 @@ class ParkTelegramConversationAgent:
         history = self.ledger.history()
         prior_patch = self.ledger.latest_strategy_patch()
         self.ledger.record_user(update_id=update_id, text=text)
+        user_text = "\n".join(
+            [str(item.get("content") or "") for item in history if item.get("role") == "user"] + [str(text or "")]
+        )
+        explicit_patch = extract_explicit_strategy_patch(user_text)
         try:
             result = dict(converse(text, context=context, history=history) or {})
         except Exception as exc:  # noqa: BLE001 - conversation failure is fail-closed.
@@ -214,6 +219,11 @@ class ParkTelegramConversationAgent:
             conversation["strategy_patch"] = {
                 **prior_patch,
                 **dict(conversation.get("strategy_patch") or {}),
+            }
+        if explicit_patch:
+            conversation["strategy_patch"] = {
+                **dict(conversation.get("strategy_patch") or {}),
+                **explicit_patch,
             }
         self.ledger.record_assistant(update_id=update_id, conversation=conversation, provider=metadata)
         return {"status": "ok", "conversation": conversation, "metadata": metadata}
