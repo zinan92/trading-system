@@ -244,3 +244,48 @@ def test_candidate_patch_is_merged_across_natural_language_turns(tmp_path: Path)
     assert second["status"] == "proposal_created"
     assert second["plan"]["normalized_input"]["direction"] == "long"
     assert second["plan"]["normalized_input"]["stop_price"] == 4190.0
+
+
+def test_explicit_dca_fields_are_recovered_when_model_patch_is_incomplete(tmp_path: Path) -> None:
+    class IncompletePatchProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def converse(self, text: str, **kwargs) -> dict:
+            self.calls += 1
+            conversation = {
+                "mode": "strategy_forming" if self.calls == 1 else "ready_for_confirmation",
+                "assistant_reply": "我已经理解了完整的做空 DCA 参数，请确认执行。",
+                "strategy_patch": {"direction": "short"} if self.calls == 1 else {},
+                "missing_fields": [] if self.calls > 1 else ["stop_loss", "take_profit"],
+                "needs_confirmation": self.calls > 1,
+                "explicit_execution_intent": self.calls > 1,
+            }
+            return {"status": "ok", "conversation": conversation, "metadata": {"provider": "deepseek", "status": "returned"}}
+
+    router = _router(tmp_path, IncompletePatchProvider())
+    router.market_reader = lambda: {
+        "price": 4400.0,
+        "trusted": True,
+        "fresh": True,
+        "source": "paper-feed",
+        "provider": "paper-feed",
+        "observed_at": "2026-08-19T00:00:00+00:00",
+    }
+    first = router.handle_update(_update(9, "我想让你设置一个做空的DCA，从4370~4420开两单，每一单是5倍杠杆。"))
+    second = router.handle_update(
+        _update(
+            10,
+            "对，具体操作如下：4370开一单，4420开一单；止损4444，止盈4200；每单notional 5万美金。",
+        )
+    )
+
+    assert first["status"] == "conversation_replied"
+    assert second["status"] == "proposal_created"
+    normalized = second["plan"]["normalized_input"]
+    assert normalized["direction"] == "short"
+    assert normalized["strategy_type"] == "dca"
+    assert normalized["order_count"] == 2
+    assert normalized["entry_prices"] == [4370.0, 4420.0]
+    assert normalized["stop_price"] == 4444.0
+    assert normalized["take_profit_price"] == 4200.0

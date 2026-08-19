@@ -78,10 +78,20 @@ class ParkDcaLifecycle:
         upper = float(self.normalized["upper_price_boundary"])
         lower = float(self.normalized["lower_price_boundary"])
         direction = str(self.normalized["direction"])
+        explicit_prices = self.normalized.get("entry_prices")
+        entry_prices = [float(value) for value in explicit_prices] if isinstance(explicit_prices, (list, tuple)) else None
+        if entry_prices is not None and len(entry_prices) != count:
+            raise ParkDcaLifecycleError("entry_count_mismatch", "DCA entry price count does not match risk order count")
+        entry_quantities = risk.get("per_order_quantities") if isinstance(risk.get("per_order_quantities"), list) else None
+        if entry_quantities is not None and len(entry_quantities) != count:
+            raise ParkDcaLifecycleError("entry_quantity_count_mismatch", "DCA entry quantity count does not match risk order count")
         step = (upper - current) / count if direction == "short" else (current - lower) / count
         rows: list[dict[str, Any]] = []
         for index in range(count):
-            price = current + step * (index + 1) if direction == "short" else current - step * (index + 1)
+            price = entry_prices[index] if entry_prices is not None else (
+                current + step * (index + 1) if direction == "short" else current - step * (index + 1)
+            )
+            entry_quantity = float(entry_quantities[index]) if entry_quantities is not None else quantity
             row = {
                 "command_type": "dca_entry",
                 "entry_id": f"{self.revision_id}:entry:{index + 1}",
@@ -90,7 +100,7 @@ class ParkDcaLifecycle:
                 "plan_digest": self.plan_digest,
                 "direction": direction,
                 "price": round(price, 12),
-                "quantity": quantity,
+                "quantity": entry_quantity,
                 "loop_enabled": False,
                 "after_terminal": "cancel_remaining_entries",
             }

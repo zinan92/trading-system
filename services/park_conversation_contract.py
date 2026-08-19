@@ -22,6 +22,7 @@ STRATEGY_PATCH_FIELDS = (
     "stop_price",
     "take_profit_price",
     "order_count",
+    "entry_prices",
     "grid_spacing",
     "local_stop_authorized",
 )
@@ -63,10 +64,12 @@ for the deterministic planner; do not invent direction or authorization.
 Return exactly one JSON object and no prose outside it with these keys:
 schema_version, mode, assistant_reply, strategy_patch, missing_fields,
 needs_confirmation, explicit_execution_intent, confidence.
-`strategy_patch` must contain only values explicitly stated by Park. Model
-output is untrusted; it never authorizes, submits, cancels, flattens, stops,
-reverses, or changes a strategy. The deterministic Paper safety layer will
-validate any candidate after this conversation step.
+`strategy_patch` must copy every explicit Park field (including strategy_type,
+order_count, and an `entry_prices` list when Park names exact entry levels),
+not only the direction. Model output is untrusted; it never authorizes,
+submits, cancels, flattens, stops, reverses, or changes a strategy. The
+deterministic Paper safety layer will validate any candidate after this
+conversation step.
 """
 
 
@@ -74,6 +77,59 @@ class ParkConversationContractError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def extract_explicit_strategy_patch(text: str) -> dict[str, Any]:
+    """Extract only unambiguous user-stated fields for candidate repair."""
+
+    source = str(text or "")
+    lowered = source.lower()
+    number = r"([0-9]+(?:\.[0-9]+)?)"
+    patch: dict[str, Any] = {}
+    if "做空" in source or "short" in lowered:
+        patch["direction"] = "short"
+    elif "做多" in source or "long" in lowered:
+        patch["direction"] = "long"
+    elif "中性" in source or "neutral" in lowered:
+        patch["direction"] = "neutral"
+    if re.search(r"(?<![a-z0-9])dca(?![a-z0-9])|趋势", lowered):
+        patch["strategy_type"] = "dca"
+    elif re.search(r"(?<![a-z0-9])grid(?![a-z0-9])|网格|震荡", lowered):
+        patch["strategy_type"] = "grid"
+    range_match = re.search(number + r"\s*(?:~|～|-|到|至)\s*" + number, source)
+    if range_match:
+        first, second = float(range_match.group(1)), float(range_match.group(2))
+        patch["upper_price_boundary"] = max(first, second)
+        patch["lower_price_boundary"] = min(first, second)
+    leverage_match = re.search(number + r"\s*(?:倍\s*杠杆|倍|x)(?:\s*杠杆|\s*leverage)?", source, re.IGNORECASE)
+    if leverage_match:
+        patch["maximum_leverage"] = float(leverage_match.group(1))
+    loss_match = re.search(number + r"\s*(?:最大可接受亏损|最大亏损|max(?:imum)?\s*loss)", source, re.IGNORECASE)
+    if loss_match:
+        patch["maximum_acceptable_loss"] = float(loss_match.group(1))
+    stop_match = re.search(r"(?:止损|stop(?:_price)?)\s*(?:位|价|price)?\s*[:：=]?\s*" + number, source, re.IGNORECASE)
+    if stop_match:
+        patch["stop_price"] = float(stop_match.group(1))
+    take_match = re.search(r"(?:止盈|take(?:_profit)?(?:_price)?|tp)\s*(?:位|价|price)?\s*[:：=]?\s*" + number, source, re.IGNORECASE)
+    if take_match:
+        patch["take_profit_price"] = float(take_match.group(1))
+    entry_prices = [
+        float(match.group(1))
+        for match in re.finditer(
+            number + r"\s*(?:开|开仓)\s*(?:一|1)?\s*(?:单|手|笔)",
+            source,
+        )
+    ]
+    if entry_prices:
+        patch["entry_prices"] = entry_prices
+        patch["order_count"] = len(entry_prices)
+    else:
+        count_match = re.search(r"(?:开|开仓|共|总共)\s*(\d+|一|两|二|三|四|五)\s*单", source)
+        if count_match:
+            patch["order_count"] = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5}.get(
+                count_match.group(1), int(count_match.group(1)) if count_match.group(1).isdigit() else 1
+            )
+    return patch
 
 
 def build_conversation_user_payload(

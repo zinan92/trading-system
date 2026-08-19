@@ -64,6 +64,31 @@ def test_dca_entries_are_finite_owned_and_idempotent(tmp_path: Path) -> None:
         ParkDcaLifecycle(_plan_without_exits(), confirmation_receipt=_receipt(), output_root=tmp_path / "missing", park_user_id="park", chat_id="chat")
 
 
+def test_explicit_entry_prices_are_preserved_with_per_entry_quantities(tmp_path: Path) -> None:
+    plan = _plan()
+    plan["normalized_input"] = {
+        **plan["normalized_input"],
+        "order_count": 2,
+        "entry_prices": [4370.0, 4420.0],
+    }
+    plan["risk"] = {
+        "order_count": 2,
+        "per_order_quantity": 10.0,
+        "per_order_quantities": [11.4416476, 11.3122172],
+    }
+
+    entries = ParkDcaLifecycle(
+        plan,
+        confirmation_receipt=_receipt(),
+        output_root=tmp_path / "outputs",
+        park_user_id="park",
+        chat_id="chat",
+    ).entry_commands()
+
+    assert [row["price"] for row in entries] == [4370.0, 4420.0]
+    assert [row["quantity"] for row in entries] == [11.4416476, 11.3122172]
+
+
 def test_both_authorized_boundaries_terminal_and_notify_once(tmp_path: Path) -> None:
     upper = _dca(tmp_path / "upper")
     first = upper.on_market(price=4444, trusted=True, fresh=True)
