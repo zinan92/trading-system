@@ -341,7 +341,7 @@ class ParkTelegramRouter:
             self.output_root,
             park_user_id=park_user_id,
             chat_id=chat_id,
-            ttl_seconds=max(self.confirmation_ttl_seconds, 1800),
+            ttl_seconds=max(self.confirmation_ttl_seconds, 12 * 60 * 60),
         )
         self.market_reader = market_reader or default_market_reader
         self.config = dict(config or {})
