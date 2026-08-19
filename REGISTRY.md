@@ -13,6 +13,20 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #813 / PR #814 fixes Park admission precedence after the exact clean-slate
+  cutover. A completed receipt with quarantine, ownership, Paper-only, and
+  reconciliation proof now supersedes only the stale historical
+  `previous_runtime_unresolved` marker; current account exposure and the
+  active Park identity remain independently fail-closed. Cloud is deployed on
+  exact `main@21c9090b90f5b44db59c0531d3f19a67007f9bb4` (tree
+  `9cdf3560ae29b7c36d93d26ebe16705488d913af`). The natural tick merged the
+  already-ingested Park messages into one immutable proposal for long DCA,
+  4200~4400, max 10x, stop 4190, and take profit 4800; Telegram delivery was
+  recorded. Execution remains `awaiting_confirmation` with 0 orders and 0
+  positions, so no confirmation or trading mutation was assumed. Next step is
+  Park's explicit confirmation, followed by the continuous-session soak across
+  a 09:00/21:00 Beijing Recording Window boundary; no strategy is invented to
+  manufacture that evidence.
 - #783 final delivery (#784, #788, #790, #792, #794, #796, #798, #800)
   recovers Park's already-ingested instruction
   `取消这19个旧挂单，确认 clean slate，启用 Park Paper` without requiring a
