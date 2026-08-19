@@ -688,7 +688,7 @@ class ParkTelegramRouter:
         )
         question = bool(
             re.search(
-                r"\?|？|多少|吗|么|有没有|是否|现在.*(?:跑|运行|状态)|当前.*(?:价格|价|状态)|what|how many|is there|current",
+                r"\?|？|多少|吗|么|有没有|是否|是什么|什么|哪种|现在.*(?:跑|运行|状态)|当前.*(?:状态)|what|how many|is there",
                 lowered,
                 re.IGNORECASE,
             )
@@ -709,7 +709,9 @@ class ParkTelegramRouter:
         if active is None:
             strategy = {"status": "none"}
         else:
-            strategy["status"] = "active"
+            pending_confirmation = bool(self.confirmations.pending_proposals(active))
+            strategy["status"] = "pending_confirmation" if pending_confirmation else "active"
+            strategy["pending_confirmation"] = pending_confirmation
             digest = str(active.get("plan_digest") or "")
             if digest:
                 plans = _read_jsonl(self.output_root / "park_strategy" / "plans.jsonl")
@@ -745,11 +747,21 @@ class ParkTelegramRouter:
             strategy = context.get("strategy") if isinstance(context.get("strategy"), Mapping) else {}
             account = context.get("account") if isinstance(context.get("account"), Mapping) else {}
             price = market.get("price")
-            strategy_status = "有一张策略处于等待/运行状态" if strategy.get("status") == "active" else "当前没有已确认运行策略"
-            price_text = str(price) if price not in (None, "") else "暂时无法读取"
+            if strategy.get("status") == "pending_confirmation":
+                strategy_status = "有一张策略提案正在等待你的确认，但还没有执行"
+            elif strategy.get("status") == "active":
+                strategy_status = "有一张已确认策略处于运行状态"
+            else:
+                strategy_status = "当前没有已确认运行策略"
+            market_authoritative = market.get("trusted") is True and market.get("fresh") is True
+            price_text = str(price) if market_authoritative and price not in (None, "") else "暂时无法读取（行情信任或新鲜度闸未通过）"
+            if account.get("status") == "unavailable":
+                exposure_text = "挂单和持仓事实暂时无法读取"
+            else:
+                exposure_text = f"挂单 {account.get('open_or_accepted_orders', 0)}，持仓 {account.get('open_positions', 0)}"
             reply = (
                 f"{strategy_status}。当前 Paper 价格：{price_text}。\n"
-                f"挂单 {account.get('open_or_accepted_orders', 0)}，持仓 {account.get('open_positions', 0)}。"
+                f"{exposure_text}。"
             )
             return {
                 "status": "conversation_replied",
@@ -758,7 +770,7 @@ class ParkTelegramRouter:
                 "provider": {"provider": "deterministic_read_only", "status": "fallback"},
                 "execution_authorized": False,
             }
-        if not re.search(r"交易|行情|市场|策略|价格|持仓|挂单|dca|grid|trade|market|strategy|position|order", str(text or ""), re.IGNORECASE):
+        if not re.search(r"交易|行情|市场|策略|价格|持仓|挂单|订单|中性|网格|杠杆|止损|止盈|做多|做空|趋势|震荡|dca|grid|trade|market|strategy|position|order|leverage|stop|take profit", str(text or ""), re.IGNORECASE):
             return {
                 "status": "conversation_replied",
                 "mode": "off_topic",
@@ -766,7 +778,13 @@ class ParkTelegramRouter:
                 "provider": {"provider": "deterministic_scope_guard", "status": "fallback"},
                 "execution_authorized": False,
             }
-        return self._handle_strategy(text, active=active, update_id=update_id)
+        return self._handle_strategy(
+            text,
+            active=active,
+            update_id=update_id,
+            skip_provider=True,
+            provider={"provider": "deterministic_strategy_fallback", "status": "provider_unavailable"},
+        )
 
     def _handle_conversation_or_strategy(
         self,
@@ -775,6 +793,8 @@ class ParkTelegramRouter:
         active: Mapping[str, Any] | None,
         update_id: Any,
     ) -> dict[str, Any]:
+        if str(text or "").strip().lower() in {"/start", "start", "/help", "help"}:
+            return self._handle_strategy(text, active=active, update_id=update_id)
         if self.conversation_agent is None:
             return self._handle_strategy(text, active=active, update_id=update_id)
         context = self._conversation_context(active)
@@ -845,6 +865,7 @@ class ParkTelegramRouter:
         update_id: Any,
         candidate: Mapping[str, Any] | None = None,
         provider: Mapping[str, Any] | None = None,
+        skip_provider: bool = False,
     ) -> dict[str, Any]:
         if text.lower() in {"/start", "start", "/help", "help"}:
             return self._block(
@@ -877,15 +898,24 @@ class ParkTelegramRouter:
                 normalized = normalize_park_input({**dict(candidate), "source_text": text})
             elif self._looks_like_continuation(text):
                 continuation = self.continuations.latest_pending()
-            if continuation is not None:
-                merged = dict(continuation.get("normalized_input") or {})
-                merged["source_text"] = text
-                normalized = normalize_park_input(merged)
-                provider = {
-                    "provider": "deterministic_continuation",
-                    "status": "merged",
-                    "draft_id": str(continuation.get("draft_id") or ""),
-                }
+                if continuation is not None:
+                    merged = dict(continuation.get("normalized_input") or {})
+                    merged["source_text"] = text
+                    normalized = normalize_park_input(merged)
+                    provider = {
+                        "provider": "deterministic_continuation",
+                        "status": "merged",
+                        "draft_id": str(continuation.get("draft_id") or ""),
+                    }
+                elif skip_provider:
+                    normalized = normalize_park_input(text)
+                else:
+                    parsed = self._parse_intent(text, update_id=update_id)
+                    provider = parsed.get("metadata") if isinstance(parsed, Mapping) else None
+                    candidate = parsed.get("candidate") if isinstance(parsed, Mapping) else None
+                    normalized = normalize_park_input(candidate if isinstance(candidate, Mapping) else text)
+            elif skip_provider:
+                normalized = normalize_park_input(text)
             else:
                 parsed = self._parse_intent(text, update_id=update_id)
                 provider = parsed.get("metadata") if isinstance(parsed, Mapping) else None
