@@ -17,6 +17,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from services.dashboard_ai_provider import _safe_context
+from services.park_conversation_contract import (
+    TRADING_AGENT_SYSTEM_PROMPT,
+    build_conversation_user_payload,
+)
+
 PARK_CODEX_INTENT_SCHEMA = "park-codex-intent-v1"
 DEFAULT_CODEX_CLI = "/opt/homebrew/bin/codex"
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -391,3 +397,103 @@ class CodexCliIntentParser:
 
     def _elapsed(self, started: float) -> int:
         return max(0, int(round((time.monotonic() - started) * 1000)))
+
+
+class CodexCliConversationParser(CodexCliIntentParser):
+    """Bounded Codex fallback for the Trading Conversation Agent contract."""
+
+    def converse(
+        self,
+        text: str,
+        *,
+        context: Mapping[str, Any] | None = None,
+        history: list[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        started = time.monotonic()
+        metadata: dict[str, Any] = {
+            "provider": "codex_cli",
+            "executable": self.executable,
+            "model": self.model,
+            "status": "started",
+            "timed_out": False,
+            "exit_code": None,
+        }
+        if not str(text or "").strip():
+            metadata.update({"status": "skipped", "elapsed_ms": 0})
+            return {"status": "unavailable", "metadata": metadata}
+        if not Path(self.executable).is_file() or not os.access(self.executable, os.X_OK):
+            metadata.update({"status": "unavailable", "elapsed_ms": self._elapsed(started)})
+            return {"status": "unavailable", "metadata": metadata}
+        env = {
+            "HOME": os.environ.get("HOME") or "/Users/wendy",
+            "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/opt/homebrew/bin",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+        }
+        if self.codex_home:
+            env["CODEX_HOME"] = self.codex_home
+        prompt = (
+            f"{TRADING_AGENT_SYSTEM_PROMPT}\n\n"
+            "Return exactly one JSON object with the required keys and no markdown.\n"
+            + build_conversation_user_payload(text, history=history, context=_safe_context(context))
+        )
+        try:
+            completed = self.runner(
+                [
+                    self.executable,
+                    "exec",
+                    "--model",
+                    self.model,
+                    "--ephemeral",
+                    "--sandbox",
+                    "read-only",
+                    "--skip-git-repo-check",
+                    "--ignore-user-config",
+                    "--ignore-rules",
+                    "--disable",
+                    "skill_search",
+                    "--json",
+                    "--color",
+                    "never",
+                    "-",
+                ],
+                input=prompt,
+                text=True,
+                capture_output=True,
+                timeout=self.timeout_seconds,
+                cwd=str(self.cwd),
+                env=env,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            metadata.update(
+                {
+                    "status": "timeout",
+                    "timed_out": True,
+                    "elapsed_ms": self._elapsed(started),
+                    "stderr_digest": _digest(_bounded(exc.stderr, MAX_STDERR_BYTES)),
+                }
+            )
+            return {"status": "unavailable", "metadata": metadata}
+        except OSError as exc:
+            metadata.update({"status": "unavailable", "elapsed_ms": self._elapsed(started), "error_type": type(exc).__name__})
+            return {"status": "unavailable", "metadata": metadata}
+
+        stdout = _bounded(completed.stdout, MAX_STDOUT_BYTES)
+        stderr = _bounded(completed.stderr, MAX_STDERR_BYTES)
+        metadata.update(
+            {
+                "status": "returned" if completed.returncode == 0 else "error",
+                "exit_code": int(completed.returncode),
+                "elapsed_ms": self._elapsed(started),
+                "stderr_digest": _digest(stderr) if stderr else None,
+            }
+        )
+        if completed.returncode != 0:
+            return {"status": "unavailable", "metadata": metadata}
+        try:
+            conversation = _json_from_agent_message(stdout)
+        except ParkCodexIntentError as exc:
+            metadata.update({"status": exc.code})
+            return {"status": "unavailable", "metadata": metadata}
+        return {"status": "ok", "conversation": conversation, "metadata": metadata}

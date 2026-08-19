@@ -15,6 +15,11 @@ from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from services.park_conversation_contract import (
+    TRADING_AGENT_SYSTEM_PROMPT,
+    build_conversation_user_payload,
+)
+
 
 DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
@@ -183,6 +188,77 @@ class DeepSeekIntentProvider:
             return {"status": "unavailable", "metadata": metadata}
         metadata.update({"status": "returned", "elapsed_ms": self._elapsed(started)})
         return {"status": "ok", "candidate": candidate, "metadata": metadata}
+
+    def converse(
+        self,
+        text: str,
+        *,
+        context: Mapping[str, Any] | None = None,
+        history: list[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Run the bounded Trading Conversation Agent prompt."""
+
+        started = time.monotonic()
+        metadata: dict[str, Any] = {
+            "provider": "deepseek",
+            "model": self.model,
+            "status": "started",
+            "timed_out": False,
+        }
+        if not self.api_key:
+            metadata.update({"status": "missing_api_key", "elapsed_ms": self._elapsed(started)})
+            return {"status": "unavailable", "metadata": metadata}
+        body = json.dumps(
+            {
+                "model": self.model,
+                "temperature": 0.2,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": TRADING_AGENT_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": build_conversation_user_payload(
+                            text,
+                            history=history,
+                            context=_safe_context(context),
+                        ),
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = Request(
+            self.base_url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with self.opener(request, timeout=self.timeout_seconds) as response:
+                raw = response.read(128_000)
+            payload = json.loads(raw.decode("utf-8"))
+            content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+            conversation = json.loads(_strip_json_fence(str(content)))
+            if not isinstance(conversation, dict):
+                raise ValueError("DeepSeek conversation content was not a JSON object")
+        except TimeoutError:
+            metadata.update({"status": "timeout", "timed_out": True, "elapsed_ms": self._elapsed(started)})
+            return {"status": "unavailable", "metadata": metadata}
+        except HTTPError as exc:
+            metadata.update({"status": "http_error", "http_status": int(exc.code), "elapsed_ms": self._elapsed(started)})
+            return {"status": "unavailable", "metadata": metadata}
+        except (URLError, OSError) as exc:
+            metadata.update({"status": "transport_error", "error_type": type(exc).__name__, "elapsed_ms": self._elapsed(started)})
+            return {"status": "unavailable", "metadata": metadata}
+        except (ValueError, TypeError, json.JSONDecodeError):
+            metadata.update({"status": "invalid_output", "elapsed_ms": self._elapsed(started)})
+            return {"status": "unavailable", "metadata": metadata}
+        metadata.update({"status": "returned", "elapsed_ms": self._elapsed(started)})
+        return {"status": "ok", "conversation": conversation, "metadata": metadata}
 
     @staticmethod
     def _elapsed(started: float) -> int:

@@ -31,6 +31,21 @@ delivery receipts under `outputs/park_strategy/`.  A successful Telegram send
 requires the API response's explicit `result.message_id`.  Missing or failed
 receipts remain failed/dead-lettered and are not treated as delivered.
 
+## Trading Conversation behavior
+
+The bot starts as a bounded Trading Conversation, not as a strategy form. It
+may answer read-only questions about current Paper price, strategy, orders,
+positions, and PnL; discuss trading ideas; and politely redirect unrelated
+topics. When Park is forming an execution decision, it preserves bounded
+conversation context, asks natural-language follow-ups, and only converges to
+a strategy snapshot when the explicitly stated fields are complete. The bot
+then asks Park whether to execute. A Conversation Candidate or an assistant
+reply is never an execution authorization.
+
+The deterministic normalizer, risk planner, market/freshness gates,
+reconciliation, ownership checks, Paper-only gate, and exact Park confirmation
+remain the only path to a proposal or execution.
+
 ## Safety interpretation
 
 - Natural-language intent uses DeepSeek first, then the bounded Codex CLI on
