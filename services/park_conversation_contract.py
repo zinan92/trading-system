@@ -128,16 +128,18 @@ def normalize_conversation_result(
         raise ParkConversationContractError("conversation_missing_fields_invalid", "missing fields must be a string list")
     confidence = value.get("confidence")
     confidence = confidence if confidence in {"high", "medium", "low"} else "low"
-    ready = mode == "ready_for_confirmation"
+    explicit_execution_intent = bool(value.get("explicit_execution_intent"))
+    ready = mode == "ready_for_confirmation" and explicit_execution_intent
+    if mode == "ready_for_confirmation" and not ready:
+        mode = "strategy_forming"
     return {
         "schema_version": PARK_CONVERSATION_SCHEMA,
         "mode": mode,
         "assistant_reply": reply[:MAX_ASSISTANT_REPLY_CHARS],
         "strategy_patch": patch,
         "missing_fields": [str(item)[:120] for item in missing_value[:12]],
-        "needs_confirmation": bool(value.get("needs_confirmation")) or ready,
-        "explicit_execution_intent": bool(value.get("explicit_execution_intent")),
+        "needs_confirmation": ready,
+        "explicit_execution_intent": explicit_execution_intent,
         "confidence": confidence,
         "source_text": str(source_text or "")[:MAX_HISTORY_MESSAGE_CHARS],
     }
-

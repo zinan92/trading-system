@@ -174,3 +174,31 @@ def test_provider_outage_does_not_misclassify_explicit_price_based_strategy_as_q
 
     assert result["status"] == "proposal_created"
     assert result["proposal"]["execution_authorized"] is False
+
+
+def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_path: Path) -> None:
+    provider = ConversationProvider(
+        {
+            "mode": "ready_for_confirmation",
+            "assistant_reply": "我整理出了一个候选方案，但先继续讨论也可以。",
+            "strategy_patch": {
+                "direction": "long",
+                "strategy_type": "dca",
+                "lower_price_boundary": 4200,
+                "upper_price_boundary": 4400,
+                "maximum_leverage": 10,
+                "stop_price": 4190,
+                "take_profit_price": 4800,
+            },
+            "missing_fields": [],
+            "needs_confirmation": True,
+            "explicit_execution_intent": False,
+        }
+    )
+    router = _router(tmp_path, provider)
+
+    result = router.handle_update(_update(6, "我们先讨论一下这个方案"))
+
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "strategy_forming"
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
