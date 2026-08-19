@@ -13,6 +13,18 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #817 / PR #818 makes the Telegram provider chain DeepSeek-first, with the
+  bounded Codex CLI (`gpt-5.6-sol`) fallback and deterministic parsing only as
+  the final safety fallback. The shared gateway is now used by Dashboard and
+  Telegram; provider output remains untrusted and cannot authorize execution.
+  Exact Cloud deployment is `main@6c2ee1f23fcfd2ec119f2217739c95e495b43da5`
+  (tree `a8cfc34a41a7fbf0c6ec686ecbafaf4b6e5fa938`). The host-owned DeepSeek
+  key is stored outside Git with mode 0600 and was not logged. A read-only
+  DeepSeek canary returned successfully; source/preflight/boot gates and a
+  natural tick passed with `execution=idle`, 0 orders, and 0 positions. The
+  previous unconfirmed strategy proposal remains expired/released; #750 still
+  requires a new Park-confirmed strategy crossing both 09:00 and 21:00
+  Recording Window boundaries.
 - #813 / PR #814 fixes Park admission precedence after the exact clean-slate
   cutover. A completed receipt with quarantine, ownership, Paper-only, and
   reconciliation proof now supersedes only the stale historical
