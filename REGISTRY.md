@@ -13,6 +13,14 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #836 / PR #837 keeps read-only trading and macro questions outside the
+  active Strategy Revision immutable guard. Exact Cloud deployment is
+  `main@25b3591f06e69609b5f504857be217365f8b61e2` (tree
+  `f017e1b545624d016a52bbe29b4fc28850375641`); the natural tick passed. The
+  existing Bot identity is unchanged. A previously Park-confirmed Paper DCA
+  is now active with one filled short entry at 4370 and one accepted short
+  entry at 4420; this exposure predates the release and is not live money.
+  #750's two-boundary soak can now observe this active session.
 - #832 / PR #833 retains bounded Trading Conversation context for one full
   12-hour Recording Window and deduplicates repeated explicit DCA entry levels.
   Exact Cloud deployment is `main@a184532696d64832f286501adec0dccefd16666e`
