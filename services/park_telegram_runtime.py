@@ -681,7 +681,7 @@ class ParkTelegramRouter:
         lowered = str(text or "").lower()
         topic = bool(
             re.search(
-                r"价格|当前价|行情|策略|有策略|持仓|挂单|订单|盈亏|pnl|price|position|order|running strategy|status",
+                r"价格|当前价|行情|策略|有策略|持仓|挂单|订单|盈亏|美联储|联储|fomc|fed|央行|利率|cpi|ppi|非农|就业|数据|会议|pnl|price|position|order|running strategy|status",
                 lowered,
                 re.IGNORECASE,
             )
@@ -770,7 +770,7 @@ class ParkTelegramRouter:
                 "provider": {"provider": "deterministic_read_only", "status": "fallback"},
                 "execution_authorized": False,
             }
-        if not re.search(r"交易|行情|市场|策略|价格|持仓|挂单|订单|中性|网格|杠杆|止损|止盈|做多|做空|趋势|震荡|dca|grid|trade|market|strategy|position|order|leverage|stop|take profit", str(text or ""), re.IGNORECASE):
+        if not re.search(r"交易|行情|市场|策略|价格|持仓|挂单|订单|中性|网格|杠杆|止损|止盈|做多|做空|趋势|震荡|美联储|联储|fomc|fed|央行|利率|cpi|ppi|非农|就业|数据|会议|dca|grid|trade|market|strategy|position|order|leverage|stop|take profit", str(text or ""), re.IGNORECASE):
             return {
                 "status": "conversation_replied",
                 "mode": "off_topic",
