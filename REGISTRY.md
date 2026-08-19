@@ -13,6 +13,13 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-18)
+- #832 / PR #833 retains bounded Trading Conversation context for one full
+  12-hour Recording Window and deduplicates repeated explicit DCA entry levels.
+  Exact Cloud deployment is `main@a184532696d64832f286501adec0dccefd16666e`
+  (tree `c474400bb4adabac736e870e6c4a59787e0a0396`); source/preflight/boot and
+  natural tick pass with 0 orders and 0 positions. The existing Telegram Bot
+  identity is unchanged. #750 remains the next frontier: a fresh
+  Park-confirmed strategy must cross both recording boundaries.
 - #828 / PR #829 repairs explicit DCA field recovery at Conversation
   Convergence. Park's multi-message user text now supplies the deterministic
   candidate when DeepSeek's structured patch is incomplete, including exact
