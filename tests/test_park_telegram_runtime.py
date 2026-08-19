@@ -233,6 +233,57 @@ def test_account_reader_releases_proven_completed_legacy_cutover_from_runtime_su
     assert result["legacy_cutover_completed"] is True
 
 
+def test_account_reader_completed_clean_slate_overrides_historical_unresolved_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Adapter:
+        output_root = tmp_path
+
+        def snapshot(self, _cycle_id):
+            return {"account": {"equity": 1000}, "orders": [], "positions": []}
+
+        def reconcile(self, _cycle_id):
+            return {"status": "ok", "issues": []}
+
+    monkeypatch.setattr(
+        "services.park_paper_runtime.build_park_authoritative_adapter",
+        lambda *_args, **_kwargs: SimpleNamespace(adapter=Adapter()),
+    )
+    monkeypatch.setattr(
+        "services.strategy_control_plane.StrategyControlPlane.runtime_state",
+        lambda _self, _cycle_id: {
+            "actual_state": "stopped",
+            "desired_state": "stopped",
+            "stale_cycle": True,
+            "previous_runtime_unresolved": True,
+        },
+    )
+    path = tmp_path / "park_strategy" / "legacy_cutover.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "event": "completed",
+                "clean_slate_verified": True,
+                "enabled_park_paper": True,
+                "legacy_runner_quarantine": {
+                    "ok": True,
+                    "park_control": True,
+                    "legacy_cycle_runner": False,
+                    "ownership": {"ok": True, "owner_id": "cloud-primary"},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = default_account_reader(tmp_path, "2026-08-19_DAY")
+
+    assert result["unresolved_runtime"] is False
+    assert result["legacy_cutover_completed"] is True
+
+
 def test_router_passes_park_config_to_default_account_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[object] = []
 
