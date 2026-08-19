@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -47,6 +48,10 @@ from services.park_strategy_session import (
     recording_window,
 )
 from services.park_telegram_control import ParkTelegramControlError, ParkTelegramLedger
+from services.park_telegram_continuation import (
+    ParkContinuationError,
+    ParkTelegramContinuationLedger,
+)
 from services.telegram_bot_transport import (
     TelegramBotTransport,
     TelegramBotTransportError,
@@ -281,6 +286,13 @@ class ParkTelegramRouter:
             park_user_id=park_user_id,
             chat_id=chat_id,
         )
+        self.confirmation_ttl_seconds = max(60, int(confirmation_ttl_seconds))
+        self.continuations = ParkTelegramContinuationLedger(
+            self.output_root,
+            park_user_id=park_user_id,
+            chat_id=chat_id,
+            ttl_seconds=self.confirmation_ttl_seconds,
+        )
         self.market_reader = market_reader or default_market_reader
         self.config = dict(config or {})
         self.account_reader = account_reader or (
@@ -288,7 +300,6 @@ class ParkTelegramRouter:
         )
         self.now = now or _utc_now
         self.cycle_id_provider = cycle_id_provider or _default_cycle_id
-        self.confirmation_ttl_seconds = max(60, int(confirmation_ttl_seconds))
         # Offline/tests may omit this seam.  The production pipeline supplies
         # a bounded Codex CLI parser explicitly; its output is untrusted.
         self.intent_parser = intent_parser
@@ -410,8 +421,15 @@ class ParkTelegramRouter:
             update_id = received.get("update_id")
             prior = self._previous_result(update_id)
             prior_result = dict(prior.get("result") or {}) if prior else {}
-            if prior_result.get("code") not in {"ambiguous_strategy_type", "missing_risk_authority"}:
-                continue
+            prior_code = str(prior_result.get("code") or "")
+            if prior_code not in {"ambiguous_strategy_type", "missing_risk_authority", "dca_exit_levels_missing"}:
+                if prior_code != "missing_direction":
+                    continue
+                try:
+                    if self.continuations.latest_pending() is None:
+                        continue
+                except ParkContinuationError:
+                    continue
             recovery_key = f"park-strategy-rejected:{update_id}:strategy-recovery"
             if any(row.get("idempotency_key") == recovery_key for row in self.telegram.outbox_rows()):
                 continue
@@ -587,6 +605,19 @@ class ParkTelegramRouter:
             )
         return dict(result)
 
+    @staticmethod
+    def _looks_like_continuation(text: str) -> bool:
+        """Recognize field-completion language without inferring direction."""
+
+        lowered = str(text or "").lower()
+        return bool(
+            re.search(
+                r"止损|止盈|止损位|止盈位|stop(?:_price)?|take\s*profit|take_profit|\btp\b|杠杆|leverage|最大可接受亏损|最大亏损|max(?:imum)?\s*loss",
+                lowered,
+                re.IGNORECASE,
+            )
+        )
+
     def _handle_strategy(
         self,
         text: str,
@@ -619,28 +650,64 @@ class ParkTelegramRouter:
                 idempotency_key=f"park-strategy-locked:{update_id}",
             )
         provider: Mapping[str, Any] | None = None
+        continuation: Mapping[str, Any] | None = None
+        normalized: dict[str, Any] | None = None
         try:
-            parsed = self._parse_intent(text, update_id=update_id)
-            provider = parsed.get("metadata") if isinstance(parsed, Mapping) else None
-            candidate = parsed.get("candidate") if isinstance(parsed, Mapping) else None
-            if isinstance(candidate, Mapping):
-                direction = str(candidate.get("direction") or "")
-                strategy_type = str(candidate.get("strategy_type") or "")
-                if direction == "neutral" and strategy_type not in {"", "grid"}:
-                    return self._block(
-                        code="neutral_direction_requires_grid",
-                        message="我理解到的是‘中性’，但中性只适用于 Grid；请把策略类型说成 Grid。\n\n例如：中性网格，区间 4450~4100，最大20倍杠杆",
-                        binding=None,
-                        idempotency_key=f"park-neutral-direction:{update_id}",
-                        provider=provider,
-                    )
-                normalized = normalize_park_input(candidate)
+            if self._looks_like_continuation(text):
+                continuation = self.continuations.latest_pending()
+            if continuation is not None:
+                merged = dict(continuation.get("normalized_input") or {})
+                merged["source_text"] = text
+                normalized = normalize_park_input(merged)
+                provider = {
+                    "provider": "deterministic_continuation",
+                    "status": "merged",
+                    "draft_id": str(continuation.get("draft_id") or ""),
+                }
             else:
-                normalized = normalize_park_input(text)
+                parsed = self._parse_intent(text, update_id=update_id)
+                provider = parsed.get("metadata") if isinstance(parsed, Mapping) else None
+                candidate = parsed.get("candidate") if isinstance(parsed, Mapping) else None
+                if isinstance(candidate, Mapping):
+                    direction = str(candidate.get("direction") or "")
+                    strategy_type = str(candidate.get("strategy_type") or "")
+                    if direction == "neutral" and strategy_type not in {"", "grid"}:
+                        return self._block(
+                            code="neutral_direction_requires_grid",
+                            message="我理解到的是‘中性’，但中性只适用于 Grid；请把策略类型说成 Grid。\n\n例如：中性网格，区间 4450~4100，最大20倍杠杆",
+                            binding=None,
+                            idempotency_key=f"park-neutral-direction:{update_id}",
+                            provider=provider,
+                        )
+                    normalized = normalize_park_input(candidate)
+                else:
+                    normalized = normalize_park_input(text)
             if normalized.get("strategy_type") == "dca" and (
                 normalized.get("stop_price") in (None, "")
                 or normalized.get("take_profit_price") in (None, "")
             ):
+                self.continuations.record_pending(
+                    update_id=update_id,
+                    text_digest=_digest(text),
+                    normalized_input={
+                        key: normalized.get(key)
+                        for key in (
+                            "direction",
+                            "strategy_type",
+                            "upper_price_boundary",
+                            "lower_price_boundary",
+                            "maximum_leverage",
+                            "maximum_acceptable_loss",
+                            "order_count",
+                        )
+                    },
+                    missing_fields=[
+                        key
+                        for key in ("stop_price", "take_profit_price")
+                        if normalized.get(key) in (None, "")
+                    ],
+                    draft_id=str(continuation.get("draft_id") or "") if continuation is not None else None,
+                )
                 return self._block(
                     code="dca_exit_levels_missing",
                     message=(
@@ -707,11 +774,17 @@ class ParkTelegramRouter:
                 text=self._format_plan(plan, proposal),
                 binding={"strategy_session_id": session_id, "strategy_revision_id": revision_id},
             )
+            if continuation is not None:
+                self.continuations.resolve(
+                    continuation,
+                    update_id=update_id,
+                    plan_digest=str(plan["plan_digest"]),
+                )
             result: dict[str, Any] = {"status": "proposal_created", "plan": plan, "proposal": proposal, "session": started}
             if provider:
                 result["provider"] = dict(provider)
             return result
-        except (ParkStrategyPlanError, ParkStrategyIdentityError, ParkTelegramControlError) as exc:
+        except (ParkStrategyPlanError, ParkStrategyIdentityError, ParkTelegramControlError, ParkContinuationError) as exc:
             return self._block(
                 code=getattr(exc, "code", "park_strategy_rejected"),
                 message=f"Park strategy not accepted: {str(exc)}",
