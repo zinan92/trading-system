@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import threading
 import time
 import uuid
@@ -22,7 +21,6 @@ from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Mapping
-from services.park_codex_intent_parser import CodexCliIntentParser
 from services.park_confirmation import ParkConfirmationLedger
 from services.park_strategy_plan import (
     ParkStrategyPlanError,
@@ -35,12 +33,13 @@ from services.park_strategy_snapshot import (
     PARK_AI_SNAPSHOT_EVENT_SCHEMA,
     record_strategy_snapshot_terminal,
 )
-from services.dashboard_ai_provider import (
+from services.dashboard_ai_provider import _safe_context
+from services.park_ai_provider_gateway import (
     DEFAULT_DEEPSEEK_MODEL,
     DEFAULT_DEEPSEEK_TIMEOUT_SECONDS,
     DEFAULT_DEEPSEEK_URL,
     DeepSeekIntentProvider,
-    _safe_context,
+    ParkAiProviderGateway,
 )
 
 
@@ -143,65 +142,6 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
     value = json.loads(path.read_text(encoding="utf-8"))
     return dict(value) if isinstance(value, dict) else None
-
-
-class ParkAiProviderGateway:
-    """DeepSeek-first provider chain with Codex CLI fallback."""
-
-    def __init__(
-        self,
-        *,
-        deepseek: Any | None = None,
-        codex: Any | None = None,
-    ) -> None:
-        self.deepseek = deepseek or DeepSeekIntentProvider()
-        configured_codex = (
-            os.environ.get("PARK_CODEX_CLI")
-            or os.environ.get("CODEX_CLI")
-            or shutil.which("codex")
-            or "/opt/homebrew/bin/codex"
-        )
-        self.codex = codex or CodexCliIntentParser(
-            executable=configured_codex,
-            model="gpt-5.6-sol",
-            timeout_seconds=float(os.environ.get("PARK_CODEX_FALLBACK_TIMEOUT_SECONDS", "15")),
-            cwd=os.environ.get("PARK_CODEX_CWD") or None,
-            codex_home=os.environ.get("CODEX_HOME") or None,
-        )
-
-    def parse(self, text: str, *, context: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        first = self._call(self.deepseek, text, context=context)
-        if first.get("status") == "ok":
-            return first
-        first_metadata = dict(first.get("metadata") or {})
-        second = self._call(self.codex, text, context=context)
-        metadata = dict(second.get("metadata") or {})
-        metadata.setdefault("fallback_from", str(first_metadata.get("provider") or "deepseek"))
-        metadata["fallback_status"] = first_metadata.get("status")
-        metadata["fallback_elapsed_ms"] = first_metadata.get("elapsed_ms")
-        second["metadata"] = metadata
-        return second
-
-    @staticmethod
-    def _call(provider: Any, text: str, *, context: Mapping[str, Any] | None) -> dict[str, Any]:
-        try:
-            result = provider.parse(text, context=context)
-        except TypeError:
-            # Existing Codex parser has a text-only seam.
-            try:
-                result = provider.parse(text)
-            except Exception as exc:  # noqa: BLE001 - fallback failure is fail-closed.
-                return {
-                    "status": "unavailable",
-                    "metadata": {
-                        "provider": provider.__class__.__name__,
-                        "status": "adapter_error",
-                        "error_type": type(exc).__name__,
-                    },
-                }
-        except Exception as exc:  # noqa: BLE001 - provider failure is a safe fallback.
-            return {"status": "unavailable", "metadata": {"provider": provider.__class__.__name__, "status": "adapter_error", "error_type": type(exc).__name__}}
-        return dict(result or {})
 
 
 def _disposition_from_text(text: str) -> dict[str, Any] | None:

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from services.journal_store import load_json
-from services.park_codex_intent_parser import CodexCliIntentParser
+from services.park_ai_provider_gateway import ParkAiProviderGateway
 from services.park_legacy_cutover import load_effective_park_config
 from services.park_legacy_cutover_runtime import run_legacy_cutover_once
 from services.park_paper_runtime import (
@@ -73,13 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             # never invent an instrument or fee model at the process boundary.
             pass
         transport = TelegramBotTransport(chat_id=args.chat_id)
-        intent_parser = CodexCliIntentParser(
-            executable=os.getenv("TRADING_ORCHESTRATOR_CODEX_CLI", "/opt/homebrew/bin/codex"),
-            model=os.getenv("TRADING_ORCHESTRATOR_CODEX_MODEL", "gpt-5.6-luna"),
-            timeout_seconds=float(os.getenv("TRADING_ORCHESTRATOR_CODEX_TIMEOUT_SECONDS", "30")),
-            cwd=Path(os.getenv("TRADING_ORCHESTRATOR_CODEX_CWD", "/tmp")),
-            codex_home=os.getenv("CODEX_HOME") or None,
-        )
+        intent_parser = ParkAiProviderGateway()
         router = ParkTelegramRouter(
             output_root,
             park_user_id=args.park_user_id,
