@@ -211,9 +211,39 @@ def default_account_reader(
         and str(runtime_after.get("actual_state") or "") == "stopped"
         and str(runtime_after.get("desired_state") or "") == "stopped"
     )
+    legacy_cutover_completion: dict[str, Any] | None = None
+    cutover_path = Path(output_root) / "park_strategy" / "legacy_cutover.jsonl"
+    try:
+        cutover_rows = [
+            json.loads(line)
+            for line in cutover_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ] if cutover_path.exists() else []
+        latest_terminal = next(
+            (row for row in reversed(cutover_rows) if isinstance(row, Mapping) and row.get("event") in {"completed", "blocked"}),
+            None,
+        )
+        quarantine = latest_terminal.get("legacy_runner_quarantine") if isinstance(latest_terminal, Mapping) else None
+        quarantine = quarantine if isinstance(quarantine, Mapping) else {}
+        ownership = quarantine.get("ownership") if isinstance(quarantine.get("ownership"), Mapping) else {}
+        if (
+            latest_terminal
+            and latest_terminal.get("event") == "completed"
+            and latest_terminal.get("clean_slate_verified") is True
+            and latest_terminal.get("enabled_park_paper") is True
+            and quarantine.get("ok") is True
+            and quarantine.get("park_control") is True
+            and quarantine.get("legacy_cycle_runner") is False
+            and ownership.get("ok") is True
+            and runtime.get("previous_runtime_unresolved") is not True
+        ):
+            legacy_cutover_completion = dict(latest_terminal)
+    except (OSError, ValueError, json.JSONDecodeError):
+        legacy_cutover_completion = None
     unresolved = bool(runtime.get("previous_runtime_unresolved")) or (
         str(runtime.get("actual_state") or "") in {"starting", "running", "replanning", "stopping"}
         and not proven_stale_record
+        and legacy_cutover_completion is None
     )
     return {
         "equity": account.get("equity"),
@@ -222,6 +252,7 @@ def default_account_reader(
         "open_or_accepted_orders": len(account_wide_orders),
         "unresolved_runtime": unresolved,
         "legacy_runtime_stale_record": proven_stale_record,
+        "legacy_cutover_completed": legacy_cutover_completion is not None,
         "pending_terminal_actions": False,
         "snapshot": {
             **snapshot,
@@ -422,7 +453,7 @@ class ParkTelegramRouter:
             prior = self._previous_result(update_id)
             prior_result = dict(prior.get("result") or {}) if prior else {}
             prior_code = str(prior_result.get("code") or "")
-            if prior_code not in {"ambiguous_strategy_type", "missing_risk_authority", "dca_exit_levels_missing"}:
+            if prior_code not in {"ambiguous_strategy_type", "missing_risk_authority", "dca_exit_levels_missing", "clean_slate_blocked"}:
                 if prior_code != "missing_direction":
                     continue
                 try:
