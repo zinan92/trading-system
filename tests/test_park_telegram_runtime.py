@@ -74,6 +74,106 @@ def test_account_reader_counts_legacy_exposure_across_all_paper_cycles(tmp_path:
     assert account["snapshot"]["account_wide_legacy_exposure"]["orders"][0]["cycle_id"] == "legacy-cycle"
 
 
+def test_account_reader_uses_active_park_session_equity_over_recording_window_starting_cash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "outputs"
+
+    class Adapter:
+        output_root = output
+
+        def snapshot(self, _cycle_id):
+            return {
+                "orders": [],
+                "positions": [],
+                "account": {"starting_cash": 10000.0, "equity": 10000.0},
+            }
+
+        def reconcile(self, _cycle_id):
+            return {"status": "ok", "issues": []}
+
+    monkeypatch.setattr(
+        "services.park_paper_runtime.build_park_authoritative_adapter",
+        lambda *_args, **_kwargs: SimpleNamespace(adapter=Adapter()),
+    )
+    identity = output / "park_strategy" / "identity.jsonl"
+    identity.parent.mkdir(parents=True)
+    identity.write_text(
+        json.dumps(
+            {
+                "event": "session_started",
+                "strategy_session_id": "session-active",
+                "strategy_revision_id": "revision-active",
+                "plan_digest": "sha256:" + "a" * 64,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshots = output / "dualtrack" / "nautilus_authoritative" / "snapshots"
+    snapshots.mkdir(parents=True)
+    (snapshots / "park-session-active.json").write_text(
+        json.dumps(
+            {
+                "cycle_id": "park-session-active",
+                "account": {
+                    "starting_cash": 10000.0,
+                    "ending_cash": 9444.93,
+                    "equity": 9434.93,
+                    "realized_pnl": -555.07,
+                    "fees": 10.0,
+                    "funding": 0.0,
+                },
+                "orders": [],
+                "positions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = default_account_reader(output, "2026-08-20_DAY", config={"feature_enabled": True})
+
+    assert result["equity"] == 9434.93
+    assert result["snapshot"]["account"]["equity"] == 9434.93
+
+
+def test_account_reader_uses_latest_authoritative_snapshot_after_session_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "outputs"
+
+    class Adapter:
+        output_root = output
+
+        def snapshot(self, _cycle_id):
+            return {"account": {"starting_cash": 10000.0, "equity": 10000.0}, "orders": [], "positions": []}
+
+        def reconcile(self, _cycle_id):
+            return {"status": "ok", "issues": []}
+
+    monkeypatch.setattr(
+        "services.park_paper_runtime.build_park_authoritative_adapter",
+        lambda *_args, **_kwargs: SimpleNamespace(adapter=Adapter()),
+    )
+    snapshots = output / "dualtrack" / "nautilus_authoritative" / "snapshots"
+    snapshots.mkdir(parents=True)
+    (snapshots / "park-session-closed.json").write_text(
+        json.dumps(
+            {
+                "cycle_id": "park-session-closed",
+                "account": {"starting_cash": 10000.0, "ending_cash": 9444.93, "equity": 9434.93},
+                "orders": [],
+                "positions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = default_account_reader(output, "2026-08-20_DAY", config={"feature_enabled": True})
+
+    assert result["equity"] == 9434.93
+
+
 def test_transport_requires_explicit_message_receipt_and_parses_updates() -> None:
     calls: list[tuple[str, int]] = []
 
