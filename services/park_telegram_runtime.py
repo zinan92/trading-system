@@ -165,6 +165,7 @@ def default_account_reader(
     }
     account_wide_reconciliation_ok = reconciliation.get("status") == "ok" and not reconciliation.get("issues")
     adapter_root = getattr(adapter, "output_root", None)
+    account_candidates: list[tuple[float, str, dict[str, Any]]] = []
     if adapter_root is not None:
         snapshot_dir = Path(adapter_root) / "dualtrack" / "nautilus_authoritative" / "snapshots"
         for path in sorted(snapshot_dir.glob("*.json")):
@@ -176,6 +177,10 @@ def default_account_reader(
                 snapshot_cycle_id = str(row.get("cycle_id") or path.stem).strip()
                 if not snapshot_cycle_id:
                     raise ValueError("account_snapshot_cycle_id_missing")
+                if isinstance(row.get("account"), Mapping) and row.get("account", {}).get("equity") not in (None, ""):
+                    account_candidates.append(
+                        (path.stat().st_mtime, snapshot_cycle_id, dict(row["account"]))
+                    )
                 for order in row["orders"]:
                     if not isinstance(order, Mapping):
                         raise ValueError("account_snapshot_order_invalid")
@@ -199,6 +204,24 @@ def default_account_reader(
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 raise ParkTelegramRuntimeError("paper_account_snapshot_invalid", type(exc).__name__) from exc
     account = dict(snapshot.get("account") or {})
+    selected_account_cycle = str(cycle_id)
+    active_identity = ParkStrategyIdentityJournal(Path(output_root)).active_session()
+    active_snapshot_cycle = (
+        f"park-session-{active_identity.get('strategy_session_id')}"
+        if isinstance(active_identity, Mapping) and active_identity.get("strategy_session_id")
+        else ""
+    )
+    preferred = [
+        candidate
+        for candidate in account_candidates
+        if active_snapshot_cycle and candidate[1] == active_snapshot_cycle
+    ]
+    if preferred:
+        _mtime, selected_account_cycle, account = preferred[-1]
+    elif account_candidates:
+        _mtime, selected_account_cycle, account = max(account_candidates, key=lambda item: item[0])
+    snapshot["account"] = dict(account)
+    snapshot["account_source"] = f"authoritative_snapshot:{selected_account_cycle}"
     runtime = {}
     try:
         from services.strategy_control_plane import StrategyControlPlane
