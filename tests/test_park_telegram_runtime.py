@@ -7,7 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from services.park_confirmation import ParkConfirmationLedger
-from services.park_telegram_runtime import ParkTelegramRouter, ParkTelegramWorker, default_account_reader
+from services.park_telegram_runtime import (
+    ParkTelegramRouter,
+    ParkTelegramWorker,
+    default_account_reader,
+    mark_paper_account_to_market,
+)
 from services.telegram_bot_transport import TelegramBotTransport, TelegramBotTransportError
 
 
@@ -174,6 +179,119 @@ def test_account_reader_uses_latest_authoritative_snapshot_after_session_closes(
     assert result["equity"] == 9434.93
 
 
+def test_mark_paper_account_to_market_reprices_long_and_short_without_mutating_history() -> None:
+    account = {"ending_cash": 10000.0, "equity": 9900.0}
+    positions = [
+        {"status": "open", "side": "long", "entry_price": 100.0, "remaining_units": 2.0},
+        {"status": "open", "side": "short", "entry_price": 110.0, "remaining_units": 3.0},
+    ]
+
+    projected, marked = mark_paper_account_to_market(
+        account,
+        positions,
+        {
+            "price": 105.0,
+            "trusted": True,
+            "fresh": True,
+            "source": "paper-feed",
+            "observed_at": "2026-08-20T02:00:00+00:00",
+        },
+    )
+
+    assert projected["equity"] == 10025.0
+    assert projected["unrealized_pnl"] == 25.0
+    assert projected["historical_snapshot_equity"] == 9900.0
+    assert projected["nav_status"] == "marked_to_market"
+    assert projected["nav_is_current"] is True
+    assert marked[0]["unrealized_pnl"] == 10.0
+    assert marked[1]["unrealized_pnl"] == 15.0
+    assert account == {"ending_cash": 10000.0, "equity": 9900.0}
+
+
+def test_mark_paper_account_to_market_blocks_untrusted_mark_for_open_positions() -> None:
+    projected, marked = mark_paper_account_to_market(
+        {"ending_cash": 10000.0, "equity": 9500.0},
+        [{"status": "open", "side": "short", "entry_price": 100.0, "remaining_units": 1.0}],
+        {"price": 120.0, "trusted": False, "fresh": True, "source": "synthetic"},
+    )
+
+    assert projected["equity"] is None
+    assert projected["nav_is_current"] is False
+    assert projected["nav_status"] == "blocked"
+    assert projected["nav_blocker"] == "market_not_authoritative"
+    assert marked[0].get("unrealized_pnl") is None
+
+
+def test_account_reader_reprices_active_park_session_against_current_market(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "outputs"
+
+    class Adapter:
+        output_root = output
+
+        def snapshot(self, _cycle_id):
+            return {
+                "orders": [],
+                "positions": [],
+                "account": {"starting_cash": 10000.0, "ending_cash": 9989.99598479, "equity": 9434.93258479},
+            }
+
+        def reconcile(self, _cycle_id):
+            return {"status": "ok", "issues": []}
+
+    monkeypatch.setattr(
+        "services.park_paper_runtime.build_park_authoritative_adapter",
+        lambda *_args, **_kwargs: SimpleNamespace(adapter=Adapter()),
+    )
+    identity = output / "park_strategy" / "identity.jsonl"
+    identity.parent.mkdir(parents=True)
+    identity.write_text(
+        json.dumps({"event": "session_started", "strategy_session_id": "session-active"}) + "\n",
+        encoding="utf-8",
+    )
+    snapshots = output / "dualtrack" / "nautilus_authoritative" / "snapshots"
+    snapshots.mkdir(parents=True)
+    (snapshots / "park-session-active.json").write_text(
+        json.dumps(
+            {
+                "cycle_id": "park-session-active",
+                "account": {
+                    "starting_cash": 10000.0,
+                    "ending_cash": 9989.99598479,
+                    "equity": 9434.93258479,
+                },
+                "orders": [],
+                "positions": [
+                    {"position_id": "p1", "status": "open", "side": "short", "entry_price": 4371.62, "remaining_units": 5.721},
+                    {"position_id": "p2", "status": "open", "side": "short", "entry_price": 4420.0, "remaining_units": 5.656},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = default_account_reader(
+        output,
+        "2026-08-20_DAY",
+        config={"feature_enabled": True},
+        market={
+            "price": 4503.87,
+            "trusted": True,
+            "fresh": True,
+            "source": "binance_usdm_futures",
+            "observed_at": "2026-08-20T02:13:00+00:00",
+        },
+    )
+
+    assert result["equity"] == 8759.02501479
+    assert result["unrealized_pnl"] == -1230.97097
+    assert result["nav_status"] == "marked_to_market"
+    assert result["mark"]["price"] == 4503.87
+    assert result["positions"][0]["unrealized_pnl"] == -756.60225
+    assert result["positions"][1]["unrealized_pnl"] == -474.36872
+
+
 def test_transport_requires_explicit_message_receipt_and_parses_updates() -> None:
     calls: list[tuple[str, int]] = []
 
@@ -235,7 +353,9 @@ def test_default_account_reader_uses_park_authoritative_adapter_and_external_con
         "snapshot_cycle": "2026-08-15_DAY",
         "reconcile_cycle": "2026-08-15_DAY",
     }
-    assert result["equity"] == 1234.0
+    assert result["equity"] is None
+    assert result["nav_status"] == "blocked"
+    assert result["nav_blocker"] == "current_market_required"
     assert result["open_positions"] == 1
     assert result["open_or_accepted_orders"] == 1
     assert result["reconciliation_healthy"] is True

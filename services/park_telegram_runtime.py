@@ -11,6 +11,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -110,11 +111,145 @@ def default_market_reader() -> dict[str, Any]:
     }
 
 
+def mark_paper_account_to_market(
+    account: Mapping[str, Any],
+    positions: list[Mapping[str, Any]],
+    market: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Project current Paper NAV from authoritative cash and a trusted mark.
+
+    The execution snapshot's ``equity`` is an historical mark.  It is useful
+    evidence, but it must not be presented as current while positions remain
+    open.  This helper is deliberately read-only and fail-closed: a missing,
+    stale, synthetic, or otherwise untrusted mark yields no current NAV.
+    """
+
+    projected = dict(account)
+    projected["historical_snapshot_equity"] = account.get("equity")
+    projected["nav_is_current"] = False
+    projected["nav_status"] = "blocked"
+    projected["nav_blocker"] = "current_market_required"
+    marked_positions = [dict(row) for row in positions]
+
+    # Direct historical readers may not have a market seam.  Keep the
+    # historical value explicitly labelled for compatibility, but never call
+    # it current NAV.  Production Telegram/Dashboard paths always pass the
+    # same market envelope used for their read-only context.
+    if market is None:
+        if marked_positions:
+            projected["equity"] = None
+            projected["unrealized_pnl"] = None
+            projected["nav_status"] = "blocked"
+            projected["nav_blocker"] = "current_market_required"
+            return projected, marked_positions
+        projected["nav_status"] = "historical_snapshot_only"
+        return projected, marked_positions
+
+    if not marked_positions:
+        try:
+            ending_cash = float(account.get("ending_cash"))
+        except (TypeError, ValueError):
+            projected["equity"] = None
+            projected["unrealized_pnl"] = None
+            projected["nav_blocker"] = "authoritative_ending_cash_missing"
+            return projected, marked_positions
+        if not math.isfinite(ending_cash):
+            projected["equity"] = None
+            projected["unrealized_pnl"] = None
+            projected["nav_blocker"] = "authoritative_ending_cash_invalid"
+            return projected, marked_positions
+        projected["equity"] = round(ending_cash, 8)
+        projected["unrealized_pnl"] = 0.0
+        projected["nav_is_current"] = True
+        projected["nav_status"] = "cash_only"
+        projected.pop("nav_blocker", None)
+        return projected, marked_positions
+
+    market = dict(market or {})
+    try:
+        mark_price = float(market.get("price", market.get("latest_close")))
+    except (TypeError, ValueError):
+        mark_price = math.nan
+    trusted = (
+        market.get("trusted") is True
+        and market.get("fresh") is True
+        and math.isfinite(mark_price)
+        and mark_price > 0
+    )
+    if not trusted:
+        projected["equity"] = None
+        projected["unrealized_pnl"] = None
+        projected["nav_blocker"] = (
+            "market_not_fresh"
+            if market.get("trusted") is True and market.get("fresh") is not True
+            else "market_not_authoritative"
+        )
+        return projected, marked_positions
+
+    try:
+        ending_cash = float(account.get("ending_cash"))
+    except (TypeError, ValueError):
+        projected["equity"] = None
+        projected["unrealized_pnl"] = None
+        projected["nav_blocker"] = "authoritative_ending_cash_missing"
+        return projected, marked_positions
+    if not math.isfinite(ending_cash):
+        projected["equity"] = None
+        projected["unrealized_pnl"] = None
+        projected["nav_blocker"] = "authoritative_ending_cash_invalid"
+        return projected, marked_positions
+
+    unrealized = 0.0
+    for row in marked_positions:
+        if str(row.get("status") or "").lower() != "open":
+            continue
+        try:
+            entry_price = float(row.get("entry_price"))
+            units = float(row.get("remaining_units", row.get("units")))
+        except (TypeError, ValueError):
+            projected["equity"] = None
+            projected["unrealized_pnl"] = None
+            projected["nav_blocker"] = "open_position_mark_fields_missing"
+            return projected, marked_positions
+        if not math.isfinite(entry_price) or not math.isfinite(units) or units < 0:
+            projected["equity"] = None
+            projected["unrealized_pnl"] = None
+            projected["nav_blocker"] = "open_position_mark_fields_invalid"
+            return projected, marked_positions
+        side = str(row.get("side") or "").lower()
+        if side not in {"long", "short"}:
+            projected["equity"] = None
+            projected["unrealized_pnl"] = None
+            projected["nav_blocker"] = "open_position_side_missing"
+            return projected, marked_positions
+        position_unrealized = (mark_price - entry_price) * units
+        if side == "short":
+            position_unrealized *= -1.0
+        row["unrealized_pnl"] = round(position_unrealized, 8)
+        row["mark_price"] = mark_price
+        unrealized += position_unrealized
+
+    projected["unrealized_pnl"] = round(unrealized, 8)
+    projected["equity"] = round(ending_cash + unrealized, 8)
+    projected["nav_is_current"] = True
+    projected["nav_status"] = "marked_to_market"
+    projected.pop("nav_blocker", None)
+    projected["mark"] = {
+        "price": mark_price,
+        "fresh": True,
+        "trusted": True,
+        "source": str(market.get("source") or market.get("provider") or "market"),
+        "observed_at": str(market.get("observed_at") or market.get("latest_timestamp") or ""),
+    }
+    return projected, marked_positions
+
+
 def default_account_reader(
     output_root: Path,
     cycle_id: str,
     *,
     config: Mapping[str, Any] | None = None,
+    market: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Read the Park-authoritative Paper snapshot; never use a fake equity.
 
@@ -220,6 +355,11 @@ def default_account_reader(
         _mtime, selected_account_cycle, account = preferred[-1]
     elif account_candidates:
         _mtime, selected_account_cycle, account = max(account_candidates, key=lambda item: item[0])
+    account, marked_positions = mark_paper_account_to_market(
+        account,
+        list(account_wide_positions.values()),
+        market,
+    )
     snapshot["account"] = dict(account)
     snapshot["account_source"] = f"authoritative_snapshot:{selected_account_cycle}"
     runtime = {}
@@ -283,6 +423,11 @@ def default_account_reader(
     )
     return {
         "equity": account.get("equity"),
+        "unrealized_pnl": account.get("unrealized_pnl"),
+        "nav_is_current": account.get("nav_is_current") is True,
+        "nav_status": account.get("nav_status"),
+        "nav_blocker": account.get("nav_blocker"),
+        "mark": dict(account.get("mark") or {}),
         "reconciliation_healthy": account_wide_reconciliation_ok,
         "open_positions": len(account_wide_positions),
         "open_or_accepted_orders": len(account_wide_orders),
@@ -294,10 +439,12 @@ def default_account_reader(
             **snapshot,
             "account_wide_legacy_exposure": {
                 "orders": list(account_wide_orders.values()),
-                "positions": list(account_wide_positions.values()),
+                "positions": marked_positions,
                 "ownership": "legacy_cycle_or_unknown",
             },
         },
+        "positions": marked_positions,
+        "orders": list(account_wide_orders.values()),
         "reconciliation": reconciliation,
     }
 
@@ -368,6 +515,7 @@ class ParkTelegramRouter:
         )
         self.market_reader = market_reader or default_market_reader
         self.config = dict(config or {})
+        self._uses_default_account_reader = account_reader is None
         self.account_reader = account_reader or (
             lambda root, cycle: default_account_reader(root, cycle, config=self.config)
         )
@@ -381,6 +529,21 @@ class ParkTelegramRouter:
             intent_parser,
         ) if intent_parser is not None else None
         self.provider_path = self.output_root / "park_strategy" / "provider_calls.jsonl"
+
+    def _read_account(
+        self,
+        cycle_id: str,
+        *,
+        market: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        if self._uses_default_account_reader:
+            return default_account_reader(
+                self.output_root,
+                cycle_id,
+                config=self.config,
+                market=market,
+            )
+        return self.account_reader(self.output_root, cycle_id)
 
     def handle_update(self, update: Mapping[str, Any]) -> dict[str, Any]:
         update_id = update.get("update_id")
@@ -559,7 +722,7 @@ class ParkTelegramRouter:
             )
         try:
             expected_count = int(expected)
-            facts = dict(self.account_reader(self.output_root, self.cycle_id_provider(self.now())))
+            facts = dict(self._read_account(self.cycle_id_provider(self.now())))
             if facts.get("reconciliation_healthy") is not True:
                 raise ParkLegacyCutoverError(
                     "legacy_reconciliation_unhealthy",
@@ -724,7 +887,12 @@ class ParkTelegramRouter:
         except Exception as exc:  # noqa: BLE001 - read-only context may be unavailable.
             market = {"status": "unavailable", "error_type": type(exc).__name__}
         try:
-            account = dict(self.account_reader(self.output_root, self.cycle_id_provider(self.now())))
+            account = dict(
+                self._read_account(
+                    self.cycle_id_provider(self.now()),
+                    market=market,
+                )
+            )
         except Exception as exc:  # noqa: BLE001 - provider must say facts are unavailable.
             account = {"status": "unavailable", "error_type": type(exc).__name__}
         snapshot = account.get("snapshot") if isinstance(account.get("snapshot"), Mapping) else {}
@@ -753,8 +921,12 @@ class ParkTelegramRouter:
             "strategy": strategy,
             "execution": {"paper_only": True, "control_plane": "telegram"},
             "account": account,
-            "positions": list(snapshot.get("positions") or []) if isinstance(snapshot, Mapping) else [],
-            "orders": list(snapshot.get("orders") or []) if isinstance(snapshot, Mapping) else [],
+            "positions": list(account.get("positions") or snapshot.get("positions") or [])
+            if isinstance(snapshot, Mapping)
+            else list(account.get("positions") or []),
+            "orders": list(account.get("orders") or snapshot.get("orders") or [])
+            if isinstance(snapshot, Mapping)
+            else list(account.get("orders") or []),
         }
 
     def _deterministic_conversation_fallback(
@@ -782,9 +954,13 @@ class ParkTelegramRouter:
                 exposure_text = "挂单和持仓事实暂时无法读取"
             else:
                 exposure_text = f"挂单 {account.get('open_or_accepted_orders', 0)}，持仓 {account.get('open_positions', 0)}"
+            if account.get("nav_is_current") is True and account.get("equity") not in (None, ""):
+                nav_text = f"当前 Paper NAV：{float(account['equity']):.2f} USDT（按可信行情标记）"
+            else:
+                nav_text = "当前 Paper NAV：暂不可计算（当前行情信任/新鲜度闸未通过）"
             reply = (
                 f"{strategy_status}。当前 Paper 价格：{price_text}。\n"
-                f"{exposure_text}。"
+                f"{exposure_text}。\n{nav_text}。"
             )
             return {
                 "status": "conversation_replied",
@@ -995,7 +1171,8 @@ class ParkTelegramRouter:
                 )
             observed_at = self.now()
             cycle_id = self.cycle_id_provider(observed_at)
-            facts = dict(self.account_reader(self.output_root, cycle_id))
+            market = dict(self.market_reader())
+            facts = dict(self._read_account(cycle_id, market=market))
             admission = admit_clean_slate(facts)
             if not admission.get("admitted"):
                 return self._block(
@@ -1004,7 +1181,6 @@ class ParkTelegramRouter:
                     binding=None,
                     idempotency_key=f"park-clean-slate:{update_id}",
                 )
-            market = dict(self.market_reader())
             session_id = f"session-{uuid.uuid4().hex}"
             revision_id = f"revision-{uuid.uuid4().hex}"
             normalized.update(
@@ -1097,7 +1273,7 @@ class ParkTelegramRouter:
             return active
         cycle_id = self.cycle_id_provider(self.now())
         try:
-            facts = dict(self.account_reader(self.output_root, cycle_id))
+            facts = dict(self._read_account(cycle_id))
         except ParkTelegramRuntimeError:
             raise
         except Exception as exc:  # noqa: BLE001 - expiry release is fail closed.
