@@ -250,6 +250,7 @@ class ParkAiChatService:
         self.park_user_id = _text(park_user_id, "park_user_id")
         self.provider = provider or ParkAiProviderGateway()
         self.market_reader = market_reader or self._default_market_reader
+        self._uses_default_account_reader = account_reader is None
         self.account_reader = account_reader or self._default_account_reader
         self.now = now or _utc_now
         self._time = time.time
@@ -899,13 +900,33 @@ class ParkAiChatService:
     def _read_context(self, active: Mapping[str, Any] | None) -> dict[str, Any]:
         market = dict(self.market_reader() or {})
         cycle = str(recording_window(self.now())["record_window_id"])
-        account = dict(self.account_reader(self.output_root, cycle) or {})
+        if self._uses_default_account_reader:
+            from services.park_telegram_runtime import default_account_reader
+
+            account = dict(
+                default_account_reader(
+                    self.output_root,
+                    cycle,
+                    market=market,
+                )
+                or {}
+            )
+        else:
+            account = dict(self.account_reader(self.output_root, cycle) or {})
         return {
             "market": market,
             "account": account,
             "strategy": dict(active or {}),
-            "positions": list((account.get("snapshot") or {}).get("positions") or []),
-            "orders": list((account.get("snapshot") or {}).get("orders") or []),
+            "positions": list(
+                account.get("positions")
+                or (account.get("snapshot") or {}).get("positions")
+                or []
+            ),
+            "orders": list(
+                account.get("orders")
+                or (account.get("snapshot") or {}).get("orders")
+                or []
+            ),
         }
 
     def _active_strategy_summary(self, active: Mapping[str, Any] | None) -> dict[str, Any]:
