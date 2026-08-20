@@ -12,6 +12,29 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-20)
+- #840 / PR #841 first corrected Telegram NAV provenance: the account reader now
+  selects the active Park Strategy Session authoritative snapshot instead of the
+  recording-window baseline. #842 / PR #843 completes the read-only projection:
+  while positions remain open, current NAV is authoritative ending cash plus
+  current trusted/fresh mark-to-market unrealized PnL. Starting cash remains a
+  historical baseline and is never displayed as current NAV. Untrusted or stale
+  marks return `equity=null` with an explicit blocker; no order, position,
+  strategy, or Paper gate is mutated.
+- Exact Cloud deployment is `main@8f8e4de438b43d35f6300b6e095325726616080b`
+  (tree `7b1c56db0fd8d023176a1e0b5ae7c123380efc1c`) at
+  `/opt/gridmind/src/trading-system`. Candidate preflight, Dashboard boot, and
+  the natural `dualtrack-live-tick` passed with `paper_only=true` and zero
+  control actions. The independent datafeed was restarted after a transient
+  health timeout, then returned `service_status=ok` and fresh execution-venue
+  candles.
+- Post-deploy read-only evidence at the trusted mark `4496.87` reports
+  `equity=8838.66401479`, `unrealized_pnl=-1151.33197`, 2 existing open short
+  positions, 0 accepted orders, reconciliation healthy, and account source
+  `park-session-cb179e9a46cf48cf8602888f9677fc1c`. This is Paper evidence only;
+  no live/real-money path or exchange key is enabled. #750 remains the next
+  frontier: continuous-session soak across both Beijing recording boundaries.
+
 ## 现在在哪里(2026-08-18)
 - #836 / PR #837 keeps read-only trading and macro questions outside the
   active Strategy Revision immutable guard. Exact Cloud deployment is
