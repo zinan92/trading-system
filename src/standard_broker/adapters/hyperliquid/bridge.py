@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from ...capabilities import CapabilityDescriptor
+from ...capabilities import PORT_NAMES, CapabilityDescriptor
 from ...errors import BrokerCapabilityError, BrokerError
-from ...models import BrokerEnvironment, Provenance, SignerKind
+from ...models import BrokerEnvironment, BrokerIdentity, Provenance, SignerKind
+from ...paper import PaperPreflight
 
 
 class NautilusCompatibilityError(BrokerError):
@@ -114,6 +115,15 @@ class NautilusHyperliquidBridge:
         return self._capabilities
 
     @property
+    def identity(self) -> BrokerIdentity:
+        return BrokerIdentity(
+            broker_id="hyperliquid",
+            environment=self._config.environment,
+            account_address=self._config.account_address,
+            signer_kind=self._config.signer_kind,
+        )
+
+    @property
     def adapter_metadata(self) -> NautilusAdapterMetadata:
         return self._metadata
 
@@ -136,4 +146,14 @@ class NautilusHyperliquidBridge:
             real_money_eligible=False,
             adapter_version=self._metadata.version,
             adapter_commit=self._metadata.commit,
+        )
+
+    def preflight(self) -> PaperPreflight:
+        return PaperPreflight(
+            broker_id="hyperliquid",
+            environment=BrokerEnvironment.PAPER,
+            network_io=False,
+            real_money_eligible=False,
+            credential_required=False,
+            ports=PORT_NAMES,
         )

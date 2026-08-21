@@ -13,6 +13,15 @@ from .fees import (
     FillFact,
     FundingPayment,
 )
+from .host import (
+    BrokerRegistry,
+    BrokerSelection,
+    HostBrokerBinding,
+    HostRole,
+    HostSafetyPolicy,
+    RecordingEvent,
+    RecordingTrack,
+)
 from .models import (
     AccountScope,
     BrokerEnvironment,
@@ -62,6 +71,8 @@ __all__ = [
     "BrokerEnvironment",
     "BrokerError",
     "BrokerIdentity",
+    "BrokerRegistry",
+    "BrokerSelection",
     "CapabilityDescriptor",
     "ConformanceReport",
     "EvidenceKind",
@@ -73,6 +84,9 @@ __all__ = [
     "FeeState",
     "FillFact",
     "FundingPayment",
+    "HostBrokerBinding",
+    "HostRole",
+    "HostSafetyPolicy",
     "InMemoryPaperTransport",
     "InstrumentPort",
     "LiquidationFact",
@@ -97,6 +111,8 @@ __all__ = [
     "ProtectionQuantityPolicy",
     "ProtectionType",
     "Provenance",
+    "RecordingEvent",
+    "RecordingTrack",
     "SignerKind",
     "TimeInForce",
     "TriggerReference",

@@ -10,11 +10,12 @@
 - T04 is merged in PR #14: Hyperliquid order lifecycle and reconciliation.
 - T05 is merged in PR #15: Hyperliquid protection order semantics.
 - T06 is merged in PR #16: Nautilus Hyperliquid compatibility bridge.
-- T07 is in progress: Broker conformance, security, and Paper proof.
+- T07 is merged in PR #17: Broker conformance, security, and Paper proof.
+- T08 is in progress: trading-system host integration contract.
 
 ## Next
 
-- T08: Trading-system host integration contract, after T07 merges.
+- After T08, run the final full-suite and requirement audit; no live/testnet milestone is implied.
 - T04–T08 remain blocked in dependency order by the published GitHub tickets.
 
 ## Safety boundary

@@ -70,6 +70,19 @@ class NautilusBridgeTests(unittest.TestCase):
         self.assertEqual(receipt.adapter_version, "1.230.0")
         self.assertEqual(backend.calls[0][0:2], ("market_data", "read"))
 
+    def test_bridge_exposes_paper_safe_preflight(self) -> None:
+        bridge = NautilusHyperliquidBridge(
+            backend=FakeNautilusBackend(self.metadata()),
+            config=self.config(),
+            declared_capabilities=capabilities(),
+        )
+
+        facts = bridge.preflight()
+
+        self.assertFalse(facts.network_io)
+        self.assertFalse(facts.real_money_eligible)
+        self.assertFalse(facts.credential_required)
+
     def test_version_mismatch_fails_before_backend_invocation(self) -> None:
         backend = FakeNautilusBackend(self.metadata(version="1.231.0"))
 
