@@ -1,5 +1,35 @@
 # Decision Log
 
+## Consume the standard-broker Paper host contract without fallback (Issue #852 / PR #853)
+
+Date: 2026-08-21
+
+### Decision
+
+- `trading-system` consumes the canonical `standard-broker` package at the
+  immutable full commit `9f4d42637d48f6bf8926d85eb50ce62bd86b499e` through an
+  explicit `hyperliquid`/`PAPER` composition. The host adapter is deliberately
+  local-fixture-only and read-only: it cannot create orders, positions, network
+  traffic, credentials, or real-money eligibility.
+- Unsupported broker IDs, testnet/live environments, wildcard provider
+  namespaces, write fixture operations, unsafe receipts, and spoofed receipt
+  objects fail closed. No fallback to the legacy generic Paper adapter is
+  permitted for a `standard_broker` selection.
+- Canonical Paper receipts and capability-gap events are recorded through the
+  existing Recording Track with provenance and safety flags preserved. Existing
+  Park, Paper-only, trusted-market, freshness, reconciliation, immutable-fill,
+  Supervisor, boot, and release-SHA gates remain authoritative.
+
+### Verification
+
+- Implementation source: `trading-system` branch `codex/issue-852-standard-broker-host`,
+  commit `f52264d`; delivery is tracked by PR #853.
+- Focused host/composition/recording tests: 45 passed. The independent
+  `standard-broker` suite: 82 passed. Compile, diff, and secret scans passed.
+- No Hyperliquid network, testnet/mainnet credential, live path, strategy-core
+  mutation, or cloud deployment was used. The user's existing dirty checkout
+  was not modified.
+
 ## Activate Paper-only Telegram control after pending-update precheck (Issue #847 follow-up)
 
 Date: 2026-08-21

@@ -8,11 +8,13 @@ from services.broker_composition import (
     BrokerPlugin,
     BrokerPluginKey,
     BrokerPluginRegistry,
+    build_demo_broker_execution_port,
     build_broker_execution_port,
     build_configured_live_broker_execution_port,
     build_broker_reconciliation_port,
 )
 from services.broker_port import BrokerOrderRequest
+from services.park_recording_track import ParkRecordingTrack
 
 
 class _FakeResponse:
@@ -138,6 +140,80 @@ def test_default_registry_builds_expected_adapter(
     adapter = build_broker_execution_port(_context(tmp_path, **context_kwargs))
 
     assert adapter.name == expected_name
+
+
+def test_standard_broker_paper_composition_is_explicit_and_read_only(tmp_path: Path):
+    adapter = build_broker_execution_port(
+        _context(
+            tmp_path,
+            mode="paper",
+            provider="standard_broker",
+            environment="paper",
+            broker_config={"broker_id": "hyperliquid"},
+        )
+    )
+
+    assert adapter.name == "standard_broker_paper"
+    assert adapter.provider == "standard_broker"
+    assert adapter.preflight()["network_io"] is False
+    assert adapter.preflight()["real_money_eligible"] is False
+    receipt = adapter.request("market_data", "read", {"request_id": "host-read-1"})
+    assert receipt.network_io is False
+    event = adapter.record_receipt(
+        ParkRecordingTrack(tmp_path / "recording"),
+        record_window_id="2026-08-21_DAY",
+        strategy_session_id="session-host",
+        strategy_revision_id="revision-host",
+        occurred_at="2026-08-21T01:00:00+00:00",
+        receipt=receipt,
+    )
+    assert event["source"] == "standard-broker.paper"
+    blocked = adapter.record_capability_gap(
+        ParkRecordingTrack(tmp_path / "recording"),
+        record_window_id="2026-08-21_DAY",
+        strategy_session_id="session-host",
+        strategy_revision_id="revision-host",
+        occurred_at="2026-08-21T01:00:01+00:00",
+        port="order_execution",
+        operation="submit",
+        reason="capability_gap",
+    )
+    assert blocked["event_type"] == "standard_broker_capability_gap"
+    assert blocked["payload"]["status"] == "blocked"
+    with pytest.raises(RuntimeError, match="submit_order"):
+        adapter.submit_order(
+            BrokerOrderRequest(
+                run_date="2026-08-21",
+                ticket={"ticket_id": "paper-host-submit"},
+            )
+        )
+
+
+@pytest.mark.parametrize("environment", ["paper", "testnet", "live"])
+def test_standard_broker_rejects_unsupported_selection_without_fallback(tmp_path: Path, environment: str):
+    with pytest.raises(RuntimeError, match="unsupported standard_broker selection|unsupported broker selection"):
+        build_broker_execution_port(
+            _context(
+                tmp_path,
+                mode="live" if environment == "live" else "paper",
+                provider="standard_broker",
+                environment=environment,
+                broker_config={"broker_id": "binance"},
+            )
+        )
+
+
+def test_standard_broker_demo_composition_cannot_fall_back_to_legacy(tmp_path: Path):
+    with pytest.raises(RuntimeError, match="unsupported standard_broker selection"):
+        build_demo_broker_execution_port(
+            _context(
+                tmp_path,
+                mode="live",
+                provider="standard_broker",
+                environment="demo",
+                broker_config={"broker_id": "hyperliquid"},
+            )
+        )
 
 
 def test_demo_and_testnet_are_distinct_plugins_with_matched_reconciliation_endpoint(tmp_path: Path):

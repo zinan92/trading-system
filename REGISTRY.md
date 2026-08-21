@@ -13,6 +13,17 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-21)
+- #852 / PR #853 consumes the merged `standard-broker` Paper host contract at
+  `standard-broker@9f4d42637d48f6bf8926d85eb50ce62bd86b499e`. The exact
+  `hyperliquid`/`PAPER` registry selection is read-only, local-fixture-only,
+  credential-free, and has no network or real-money eligibility; unsupported
+  broker/environment namespaces fail closed rather than falling back to the
+  legacy adapter. Canonical Paper receipts and capability gaps are projected
+  into the existing Recording Track. This is host integration only: no
+  Hyperliquid wire connection, testnet/mainnet credential, strategy rewrite,
+  cloud deployment, or live execution was performed. Focused host/composition/
+  recording tests pass; #846 remains open for the later broker-capability and
+  strategy execution work.
 - #847 / PR #848 promotes the Telegram path to a bounded Trading Expert with
   separate research, discussion, strategy-forming, and confirmation-ready
   modes. Grid/DCA fields, evidence, assumptions, and conflicts persist as an
