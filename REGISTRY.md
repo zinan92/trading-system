@@ -8,11 +8,12 @@
 - T02 is merged in PR #12: Hyperliquid default-perps market data and instrument mapping.
 - T03 is merged in PR #13: Hyperliquid account, fee, funding, and liquidation facts.
 - T04 is merged in PR #14: Hyperliquid order lifecycle and reconciliation.
-- T05 is in progress: Hyperliquid protection order semantics.
+- T05 is merged in PR #15: Hyperliquid protection order semantics.
+- T06 is in progress: Nautilus Hyperliquid compatibility bridge.
 
 ## Next
 
-- T06: Nautilus Hyperliquid compatibility bridge, after T05 merges.
+- T07: Broker conformance, security, and Paper proof, after T06 merges.
 - T04–T08 remain blocked in dependency order by the published GitHub tickets.
 
 ## Safety boundary
