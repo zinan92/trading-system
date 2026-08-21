@@ -2,6 +2,7 @@
 
 from .account import AccountSnapshot, LiquidationFact, PositionFact, PositionSide
 from .capabilities import PORT_NAMES, CapabilityDescriptor
+from .conformance import ConformanceReport, EvidenceKind, run_paper_conformance
 from .errors import BrokerCapabilityError, BrokerError, PaperBoundaryError
 from .fees import (
     FeeEvent,
@@ -50,6 +51,7 @@ from .protection import (
     ProtectionType,
     TriggerReference,
 )
+from .security import find_secret_like_literals
 
 __all__ = [
     "PORT_NAMES",
@@ -61,6 +63,8 @@ __all__ = [
     "BrokerError",
     "BrokerIdentity",
     "CapabilityDescriptor",
+    "ConformanceReport",
+    "EvidenceKind",
     "FeeEvent",
     "FeeKind",
     "FeePort",
@@ -96,4 +100,6 @@ __all__ = [
     "SignerKind",
     "TimeInForce",
     "TriggerReference",
+    "find_secret_like_literals",
+    "run_paper_conformance",
 ]

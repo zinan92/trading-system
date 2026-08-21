@@ -9,11 +9,12 @@
 - T03 is merged in PR #13: Hyperliquid account, fee, funding, and liquidation facts.
 - T04 is merged in PR #14: Hyperliquid order lifecycle and reconciliation.
 - T05 is merged in PR #15: Hyperliquid protection order semantics.
-- T06 is in progress: Nautilus Hyperliquid compatibility bridge.
+- T06 is merged in PR #16: Nautilus Hyperliquid compatibility bridge.
+- T07 is in progress: Broker conformance, security, and Paper proof.
 
 ## Next
 
-- T07: Broker conformance, security, and Paper proof, after T06 merges.
+- T08: Trading-system host integration contract, after T07 merges.
 - T04–T08 remain blocked in dependency order by the published GitHub tickets.
 
 ## Safety boundary
