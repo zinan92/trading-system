@@ -59,6 +59,7 @@ class HyperliquidMarketDataTests(unittest.TestCase):
         btc = self.make_instruments().get("BTC-USD-PERP")
 
         self.assertTrue(btc.price_rule.is_valid(Decimal("1234.5")))
+        self.assertFalse(btc.price_rule.is_valid(Decimal("123456")))
         self.assertFalse(btc.price_rule.is_valid(Decimal("1234.56")))
         self.assertFalse(btc.price_rule.is_valid(Decimal("0.00123")))
         self.assertFalse(btc.price_rule.is_valid(Decimal(0)))
@@ -122,8 +123,6 @@ class HyperliquidMarketDataTests(unittest.TestCase):
                 "time": 1787313659000,
             },
             self.make_provenance(),
-            n_sig_figs=5,
-            mantissa=2,
         )
 
         self.assertEqual(trades[0].instrument_id, "BTC-USD-PERP")
@@ -133,8 +132,8 @@ class HyperliquidMarketDataTests(unittest.TestCase):
         self.assertEqual(book.bids[0].price, Decimal("64999.0"))
         self.assertEqual(book.asks[0].order_count, 2)
         self.assertEqual(book.depth, 1)
-        self.assertEqual(book.n_sig_figs, 5)
-        self.assertEqual(book.mantissa, 2)
+        self.assertFalse(hasattr(book, "n_sig_figs"))
+        self.assertFalse(hasattr(book, "mantissa"))
 
     def test_mid_and_bbo_remain_distinct_ticker_facts(self) -> None:
         adapter = HyperliquidMarketDataAdapter(self.make_instruments())

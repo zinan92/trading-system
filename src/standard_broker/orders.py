@@ -24,6 +24,17 @@ class TimeInForce(str, Enum):
     ALO = "alo"
 
 
+@dataclass(frozen=True)
+class SlippagePolicy:
+    """Maximum allowed aggressive IOC distance expressed in basis points."""
+
+    max_bps: Decimal
+
+    def __post_init__(self) -> None:
+        if not self.max_bps.is_finite() or self.max_bps <= 0:
+            raise ValueError("max_bps must be finite and positive")
+
+
 class OrderState(str, Enum):
     SUBMITTING = "submitting"
     RESTING = "resting"

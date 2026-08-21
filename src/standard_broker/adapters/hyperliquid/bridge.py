@@ -280,6 +280,12 @@ class NautilusHyperliquidRuntime:
         return self._state
 
     @property
+    def session(self) -> BrokerRuntimeSession:
+        """Return the immutable session identity used by adapter mappers."""
+
+        return self._session
+
+    @property
     def health(self) -> NautilusRuntimeHealth:
         return NautilusRuntimeHealth(
             state=self._state,

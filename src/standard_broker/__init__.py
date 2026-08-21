@@ -3,7 +3,13 @@
 from .account import AccountSnapshot, LiquidationFact, PositionFact, PositionSide
 from .capabilities import PORT_NAMES, CapabilityDescriptor
 from .conformance import ConformanceReport, EvidenceKind, run_paper_conformance
-from .errors import BrokerCapabilityError, BrokerError, PaperBoundaryError, RuntimeBoundaryError
+from .errors import (
+    BrokerCapabilityError,
+    BrokerError,
+    MarketDataGateError,
+    PaperBoundaryError,
+    RuntimeBoundaryError,
+)
 from .fees import (
     FeeEvent,
     FeeKind,
@@ -36,6 +42,7 @@ from .orders import (
     OrderSide,
     OrderState,
     OrderType,
+    SlippagePolicy,
     TimeInForce,
 )
 from .paper import (
@@ -102,6 +109,7 @@ __all__ = [
     "InstrumentPort",
     "LiquidationFact",
     "MarketDataPort",
+    "MarketDataGateError",
     "OrderExecutionPort",
     "OrderFill",
     "OrderIntent",
@@ -109,6 +117,7 @@ __all__ = [
     "OrderSide",
     "OrderState",
     "OrderType",
+    "SlippagePolicy",
     "PaperBoundaryError",
     "PaperBrokerAdapter",
     "PaperPreflight",

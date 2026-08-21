@@ -10,6 +10,7 @@ from ...instruments import (
     MarginMode,
     PriceRule,
 )
+from ...orders import OrderType
 from .errors import UnsupportedProductError
 
 
@@ -69,6 +70,8 @@ class HyperliquidInstrumentAdapter:
                 max_leverage=Decimal(str(raw["maxLeverage"])),
                 margin_mode=margin_mode,
                 metadata_revision=revision,
+                minimum_quantity=Decimal(1).scaleb(-sz_decimals),
+                supported_order_types=(OrderType.LIMIT, OrderType.MARKET),
             )
             if instrument.canonical_symbol in instruments:
                 raise ValueError(f"duplicate canonical instrument {instrument.canonical_symbol}")

@@ -28,3 +28,11 @@ class RuntimeBoundaryError(BrokerError):
     def __init__(self, reason_code: str, detail: str) -> None:
         self.reason_code = reason_code
         super().__init__(f"{reason_code}: {detail}")
+
+
+class MarketDataGateError(BrokerError):
+    """Raised when execution-grade market data cannot authorize an order intent."""
+
+    def __init__(self, reason_code: str, detail: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {detail}")

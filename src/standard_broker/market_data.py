@@ -81,8 +81,6 @@ class OrderBookSnapshot:
     depth: int
     venue_timestamp: datetime
     provenance: Provenance
-    n_sig_figs: int | None = None
-    mantissa: int | None = None
 
 
 @dataclass(frozen=True)

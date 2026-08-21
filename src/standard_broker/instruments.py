@@ -6,6 +6,8 @@ from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from enum import Enum
 from types import MappingProxyType
 
+from .orders import OrderType
+
 
 class ContractType(str, Enum):
     """Supported canonical contract families."""
@@ -47,9 +49,6 @@ class PriceRule:
         decimal_places = max(0, -normalized.as_tuple().exponent)
         if decimal_places > self.max_decimal_places:
             return False
-        if normalized == normalized.to_integral_value():
-            return True
-
         digits = "".join(str(digit) for digit in normalized.as_tuple().digits).lstrip("0")
         digits = digits.rstrip("0")
         return len(digits) <= self.max_significant_figures
@@ -73,6 +72,8 @@ class InstrumentSpec:
     max_leverage: Decimal
     margin_mode: MarginMode
     metadata_revision: str
+    minimum_quantity: Decimal | None = None
+    supported_order_types: tuple[OrderType, ...] = (OrderType.LIMIT,)
 
     def __post_init__(self) -> None:
         for name in (
@@ -95,6 +96,12 @@ class InstrumentSpec:
             raise ValueError("minimum_notional must be positive")
         if self.max_leverage <= 0:
             raise ValueError("max_leverage must be positive")
+        if self.minimum_quantity is not None and self.minimum_quantity <= 0:
+            raise ValueError("minimum_quantity must be positive when provided")
+        if not self.supported_order_types or any(
+            not isinstance(order_type, OrderType) for order_type in self.supported_order_types
+        ):
+            raise ValueError("supported_order_types must contain OrderType values")
 
     def minimum_quantity_for_price(self, price: Decimal) -> Decimal:
         """Derive the smallest step quantity meeting the minimum notional."""
@@ -104,7 +111,13 @@ class InstrumentSpec:
         units = (self.minimum_notional / price / self.quantity_step).to_integral_value(
             rounding=ROUND_CEILING
         )
-        return units * self.quantity_step
+        derived = units * self.quantity_step
+        return max(self.minimum_quantity or self.quantity_step, derived)
+
+    def supports_order_type(self, order_type: OrderType) -> bool:
+        """Return whether this Broker instrument supports one canonical order type."""
+
+        return order_type in self.supported_order_types
 
 
 class InstrumentCatalog:
