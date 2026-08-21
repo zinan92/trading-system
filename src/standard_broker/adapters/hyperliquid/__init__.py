@@ -18,7 +18,7 @@ from .errors import UnknownInstrumentError, UnsupportedProductError
 from .fees import HyperliquidFeeAdapter
 from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter, HyperliquidRuntimeReadAdapter
-from .orders import HyperliquidOrderAdapter
+from .orders import HyperliquidOrderAdapter, HyperliquidRuntimeOrderAdapter
 from .protection import HyperliquidProtectionAdapter
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "HyperliquidMarketDataAdapter",
     "HyperliquidRuntimeReadAdapter",
     "HyperliquidOrderAdapter",
+    "HyperliquidRuntimeOrderAdapter",
     "HyperliquidProtectionAdapter",
     "NautilusAdapterMetadata",
     "NautilusBridgeConfig",

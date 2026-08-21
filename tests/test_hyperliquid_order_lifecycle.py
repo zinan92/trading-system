@@ -81,7 +81,8 @@ class HyperliquidOrderLifecycleTests(unittest.TestCase):
         )
         receipt = HyperliquidOrderAdapter(transport=transport).submit(self.intent())
 
-        self.assertEqual(receipt.state, OrderState.FILLED)
+        self.assertEqual(receipt.state, OrderState.UNKNOWN)
+        self.assertEqual(receipt.reason, "filled_without_fill_identity")
         self.assertEqual(receipt.filled_quantity, Decimal("0.1"))
         self.assertEqual(receipt.remaining_quantity, Decimal(0))
         self.assertEqual(receipt.average_fill_price, Decimal("65001.2"))

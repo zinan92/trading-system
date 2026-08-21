@@ -7,6 +7,7 @@ from .errors import (
     BrokerCapabilityError,
     BrokerError,
     MarketDataGateError,
+    OrderIdempotencyError,
     PaperBoundaryError,
     RuntimeBoundaryError,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "MarketDataPort",
     "MarketDataGateError",
     "OrderExecutionPort",
+    "OrderIdempotencyError",
     "OrderFill",
     "OrderIntent",
     "OrderReceipt",

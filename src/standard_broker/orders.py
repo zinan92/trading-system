@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 
-from .models import Provenance
+from .models import BrokerEnvironment, Provenance
 
 
 class OrderSide(str, Enum):
@@ -60,6 +60,7 @@ class OrderIntent:
     time_in_force: TimeInForce
     idempotency_key: str
     reduce_only: bool = False
+    close_position: bool = False
     client_order_id: str | None = None
     trigger_price: Decimal | None = None
     expires_at: datetime | None = None
@@ -81,6 +82,8 @@ class OrderIntent:
             raise ValueError("limit orders require limit_price")
         if self.limit_price is not None and self.limit_price <= 0:
             raise ValueError("limit_price must be positive")
+        if self.close_position and not self.reduce_only:
+            raise ValueError("close_position orders must be reduce_only")
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,7 @@ class OrderFill:
 class OrderReceipt:
     order_id: str
     broker_id: str
+    environment: BrokerEnvironment
     client_order_id: str
     state: OrderState
     original_quantity: Decimal
@@ -109,6 +113,10 @@ class OrderReceipt:
     average_fill_price: Decimal | None
     reason: str | None
     provenance: Provenance
+    updated_at: datetime
+    broker_updated_at: datetime | None = None
+    broker_order_lineage: tuple[str, ...] = ()
+    client_order_lineage: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -129,13 +137,19 @@ class InMemoryOrderTransport:
         submit_response: object,
         cancel_response: object | None = None,
         modify_response: object | None = None,
+        query_response: object | None = None,
+        open_orders_response: object | None = None,
     ) -> None:
         self.submit_response = submit_response
         self.cancel_response = cancel_response if cancel_response is not None else {"status": "ok"}
         self.modify_response = modify_response if modify_response is not None else {"status": "ok"}
+        self.query_response = query_response if query_response is not None else {"status": "unknown"}
+        self.open_orders_response = open_orders_response if open_orders_response is not None else {"orders": []}
         self.submit_calls: list[OrderTransportCall] = []
         self.cancel_calls: list[OrderTransportCall] = []
         self.modify_calls: list[OrderTransportCall] = []
+        self.query_calls: list[OrderTransportCall] = []
+        self.open_orders_calls: list[OrderTransportCall] = []
 
     @staticmethod
     def _resolve(response: object, call: OrderTransportCall) -> object:
@@ -155,7 +169,22 @@ class InMemoryOrderTransport:
         self.cancel_calls.append(call)
         return self._resolve(self.cancel_response, call)
 
-    def modify(self, receipt: OrderReceipt, intent: OrderIntent) -> object:
-        call = OrderTransportCall("modify", receipt.order_id, receipt.client_order_id)
+    def modify(
+        self,
+        receipt: OrderReceipt,
+        intent: OrderIntent,
+        replacement_client_order_id: str,
+    ) -> object:
+        call = OrderTransportCall("modify", receipt.order_id, replacement_client_order_id)
         self.modify_calls.append(call)
         return self._resolve(self.modify_response, call)
+
+    def query(self, receipt: OrderReceipt) -> object:
+        call = OrderTransportCall("query", receipt.order_id, receipt.client_order_id)
+        self.query_calls.append(call)
+        return self._resolve(self.query_response, call)
+
+    def open_orders(self, instrument_id: str | None = None) -> object:
+        call = OrderTransportCall("open_orders", instrument_id or "", "")
+        self.open_orders_calls.append(call)
+        return self._resolve(self.open_orders_response, call)

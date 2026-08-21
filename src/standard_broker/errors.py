@@ -36,3 +36,11 @@ class MarketDataGateError(BrokerError):
     def __init__(self, reason_code: str, detail: str) -> None:
         self.reason_code = reason_code
         super().__init__(f"{reason_code}: {detail}")
+
+
+class OrderIdempotencyError(BrokerError):
+    """Raised when one idempotency key is reused for a different canonical intent."""
+
+    def __init__(self, detail: str) -> None:
+        self.reason_code = "idempotency_collision"
+        super().__init__(f"{self.reason_code}: {detail}")
