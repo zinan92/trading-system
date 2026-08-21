@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import Enum
 
 from .instruments import MarginMode
-from .models import Provenance
+from .models import BrokerEnvironment, Provenance
 
 
 class PositionSide(str, Enum):
@@ -26,6 +26,9 @@ class PositionFact:
     margin_used: Decimal | None
     position_value: Decimal | None
     unrealized_pnl: Decimal | None
+    broker_id: str
+    environment: BrokerEnvironment
+    observation_id: str
     provenance: Provenance
 
 
@@ -42,6 +45,8 @@ class AccountSnapshot:
     unrealized_pnl: Decimal | None
     positions: tuple[PositionFact, ...]
     provenance: Provenance
+    environment: BrokerEnvironment = BrokerEnvironment.PAPER
+    observation_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -56,3 +61,4 @@ class LiquidationFact:
     liquidation_fee: Decimal | None
     occurred_at: datetime
     provenance: Provenance
+    environment: BrokerEnvironment = BrokerEnvironment.PAPER

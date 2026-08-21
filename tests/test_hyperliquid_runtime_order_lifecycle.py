@@ -15,6 +15,7 @@ from standard_broker.errors import OrderIdempotencyError
 from standard_broker.models import AccountScope, BrokerEnvironment
 from standard_broker.orders import OrderIntent, OrderSide, OrderState, OrderType, TimeInForce
 from standard_broker.runtime import AccountReference, BrokerRuntimeSession, SignerReference
+from standard_broker.runtime_facts import RuntimeFactLedger
 
 
 REVISION = "hyperliquid-runtime-order-v1"
@@ -134,7 +135,14 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
 
     def adapter(self, *, profile: CapabilityDescriptor | None = None):
         runtime, backend = self.runtime(profile=profile)
-        return HyperliquidRuntimeOrderAdapter(runtime=runtime, instruments=self.instruments()), backend
+        return (
+            HyperliquidRuntimeOrderAdapter(
+                runtime=runtime,
+                instruments=self.instruments(),
+                ledger=RuntimeFactLedger(),
+            ),
+            backend,
+        )
 
     def test_submit_returns_canonical_receipt_and_native_request_stays_internal(self) -> None:
         adapter, backend = self.adapter()
@@ -353,6 +361,31 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(result.remaining_quantity, Decimal("0"))
         self.assertIn("503", adapter.fills)
 
+    def test_order_fill_is_written_to_shared_runtime_fact_ledger(self) -> None:
+        runtime, _ = self.runtime()
+        ledger = RuntimeFactLedger()
+        adapter = HyperliquidRuntimeOrderAdapter(
+            runtime=runtime,
+            instruments=self.instruments(),
+            ledger=ledger,
+        )
+        submitted = adapter.submit(self.intent())
+
+        adapter.apply_fill(
+            {
+                "coin": "BTC",
+                "px": "65000",
+                "sz": "0.1",
+                "side": "B",
+                "time": 1787313663000,
+                "oid": 101,
+                "cloid": submitted.client_order_id,
+                "tid": 504,
+            }
+        )
+
+        self.assertEqual(len(ledger.order_fills), 1)
+
     def test_quantity_step_and_minimum_notional_are_checked_before_backend(self) -> None:
         adapter, backend = self.adapter()
 
@@ -386,7 +419,11 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
 
     def test_runtime_backend_is_not_invoked_before_runtime_start(self) -> None:
         runtime, backend = self.runtime(start=False)
-        adapter = HyperliquidRuntimeOrderAdapter(runtime=runtime, instruments=self.instruments())
+        adapter = HyperliquidRuntimeOrderAdapter(
+            runtime=runtime,
+            instruments=self.instruments(),
+            ledger=RuntimeFactLedger(),
+        )
 
         with self.assertRaises(NautilusRuntimeError):
             adapter.submit(self.intent())

@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 
-from .models import Provenance
+from .models import BrokerEnvironment, Provenance
 
 
 class FeeKind(str, Enum):
@@ -46,6 +46,7 @@ class FeeEvent:
     fill_id: str | None = None
     order_id: str | None = None
     liquidity: str | None = None
+    environment: BrokerEnvironment = BrokerEnvironment.PAPER
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class FillFact:
     fee: FeeEvent
     provenance: Provenance
     builder_fee: FeeEvent | None = None
+    environment: BrokerEnvironment = BrokerEnvironment.PAPER
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,7 @@ class FundingPayment:
     occurred_at: datetime
     fee: FeeEvent
     provenance: Provenance
+    environment: BrokerEnvironment = BrokerEnvironment.PAPER
 
 
 @dataclass(frozen=True)
@@ -88,3 +91,4 @@ class FeeScheduleSnapshot:
     source: FeeSource
     state: FeeState
     provenance: Provenance
+    environment: BrokerEnvironment = BrokerEnvironment.PAPER

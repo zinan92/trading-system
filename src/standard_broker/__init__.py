@@ -79,6 +79,7 @@ from .runtime import (
     SignerProvider,
     preflight_runtime_session,
 )
+from .runtime_facts import RuntimeFactLedger
 from .security import find_secret_like_literals
 
 __all__ = [
@@ -140,6 +141,7 @@ __all__ = [
     "RuntimeBoundaryError",
     "RuntimeOperationGuard",
     "RuntimePreflight",
+    "RuntimeFactLedger",
     "RecordingEvent",
     "RecordingTrack",
     "SignerKind",

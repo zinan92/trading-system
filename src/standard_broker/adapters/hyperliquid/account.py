@@ -1,12 +1,15 @@
 """Hyperliquid account-state mapping for default perpetuals."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from decimal import Decimal
 
 from ...account import AccountSnapshot, LiquidationFact, PositionFact, PositionSide
 from ...fees import FillFact
 from ...instruments import MarginMode
-from ...models import Provenance
+from ...models import BrokerEnvironment, Provenance
+from .bridge import NautilusHyperliquidRuntime
+from ...runtime_facts import RuntimeFactLedger
 from .errors import UnknownInstrumentError
 from .instruments import HyperliquidInstrumentAdapter
 
@@ -92,6 +95,9 @@ class HyperliquidAccountAdapter:
             if signed_quantity < 0
             else None
         )
+        observation_id = str(position.get("positionId") or position.get("timestamp") or "")
+        if not observation_id:
+            raise ValueError("position_identity_required")
         return PositionFact(
             instrument_id=instrument.canonical_symbol,
             signed_quantity=signed_quantity,
@@ -103,6 +109,9 @@ class HyperliquidAccountAdapter:
             margin_used=_optional_decimal(position.get("marginUsed")),
             position_value=_optional_decimal(position.get("positionValue")),
             unrealized_pnl=_optional_decimal(position.get("unrealizedPnl")),
+            broker_id="hyperliquid",
+            environment=BrokerEnvironment.PAPER,
+            observation_id=observation_id,
             provenance=provenance,
         )
 
@@ -111,8 +120,11 @@ class HyperliquidAccountAdapter:
         raw: Mapping[str, object],
         provenance: Provenance,
     ) -> LiquidationFact:
+        liquidation_id = str(raw.get("lid") or raw.get("id") or "")
+        if not liquidation_id:
+            raise ValueError("liquidation_identity_required")
         return LiquidationFact(
-            liquidation_id=str(raw.get("lid") or raw.get("id") or ""),
+            liquidation_id=liquidation_id,
             broker_id="hyperliquid",
             account_address=str(raw.get("liquidated_user") or ""),
             liquidator=str(raw["liquidator"]) if raw.get("liquidator") else None,
@@ -136,3 +148,125 @@ class HyperliquidAccountAdapter:
             seen.add(fill.fill_id)
             total += fill.closed_pnl
         return total
+
+
+class HyperliquidRuntimeAccountAdapter:
+    """Connect canonical account facts to the Paper-safe runtime seam."""
+
+    name = "hyperliquid_runtime_account"
+
+    def __init__(
+        self,
+        *,
+        runtime: NautilusHyperliquidRuntime,
+        instruments: HyperliquidInstrumentAdapter,
+        ledger: RuntimeFactLedger,
+    ) -> None:
+        self._runtime = runtime
+        self._mapper = HyperliquidAccountAdapter(instruments)
+        self._ledger = ledger
+        self._ledger.bind_session(
+            broker_id=runtime.session.broker_id,
+            environment=runtime.session.environment.value,
+            account_address=runtime.session.account.address,
+        )
+
+    def _invoke(self, operation: str, request: Mapping[str, object]) -> tuple[Mapping[str, object], Provenance]:
+        response = self._runtime._invoke_native("account", operation, request)
+        if not isinstance(response, Mapping):
+            raise ValueError(f"Hyperliquid account {operation} response must be a mapping")
+        provenance = response.get("provenance")
+        if not isinstance(provenance, Provenance):
+            raise ValueError("Broker account facts require source provenance")
+        data = response.get("data", response)
+        if not isinstance(data, Mapping):
+            raise ValueError(f"Hyperliquid account {operation} data must be a mapping")
+        return data, provenance
+
+    def read_account(self, account_address: str) -> AccountSnapshot:
+        if account_address != self._runtime.session.account.address:
+            raise ValueError("account_identity_mismatch")
+        raw, provenance = self._invoke("read", {"account_address": account_address})
+        returned_account = raw.get("accountAddress") or raw.get("account_address")
+        if returned_account is not None and str(returned_account) != self._runtime.session.account.address:
+            raise ValueError("account_identity_mismatch")
+        realized = raw.get("realizedPnl")
+        realized_pnl = (
+            Decimal(str(realized))
+            if realized is not None
+            else HyperliquidAccountAdapter.realized_pnl_from_fills(
+                tuple(value for key, value in self._ledger.fills.items() if key.startswith(self._namespace()))
+            )
+        )
+        observation_id = str(raw.get("snapshotId") or raw.get("timestamp") or "")
+        if not observation_id:
+            raise ValueError("account_snapshot_identity_required")
+        existing = self._ledger.accounts.get(self._key(observation_id))
+        snapshot = self._mapper.map_clearinghouse(
+            account_address=account_address,
+            raw=raw,
+            provenance=provenance,
+            realized_pnl=realized_pnl,
+        )
+        positions = tuple(
+            replace(position, environment=self._runtime.session.environment)
+            for position in snapshot.positions
+        )
+        result = replace(
+            snapshot,
+            environment=self._runtime.session.environment,
+            positions=positions,
+            observation_id=observation_id,
+        )
+        if existing == result:
+            return existing
+        if existing is not None and replace(result, realized_pnl=existing.realized_pnl) != existing:
+            raise ValueError("account_observation_conflict")
+        self._ledger.accounts[self._key(observation_id)] = result
+        return result
+
+    def read_liquidation(self, request: Mapping[str, object]) -> LiquidationFact:
+        requested_account = str(request.get("account_address") or self._runtime.session.account.address)
+        if requested_account != self._runtime.session.account.address:
+            raise ValueError("account_identity_mismatch")
+        raw, provenance = self._invoke("liquidation", request)
+        fact = self._mapper.map_liquidation(raw, provenance)
+        if fact.account_address != self._runtime.session.account.address:
+            raise ValueError("account_identity_mismatch")
+        existing = self._ledger.liquidations.get(self._key(fact.liquidation_id))
+        if existing is not None:
+            if existing != fact:
+                raise ValueError("liquidation_observation_conflict")
+            return existing
+        result = replace(fact, environment=self._runtime.session.environment)
+        self._ledger.liquidations[self._key(result.liquidation_id)] = result
+        return result
+
+    @property
+    def fill_facts(self) -> tuple[FillFact, ...]:
+        return tuple(
+            value for key, value in self._ledger.fills.items() if key.startswith(self._namespace())
+        )
+
+    def record_fill_fact(self, fact: FillFact) -> FillFact:
+        """Ingest one canonical fill identity for realized-PnL aggregation."""
+
+        if fact.broker_id != self._runtime.session.broker_id or fact.environment is not self._runtime.session.environment:
+            raise ValueError("fill_runtime_identity_mismatch")
+        existing = self._ledger.fills.get(self._key(fact.fill_id))
+        if existing is not None:
+            return existing
+        self._ledger.fills[self._key(fact.fill_id)] = fact
+        return fact
+
+    def _key(self, identity: str) -> str:
+        return self._namespace() + identity
+
+    def _namespace(self) -> str:
+        return ":".join(
+            (
+                self._runtime.session.broker_id,
+                self._runtime.session.environment.value,
+                self._runtime.session.account.address,
+            )
+        ) + ":"

@@ -19,6 +19,7 @@ from ...orders import (
 )
 from .bridge import NautilusHyperliquidRuntime
 from .instruments import HyperliquidInstrumentAdapter
+from ...runtime_facts import RuntimeFactLedger
 
 
 def _decimal(value: object) -> Decimal:
@@ -243,6 +244,11 @@ class HyperliquidOrderAdapter:
         return receipt
 
     def reconcile(self, raw: Mapping[str, object]) -> OrderReceipt:
+        return self.apply_order_update(self.normalize_reconcile_event(raw))
+
+    def normalize_reconcile_event(self, raw: Mapping[str, object]) -> dict[str, object]:
+        """Flatten a Broker reconciliation envelope into one lifecycle event."""
+
         outer = raw.get("order") if isinstance(raw.get("order"), Mapping) else raw
         if not isinstance(outer, Mapping):
             raise TypeError("Hyperliquid order status must be a mapping")
@@ -255,7 +261,7 @@ class HyperliquidOrderAdapter:
             "statusTimestamp",
             outer.get("timestamp", details.get("statusTimestamp", details.get("timestamp"))),
         )
-        return self.apply_order_update(event)
+        return event
 
     def get(self, order_id: str) -> OrderReceipt:
         return self._orders[order_id]
@@ -501,12 +507,20 @@ class HyperliquidRuntimeOrderAdapter:
         *,
         runtime: NautilusHyperliquidRuntime,
         instruments: HyperliquidInstrumentAdapter,
+        ledger: RuntimeFactLedger,
     ) -> None:
+        self._runtime = runtime
         self._lifecycle = HyperliquidOrderAdapter(
             transport=_RuntimeOrderTransport(runtime=runtime, instruments=instruments),
             environment=runtime.session.environment,
         )
         self._instruments = instruments
+        self._ledger = ledger
+        self._ledger.bind_session(
+            broker_id=runtime.session.broker_id,
+            environment=runtime.session.environment.value,
+            account_address=runtime.session.account.address,
+        )
 
     def submit(self, intent: OrderIntent) -> OrderReceipt:
         self._validate_intent(intent)
@@ -526,13 +540,20 @@ class HyperliquidRuntimeOrderAdapter:
         return self._lifecycle.open_orders(instrument_id)
 
     def apply_fill(self, raw: Mapping[str, object]) -> OrderReceipt:
-        return self._lifecycle.apply_fill(raw)
+        result = self._lifecycle.apply_fill(raw)
+        self._sync_order_fills(raw)
+        return result
 
     def apply_order_update(self, raw: Mapping[str, object]) -> OrderReceipt:
-        return self._lifecycle.apply_order_update(raw)
+        result = self._lifecycle.apply_order_update(raw)
+        self._sync_order_fills(raw)
+        return result
 
     def reconcile(self, raw: Mapping[str, object]) -> OrderReceipt:
-        return self._lifecycle.reconcile(raw)
+        normalized = self._lifecycle.normalize_reconcile_event(raw)
+        result = self._lifecycle.apply_order_update(normalized)
+        self._sync_order_fills(normalized)
+        return result
 
     def get(self, order_id: str) -> OrderReceipt:
         return self._lifecycle.get(order_id)
@@ -554,3 +575,17 @@ class HyperliquidRuntimeOrderAdapter:
                 raise ValueError("order price does not satisfy instrument precision")
             if intent.quantity * intent.limit_price < instrument.minimum_notional:
                 raise ValueError("order notional is below instrument minimum notional")
+
+    def _sync_order_fills(self, raw: Mapping[str, object]) -> None:
+        namespace = ":".join(
+            (
+                self._runtime.session.broker_id,
+                self._runtime.session.environment.value,
+                self._runtime.session.account.address,
+            )
+        ) + ":"
+        for fill_id, fill in self._lifecycle.fills.items():
+            if str(raw.get("tid") or raw.get("hash") or "") == fill_id:
+                self._ledger.record_order_fill(fill, raw)
+            else:
+                self._ledger.order_fills[namespace + fill_id] = fill

@@ -45,6 +45,7 @@ class HyperliquidAccountFeesTests(unittest.TestCase):
                     {
                         "position": {
                             "coin": "BTC",
+                            "positionId": "position-btc-1",
                             "szi": "0.1",
                             "entryPx": "65000",
                             "leverage": {"type": "cross", "value": 5},
