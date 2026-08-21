@@ -19,6 +19,15 @@ from .models import (
     Provenance,
     SignerKind,
 )
+from .orders import (
+    OrderFill,
+    OrderIntent,
+    OrderReceipt,
+    OrderSide,
+    OrderState,
+    OrderType,
+    TimeInForce,
+)
 from .paper import (
     InMemoryPaperTransport,
     PaperBrokerAdapter,
@@ -32,6 +41,14 @@ from .ports import (
     MarketDataPort,
     OrderExecutionPort,
     ProtectionOrderPort,
+)
+from .protection import (
+    ProtectionExecution,
+    ProtectionGroup,
+    ProtectionLeg,
+    ProtectionQuantityPolicy,
+    ProtectionType,
+    TriggerReference,
 )
 
 __all__ = [
@@ -57,13 +74,26 @@ __all__ = [
     "LiquidationFact",
     "MarketDataPort",
     "OrderExecutionPort",
+    "OrderFill",
+    "OrderIntent",
+    "OrderReceipt",
+    "OrderSide",
+    "OrderState",
+    "OrderType",
     "PaperBoundaryError",
     "PaperBrokerAdapter",
     "PaperPreflight",
     "PaperReceipt",
     "PositionFact",
     "PositionSide",
+    "ProtectionExecution",
+    "ProtectionGroup",
+    "ProtectionLeg",
     "ProtectionOrderPort",
+    "ProtectionQuantityPolicy",
+    "ProtectionType",
     "Provenance",
     "SignerKind",
+    "TimeInForce",
+    "TriggerReference",
 ]

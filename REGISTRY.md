@@ -7,11 +7,12 @@
 - T01 is merged in PR #11 and establishes the six-port Paper Broker Contract seam with local-only transport and fail-closed capability checks.
 - T02 is merged in PR #12: Hyperliquid default-perps market data and instrument mapping.
 - T03 is merged in PR #13: Hyperliquid account, fee, funding, and liquidation facts.
-- T04 is in progress: Hyperliquid order lifecycle and reconciliation.
+- T04 is merged in PR #14: Hyperliquid order lifecycle and reconciliation.
+- T05 is in progress: Hyperliquid protection order semantics.
 
 ## Next
 
-- T05: Hyperliquid protection order semantics, after T04 merges.
+- T06: Nautilus Hyperliquid compatibility bridge, after T05 merges.
 - T04–T08 remain blocked in dependency order by the published GitHub tickets.
 
 ## Safety boundary

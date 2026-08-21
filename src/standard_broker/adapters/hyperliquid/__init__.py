@@ -6,6 +6,7 @@ from .fees import HyperliquidFeeAdapter
 from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter
 from .orders import HyperliquidOrderAdapter
+from .protection import HyperliquidProtectionAdapter
 
 __all__ = [
     "HyperliquidAccountAdapter",
@@ -13,6 +14,7 @@ __all__ = [
     "HyperliquidInstrumentAdapter",
     "HyperliquidMarketDataAdapter",
     "HyperliquidOrderAdapter",
+    "HyperliquidProtectionAdapter",
     "UnknownInstrumentError",
     "UnsupportedProductError",
 ]
