@@ -12,6 +12,23 @@
 ## 要去哪里
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
+## 现在在哪里(2026-08-21)
+- #847 / PR #848 promotes the Telegram path to a bounded Trading Expert with
+  separate research, discussion, strategy-forming, and confirmation-ready
+  modes. Grid/DCA fields, evidence, assumptions, and conflicts persist as an
+  editable conversation candidate; complete fields alone do not create a
+  proposal. A deterministic positive finalize/execute phrase is required, and
+  the existing exact Park confirmation remains the only execution capability.
+  Exact merged source is `main@bc7856b76c9ebcc81803ea11d9eaa0a74008fd48`
+  (tree `382a0b878198dbb74d787b65b31c190477ad3136`). The Paper predeploy gate
+  passed with `tracked_tree_clean=true` and all operation flags false; focused
+  `test_park_*` validation passed 231 tests and gitleaks found no leaks.
+  The local `com.wendy.trading-orchestrator.park-paper-control` launchd label
+  is not loaded, so Telegram end-to-end activation and natural-tick behavior
+  are not claimed. Next: perform the separately controlled source-bound Paper
+  service activation and read-only canary; no live or real-money path is in
+  scope.
+
 ## 现在在哪里(2026-08-20)
 - #840 / PR #841 first corrected Telegram NAV provenance: the account reader now
   selects the active Park Strategy Session authoritative snapshot instead of the
