@@ -1,5 +1,36 @@
 # Decision Log
 
+## Promote Telegram to a non-convergent Trading Expert (Issue #847 / PR #848)
+
+Date: 2026-08-21
+
+### Decision
+
+- Keep the Telegram bot as a Trading Expert with distinct research, discussion,
+  strategy-forming, and confirmation-ready modes. Research and discussion may
+  compare ideas and retain Grid/DCA fields, but they cannot create a strategy
+  session, proposal, order, position, or execution authorization.
+- Persist explicit strategy fields together with evidence, assumptions,
+  conflicts, and missing fields. Require a deterministic positive
+  finalize/execute phrase before a model response can cross the proposal seam.
+- Preserve the existing Paper-only, Telegram-only, trusted-market,
+  reconciliation, ownership, exact-confirmation, and fail-closed gates. No live
+  path, exchange key, risk formula, or external research connector changed.
+
+### Verification
+
+- Merged as PR #848 on exact `main@bc7856b76c9ebcc81803ea11d9eaa0a74008fd48`,
+  tree `382a0b878198dbb74d787b65b31c190477ad3136`.
+- `python3 -m pytest -q tests/test_park_*.py`: 231 passed.
+- `python3 -m compileall -q services tests`, `git diff --check`, and gitleaks
+  passed. A deployed-copy harness proved research stays conversation-only,
+  discussion without finalize stays strategy-forming, and explicit finalize
+  creates only `execution_authorized=false` proposal state.
+- Paper predeploy receipt passed with zero starts/stops/order/position
+  operations and no exchange credentials. The local Park Telegram launchd
+  label is not loaded; runtime activation and Telegram end-to-end delivery
+  remain unverified.
+
 ## Complete Park legacy clean-slate cutover and leave the runtime idle (Issues #783-#800)
 
 Date: 2026-08-18
