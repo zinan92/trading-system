@@ -278,6 +278,22 @@ def _paper_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
     return PaperBrokerAdapter(context.output_root)
 
 
+def _standard_broker_paper_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
+    from services.standard_broker_host import StandardBrokerPaperExecutionAdapter
+
+    return StandardBrokerPaperExecutionAdapter(
+        broker_id=str(context.broker_config.get("broker_id") or "")
+    )
+
+
+def _reject_standard_broker_selection(context: BrokerBuildContext) -> BrokerExecutionPort:
+    from services.standard_broker_host import StandardBrokerHostError
+
+    raise StandardBrokerHostError(
+        "unsupported standard_broker selection: only paper/hyperliquid is enabled"
+    )
+
+
 def _legacy_live_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
     from services.broker_adapter import LiveBrokerAdapter
 
@@ -393,6 +409,27 @@ def _execution_capabilities(provider: str, *, reconciliation: bool = False) -> B
 
 def default_broker_plugin_registry() -> BrokerPluginRegistry:
     registry = BrokerPluginRegistry()
+    from services.standard_broker_host import STANDARD_BROKER_PAPER_CAPABILITIES
+
+    registry.register(
+        BrokerPlugin(
+            BrokerPluginKey("paper", "standard_broker", "paper"),
+            execution_factory=_standard_broker_paper_execution,
+            capabilities=STANDARD_BROKER_PAPER_CAPABILITIES,
+        )
+    )
+    registry.register(
+        BrokerPlugin(
+            BrokerPluginKey("paper", "standard_broker", "*"),
+            execution_factory=_reject_standard_broker_selection,
+        )
+    )
+    registry.register(
+        BrokerPlugin(
+            BrokerPluginKey("live", "standard_broker", "*"),
+            execution_factory=_reject_standard_broker_selection,
+        )
+    )
     registry.register(
         BrokerPlugin(
             BrokerPluginKey("paper", "*", "*"),
@@ -464,6 +501,8 @@ def build_demo_broker_execution_port(
     registry: BrokerPluginRegistry | None = None,
 ) -> BrokerExecutionPort:
     active_registry = registry or default_broker_plugin_registry()
+    if context.provider == "standard_broker":
+        return active_registry.build_execution(context)
     plugin = active_registry.resolve(context)
     if not plugin.demo_capable:
         return _unarmed_unknown_execution(context)
