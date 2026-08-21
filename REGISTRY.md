@@ -24,10 +24,13 @@
   passed with `tracked_tree_clean=true` and all operation flags false; focused
   `test_park_*` validation passed 231 tests and gitleaks found no leaks.
   The local `com.wendy.trading-orchestrator.park-paper-control` launchd label
-  is not loaded, so Telegram end-to-end activation and natural-tick behavior
-  are not claimed. Next: perform the separately controlled source-bound Paper
-  service activation and read-only canary; no live or real-money path is in
-  scope.
+  is now enabled with a 60-second interval. The first activation found one
+  historical legacy cutover update while a Park strategy was active, sent one
+  idempotent blocker, and performed zero order/position mutations. The latest
+  run is `status=pass`, `execution=idle`, `next_action=await_new_park_strategy`,
+  `updates_received=0`, `orders_created=0`, and `positions_created=0`; the
+  Telegram cursor remains `741098670`. This is local Paper-only runtime
+  evidence, not live/real-money readiness.
 
 ## 现在在哪里(2026-08-20)
 - #840 / PR #841 first corrected Telegram NAV provenance: the account reader now

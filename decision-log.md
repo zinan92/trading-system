@@ -1,5 +1,34 @@
 # Decision Log
 
+## Activate Paper-only Telegram control after pending-update precheck (Issue #847 follow-up)
+
+Date: 2026-08-21
+
+### Decision
+
+- Park clarified that the Telegram bot may retain the original Paper order
+  capability; the new Trading Expert conversation layer is additive. The
+  existing deterministic proposal, explicit Park confirmation, and Paper
+  execution path remain the authority for orders.
+- Before activation, Telegram `getUpdates` returned zero pending updates at
+  offset `741098670`. The label was disabled, so it was explicitly enabled and
+  bootstrapped from the exact source-bound main checkout.
+- The first pass encountered one already-ingested legacy clean-slate message
+  that conflicted with the current active strategy. It delivered one blocker,
+  did not cancel, flatten, submit, or create any order/position, and later
+  passes returned to idle/pass. No inbox history was deleted or rewritten.
+
+### Verification
+
+- Source checkout: `main@d1060bfefc1d0afbf55c07b24da4b50a408948b4`, tree
+  `7c51c942117e8c43a1e1ff3d8b32ee20c8bb34fe`.
+- Launchd label: `com.wendy.trading-orchestrator.park-paper-control`, enabled,
+  60-second interval; latest observed run `status=pass`, `execution=idle`,
+  `next_action=await_new_park_strategy`, `orders_created=0`,
+  `positions_created=0`, and unchanged Telegram offset `741098670`.
+- Paper predeploy and safety receipts passed with no service/order/position
+  mutation during the gate. The original confirmation gate remains intact.
+
 ## Promote Telegram to a non-convergent Trading Expert (Issue #847 / PR #848)
 
 Date: 2026-08-21
