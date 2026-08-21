@@ -1,4 +1,5 @@
 import unittest
+from datetime import UTC, datetime
 
 from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import BrokerCapabilityError
@@ -6,6 +7,7 @@ from standard_broker.models import AccountScope, BrokerEnvironment, SignerKind
 from standard_broker.runtime import (
     AccountReference,
     BrokerRuntimeSession,
+    ExternalEnvironmentApproval,
     RuntimeActivationPolicy,
     RuntimeBoundaryError,
     RuntimeOperationGuard,
@@ -114,7 +116,15 @@ class RuntimeSessionTests(unittest.TestCase):
         result = preflight_runtime_session(
             session,
             required_operations={"market_data": {"read"}},
-            policy=RuntimeActivationPolicy(allow_testnet=True),
+            policy=RuntimeActivationPolicy(
+                testnet_approval=ExternalEnvironmentApproval(
+                    environment=BrokerEnvironment.TESTNET,
+                    approval_id="approval-1",
+                    release_sha="release-sha-1",
+                    approved_by="park",
+                    approved_at=datetime.now(UTC),
+                )
+            ),
         )
 
         self.assertTrue(result.accepted)
@@ -143,7 +153,15 @@ class RuntimeSessionTests(unittest.TestCase):
         result = preflight_runtime_session(
             session,
             required_operations={"order_execution": {"submit"}},
-            policy=RuntimeActivationPolicy(allow_testnet=True),
+            policy=RuntimeActivationPolicy(
+                testnet_approval=ExternalEnvironmentApproval(
+                    environment=BrokerEnvironment.TESTNET,
+                    approval_id="approval-2",
+                    release_sha="release-sha-1",
+                    approved_by="park",
+                    approved_at=datetime.now(UTC),
+                )
+            ),
         )
 
         self.assertTrue(result.credential_required)
@@ -158,7 +176,7 @@ class RuntimeSessionTests(unittest.TestCase):
             preflight_runtime_session(
                 session,
                 required_operations={"market_data": {"read"}},
-                policy=RuntimeActivationPolicy(allow_testnet=True),
+                policy=RuntimeActivationPolicy(),
             )
 
         self.assertEqual(raised.exception.reason_code, "mainnet_not_in_runtime_v1")
@@ -203,7 +221,15 @@ class RuntimeSessionTests(unittest.TestCase):
                 )
             ),
             backend=backend,
-            policy=RuntimeActivationPolicy(allow_testnet=True),
+            policy=RuntimeActivationPolicy(
+                testnet_approval=ExternalEnvironmentApproval(
+                    environment=BrokerEnvironment.TESTNET,
+                    approval_id="approval-3",
+                    release_sha="release-sha-1",
+                    approved_by="park",
+                    approved_at=datetime.now(UTC),
+                )
+            ),
         )
 
         with self.assertRaises(BrokerCapabilityError):

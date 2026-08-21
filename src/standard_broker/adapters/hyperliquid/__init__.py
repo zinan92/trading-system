@@ -7,6 +7,12 @@ from .bridge import (
     NautilusBridgeReceipt,
     NautilusCompatibilityError,
     NautilusHyperliquidBridge,
+    NautilusHyperliquidRuntime,
+    NautilusRuntimeConfig,
+    NautilusRuntimeError,
+    NautilusRuntimeHealth,
+    NautilusRuntimeReceipt,
+    NautilusRuntimeState,
 )
 from .errors import UnknownInstrumentError, UnsupportedProductError
 from .fees import HyperliquidFeeAdapter
@@ -27,6 +33,12 @@ __all__ = [
     "NautilusBridgeReceipt",
     "NautilusCompatibilityError",
     "NautilusHyperliquidBridge",
+    "NautilusHyperliquidRuntime",
+    "NautilusRuntimeConfig",
+    "NautilusRuntimeError",
+    "NautilusRuntimeHealth",
+    "NautilusRuntimeReceipt",
+    "NautilusRuntimeState",
     "UnknownInstrumentError",
     "UnsupportedProductError",
 ]

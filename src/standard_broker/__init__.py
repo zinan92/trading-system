@@ -63,6 +63,7 @@ from .protection import (
 from .runtime import (
     AccountReference,
     BrokerRuntimeSession,
+    ExternalEnvironmentApproval,
     RuntimeActivationPolicy,
     RuntimeOperationGuard,
     RuntimePreflight,
@@ -123,6 +124,7 @@ __all__ = [
     "Provenance",
     "AccountReference",
     "BrokerRuntimeSession",
+    "ExternalEnvironmentApproval",
     "RuntimeActivationPolicy",
     "RuntimeBoundaryError",
     "RuntimeOperationGuard",

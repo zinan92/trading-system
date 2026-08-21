@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 import re
 from typing import Protocol, runtime_checkable
 
@@ -148,9 +149,33 @@ class BrokerRuntimeSession:
 
 @dataclass(frozen=True)
 class RuntimeActivationPolicy:
-    """Explicit external-environment activation policy; all external access is denied by default."""
+    """Explicit external-environment approval policy; all external access is denied by default."""
 
-    allow_testnet: bool = False
+    testnet_approval: "ExternalEnvironmentApproval | None" = None
+
+
+@dataclass(frozen=True)
+class ExternalEnvironmentApproval:
+    """Human-approved, release-bound artifact required before testnet readiness."""
+
+    environment: BrokerEnvironment
+    approval_id: str
+    release_sha: str
+    approved_by: str
+    approved_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.environment is not BrokerEnvironment.TESTNET:
+            raise RuntimeBoundaryError(
+                "external_approval_invalid",
+                "runtime v1 only accepts an explicit testnet approval artifact",
+            )
+        for name in ("approval_id", "release_sha", "approved_by"):
+            value = getattr(self, name)
+            if not value or value != value.strip():
+                raise RuntimeBoundaryError("external_approval_required", f"{name} is required")
+        if self.approved_at.tzinfo is None:
+            raise RuntimeBoundaryError("external_approval_invalid", "approved_at must include timezone information")
 
 
 @dataclass(frozen=True)
@@ -179,8 +204,13 @@ def preflight_runtime_session(
     selected_policy = policy or RuntimeActivationPolicy()
     capabilities = session.capabilities
 
-    if session.environment is BrokerEnvironment.TESTNET and not selected_policy.allow_testnet:
-        raise RuntimeBoundaryError("external_environment_denied", "testnet activation is not enabled")
+    if session.environment is BrokerEnvironment.TESTNET:
+        approval = selected_policy.testnet_approval
+        if approval is None or approval.environment is not BrokerEnvironment.TESTNET:
+            raise RuntimeBoundaryError(
+                "external_environment_denied",
+                "testnet requires a separate human-approved environment artifact",
+            )
     if session.environment is BrokerEnvironment.MAINNET:
         raise RuntimeBoundaryError(
             "mainnet_not_in_runtime_v1",
