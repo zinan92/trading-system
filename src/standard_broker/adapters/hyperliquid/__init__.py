@@ -1,11 +1,16 @@
 """Fixture-backed Hyperliquid default-perps canonical mappings."""
 
-from .errors import UnsupportedProductError
+from .account import HyperliquidAccountAdapter
+from .errors import UnknownInstrumentError, UnsupportedProductError
+from .fees import HyperliquidFeeAdapter
 from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter
 
 __all__ = [
+    "HyperliquidAccountAdapter",
+    "HyperliquidFeeAdapter",
     "HyperliquidInstrumentAdapter",
     "HyperliquidMarketDataAdapter",
+    "UnknownInstrumentError",
     "UnsupportedProductError",
 ]
