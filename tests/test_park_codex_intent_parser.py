@@ -141,6 +141,7 @@ def test_router_gives_natural_guidance_for_neutral_grid(tmp_path: Path) -> None:
         account_reader=_account,
         intent_parser=FakeParser(),
     )
+    router.conversation_agent = None
     result = router.handle_update(
         {
             "update_id": 1,
@@ -148,7 +149,7 @@ def test_router_gives_natural_guidance_for_neutral_grid(tmp_path: Path) -> None:
                 "message_id": 2,
                 "from": {"id": "park-user"},
                 "chat": {"id": "park-chat"},
-                "text": "中性网格策略 4450 4100 最大20x杠杆",
+                    "text": "中性网格策略 4450 4100 最大20x杠杆，确认执行",
             },
         }
     )
@@ -187,6 +188,7 @@ def test_router_uses_safe_neutral_grid_fallback_after_provider_timeout(tmp_path:
         account_reader=_account,
         intent_parser=TimeoutParser(),
     )
+    router.conversation_agent = None
     result = router.handle_update(
         {
             "update_id": 5,
@@ -194,7 +196,7 @@ def test_router_uses_safe_neutral_grid_fallback_after_provider_timeout(tmp_path:
                 "message_id": 6,
                 "from": {"id": "park-user"},
                 "chat": {"id": "park-chat"},
-                "text": "中性网格策略 4450 4100 最大20x杠杆",
+                    "text": "中性网格策略 4450 4100 最大20x杠杆，确认执行",
             },
         }
     )

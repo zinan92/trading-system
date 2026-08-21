@@ -127,8 +127,9 @@ def test_telegram_router_uses_gateway_candidate_but_keeps_confirmation_gate(tmp_
         now=lambda: "2026-08-19T00:00:00+00:00",
         cycle_id_provider=lambda _now: "2026-08-19_DAY",
     )
+    router.conversation_agent = None
 
-    result = router.handle_update(_update(801, "这次做多 DCA，4200~4400，最大10倍，止损4190，止盈4800"))
+    result = router.handle_update(_update(801, "这次做多 DCA，4200~4400，最大10倍，止损4190，止盈4800，确认执行"))
 
     assert result["status"] == "proposal_created"
     assert result["proposal"]["execution_authorized"] is False
@@ -185,8 +186,9 @@ def test_both_provider_failures_leave_only_deterministic_neutral_grid_fallback(t
         now=lambda: "2026-08-19T00:00:00+00:00",
         cycle_id_provider=lambda _now: "2026-08-19_DAY",
     )
+    router.conversation_agent = None
 
-    result = router.handle_update(_update(802, "中性网格 4450 4100 最大20倍杠杆"))
+    result = router.handle_update(_update(802, "中性网格 4450 4100 最大20倍杠杆，确认执行"))
 
     assert result["status"] == "proposal_created"
     assert result["plan"]["normalized_input"]["direction"] == "neutral"

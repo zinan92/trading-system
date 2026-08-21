@@ -106,6 +106,8 @@ class ParkTelegramConversationLedger:
                     item["mode"] = str(row.get("mode") or "")
                     item["strategy_patch"] = dict(row.get("strategy_patch") or {})
                     item["missing_fields"] = list(row.get("missing_fields") or [])
+                    for field in ("evidence_used", "assumptions", "conflicts"):
+                        item[field] = list(row.get(field) or [])
                 result.append(item)
         return result[-max(1, int(limit)) :]
 
@@ -163,6 +165,9 @@ class ParkTelegramConversationLedger:
             "mode": str(conversation.get("mode") or ""),
             "strategy_patch": dict(conversation.get("strategy_patch") or {}),
             "missing_fields": list(conversation.get("missing_fields") or []),
+            "evidence_used": list(conversation.get("evidence_used") or []),
+            "assumptions": list(conversation.get("assumptions") or []),
+            "conflicts": list(conversation.get("conflicts") or []),
             "needs_confirmation": bool(conversation.get("needs_confirmation")),
             "execution_authorized": False,
             "provider": dict(provider or {}),
