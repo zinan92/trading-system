@@ -3,7 +3,7 @@
 from .account import AccountSnapshot, LiquidationFact, PositionFact, PositionSide
 from .capabilities import PORT_NAMES, CapabilityDescriptor
 from .conformance import ConformanceReport, EvidenceKind, run_paper_conformance
-from .errors import BrokerCapabilityError, BrokerError, PaperBoundaryError
+from .errors import BrokerCapabilityError, BrokerError, PaperBoundaryError, RuntimeBoundaryError
 from .fees import (
     FeeEvent,
     FeeKind,
@@ -60,6 +60,16 @@ from .protection import (
     ProtectionType,
     TriggerReference,
 )
+from .runtime import (
+    AccountReference,
+    BrokerRuntimeSession,
+    RuntimeActivationPolicy,
+    RuntimeOperationGuard,
+    RuntimePreflight,
+    SignerReference,
+    SignerProvider,
+    preflight_runtime_session,
+)
 from .security import find_secret_like_literals
 
 __all__ = [
@@ -111,11 +121,20 @@ __all__ = [
     "ProtectionQuantityPolicy",
     "ProtectionType",
     "Provenance",
+    "AccountReference",
+    "BrokerRuntimeSession",
+    "RuntimeActivationPolicy",
+    "RuntimeBoundaryError",
+    "RuntimeOperationGuard",
+    "RuntimePreflight",
     "RecordingEvent",
     "RecordingTrack",
     "SignerKind",
+    "SignerProvider",
+    "SignerReference",
     "TimeInForce",
     "TriggerReference",
     "find_secret_like_literals",
     "run_paper_conformance",
+    "preflight_runtime_session",
 ]

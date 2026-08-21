@@ -75,3 +75,35 @@ _Avoid_: assuming signer identity and account identity are always the same.
 **Recording Track**:
 The system-owned record of canonical orders, fills, fees, funding, provenance, and reconciliation facts.
 _Avoid_: making broker-native raw responses the accounting contract.
+
+## External execution runtime language
+
+**Broker Runtime Session**:
+An explicitly bound execution context containing `broker_id`, environment, account reference, signer reference, capability profile, and lifecycle correlation. A session never infers a default broker, account, signer, or environment.
+_Avoid_: treating a process-wide default account or environment as execution authority.
+
+**External Execution**:
+An order lifecycle that crosses the local process boundary into a Broker network. Testnet and Live are separate external environments; neither is equivalent to local Paper.
+_Avoid_: calling a fixture receipt proof of an external Broker action.
+
+**Runtime Adapter**:
+The Broker-facing implementation that turns canonical requests into Broker calls and turns Broker observations into canonical receipts. It may wrap a low-level execution engine such as NautilusTrader but must not move strategy or system-control decisions into that layer.
+_Avoid_: putting Hyperliquid REST/WebSocket calls in strategy, risk, or Telegram code.
+
+**External Execution Proof**:
+Evidence from a separately approved external environment, including environment identity, account identity, order lifecycle, fills, fees, positions, and reconciliation. Fixture/Paper evidence and external runtime evidence must remain separately labelled.
+_Avoid_: upgrading local Paper or static fixture evidence to testnet/live proof.
+
+**Capability Preflight**:
+The fail-closed check that validates the requested canonical behavior against the frozen Broker capability profile before any external network request. Unknown is not treated as supported.
+_Avoid_: discovering a missing capability only after submitting an order.
+
+## Accepted external-runtime boundary
+
+The current next phase is Hyperliquid external execution runtime integration. It starts with a narrowly scoped testnet proof and keeps Live/mainnet as a separate later milestone. The first end-to-end slice is one default validator-operated perpetual order lifecycle: submit, query, cancel/replace, fill, position, fee, and reconciliation. DCA/Grid strategy behavior is not the first runtime proof.
+
+`standard-broker` owns the Hyperliquid Runtime Adapter, canonical lifecycle mapping, capability preflight, Broker-facing account/signer binding, and reconciliation correlation. The low-level REST, WebSocket, signing, nonce, and execution-engine behavior remains in the pinned compatible Nautilus Hyperliquid implementation. `trading-system` owns host composition, strategy, risk, Park authorization, Paper/testnet/live gates, Recording Track, Supervisor, and Telegram control.
+
+External credentials are supplied through an out-of-band secret provider. Private keys, signatures, signed payloads, and raw credentials never enter the canonical model, logs, Recording Track, issue text, or test fixtures. An ambiguous external result enters an unknown lifecycle state and must be queried/reconciled before retry; blind retry is forbidden.
+
+This decision does not authorize testnet or Live network access. It only defines the next implementation contract; each external environment requires its own approval and evidence boundary.

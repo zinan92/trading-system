@@ -20,3 +20,11 @@ class BrokerCapabilityError(BrokerError):
         if detail:
             message = f"{message}: {detail}"
         super().__init__(message)
+
+
+class RuntimeBoundaryError(BrokerError):
+    """Raised when a Broker Runtime Session cannot be safely authorized."""
+
+    def __init__(self, reason_code: str, detail: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {detail}")
