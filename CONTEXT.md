@@ -73,21 +73,24 @@ _Avoid_: strategy restart, new revision
 ## Operator actions
 
 **Trading Conversation**:
-A bounded conversation about trading, markets, finance, and Paper facts. It
-may begin as exploration or a read-only question and does not itself create
-strategy authority.
+  A bounded Trading Expert conversation about trading, markets, finance, and
+  Paper facts. It has research, discussion, read-only query, strategy-forming,
+  and confirmation-ready modes. It may begin as exploration or a read-only
+  question and does not itself create strategy authority.
 _Avoid_: strategy submission, execution command
 
 **Conversation Convergence**:
-The point at which Park's explicitly stated trading decision has enough
-fields for a complete candidate snapshot and the system must ask Park for
-confirmation. Convergence is not authorization.
+  The point at which Park's explicitly stated trading decision has enough
+  fields for a complete candidate snapshot and Park has explicitly asked to
+  finalize/execute; the system must ask Park for confirmation. Complete fields
+  alone do not converge. Convergence is not authorization.
 _Avoid_: automatic execution, model approval
 
 **Conversation Candidate**:
-An unconfirmed set of strategy fields accumulated during a Trading Conversation.
-It may be revised or abandoned and cannot create orders, positions, or a
-strategy card until Park confirms the deterministic snapshot.
+  An unconfirmed set of strategy fields accumulated during a Trading Conversation.
+  It may be revised or abandoned and cannot create a strategy session, proposal,
+  orders, positions, or a strategy card until Park explicitly finalizes and then
+  confirms the deterministic snapshot.
 _Avoid_: active strategy, confirmed plan
 
 **Cancel**:

@@ -31,16 +31,20 @@ delivery receipts under `outputs/park_strategy/`.  A successful Telegram send
 requires the API response's explicit `result.message_id`.  Missing or failed
 receipts remain failed/dead-lettered and are not treated as delivered.
 
-## Trading Conversation behavior
+## Trading Expert behavior
 
-The bot starts as a bounded Trading Conversation, not as a strategy form. It
-may answer read-only questions about current Paper price, strategy, orders,
-positions, and PnL; discuss trading ideas; and politely redirect unrelated
-topics. When Park is forming an execution decision, it preserves bounded
-conversation context, asks natural-language follow-ups, and only converges to
-a strategy snapshot when the explicitly stated fields are complete. The bot
-then asks Park whether to execute. A Conversation Candidate or an assistant
-reply is never an execution authorization.
+The bot starts as a bounded Trading Expert, not as a strategy form. It has
+separate research, discussion, read-only query, strategy-forming, and
+confirmation-ready modes. It may answer current Paper facts, compare trading
+ideas, challenge assumptions, and politely redirect unrelated topics. Research
+and discussion stay open even when some Grid/DCA fields are present.
+
+When Park is forming an execution decision, the bot preserves bounded
+conversation context and asks natural-language follow-ups. It retains explicit
+Grid/DCA fields plus missing fields, evidence, assumptions, and conflicts. A
+complete field set alone does not converge: Park must explicitly ask to
+finalize/execute before a deterministic proposal can be created. A Conversation
+Candidate or assistant reply is never execution authorization.
 
 The deterministic normalizer, risk planner, market/freshness gates,
 reconciliation, ownership checks, Paper-only gate, and exact Park confirmation

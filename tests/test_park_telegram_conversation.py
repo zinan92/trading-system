@@ -180,7 +180,7 @@ def test_active_strategy_does_not_block_macro_read_only_question_on_provider_fal
     assert result.get("code") != "strategy_locked"
 
 
-def test_provider_outage_does_not_misclassify_explicit_price_based_strategy_as_query(tmp_path: Path) -> None:
+def test_provider_outage_keeps_explicit_strategy_as_unconfirmed_draft(tmp_path: Path) -> None:
     class UnavailableConversationProvider:
         def converse(self, text: str, **kwargs) -> dict:
             return {"status": "unavailable", "metadata": {"provider": "deepseek", "status": "timeout"}}
@@ -194,8 +194,9 @@ def test_provider_outage_does_not_misclassify_explicit_price_based_strategy_as_q
         _update(5, "价格跌到4200，我决定做多 DCA，区间4200~4400，最大10倍，止损4190，止盈4800")
     )
 
-    assert result["status"] == "proposal_created"
-    assert result["proposal"]["execution_authorized"] is False
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "strategy_forming"
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
 def test_ready_mode_without_explicit_execution_intent_stays_in_conversation(tmp_path: Path) -> None:
     provider = ConversationProvider(
         {
@@ -298,7 +299,7 @@ def test_explicit_dca_fields_are_recovered_when_model_patch_is_incomplete(tmp_pa
     second = router.handle_update(
         _update(
             10,
-            "对，具体操作如下：4370开一单，4420开一单；止损4444，止盈4200；每单notional 5万美金。",
+            "对，具体操作如下：4370开一单，4420开一单；止损4444，止盈4200；每单notional 5万美金；确认执行。",
         )
     )
 
@@ -311,3 +312,90 @@ def test_explicit_dca_fields_are_recovered_when_model_patch_is_incomplete(tmp_pa
     assert normalized["entry_prices"] == [4370.0, 4420.0]
     assert normalized["stop_price"] == 4444.0
     assert normalized["take_profit_price"] == 4200.0
+
+
+def test_research_mode_keeps_evidence_and_grid_draft_without_plan(tmp_path: Path) -> None:
+    provider = ConversationProvider(
+        {
+            "mode": "research",
+            "assistant_reply": "先比较 Grid 与 DCA 的适用条件，不形成执行计划。",
+            "strategy_patch": {
+                "strategy_type": "grid",
+                "direction": "neutral",
+                "lower_price_boundary": 4100,
+                "upper_price_boundary": 4450,
+                "grid_spacing": 10,
+                "entry_prices": [4110, 4120, 4430, 4440],
+                "order_count": 4,
+            },
+            "missing_fields": ["maximum_leverage"],
+            "evidence_used": ["用户提供的策略想法", "Paper context"],
+            "assumptions": ["当前只做研究，不请求执行"],
+            "conflicts": ["Grid Hard Stop 仍需明确授权"],
+            "needs_confirmation": False,
+            "explicit_execution_intent": False,
+        }
+    )
+    router = _router(tmp_path, provider)
+
+    result = router.handle_update(_update(11, "比较一个中性 Grid 和 DCA"))
+
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "research"
+    conversation = result["conversation"]
+    assert conversation["strategy_patch"]["grid_spacing"] == 10
+    assert conversation["strategy_patch"]["entry_prices"] == [4110, 4120, 4430, 4440]
+    assert conversation["evidence_used"] == ["用户提供的策略想法", "Paper context"]
+    assert conversation["assumptions"] == ["当前只做研究，不请求执行"]
+    assert conversation["conflicts"] == ["Grid Hard Stop 仍需明确授权"]
+    history = router.conversation_ledger.history()
+    assert history[-1]["evidence_used"] == ["用户提供的策略想法", "Paper context"]
+    assert history[-1]["assumptions"] == ["当前只做研究，不请求执行"]
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
+def test_provider_cannot_finalize_when_user_is_only_discussing(tmp_path: Path) -> None:
+    provider = ConversationProvider(
+        {
+            "mode": "ready_for_confirmation",
+            "assistant_reply": "参数看起来完整，但先继续讨论。",
+            "strategy_patch": {
+                "direction": "long",
+                "strategy_type": "dca",
+                "lower_price_boundary": 4200,
+                "upper_price_boundary": 4400,
+                "maximum_leverage": 10,
+                "stop_price": 4190,
+                "take_profit_price": 4800,
+            },
+            "missing_fields": [],
+            "needs_confirmation": True,
+            "explicit_execution_intent": True,
+        }
+    )
+    router = _router(tmp_path, provider)
+
+    result = router.handle_update(_update(12, "这些参数都齐了，但我们先讨论一下，不要执行"))
+
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "strategy_forming"
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()
+
+
+def test_provider_outage_does_not_turn_complete_discussion_into_proposal(tmp_path: Path) -> None:
+    class UnavailableConversationProvider:
+        def converse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "deepseek", "status": "timeout"}}
+
+        def parse(self, text: str, **kwargs) -> dict:
+            return {"status": "unavailable", "metadata": {"provider": "codex_cli", "status": "unavailable"}}
+
+    router = _router(tmp_path, UnavailableConversationProvider())
+
+    result = router.handle_update(
+        _update(13, "做多 DCA，区间4200~4400，最大10倍，止损4190，止盈4800，但我还要继续研究")
+    )
+
+    assert result["status"] == "conversation_replied"
+    assert result["mode"] == "strategy_forming"
+    assert not (tmp_path / "outputs" / "park_strategy" / "plans.jsonl").exists()

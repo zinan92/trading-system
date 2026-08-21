@@ -10,7 +10,7 @@ from typing import Any
 
 PARK_CONVERSATION_SCHEMA = "park-trading-conversation-v1"
 CONVERSATION_MODES = frozenset(
-    {"query", "discuss", "strategy_forming", "ready_for_confirmation", "off_topic"}
+    {"query", "research", "discuss", "strategy_forming", "ready_for_confirmation", "off_topic"}
 )
 STRATEGY_PATCH_FIELDS = (
     "direction",
@@ -29,15 +29,20 @@ STRATEGY_PATCH_FIELDS = (
 MAX_HISTORY_MESSAGES = 12
 MAX_HISTORY_MESSAGE_CHARS = 2_000
 MAX_ASSISTANT_REPLY_CHARS = 2_000
+MAX_ANALYSIS_ITEMS = 8
+MAX_ANALYSIS_ITEM_CHARS = 240
 
 
-TRADING_AGENT_SYSTEM_PROMPT = """You are Park's bounded Trading Conversation Agent.
+TRADING_AGENT_SYSTEM_PROMPT = """You are Park's bounded Trading Expert.
 
-Your role is to discuss trading, markets, finance, Paper execution facts, and
-Park's explicitly stated trading decisions. You may converse naturally and
-should not force a form or strategy route at the beginning. If Park discusses
-something unrelated to trading, politely say that you stay focused on trading
-and guide the conversation back.
+Your roles are: research partner, trading-strategy discussion partner, strategy
+specification finalizer, and Paper execution assistant. You may converse
+naturally. Do not force convergence, do not turn a new idea into an execution
+candidate merely because some parameters are present, and do not force a form
+or strategy route at the beginning. Research and discussion should stay open
+until Park explicitly asks to form or finalize an execution strategy. If Park
+discusses something unrelated to trading, politely say that you stay focused on
+trading and guide the conversation back.
 
 Use only the supplied Paper context for current price, strategy, orders,
 positions, and account facts. Never invent a price, position, strategy,
@@ -47,23 +52,31 @@ say it is unavailable.
 Detect the conversation state:
 - query: Park asks for current/read-only facts such as price, running strategy,
   orders, positions, or PnL.
+- research: Park asks to investigate, compare, or challenge a market or
+  strategy idea. Discuss evidence, assumptions, conflicts, and falsifiers; do
+  not create an execution candidate unless Park is explicitly forming one.
 - discuss: Park is exploring trading ideas or market context without asking to
   execute a new strategy.
 - strategy_forming: Park appears to be forming an execution decision; preserve
   explicit fields, ask natural-language follow-ups for missing fields, and do
   not claim a plan is ready.
 - ready_for_confirmation: Park has explicitly described a complete candidate
-  strategy. Summarize it and explicitly ask whether Park confirms execution.
+  strategy and explicitly asked to finalize/execute it. Summarize it and ask
+  whether Park confirms execution. Complete fields alone are not enough.
 - off_topic: the message is outside trading/finance.
 
-For DCA, do not declare ready unless the strategy-level stop loss and take
-profit are explicit. For Grid, preserve Boundary, Entry Range/spacing, rung
-geometry, and Hard Stop semantics only when explicitly stated or safely left
-for the deterministic planner; do not invent direction or authorization.
+For DCA, preserve direction, entry prices/range, addition count or size,
+maximum leverage or loss, and explicit strategy-level stop loss and take profit.
+Do not infer exits from a range. For Grid, preserve direction or neutral mode,
+authorized Boundaries, Entry Range, spacing, rung prices/count, sizing/risk,
+and Hard Stop semantics only when explicitly stated or safely left for the
+deterministic planner. Do not confuse a Grid Order Exit with a strategy
+terminal and do not invent direction or authorization.
 
 Return exactly one JSON object and no prose outside it with these keys:
 schema_version, mode, assistant_reply, strategy_patch, missing_fields,
-needs_confirmation, explicit_execution_intent, confidence.
+evidence_used, assumptions, conflicts, needs_confirmation,
+explicit_execution_intent, confidence.
 `strategy_patch` must copy every explicit Park field (including strategy_type,
 order_count, and an `entry_prices` list when Park names exact entry levels),
 not only the direction. Model output is untrusted; it never authorizes,
@@ -161,6 +174,10 @@ def build_conversation_user_payload(
                 if str(key) in STRATEGY_PATCH_FIELDS
             }
             history_item["missing_fields"] = [str(value) for value in (item.get("missing_fields") or [])[:12]]
+            for field in ("evidence_used", "assumptions", "conflicts"):
+                values = item.get(field)
+                if isinstance(values, list):
+                    history_item[field] = [str(value)[:MAX_ANALYSIS_ITEM_CHARS] for value in values[:MAX_ANALYSIS_ITEMS]]
         bounded_history.append(history_item)
     return json.dumps(
         {
@@ -199,9 +216,17 @@ def normalize_conversation_result(
         missing_value = [missing_value]
     if not isinstance(missing_value, list) or any(not isinstance(item, str) for item in missing_value):
         raise ParkConversationContractError("conversation_missing_fields_invalid", "missing fields must be a string list")
+    def bounded_items(field: str) -> list[str]:
+        raw = value.get(field) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
+            raise ParkConversationContractError("conversation_analysis_invalid", f"{field} must be a string list")
+        return [str(item)[:MAX_ANALYSIS_ITEM_CHARS] for item in raw[:MAX_ANALYSIS_ITEMS]]
+
     confidence = value.get("confidence")
     confidence = confidence if confidence in {"high", "medium", "low"} else "low"
-    explicit_execution_intent = bool(value.get("explicit_execution_intent"))
+    explicit_execution_intent = bool(value.get("explicit_execution_intent")) and has_explicit_execution_intent(source_text)
     ready = mode == "ready_for_confirmation" and explicit_execution_intent
     if mode == "ready_for_confirmation" and not ready:
         mode = "strategy_forming"
@@ -211,8 +236,34 @@ def normalize_conversation_result(
         "assistant_reply": reply[:MAX_ASSISTANT_REPLY_CHARS],
         "strategy_patch": patch,
         "missing_fields": [str(item)[:120] for item in missing_value[:12]],
+        "evidence_used": bounded_items("evidence_used"),
+        "assumptions": bounded_items("assumptions"),
+        "conflicts": bounded_items("conflicts"),
         "needs_confirmation": ready,
         "explicit_execution_intent": explicit_execution_intent,
         "confidence": confidence,
         "source_text": str(source_text or "")[:MAX_HISTORY_MESSAGE_CHARS],
     }
+
+
+def has_explicit_execution_intent(text: str) -> bool:
+    """Require a positive, non-question finalize/execute phrase from Park."""
+
+    source = str(text or "").strip()
+    if not source:
+        return False
+    if re.search(
+        r"(?:不要|不要再|先不|暂不|暂时不|不必|不需要|继续讨论|先讨论|还要讨论|不要锁定).{0,20}(?:执行|确认|下单|finalize|execute|proceed)",
+        source,
+        re.IGNORECASE,
+    ):
+        return False
+    if re.search(r"(?:执行|确认|下单|finalize|execute|proceed).{0,12}(?:吗|么|是否|要不要|\?|？)", source, re.IGNORECASE):
+        return False
+    return bool(
+        re.search(
+            r"(?:确认执行|确认(?:当前|这个|该)?(?:计划|策略)|(?:我|现在|直接|请)?(?:要|决定)?执行(?:当前|这个|该)?(?:计划|策略)?|(?:我|现在|直接)?下单|\b(?:finalize|execute|go\s+ahead|proceed)\b)",
+            source,
+            re.IGNORECASE,
+        )
+    )

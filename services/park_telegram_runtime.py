@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from services.journal_store import load_json, write_json
+from services.park_conversation_contract import (
+    extract_explicit_strategy_patch,
+    has_explicit_execution_intent,
+)
 from services.park_codex_intent_parser import (
     deterministic_legacy_clean_slate_candidate,
     deterministic_neutral_grid_candidate,
@@ -969,6 +973,49 @@ class ParkTelegramRouter:
                 "provider": {"provider": "deterministic_read_only", "status": "fallback"},
                 "execution_authorized": False,
             }
+        if not has_explicit_execution_intent(text):
+            patch = extract_explicit_strategy_patch(text)
+            research_like = bool(
+                re.search(
+                    r"研究|调研|比较|对比|优缺点|假设|证据|反例|research|compare|pros|cons|hypothesis|evidence",
+                    str(text or ""),
+                    re.IGNORECASE,
+                )
+            )
+            formation_like = bool(
+                re.search(
+                    r"我\s*(?:想|要|决定|计划)|我要|我决定|设置|启动|做多|做空|中性网格|open|start",
+                    str(text or ""),
+                    re.IGNORECASE,
+                )
+            )
+            mode = "research" if research_like and not formation_like else "strategy_forming" if patch else "discuss"
+            if mode == "strategy_forming":
+                message = "我先把这条保留为可修改的策略草稿；你还可以继续补充或讨论，未收到明确 finalize/执行指令前不会创建 Paper 计划。"
+            elif mode == "research":
+                message = "我先按研究/讨论处理，不把这个策略想法收敛成执行计划；可以继续比较证据、假设和风险。"
+            else:
+                message = "我先和你讨论这个交易想法，不会因为提到参数就自动形成或执行 Paper 策略。"
+            conversation = {
+                "mode": mode,
+                "assistant_reply": message,
+                "strategy_patch": patch,
+                "missing_fields": [],
+                "evidence_used": [],
+                "assumptions": ["provider unavailable; deterministic conversation fallback"],
+                "conflicts": [],
+                "needs_confirmation": False,
+                "explicit_execution_intent": False,
+                "confidence": "low",
+            }
+            return {
+                "status": "conversation_replied",
+                "mode": mode,
+                "message": message,
+                "conversation": conversation,
+                "provider": {"provider": "deterministic_conversation_fallback", "status": "provider_unavailable"},
+                "execution_authorized": False,
+            }
         if not re.search(r"交易|行情|市场|策略|价格|持仓|挂单|订单|中性|网格|杠杆|止损|止盈|做多|做空|趋势|震荡|美联储|联储|fomc|fed|央行|利率|cpi|ppi|非农|就业|数据|会议|dca|grid|trade|market|strategy|position|order|leverage|stop|take profit", str(text or ""), re.IGNORECASE):
             return {
                 "status": "conversation_replied",
@@ -1012,6 +1059,13 @@ class ParkTelegramRouter:
                 update_id=update_id,
             )
             if fallback.get("status") == "conversation_replied":
+                fallback_conversation = fallback.get("conversation")
+                if isinstance(fallback_conversation, Mapping):
+                    self.conversation_ledger.record_assistant(
+                        update_id=update_id,
+                        conversation=fallback_conversation,
+                        provider=fallback.get("provider"),
+                    )
                 outbound = self.telegram.queue_outbound(
                     idempotency_key=f"park-conversation:{update_id}",
                     message_type="conversation_reply",
