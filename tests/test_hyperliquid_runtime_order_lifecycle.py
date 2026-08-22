@@ -295,6 +295,14 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
             ["submit", "query", "open_orders", "replace", "cancel"],
         )
 
+        second = adapter.submit(self.intent(order_id="testnet-cancel", key="testnet-cancel"))
+        client_cancel = adapter.cancel(second.client_order_id)
+        self.assertEqual(client_cancel.state, OrderState.CANCEL_PENDING)
+        before_unknown = len(backend.calls)
+        with self.assertRaises(KeyError):
+            adapter.cancel("unknown-testnet-order")
+        self.assertEqual(len(backend.calls), before_unknown)
+
         preflight = runtime.preflight(
             required_operations={
                 "order_execution": {"submit", "cancel", "replace", "query", "open_orders"}
