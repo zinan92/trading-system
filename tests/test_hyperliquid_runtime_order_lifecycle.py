@@ -60,6 +60,7 @@ class FakeOrderBackend:
     def __init__(self, profile: CapabilityDescriptor) -> None:
         self.calls: list[tuple[str, str, object]] = []
         self.last_client_order_id: str | None = None
+        self.last_broker_order_id = 100
         self.submit_timeout = False
         self.inline_filled = False
         self.responses: dict[str, object] = {}
@@ -74,6 +75,7 @@ class FakeOrderBackend:
         self.calls.append((port, operation, request))
         if operation == "submit":
             self.last_client_order_id = str(request["cloid"])
+            self.last_broker_order_id += 1
             if self.submit_timeout:
                 raise TimeoutError("ambiguous submit")
             if self.inline_filled:
@@ -83,7 +85,7 @@ class FakeOrderBackend:
                         "type": "order",
                         "data": {
                             "statuses": [
-                                {"filled": {"oid": 101, "totalSz": "0.1", "avgPx": "65000"}}
+                                {"filled": {"oid": self.last_broker_order_id, "totalSz": "0.1", "avgPx": "65000"}}
                             ]
                         },
                     },
@@ -92,7 +94,7 @@ class FakeOrderBackend:
                 "status": "ok",
                 "response": {
                     "type": "order",
-                    "data": {"statuses": [{"resting": {"oid": 101}}]},
+                    "data": {"statuses": [{"resting": {"oid": self.last_broker_order_id}}]},
                 },
             }
         if operation in {"cancel", "replace"}:
@@ -100,14 +102,14 @@ class FakeOrderBackend:
         if operation == "query":
             return {
                 "status": "open",
-                "oid": 101,
+                "oid": self.last_broker_order_id,
                 "cloid": self.last_client_order_id,
                 "timestamp": 1787313661000,
             }
         if operation == "open_orders":
             return self.responses.get(
                 "open_orders",
-                {"orders": [{"status": "open", "oid": 101, "cloid": self.last_client_order_id}]},
+                {"orders": [{"status": "open", "oid": self.last_broker_order_id, "cloid": self.last_client_order_id}]},
             )
         return {"status": "unknown"}
 
@@ -298,6 +300,12 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         second = adapter.submit(self.intent(order_id="testnet-cancel", key="testnet-cancel"))
         client_cancel = adapter.cancel(second.client_order_id)
         self.assertEqual(client_cancel.state, OrderState.CANCEL_PENDING)
+        third = adapter.submit(
+            self.intent(order_id="testnet-broker-cancel", key="testnet-broker-cancel")
+        )
+        broker_cancel = adapter.cancel("103")
+        self.assertEqual(broker_cancel.order_id, third.order_id)
+        self.assertEqual(broker_cancel.state, OrderState.CANCEL_PENDING)
         before_unknown = len(backend.calls)
         with self.assertRaises(KeyError):
             adapter.cancel("unknown-testnet-order")
