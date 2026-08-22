@@ -23,6 +23,10 @@ def _plan() -> dict:
             "target_price": 66000.0,
             "stop_price": 64000.0,
         },
+        "risk_budget": {
+            "maximum_loss_at_full_depth": 1000.0,
+            "max_slippage": 50.0,
+        },
     }
 
 
@@ -66,6 +70,7 @@ def _broker(tmp_path: Path, *, protection: bool = True):
             self.calls: list[tuple[str, str, object]] = []
             self.next_oid = 100
             self.last_cloid = ""
+            self.cancel_failure = False
             self.metadata = NautilusAdapterMetadata(
                 package="nautilus-hyperliquid",
                 version="1.230.0",
@@ -86,6 +91,8 @@ def _broker(tmp_path: Path, *, protection: bool = True):
                     },
                 }
             if port == "order_execution" and operation in {"cancel", "replace"}:
+                if operation == "cancel" and self.cancel_failure:
+                    raise TimeoutError("ambiguous cancel")
                 return {"status": "ok"}
             if port == "order_execution" and operation == "query":
                 return {"status": "open", "oid": self.next_oid, "cloid": self.last_cloid, "timestamp": 1787313661000}
@@ -188,9 +195,50 @@ def test_dca_testnet_freezes_before_next_entry_when_protection_capability_missin
         timestamp="2026-08-22T01:01:00+00:00",
     )
 
-    assert blocked["status"] == "blocked_protection"
+    assert blocked["status"] == "protection_blocked_flattening"
     assert "capability_gap" in blocked["blocker"]
-    assert len(blocked["orders"]) == 1
+    assert len([row for row in blocked["orders"] if row["event"] == "entry"]) == 1
+    assert any(row["event"] == "stop" and row["reduce_only"] for row in blocked["orders"])
+
+
+def test_dca_testnet_partial_fill_does_not_advance_or_attach_protection(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+
+    partial = lifecycle.on_fill(
+        plan,
+        {**_fill(started["orders"][0], price=65000, tid=20), "sz": "0.04"},
+        timestamp="2026-08-22T01:01:00+00:00",
+    )
+
+    assert partial["status"] == "partial_entry"
+    assert partial["protection"] is None
+    assert len(partial["orders"]) == 1
+
+
+def test_dca_testnet_cancel_failure_stops_before_exit_submission(tmp_path: Path) -> None:
+    broker, backend = _broker(tmp_path, protection=True)
+    backend.cancel_failure = True
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+
+    opened = lifecycle.on_fill(
+        plan,
+        _fill(started["orders"][0], price=65000, tid=30),
+        timestamp="2026-08-22T01:01:00+00:00",
+    )
+    blocked = lifecycle.on_market_event(
+        plan,
+        price=64000,
+        timestamp="2026-08-22T01:02:00+00:00",
+    )
+
+    assert blocked["status"] == "blocked_reconciliation"
+    assert "entry_cancel_failed" in blocked["blocker"]
+    assert not any(row["event"] == "stop" for row in blocked["orders"])
 
 
 def test_dca_testnet_stop_cancels_remaining_entries_and_reaches_terminal(tmp_path: Path) -> None:

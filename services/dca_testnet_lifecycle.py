@@ -37,6 +37,7 @@ class DcaTestnetLifecycle:
 
     def start(self, plan: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
         identity = self._identity(plan)
+        self._validate_risk_inputs(plan)
         state = self._load(identity["plan_id"]) or {
             "schema_version": self.schema_version,
             "strategy_plan_id": identity["plan_id"],
@@ -49,12 +50,15 @@ class DcaTestnetLifecycle:
             "fills": [],
             "positions": [],
             "protection": None,
+            "events": [],
             "status": "starting",
             "created_at": timestamp,
         }
         self._states[identity["plan_id"]] = state
+        self._record_event(state, "lifecycle_started", timestamp=timestamp)
         if not state["orders"]:
             self._submit_next_entry(plan, state, timestamp=timestamp)
+            self._record_event(state, "entry_submitted", timestamp=timestamp)
         state["status"] = "waiting_entry"
         state["updated_at"] = timestamp
         self._save(state)
@@ -80,20 +84,43 @@ class DcaTestnetLifecycle:
         if not order_id:
             client_id = str(raw_fill.get("cloid") or raw_fill.get("client_order_id") or "")
             order_id = self._order_id_for_client(state, client_id)
+        order = self._find_order(state, order_id)
+        if order is None:
+            self._block(state, "unknown_fill_order", timestamp=timestamp)
+            self._save(state)
+            raise DcaTestnetLifecycleError(state["blocker"])
+        if state["status"] in {
+            "terminal",
+            "blocked_reconciliation",
+            "blocked_risk",
+        } or (
+            state["status"] in {"stopping", "blocked_protection"}
+            and order["event"] == "entry"
+        ):
+            self._block(state, "late_fill_after_block_or_terminal", timestamp=timestamp)
+            self._save(state)
+            raise DcaTestnetLifecycleError(state["blocker"])
         try:
             receipt = self.broker.canonical_order_adapter.apply_fill(raw_fill)
         except Exception as exc:  # noqa: BLE001 - freeze at the lifecycle seam.
-            state["status"] = "blocked_reconciliation"
-            state["blocker"] = f"fill_rejected:{type(exc).__name__}:{exc}"
+            self._block(state, f"fill_rejected:{type(exc).__name__}:{exc}", timestamp=timestamp)
             self._save(state)
             raise DcaTestnetLifecycleError(state["blocker"]) from exc
-        order = self._find_order(state, order_id)
-        if order is None:
-            raise DcaTestnetLifecycleError("fill references unknown DCA order")
         if str(raw_fill.get("tid") or "") in {str(row.get("fill_id") or "") for row in state["fills"]}:
             return self.snapshot(plan)
-        quantity = float(receipt.filled_quantity)
+        receipt_state = str(getattr(receipt.state, "value", receipt.state) or "").lower()
+        if receipt_state in {"unknown", "rejected"}:
+            self._block(state, f"fill_receipt_{receipt_state}", timestamp=timestamp)
+            self._save(state)
+            raise DcaTestnetLifecycleError(state["blocker"])
+        quantity = float(raw_fill.get("sz") or raw_fill.get("quantity") or 0.0)
         price = float(receipt.average_fill_price or raw_fill.get("px") or 0)
+        planned_price = float(order.get("price") or 0.0)
+        max_slippage = plan.get("risk_budget", {}).get("max_slippage")
+        if max_slippage not in (None, "") and abs(price - planned_price) > float(max_slippage):
+            self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
+            self._save(state)
+            raise DcaTestnetLifecycleError(state["blocker"])
         fill_id = str(raw_fill.get("tid") or raw_fill.get("hash") or "")
         fill = {
             "fill_id": fill_id,
@@ -108,22 +135,52 @@ class DcaTestnetLifecycle:
             "timestamp": timestamp,
         }
         state["fills"].append(fill)
-        order["state"] = "filled"
-        order["filled_quantity"] = quantity
+        self._record_event(state, "fill_received", timestamp=timestamp, fill_id=fill_id, order_id=order_id)
+        order["state"] = "partial" if receipt_state == "partially_filled" else receipt_state
+        order["filled_quantity"] = float(receipt.filled_quantity)
         order["average_fill_price"] = price
+        if receipt_state == "partially_filled":
+            state["status"] = "partial_entry"
+            state["updated_at"] = timestamp
+            self._save(state)
+            return self.snapshot(plan)
         if order["event"] == "entry":
             self._increase_position(state, order, quantity, price)
-            self._confirm_or_update_protection(plan, state, timestamp=timestamp)
-            if state["status"] != "blocked_protection":
+            if not self._risk_within_budget(plan, state):
+                self._block(state, "maximum_loss_budget_exceeded", timestamp=timestamp)
+            else:
+                self._confirm_or_update_protection(plan, state, timestamp=timestamp)
+            if state["status"] not in {"blocked_protection", "blocked_risk"}:
                 self._submit_next_entry(plan, state, timestamp=timestamp)
                 state["status"] = "open"
+            elif state["status"] == "blocked_protection":
+                self._flatten_after_protection_failure(plan, state, timestamp=timestamp)
         else:
+            group_before_exit = (
+                self._protection_group(plan, state, state["positions"][0])
+                if state["positions"]
+                else None
+            )
             self._decrease_position(state, quantity)
             if sum(float(row["quantity"]) for row in state["positions"]) <= 1e-9:
-                state["positions"] = []
-                state["status"] = "terminal"
-                state["terminal_reason"] = order["event"]
-                state["protection"] = None
+                try:
+                    if group_before_exit is not None and state.get("protection") is not None:
+                        self.broker.request("protection_order", "cancel", group_before_exit)
+                    state["positions"] = []
+                    state["status"] = "terminal"
+                    state["terminal_reason"] = order["event"]
+                    state["protection"] = None
+                    state["sealed"] = True
+                    state["park_notification_required"] = True
+                    state["next_action"] = "notify_park_and_wait"
+                    state["reconciliation"] = self._terminal_reconciliation(state, timestamp)
+                    self._record_event(state, "terminal_closed", timestamp=timestamp, reason=order["event"])
+                except Exception as exc:  # noqa: BLE001 - terminal protection close remains blocked.
+                    self._block(
+                        state,
+                        f"terminal_protection_cancel_failed:{type(exc).__name__}:{exc}",
+                        timestamp=timestamp,
+                    )
         state["updated_at"] = timestamp
         self._save(state)
         return self.snapshot(plan)
@@ -146,7 +203,10 @@ class DcaTestnetLifecycle:
         if stop_hit and state["positions"]:
             return self.stop(plan, timestamp=timestamp, reason="strategy_stop", price=stop)
         if target_hit and state["positions"]:
-            self._cancel_entries(state, timestamp=timestamp, reason="take_profit")
+            if not self._cancel_entries(state, timestamp=timestamp, reason="take_profit"):
+                state["updated_at"] = timestamp
+                self._save(state)
+                return self.snapshot(plan)
             position = state["positions"][0]
             self._submit_exit(plan, state, timestamp=timestamp, price=target, quantity=float(position["quantity"]), event="target")
             state["status"] = "target_triggered"
@@ -163,7 +223,10 @@ class DcaTestnetLifecycle:
         price: float,
     ) -> dict[str, Any]:
         state = self._state(plan)
-        self._cancel_entries(state, timestamp=timestamp, reason=reason)
+        if not self._cancel_entries(state, timestamp=timestamp, reason=reason):
+            state["updated_at"] = timestamp
+            self._save(state)
+            return self.snapshot(plan)
         quantity = sum(float(row["quantity"]) for row in state["positions"])
         if quantity > 1e-9:
             self._submit_exit(plan, state, timestamp=timestamp, price=price, quantity=quantity, event="stop")
@@ -180,8 +243,7 @@ class DcaTestnetLifecycle:
         timestamp: str,
     ) -> None:
         if self.broker.protection_adapter is None:
-            state["status"] = "blocked_protection"
-            state["blocker"] = "capability_gap:protection_order.submit"
+            self._block(state, "capability_gap:protection_order.submit", timestamp=timestamp)
             return
         position = state["positions"][0]
         group = self._protection_group(plan, state, position)
@@ -202,10 +264,97 @@ class DcaTestnetLifecycle:
                 "submitted_operation": submitted.operation,
                 "confirmed_operation": confirmed.operation,
                 "confirmed_at": timestamp,
+                "environment": self.broker.broker_config["environment"],
+                "account_id": self.broker.broker_config["account_id"],
+                "release_sha": self.broker.broker_config["release_sha"],
+                "ledger_namespace": self.broker.broker_config["ledger_namespace"],
             }
+            self._record_event(state, "protection_confirmed", timestamp=timestamp, protection_id=group.protection_id)
         except Exception as exc:  # noqa: BLE001 - no new entry after coverage failure.
-            state["status"] = "blocked_protection"
-            state["blocker"] = f"protection_update_failed:{type(exc).__name__}:{exc}"
+            self._block(
+                state,
+                f"protection_update_failed:{type(exc).__name__}:{exc}",
+                timestamp=timestamp,
+            )
+
+    def _flatten_after_protection_failure(
+        self,
+        plan: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        timestamp: str,
+    ) -> None:
+        if not self._cancel_entries(state, timestamp=timestamp, reason="protection_failure"):
+            return
+        quantity = sum(float(row["quantity"]) for row in state["positions"])
+        if quantity <= 1e-9:
+            return
+        self._submit_exit(
+            plan,
+            state,
+            timestamp=timestamp,
+            price=float(plan["dca"]["stop_price"]),
+            quantity=quantity,
+            event="stop",
+        )
+        state["status"] = "protection_blocked_flattening"
+        self._record_event(state, "protection_failure_flatten_submitted", timestamp=timestamp)
+
+    def _terminal_reconciliation(self, state: dict[str, Any], timestamp: str) -> dict[str, Any]:
+        open_orders = [row for row in state["orders"] if row.get("state") == "accepted"]
+        status = "ok" if not open_orders and not state["positions"] else "blocked"
+        return {
+            "status": status,
+            "at": timestamp,
+            "open_order_count": len(open_orders),
+            "open_position_count": len(state["positions"]),
+            **self._identity_metadata(),
+        }
+
+    def _record_event(self, state: dict[str, Any], event: str, *, timestamp: str, **payload: Any) -> None:
+        state.setdefault("events", []).append(
+            {
+                "event": event,
+                "timestamp": timestamp,
+                **payload,
+                **self._identity_metadata(),
+            }
+        )
+
+    def _block(self, state: dict[str, Any], reason: str, *, timestamp: str) -> None:
+        state["status"] = "blocked_reconciliation" if "cancel" in reason or "fill" in reason else "blocked_protection" if "protect" in reason or "capability" in reason else "blocked_risk"
+        state["blocker"] = reason
+        self._record_event(state, "lifecycle_blocked", timestamp=timestamp, reason=reason)
+
+    def _identity_metadata(self) -> dict[str, Any]:
+        return {
+            "environment": self.broker.broker_config["environment"],
+            "account_id": self.broker.broker_config["account_id"],
+            "release_sha": self.broker.broker_config["release_sha"],
+            "ledger_namespace": self.broker.broker_config["ledger_namespace"],
+        }
+
+    @staticmethod
+    def _validate_risk_inputs(plan: dict[str, Any]) -> None:
+        risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), dict) else {}
+        max_loss = risk.get("maximum_loss_at_full_depth")
+        if max_loss in (None, "") or float(max_loss) <= 0:
+            raise DcaTestnetLifecycleError(
+                "maximum_loss_at_full_depth is required before Testnet writes"
+            )
+
+    @staticmethod
+    def _risk_within_budget(plan: dict[str, Any], state: dict[str, Any]) -> bool:
+        risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), dict) else {}
+        max_loss = float(risk.get("maximum_loss_at_full_depth") or 0.0)
+        stop = float(plan["dca"]["stop_price"])
+        loss = sum(
+            (float(position["entry_price"]) - stop) * float(position["quantity"])
+            if state["direction"] == "long"
+            else (stop - float(position["entry_price"])) * float(position["quantity"])
+            for position in state["positions"]
+        )
+        return loss <= max_loss + 1e-9
 
     def _submit_next_entry(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str) -> None:
         index = int(state["next_entry_index"])
@@ -236,12 +385,12 @@ class DcaTestnetLifecycle:
         )
         state["orders"].append(self._order_row(command, receipt))
 
-    def _cancel_entries(self, state: dict[str, Any], *, timestamp: str, reason: str) -> None:
+    def _cancel_entries(self, state: dict[str, Any], *, timestamp: str, reason: str) -> bool:
         for row in state["orders"]:
             if row["event"] != "entry" or row["state"] != "accepted":
                 continue
             try:
-                self.broker.cancel_order(
+                cancel_receipt = self.broker.cancel_order(
                     BrokerCancelRequest(
                         run_date=state["cycle_id"],
                         asset=row["instrument_id"],
@@ -249,13 +398,28 @@ class DcaTestnetLifecycle:
                         broker_order_id=row.get("broker_order_id") or "",
                     )
                 )
+                cancel_state = str(
+                    getattr(cancel_receipt.state, "value", cancel_receipt.state) or ""
+                ).lower()
+                if cancel_state not in {"cancel_pending", "canceled"}:
+                    raise DcaTestnetLifecycleError(
+                        f"cancel_receipt_{cancel_state or 'unknown'}"
+                    )
             except Exception as exc:  # noqa: BLE001 - cancellation uncertainty blocks completion.
                 state["status"] = "blocked_reconciliation"
                 state["blocker"] = f"entry_cancel_failed:{type(exc).__name__}:{exc}"
-                return
+                return False
             row["state"] = "cancelled"
             row["cancelled_at"] = timestamp
             row["cancel_reason"] = reason
+            self._record_event(
+                state,
+                "entry_cancelled",
+                timestamp=timestamp,
+                order_id=row["order_id"],
+                reason=reason,
+            )
+        return True
 
     def _increase_position(self, state: dict[str, Any], order: dict[str, Any], quantity: float, price: float) -> None:
         position = state["positions"][0] if state["positions"] else None
@@ -335,12 +499,24 @@ class DcaTestnetLifecycle:
 
     @staticmethod
     def _order_row(command: dict[str, Any], receipt: Any) -> dict[str, Any]:
+        receipt_state = str(getattr(receipt.state, "value", receipt.state) or "").lower()
+        if receipt_state in {"unknown", "rejected"}:
+            raise DcaTestnetLifecycleError(
+                f"order_submit_{receipt_state}:{receipt.order_id}"
+            )
         return {
             **command,
             "order_id": str(receipt.order_id),
             "client_order_id": str(receipt.client_order_id),
             "broker_order_id": str(receipt.broker_order_id or ""),
-            "state": "accepted",
+            "environment": "testnet",
+            "account_id": receipt.account_address,
+            "release_sha": receipt.release_sha,
+            "state": (
+                "accepted"
+                if receipt_state in {"submitting", "resting", "waiting_for_fill", "waiting_for_trigger"}
+                else receipt_state
+            ),
         }
 
     def _state(self, plan: dict[str, Any]) -> dict[str, Any]:
