@@ -6859,7 +6859,7 @@ class StrategyControlPlane:
                 "max_notional": float(preview["risk"].get("absolute_notional_ceiling") or preview["risk"].get("capital_budget") or 0),
                 "max_open_orders": len(preview["orders"]),
                 "max_open_positions": len(preview["orders"]),
-                "max_slippage": float((current.get("risk_budget") or {}).get("max_slippage") or preview["grid"].get("min_spacing") or 0),
+                "max_slippage": float((current.get("risk_budget") or {}).get("max_slippage") or 0),
                 "leverage_limit": float(preview["grid"].get("leverage_limit") or preview["grid"].get("leverage") or 0),
             },
             "field_sources": {
@@ -7409,7 +7409,7 @@ class StrategyControlPlane:
             idempotency_key=key,
             message_type="dca_testnet_terminal",
             text=(
-                f"DCA Testnet revision terminal: {state.get('terminal_reason')}; "
+                f"{'Grid' if str(plan.get('strategy_type') or '').lower() == 'grid' else 'DCA'} Testnet revision terminal: {state.get('terminal_reason')}; "
                 f"plan={plan.get('plan_digest')}; next_action=notify_park_and_wait"
             ),
             binding={

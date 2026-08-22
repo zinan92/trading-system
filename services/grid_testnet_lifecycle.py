@@ -103,6 +103,9 @@ class GridTestnetLifecycle:
             state["status"] = "hard_stop_triggered"
             state["sealed"] = False
             state["post_terminal_late_fill"] = True
+            state["park_notification_required"] = False
+            state.pop("park_notification", None)
+            state.pop("next_action", None)
             self._record_event(state, "post_terminal_late_fill", timestamp=timestamp, order_id=order_id)
 
         try:
@@ -188,7 +191,7 @@ class GridTestnetLifecycle:
             if slippage_breached:
                 self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
                 self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
-                self._hard_stop(plan, state, timestamp=timestamp, reason="slippage")
+                self._hard_stop(plan, state, timestamp=timestamp, reason="slippage", market_price=price)
                 state["updated_at"] = timestamp
                 self._save(state)
                 return self.snapshot(plan)
@@ -238,7 +241,7 @@ class GridTestnetLifecycle:
                 self._block(state, "exit_fill_slippage_exceeded", timestamp=timestamp)
                 self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned, actual_price=price, slippage=slippage)
                 if line.open_quantity > 1e-9 or any(GridLineLifecycle.from_snapshot(item["line"]).open_quantity > 1e-9 for item in state["rungs"]):
-                    self._hard_stop(plan, state, timestamp=timestamp, reason="exit_slippage")
+                    self._hard_stop(plan, state, timestamp=timestamp, reason="exit_slippage", market_price=price)
                 else:
                     state["reconciliation"] = self._terminal_reconciliation(state, timestamp)
                     if state["reconciliation"].get("status") == "ok":
@@ -269,7 +272,7 @@ class GridTestnetLifecycle:
         upper = float(state["upper_boundary"])
         lower = float(state["lower_boundary"])
         if float(price) >= upper or float(price) <= lower:
-            self._hard_stop(plan, state, timestamp=timestamp, reason="grid_boundary")
+            self._hard_stop(plan, state, timestamp=timestamp, reason="grid_boundary", market_price=float(price))
         else:
             self._skip_missed_rungs(plan, state, price=float(price), timestamp=timestamp)
             self._expire_partial_entries(plan, state, timestamp=timestamp)
@@ -450,7 +453,7 @@ class GridTestnetLifecycle:
             except Exception as exc:  # noqa: BLE001 - unresolved cancellation cannot be silently chased.
                 self._submission_failure(plan, state, timestamp=timestamp, reason=f"missed_rung_cancel_failed:{type(exc).__name__}:{exc}")
 
-    def _hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str) -> None:
+    def _hard_stop(self, plan: dict[str, Any], state: dict[str, Any], *, timestamp: str, reason: str, market_price: float | None = None) -> None:
         if state["status"] in {"terminal", "sealed"}:
             return
         state["status"] = "hard_stop_triggered"
@@ -460,7 +463,7 @@ class GridTestnetLifecycle:
             line = GridLineLifecycle.from_snapshot(rung["line"])
             if line.open_quantity <= 1e-9:
                 continue
-            command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]))
+            command = self._command(plan, state, rung, price=float(rung["hard_stop"]), quantity=line.open_quantity, event="hard_stop", index=int(rung.get("generation") or 1), timestamp=timestamp, reduce_only=True, order_type="market", time_in_force="ioc", planned_price=float(rung["hard_stop"]), market_price=market_price)
             try:
                 receipt = self._submit_with_retries(plan, state, command, timestamp=timestamp)
                 state["orders"].append(self._order_row(command, receipt))
@@ -634,11 +637,11 @@ class GridTestnetLifecycle:
             quantity += line.open_quantity
         return total / quantity if quantity > 1e-9 else float(state["lower_boundary"])
 
-    def _command(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False, order_type: str = "limit", time_in_force: str = "gtc", planned_price: float | None = None, attempt: int | None = None) -> dict[str, Any]:
+    def _command(self, plan: dict[str, Any], state: dict[str, Any], rung: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False, order_type: str = "limit", time_in_force: str = "gtc", planned_price: float | None = None, attempt: int | None = None, market_price: float | None = None) -> dict[str, Any]:
         suffix = f":a{attempt}" if attempt is not None else ""
         ticket_id = f"{state['strategy_plan_id']}:{rung['rung_id']}:{event}:g{index}{suffix}"
         side = rung["side"] if not reduce_only else ("sell" if rung["side"] == "buy" else "buy")
-        execution_price = float(price)
+        execution_price = float(market_price if market_price is not None else price)
         if order_type == "market":
             bound = float((plan.get("risk_budget") or {}).get("max_slippage") or 0.0)
             if bound <= 0:
