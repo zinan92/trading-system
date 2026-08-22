@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
             result["readiness"] = soak.finalize()
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if row["status"] == "pass" and (not args.finalize or result["readiness"].get("status") == "ready") else 2
-    except (OSError, ValueError, TestnetSoakError, json.JSONDecodeError) as exc:
+    except (AttributeError, OSError, ValueError, TestnetSoakError, json.JSONDecodeError) as exc:
         print(json.dumps({"status": "blocked", "code": getattr(exc, "code", type(exc).__name__)}, ensure_ascii=False, sort_keys=True))
         return 2
 

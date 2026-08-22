@@ -181,6 +181,8 @@ class TestnetSoakReadiness:
         hashes those artifacts. It never invents a pass from elapsed time.
         """
 
+        if not isinstance(observation, Mapping):
+            raise TestnetSoakError("observation_shape_invalid")
         evidence = dict(observation.get("evidence") or {})
         try:
             for category in sorted(set(REQUIRED_CATEGORIES) | set(REQUIRED_GATE_EVIDENCE)):
@@ -209,6 +211,8 @@ class TestnetSoakReadiness:
         if existing and existing[-1].get("status") == "ready" and self._receipt_integrity_ok(existing[-1], rows) and self._receipt_is_fresh(existing[-1], rows, now=now):
             return dict(existing[-1])
         blockers: list[dict[str, Any]] = []
+        if rows and not self._rows_integrity_ok(rows):
+            blockers.append({"code": "soak_window_integrity_failed"})
         if len(rows) != WINDOW_COUNT or [int(row.get("window_index")) if row.get("window_index") is not None else -1 for row in rows] != list(range(WINDOW_COUNT)):
             blockers.append({"code": "soak_window_count_incomplete", "expected": WINDOW_COUNT, "actual": len(rows)})
         if rows:
@@ -274,6 +278,7 @@ class TestnetSoakReadiness:
             if not self._receipt_integrity_ok(receipt, rows):
                 status = "blocked"
                 receipt = {**receipt, "blockers": [*list(receipt.get("blockers") or []), {"code": "readiness_receipt_integrity_invalid"}]}
+                self._persist_invalidated_receipt(receipt)
             elif status == "ready" and not self._receipt_is_fresh(receipt, rows, now=now):
                 status = "stale"
             if status == "ready" and now is not None:
@@ -334,6 +339,24 @@ class TestnetSoakReadiness:
         expected = [str(row.get("row_digest") or "") for row in ordered]
         recomputed = [_digest({key: value for key, value in row.items() if key != "row_digest"}) for row in ordered]
         return int(receipt.get("window_count") or 0) == len(rows) and expected == recomputed and expected == list(receipt.get("window_digests") or []) and all(expected) and self._artifacts_intact(ordered)
+
+    @staticmethod
+    def _rows_integrity_ok(rows: Sequence[Mapping[str, Any]]) -> bool:
+        for row in rows:
+            digest = str(row.get("row_digest") or "")
+            if not digest or digest != _digest({key: value for key, value in row.items() if key != "row_digest"}):
+                return False
+            if row.get("status") != "pass" or row.get("blockers"):
+                return False
+        return True
+
+    def _persist_invalidated_receipt(self, receipt: Mapping[str, Any]) -> None:
+        rows = self.receipts()
+        if rows and rows[-1].get("status") == "blocked" and rows[-1].get("blockers") == receipt.get("blockers"):
+            return
+        invalidated = {**dict(receipt), "event": "readiness_invalidated", "status": "blocked", "next_action": "notify_park_and_wait", "receipt_revision": len(rows)}
+        invalidated["receipt_digest"] = _digest({key: value for key, value in invalidated.items() if key != "receipt_digest"})
+        write_json(self.receipts_path, [*rows, invalidated])
 
     def _artifacts_intact(self, rows: Sequence[Mapping[str, Any]]) -> bool:
         for row in rows:
