@@ -262,6 +262,12 @@ def build_dca_preview(
             "risk_flags": risk_flags,
         },
     }
+    for limit_name in ("max_notional", "max_open_orders", "max_open_positions", "max_slippage"):
+        if limit_name in risk_budget:
+            preview["risk"][limit_name] = _positive_number(
+                risk_budget[limit_name],
+                f"DCA {limit_name}",
+            )
     if body.get("start_facts_digest") is not None:
         preview["start_facts_digest"] = str(
             body["start_facts_digest"]
@@ -310,10 +316,14 @@ def build_dca_strategy_plan(
             "risk_budget": "confirmed",
         },
     }
-    if strategy_session_id is not None:
-        plan["strategy_session_id"] = _required_text(strategy_session_id, "strategy_session_id")
-    if strategy_revision_id is not None:
-        plan["strategy_revision_id"] = _required_text(strategy_revision_id, "strategy_revision_id")
+    plan["strategy_session_id"] = _required_text(
+        strategy_session_id or f"session:{strategy_plan_id}",
+        "strategy_session_id",
+    )
+    plan["strategy_revision_id"] = _required_text(
+        strategy_revision_id or f"revision:{strategy_plan_id}:v{version}",
+        "strategy_revision_id",
+    )
     digest_payload = {key: value for key, value in plan.items() if key != "plan_digest"}
     plan["plan_digest"] = "sha256:" + hashlib.sha256(
         json.dumps(digest_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

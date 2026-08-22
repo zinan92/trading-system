@@ -106,7 +106,6 @@ class DcaTestnetLifecycle:
             "strategy_plan_id": identity["plan_id"],
             "strategy_plan_version": identity["version"],
             "cycle_id": identity["cycle_id"],
-            "cycle_id": identity["cycle_id"],
             "direction": identity["direction"],
             "entry_levels": identity["entry_levels"],
             "plan_digest": identity["plan_digest"],
@@ -232,6 +231,26 @@ class DcaTestnetLifecycle:
         order["average_fill_price"] = price
         slippage_exceeded = max_slippage not in (None, "") and slippage > float(max_slippage)
         is_entry_event = self._is_entry_event(order["event"])
+        if slippage_exceeded and not is_entry_event:
+            self._decrease_position(state, quantity)
+            self._block(state, "exit_fill_slippage_exceeded", timestamp=timestamp)
+            self._record_event(
+                state,
+                "slippage_budget_breached",
+                timestamp=timestamp,
+                planned_price=planned_price,
+                actual_price=price,
+                slippage=slippage,
+                order_event=order["event"],
+            )
+            if sum(float(row["quantity"]) for row in state["positions"]) > 1e-9:
+                self._flatten_after_block(plan, state, timestamp=timestamp, reason="exit_slippage")
+            else:
+                self._queue_park_notification(state, timestamp=timestamp, reason="exit_fill_slippage_exceeded")
+                state["next_action"] = "notify_park_and_wait"
+            state["updated_at"] = timestamp
+            self._save(state)
+            return self.snapshot(plan)
         if receipt_state == "partially_filled" and not is_entry_event:
             group_before_exit = self._protection_group(plan, state, state["positions"][0]) if state["positions"] else None
             self._decrease_position(state, quantity)
@@ -988,6 +1007,7 @@ class DcaTestnetLifecycle:
         expected = {
             "strategy_plan_id": identity["plan_id"],
             "strategy_plan_version": identity["version"],
+            "cycle_id": identity["cycle_id"],
             "direction": identity["direction"],
             "entry_levels": identity["entry_levels"],
             "plan_digest": identity["plan_digest"],

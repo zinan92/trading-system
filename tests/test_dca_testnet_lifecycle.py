@@ -281,6 +281,21 @@ def test_dca_testnet_partial_exit_reduces_position_and_refreshes_protection(tmp_
     assert partial["protection"]["quantity"] == pytest.approx(float(stop_order["quantity"]) / 2)
 
 
+def test_dca_testnet_exit_slippage_blocks_terminal_seal(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=72), timestamp="2026-08-22T01:01:00+00:00")
+    stopping = lifecycle.stop(plan, timestamp="2026-08-22T01:02:00+00:00", reason="strategy_stop", price=64000)
+    stop_order = next(row for row in stopping["orders"] if row["event"] == "stop")
+    breached = lifecycle.on_fill(plan, _fill(stop_order, price=65000, tid=73), timestamp="2026-08-22T01:03:00+00:00")
+
+    assert breached["status"] == "blocked_reconciliation"
+    assert breached.get("sealed") is not True
+    assert breached["next_action"] == "notify_park_and_wait"
+
+
 def test_dca_testnet_restart_does_not_reopen_terminal_revision(tmp_path: Path) -> None:
     broker, _ = _broker(tmp_path, protection=True)
     lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from services.strategy_control_plane import StrategyControlMachineError, StrategyControlPlane
+from services.park_confirmation import ParkConfirmationLedger
 
 
 def _plan() -> dict:
@@ -46,6 +47,29 @@ class ReadinessOnlyTestnetAdapter:
         }
 
 
+def _durable_confirmation(tmp_path: Path, plan: dict) -> dict:
+    ledger = ParkConfirmationLedger(tmp_path, park_user_id="park-user")
+    proposal = ledger.create_proposal(
+        proposal_id=f"proposal:{plan['strategy_plan_id']}",
+        strategy_session_id=plan["strategy_session_id"],
+        strategy_revision_id=plan["strategy_revision_id"],
+        plan_digest=plan["plan_digest"],
+        risk_digest="sha256:" + "b" * 64,
+        expires_at=4102444800,
+    )
+    decision = ledger.decide(
+        proposal_id=proposal["proposal_id"],
+        park_user_id="park-user",
+        command_text=f"confirm {plan['plan_digest']}",
+        current_binding={
+            "strategy_session_id": plan["strategy_session_id"],
+            "strategy_revision_id": plan["strategy_revision_id"],
+        },
+        now=1787350000,
+    )
+    return dict(decision)
+
+
 def test_testnet_control_requires_exact_park_confirmation(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path)
     plan = _plan()
@@ -68,13 +92,7 @@ def test_testnet_control_requires_exact_park_confirmation(tmp_path: Path) -> Non
 def test_testnet_control_requires_authoritative_market_before_lifecycle(tmp_path: Path) -> None:
     plane = StrategyControlPlane(tmp_path)
     plan = _plan()
-    confirmation = {
-        "execution_authorized": True,
-        "plan_digest": plan["plan_digest"],
-        "source": "telegram",
-        "strategy_session_id": plan["strategy_session_id"],
-        "strategy_revision_id": plan["strategy_revision_id"],
-    }
+    confirmation = _durable_confirmation(tmp_path, plan)
 
     with pytest.raises(StrategyControlMachineError, match="testnet_market_not_authoritative"):
         plane.start_testnet_dca(
@@ -97,13 +115,7 @@ def test_testnet_control_starts_lifecycle_only_after_authority_gates(tmp_path: P
             "strategy_revision_id": "revision-testnet",
         }
     )
-    confirmation = {
-        "execution_authorized": True,
-        "plan_digest": plan["plan_digest"],
-        "source": "telegram",
-        "strategy_session_id": plan["strategy_session_id"],
-        "strategy_revision_id": plan["strategy_revision_id"],
-    }
+    confirmation = _durable_confirmation(tmp_path, plan)
 
     result = plane.start_testnet_dca(
         plan,
@@ -129,13 +141,7 @@ def test_testnet_control_never_publishes_running_when_protection_capability_is_m
     broker, _ = _broker(tmp_path, protection=False)
     plane = StrategyControlPlane(tmp_path)
     plan = _plan()
-    confirmation = {
-        "execution_authorized": True,
-        "plan_digest": plan["plan_digest"],
-        "source": "telegram",
-        "strategy_session_id": plan["strategy_session_id"],
-        "strategy_revision_id": plan["strategy_revision_id"],
-    }
+    confirmation = _durable_confirmation(tmp_path, plan)
 
     with pytest.raises(StrategyControlMachineError, match="testnet_preflight_blocked"):
         plane.start_testnet_dca(
