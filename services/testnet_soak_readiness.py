@@ -352,14 +352,18 @@ class TestnetSoakReadiness:
 
     def _persist_invalidated_receipt(self, receipt: Mapping[str, Any]) -> None:
         rows = self.receipts()
-        if rows and rows[-1].get("status") == "blocked" and rows[-1].get("blockers") == receipt.get("blockers"):
+        blockers = list({json.dumps(item, sort_keys=True): item for item in receipt.get("blockers") or []}.values())
+        if rows and rows[-1].get("status") == "blocked" and rows[-1].get("blockers") == blockers:
             return
-        invalidated = {**dict(receipt), "event": "readiness_invalidated", "status": "blocked", "next_action": "notify_park_and_wait", "receipt_revision": len(rows)}
+        invalidated = {**dict(receipt), "event": "readiness_invalidated", "status": "blocked", "blockers": blockers, "next_action": "notify_park_and_wait", "receipt_revision": len(rows)}
         invalidated["receipt_digest"] = _digest({key: value for key, value in invalidated.items() if key != "receipt_digest"})
         write_json(self.receipts_path, [*rows, invalidated])
 
     def _artifacts_intact(self, rows: Sequence[Mapping[str, Any]]) -> bool:
-        review_rows = load_json(self.root / "reviews.json")
+        try:
+            review_rows = load_json(self.root / "reviews.json")
+        except Exception:
+            return False
         review_by_window = {str(item.get("record_window_id") or ""): item for item in review_rows if isinstance(item, Mapping)}
         for row in rows:
             review = review_by_window.get(str(row.get("record_window_id") or ""))
