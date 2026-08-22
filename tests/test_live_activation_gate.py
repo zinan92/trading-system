@@ -154,7 +154,7 @@ def _preflight(gate: LiveActivationGate) -> dict:
         strategy_scope="dca",
         readiness=gate._readiness_receipt_resolver(),
         capabilities={"operations": operations},
-        risk_limits={"max_acceptable_loss": 25, "max_notional": 100, "max_leverage": 2, "max_open_orders": 10, "max_positions": 1},
+        risk_limits={"max_acceptable_loss": 1000, "max_notional": 10000, "max_leverage": 5, "max_open_orders": 2, "max_positions": 2, "max_slippage": 10},
         source_attestation=source,
     )
 
@@ -231,6 +231,7 @@ def test_prepare_rejects_self_consistent_forged_preflight(tmp_path: Path) -> Non
         "max_leverage": 20,
         "max_open_orders": 999,
         "max_positions": 999,
+        "max_slippage": 999,
     }
     forged["preflight_digest"] = _digest({key: value for key, value in forged.items() if key != "preflight_digest"})
     try:

@@ -113,9 +113,12 @@ class LiveDcaCanary:
         self._require(admission.get("ready") is True, "activation_prerequisite_blocked", admission)
         self._validate_transport_identity(admission)
         normalized = self._validate_plan(plan, admission)
+        if dict(normalized["risk_limits"]) != dict((admission.get("preflight") or {}).get("risk_limits") or {}):
+            raise LiveDcaCanaryError("current_risk_limits_mismatch", "canary risk limits do not match the activation preflight")
         capabilities = self._capabilities()
         missing = sorted(REQUIRED_TRANSPORT_CAPABILITIES - capabilities)
         self._require(not missing, "capability_gap", {"missing": missing})
+        account = self._account_snapshot(normalized["risk_limits"], admission=admission, timestamp=timestamp)
         existing = self.snapshot()
         if existing:
             self._validate_state_integrity(existing)
@@ -148,6 +151,7 @@ class LiveDcaCanary:
             "network_io": bool(getattr(self.transport, "network_io", False)),
             "real_money_eligible": bool(self.allow_network),
             "transport_identity": dict(getattr(self.transport, "identity", {})),
+            "account_snapshot": account,
             "live_writes_enabled": False,
             "created_at": str(timestamp),
             "updated_at": str(timestamp),
@@ -160,6 +164,7 @@ class LiveDcaCanary:
     def submit_entry(self, index: int, *, timestamp: str) -> dict[str, Any]:
         state = self._state()
         self._require(state.get("status") in {"prepared", "running"}, "canary_not_accepting_entries", state)
+        self._account_snapshot(state["risk_limits"], state=state, timestamp=timestamp)
         expected_index = sum(1 for order in state.get("orders") or [] if order.get("event") == "entry")
         if int(index) != expected_index:
             self._block(state, "entry_sequence_invalid", timestamp=timestamp)
@@ -210,9 +215,17 @@ class LiveDcaCanary:
         if str(response.get("status") or "").lower() not in {"filled", "partially_filled", "partial"}:
             state["pending_entry_order_id"] = order_id
         fill = response.get("fill") if isinstance(response.get("fill"), Mapping) else None
+        response_status = str(response.get("status") or "").lower()
+        if response_status in {"filled", "partially_filled", "partial"} and not isinstance(fill, Mapping):
+            self._block(state, "fill_receipt_missing", timestamp=timestamp)
+            self._save(state)
+            raise LiveDcaCanaryError("fill_receipt_missing", "a terminal order response without fill quantity and price is unknown")
+        if response_status in {"partially_filled", "partial"}:
+            state["pending_entry_order_id"] = order_id
         if fill:
-            state["fills"].append({"order_id": order_id, **dict(fill), "index": int(index), "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"]})
-            actual_price = _number(fill.get("price"), "fill price")
+            quantity = _number(fill.get("quantity", fill.get("sz")), "fill quantity")
+            actual_price = _number(fill.get("price", fill.get("px")), "fill price")
+            state["fills"].append({"order_id": order_id, **dict(fill), "quantity": quantity, "price": actual_price, "index": int(index), "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"]})
             if abs(actual_price - entry["price"]) > state["risk_limits"]["max_slippage"]:
                 self._recover_after_protection_gap(state, "entry_slippage_exceeded", timestamp=timestamp)
                 raise LiveDcaCanaryError("entry_slippage_exceeded", "entry fill exceeded the approved slippage ceiling")
@@ -244,10 +257,16 @@ class LiveDcaCanary:
             response = self._call("replace_protection", request, timestamp=timestamp)
             self._require(response.get("status") not in {"unknown", "rejected", "error"}, "protection_update_unknown", response)
             self._require(response.get("reduce_only") is True, "protection_not_reduce_only", response)
+            covered_quantity = _number(response.get("covered_quantity"), "covered protection quantity")
+            self._require(covered_quantity >= quantity, "protection_coverage_underreported", response)
+            take_profit = _number(response.get("take_profit"), "protection take profit")
+            stop_loss = _number(response.get("stop_loss"), "protection stop loss")
+            self._require(take_profit == float(state["target_price"]), "protection_take_profit_mismatch", response)
+            self._require(stop_loss == float(state["stop_price"]), "protection_stop_loss_mismatch", response)
         except LiveDcaCanaryError as exc:
             self._recover_after_protection_gap(state, exc.code, timestamp=timestamp)
             raise
-        state["protection"] = {"quantity": quantity, "take_profit": state["target_price"], "stop_loss": state["stop_price"], "reduce_only": True, "group_id": response.get("group_id")}
+        state["protection"] = {"quantity": covered_quantity, "take_profit": take_profit, "stop_loss": stop_loss, "reduce_only": True, "group_id": response.get("group_id")}
         state["status"] = "running"
         self._event(state, "protection_replaced", timestamp=timestamp, quantity=quantity)
         self._save(state)
@@ -296,11 +315,13 @@ class LiveDcaCanary:
         self._event(state, "flatten_requested", timestamp=timestamp, reason=reason)
         self._reconcile(state, timestamp=timestamp, require_flat=True)
         if reason == "completed":
-            self._record_canary_passed(state, timestamp=timestamp)
+            self._require(self._open_quantity(state) > 0 and isinstance(state.get("protection"), Mapping), "canary_completion_proof_missing", {"open_quantity": self._open_quantity(state), "protection": bool(state.get("protection"))})
         state["status"] = "rolled_back" if reason != "completed" else "completed"
         state["live_writes_enabled"] = False
         state["next_action"] = "record_and_stop"
         self._save(state)
+        if reason == "completed":
+            self._record_canary_passed(state, timestamp=timestamp)
         return dict(state)
 
     def stop(self, *, timestamp: str, reason: str = "attended_stop") -> dict[str, Any]:
@@ -397,9 +418,33 @@ class LiveDcaCanary:
     def _open_quantity(self, state: Mapping[str, Any]) -> float:
         return sum(float(fill.get("quantity") or 0) for fill in state.get("fills") or [])
 
+    def _account_snapshot(self, limits: Mapping[str, float], *, admission: Mapping[str, Any] | None = None, state: Mapping[str, Any] | None = None, timestamp: str) -> dict[str, Any]:
+        identity = admission or state or {}
+        request = {
+            "activation_digest": identity.get("activation_digest"),
+            "plan_digest": identity.get("plan_digest"),
+            "environment": "mainnet",
+            "account_id": identity.get("account_id"),
+            "release_sha": identity.get("release_sha"),
+        }
+        response = self._call("account_snapshot", request, timestamp=timestamp)
+        self._require(response.get("status") in {"ok", "pass", "ready"}, "account_snapshot_unknown", response)
+        fields = {key: _number(response.get(key), key) for key in ("open_orders", "open_positions", "notional", "leverage", "loss")}
+        if fields["open_orders"] > limits["max_open_orders"] or fields["open_positions"] > limits["max_positions"] or fields["notional"] > limits["max_notional"] or fields["leverage"] > limits["max_leverage"] or fields["loss"] > limits["max_acceptable_loss"]:
+            self._require(False, "current_risk_ceiling_exceeded", {"account": fields, "limits": dict(limits)})
+        return {"status": str(response.get("status")), **fields}
+
     def _reconcile(self, state: dict[str, Any], *, timestamp: str, require_flat: bool = False) -> None:
         expected = {"activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "open_quantity": self._open_quantity(state), "require_flat": bool(require_flat)}
-        report = self._call("reconcile", expected, timestamp=timestamp)
+        try:
+            report = self._call("reconcile", expected, timestamp=timestamp)
+        except LiveDcaCanaryError as exc:
+            state["status"] = "blocked_reconciliation"
+            state["blocker"] = exc.code
+            state["next_action"] = "notify_park_and_wait"
+            self._event(state, "reconciliation_unknown", timestamp=timestamp, code=exc.code)
+            self._save(state)
+            raise
         if report.get("status") not in {"ok", "pass", "reconciled"} or (require_flat and float(report.get("open_quantity") or 0) != 0):
             state["status"] = "blocked_reconciliation"
             state["next_action"] = "notify_park_and_wait"
@@ -423,7 +468,12 @@ class LiveDcaCanary:
         if not callable(method):
             raise LiveDcaCanaryError("capability_gap", f"transport does not implement {operation}")
         try:
-            response = method(request) if operation not in {"cancel_order", "query_order", "account_snapshot"} else method(str(request.get("order_id") or ""))
+            if operation == "account_snapshot":
+                response = method()
+            elif operation in {"cancel_order", "query_order"}:
+                response = method(str(request.get("order_id") or ""))
+            else:
+                response = method(request)
         except Exception as exc:  # unknown outcome freezes the canary.
             raise LiveDcaCanaryError(f"{operation}_unknown", f"{operation} returned an unknown error") from exc
         if not isinstance(response, Mapping):
@@ -497,6 +547,8 @@ class LiveDcaCanary:
             "risk_limits_digest": _digest(state["risk_limits"]),
             "source_attestation": dict(source) if isinstance(source, Mapping) else {},
             "canary_status": "pass",
+            "state_digest": state.get("state_digest"),
+            "reconciliation_digest": _digest(state.get("reconciliation") or {}),
             "finished_at": str(timestamp),
         }
         row["canary_receipt_digest"] = _digest(row)

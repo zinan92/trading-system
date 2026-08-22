@@ -30,7 +30,7 @@ class FixtureTransport:
 
     def replace_protection(self, request):
         self.calls.append(("replace_protection", dict(request)))
-        return {"status": "accepted", "group_id": "protection-1", "reduce_only": True}
+        return {"status": "accepted", "group_id": "protection-1", "reduce_only": True, "covered_quantity": request["quantity"], "take_profit": request["take_profit"], "stop_loss": request["stop_loss"]}
 
     def query_order(self, order_id):
         self.calls.append(("query_order", order_id))
@@ -38,7 +38,7 @@ class FixtureTransport:
 
     def account_snapshot(self):
         self.calls.append(("account_snapshot", ""))
-        return {"status": "ok"}
+        return {"status": "ok", "open_orders": 0, "open_positions": 0, "notional": 0, "leverage": 0, "loss": 0}
 
     def reconcile(self, expected):
         self.calls.append(("reconcile", dict(expected)))

@@ -465,6 +465,13 @@ class LiveActivationGate:
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_receipt_missing"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         if canary.get("risk_limits_digest") != _digest(preflight.get("risk_limits") or {}):
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_risk_limits_mismatch"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
+        try:
+            state_rows = load_json(self.output_root / "dualtrack" / "live_dca_canary" / "current.json")
+            state = state_rows[-1] if state_rows and isinstance(state_rows[-1], Mapping) else None
+        except Exception:
+            state = None
+        if not isinstance(state, Mapping) or state.get("status") != "completed" or state.get("activation_digest") != confirmed.get("activation_digest") or state.get("plan_digest") != confirmed.get("plan_digest") or state.get("state_digest") != _digest({key: value for key, value in state.items() if key != "state_digest"}) or state.get("reconciliation", {}).get("status") not in {"ok", "pass", "reconciled"} or canary.get("state_digest") != state.get("state_digest") or canary.get("reconciliation_digest") != _digest(state.get("reconciliation") or {}):
+            return {"ready": False, "status": "blocked", "blockers": ["attended_canary_state_missing_or_invalid"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         source = canary.get("source_attestation") if isinstance(canary.get("source_attestation"), Mapping) else {}
         try:
             current = dict(self._source_attestation_resolver())
@@ -863,7 +870,7 @@ class LiveActivationGate:
         if not isinstance(value, Mapping):
             return None
         result: dict[str, float] = {}
-        for key in ("max_acceptable_loss", "max_notional", "max_leverage", "max_open_orders", "max_positions"):
+        for key in ("max_acceptable_loss", "max_notional", "max_leverage", "max_open_orders", "max_positions", "max_slippage"):
             try:
                 number = float(value.get(key))
             except (TypeError, ValueError):
