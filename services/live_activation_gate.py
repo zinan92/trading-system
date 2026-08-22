@@ -520,7 +520,16 @@ class LiveActivationGate:
         current_digest = str(current.get("receipt_digest") or "")
         if not _SHA256.fullmatch(supplied_digest) or supplied_digest != current_digest:
             return False
+        if dict(readiness) != dict(current):
+            return False
         if current_digest != _digest({key: value for key, value in current.items() if key != "receipt_digest"}):
+            return False
+        critical = current.get("critical_gate_results")
+        if (
+            not isinstance(critical, Mapping)
+            or set(str(key) for key in critical) != set(REQUIRED_READINESS_CATEGORIES)
+            or any(not self._gate_passes(value) for value in critical.values())
+        ):
             return False
         try:
             readiness_counts_valid = (
