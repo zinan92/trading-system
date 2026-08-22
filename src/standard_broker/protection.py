@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 
-from .orders import OrderSide
 from .models import BrokerEnvironment, Provenance
+from .orders import OrderSide
 
 
 class ProtectionType(str, Enum):
@@ -23,6 +23,10 @@ class ProtectionQuantityPolicy(str, Enum):
     POSITION_FOLLOWING = "position_following"
 
 
+class TriggerReference(str, Enum):
+    MARK = "mark"
+
+
 class ProtectionLifecycleState(str, Enum):
     UNKNOWN = "unknown"
     SUBMITTED = "submitted"
@@ -31,12 +35,10 @@ class ProtectionLifecycleState(str, Enum):
     CANCELED = "canceled"
 
 
-class TriggerReference(str, Enum):
-    MARK = "mark"
-
-
 @dataclass(frozen=True)
 class ProtectionLifecycleStatus:
+    """Canonical protection status; ACTIVE requires Broker/ledger evidence."""
+
     protection_id: str
     state: ProtectionLifecycleState
     reason: str | None
@@ -55,6 +57,28 @@ class ProtectionReceipt:
     account_address: str | None = None
     lifecycle_id: str | None = None
     release_sha: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("protection_id", "parent_order_id", "operation", "broker_id"):
+            value = getattr(self, name)
+            if not value or value != value.strip():
+                raise ValueError(f"{name} must be a non-empty trimmed string")
+        if not isinstance(self.environment, BrokerEnvironment):
+            raise TypeError("environment must be a BrokerEnvironment")
+        if not isinstance(self.accepted, bool):
+            raise TypeError("accepted must be a bool")
+        if not isinstance(self.provenance, Provenance):
+            raise TypeError("provenance must be a Provenance")
+
+
+@dataclass(frozen=True)
+class ProtectionRetryPlan:
+    protection_id: str
+    operation: str
+    attempt: int
+    retry_allowed: bool
+    delay_seconds: float
+    disposition: str
 
 
 @dataclass(frozen=True)

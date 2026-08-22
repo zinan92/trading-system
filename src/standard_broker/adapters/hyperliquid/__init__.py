@@ -19,7 +19,13 @@ from .fees import HyperliquidFeeAdapter, HyperliquidRuntimeFeeAdapter
 from .instruments import HyperliquidInstrumentAdapter
 from .market_data import HyperliquidMarketDataAdapter, HyperliquidRuntimeReadAdapter
 from .orders import HyperliquidOrderAdapter, HyperliquidRuntimeOrderAdapter
-from .protection import HyperliquidProtectionAdapter, HyperliquidRuntimeProtectionAdapter
+from .protection import (
+    HyperliquidProtectionAdapter,
+    HyperliquidRuntimeProtectionAdapter,
+    ProtectionLifecycleState,
+    ProtectionLifecycleStatus,
+    ProtectionRetryPlan,
+)
 from .resilience import (
     HyperliquidRuntimeReconciliationAdapter,
     RateLimitError,
@@ -49,6 +55,9 @@ __all__ = [
     "HyperliquidRuntimeOrderAdapter",
     "HyperliquidProtectionAdapter",
     "HyperliquidRuntimeProtectionAdapter",
+    "ProtectionLifecycleState",
+    "ProtectionLifecycleStatus",
+    "ProtectionRetryPlan",
     "HyperliquidRuntimeReconciliationAdapter",
     "RateLimitError",
     "ObservationSource",

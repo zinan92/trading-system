@@ -15,10 +15,12 @@ from ...protection import (
     ProtectionLifecycleStatus,
     ProtectionQuantityPolicy,
     ProtectionReceipt,
+    ProtectionRetryPlan,
     ProtectionType,
     TriggerReference,
 )
 from .bridge import NautilusHyperliquidRuntime, NautilusRuntimeState
+from .resilience import RateLimitError, RetryPolicy, plan_retry
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,435 @@ class HyperliquidProtectionRequest:
     quantity: Decimal
     quantity_policy: ProtectionQuantityPolicy
     legs: tuple[HyperliquidProtectionLeg, ...]
+
+
+class HyperliquidRuntimeProtectionAdapter:
+    """Paper-only ProtectionOrderPort lifecycle with explicit capability gaps."""
+
+    name = "hyperliquid_runtime_protection_order"
+
+    def __init__(
+        self,
+        *,
+        runtime: NautilusHyperliquidRuntime,
+        retry_policy: RetryPolicy | None = None,
+    ) -> None:
+        if not isinstance(runtime, NautilusHyperliquidRuntime):
+            raise RuntimeBoundaryError(
+                "runtime_type_invalid",
+                "protection adapter requires the canonical Hyperliquid runtime",
+            )
+        if runtime.state is not NautilusRuntimeState.READY:
+            raise RuntimeBoundaryError(
+                "runtime_not_ready",
+                "protection adapter requires an approved ready runtime",
+            )
+        if runtime.session.broker_id != "hyperliquid":
+            raise RuntimeBoundaryError(
+                "broker_mismatch",
+                "Hyperliquid protection adapter requires the Hyperliquid Broker",
+            )
+        if runtime.session.environment not in {
+            BrokerEnvironment.PAPER,
+            BrokerEnvironment.TESTNET,
+        }:
+            raise RuntimeBoundaryError(
+                "protection_runtime_environment_unsupported",
+                "protection lifecycle supports Paper and approved Testnet fixtures only",
+            )
+        if runtime.session.environment is BrokerEnvironment.TESTNET:
+            runtime.preflight(
+                required_operations={
+                    "order_execution": {"submit", "cancel", "replace", "query", "open_orders"},
+                    "protection_order": {"submit"},
+                }
+            )
+        self._runtime = runtime
+        self._mapper = HyperliquidProtectionAdapter()
+        self._retry_policy = retry_policy or RetryPolicy()
+        self._lock = RLock()
+        self._statuses: dict[str, ProtectionLifecycleStatus] = {}
+        self._last_errors: dict[str, BaseException] = {}
+        self._last_operations: dict[str, str] = {}
+        self._last_groups: dict[str, ProtectionGroup] = {}
+
+    def submit(self, group: ProtectionGroup) -> ProtectionReceipt:
+        with self._lock:
+            return self._run(group, operation="submit", success_state=ProtectionLifecycleState.SUBMITTED)
+
+    def cancel(self, group: ProtectionGroup) -> ProtectionReceipt:
+        with self._lock:
+            return self._run(
+                group,
+                operation="cancel",
+                success_state=ProtectionLifecycleState.CANCELED,
+                request={"protectionId": group.protection_id},
+                require_group=False,
+            )
+
+    def reconcile(self, group: ProtectionGroup) -> ProtectionReceipt:
+        """Confirm protection through an explicit Broker/fixture observation."""
+
+        with self._lock:
+            self._last_operations[group.protection_id] = "query"
+            self._last_groups[group.protection_id] = group
+            try:
+                self._require("query")
+                runtime_receipt = self._runtime.invoke(
+                    "protection_order",
+                    "query",
+                    {"protectionId": group.protection_id},
+                )
+                if runtime_receipt.accepted is not True:
+                    raise BrokerCapabilityError(
+                        "protection_order",
+                        "query",
+                        "protection_query_not_accepted",
+                    )
+            except Exception as error:
+                self._freeze(group.protection_id, error)
+                raise
+            self._statuses[group.protection_id] = ProtectionLifecycleStatus(
+                protection_id=group.protection_id,
+                state=ProtectionLifecycleState.ACTIVE,
+                reason=None,
+                attempts=0,
+            )
+            return ProtectionReceipt(
+                protection_id=group.protection_id,
+                parent_order_id=group.parent_order_id,
+                operation="query",
+                accepted=True,
+                broker_id=runtime_receipt.broker_id,
+                environment=runtime_receipt.environment,
+                provenance=runtime_receipt.provenance,
+                account_address=getattr(runtime_receipt, "account_address", None),
+                lifecycle_id=getattr(runtime_receipt, "lifecycle_id", None),
+                release_sha=getattr(runtime_receipt, "release_sha", None),
+            )
+
+    def replace(self, group: ProtectionGroup) -> ProtectionReceipt:
+        with self._lock:
+            return self._run(group, operation="replace", success_state=ProtectionLifecycleState.SUBMITTED)
+
+    def repair_after_partial_fill(
+        self,
+        group: ProtectionGroup,
+        *,
+        filled_quantity: Decimal,
+    ) -> ProtectionReceipt:
+        with self._lock:
+            self._last_operations[group.protection_id] = "replace"
+            self._last_groups[group.protection_id] = group
+            try:
+                self._mapper.repair_after_partial_fill(
+                    group,
+                    filled_quantity=filled_quantity,
+                )
+                self._require("partial_fill_repair_position_following")
+            except Exception as error:
+                self._freeze(group.protection_id, error)
+                raise
+            repaired_group = replace(group, quantity=filled_quantity)
+            return self._run(
+                repaired_group,
+                operation="replace",
+                success_state=ProtectionLifecycleState.SUBMITTED,
+            )
+
+    def reconcile_position_coverage(
+        self,
+        group: ProtectionGroup,
+        *,
+        owned_quantity: Decimal,
+    ) -> ProtectionReceipt | ProtectionLifecycleStatus:
+        """Keep protection coverage aligned with the currently owned quantity."""
+
+        with self._lock:
+            if not owned_quantity.is_finite() or owned_quantity < 0:
+                raise ValueError("owned_quantity must be finite and non-negative")
+            self._last_operations[group.protection_id] = "cancel" if owned_quantity == 0 else "replace"
+            self._last_groups[group.protection_id] = group
+            if owned_quantity == 0:
+                return self._run(
+                    group,
+                    operation="cancel",
+                    success_state=ProtectionLifecycleState.CANCELED,
+                    request={"protectionId": group.protection_id},
+                    require_group=False,
+                )
+            if group.quantity_policy is ProtectionQuantityPolicy.POSITION_FOLLOWING:
+                if owned_quantity != group.quantity:
+                    try:
+                        self._require("partial_fill_repair_position_following")
+                    except Exception as error:
+                        self._freeze(group.protection_id, error)
+                        raise
+                    return self._run(
+                        replace(group, quantity=owned_quantity),
+                        operation="replace",
+                        success_state=ProtectionLifecycleState.SUBMITTED,
+                    )
+                return self._coverage_status_or_freeze(group.protection_id)
+            if owned_quantity != group.quantity:
+                error = BrokerCapabilityError(
+                    "protection_order",
+                    "position_coverage",
+                    "partial_fill_protection_gap: fixed-size protection cannot cover the residual position",
+                )
+                self._freeze(group.protection_id, error)
+                raise error
+            return self._coverage_status_or_freeze(group.protection_id)
+
+    def retry(
+        self,
+        group: ProtectionGroup,
+        *,
+        attempt: int,
+        delay_elapsed: bool = False,
+    ) -> ProtectionReceipt:
+        with self._lock:
+            plan = self.retry_plan(group, attempt=attempt)
+            if not plan.retry_allowed:
+                raise BrokerCapabilityError(
+                    "protection_order",
+                    "retry",
+                    f"retry_blocked:{plan.disposition}",
+                )
+            if plan.delay_seconds > 0 and not delay_elapsed:
+                raise BrokerCapabilityError(
+                    "protection_order",
+                    "retry",
+                    "retry_wait_required",
+                )
+            retry_group = self._last_groups[group.protection_id]
+            operation = plan.operation
+            success_state = (
+                ProtectionLifecycleState.CANCELED
+                if operation == "cancel"
+                else ProtectionLifecycleState.SUBMITTED
+            )
+            return self._run(
+                retry_group,
+                operation=operation,
+                success_state=success_state,
+                request={"protectionId": retry_group.protection_id}
+                if operation == "cancel"
+                else None,
+                require_group=operation != "cancel",
+                allow_frozen=True,
+            )
+
+    def retry_plan(self, group: ProtectionGroup, *, attempt: int) -> ProtectionRetryPlan:
+        with self._lock:
+            if type(attempt) is not int or attempt < 1:
+                raise ValueError("protection retry attempt must be a positive integer")
+            error = self._last_errors.get(group.protection_id)
+            operation = self._last_operations.get(group.protection_id)
+            status = self.status(group.protection_id)
+            if error is None or operation is None:
+                raise RuntimeBoundaryError(
+                    "protection_retry_not_pending",
+                    "protection retry requires a prior frozen failure",
+                )
+            effective_attempt = max(attempt, status.attempts + 1)
+            plan = plan_retry(error, attempt=effective_attempt, policy=self._retry_policy)
+            return ProtectionRetryPlan(
+                protection_id=group.protection_id,
+                operation=operation,
+                attempt=effective_attempt,
+                retry_allowed=plan.retry_allowed,
+                delay_seconds=plan.delay_seconds,
+                disposition=plan.disposition.value,
+            )
+
+    def status(self, protection_id: str) -> ProtectionLifecycleStatus:
+        with self._lock:
+            return self._statuses.get(
+                protection_id,
+                ProtectionLifecycleStatus(
+                    protection_id=protection_id,
+                    state=ProtectionLifecycleState.UNKNOWN,
+                    reason=None,
+                    attempts=0,
+                ),
+            )
+
+    def _run(
+        self,
+        group: ProtectionGroup,
+        *,
+        operation: str,
+        success_state: ProtectionLifecycleState,
+        request: dict[str, object] | None = None,
+        require_group: bool = True,
+        allow_frozen: bool = False,
+    ) -> ProtectionReceipt:
+        current_status = self._statuses.get(group.protection_id)
+        if (
+            current_status is not None
+            and current_status.state is ProtectionLifecycleState.FROZEN
+            and not allow_frozen
+        ):
+            raise BrokerCapabilityError(
+                "protection_order",
+                "retry",
+                "frozen_protection_requires_explicit_retry",
+            )
+        self._last_operations[group.protection_id] = operation
+        self._last_groups[group.protection_id] = group
+        try:
+            if require_group:
+                self._require_group_capabilities(group, operation)
+            else:
+                self._require(operation)
+            if operation == "replace":
+                self._require("cancel_replace")
+            native_request = request or self._serialize(
+                group,
+                self._mapper.build_group(group),
+            )
+            if operation != "cancel" and any(
+                not leg["reduceOnly"] for leg in native_request["legs"]
+            ):
+                raise BrokerCapabilityError(
+                    "protection_order",
+                    "reduce_only",
+                    "every close leg must remain reduce-only",
+                )
+            runtime_receipt = self._runtime.invoke(
+                "protection_order",
+                operation,
+                native_request,
+            )
+            if runtime_receipt.accepted is not True:
+                raise BrokerCapabilityError(
+                    "protection_order",
+                    operation,
+                    "protection_receipt_not_accepted",
+                )
+        except Exception as error:
+            self._freeze(group.protection_id, error)
+            raise
+        self._statuses[group.protection_id] = ProtectionLifecycleStatus(
+            protection_id=group.protection_id,
+            state=success_state,
+            reason=None,
+            attempts=0,
+        )
+        self._last_errors.pop(group.protection_id, None)
+        return ProtectionReceipt(
+            protection_id=group.protection_id,
+            parent_order_id=group.parent_order_id,
+            operation=operation,
+            accepted=runtime_receipt.accepted,
+            broker_id=runtime_receipt.broker_id,
+            environment=runtime_receipt.environment,
+            provenance=runtime_receipt.provenance,
+            account_address=runtime_receipt.account_address,
+            lifecycle_id=runtime_receipt.lifecycle_id,
+            release_sha=runtime_receipt.release_sha,
+        )
+
+    def _require_group_capabilities(self, group: ProtectionGroup, operation: str) -> None:
+        self._require(operation)
+        self._require("reduce_only")
+        self._require("mark_price_trigger")
+        if group.take_profit is not None and group.stop_loss is not None:
+            self._require("grouped_tp_sl")
+            self._require("sibling_cancellation")
+        if group.quantity_policy is ProtectionQuantityPolicy.FIXED_SIZE:
+            self._require("fixed_size")
+        else:
+            self._require("position_following")
+            self._require("position_level_tpsl")
+        for leg in (group.take_profit, group.stop_loss):
+            if leg is not None:
+                self._require(f"{leg.protection_type.value}_{leg.execution.value}")
+
+    def _require(self, operation: str) -> None:
+        self._runtime.session.capabilities.require("protection_order", operation)
+
+    def _coverage_status_or_freeze(self, protection_id: str) -> ProtectionLifecycleStatus:
+        status = self.status(protection_id)
+        if status.state in {ProtectionLifecycleState.SUBMITTED, ProtectionLifecycleState.ACTIVE}:
+            return status
+        if status.state is ProtectionLifecycleState.FROZEN:
+            raise BrokerCapabilityError(
+                "protection_order",
+                "position_coverage",
+                "frozen_protection_requires_explicit_retry",
+            )
+        error = BrokerCapabilityError(
+            "protection_order",
+            "position_coverage",
+            "protection coverage is not active",
+        )
+        self._freeze(protection_id, error)
+        raise error
+
+    @staticmethod
+    def _serialize(
+        group: ProtectionGroup,
+        request: HyperliquidProtectionRequest,
+    ) -> dict[str, object]:
+        return {
+            "protectionId": group.protection_id,
+            "parentOrderId": group.parent_order_id,
+            "instrumentId": group.instrument_id,
+            "grouping": request.grouping,
+            "quantity": str(request.quantity),
+            "quantityPolicy": request.quantity_policy.value,
+            "legs": [
+                {
+                    "side": "B" if leg.side is OrderSide.BUY else "A",
+                    "tpsl": leg.tpsl,
+                    "execution": leg.execution,
+                    "triggerPx": str(leg.trigger_price),
+                    "limitPx": str(leg.limit_price) if leg.limit_price is not None else None,
+                    "reduceOnly": leg.reduce_only,
+                    "triggerReference": leg.trigger_reference.value,
+                    "siblingId": leg.sibling_id,
+                }
+                for leg in request.legs
+            ],
+        }
+
+    def _freeze(self, protection_id: str, error: BaseException) -> None:
+        previous = self._statuses.get(protection_id)
+        attempts = previous.attempts + 1 if previous is not None else 1
+        self._statuses[protection_id] = ProtectionLifecycleStatus(
+            protection_id=protection_id,
+            state=ProtectionLifecycleState.FROZEN,
+            reason=f"protection_update_failed:{self._safe_reason_code(error)}",
+            attempts=attempts,
+        )
+        self._last_errors[protection_id] = self._safe_retry_error(error)
+
+    @staticmethod
+    def _safe_reason_code(error: BaseException) -> str:
+        if isinstance(error, BrokerCapabilityError):
+            return "capability_gap"
+        if isinstance(error, RateLimitError):
+            return "rate_limit"
+        if isinstance(error, (OSError, TimeoutError)):
+            return "transport_error"
+        if isinstance(error, RuntimeBoundaryError):
+            return "runtime_boundary"
+        return "invalid_protection_update"
+
+    @staticmethod
+    def _safe_retry_error(error: BaseException) -> BaseException:
+        if isinstance(error, RateLimitError):
+            return RateLimitError(
+                retry_after_seconds=error.retry_after_seconds,
+                side_effect_free=error.side_effect_free,
+            )
+        if isinstance(error, TimeoutError):
+            return TimeoutError()
+        if isinstance(error, OSError):
+            return OSError()
+        return ValueError()
 
 
 class HyperliquidProtectionAdapter:
@@ -107,232 +538,3 @@ class HyperliquidProtectionAdapter:
             trigger_reference=leg.trigger_reference,
             sibling_id=group.protection_id,
         )
-
-
-class HyperliquidRuntimeProtectionAdapter:
-    """Submit canonical protection groups through an approved local runtime."""
-
-    name = "hyperliquid_runtime_protection_order"
-
-    def __init__(self, *, runtime: object) -> None:
-        if not isinstance(runtime, NautilusHyperliquidRuntime):
-            raise RuntimeBoundaryError(
-                "runtime_type_invalid",
-                "protection adapter requires the canonical Hyperliquid runtime",
-            )
-        if runtime.state is not NautilusRuntimeState.READY:
-            raise RuntimeBoundaryError(
-                "runtime_not_ready",
-                "protection adapter requires an approved ready runtime",
-            )
-        session = getattr(runtime, "session", None)
-        if session is None or getattr(session, "broker_id", "") != "hyperliquid":
-            raise RuntimeBoundaryError(
-                "broker_mismatch",
-                "Hyperliquid protection adapter requires the Hyperliquid Broker",
-            )
-        if session.environment not in {BrokerEnvironment.PAPER, BrokerEnvironment.TESTNET}:
-            raise RuntimeBoundaryError(
-                "protection_runtime_environment_unsupported",
-                "protection lifecycle supports Paper and approved Testnet only",
-            )
-        if session.environment is BrokerEnvironment.TESTNET:
-            runtime.preflight(
-                required_operations={
-                    "order_execution": {
-                        "submit",
-                        "cancel",
-                        "replace",
-                        "query",
-                        "open_orders",
-                    },
-                    "protection_order": {"submit"},
-                }
-            )
-        self._runtime = runtime
-        self._mapper = HyperliquidProtectionAdapter()
-        self._statuses: dict[str, ProtectionLifecycleStatus] = {}
-        self._groups: dict[str, ProtectionGroup] = {}
-        self._lock = RLock()
-
-    def submit(self, group: ProtectionGroup) -> ProtectionReceipt:
-        return self._run(group, operation="submit")
-
-    def replace(self, group: ProtectionGroup) -> ProtectionReceipt:
-        return self._run(group, operation="replace")
-
-    def cancel(self, group: ProtectionGroup) -> ProtectionReceipt:
-        return self._run(group, operation="cancel")
-
-    def reconcile(self, group: ProtectionGroup) -> ProtectionReceipt:
-        with self._lock:
-            self._require("query")
-            runtime_receipt = self._runtime.invoke(
-                "protection_order",
-                "query",
-                {"protectionId": group.protection_id},
-            )
-            if runtime_receipt.accepted is not True:
-                self._statuses[group.protection_id] = ProtectionLifecycleStatus(
-                    protection_id=group.protection_id,
-                    state=ProtectionLifecycleState.FROZEN,
-                    reason="protection_query_not_accepted",
-                    attempts=1,
-                )
-                raise BrokerCapabilityError(
-                    "protection_order",
-                    "query",
-                    "protection_query_not_accepted",
-                )
-            self._statuses[group.protection_id] = ProtectionLifecycleStatus(
-                protection_id=group.protection_id,
-                state=ProtectionLifecycleState.ACTIVE,
-                reason=None,
-                attempts=0,
-            )
-            self._groups[group.protection_id] = group
-            return ProtectionReceipt(
-                protection_id=group.protection_id,
-                parent_order_id=group.parent_order_id,
-                operation="query",
-                accepted=True,
-                broker_id=runtime_receipt.broker_id,
-                environment=runtime_receipt.environment,
-                provenance=runtime_receipt.provenance,
-                account_address=self._runtime.session.account.address,
-                lifecycle_id=self._runtime.session.lifecycle_id,
-                release_sha=self._runtime._config.expected_release_sha,
-            )
-
-    def reconcile_position_coverage(
-        self,
-        group: ProtectionGroup,
-        *,
-        owned_quantity: Decimal,
-    ) -> ProtectionReceipt | ProtectionLifecycleStatus:
-        if not owned_quantity.is_finite() or owned_quantity < 0:
-            raise ValueError("owned_quantity must be finite and non-negative")
-        if owned_quantity == 0:
-            return self.cancel(group)
-        if owned_quantity != group.quantity:
-            if group.quantity_policy is ProtectionQuantityPolicy.FIXED_SIZE:
-                raise BrokerCapabilityError(
-                    "protection_order",
-                    "position_coverage",
-                    "partial_fill_protection_gap: fixed-size protection cannot cover the residual position",
-                )
-            return self.replace(replace(group, quantity=owned_quantity))
-        status = self._statuses.get(group.protection_id)
-        if status is not None and status.state is ProtectionLifecycleState.SUBMITTED:
-            status = self.reconcile(group)
-        if status is None or status.state is not ProtectionLifecycleState.ACTIVE:
-            raise BrokerCapabilityError(
-                "protection_order",
-                "position_coverage",
-                "protection coverage is not active",
-            )
-        return status
-
-    def status(self, protection_id: str) -> ProtectionLifecycleStatus:
-        return self._statuses.get(
-            protection_id,
-            ProtectionLifecycleStatus(
-                protection_id=protection_id,
-                state=ProtectionLifecycleState.UNKNOWN,
-                reason=None,
-                attempts=0,
-            ),
-        )
-
-    def _run(self, group: ProtectionGroup, *, operation: str) -> ProtectionReceipt:
-        with self._lock:
-            if operation == "cancel":
-                self._require("cancel")
-                request = {"protectionId": group.protection_id}
-            else:
-                self._require_group(group, operation)
-                request = self._serialize(group)
-            runtime_receipt = self._runtime.invoke(
-                "protection_order",
-                operation,
-                request,
-            )
-            if runtime_receipt.accepted is not True:
-                self._statuses[group.protection_id] = ProtectionLifecycleStatus(
-                    protection_id=group.protection_id,
-                    state=ProtectionLifecycleState.FROZEN,
-                    reason="protection_receipt_not_accepted",
-                    attempts=1,
-                )
-                raise BrokerCapabilityError(
-                    "protection_order",
-                    operation,
-                    "protection_receipt_not_accepted",
-                )
-            state = (
-                ProtectionLifecycleState.CANCELED
-                if operation == "cancel"
-                else ProtectionLifecycleState.SUBMITTED
-            )
-            self._statuses[group.protection_id] = ProtectionLifecycleStatus(
-                protection_id=group.protection_id,
-                state=state,
-                reason=None,
-                attempts=0,
-            )
-            self._groups[group.protection_id] = group
-            return ProtectionReceipt(
-                protection_id=group.protection_id,
-                parent_order_id=group.parent_order_id,
-                operation=operation,
-                accepted=runtime_receipt.accepted,
-                broker_id=runtime_receipt.broker_id,
-                environment=runtime_receipt.environment,
-                provenance=runtime_receipt.provenance,
-                account_address=self._runtime.session.account.address,
-                lifecycle_id=self._runtime.session.lifecycle_id,
-                release_sha=self._runtime._config.expected_release_sha,
-            )
-
-    def _require_group(self, group: ProtectionGroup, operation: str) -> None:
-        self._require(operation)
-        for required in ("reduce_only", "mark_price_trigger"):
-            self._require(required)
-        if group.take_profit is not None and group.stop_loss is not None:
-            for required in ("grouped_tp_sl", "sibling_cancellation"):
-                self._require(required)
-        if group.quantity_policy is ProtectionQuantityPolicy.POSITION_FOLLOWING:
-            for required in ("position_following", "position_level_tpsl"):
-                self._require(required)
-        else:
-            self._require("fixed_size")
-        for leg in (group.take_profit, group.stop_loss):
-            if leg is not None:
-                self._require(f"{leg.protection_type.value}_{leg.execution.value}")
-
-    def _require(self, operation: str) -> None:
-        self._runtime.session.capabilities.require("protection_order", operation)
-
-    def _serialize(self, group: ProtectionGroup) -> dict[str, object]:
-        request = self._mapper.build_group(group)
-        return {
-            "protectionId": group.protection_id,
-            "parentOrderId": group.parent_order_id,
-            "instrumentId": group.instrument_id,
-            "grouping": request.grouping,
-            "quantity": str(request.quantity),
-            "quantityPolicy": request.quantity_policy.value,
-            "legs": [
-                {
-                    "side": "B" if leg.side is OrderSide.BUY else "A",
-                    "tpsl": leg.tpsl,
-                    "execution": leg.execution,
-                    "triggerPx": str(leg.trigger_price),
-                    "limitPx": str(leg.limit_price) if leg.limit_price is not None else None,
-                    "reduceOnly": leg.reduce_only,
-                    "triggerReference": leg.trigger_reference.value,
-                    "siblingId": leg.sibling_id,
-                }
-                for leg in request.legs
-            ],
-        }

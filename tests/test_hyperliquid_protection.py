@@ -234,6 +234,7 @@ class HyperliquidProtectionTests(unittest.TestCase):
                         "submit",
                         "cancel",
                         "replace",
+                        "cancel_replace",
                         "query",
                         "reduce_only",
                         "mark_price_trigger",
