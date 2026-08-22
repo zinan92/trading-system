@@ -97,6 +97,10 @@ class OrderFill:
     price: Decimal
     quantity: Decimal
     occurred_at: datetime
+    environment: BrokerEnvironment | None = None
+    account_address: str | None = None
+    lifecycle_id: str | None = None
+    release_sha: str | None = None
 
 
 @dataclass(frozen=True)

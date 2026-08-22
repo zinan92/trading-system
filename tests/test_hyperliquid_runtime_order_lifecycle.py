@@ -245,6 +245,11 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
         self.assertEqual(partial.state, OrderState.PARTIALLY_FILLED)
         self.assertEqual(partial.account_address, "testnet-account")
         self.assertEqual(partial.lifecycle_id, "testnet-order-runtime-1")
+        bound_fill = next(iter(adapter.fills.values()))
+        self.assertEqual(bound_fill.environment, BrokerEnvironment.TESTNET)
+        self.assertEqual(bound_fill.account_address, "testnet-account")
+        self.assertEqual(bound_fill.lifecycle_id, "testnet-order-runtime-1")
+        self.assertEqual(bound_fill.release_sha, "a" * 40)
         self.assertEqual(adapter.apply_fill(
             {
                 "coin": "BTC",

@@ -575,7 +575,19 @@ class HyperliquidRuntimeOrderAdapter:
 
     @property
     def fills(self) -> Mapping[str, OrderFill]:
-        return self._lifecycle.fills
+        return {
+            fill_id: self._bind_fill(fill)
+            for fill_id, fill in self._lifecycle.fills.items()
+        }
+
+    def _bind_fill(self, fill: OrderFill) -> OrderFill:
+        return replace(
+            fill,
+            environment=self._runtime.session.environment,
+            account_address=self._runtime.session.account.address,
+            lifecycle_id=self._runtime.session.lifecycle_id,
+            release_sha=self._runtime._config.expected_release_sha,
+        )
 
     def _validate_intent(self, intent: OrderIntent) -> None:
         instrument = self._instruments.get(intent.instrument_id)
@@ -599,7 +611,8 @@ class HyperliquidRuntimeOrderAdapter:
                 self._runtime.session.account.address,
             )
         ) + ":"
-        for fill_id, fill in self._lifecycle.fills.items():
+        for fill_id, raw_fill in self._lifecycle.fills.items():
+            fill = self._bind_fill(raw_fill)
             if str(raw.get("tid") or raw.get("hash") or "") == fill_id:
                 self._ledger.record_order_fill(fill, raw)
             else:
