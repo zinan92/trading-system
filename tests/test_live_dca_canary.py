@@ -149,4 +149,5 @@ def test_live_dca_canary_freezes_on_unknown_entry_response(tmp_path: Path) -> No
     canary.start(_plan(), timestamp="2026-08-22T00:00:00+00:00")
     with pytest.raises(LiveDcaCanaryError, match="unknown"):
         canary.submit_entry(0, timestamp="2026-08-22T00:01:00+00:00")
-    assert canary.snapshot()["status"] == "prepared"
+    assert canary.snapshot()["status"] == "blocked"
+    assert canary.snapshot()["next_action"] == "notify_park_and_wait"
