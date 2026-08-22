@@ -337,6 +337,53 @@ def _standard_broker_environment_gate(context: BrokerBuildContext) -> BrokerExec
     return adapter
 
 
+def _standard_broker_testnet_execution(context: BrokerBuildContext) -> BrokerExecutionPort:
+    from services.standard_broker_testnet import (
+        StandardBrokerTestnetExecutionAdapter,
+        StandardBrokerTestnetHostError,
+    )
+
+    required = (
+        "backend",
+        "testnet_approval",
+        "instrument_meta",
+        "nautilus_expected_version",
+        "nautilus_expected_commit",
+    )
+    missing = [name for name in required if name not in context.broker_config]
+    if missing:
+        raise StandardBrokerTestnetHostError(
+            "Testnet fixture composition is blocked; missing " + ", ".join(missing)
+        )
+    try:
+        adapter = StandardBrokerTestnetExecutionAdapter(
+            broker_id=str(context.broker_config.get("broker_id") or ""),
+            account_id=str(context.broker_config.get("account_id") or ""),
+            credential_source=str(context.broker_config.get("credential_source") or ""),
+            runtime_id=str(context.broker_config.get("runtime_id") or ""),
+            ledger_namespace=str(context.broker_config.get("ledger_namespace") or ""),
+            environment_fingerprint=str(
+                context.broker_config.get("environment_fingerprint") or ""
+            ),
+            release_sha=str(context.broker_config.get("release_sha") or ""),
+            execution_scope=str(
+                context.broker_config.get("execution_scope") or "hypercore:default"
+            ),
+            backend=context.broker_config["backend"],
+            approval=context.broker_config["testnet_approval"],
+            instrument_meta=context.broker_config["instrument_meta"],
+            expected_version=str(context.broker_config["nautilus_expected_version"]),
+            expected_commit=str(context.broker_config["nautilus_expected_commit"]),
+        )
+    except Exception as exc:  # noqa: BLE001 - normalize fixture blockers at composition seam.
+        if isinstance(exc, StandardBrokerTestnetHostError):
+            raise
+        raise StandardBrokerTestnetHostError(
+            f"standard_broker Testnet fixture blocked: {type(exc).__name__}: {exc}"
+        ) from exc
+    return adapter
+
+
 def _reject_standard_broker_selection(context: BrokerBuildContext) -> BrokerExecutionPort:
     from services.standard_broker_host import StandardBrokerHostError
 
@@ -464,6 +511,7 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
         STANDARD_BROKER_ENVIRONMENT_CAPABILITIES,
         STANDARD_BROKER_PAPER_CAPABILITIES,
     )
+    from services.standard_broker_testnet import STANDARD_BROKER_TESTNET_CAPABILITIES
 
     registry.register(
         BrokerPlugin(
@@ -478,7 +526,14 @@ def default_broker_plugin_registry() -> BrokerPluginRegistry:
             execution_factory=_reject_standard_broker_selection,
         )
     )
-    for environment in ("testnet", "mainnet", "live"):
+    registry.register(
+        BrokerPlugin(
+            BrokerPluginKey("live", "standard_broker", "testnet"),
+            execution_factory=_standard_broker_testnet_execution,
+            capabilities=STANDARD_BROKER_TESTNET_CAPABILITIES,
+        )
+    )
+    for environment in ("mainnet", "live"):
         registry.register(
             BrokerPlugin(
                 BrokerPluginKey("live", "standard_broker", environment),

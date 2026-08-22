@@ -189,7 +189,7 @@ def test_standard_broker_paper_composition_is_explicit_and_read_only(tmp_path: P
         )
 
 
-@pytest.mark.parametrize("environment", ["paper", "testnet", "live"])
+@pytest.mark.parametrize("environment", ["paper", "mainnet", "live"])
 def test_standard_broker_rejects_unsupported_selection_without_fallback(tmp_path: Path, environment: str):
     with pytest.raises(RuntimeError, match="unsupported standard_broker selection|unsupported broker selection"):
         build_broker_execution_port(
@@ -216,7 +216,7 @@ def test_standard_broker_demo_composition_cannot_fall_back_to_legacy(tmp_path: P
         )
 
 
-@pytest.mark.parametrize("environment", ["testnet", "mainnet", "live"])
+@pytest.mark.parametrize("environment", ["mainnet", "live"])
 def test_standard_broker_environment_gate_is_explicit_and_non_networked(
     tmp_path: Path,
     environment: str,
@@ -299,7 +299,7 @@ def test_standard_broker_accepts_live_mainnet_alias_pair(tmp_path: Path):
     assert context.environment == "live"
 
 
-@pytest.mark.parametrize("environment", ["testnet", "mainnet", "live"])
+@pytest.mark.parametrize("environment", ["mainnet", "live"])
 def test_configured_standard_broker_preserves_environment_selection(
     tmp_path: Path,
     environment: str,
@@ -324,6 +324,21 @@ def test_configured_standard_broker_preserves_environment_selection(
     assert adapter.preflight()["environment"] == (
         "mainnet" if environment == "live" else environment
     )
+
+
+def test_standard_broker_testnet_requires_local_fixture_and_approval(tmp_path: Path):
+    from services.standard_broker_testnet import StandardBrokerTestnetHostError
+
+    with pytest.raises(StandardBrokerTestnetHostError, match="missing backend"):
+        build_broker_execution_port(
+            _context(
+                tmp_path,
+                mode="live",
+                provider="standard_broker",
+                environment="testnet",
+                broker_config={"broker_id": "hyperliquid"},
+            )
+        )
 
 
 def test_demo_and_testnet_are_distinct_plugins_with_matched_reconciliation_endpoint(tmp_path: Path):
