@@ -13,6 +13,16 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-22)
+- #857 / PR #865 merged as
+  `main@b8a942d2faa2dc3603e91abd17682e12e6fe2194`, consuming
+  `standard-broker@8dfd8bba1d072b389b6639b7c7051b937535d061`. The selected
+  Hyperliquid Testnet path now requires a canonical approved local fixture,
+  complete order lifecycle capabilities, environment-bound identity and
+  credential-source references, and a namespaced RuntimeFactLedger. Submit,
+  cancel, replace, query, open-orders, idempotency, fills, and reconciliation
+  are available through canonical ports; missing fixtures, mixed identities,
+  unknown capabilities, or fallback all block before transport. No network,
+  Testnet credential value, Live path, order write, or deployment was used.
 - #856 / PR #863 merged as
   `main@0beb87069b140468a6a50a33e99ae4e26176dcef`. The standard-broker
   composition now requires explicit Paper/Testnet/Live environment identity,
@@ -24,7 +34,7 @@
   no order lifecycle, credential, deployment, or environment connection was
   enabled. Focused host/composition tests passed 56 cases; #857 is next.
 - #855 is the staged Testnet-to-Live execution spec. Its remaining tickets are
-  #857 → (#858 and #859 in parallel) → #860 → #861 → #862. Live writes remain
+  #858 and #859 in parallel → #860 → #861 → #862. Live writes remain
   disabled; the current user's dirty checkout was not modified.
 
 ## 现在在哪里(2026-08-21)

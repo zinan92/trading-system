@@ -1,5 +1,33 @@
 # Decision Log
 
+## Consume the approved Hyperliquid Testnet order lifecycle (Issue #857 / PR #865)
+
+Date: 2026-08-22
+
+### Decision
+
+- `trading-system` consumes `standard-broker` at the immutable merge
+  `8dfd8bba1d072b389b6639b7c7051b937535d061`. Testnet composition is explicit
+  and requires a canonical local fixture backend, a matching approval, a
+  complete order capability profile, instrument metadata, and pinned Nautilus
+  metadata. Missing inputs fail closed; no Paper/legacy fallback is allowed.
+- The Testnet adapter exposes canonical submit, cancel, replace, query,
+  open-orders, fill, and reconciliation behavior. DCA/Grid strategy code is
+  not changed. Cancel accepts canonical/client/broker identities and rejects
+  mixed or unknown identities before transport.
+- Environment identity is validated through the shared Paper/Testnet/Live
+  contract. Credential source is only a non-secret environment-variable name.
+  Runtime order/fill facts carry environment, account, lifecycle, release, and
+  configured ledger namespace provenance.
+
+### Verification
+
+- Merged source: `main@b8a942d2faa2dc3603e91abd17682e12e6fe2194`.
+- Trading-system focused host/composition/Testnet tests: 59 passed.
+- Standard-broker full suite after the dependent PRs: 169 passed.
+- Compile, diff, and gitleaks checks passed. No network, credential value,
+  Live activation, order write, or deployment occurred; #858/#859 are next.
+
 ## Isolate standard-broker environment identities before Testnet/Live writes (Issue #856 / PR #863)
 
 Date: 2026-08-22
