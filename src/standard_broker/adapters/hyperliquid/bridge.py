@@ -315,16 +315,10 @@ class NautilusHyperliquidRuntime:
             raise NautilusRuntimeError(reason_code, str(exc)) from exc
 
     def start(self) -> NautilusRuntimeHealth:
-        """Move the runtime to READY after non-network preflight."""
+        """Move the runtime to READY after environment approval preflight."""
 
         if self._state is NautilusRuntimeState.CLOSED:
             raise NautilusRuntimeError("runtime_closed", "closed runtime cannot be started")
-        if self._session.environment is not BrokerEnvironment.PAPER:
-            self._state = NautilusRuntimeState.FAULTED
-            raise NautilusRuntimeError(
-                "external_environment_requires_testnet_ticket",
-                "external runtime readiness is opened only by the human-gated testnet ticket",
-            )
         self.preflight()
         self._state = NautilusRuntimeState.READY
         return self.health

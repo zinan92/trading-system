@@ -12,9 +12,16 @@ from standard_broker.adapters.hyperliquid import (
 )
 from standard_broker.capabilities import CapabilityDescriptor
 from standard_broker.errors import OrderIdempotencyError
-from standard_broker.models import AccountScope, BrokerEnvironment
+from standard_broker.models import AccountScope, BrokerEnvironment, SignerKind
 from standard_broker.orders import OrderIntent, OrderSide, OrderState, OrderType, TimeInForce
-from standard_broker.runtime import AccountReference, BrokerRuntimeSession, SignerReference
+from standard_broker.runtime import (
+    AccountReference,
+    BrokerRuntimeSession,
+    ExternalEnvironmentApproval,
+    RuntimeActivationPolicy,
+    SignerReference,
+    SignerProvider,
+)
 from standard_broker.runtime_facts import RuntimeFactLedger
 
 
@@ -28,6 +35,21 @@ def capabilities(*operations: str) -> CapabilityDescriptor:
         operations={"order_execution": frozenset(operations)},
         revision=REVISION,
     )
+
+
+def capabilities_for(environment: BrokerEnvironment, *operations: str) -> CapabilityDescriptor:
+    return CapabilityDescriptor(
+        broker_id="hyperliquid",
+        environment=environment,
+        operations={"order_execution": frozenset(operations)},
+        revision=REVISION,
+    )
+
+
+class FixtureSignerProvider:
+    def sign(self, signer: SignerReference, payload: bytes) -> bytes:
+        assert signer.reference == "fixture://testnet-signer"
+        return payload
 
 
 class FakeOrderBackend:
@@ -143,6 +165,90 @@ class HyperliquidRuntimeOrderLifecycleTests(unittest.TestCase):
             ),
             backend,
         )
+
+    def test_testnet_runtime_requires_approval_and_supports_fixture_order_lifecycle(self) -> None:
+        profile = capabilities_for(
+            BrokerEnvironment.TESTNET,
+            "submit",
+            "cancel",
+            "replace",
+            "query",
+            "open_orders",
+        )
+        backend = FakeOrderBackend(profile)
+        approval = ExternalEnvironmentApproval(
+            environment=BrokerEnvironment.TESTNET,
+            approval_id="testnet-approval-1",
+            release_sha="a" * 40,
+            approved_by="park",
+            approved_at=datetime.now(UTC),
+        )
+        runtime = NautilusHyperliquidRuntime(
+            session=BrokerRuntimeSession(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                account=AccountReference(AccountScope.MASTER, "testnet-account"),
+                signer=SignerReference(
+                    SignerKind.API_AGENT,
+                    "fixture",
+                    "fixture://testnet-signer",
+                ),
+                signer_provider=FixtureSignerProvider(),
+                capabilities=profile,
+                execution_scope="hypercore:default",
+                lifecycle_id="testnet-order-runtime-1",
+            ),
+            backend=backend,
+            config=NautilusRuntimeConfig(
+                "1.230.0",
+                "order-lifecycle-commit",
+                RuntimeActivationPolicy(testnet_approval=approval),
+            ),
+        )
+
+        health = runtime.start()
+        self.assertEqual(health.environment, BrokerEnvironment.TESTNET)
+        self.assertEqual(health.state.value, "ready")
+        adapter = HyperliquidRuntimeOrderAdapter(
+            runtime=runtime,
+            instruments=self.instruments(),
+            ledger=RuntimeFactLedger(),
+        )
+
+        receipt = adapter.submit(self.intent())
+
+        self.assertEqual(receipt.environment, BrokerEnvironment.TESTNET)
+        self.assertEqual(receipt.state, OrderState.RESTING)
+        self.assertTrue(adapter.local_only)
+        self.assertEqual([call[1] for call in backend.calls], ["submit"])
+
+    def test_testnet_runtime_without_approval_fails_before_backend_invocation(self) -> None:
+        profile = capabilities_for(BrokerEnvironment.TESTNET, "submit")
+        backend = FakeOrderBackend(profile)
+        runtime = NautilusHyperliquidRuntime(
+            session=BrokerRuntimeSession(
+                broker_id="hyperliquid",
+                environment=BrokerEnvironment.TESTNET,
+                account=AccountReference(AccountScope.MASTER, "testnet-account"),
+                signer=SignerReference(
+                    SignerKind.API_AGENT,
+                    "fixture",
+                    "fixture://testnet-signer",
+                ),
+                signer_provider=FixtureSignerProvider(),
+                capabilities=profile,
+                execution_scope="hypercore:default",
+                lifecycle_id="testnet-order-runtime-2",
+            ),
+            backend=backend,
+            config=NautilusRuntimeConfig("1.230.0", "order-lifecycle-commit"),
+        )
+
+        with self.assertRaises(NautilusRuntimeError) as raised:
+            runtime.start()
+
+        self.assertEqual(raised.exception.reason_code, "external_environment_denied")
+        self.assertEqual(backend.calls, [])
 
     def test_submit_returns_canonical_receipt_and_native_request_stays_internal(self) -> None:
         adapter, backend = self.adapter()

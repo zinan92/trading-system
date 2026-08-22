@@ -42,7 +42,9 @@ class HyperliquidOrderAdapter:
         environment: BrokerEnvironment = BrokerEnvironment.PAPER,
     ) -> None:
         if getattr(transport, "local_only", False) is not True:
-            raise ValueError("T04 Paper order adapter requires a local-only transport")
+            raise ValueError("Paper/Testnet order adapter requires a local-only transport")
+        if environment not in {BrokerEnvironment.PAPER, BrokerEnvironment.TESTNET}:
+            raise ValueError("fixture order adapter supports Paper and approved Testnet only")
         self._transport = transport
         self._environment = environment
         self._orders: dict[str, OrderReceipt] = {}
@@ -521,6 +523,12 @@ class HyperliquidRuntimeOrderAdapter:
             environment=runtime.session.environment.value,
             account_address=runtime.session.account.address,
         )
+
+    @property
+    def local_only(self) -> bool:
+        """Expose whether the injected runtime backend is local-only."""
+
+        return bool(getattr(self._runtime._backend, "local_only", False))
 
     def submit(self, intent: OrderIntent) -> OrderReceipt:
         self._validate_intent(intent)
