@@ -86,6 +86,7 @@ class StandardBrokerTestnetExecutionAdapter:
             )
             from standard_broker.adapters.hyperliquid import (
                 HyperliquidInstrumentAdapter,
+                HyperliquidRuntimeAccountAdapter,
                 HyperliquidRuntimeOrderAdapter,
                 HyperliquidRuntimeProtectionAdapter,
                 NautilusHyperliquidRuntime,
@@ -192,6 +193,15 @@ class StandardBrokerTestnetExecutionAdapter:
                 if capabilities.supports("protection_order", "submit")
                 else None
             )
+            self._account = (
+                HyperliquidRuntimeAccountAdapter(
+                    runtime=runtime,
+                    instruments=instruments,
+                    ledger=ledger,
+                )
+                if capabilities.supports("account", "read")
+                else None
+            )
             if ledger.session_key is None:
                 raise StandardBrokerTestnetHostError(
                     "Testnet runtime fact ledger did not bind a session"
@@ -219,6 +229,10 @@ class StandardBrokerTestnetExecutionAdapter:
     @property
     def protection_adapter(self) -> Any:
         return self._protection
+
+    @property
+    def account_adapter(self) -> Any:
+        return self._account
 
     @property
     def fills(self) -> Mapping[str, object]:
@@ -259,6 +273,7 @@ class StandardBrokerTestnetExecutionAdapter:
             "ledger_namespace": self.broker_config["ledger_namespace"],
             "capability_revision": result.capability_revision,
             "protection_ready": self._protection is not None,
+            "account_read_ready": self._account is not None,
         }
 
     def submit_order(self, request: BrokerOrderRequest) -> Any:
@@ -284,6 +299,13 @@ class StandardBrokerTestnetExecutionAdapter:
 
     def request(self, port: str, operation: str, payload: object | None = None) -> Any:
         if port != "order_execution":
+            if port == "account":
+                if self._account is None or operation != "read":
+                    raise UnsupportedBrokerCapability(
+                        "Testnet account read capability is not declared"
+                    )
+                account_address = str(payload or self.broker_config["account_id"])
+                return self._account.read_account(account_address)
             if port != "protection_order":
                 raise UnsupportedBrokerCapability(
                     f"Testnet adapter does not expose {port}"

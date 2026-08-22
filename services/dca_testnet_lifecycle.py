@@ -48,6 +48,8 @@ class DcaTestnetLifecycle:
             or float(existing.get("target_price") or 0) != identity["target_price"]
             or float(existing.get("stop_price") or 0) != identity["stop_price"]
             or existing.get("risk_budget") != identity["risk_budget"]
+            or str(existing.get("strategy_session_id") or "") != identity["strategy_session_id"]
+            or str(existing.get("strategy_revision_id") or "") != identity["strategy_revision_id"]
         ):
             self._block(existing, "strategy_revision_mismatch", timestamp=timestamp)
             self._save(existing)
@@ -65,7 +67,12 @@ class DcaTestnetLifecycle:
             }:
                 return self.snapshot(plan)
             return self.snapshot(plan)
-        if self.broker.protection_adapter is None:
+        if self.broker.protection_adapter is None or self.broker.account_adapter is None:
+            blocker = (
+                "capability_gap:protection_order.submit"
+                if self.broker.protection_adapter is None
+                else "capability_gap:account.read"
+            )
             state = {
                 "schema_version": self.schema_version,
                 "strategy_plan_id": identity["plan_id"],
@@ -78,13 +85,15 @@ class DcaTestnetLifecycle:
                 "target_price": identity["target_price"],
                 "stop_price": identity["stop_price"],
                 "risk_budget": identity["risk_budget"],
+                "strategy_session_id": identity["strategy_session_id"],
+                "strategy_revision_id": identity["strategy_revision_id"],
                 "orders": [],
                 "fills": [],
                 "positions": [],
                 "protection": None,
                 "events": [],
-                "status": "blocked_protection",
-                "blocker": "capability_gap:protection_order.submit",
+                "status": "blocked_protection" if self.broker.protection_adapter is None else "blocked_reconciliation",
+                "blocker": blocker,
                 "created_at": timestamp,
             }
             self._record_event(state, "lifecycle_blocked", timestamp=timestamp, reason=state["blocker"])
@@ -103,6 +112,8 @@ class DcaTestnetLifecycle:
             "target_price": identity["target_price"],
             "stop_price": identity["stop_price"],
             "risk_budget": identity["risk_budget"],
+            "strategy_session_id": identity["strategy_session_id"],
+            "strategy_revision_id": identity["strategy_revision_id"],
             "next_entry_index": 0,
             "orders": [],
             "fills": [],
@@ -117,7 +128,8 @@ class DcaTestnetLifecycle:
         if not state["orders"]:
             self._submit_next_entry(plan, state, timestamp=timestamp)
             self._record_event(state, "entry_submitted", timestamp=timestamp)
-        state["status"] = "waiting_entry"
+        if state["status"] == "starting":
+            state["status"] = "waiting_entry"
         state["updated_at"] = timestamp
         self._save(state)
         return self.snapshot(plan)
@@ -127,6 +139,7 @@ class DcaTestnetLifecycle:
         state = self._states.get(identity["plan_id"]) or self._load(identity["plan_id"])
         if state is None:
             raise DcaTestnetLifecycleError("DCA Testnet lifecycle has not started")
+        self._assert_state_identity(state, identity)
         return json.loads(json.dumps(state, sort_keys=True))
 
     def on_fill(
@@ -156,12 +169,13 @@ class DcaTestnetLifecycle:
             "terminal",
             "blocked_reconciliation",
             "blocked_risk",
+            "blocked_risk_flattening",
         } or (
             state["status"] in {"stopping", "blocked_protection"}
-            and order["event"] == "entry"
+            and self._is_entry_event(order["event"])
         ) or (
             state["status"] in {"target_triggered", "protection_blocked_flattening"}
-            and order["event"] == "entry"
+            and self._is_entry_event(order["event"])
         ):
             self._block(state, "late_fill_after_block_or_terminal", timestamp=timestamp)
             self._save(state)
@@ -182,18 +196,17 @@ class DcaTestnetLifecycle:
             raise DcaTestnetLifecycleError(state["blocker"])
         quantity = float(raw_fill.get("sz") or raw_fill.get("quantity") or 0.0)
         price = float(receipt.average_fill_price or raw_fill.get("px") or 0)
-        planned_price = float(order.get("price") or 0.0)
+        planned_price = float(order.get("planned_price") or order.get("price") or 0.0)
         max_slippage = plan.get("risk_budget", {}).get("max_slippage")
-        if max_slippage not in (None, "") and abs(price - planned_price) > float(max_slippage):
-            self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
-            self._save(state)
-            raise DcaTestnetLifecycleError(state["blocker"])
+        slippage = abs(price - planned_price)
         fill = {
             "fill_id": fill_id,
             "order_id": order_id,
             "event": order["event"],
             "quantity": quantity,
             "price": price,
+            "planned_price": planned_price,
+            "slippage": slippage,
             "strategy_plan_id": identity["plan_id"],
             "environment": "testnet",
             "account_id": self.broker.broker_config["account_id"],
@@ -205,28 +218,38 @@ class DcaTestnetLifecycle:
         order["state"] = "partial" if receipt_state == "partially_filled" else receipt_state
         order["filled_quantity"] = float(receipt.filled_quantity)
         order["average_fill_price"] = price
+        slippage_exceeded = max_slippage not in (None, "") and slippage > float(max_slippage)
         if receipt_state == "partially_filled":
             self._increase_position(state, order, quantity, price)
-            if self._risk_within_budget(plan, state):
+            if slippage_exceeded:
+                self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
+                self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned_price, actual_price=price, slippage=slippage)
+                self._flatten_after_block(plan, state, timestamp=timestamp, reason="slippage")
+            elif self._risk_within_budget(plan, state):
                 self._confirm_or_update_protection(plan, state, timestamp=timestamp)
             else:
                 self._block(state, "maximum_loss_budget_exceeded", timestamp=timestamp)
-            if state["status"] not in {"blocked_protection", "blocked_risk"}:
+            if state["status"] not in {"blocked_protection", "blocked_risk", "blocked_risk_flattening"}:
                 state["status"] = "partial_entry"
             elif state["status"] == "blocked_protection":
                 self._flatten_after_protection_failure(plan, state, timestamp=timestamp)
             state["updated_at"] = timestamp
             self._save(state)
             return self.snapshot(plan)
-        if order["event"] == "entry":
+        if self._is_entry_event(order["event"]):
             self._increase_position(state, order, quantity, price)
-            if not self._risk_within_budget(plan, state):
+            if slippage_exceeded:
+                self._block(state, "fill_slippage_exceeded", timestamp=timestamp)
+                self._record_event(state, "slippage_budget_breached", timestamp=timestamp, planned_price=planned_price, actual_price=price, slippage=slippage)
+                self._flatten_after_block(plan, state, timestamp=timestamp, reason="slippage")
+            elif not self._risk_within_budget(plan, state):
                 self._block(state, "maximum_loss_budget_exceeded", timestamp=timestamp)
             else:
                 self._confirm_or_update_protection(plan, state, timestamp=timestamp)
-            if state["status"] not in {"blocked_protection", "blocked_risk"}:
+            if state["status"] not in {"blocked_protection", "blocked_risk", "blocked_risk_flattening"}:
                 self._submit_next_entry(plan, state, timestamp=timestamp)
-                state["status"] = "open"
+                if state["status"] not in {"budget_exhausted", "blocked_protection", "blocked_risk", "blocked_risk_flattening"}:
+                    state["status"] = "open"
             elif state["status"] == "blocked_protection":
                 self._flatten_after_protection_failure(plan, state, timestamp=timestamp)
         else:
@@ -277,6 +300,7 @@ class DcaTestnetLifecycle:
             "blocked_protection",
             "blocked_reconciliation",
             "blocked_risk",
+            "blocked_risk_flattening",
             "target_triggered",
             "protection_blocked_flattening",
             "stopping",
@@ -299,6 +323,9 @@ class DcaTestnetLifecycle:
             state["status"] = "target_triggered"
             state["updated_at"] = timestamp
             self._save(state)
+        self._catch_up_crossed_entry(plan, state, price=price, timestamp=timestamp)
+        state["updated_at"] = timestamp
+        self._save(state)
         return self.snapshot(plan)
 
     def stop(
@@ -310,6 +337,16 @@ class DcaTestnetLifecycle:
         price: float,
     ) -> dict[str, Any]:
         state = self._state(plan)
+        if state["status"] in {
+            "terminal",
+            "sealed",
+            "blocked_reconciliation",
+            "blocked_risk_flattening",
+            "target_triggered",
+            "protection_blocked_flattening",
+            "stopped",
+        }:
+            return self.snapshot(plan)
         if not self._cancel_entries(state, timestamp=timestamp, reason=reason):
             state["updated_at"] = timestamp
             self._save(state)
@@ -389,6 +426,42 @@ class DcaTestnetLifecycle:
         state["status"] = "protection_blocked_flattening"
         self._record_event(state, "protection_failure_flatten_submitted", timestamp=timestamp)
 
+    def _flatten_after_block(
+        self,
+        plan: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        timestamp: str,
+        reason: str,
+    ) -> None:
+        """Record the actual fill, then submit a reduce-only recovery leg."""
+
+        if not self._cancel_entries(state, timestamp=timestamp, reason=f"{reason}_budget"):
+            state["status"] = "blocked_reconciliation"
+            return
+        quantity = sum(float(row["quantity"]) for row in state["positions"])
+        if quantity <= 1e-9:
+            return
+        try:
+            self._submit_exit(
+                plan,
+                state,
+                timestamp=timestamp,
+                price=float(plan["dca"]["stop_price"]),
+                quantity=quantity,
+                event="risk_recovery",
+            )
+            state["status"] = "blocked_risk_flattening"
+            self._record_event(
+                state,
+                "risk_recovery_submitted",
+                timestamp=timestamp,
+                reason=reason,
+                quantity=quantity,
+            )
+        except DcaTestnetLifecycleError:
+            state["status"] = "blocked_reconciliation"
+
     def _terminal_reconciliation(self, state: dict[str, Any], timestamp: str) -> dict[str, Any]:
         try:
             broker_open_orders = self.broker.request(
@@ -404,14 +477,33 @@ class DcaTestnetLifecycle:
                 "reason": f"broker_open_order_query_failed:{type(exc).__name__}:{exc}",
                 **self._identity_metadata(),
             }
+        try:
+            broker_account = self.broker.request(
+                "account",
+                "read",
+                self.broker.broker_config["account_id"],
+            )
+            broker_positions = tuple(
+                position
+                for position in getattr(broker_account, "positions", ())
+                if abs(float(getattr(position, "signed_quantity", 0) or 0)) > 1e-9
+            )
+        except Exception as exc:  # noqa: BLE001 - remote position truth is required before sealing.
+            return {
+                "status": "blocked",
+                "at": timestamp,
+                "reason": f"broker_position_query_failed:{type(exc).__name__}:{exc}",
+                **self._identity_metadata(),
+            }
         open_orders = [row for row in state["orders"] if row.get("state") == "accepted"]
-        status = "ok" if not open_orders and broker_open_count == 0 and not state["positions"] else "blocked"
+        status = "ok" if not open_orders and broker_open_count == 0 and not state["positions"] and not broker_positions else "blocked"
         return {
             "status": status,
             "at": timestamp,
             "open_order_count": len(open_orders),
             "broker_open_order_count": broker_open_count,
             "open_position_count": len(state["positions"]),
+            "broker_position_count": len(broker_positions),
             **self._identity_metadata(),
         }
 
@@ -420,13 +512,22 @@ class DcaTestnetLifecycle:
             {
                 "event": event,
                 "timestamp": timestamp,
+                "strategy_session_id": state.get("strategy_session_id", ""),
+                "strategy_revision_id": state.get("strategy_revision_id", ""),
+                "plan_digest": state.get("plan_digest", ""),
                 **payload,
                 **self._identity_metadata(),
             }
         )
 
     def _block(self, state: dict[str, Any], reason: str, *, timestamp: str) -> None:
-        state["status"] = "blocked_reconciliation" if "cancel" in reason or "fill" in reason else "blocked_protection" if "protect" in reason or "capability" in reason else "blocked_risk"
+        state["status"] = (
+            "blocked_reconciliation"
+            if any(token in reason for token in ("cancel", "fill", "reconciliation", "position_query"))
+            else "blocked_protection"
+            if "protect" in reason or "capability" in reason
+            else "blocked_risk"
+        )
         state["blocker"] = reason
         self._record_event(state, "lifecycle_blocked", timestamp=timestamp, reason=reason)
 
@@ -516,7 +617,14 @@ class DcaTestnetLifecycle:
                 self._save(state)
                 raise DcaTestnetLifecycleError(state["blocker"])
         price = float(state["entry_levels"][index])
-        command = self._command(plan, state, price=price, quantity=self._entry_quantity(plan, price), event="entry", index=index, timestamp=timestamp)
+        quantity = self._entry_quantity(plan, price)
+        if not self._projected_entry_within_budget(plan, state, price=price, quantity=quantity):
+            state["status"] = "budget_exhausted"
+            state["blocker"] = "maximum_loss_budget_exhausted_before_next_entry"
+            self._record_event(state, "entry_budget_exhausted", timestamp=timestamp, price=price, quantity=quantity)
+            self._save(state)
+            return
+        command = self._command(plan, state, price=price, quantity=quantity, event="entry", index=index, timestamp=timestamp)
         try:
             receipt = self.broker.submit_order(
                 BrokerOrderRequest(
@@ -564,7 +672,7 @@ class DcaTestnetLifecycle:
 
     def _cancel_entries(self, state: dict[str, Any], *, timestamp: str, reason: str) -> bool:
         for row in state["orders"]:
-            if row["event"] != "entry" or row["state"] != "accepted":
+            if not self._is_entry_event(row["event"]) or row["state"] != "accepted":
                 continue
             try:
                 cancel_receipt = self.broker.cancel_order(
@@ -624,6 +732,89 @@ class DcaTestnetLifecycle:
         notional = float(plan["dca"].get("notional_per_addition") or 0.0)
         return round(notional / price, 5)
 
+    def _projected_entry_within_budget(
+        self,
+        plan: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        price: float,
+        quantity: float,
+    ) -> bool:
+        stop = float(plan["dca"]["stop_price"])
+        direction = state["direction"]
+        added_loss = (price - stop) * quantity if direction == "long" else (stop - price) * quantity
+        current_loss = sum(
+            (float(position["entry_price"]) - stop) * float(position["quantity"])
+            if direction == "long"
+            else (stop - float(position["entry_price"])) * float(position["quantity"])
+            for position in state["positions"]
+        )
+        risk = plan.get("risk_budget") if isinstance(plan.get("risk_budget"), dict) else {}
+        return current_loss + added_loss <= float(risk.get("maximum_loss_at_full_depth") or 0.0) + 1e-9
+
+    def _catch_up_crossed_entry(
+        self,
+        plan: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        price: float,
+        timestamp: str,
+    ) -> None:
+        """Replace a crossed resting entry with a bounded market catch-up order."""
+
+        pending = next(
+            (
+                row
+                for row in reversed(state["orders"])
+                if self._is_entry_event(row.get("event")) and row.get("state") == "accepted"
+            ),
+            None,
+        )
+        if pending is None:
+            return
+        planned = float(pending.get("planned_price") or pending.get("price") or 0)
+        crossed = price < planned if state["direction"] == "long" else price > planned
+        if not crossed:
+            return
+        max_slippage = float((plan.get("risk_budget") or {}).get("max_slippage") or 0)
+        if max_slippage <= 0 or abs(price - planned) > max_slippage:
+            self._block(state, "catch_up_slippage_exceeded", timestamp=timestamp)
+            self._record_event(state, "catch_up_skipped", timestamp=timestamp, planned_price=planned, market_price=price)
+            self._save(state)
+            return
+        if not self._cancel_entries(state, timestamp=timestamp, reason="catch_up_market"):
+            self._save(state)
+            return
+        index = int(pending.get("strategy_plan_entry_index") or 0)
+        quantity = self._entry_quantity(plan, planned)
+        if not self._projected_entry_within_budget(plan, state, price=price, quantity=quantity):
+            state["status"] = "budget_exhausted"
+            state["blocker"] = "maximum_loss_budget_exhausted_before_catch_up"
+            self._record_event(state, "catch_up_budget_exhausted", timestamp=timestamp, market_price=price, quantity=quantity)
+            self._save(state)
+            return
+        command = self._command(
+            plan,
+            state,
+            price=price,
+            quantity=quantity,
+            event="entry_catch_up",
+            index=index,
+            timestamp=timestamp,
+            order_type="market",
+            time_in_force="ioc",
+            planned_price=planned,
+        )
+        try:
+            receipt = self.broker.submit_order(
+                BrokerOrderRequest(run_date=state["cycle_id"], ticket=command, latest_price=price, actual_size=quantity)
+            )
+            state["orders"].append(self._order_row(command, receipt))
+            self._record_event(state, "catch_up_submitted", timestamp=timestamp, planned_price=planned, market_price=price)
+        except Exception as exc:  # noqa: BLE001 - ambiguous catch-up stops the ladder.
+            self._block(state, f"catch_up_submit_failed:{type(exc).__name__}:{exc}", timestamp=timestamp)
+        self._save(state)
+
     def _protection_group(self, plan: dict[str, Any], state: dict[str, Any], position: dict[str, Any]) -> Any:
         from standard_broker import (
             OrderSide,
@@ -655,14 +846,18 @@ class DcaTestnetLifecycle:
         )
 
     @staticmethod
-    def _command(plan: dict[str, Any], state: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False) -> dict[str, Any]:
+    def _command(plan: dict[str, Any], state: dict[str, Any], *, price: float, quantity: float, event: str, index: int, timestamp: str, reduce_only: bool = False, order_type: str = "limit", time_in_force: str = "gtc", planned_price: float | None = None) -> dict[str, Any]:
         return {
             "ticket_id": f"{state['strategy_plan_id']}:{event}:{index}",
             "instrument_id": str(plan.get("instrument_id") or plan.get("execution_context", {}).get("instrument_id") or "BTC-USD-PERP"),
-            "side": ("buy" if state["direction"] == "long" else "sell") if event == "entry" else ("sell" if state["direction"] == "long" else "buy"),
-            "order_type": "limit",
-            "limit_price": price,
+            "side": ("buy" if state["direction"] == "long" else "sell") if DcaTestnetLifecycle._is_entry_event(event) else ("sell" if state["direction"] == "long" else "buy"),
+            "order_type": "limit" if order_type == "market" else order_type,
+            "limit_price": price if order_type in {"limit", "market"} else None,
+            "time_in_force": time_in_force,
             "price": price,
+            "execution_semantics": "aggressive_ioc_market" if order_type == "market" else "resting_limit",
+            "planned_price": planned_price if planned_price is not None else price,
+            "strategy_plan_entry_index": index,
             "quantity": quantity,
             "idempotency_key": f"{state['strategy_plan_id']}:{event}:{index}",
             "reduce_only": reduce_only,
@@ -701,12 +896,35 @@ class DcaTestnetLifecycle:
         state = self._states.get(identity["plan_id"]) or self._load(identity["plan_id"])
         if state is None:
             raise DcaTestnetLifecycleError("DCA Testnet lifecycle has not started")
+        self._assert_state_identity(state, identity)
         self._states[identity["plan_id"]] = state
         return state
 
     @staticmethod
+    def _assert_state_identity(state: dict[str, Any], identity: dict[str, Any]) -> None:
+        expected = {
+            "strategy_plan_id": identity["plan_id"],
+            "strategy_plan_version": identity["version"],
+            "direction": identity["direction"],
+            "entry_levels": identity["entry_levels"],
+            "plan_digest": identity["plan_digest"],
+            "instrument_id": identity["instrument_id"],
+            "target_price": identity["target_price"],
+            "stop_price": identity["stop_price"],
+            "risk_budget": identity["risk_budget"],
+            "strategy_session_id": identity["strategy_session_id"],
+            "strategy_revision_id": identity["strategy_revision_id"],
+        }
+        if any(state.get(key) != value for key, value in expected.items()):
+            raise DcaTestnetLifecycleError("strategy_revision_mismatch")
+
+    @staticmethod
     def _find_order(state: dict[str, Any], order_id: str) -> dict[str, Any] | None:
         return next((row for row in state["orders"] if str(row.get("order_id")) == order_id), None)
+
+    @staticmethod
+    def _is_entry_event(event: object) -> bool:
+        return str(event or "") in {"entry", "entry_catch_up"}
 
     @staticmethod
     def _order_id_for_client(state: dict[str, Any], client_id: str) -> str:
@@ -735,6 +953,8 @@ class DcaTestnetLifecycle:
             "target_price": float(dca["target_price"]),
             "stop_price": float(dca["stop_price"]),
             "risk_budget": dict(plan.get("risk_budget") or {}),
+            "strategy_session_id": str(plan.get("strategy_session_id") or ""),
+            "strategy_revision_id": str(plan.get("strategy_revision_id") or ""),
         }
 
     def _path(self, plan_id: str) -> Path:

@@ -121,3 +121,28 @@ def test_testnet_control_starts_lifecycle_only_after_authority_gates(tmp_path: P
     assert result["runtime"]["execution_environment"] == "testnet"
     assert result["runtime"]["actual_state"] == "running"
     assert len(result["lifecycle"]["orders"]) == 1
+
+
+def test_testnet_control_never_publishes_running_when_protection_capability_is_missing(tmp_path: Path) -> None:
+    from tests.test_dca_testnet_lifecycle import _broker, _plan
+
+    broker, _ = _broker(tmp_path, protection=False)
+    plane = StrategyControlPlane(tmp_path)
+    plan = _plan()
+    confirmation = {
+        "execution_authorized": True,
+        "plan_digest": plan["plan_digest"],
+        "source": "telegram",
+        "strategy_session_id": plan["strategy_session_id"],
+        "strategy_revision_id": plan["strategy_revision_id"],
+    }
+
+    with pytest.raises(StrategyControlMachineError, match="testnet_preflight_blocked"):
+        plane.start_testnet_dca(
+            plan,
+            confirmation=confirmation,
+            market={"execution_ready": True, "fresh": True, "is_synthetic": False, "fallback_policy": "none"},
+            adapter=broker,
+        )
+
+    assert plane.active_plan(plan["cycle_id"]) is None

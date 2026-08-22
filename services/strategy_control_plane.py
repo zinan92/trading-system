@@ -6930,15 +6930,27 @@ class StrategyControlPlane:
             or preflight.get("environment") != "testnet"
             or preflight.get("network_io") is not False
             or preflight.get("real_money_eligible") is not False
+            or preflight.get("protection_ready") is not True
+            or preflight.get("account_read_ready") is not True
         ):
             raise StrategyControlMachineError("testnet_preflight_blocked", dict(preflight))
         runtime = self.runtime_state(cycle_id)
         if runtime.get("desired_state") == "running":
             raise StrategyControlMachineError("testnet_strategy_already_running", runtime)
-        self._activate_plan(plan)
+        foreign_active = [
+            row
+            for row in self._all_active_plans()
+            if str(row.get("strategy_plan_id") or "") != str(plan.get("strategy_plan_id") or "")
+        ]
+        if foreign_active:
+            raise StrategyControlMachineError(
+                "testnet_existing_active_strategy",
+                {"active_strategy_plan_ids": [str(row.get("strategy_plan_id") or "") for row in foreign_active]},
+            )
         lifecycle = DcaTestnetLifecycle(self.output_root, adapter)
         try:
-            state = lifecycle.start(plan, timestamp=timestamp)
+            with production_mutation_lock(self.output_root):
+                state = lifecycle.start(plan, timestamp=timestamp)
         except Exception as exc:
             append_control_event(
                 self.output_root,
@@ -6954,6 +6966,26 @@ class StrategyControlPlane:
                 ),
             )
             raise
+        if state.get("status") not in {"waiting_entry", "open", "partial_entry", "budget_exhausted"}:
+            append_control_event(
+                self.output_root,
+                build_control_event(
+                    cycle_id=cycle_id,
+                    action="start_testnet_dca",
+                    actor=actor,
+                    payload={"plan_digest": digest, "environment": "testnet"},
+                    result="blocked",
+                    error=str(state.get("blocker") or state.get("status") or "lifecycle_blocked"),
+                    runtime=runtime,
+                    evidence={"preflight": preflight, "lifecycle": state},
+                    now=timestamp,
+                ),
+            )
+            raise StrategyControlMachineError(
+                "testnet_lifecycle_blocked",
+                {"status": state.get("status"), "blocker": state.get("blocker")},
+            )
+        self._activate_plan(plan)
         published = {
             **runtime,
             "cycle_id": cycle_id,
@@ -7014,14 +7046,51 @@ class StrategyControlPlane:
             raise StrategyControlMachineError("testnet_adapter_required", {"adapter": getattr(adapter, "name", "")})
         lifecycle = DcaTestnetLifecycle(self.output_root, adapter)
         observed_at = str(timestamp or self._authorization_clock())
-        if fill is not None:
-            state = lifecycle.on_fill(plan, fill, timestamp=observed_at)
-            action = "testnet_dca_fill"
-        elif price is not None:
-            state = lifecycle.on_market_event(plan, price=float(price), timestamp=observed_at)
-            action = "testnet_dca_market_event"
-        else:
-            raise StrategyControlMachineError("testnet_dca_event_required", {"cycle_id": cycle_id})
+        try:
+            with production_mutation_lock(self.output_root):
+                if fill is not None:
+                    state = lifecycle.on_fill(plan, fill, timestamp=observed_at)
+                    action = "testnet_dca_fill"
+                elif price is not None:
+                    state = lifecycle.on_market_event(plan, price=float(price), timestamp=observed_at)
+                    action = "testnet_dca_market_event"
+                else:
+                    raise StrategyControlMachineError("testnet_dca_event_required", {"cycle_id": cycle_id})
+        except Exception as exc:
+            try:
+                state = lifecycle.snapshot(plan)
+            except Exception as snapshot_exc:
+                state = {
+                    "status": "blocked_reconciliation",
+                    "blocker": f"lifecycle_snapshot_failed:{type(snapshot_exc).__name__}:{snapshot_exc}",
+                    "plan_digest": plan.get("plan_digest"),
+                }
+            published = {
+                **runtime,
+                "updated_at": observed_at,
+                "actual_state": str(state.get("status") or "blocked"),
+                "desired_state": "stopped",
+                "last_action": "testnet_dca_blocked",
+                "last_error": str(state.get("blocker") or exc),
+                "dca_lifecycle_status": state.get("status"),
+                "next_action": state.get("next_action") or "notify_park_and_wait",
+            }
+            self._write_runtime(published)
+            append_control_event(
+                self.output_root,
+                build_control_event(
+                    cycle_id=cycle_id,
+                    action="testnet_dca_blocked",
+                    actor=actor,
+                    payload={"environment": "testnet", "plan_digest": plan.get("plan_digest")},
+                    result="blocked",
+                    error=str(state.get("blocker") or exc),
+                    runtime=published,
+                    evidence={"lifecycle": state},
+                    now=observed_at,
+                ),
+            )
+            raise
         terminal = str(state.get("status") or "") == "terminal"
         published = {
             **runtime,

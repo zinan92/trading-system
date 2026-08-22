@@ -13,6 +13,8 @@ def _plan() -> dict:
         "schema_version": "strategy-plan-v1",
         "strategy_type": "dca",
         "strategy_plan_id": "dca-testnet-plan-1",
+        "strategy_session_id": "session-testnet",
+        "strategy_revision_id": "revision-testnet",
         "plan_digest": "sha256:" + "a" * 64,
         "version": 1,
         "cycle_id": "2026-08-22_DAY",
@@ -43,7 +45,8 @@ def _broker(tmp_path: Path, *, protection: bool = True):
     operations = {
         "order_execution": frozenset(
             {"submit", "cancel", "replace", "query", "open_orders"}
-        )
+        ),
+        "account": frozenset({"read"}),
     }
     if protection:
         operations["protection_order"] = frozenset(
@@ -51,6 +54,7 @@ def _broker(tmp_path: Path, *, protection: bool = True):
                 "submit",
                 "cancel",
                 "replace",
+                "cancel_replace",
                 "query",
                 "reduce_only",
                 "mark_price_trigger",
@@ -77,6 +81,7 @@ def _broker(tmp_path: Path, *, protection: bool = True):
             self.next_oid = 100
             self.last_cloid = ""
             self.cancel_failure = False
+            self.account_positions: list[dict] = []
             self.metadata = NautilusAdapterMetadata(
                 package="nautilus-hyperliquid",
                 version="1.230.0",
@@ -104,6 +109,22 @@ def _broker(tmp_path: Path, *, protection: bool = True):
                 return {"status": "open", "oid": self.next_oid, "cloid": self.last_cloid, "timestamp": 1787313661000}
             if port == "order_execution" and operation == "open_orders":
                 return {"orders": []}
+            if port == "account" and operation == "read":
+                from standard_broker import Provenance
+                return {
+                    "data": {
+                        "accountAddress": "testnet-account",
+                        "snapshotId": "snapshot-1",
+                        "marginSummary": {"accountValue": "10000", "totalNtlPos": "0"},
+                        "assetPositions": list(self.account_positions),
+                    },
+                    "provenance": Provenance(
+                        source="fixture.account",
+                        execution_scope="hypercore:default",
+                        transport_state="local_fixture",
+                        mapping_revision="dca-testnet-v1",
+                    ),
+                }
             if port == "protection_order":
                 return {"accepted": True}
             return {"status": "unknown"}
@@ -270,6 +291,99 @@ def test_dca_testnet_restart_does_not_reopen_terminal_revision(tmp_path: Path) -
     assert terminal["status"] == "terminal"
     assert restarted["status"] == "terminal"
     assert restarted["sealed"] is True
+
+
+def test_dca_testnet_terminal_does_not_seal_when_broker_position_remains(tmp_path: Path) -> None:
+    broker, backend = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    opened = lifecycle.on_fill(
+        plan,
+        _fill(started["orders"][0], price=65000, tid=60),
+        timestamp="2026-08-22T01:01:00+00:00",
+    )
+    backend.account_positions = [
+        {
+            "position": {
+                "coin": "BTC",
+                "szi": "0.1",
+                "positionId": "remote-position-1",
+                "leverage": {"type": "cross", "value": "1"},
+            }
+        }
+    ]
+    stopping = lifecycle.stop(plan, timestamp="2026-08-22T01:02:00+00:00", reason="strategy_stop", price=64000)
+    terminal = lifecycle.on_fill(
+        plan,
+        _fill(next(row for row in stopping["orders"] if row["event"] == "stop"), price=64000, tid=61),
+        timestamp="2026-08-22T01:03:00+00:00",
+    )
+
+    assert terminal["status"] == "blocked_reconciliation"
+    assert terminal.get("sealed") is not True
+    assert terminal["reconciliation"]["broker_position_count"] == 1
+
+
+def test_dca_testnet_slippage_records_actual_fill_and_submits_reduce_only_recovery(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    slipped = lifecycle.on_fill(
+        plan,
+        _fill(started["orders"][0], price=65100, tid=62),
+        timestamp="2026-08-22T01:01:00+00:00",
+    )
+
+    assert slipped["status"] == "blocked_risk_flattening"
+    assert slipped["positions"][0]["entry_price"] == 65100
+    recovery = next(row for row in slipped["orders"] if row["event"] == "risk_recovery")
+    assert recovery["reduce_only"] is True
+    assert slipped["fills"][0]["slippage"] == 100
+
+
+def test_dca_testnet_terminal_stop_is_immutable(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=63), timestamp="2026-08-22T01:01:00+00:00")
+    stopping = lifecycle.stop(plan, timestamp="2026-08-22T01:02:00+00:00", reason="strategy_stop", price=64000)
+    terminal = lifecycle.on_fill(plan, _fill(next(row for row in stopping["orders"] if row["event"] == "stop"), price=64000, tid=64), timestamp="2026-08-22T01:03:00+00:00")
+    replay = lifecycle.stop(plan, timestamp="2026-08-22T01:04:00+00:00", reason="replay", price=63900)
+
+    assert replay == terminal
+
+
+def test_dca_testnet_event_rejects_same_id_with_changed_revision(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    changed = {**plan, "plan_digest": "sha256:" + "b" * 64}
+
+    with pytest.raises(DcaTestnetLifecycleError, match="strategy_revision_mismatch"):
+        lifecycle.on_fill(changed, _fill(started["orders"][0], price=65000, tid=65), timestamp="2026-08-22T01:01:00+00:00")
+
+
+def test_dca_testnet_crossed_entry_uses_bounded_market_catch_up(tmp_path: Path) -> None:
+    broker, _ = _broker(tmp_path, protection=True)
+    lifecycle = DcaTestnetLifecycle(tmp_path / "outputs", broker)
+    plan = _plan()
+    plan["dca"] = {**plan["dca"], "stop_price": 63000.0}
+    started = lifecycle.start(plan, timestamp="2026-08-22T01:00:00+00:00")
+    opened = lifecycle.on_fill(plan, _fill(started["orders"][0], price=65000, tid=66), timestamp="2026-08-22T01:01:00+00:00")
+
+    caught_up = lifecycle.on_market_event(plan, price=63980.0, timestamp="2026-08-22T01:02:00+00:00")
+
+    catch_up = next(row for row in caught_up["orders"] if row["event"] == "entry_catch_up")
+    assert catch_up["order_type"] == "limit"
+    assert catch_up["time_in_force"] == "ioc"
+    assert catch_up["execution_semantics"] == "aggressive_ioc_market"
+    assert catch_up["planned_price"] == 64000.0
+    assert catch_up["price"] == 63980.0
+    assert catch_up["state"] == "accepted"
 
 
 def test_dca_testnet_hash_only_fill_is_idempotent(tmp_path: Path) -> None:
