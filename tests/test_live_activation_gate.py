@@ -187,7 +187,12 @@ def test_live_activation_requires_exact_confirmation_and_is_idempotent(tmp_path:
     ])
     receipt = {"event": "inbound_received", "update_id": 2, "message_id": 3, "sender_id": "park", "chat_id": "chat", "text": command, "text_digest": "sha256:" + hashlib.sha256(command.encode()).hexdigest()}
     confirmed = gate.confirm(activation_digest=proposal["activation_digest"], command_text=command, park_user_id="park", telegram_update_id=2, telegram_message_id=3, telegram_chat_id="chat", telegram_receipt=receipt, current_preflight=preflight, now=1787350000)
-    replay = gate.confirm(activation_digest=proposal["activation_digest"], command_text=command, park_user_id="park", telegram_update_id=2, telegram_message_id=3, telegram_chat_id="chat", telegram_receipt=receipt, current_preflight=preflight, now=1787350001)
+    bad_text = "confirm live wrong"
+    bad_receipt = {"event": "inbound_received", "update_id": 4, "message_id": 5, "sender_id": "park", "chat_id": "chat", "text": bad_text, "text_digest": "sha256:" + hashlib.sha256(bad_text.encode()).hexdigest()}
+    bad = gate.confirm(activation_digest=proposal["activation_digest"], command_text=bad_text, park_user_id="park", telegram_update_id=4, telegram_message_id=5, telegram_chat_id="chat", telegram_receipt=bad_receipt, current_preflight=preflight, now=4102444801)
+    replay = gate.confirm(activation_digest=proposal["activation_digest"], command_text=command, park_user_id="park", telegram_update_id=2, telegram_message_id=3, telegram_chat_id="chat", telegram_receipt=receipt, current_preflight=preflight, now=4102444801)
+    assert bad["event"] == "activation_rejected"
+    assert bad["code"] == "confirmation_digest_mismatch"
     assert confirmed == replay
     assert confirmed["live_writes_enabled"] is False
     assert confirmed["execution_authorized"] is False
