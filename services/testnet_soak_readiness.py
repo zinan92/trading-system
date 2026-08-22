@@ -85,7 +85,12 @@ class TestnetSoakReadiness:
         end = _parse_timestamp(ends_at)
         if end - start != timedelta(hours=WINDOW_HOURS):
             raise TestnetSoakError("recording_window_not_12_hours")
+        self.receipts()
         all_windows = self.windows()
+        if self._journal_errors:
+            blocker = {"code": "readiness_journal_corrupt", "journals": dict(self._journal_errors)}
+            self._persist_invalidated_receipt({"status": "blocked", "blockers": [blocker], "receipt_digest": ""})
+            return {"schema_version": SOAK_SCHEMA, "event": "window_blocked", "window_index": index, **identity, "environment": "testnet", "status": "blocked", "blockers": [blocker], "next_action": "notify_park_and_wait"}
         existing = next((row for row in all_windows if row.get("window_index") == index), None)
         if existing is not None:
             if self._window_identity(existing) != identity:
@@ -144,8 +149,8 @@ class TestnetSoakReadiness:
                 write_json(self.root / "reviews.json", reviews)
             if package.get("status") == "complete":
                 package = self.recording.mark_review_complete(record_window_id=window_id)
-        except ParkRecordingError as exc:
-            blockers.append({"code": exc.code, "detail": str(exc)})
+        except (ParkRecordingError, json.JSONDecodeError, OSError) as exc:
+            blockers.append({"code": getattr(exc, "code", "recording_review_failed"), "detail": str(exc)})
             package = {"status": "blocked", "error": exc.code}
         row = {
             "schema_version": SOAK_SCHEMA,
