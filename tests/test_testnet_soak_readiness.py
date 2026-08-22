@@ -1,0 +1,85 @@
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from services.testnet_soak_readiness import TestnetSoakReadiness
+from services.park_recording_track import REQUIRED_CATEGORIES
+
+
+def _evidence() -> dict:
+    return {key: {"status": "pass", "source": "fixture"} for key in (
+        "orders_fills_positions_reconciliation",
+        "protection_coverage",
+        "capability_status",
+        "market_freshness_trust",
+        "runtime_health",
+        "retry_outcomes",
+        "release_account_environment_identity",
+        "recording_package",
+    )}
+
+
+def _observation(index: int, *, evidence=None, mutations=None) -> dict:
+    start = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=12 * index)
+    return {
+        "window_index": index,
+        "record_window_id": f"soak-window-{index:02d}",
+        "starts_at": start.isoformat(),
+        "ends_at": (start + timedelta(hours=12)).isoformat(),
+        "strategy_session_id": "session-continuous",
+        "strategy_revision_id": "revision-dca-1",
+        "plan_digest": "sha256:" + "a" * 64,
+        "broker_id": "hyperliquid",
+        "release_sha": "b" * 40,
+        "account_fingerprint": "testnet-account-fingerprint",
+        "fresh": True,
+        "trusted": True,
+        "network_io": False,
+        "real_money_eligible": False,
+        "positions_open": 0,
+        "evidence": evidence or _evidence(),
+        "execution_mutations": mutations or [],
+    }
+
+
+def test_seven_day_soak_requires_fourteen_windows_and_keeps_live_disabled(tmp_path: Path) -> None:
+    soak = TestnetSoakReadiness(tmp_path / "outputs")
+    for index in range(14):
+        row = soak.record_window(_observation(index))
+        assert row["status"] == "pass"
+
+    receipt = soak.finalize(now="2026-01-08T00:00:00+00:00")
+
+    assert receipt["status"] == "ready"
+    assert receipt["window_count"] == 14
+    assert receipt["day_count"] == 7
+    assert receipt["live_enabled"] is False
+    assert receipt["live_writes_enabled"] is False
+    assert soak.public_status()["status"] == "ready"
+
+
+def test_soak_failure_is_durable_blocker_not_a_pass(tmp_path: Path) -> None:
+    soak = TestnetSoakReadiness(tmp_path / "outputs")
+    for index in range(14):
+        evidence = _evidence()
+        if index == 6:
+            evidence["protection_coverage"] = {"status": "blocked", "reason": "coverage_unknown"}
+        soak.record_window(_observation(index, evidence=evidence))
+
+    receipt = soak.finalize()
+
+    assert receipt["status"] == "blocked"
+    assert any(item.get("code") == "gate_protection_coverage_not_ready" for item in receipt["blockers"])
+    assert receipt["next_action"] == "notify_park_and_wait"
+    assert soak.public_status()["status"] == "blocked"
+
+
+def test_soak_boundaries_reject_mutation_and_replay_is_idempotent(tmp_path: Path) -> None:
+    soak = TestnetSoakReadiness(tmp_path / "outputs")
+    first = soak.record_window(_observation(0))
+    replay = soak.record_window(_observation(0))
+    assert replay == first
+
+    blocked = soak.record_window(_observation(1, mutations=[{"action": "flatten"}]))
+    assert blocked["status"] == "blocked"
+    assert any(item.get("code") == "boundary_execution_mutation" for item in blocked["blockers"])
+
