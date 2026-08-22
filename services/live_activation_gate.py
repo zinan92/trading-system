@@ -562,7 +562,7 @@ class LiveActivationGate:
         ordered = sorted((item for item in windows if isinstance(item, Mapping)), key=lambda item: int(item.get("window_index") or 0))
         if len(ordered) != 14 or [str(item.get("row_digest") or "") for item in ordered] != window_digests:
             return False
-        if [int(item.get("window_index") or -1) for item in ordered] != list(range(14)):
+        if [int(item.get("window_index")) if item.get("window_index") is not None else -1 for item in ordered] != list(range(14)):
             return False
         window_ids = [str(item.get("record_window_id") or "") for item in ordered]
         if any(not item for item in window_ids) or len(set(window_ids)) != 14:
