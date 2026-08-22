@@ -109,6 +109,7 @@ def _make_canary(tmp_path: Path, transport: FixtureTransport) -> LiveDcaCanary:
         "account_id": admission["account_id"],
         "environment_fingerprint": admission["environment_fingerprint"],
         "release_sha": admission["release_sha"],
+        "endpoint": "fixture://local",
     }
     return LiveDcaCanary(tmp_path / "outputs", transport=transport, park_user_id="park", park_chat_id="chat", gate=gate)
 

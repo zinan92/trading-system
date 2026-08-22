@@ -108,9 +108,14 @@ class LiveDcaCanary:
             park_user_id=park_user_id,
             park_chat_id=park_chat_id,
         )
-        if bool(getattr(transport, "network_io", False)) and not allow_network:
+        network_io = getattr(transport, "network_io", None)
+        if not isinstance(network_io, bool):
+            raise LiveDcaCanaryError("network_io_flag_missing", "transport must explicitly declare network_io as a boolean")
+        self._transport_network_io = network_io
+        self._transport_identity: dict[str, Any] | None = None
+        if network_io and not allow_network:
             raise LiveDcaCanaryError("network_transport_not_allowed", "the default attended harness accepts only a no-network transport")
-        if allow_network and not bool(getattr(transport, "network_io", False)):
+        if allow_network and not network_io:
             raise LiveDcaCanaryError("network_transport_mismatch", "network_transport_mismatch: allow_network requires a transport that declares network_io=true")
         self.allow_network = bool(allow_network)
 
@@ -295,7 +300,7 @@ class LiveDcaCanary:
         self._save(state)
         return dict(state)
 
-    def cancel(self, order_id: str, *, timestamp: str) -> dict[str, Any]:
+    def cancel(self, order_id: str, *, timestamp: str, allow_protection_open: bool = False) -> dict[str, Any]:
         state = self._state()
         order_id = str(order_id or "").strip()
         self._require(bool(order_id), "cancel_order_identity_missing", {})
@@ -322,7 +327,7 @@ class LiveDcaCanary:
         if state.get("pending_entry_order_id") == order_id:
             state.pop("pending_entry_order_id", None)
         self._event(state, "entry_canceled", timestamp=timestamp, order_id=order_id)
-        self._reconcile(state, timestamp=timestamp, require_no_open_orders=True)
+        self._reconcile(state, timestamp=timestamp, require_no_open_orders=not allow_protection_open)
         self._save(state)
         return dict(state)
 
@@ -361,10 +366,12 @@ class LiveDcaCanary:
         self._save(state)
         for order in list(state.get("orders") or []):
             if order.get("state") not in {"canceled", "cancelled", "filled", "closed"}:
-                self.cancel(str(order.get("order_id") or ""), timestamp=timestamp)
+                self.cancel(str(order.get("order_id") or ""), timestamp=timestamp, allow_protection_open=True)
         result = self.flatten(timestamp=timestamp, reason=reason)
-        if result.get("status") == "rolled_back":
+        if result.get("status") == "rolled_back" and reason != "attended_rollback":
             result["status"] = "stopped"
+            self._save(result)
+        elif result.get("status") == "rolled_back" and reason == "attended_rollback":
             self._save(result)
         return result
 
@@ -444,8 +451,10 @@ class LiveDcaCanary:
         }
         if any(identity.get(key) != value for key, value in expected.items()):
             raise LiveDcaCanaryError("transport_identity_mismatch", "transport identity does not match the approved activation", {"expected": expected, "actual": {key: identity.get(key) for key in expected}})
-        if self.allow_network and not str(identity.get("endpoint") or "").startswith("https://"):
-            raise LiveDcaCanaryError("transport_endpoint_missing", "network transport must declare an HTTPS endpoint")
+        endpoint = str(identity.get("endpoint") or "")
+        if not endpoint or (self.allow_network and not endpoint.startswith("https://")) or (not self.allow_network and not endpoint.startswith("fixture://")):
+            raise LiveDcaCanaryError("transport_endpoint_invalid", "transport endpoint does not match the attended mode")
+        self._transport_identity = dict(identity)
 
     def _open_quantity(self, state: Mapping[str, Any]) -> float:
         return sum(float(fill.get("quantity") or 0) for fill in state.get("fills") or [])
@@ -516,6 +525,10 @@ class LiveDcaCanary:
         method = getattr(self.transport, operation, None)
         if not callable(method):
             raise LiveDcaCanaryError("capability_gap", f"transport does not implement {operation}")
+        current_network_io = getattr(self.transport, "network_io", None)
+        current_identity = getattr(self.transport, "identity", None)
+        if current_network_io is not self._transport_network_io or not isinstance(current_identity, Mapping) or self._transport_identity is None or dict(current_identity) != self._transport_identity:
+            raise LiveDcaCanaryError("transport_identity_changed", "transport identity or network mode changed after activation")
         identity = getattr(self.transport, "identity", None)
         expected_identity = {
             "broker_id": request.get("broker_id", "hyperliquid"),
