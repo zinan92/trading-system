@@ -100,3 +100,20 @@ def test_soak_boundaries_reject_mutation_and_replay_is_idempotent(tmp_path: Path
     blocked = soak.record_window(_observation(1, mutations=[{"action": "flatten"}]))
     assert blocked["status"] == "blocked"
     assert any(item.get("code") == "boundary_execution_mutation" for item in blocked["blockers"])
+
+
+def test_soak_can_collect_canonical_category_artifacts(tmp_path: Path) -> None:
+    soak = TestnetSoakReadiness(tmp_path / "outputs")
+    observation = _observation(0)
+    artifact_paths = {}
+    for category in REQUIRED_CATEGORIES:
+        path = tmp_path / f"{category}.json"
+        payload = {"status": "pass", "source": "runtime-receipt", "observed_at": observation["ends_at"], "artifact_ref": str(path), "artifact_sha256": "pending"}
+        if category == "release_account_environment_identity":
+            payload.update({"release_sha": observation["release_sha"], "account_fingerprint": observation["account_fingerprint"], "environment": "testnet", "broker_id": observation["broker_id"]})
+        if category == "market_freshness_trust":
+            payload.update({"fresh": True, "trusted": True})
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        artifact_paths[category] = path
+    row = soak.record_window_from_artifacts(observation, artifact_paths=artifact_paths)
+    assert row["status"] == "pass"

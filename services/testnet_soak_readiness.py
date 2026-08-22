@@ -160,6 +160,40 @@ class TestnetSoakReadiness:
         write_json(self.windows_path, rows)
         return dict(row)
 
+    def record_window_from_artifacts(
+        self,
+        observation: Mapping[str, Any],
+        *,
+        artifact_paths: Mapping[str, str | Path],
+    ) -> dict[str, Any]:
+        """Build one observation from existing runtime/broker evidence files.
+
+        This is the production handoff seam: DCA/Grid runners and the broker
+        recorder publish their receipts first, then the soak only reads and
+        hashes those artifacts. It never invents a pass from elapsed time.
+        """
+
+        evidence = dict(observation.get("evidence") or {})
+        for category in REQUIRED_CATEGORIES:
+            reference = artifact_paths.get(category)
+            if reference is None:
+                raise TestnetSoakError(f"artifact_reference_missing:{category}")
+            path = Path(reference)
+            if not path.exists() or not path.is_file():
+                raise TestnetSoakError(f"artifact_missing:{category}")
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                raise TestnetSoakError(f"artifact_unreadable:{category}") from exc
+            if not isinstance(payload, Mapping):
+                raise TestnetSoakError(f"artifact_shape_invalid:{category}")
+            evidence[category] = {
+                **dict(payload),
+                "artifact_ref": str(path),
+                "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        return self.record_window({**dict(observation), "evidence": evidence})
+
     def finalize(self, *, now: str | None = None) -> dict[str, Any]:
         rows = sorted(self.windows(), key=lambda row: int(row.get("window_index") or 0))
         existing = self.receipts()
