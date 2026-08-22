@@ -258,3 +258,27 @@ def test_environment_identity_rejects_shared_boundary_identifiers() -> None:
 
     with pytest.raises(ValueError, match="environment-bound"):
         build_standard_broker_environment_gate(**identity)
+
+
+def test_environment_identity_rejects_identifiers_claiming_multiple_environments() -> None:
+    identity = _environment_identity_kwargs()
+    identity.update(
+        {
+            "account_id": "testnet-mainnet-account",
+            "credential_source": "HL_TESTNET_MAINNET_CREDENTIAL",
+            "runtime_id": "runtime-testnet-mainnet",
+            "ledger_namespace": "ledger.standard-broker.testnet.mainnet",
+            "environment_fingerprint": "hyperliquid:testnet:mainnet:fingerprint",
+        }
+    )
+
+    with pytest.raises(ValueError, match="environment-bound"):
+        build_standard_broker_environment_gate(**identity)
+
+
+def test_environment_identity_rejects_secret_like_credential_source() -> None:
+    identity = _environment_identity_kwargs()
+    identity["credential_source"] = "testnet-secret-token-123"
+
+    with pytest.raises(ValueError, match="credential_source"):
+        build_standard_broker_environment_gate(**identity)

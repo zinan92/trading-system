@@ -34,21 +34,20 @@ STANDARD_BROKER_ENVIRONMENT_CAPABILITIES = BrokerCapabilities(
 )
 _RELEASE_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+_CREDENTIAL_SOURCE_RE = re.compile(
+    r"^(?:[A-Z][A-Z0-9]*_)*(?:TESTNET|MAINNET|LIVE)_[A-Z0-9_]+$"
+)
 
 
 def _is_environment_bound(value: str, environment: str) -> bool:
     if environment == "paper" and value.lower() == "none":
         return True
-    tokens = [environment]
-    if environment == "mainnet":
-        tokens.append("live")
-    return any(
-        re.search(
-            rf"(?:^|[^a-z0-9]){re.escape(token)}(?:$|[^a-z0-9])",
-            value.lower(),
-        )
-        for token in tokens
+    tokens = set(
+        re.findall(r"(?<![a-z0-9])(paper|testnet|mainnet|live)(?![a-z0-9])", value.lower())
     )
+    allowed = {"mainnet", "live"} if environment == "mainnet" else {environment}
+    required = allowed
+    return bool(tokens & required) and tokens <= allowed
 
 
 @dataclass(frozen=True)
@@ -88,6 +87,12 @@ class StandardBrokerEnvironmentIdentity:
                 raise ValueError(f"{name} is required for standard-broker environment identity")
             if not _IDENTIFIER_RE.fullmatch(value):
                 raise ValueError(f"{name} contains unsafe identity characters")
+            if name == "credential_source" and not (
+                environment == "paper" and value.lower() == "none"
+            ) and not _CREDENTIAL_SOURCE_RE.fullmatch(value):
+                raise ValueError(
+                    "credential_source must be a non-secret environment variable reference"
+                )
             if not _is_environment_bound(value, environment):
                 raise ValueError(f"{name} is not environment-bound")
             object.__setattr__(self, name, value)
