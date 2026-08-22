@@ -58,12 +58,21 @@ class TestnetSoakReadiness:
         self.windows_path = self.root / "windows.json"
         self.receipts_path = self.root / "readiness_receipts.json"
         self.recording = ParkRecordingTrack(self.output_root)
+        self._journal_errors: dict[str, str] = {}
 
     def windows(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in load_json(self.windows_path) if isinstance(row, dict)]
+        try:
+            return [dict(row) for row in load_json(self.windows_path) if isinstance(row, dict)]
+        except Exception as exc:
+            self._journal_errors["windows"] = f"{type(exc).__name__}:{exc}"
+            return []
 
     def receipts(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in load_json(self.receipts_path) if isinstance(row, dict)]
+        try:
+            return [dict(row) for row in load_json(self.receipts_path) if isinstance(row, dict)]
+        except Exception as exc:
+            self._journal_errors["receipts"] = f"{type(exc).__name__}:{exc}"
+            return []
 
     def record_window(self, observation: Mapping[str, Any]) -> dict[str, Any]:
         identity = self._identity(observation)
@@ -211,6 +220,7 @@ class TestnetSoakReadiness:
         if existing and existing[-1].get("status") == "ready" and self._receipt_integrity_ok(existing[-1], rows) and self._receipt_is_fresh(existing[-1], rows, now=now):
             return dict(existing[-1])
         blockers: list[dict[str, Any]] = []
+        blockers.extend({"code": "readiness_journal_corrupt", "journal": name, "detail": detail} for name, detail in self._journal_errors.items())
         if rows and not self._rows_integrity_ok(rows):
             blockers.append({"code": "soak_window_integrity_failed"})
         if len(rows) != WINDOW_COUNT or [int(row.get("window_index")) if row.get("window_index") is not None else -1 for row in rows] != list(range(WINDOW_COUNT)):
@@ -273,6 +283,10 @@ class TestnetSoakReadiness:
         receipt = self.receipts()[-1] if self.receipts() else None
         now = now or datetime.now(timezone.utc).isoformat()
         rows = self.windows()
+        if self._journal_errors:
+            blocker = {"code": "readiness_journal_corrupt", "journals": dict(self._journal_errors)}
+            self._persist_invalidated_receipt({"status": "blocked", "blockers": [blocker], "receipt_digest": ""})
+            return {"status": "blocked", "environment": "testnet", "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": [blocker], "live_enabled": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait"}
         if receipt is not None:
             status = str(receipt.get("status") or "incomplete")
             if not self._receipt_integrity_ok(receipt, rows):

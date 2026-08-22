@@ -119,3 +119,17 @@ def test_soak_can_collect_canonical_category_artifacts(tmp_path: Path) -> None:
         artifact_paths[category] = path
     row = soak.record_window_from_artifacts(observation, artifact_paths=artifact_paths)
     assert row["status"] == "pass"
+
+
+def test_corrupt_readiness_journal_is_durable_blocker(tmp_path: Path) -> None:
+    output = tmp_path / "outputs"
+    soak = TestnetSoakReadiness(output)
+    soak.root.mkdir(parents=True, exist_ok=True)
+    soak.windows_path.write_text("not-json\n", encoding="utf-8")
+    soak.receipts_path.write_text("not-json\n", encoding="utf-8")
+
+    status = soak.public_status(now="2026-01-08T01:00:00+00:00")
+
+    assert status["status"] == "blocked"
+    assert status["next_action"] == "notify_park_and_wait"
+    assert soak.receipts()[-1]["status"] == "blocked"
