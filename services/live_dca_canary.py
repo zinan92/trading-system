@@ -130,7 +130,8 @@ class LiveDcaCanary:
         persisted_identity = state.get("transport_identity")
         current_identity = getattr(self.transport, "identity", None)
         current_network_io = getattr(self.transport, "network_io", None)
-        if not isinstance(persisted_identity, Mapping) or not isinstance(current_identity, Mapping) or dict(current_identity) != dict(persisted_identity) or current_network_io is not self._transport_network_io:
+        current_safe_identity = {key: current_identity.get(key) for key in ("broker_id", "environment", "account_id", "environment_fingerprint", "release_sha", "endpoint")} if isinstance(current_identity, Mapping) else None
+        if not isinstance(persisted_identity, Mapping) or current_safe_identity != dict(persisted_identity) or current_network_io is not self._transport_network_io:
             raise LiveDcaCanaryError("transport_identity_changed", "fresh operator process does not match persisted canary transport identity")
         self._transport_identity = dict(persisted_identity)
         if require_activation:
@@ -178,7 +179,7 @@ class LiveDcaCanary:
             "idempotency": {},
             "network_io": bool(getattr(self.transport, "network_io", False)),
             "real_money_eligible": bool(self.allow_network),
-            "transport_identity": dict(getattr(self.transport, "identity", {})),
+            "transport_identity": dict(self._transport_identity or {}),
             "account_snapshot": None,
             "live_writes_enabled": False,
             "created_at": str(timestamp),
@@ -186,7 +187,6 @@ class LiveDcaCanary:
             "next_action": "attended_submit_entry",
             "receipts": [],
         }
-        state["account_snapshot"] = self._account_snapshot(normalized["risk_limits"], state=state, timestamp=timestamp)
         state["account_snapshot"] = self._account_snapshot(normalized["risk_limits"], state=state, timestamp=timestamp)
         self._event(state, "canary_prepared", timestamp=timestamp, network_io=state["network_io"])
         self._save(state)
@@ -196,7 +196,7 @@ class LiveDcaCanary:
         state = self._state()
         self._require(state.get("status") in {"prepared", "running"}, "canary_not_accepting_entries", state)
         self._require_activation_current(state)
-        self._account_snapshot(state["risk_limits"], state=state, timestamp=timestamp)
+        state["account_snapshot"] = self._account_snapshot(state["risk_limits"], state=state, timestamp=timestamp)
         expected_index = sum(1 for order in state.get("orders") or [] if order.get("event") == "entry")
         if int(index) != expected_index:
             self._block(state, "entry_sequence_invalid", timestamp=timestamp)
@@ -474,7 +474,7 @@ class LiveDcaCanary:
         endpoint = str(identity.get("endpoint") or "")
         if not endpoint or (self.allow_network and not endpoint.startswith("https://")) or (not self.allow_network and not endpoint.startswith("fixture://")):
             raise LiveDcaCanaryError("transport_endpoint_invalid", "transport endpoint does not match the attended mode")
-        self._transport_identity = dict(identity)
+        self._transport_identity = {key: identity.get(key) for key in ("broker_id", "environment", "account_id", "environment_fingerprint", "release_sha", "endpoint")}
 
     def _open_quantity(self, state: Mapping[str, Any]) -> float:
         return sum(float(fill.get("quantity") or 0) for fill in state.get("fills") or [])
@@ -510,7 +510,12 @@ class LiveDcaCanary:
         fields = {key: _nonnegative(response.get(key), key) for key in ("open_orders", "open_positions", "notional", "leverage", "loss")}
         if fields["open_orders"] > limits["max_open_orders"] or fields["open_positions"] > limits["max_positions"] or fields["notional"] > limits["max_notional"] or fields["leverage"] > limits["max_leverage"] or fields["loss"] > limits["max_acceptable_loss"]:
             self._require(False, "current_risk_ceiling_exceeded", {"account": fields, "limits": dict(limits)})
-        return {"status": str(response.get("status")), **fields}
+        snapshot = {"status": str(response.get("status")), **fields}
+        if isinstance(state, dict):
+            state["account_snapshot"] = snapshot
+            state["account_snapshot_receipt_digest"] = state.get("last_operation_receipt_digest")
+            self._save(state)
+        return snapshot
 
     def _require_activation_current(self, state: Mapping[str, Any]) -> None:
         admission = self.gate.activation_prerequisite_status()
@@ -560,7 +565,8 @@ class LiveDcaCanary:
             raise LiveDcaCanaryError("capability_gap", f"transport does not implement {operation}")
         current_network_io = getattr(self.transport, "network_io", None)
         current_identity = getattr(self.transport, "identity", None)
-        if current_network_io is not self._transport_network_io or not isinstance(current_identity, Mapping) or self._transport_identity is None or dict(current_identity) != self._transport_identity:
+        current_safe_identity = {key: current_identity.get(key) for key in ("broker_id", "environment", "account_id", "environment_fingerprint", "release_sha", "endpoint")} if isinstance(current_identity, Mapping) else None
+        if current_network_io is not self._transport_network_io or current_safe_identity is None or self._transport_identity is None or current_safe_identity != self._transport_identity:
             raise LiveDcaCanaryError("transport_identity_changed", "transport identity or network mode changed after activation")
         identity = getattr(self.transport, "identity", None)
         expected_identity = {
@@ -580,17 +586,20 @@ class LiveDcaCanary:
                 response = method(request)
         except Exception as exc:  # unknown outcome freezes the canary.
             if state is not None:
-                self._receipt(state, operation, request, {"status": "unknown", "error_type": type(exc).__name__}, timestamp=timestamp)
+                digest = self._receipt(state, operation, request, {"status": "unknown", "error_type": type(exc).__name__}, timestamp=timestamp)
+                state["last_operation_receipt_digest"] = digest
                 self._save(state)
             raise LiveDcaCanaryError(f"{operation}_unknown", f"{operation} returned an unknown error") from exc
         if not isinstance(response, Mapping):
             if state is not None:
-                self._receipt(state, operation, request, {"status": "invalid_response"}, timestamp=timestamp)
+                digest = self._receipt(state, operation, request, {"status": "invalid_response"}, timestamp=timestamp)
+                state["last_operation_receipt_digest"] = digest
                 self._save(state)
             raise LiveDcaCanaryError(f"{operation}_shape_invalid", f"{operation} response is not an object")
         result = dict(response)
         if state is not None:
-            self._receipt(state, operation, request, result, timestamp=timestamp)
+            digest = self._receipt(state, operation, request, result, timestamp=timestamp)
+            state["last_operation_receipt_digest"] = digest
             self._save(state)
         return result
 
@@ -626,7 +635,7 @@ class LiveDcaCanary:
             state["state_digest"] = _digest({key: value for key, value in state.items() if key != "state_digest"})
         write_json(self.path, [dict(state)])
 
-    def _receipt(self, state: dict[str, Any], operation: str, request: Mapping[str, Any], response: Mapping[str, Any], *, timestamp: str) -> None:
+    def _receipt(self, state: dict[str, Any], operation: str, request: Mapping[str, Any], response: Mapping[str, Any], *, timestamp: str) -> str:
         safe_request_keys = ("activation_digest", "plan_digest", "broker_id", "environment", "account_id", "release_sha", "event", "index", "side", "price", "quantity", "notional", "reduce_only", "cancel_protection", "reason", "idempotency_key", "require_flat", "require_no_open_orders")
         safe_response_keys = ("status", "order_id", "client_order_id", "group_id", "protection_order_id", "reduce_only", "covered_quantity", "take_profit", "stop_loss", "protection_canceled", "open_quantity", "open_orders", "error_type")
         safe_request = {key: request.get(key) for key in safe_request_keys if key in request}
@@ -649,6 +658,7 @@ class LiveDcaCanary:
         }
         receipt["receipt_digest"] = _digest(receipt)
         state.setdefault("receipts", []).append(receipt)
+        return str(receipt["receipt_digest"])
 
     @staticmethod
     def _validate_state_integrity(state: Mapping[str, Any]) -> None:
@@ -688,6 +698,7 @@ class LiveDcaCanary:
             "canary_status": "pass",
             "state_digest": state.get("state_digest"),
             "receipt_chain_digest": state.get("receipt_chain_digest"),
+            "account_snapshot_receipt_digest": state.get("account_snapshot_receipt_digest"),
             "reconciliation_digest": _digest(state.get("reconciliation") or {}),
             "finished_at": str(timestamp),
         }
