@@ -23,6 +23,7 @@ def _evidence(observed_at: str = "2026-01-01T01:00:00+00:00") -> dict:
     evidence["market_freshness_trust"].update({"fresh": True, "trusted": True})
     for category in REQUIRED_CATEGORIES:
         evidence.setdefault(category, {"source": "testnet-runtime-receipt", "observed_at": observed_at, "artifact_ref": f"outputs/testnet/{category}.json", "status": "pass", "fact": True})
+        evidence[category]["artifact_kind"] = category
     return evidence
 
 
@@ -35,6 +36,7 @@ def _observation(index: int, *, evidence=None, mutations=None) -> dict:
         path.write_text(json.dumps({"category": category, "window": index}), encoding="utf-8")
         payload["artifact_ref"] = str(path)
         payload["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        payload["artifact_kind"] = category
     evidence_payload["release_account_environment_identity"]["release_sha"] = attestation["source_sha"]
     return {
         "window_index": index,

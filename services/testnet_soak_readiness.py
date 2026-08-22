@@ -303,8 +303,24 @@ class TestnetSoakReadiness:
             return False
         if rows is None:
             return True
-        expected = [str(row.get("row_digest") or "") for row in sorted(rows, key=lambda item: int(item.get("window_index") or 0))]
-        return int(receipt.get("window_count") or 0) == len(rows) and expected == list(receipt.get("window_digests") or []) and all(expected)
+        ordered = sorted(rows, key=lambda item: int(item.get("window_index") or 0))
+        expected = [str(row.get("row_digest") or "") for row in ordered]
+        recomputed = [_digest({key: value for key, value in row.items() if key != "row_digest"}) for row in ordered]
+        return int(receipt.get("window_count") or 0) == len(rows) and expected == recomputed and expected == list(receipt.get("window_digests") or []) and all(expected) and TestnetSoakReadiness._artifacts_intact(ordered)
+
+    @staticmethod
+    def _artifacts_intact(rows: Sequence[Mapping[str, Any]]) -> bool:
+        for row in rows:
+            evidence = row.get("gate_evidence") if isinstance(row.get("gate_evidence"), Mapping) else {}
+            for category, payload in evidence.items():
+                if not isinstance(payload, Mapping):
+                    return False
+                reference = str(payload.get("artifact_ref") or "")
+                expected = str(payload.get("artifact_sha256") or "")
+                path = Path(reference)
+                if not reference or not path.exists() or not path.is_file() or not expected or hashlib.sha256(path.read_bytes()).hexdigest() != expected.lower():
+                    return False
+        return True
 
     def _gate_blockers(self, observation: Mapping[str, Any], evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
         blockers: list[dict[str, Any]] = []
@@ -312,7 +328,7 @@ class TestnetSoakReadiness:
             blockers.append({"code": "observation_environment_not_testnet"})
         for key in REQUIRED_GATE_EVIDENCE:
             value = evidence.get(key)
-            if not isinstance(value, Mapping) or value.get("status") not in {"pass", "ready", "ok"} or not str(value.get("source") or "").strip() or not str(value.get("observed_at") or "").strip() or not str(value.get("artifact_ref") or "").strip():
+            if not isinstance(value, Mapping) or value.get("status") not in {"pass", "ready", "ok"} or not str(value.get("source") or "").strip() or not str(value.get("observed_at") or "").strip() or not str(value.get("artifact_ref") or "").strip() or not str(value.get("artifact_sha256") or "").strip() or str(value.get("artifact_kind") or "") != key:
                 blockers.append({"code": f"gate_{key}_not_ready", "evidence": value})
             if isinstance(value, Mapping):
                 reference = str(value.get("artifact_ref") or "")
@@ -342,7 +358,7 @@ class TestnetSoakReadiness:
                 blockers.append({"code": f"safety_{key}_invalid", "actual": observation.get(key)})
         for category in REQUIRED_CATEGORIES:
             payload = evidence.get(category)
-            if not isinstance(payload, Mapping) or not payload or payload.get("status") not in {"pass", "ready", "ok"} or not str(payload.get("source") or "").strip() or not str(payload.get("observed_at") or "").strip() or not str(payload.get("artifact_ref") or "").strip():
+            if not isinstance(payload, Mapping) or not payload or payload.get("status") not in {"pass", "ready", "ok"} or not str(payload.get("source") or "").strip() or not str(payload.get("observed_at") or "").strip() or not str(payload.get("artifact_ref") or "").strip() or not str(payload.get("artifact_sha256") or "").strip() or str(payload.get("artifact_kind") or "") != category:
                 blockers.append({"code": f"recording_{category}_payload_missing"})
                 continue
             reference = str(payload["artifact_ref"])
