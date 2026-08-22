@@ -328,13 +328,35 @@ class LiveActivationGate:
         except Exception:
             return False
         source = preflight.get("source_attestation") if isinstance(preflight.get("source_attestation"), Mapping) else {}
+        account_id = str(preflight.get("account_id") or "")
+        capabilities = preflight.get("capabilities") if isinstance(preflight.get("capabilities"), Mapping) else {}
+        readiness = preflight.get("readiness_snapshot")
+        risk_limits = self._risk_limits(preflight.get("risk_limits"))
+        expected_fingerprint = f"hyperliquid:mainnet:{account_id.lower()}"
         return (
             source.get("source_sha") == current.get("source_sha")
             and (source.get("source_tree_sha") or source.get("tree_sha")) == (current.get("source_tree_sha") or current.get("tree_sha"))
             and source.get("tracked_tree_clean") is True
+            and current.get("tracked_tree_clean") is True
             and preflight.get("release_sha") == current.get("source_sha")
+            and preflight.get("environment") == "mainnet"
+            and preflight.get("broker_id") == "hyperliquid"
+            and _ACCOUNT.fullmatch(account_id) is not None
+            and preflight.get("environment_fingerprint") == expected_fingerprint
+            and _ENV_NAME.fullmatch(str(preflight.get("credential_source") or "")) is not None
+            and preflight.get("instrument_scope") == "default_perpetuals"
+            and preflight.get("strategy_scope") == "dca"
+            and _SHA256.fullmatch(str(preflight.get("readiness_receipt_digest") or "")) is not None
+            and isinstance(readiness, Mapping)
+            and preflight.get("readiness_receipt_digest") == readiness.get("receipt_digest")
+            and self._declared_capabilities(capabilities) >= REQUIRED_CAPABILITIES
+            and not capabilities.get("gaps")
+            and risk_limits is not None
+            and preflight.get("network_io") is False
+            and preflight.get("real_money_eligible") is False
+            and preflight.get("live_writes_enabled") is False
             and not preflight.get("blockers")
-            and self._readiness_is_current(preflight.get("readiness_snapshot"))
+            and self._readiness_is_current(readiness)
         )
 
     def _readiness_is_current(self, readiness: Any) -> bool:
