@@ -10,13 +10,23 @@ from services.live_env import LiveEnvStatus
 from services.live_approval import LiveApprovalStore
 from services.official_market_data_gate import official_broker_ohlc_status
 from services.schedule_profiles import is_focus_profile
+from services.live_activation_gate import LiveActivationGate as SourceBoundLiveActivationGate
 
 
-class LiveActivationGate:
-    def __init__(self, output_root: Path | None = None) -> None:
+class LiveActivationGate(SourceBoundLiveActivationGate):
+    """Compatibility runner plus the source-bound attended activation protocol.
+
+    ``run`` preserves the repository's legacy read-only readiness artifact for
+    existing callers.  The inherited ``preflight``/``prepare_activation``/
+    ``confirm`` methods are the only source-bound Hyperliquid Live activation
+    protocol; neither path enables network writes.
+    """
+
+    def __init__(self, output_root: Path | None = None, *, park_user_id: str = "") -> None:
         config = load_pipeline_config()
         self.config = config
         self.output_root = output_root or Path(os.getenv("TRADING_ORCHESTRATOR_OUTPUT_ROOT", str(ROOT / config.get("output_root", "outputs"))))
+        super().__init__(self.output_root, park_user_id=park_user_id, repo_root=ROOT)
 
     def run(self, run_date: str) -> dict:
         live_env = LiveEnvStatus(self.output_root).run(run_date)

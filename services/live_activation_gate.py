@@ -4,17 +4,43 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 from pathlib import Path
 from typing import Any, Mapping
 
 from services.journal_store import load_json, write_json
+from services.paper_release_receipt import current_source_attestation
 
 
 LIVE_GATE_SCHEMA = "live-activation-gate-v1"
 _HEX = re.compile(r"^[0-9a-fA-F]{40,64}$")
+_SHA256 = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
+_ACCOUNT = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{2,127}$")
+
+REQUIRED_CAPABILITIES = frozenset(
+    {
+        "account.read",
+        "order_execution.submit",
+        "order_execution.cancel",
+        "order_execution.replace",
+        "order_execution.query",
+        "order_execution.open_orders",
+        "order_execution.fills",
+        "protection_order.submit",
+        "protection_order.cancel",
+        "protection_order.replace",
+        "protection_order.query",
+        "protection_order.reduce_only",
+        "protection_order.position_following",
+        "protection_order.position_level_tpsl",
+        "protection_order.take_profit_market",
+        "protection_order.stop_loss_market",
+        "reconciliation",
+    }
+)
 
 
 class LiveActivationError(RuntimeError):
@@ -31,11 +57,22 @@ def _digest(value: Any) -> str:
 class LiveActivationGate:
     """Persist Live activation intent without enabling any Live write path."""
 
-    def __init__(self, output_root: Path, *, park_user_id: str) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        *,
+        park_user_id: str,
+        repo_root: Path | None = None,
+        source_attestation_resolver: Any | None = None,
+    ) -> None:
         self.output_root = Path(output_root)
         self.root = self.output_root / "dualtrack" / "live_activation"
         self.path = self.root / "journal.json"
         self.park_user_id = str(park_user_id or "").strip()
+        self.repo_root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[1]
+        self._source_attestation_resolver = source_attestation_resolver or (
+            lambda: current_source_attestation(self.repo_root)
+        )
 
     def rows(self) -> list[dict[str, Any]]:
         return [dict(row) for row in load_json(self.path) if isinstance(row, dict)]
@@ -52,16 +89,42 @@ class LiveActivationGate:
         strategy_scope: str,
         readiness: Mapping[str, Any],
         capabilities: Mapping[str, Any],
+        risk_limits: Mapping[str, Any] | None = None,
+        source_attestation: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         blockers: list[str] = []
+        source = dict(source_attestation or {})
+        try:
+            current_source = dict(self._source_attestation_resolver())
+        except Exception as exc:  # source uncertainty must fail closed.
+            current_source = {}
+            blockers.append(f"current_source_attestation_unavailable:{type(exc).__name__}")
+        if not source:
+            source = dict(current_source)
+        source_sha = str(source.get("source_sha") or "").lower()
+        source_tree_sha = str(source.get("source_tree_sha") or source.get("tree_sha") or "").lower()
+        current_sha = str(current_source.get("source_sha") or "").lower()
+        current_tree_sha = str(current_source.get("source_tree_sha") or current_source.get("tree_sha") or "").lower()
+        if not _HEX.fullmatch(source_sha) or not _HEX.fullmatch(source_tree_sha):
+            blockers.append("source_attestation_incomplete")
+        if source_sha != current_sha or source_tree_sha != current_tree_sha:
+            blockers.append("source_attestation_does_not_match_current_tree")
+        if source.get("tracked_tree_clean") is not True or current_source.get("tracked_tree_clean") is not True:
+            blockers.append("tracked_source_tree_dirty")
         if str(broker_id).lower() != "hyperliquid":
             blockers.append("unsupported_broker")
-        if not str(account_id).strip():
+        normalized_account = str(account_id or "").strip()
+        if not _ACCOUNT.fullmatch(normalized_account):
             blockers.append("account_id_missing")
-        if not str(environment_fingerprint).strip() or "mainnet" not in str(environment_fingerprint).lower():
+        normalized_fingerprint = str(environment_fingerprint or "").strip()
+        expected_fingerprint = f"hyperliquid:mainnet:{normalized_account.lower()}"
+        if normalized_fingerprint != expected_fingerprint:
             blockers.append("mainnet_environment_fingerprint_missing")
-        if not _HEX.fullmatch(str(release_sha or "")):
+        normalized_release_sha = str(release_sha or "").lower()
+        if not _HEX.fullmatch(normalized_release_sha):
             blockers.append("release_sha_invalid")
+        if normalized_release_sha != current_sha or normalized_release_sha != source_sha:
+            blockers.append("release_sha_does_not_match_source")
         if not _ENV_NAME.fullmatch(str(credential_source or "")):
             blockers.append("credential_source_must_be_env_name")
         if str(instrument_scope) != "default_perpetuals":
@@ -70,41 +133,76 @@ class LiveActivationGate:
             blockers.append("live_scope_must_be_dca")
         if str(readiness.get("status") or "") != "ready" or readiness.get("environment") != "testnet":
             blockers.append("testnet_readiness_missing_or_not_ready")
-        if int(readiness.get("window_count") or 0) < 14 or int(readiness.get("required_window_count") or 0) != 14:
+        if int(readiness.get("window_count") or 0) != 14 or int(readiness.get("required_window_count") or 0) != 14:
             blockers.append("testnet_soak_evidence_incomplete")
+        if int(readiness.get("day_count") or 0) != 7 or int(readiness.get("required_day_count") or 0) != 7:
+            blockers.append("testnet_soak_day_evidence_incomplete")
+        if not _SHA256.fullmatch(str(readiness.get("receipt_digest") or "")):
+            blockers.append("testnet_readiness_receipt_digest_missing_or_invalid")
+        if list(readiness.get("blockers") or []):
+            blockers.append("testnet_readiness_has_blockers")
         if readiness.get("live_enabled") is not False or readiness.get("live_writes_enabled") is not False:
             blockers.append("testnet_readiness_live_flags_invalid")
-        required = {"preflight", "submit_order", "cancel_order", "protection_order", "reconciliation"}
-        declared = set(str(item) for item in (capabilities.get("operations") or []))
-        blockers.extend(f"capability_missing:{name}" for name in sorted(required - declared))
-        return {
+        readiness_source = readiness.get("source_attestation")
+        if isinstance(readiness_source, Mapping):
+            if str(readiness_source.get("source_sha") or "").lower() != source_sha:
+                blockers.append("testnet_readiness_source_sha_mismatch")
+            if readiness_source.get("tracked_tree_clean") is not True:
+                blockers.append("testnet_readiness_source_dirty")
+        critical = readiness.get("critical_gate_results")
+        if isinstance(critical, Mapping):
+            blockers.extend(
+                f"critical_gate_failed:{name}"
+                for name, value in sorted(critical.items())
+                if value not in {True, "pass", "ready"}
+            )
+        elif not isinstance(readiness.get("gate_evidence"), Mapping):
+            blockers.append("critical_gate_results_missing")
+        declared = self._declared_capabilities(capabilities)
+        blockers.extend(f"capability_missing:{name}" for name in sorted(REQUIRED_CAPABILITIES - declared))
+        declared_gaps = capabilities.get("gaps") if isinstance(capabilities, Mapping) else None
+        if declared_gaps:
+            blockers.append("capability_gaps_present")
+        normalized_risk_limits = self._risk_limits(risk_limits)
+        if normalized_risk_limits is None:
+            blockers.append("risk_limits_missing_or_invalid")
+        result = {
             "schema_version": LIVE_GATE_SCHEMA,
             "status": "blocked" if blockers else "ready_for_activation",
             "environment": "mainnet",
             "broker_id": "hyperliquid",
-            "account_id": str(account_id),
-            "environment_fingerprint": str(environment_fingerprint),
-            "release_sha": str(release_sha),
+            "account_id": normalized_account,
+            "environment_fingerprint": normalized_fingerprint,
+            "release_sha": normalized_release_sha,
             "credential_source": str(credential_source),
             "instrument_scope": str(instrument_scope),
             "strategy_scope": str(strategy_scope),
-            "capabilities": {"operations": sorted(declared)},
+            "capabilities": {"operations": sorted(declared), "required": sorted(REQUIRED_CAPABILITIES)},
+            "risk_limits": normalized_risk_limits or {},
             "readiness_receipt_digest": str(readiness.get("receipt_digest") or ""),
+            "source_attestation": source,
             "network_io": False,
             "real_money_eligible": False,
             "live_writes_enabled": False,
             "blockers": blockers,
             "next_action": "notify_park_and_wait" if blockers else "await_exact_live_activation_confirmation",
         }
+        result["preflight_digest"] = _digest({key: value for key, value in result.items() if key != "preflight_digest"})
+        return result
 
     def prepare_activation(self, preflight: Mapping[str, Any], *, plan_digest: str, expires_at: float) -> dict[str, Any]:
-        if preflight.get("status") != "ready_for_activation":
+        if not self._preflight_is_current(preflight):
             raise LiveActivationError("live_preflight_blocked", "Live preflight is not ready", preflight)
         if not _HEX.fullmatch(str(plan_digest or "").removeprefix("sha256:")):
             raise LiveActivationError("plan_digest_invalid", "exact DCA plan digest is required")
         if float(expires_at) <= time.time():
             raise LiveActivationError("activation_expired", "activation expiry must be in the future")
-        payload = {"preflight": dict(preflight), "plan_digest": str(plan_digest), "expires_at": float(expires_at)}
+        payload = {
+            "preflight": dict(preflight),
+            "preflight_digest": str(preflight.get("preflight_digest") or ""),
+            "plan_digest": str(plan_digest),
+            "expires_at": float(expires_at),
+        }
         activation_digest = _digest(payload)
         existing = next((row for row in reversed(self.rows()) if row.get("event") == "activation_proposed"), None)
         if existing:
@@ -115,22 +213,64 @@ class LiveActivationGate:
         self._append(row)
         return dict(row)
 
-    def confirm(self, *, activation_digest: str, command_text: str, park_user_id: str, now: float | None = None) -> dict[str, Any]:
+    def confirm(
+        self,
+        *,
+        activation_digest: str,
+        command_text: str,
+        park_user_id: str,
+        telegram_update_id: str | int | None = None,
+        telegram_message_id: str | int | None = None,
+        telegram_chat_id: str | int | None = None,
+        current_preflight: Mapping[str, Any] | None = None,
+        now: float | None = None,
+    ) -> dict[str, Any]:
         proposal = next((row for row in reversed(self.rows()) if row.get("event") == "activation_proposed" and row.get("activation_digest") == activation_digest), None)
         if proposal is None:
             return self._record_rejected("activation_missing", activation_digest)
-        if str(park_user_id) != self.park_user_id:
-            return self._record_rejected("unauthorized_user", activation_digest)
-        command = str(command_text or "").strip()
-        if command not in {f"confirm {activation_digest}", f"确认 {activation_digest}"}:
-            return self._record_rejected("confirmation_digest_mismatch", activation_digest)
-        timestamp = float(now if now is not None else time.time())
-        if timestamp > float(proposal.get("expires_at") or 0):
-            return self._record_rejected("activation_expired", activation_digest)
         existing = next((row for row in reversed(self.rows()) if row.get("event") == "activation_confirmed" and row.get("activation_digest") == activation_digest), None)
         if existing:
             return dict(existing)
-        row = {"schema_version": LIVE_GATE_SCHEMA, "event": "activation_confirmed", "activation_digest": activation_digest, "plan_digest": proposal["plan_digest"], "release_sha": proposal["preflight"]["release_sha"], "account_id": proposal["preflight"]["account_id"], "environment_fingerprint": proposal["preflight"]["environment_fingerprint"], "environment": "mainnet", "park_user_id": self.park_user_id, "confirmed_at": timestamp, "execution_authorized": True, "live_writes_enabled": False, "canary_required": True, "next_action": "await_attended_live_dca_canary"}
+        if str(park_user_id) != self.park_user_id:
+            return self._record_rejected("unauthorized_user", activation_digest)
+        if not self._telegram_receipt_is_complete(telegram_update_id, telegram_message_id):
+            return self._record_rejected("telegram_receipt_incomplete", activation_digest)
+        expected = self._confirmation_tokens(proposal)
+        command_tokens = str(command_text or "").strip().split()
+        if command_tokens not in [
+            ["confirm", "live", *expected],
+            ["确认", "live", *expected],
+        ]:
+            return self._record_rejected("confirmation_digest_mismatch", activation_digest)
+        if current_preflight is None or not self._preflight_is_current(current_preflight):
+            return self._record_rejected("preflight_recheck_failed", activation_digest)
+        if str(current_preflight.get("preflight_digest") or "") != str(proposal.get("preflight_digest") or ""):
+            return self._record_rejected("preflight_changed", activation_digest)
+        timestamp = float(now if now is not None else time.time())
+        if timestamp > float(proposal.get("expires_at") or 0):
+            return self._record_rejected("activation_expired", activation_digest)
+        row = {
+            "schema_version": LIVE_GATE_SCHEMA,
+            "event": "activation_confirmed",
+            "activation_digest": activation_digest,
+            "preflight_digest": proposal["preflight_digest"],
+            "plan_digest": proposal["plan_digest"],
+            "release_sha": proposal["preflight"]["release_sha"],
+            "account_id": proposal["preflight"]["account_id"],
+            "environment_fingerprint": proposal["preflight"]["environment_fingerprint"],
+            "strategy_scope": proposal["preflight"]["strategy_scope"],
+            "environment": "mainnet",
+            "park_user_id": self.park_user_id,
+            "telegram_update_id": str(telegram_update_id),
+            "telegram_message_id": str(telegram_message_id),
+            "telegram_chat_id": str(telegram_chat_id or ""),
+            "confirmed_at": timestamp,
+            "execution_authorized": False,
+            "activation_intent": True,
+            "live_writes_enabled": False,
+            "canary_required": True,
+            "next_action": "await_attended_live_dca_canary",
+        }
         self._append(row)
         return dict(row)
 
@@ -147,6 +287,82 @@ class LiveActivationGate:
         row = {"schema_version": LIVE_GATE_SCHEMA, "event": "activation_rejected", "activation_digest": activation_digest, "code": code, "execution_authorized": False, "live_writes_enabled": False, "next_action": "notify_park_and_wait"}
         self._append(row)
         return dict(row)
+
+    def _preflight_is_current(self, preflight: Mapping[str, Any]) -> bool:
+        if not isinstance(preflight, Mapping) or preflight.get("status") != "ready_for_activation":
+            return False
+        supplied = str(preflight.get("preflight_digest") or "")
+        if supplied != _digest({key: value for key, value in preflight.items() if key != "preflight_digest"}):
+            return False
+        try:
+            current = dict(self._source_attestation_resolver())
+        except Exception:
+            return False
+        source = preflight.get("source_attestation") if isinstance(preflight.get("source_attestation"), Mapping) else {}
+        return (
+            source.get("source_sha") == current.get("source_sha")
+            and (source.get("source_tree_sha") or source.get("tree_sha")) == (current.get("source_tree_sha") or current.get("tree_sha"))
+            and source.get("tracked_tree_clean") is True
+            and preflight.get("release_sha") == current.get("source_sha")
+            and not preflight.get("blockers")
+        )
+
+    @staticmethod
+    def _declared_capabilities(capabilities: Mapping[str, Any]) -> set[str]:
+        declared: set[str] = set()
+        for item in capabilities.get("operations") or []:
+            value = str(item)
+            declared.add(value)
+            # Legacy flat names are normalized only where the mapping is unambiguous.
+            aliases = {
+                "preflight": "preflight",
+                "reconciliation": "reconciliation",
+                "submit_order": "order_execution.submit",
+                "cancel_order": "order_execution.cancel",
+                "replace_order": "order_execution.replace",
+                "query_order": "order_execution.query",
+                "open_orders": "order_execution.open_orders",
+                "protection_order": "protection_order.submit",
+            }
+            if value in aliases:
+                declared.add(aliases[value])
+        for port, operations in (capabilities.get("ports") or {}).items():
+            if isinstance(operations, Mapping):
+                for operation, supported in operations.items():
+                    if supported is True:
+                        declared.add(f"{port}.{operation}")
+        return declared
+
+    @staticmethod
+    def _risk_limits(value: Mapping[str, Any] | None) -> dict[str, float] | None:
+        if not isinstance(value, Mapping):
+            return None
+        result: dict[str, float] = {}
+        for key in ("max_acceptable_loss", "max_notional", "max_leverage"):
+            try:
+                number = float(value.get(key))
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(number) or number <= 0:
+                return None
+            result[key] = number
+        return result
+
+    @staticmethod
+    def _telegram_receipt_is_complete(update_id: str | int | None, message_id: str | int | None) -> bool:
+        return bool(str(update_id or "").strip()) and bool(str(message_id or "").strip())
+
+    @staticmethod
+    def _confirmation_tokens(proposal: Mapping[str, Any]) -> list[str]:
+        preflight = proposal["preflight"]
+        return [
+            str(proposal["activation_digest"]),
+            str(preflight["release_sha"]),
+            str(preflight["account_id"]),
+            str(preflight["environment_fingerprint"]),
+            str(preflight["strategy_scope"]),
+            str(proposal["plan_digest"]),
+        ]
 
     def _append(self, row: Mapping[str, Any]) -> None:
         rows = self.rows()
