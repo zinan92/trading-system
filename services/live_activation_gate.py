@@ -470,7 +470,7 @@ class LiveActivationGate:
             state = state_rows[-1] if state_rows and isinstance(state_rows[-1], Mapping) else None
         except Exception:
             state = None
-        if not isinstance(state, Mapping) or state.get("status") != "completed" or state.get("activation_digest") != confirmed.get("activation_digest") or state.get("plan_digest") != confirmed.get("plan_digest") or state.get("state_digest") != _digest({key: value for key, value in state.items() if key != "state_digest"}) or state.get("reconciliation", {}).get("status") not in {"ok", "pass", "reconciled"} or canary.get("state_digest") != state.get("state_digest") or canary.get("reconciliation_digest") != _digest(state.get("reconciliation") or {}):
+        if not isinstance(state, Mapping) or state.get("status") != "completed" or state.get("activation_digest") != confirmed.get("activation_digest") or state.get("plan_digest") != confirmed.get("plan_digest") or state.get("state_digest") != _digest({key: value for key, value in state.items() if key != "state_digest"}) or state.get("receipt_chain_digest") != _digest(state.get("receipts") or []) or state.get("reconciliation", {}).get("status") not in {"ok", "pass", "reconciled"} or canary.get("state_digest") != state.get("state_digest") or canary.get("receipt_chain_digest") != state.get("receipt_chain_digest") or canary.get("reconciliation_digest") != _digest(state.get("reconciliation") or {}):
             return {"ready": False, "status": "blocked", "blockers": ["attended_canary_state_missing_or_invalid"], "activation_digest": confirmed.get("activation_digest"), "live_writes_enabled": False}
         source = canary.get("source_attestation") if isinstance(canary.get("source_attestation"), Mapping) else {}
         try:
