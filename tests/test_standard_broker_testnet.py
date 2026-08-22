@@ -144,6 +144,9 @@ def test_testnet_composition_is_explicit_local_fixture_and_ready(tmp_path: Path)
     assert preflight["external_network"] is True
     assert preflight["real_money_eligible"] is False
     assert preflight["transport_state"] == "local_fixture"
+    assert adapter.fact_ledger.session_key.startswith(
+        "ledger.standard-broker.testnet:hyperliquid:testnet:"
+    )
     assert adapter.capabilities.supports(BrokerCapability.REPLACE_ORDER)
     assert adapter.capabilities.supports(BrokerCapability.ORDER_RECONCILIATION)
 
@@ -203,6 +206,15 @@ def test_testnet_composition_maps_canonical_order_lifecycle(tmp_path: Path) -> N
     assert open_orders[0].order_id == first.order_id
     assert canceled.state is OrderState.CANCEL_PENDING
     assert [call[1] for call in backend.calls] == ["submit", "query", "open_orders", "cancel"]
+    with pytest.raises(StandardBrokerTestnetHostError, match="contradictory"):
+        adapter.cancel_order(
+            BrokerCancelRequest(
+                run_date="2026-08-22",
+                asset="BTC-USD-PERP",
+                client_order_id=first.client_order_id,
+                broker_order_id="unknown-broker-order",
+            )
+        )
 
 
 def test_testnet_missing_fixture_fails_without_fallback(tmp_path: Path) -> None:

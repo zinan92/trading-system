@@ -184,6 +184,11 @@ class StandardBrokerTestnetExecutionAdapter:
                 instruments=instruments,
                 ledger=ledger,
             )
+            if ledger.session_key is None:
+                raise StandardBrokerTestnetHostError(
+                    "Testnet runtime fact ledger did not bind a session"
+                )
+            ledger.session_key = f"{self.identity.ledger_namespace}:{ledger.session_key}"
             self._instruments = instruments
             self._ledger = ledger
         except Exception as exc:  # noqa: BLE001 - convert runtime blockers at host seam.
@@ -206,6 +211,10 @@ class StandardBrokerTestnetExecutionAdapter:
     @property
     def fills(self) -> Mapping[str, object]:
         return self._orders.fills
+
+    @property
+    def fact_ledger(self) -> Any:
+        return self._ledger
 
     def preflight(self) -> dict[str, Any]:
         result = self._runtime.preflight(
@@ -243,7 +252,21 @@ class StandardBrokerTestnetExecutionAdapter:
         return self._orders.submit(self._intent_from_request(request))
 
     def cancel_order(self, request: BrokerCancelRequest) -> Any:
-        order_id = request.client_order_id or request.broker_order_id
+        if request.client_order_id and request.broker_order_id:
+            try:
+                client_owner = self._orders._lifecycle.resolve_order_id(request.client_order_id)
+                broker_owner = self._orders._lifecycle.resolve_order_id(request.broker_order_id)
+            except KeyError as exc:
+                raise StandardBrokerTestnetHostError(
+                    "contradictory or unknown client and broker order identities"
+                ) from exc
+            if client_owner != broker_owner:
+                raise StandardBrokerTestnetHostError(
+                    "contradictory client and broker order identities"
+                )
+            order_id = client_owner
+        else:
+            order_id = request.client_order_id or request.broker_order_id
         return self.request("order_execution", "cancel", order_id)
 
     def request(self, port: str, operation: str, payload: object | None = None) -> Any:
