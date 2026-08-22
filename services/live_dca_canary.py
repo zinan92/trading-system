@@ -147,7 +147,6 @@ class LiveDcaCanary:
         capabilities = self._capabilities()
         missing = sorted(REQUIRED_TRANSPORT_CAPABILITIES - capabilities)
         self._require(not missing, "capability_gap", {"missing": missing})
-        account = self._account_snapshot(normalized["risk_limits"], admission=admission, timestamp=timestamp)
         existing = self.snapshot()
         if existing:
             self._validate_state_integrity(existing)
@@ -180,13 +179,14 @@ class LiveDcaCanary:
             "network_io": bool(getattr(self.transport, "network_io", False)),
             "real_money_eligible": bool(self.allow_network),
             "transport_identity": dict(getattr(self.transport, "identity", {})),
-            "account_snapshot": account,
+            "account_snapshot": None,
             "live_writes_enabled": False,
             "created_at": str(timestamp),
             "updated_at": str(timestamp),
             "next_action": "attended_submit_entry",
             "receipts": [],
         }
+        state["account_snapshot"] = self._account_snapshot(normalized["risk_limits"], state=state, timestamp=timestamp)
         state["account_snapshot"] = self._account_snapshot(normalized["risk_limits"], state=state, timestamp=timestamp)
         self._event(state, "canary_prepared", timestamp=timestamp, network_io=state["network_io"])
         self._save(state)
@@ -260,7 +260,8 @@ class LiveDcaCanary:
             if quantity > entry["quantity"]:
                 self._recover_after_protection_gap(state, "fill_quantity_exceeded", timestamp=timestamp)
                 raise LiveDcaCanaryError("fill_quantity_exceeded", "fill quantity exceeds the approved DCA entry")
-            state["fills"].append({"order_id": order_id, **dict(fill), "quantity": quantity, "price": actual_price, "index": int(index), "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"]})
+            safe_fill = {key: fill.get(key) for key in ("fill_id", "tid", "hash", "fee", "funding") if key in fill}
+            state["fills"].append({"order_id": order_id, **safe_fill, "quantity": quantity, "price": actual_price, "index": int(index), "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"]})
             if abs(actual_price - entry["price"]) > state["risk_limits"]["max_slippage"]:
                 self._recover_after_protection_gap(state, "entry_slippage_exceeded", timestamp=timestamp)
                 raise LiveDcaCanaryError("entry_slippage_exceeded", "entry fill exceeded the approved slippage ceiling")
@@ -531,10 +532,17 @@ class LiveDcaCanary:
         if report.get("status") not in {"ok", "pass", "reconciled"} or (require_flat and float(report.get("open_quantity") or 0) != 0) or (require_no_open_orders and ("open_orders" not in report or float(report.get("open_orders") or 0) != 0)):
             state["status"] = "blocked_reconciliation"
             state["next_action"] = "notify_park_and_wait"
-            self._event(state, "reconciliation_blocked", timestamp=timestamp, report=dict(report))
+            self._event(state, "reconciliation_blocked", timestamp=timestamp, report=self._safe_reconciliation(report))
             self._save(state)
             raise LiveDcaCanaryError("reconciliation_mismatch", "canary reconciliation did not prove the expected state", report)
-        state["reconciliation"] = dict(report)
+        state["reconciliation"] = self._safe_reconciliation(report)
+
+    @staticmethod
+    def _safe_reconciliation(report: Mapping[str, Any]) -> dict[str, Any]:
+        allowed = ("status", "open_quantity", "open_orders", "position_quantity", "notional", "leverage", "loss", "fees", "funding", "receipt_digest")
+        safe = {key: report.get(key) for key in allowed if key in report}
+        safe["response_digest"] = _digest({key: value for key, value in report.items() if key in allowed})
+        return safe
 
     def _recover_after_protection_gap(self, state: dict[str, Any], code: str, *, timestamp: str) -> None:
         self._block(state, code, timestamp=timestamp)

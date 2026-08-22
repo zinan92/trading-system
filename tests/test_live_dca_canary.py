@@ -128,6 +128,7 @@ def test_attended_dca_canary_keeps_fixture_non_network_and_distinguishes_stop_ca
     stopped = canary.stop(timestamp="2026-08-22T00:05:00+00:00")
     assert stopped["status"] == "stopped"
     assert stopped["receipts"]
+    assert sum(row["operation"] == "account_snapshot" for row in stopped["receipts"]) == 2
     assert all(row.get("request_digest", "").startswith("sha256:") and row.get("response_digest", "").startswith("sha256:") for row in stopped["receipts"])
     assert stopped["receipt_chain_digest"].startswith("sha256:")
     assert any(name == "cancel_order" for name, _ in transport.calls)
