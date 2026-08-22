@@ -6,7 +6,7 @@ from services.park_recording_track import REQUIRED_CATEGORIES
 
 
 def _evidence() -> dict:
-    return {key: {"status": "pass", "source": "fixture"} for key in (
+    evidence = {key: {"status": "pass", "source": "testnet-runtime-receipt", "observed_at": "2026-01-01T01:00:00+00:00"} for key in (
         "orders_fills_positions_reconciliation",
         "protection_coverage",
         "capability_status",
@@ -16,10 +16,13 @@ def _evidence() -> dict:
         "release_account_environment_identity",
         "recording_package",
     )}
+    evidence["release_account_environment_identity"].update({"release_sha": "b" * 40, "account_fingerprint": "testnet-account-fingerprint", "environment": "testnet", "broker_id": "hyperliquid"})
+    evidence["market_freshness_trust"].update({"fresh": True, "trusted": True})
+    return evidence
 
 
 def _observation(index: int, *, evidence=None, mutations=None) -> dict:
-    start = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=12 * index)
+    start = datetime(2026, 1, 1, 1, tzinfo=UTC) + timedelta(hours=12 * index)
     return {
         "window_index": index,
         "record_window_id": f"soak-window-{index:02d}",
@@ -31,6 +34,8 @@ def _observation(index: int, *, evidence=None, mutations=None) -> dict:
         "broker_id": "hyperliquid",
         "release_sha": "b" * 40,
         "account_fingerprint": "testnet-account-fingerprint",
+        "environment": "testnet",
+        "source_attestation": {"status": "verified", "source_sha": "c" * 40, "environment": "testnet"},
         "fresh": True,
         "trusted": True,
         "network_io": False,
@@ -47,14 +52,14 @@ def test_seven_day_soak_requires_fourteen_windows_and_keeps_live_disabled(tmp_pa
         row = soak.record_window(_observation(index))
         assert row["status"] == "pass"
 
-    receipt = soak.finalize(now="2026-01-08T00:00:00+00:00")
+    receipt = soak.finalize(now="2026-01-08T01:00:00+00:00")
 
     assert receipt["status"] == "ready"
     assert receipt["window_count"] == 14
     assert receipt["day_count"] == 7
     assert receipt["live_enabled"] is False
     assert receipt["live_writes_enabled"] is False
-    assert soak.public_status()["status"] == "ready"
+    assert soak.public_status(now="2026-01-08T01:00:00+00:00")["status"] == "ready"
 
 
 def test_soak_failure_is_durable_blocker_not_a_pass(tmp_path: Path) -> None:
@@ -62,7 +67,7 @@ def test_soak_failure_is_durable_blocker_not_a_pass(tmp_path: Path) -> None:
     for index in range(14):
         evidence = _evidence()
         if index == 6:
-            evidence["protection_coverage"] = {"status": "blocked", "reason": "coverage_unknown"}
+            evidence["protection_coverage"] = {"status": "blocked", "source": "testnet-runtime-receipt", "observed_at": "2026-01-04T01:00:00+00:00", "reason": "coverage_unknown"}
         soak.record_window(_observation(index, evidence=evidence))
 
     receipt = soak.finalize()
@@ -82,4 +87,3 @@ def test_soak_boundaries_reject_mutation_and_replay_is_idempotent(tmp_path: Path
     blocked = soak.record_window(_observation(1, mutations=[{"action": "flatten"}]))
     assert blocked["status"] == "blocked"
     assert any(item.get("code") == "boundary_execution_mutation" for item in blocked["blockers"])
-

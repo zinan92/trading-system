@@ -1598,7 +1598,7 @@ def _assemble_strategy_console_snapshot(
         "safe_repair_queue": safe_repair_queue,
         "cloud_health": cloud_health,
         "cycle_decision": cycle_decision,
-        "testnet_readiness": TestnetSoakReadiness(output).public_status(),
+        "testnet_readiness": TestnetSoakReadiness(output).public_status(now=datetime.now(timezone.utc).isoformat()),
         "execution_shadow": execution.get("shadow_cutover", {}),
         "safety": {
             "one_production_strategy": True,
