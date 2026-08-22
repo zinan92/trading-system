@@ -25,6 +25,10 @@ def _plan() -> dict:
         },
         "risk_budget": {
             "maximum_loss_at_full_depth": 1000.0,
+            "leverage_limit": 10.0,
+            "max_notional": 20000.0,
+            "max_open_orders": 3,
+            "max_open_positions": 1,
             "max_slippage": 50.0,
         },
     }
@@ -214,7 +218,8 @@ def test_dca_testnet_partial_fill_does_not_advance_or_attach_protection(tmp_path
     )
 
     assert partial["status"] == "partial_entry"
-    assert partial["protection"] is None
+    assert partial["protection"]["status"] == "active"
+    assert partial["protection"]["quantity"] == 0.04
     assert len(partial["orders"]) == 1
 
 
