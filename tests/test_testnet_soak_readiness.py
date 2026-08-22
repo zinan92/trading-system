@@ -5,8 +5,8 @@ from services.testnet_soak_readiness import TestnetSoakReadiness
 from services.park_recording_track import REQUIRED_CATEGORIES
 
 
-def _evidence() -> dict:
-    evidence = {key: {"status": "pass", "source": "testnet-runtime-receipt", "observed_at": "2026-01-01T01:00:00+00:00"} for key in (
+def _evidence(observed_at: str = "2026-01-01T01:00:00+00:00") -> dict:
+    evidence = {key: {"status": "pass", "source": "testnet-runtime-receipt", "observed_at": observed_at} for key in (
         "orders_fills_positions_reconciliation",
         "protection_coverage",
         "capability_status",
@@ -18,6 +18,8 @@ def _evidence() -> dict:
     )}
     evidence["release_account_environment_identity"].update({"release_sha": "b" * 40, "account_fingerprint": "testnet-account-fingerprint", "environment": "testnet", "broker_id": "hyperliquid"})
     evidence["market_freshness_trust"].update({"fresh": True, "trusted": True})
+    for category in REQUIRED_CATEGORIES:
+        evidence.setdefault(category, {"source": "testnet-runtime-receipt", "observed_at": observed_at, "status": "pass", "fact": True})
     return evidence
 
 
@@ -35,13 +37,13 @@ def _observation(index: int, *, evidence=None, mutations=None) -> dict:
         "release_sha": "b" * 40,
         "account_fingerprint": "testnet-account-fingerprint",
         "environment": "testnet",
-        "source_attestation": {"status": "verified", "source_sha": "c" * 40, "environment": "testnet"},
+        "source_attestation": {"status": "verified", "source_sha": "c" * 40, "tree_sha": "d" * 40, "tracked_tree_clean": True, "release_sha": "b" * 40, "environment": "testnet"},
         "fresh": True,
         "trusted": True,
         "network_io": False,
         "real_money_eligible": False,
         "positions_open": 0,
-        "evidence": evidence or _evidence(),
+        "evidence": evidence or _evidence((start + timedelta(hours=12)).isoformat()),
         "execution_mutations": mutations or [],
     }
 

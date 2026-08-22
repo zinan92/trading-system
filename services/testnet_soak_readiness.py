@@ -77,11 +77,14 @@ class TestnetSoakReadiness:
             raise TestnetSoakError("recording_window_not_12_hours")
         all_windows = self.windows()
         existing = next((row for row in all_windows if row.get("window_index") == index), None)
-        if existing is not None and existing.get("status") == "pass":
+        if existing is not None:
             if self._window_identity(existing) != identity:
                 raise TestnetSoakError("soak_window_identity_conflict")
-            if str(existing.get("observation_digest") or "") != self._observation_digest(observation):
-                raise TestnetSoakError("soak_window_replay_conflict")
+            if self._provenance_identity(existing) != self._provenance_identity(observation):
+                raise TestnetSoakError("broker_release_account_changed_across_soak")
+            if str(existing.get("observation_digest") or "") == self._observation_digest(observation):
+                return dict(existing)
+            raise TestnetSoakError("soak_window_replay_conflict")
             return dict(existing)
         prior = sorted([row for row in all_windows if row.get("window_index") != index], key=lambda row: int(row.get("window_index") or 0))
         if not (start.astimezone(ZoneInfo("Asia/Shanghai")).hour == 9 and start.astimezone(ZoneInfo("Asia/Shanghai")).minute == 0) and not (start.astimezone(ZoneInfo("Asia/Shanghai")).hour == 21 and start.astimezone(ZoneInfo("Asia/Shanghai")).minute == 0):
@@ -98,6 +101,11 @@ class TestnetSoakReadiness:
                 raise TestnetSoakError("broker_release_account_changed_across_soak")
         evidence = observation.get("evidence") if isinstance(observation.get("evidence"), Mapping) else {}
         blockers = self._gate_blockers(observation, evidence)
+        for category, payload in evidence.items():
+            if isinstance(payload, Mapping) and payload.get("observed_at"):
+                observed_at = _parse_timestamp(str(payload["observed_at"]))
+                if not start <= observed_at <= end:
+                    blockers.append({"code": "evidence_timestamp_outside_window", "category": category})
         attestation = observation.get("source_attestation") if isinstance(observation.get("source_attestation"), Mapping) else {}
         if attestation.get("status") != "verified" or not str(attestation.get("source_sha") or "").strip() or str(attestation.get("environment") or "") != "testnet":
             blockers.append({"code": "source_attestation_missing_or_unverified", "evidence": attestation})
@@ -108,7 +116,8 @@ class TestnetSoakReadiness:
         try:
             self.recording.start_window(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], starts_at=starts_at, ends_at=ends_at)
             for category in REQUIRED_CATEGORIES:
-                self.recording.record_event(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], category=category, event_type="soak_observation", source="testnet_soak_harness", occurred_at=ends_at, payload=dict(evidence.get(category) or {}))
+                payload = dict(evidence.get(category) or {})
+                self.recording.record_event(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], category=category, event_type="soak_observation", source=str(payload.get("source") or ""), occurred_at=str(payload.get("observed_at") or ends_at), payload=payload)
             package = self.recording.close_package(record_window_id=window_id, strategy_session_id=identity["strategy_session_id"], strategy_revision_id=identity["strategy_revision_id"], strategy_open=True, positions_open=int(observation.get("positions_open") or 0))
             if package.get("status") == "complete":
                 package = self.recording.mark_review_complete(record_window_id=window_id)
@@ -146,7 +155,7 @@ class TestnetSoakReadiness:
     def finalize(self, *, now: str | None = None) -> dict[str, Any]:
         rows = sorted(self.windows(), key=lambda row: int(row.get("window_index") or 0))
         existing = self.receipts()
-        if existing and existing[-1].get("status") == "ready":
+        if existing and existing[-1].get("status") == "ready" and self._receipt_is_fresh(existing[-1], rows, now=now):
             return dict(existing[-1])
         blockers: list[dict[str, Any]] = []
         if len(rows) != WINDOW_COUNT or [int(row.get("window_index")) if row.get("window_index") is not None else -1 for row in rows] != list(range(WINDOW_COUNT)):
@@ -159,6 +168,10 @@ class TestnetSoakReadiness:
                 blockers.append({"code": "broker_release_account_changed_across_soak"})
         else:
             identity = {"strategy_session_id": "", "strategy_revision_id": "", "plan_digest": ""}
+        provenance = self._provenance_identity(rows[0]) if rows else {"environment": "testnet", "broker_id": "", "release_sha": "", "account_fingerprint": ""}
+        source_attestation = dict(rows[0].get("source_attestation") or {}) if rows else {}
+        if rows and not self._receipt_is_fresh({"created_at": now or datetime.now(timezone.utc).isoformat()}, rows, now=now):
+            blockers.append({"code": "soak_evidence_stale"})
         for row in rows:
             blockers.extend({"window_index": row.get("window_index"), **dict(blocker)} for blocker in row.get("blockers") or [])
             if row.get("status") != "pass":
@@ -170,6 +183,8 @@ class TestnetSoakReadiness:
             "event": "readiness_receipt",
             "environment": "testnet",
             **identity,
+            **provenance,
+            "source_attestation": source_attestation,
             "window_count": len(rows),
             "day_count": len(rows) // 2,
             "required_window_count": WINDOW_COUNT,
@@ -180,8 +195,9 @@ class TestnetSoakReadiness:
             "live_writes_enabled": False,
             "automatic_promotion": False,
             "created_at": str(now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()),
+            "receipt_revision": len(existing),
             "next_action": "await_manual_live_activation" if not blockers else "notify_park_and_wait",
-            "receipt_digest": _digest({"identity": identity, "rows": rows, "blockers": blockers}),
+            "receipt_digest": _digest({"identity": identity, "rows": rows, "blockers": blockers, "provenance": provenance}),
         }
         write_json(self.receipts_path, [receipt])
         return dict(receipt)
@@ -196,8 +212,8 @@ class TestnetSoakReadiness:
                 age = _parse_timestamp(now) - _parse_timestamp(str(receipt.get("created_at") or now))
                 if age > timedelta(hours=24):
                     status = "stale"
-            return {"status": status, "environment": "testnet", "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": list(receipt.get("blockers") or []), "live_enabled": False, "live_writes_enabled": False, "next_action": receipt.get("next_action")}
-        return {"status": "incomplete" if rows else "missing", "environment": "testnet", "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": [], "live_enabled": False, "live_writes_enabled": False, "next_action": "continue_soak" if rows else "start_attended_testnet_soak"}
+            return {"status": status, "environment": "testnet", "broker_id": receipt.get("broker_id"), "release_sha": receipt.get("release_sha"), "account_fingerprint": receipt.get("account_fingerprint"), "source_attestation": dict(receipt.get("source_attestation") or {}), "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": list(receipt.get("blockers") or []), "live_enabled": False, "live_writes_enabled": False, "next_action": "refresh_soak_evidence" if status == "stale" else receipt.get("next_action")}
+        return {"status": "incomplete" if rows else "missing", "environment": "testnet", "broker_id": None, "release_sha": None, "account_fingerprint": None, "source_attestation": {}, "window_count": len(rows), "required_window_count": WINDOW_COUNT, "day_count": len(rows) // 2, "blockers": [], "live_enabled": False, "live_writes_enabled": False, "next_action": "continue_soak" if rows else "start_attended_testnet_soak"}
 
     @staticmethod
     def _identity(value: Mapping[str, Any]) -> dict[str, str]:
@@ -216,8 +232,16 @@ class TestnetSoakReadiness:
 
     @staticmethod
     def _observation_digest(value: Mapping[str, Any]) -> str:
-        material = {key: value.get(key) for key in ("window_index", "record_window_id", "starts_at", "ends_at", "strategy_session_id", "strategy_revision_id", "plan_digest", "broker_id", "release_sha", "account_fingerprint", "evidence", "execution_mutations", "source_attestation")}
+        material = {key: value.get(key) for key in ("window_index", "record_window_id", "starts_at", "ends_at", "strategy_session_id", "strategy_revision_id", "plan_digest", "environment", "broker_id", "release_sha", "account_fingerprint", "evidence", "execution_mutations", "source_attestation", "fresh", "trusted", "network_io", "real_money_eligible", "positions_open")}
         return _digest(material)
+
+    @staticmethod
+    def _receipt_is_fresh(receipt: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, now: str | None) -> bool:
+        if now is None:
+            return True
+        reference = _parse_timestamp(now)
+        created = receipt.get("created_at")
+        return not created or reference - _parse_timestamp(str(created)) <= timedelta(hours=24)
 
     @staticmethod
     def _gate_blockers(observation: Mapping[str, Any], evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -233,6 +257,9 @@ class TestnetSoakReadiness:
                     blockers.append({"code": f"identity_{field}_missing"})
             if str(identity_evidence.get("environment") or "") != "testnet":
                 blockers.append({"code": "identity_environment_not_testnet"})
+            for field in ("release_sha", "account_fingerprint", "broker_id"):
+                if str(identity_evidence.get(field) or "") != str(observation.get(field) or ""):
+                    blockers.append({"code": f"identity_{field}_mismatch"})
         market_evidence = evidence.get("market_freshness_trust")
         if isinstance(market_evidence, Mapping) and (market_evidence.get("fresh") is not True or market_evidence.get("trusted") is not True):
             blockers.append({"code": "market_freshness_or_trust_missing"})
@@ -240,4 +267,11 @@ class TestnetSoakReadiness:
             expected = {"fresh": True, "trusted": True, "network_io": False, "real_money_eligible": False}[key]
             if key not in observation or observation.get(key) is not expected:
                 blockers.append({"code": f"safety_{key}_invalid", "actual": observation.get(key)})
+        for category in REQUIRED_CATEGORIES:
+            payload = evidence.get(category)
+            if not isinstance(payload, Mapping) or not payload:
+                blockers.append({"code": f"recording_{category}_payload_missing"})
+        attestation = observation.get("source_attestation") if isinstance(observation.get("source_attestation"), Mapping) else {}
+        if attestation.get("tracked_tree_clean") is not True or not str(attestation.get("tree_sha") or "").strip() or str(attestation.get("release_sha") or "") != str(observation.get("release_sha") or ""):
+            blockers.append({"code": "source_attestation_tree_or_release_invalid"})
         return blockers
