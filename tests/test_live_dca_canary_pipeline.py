@@ -17,4 +17,3 @@ def test_attended_canary_pipeline_is_durable_blocker_without_transport(tmp_path:
     assert result["network_io"] is False
     assert result["live_writes_enabled"] is False
     assert load_json(tmp_path / "outputs" / "dualtrack" / "live_dca_canary" / "current.json")[0]["blocker"] == "live_transport_not_registered"
-
