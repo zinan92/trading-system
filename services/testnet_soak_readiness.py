@@ -359,7 +359,12 @@ class TestnetSoakReadiness:
         write_json(self.receipts_path, [*rows, invalidated])
 
     def _artifacts_intact(self, rows: Sequence[Mapping[str, Any]]) -> bool:
+        review_rows = load_json(self.root / "reviews.json")
+        review_by_window = {str(item.get("record_window_id") or ""): item for item in review_rows if isinstance(item, Mapping)}
         for row in rows:
+            review = review_by_window.get(str(row.get("record_window_id") or ""))
+            if not review or str(review.get("review_digest") or "") != str(row.get("review_digest") or "") or str(review.get("review_digest") or "") != _digest(review.get("review") or {}):
+                return False
             evidence = row.get("gate_evidence") if isinstance(row.get("gate_evidence"), Mapping) else {}
             for category, payload in evidence.items():
                 if not isinstance(payload, Mapping):
