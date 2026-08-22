@@ -940,14 +940,5 @@ class HyperliquidRuntimeOrderAdapter:
 
     def _sync_inline_fills(self) -> None:
         for fill in self._lifecycle.fills.values():
-            raw = {
-                "tid": fill.fill_id,
-                "oid": fill.broker_order_id,
-                "cloid": fill.client_order_id,
-                "coin": self._instruments.get(fill.instrument_id).broker_symbol,
-                "side": "B" if fill.side is OrderSide.BUY else "A",
-                "px": str(fill.price),
-                "sz": str(fill.quantity),
-                "time": int(fill.occurred_at.timestamp() * 1000),
-            }
-            self._ledger.record_order_fill(fill, raw)
+            bound_fill = self._bind_fill(fill)
+            self._ledger.record_order_fill(bound_fill, self._fill_raw(bound_fill))
