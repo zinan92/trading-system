@@ -1,5 +1,43 @@
 # Decision Log
 
+## Consume the fixed-geometry Grid Testnet lifecycle (Issue #859 / PR #869)
+
+Date: 2026-08-22
+
+### Decision
+
+- Grid Testnet accepts only an explicit `long`, `short`, or `neutral` mode.
+  Boundary, midpoint, rung side, TP direction, hard-stop boundary, spacing,
+  and equal rung quantity are validated before any ladder write. Neutral must
+  contain both buy and sell legs around the midpoint; missing direction or
+  instrument identity is a blocker, never an inferred default.
+- The initial ladder is complete-or-rollback. Each submit has bounded,
+  idempotent retries; if any rung cannot be accepted, already accepted entries
+  are cancelled and the lifecycle remains blocked with durable control evidence.
+  A market crossing an unfilled rung cancels and records that rung as missed;
+  it is not chased or silently re-armed.
+- Each filled rung has its own reduce-only IOC market-equivalent TP and can
+  re-arm only after a confirmed full close at the original entry price. A
+  five-minute partial-entry deadline cancels the remainder and sizes TP from
+  authoritative fills; a late fill is reconciled into a cancel-and-replace TP.
+- One aggregate position-following reduce-only Hard Stop is refreshed after
+  every fill. Hard Stop wins over local TP, cancels competing entries/exits,
+  and uses a reduce-only emergency recovery when coverage or submission fails.
+  Unknown cancellation, fill, re-arm, or protective state never advances the
+  lifecycle. Broker open orders and account positions must reconcile to zero
+  before a revision is sealed; a Telegram outbox notification is queued with
+  immutable session/revision/digest provenance.
+- Recording boundaries are not part of this lifecycle and cannot re-evaluate
+  geometry, re-arm, cancel, flatten, reverse, or switch environment.
+
+### Verification
+
+- Merged source: `main@43e70f80d043a56a176e558f3315e081bbf90126`.
+- Trading-system focused Grid/DCA/control/broker/Park tests: 142 passed;
+  compile, diff, and gitleaks passed.
+- No network, credential value, Live activation, order write, or deployment
+  occurred; #860 is next.
+
 ## Consume the protected sequential DCA Testnet lifecycle (Issue #858 / PR #867)
 
 Date: 2026-08-22
