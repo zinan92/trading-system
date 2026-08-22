@@ -94,6 +94,22 @@ def run_attended_canary(
         }
         write_json(root / "dualtrack" / "live_dca_canary" / "current.json", [payload])
         return payload
+    except Exception as exc:  # unknown transport/factory state is fail-closed and redacted.
+        payload = {
+            "schema_version": "live-dca-canary-v1",
+            "status": "blocked",
+            "blocker": f"transport_factory_failed:{type(exc).__name__}",
+            "next_action": "notify_park_and_wait",
+            "environment": "mainnet",
+            "broker_id": "hyperliquid",
+            "strategy_scope": "dca",
+            "network_io": False,
+            "live_writes_enabled": False,
+            "real_money_eligible": False,
+            "observed_at": observed_at,
+        }
+        write_json(root / "dualtrack" / "live_dca_canary" / "current.json", [payload])
+        return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,4 +149,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

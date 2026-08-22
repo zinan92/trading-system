@@ -160,3 +160,14 @@ def test_live_dca_canary_freezes_on_unknown_entry_response(tmp_path: Path) -> No
         canary.submit_entry(0, timestamp="2026-08-22T00:01:00+00:00")
     assert canary.snapshot()["status"] == "blocked"
     assert canary.snapshot()["next_action"] == "notify_park_and_wait"
+
+
+def test_live_dca_canary_rejects_network_fixture_or_identity_mismatch(tmp_path: Path) -> None:
+    transport = FixtureTransport()
+    gate = _activated_gate(tmp_path)
+    with pytest.raises(LiveDcaCanaryError, match="network_transport_mismatch"):
+        LiveDcaCanary(tmp_path / "outputs", transport=transport, park_user_id="park", park_chat_id="chat", gate=gate, allow_network=True)
+    transport.identity = {"broker_id": "other", "environment": "mainnet", "account_id": "wrong", "environment_fingerprint": "wrong", "release_sha": "wrong"}
+    canary = LiveDcaCanary(tmp_path / "outputs", transport=transport, park_user_id="park", park_chat_id="chat", gate=gate)
+    with pytest.raises(LiveDcaCanaryError, match="transport identity"):
+        canary.start(_plan(), timestamp="2026-08-22T00:00:00+00:00")
