@@ -182,6 +182,8 @@ class TestnetSoakReadiness:
                 if reference is None:
                     raise TestnetSoakError(f"artifact_reference_missing:{category}")
                 path = Path(reference)
+                if not path.is_absolute():
+                    path = self.output_root / path
                 if not path.exists() or not path.is_file():
                     raise TestnetSoakError(f"artifact_missing:{category}")
                 try:
@@ -215,6 +217,14 @@ class TestnetSoakReadiness:
         source_attestation = dict(rows[0].get("source_attestation") or {}) if rows else {}
         if rows and not self._receipt_is_fresh({"created_at": now or datetime.now(timezone.utc).isoformat()}, rows, now=now):
             blockers.append({"code": "soak_evidence_stale"})
+        if rows and not self._artifacts_intact(rows):
+            blockers.append({"code": "soak_artifact_integrity_failed"})
+        try:
+            current_source = current_source_attestation(Path(__file__).resolve().parents[1])
+            if rows and (current_source.get("tracked_tree_clean") is not True or current_source.get("source_sha") != provenance.get("release_sha")):
+                blockers.append({"code": "soak_source_changed_before_finalize"})
+        except Exception:
+            blockers.append({"code": "soak_source_attestation_unavailable"})
         for row in rows:
             blockers.extend({"window_index": row.get("window_index"), **dict(blocker)} for blocker in row.get("blockers") or [])
             if row.get("status") != "pass":
