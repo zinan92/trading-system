@@ -68,6 +68,11 @@ class BrokerCapability(str, Enum):
     PREFLIGHT = "preflight"
     SUBMIT_ORDER = "submit_order"
     CANCEL_ORDER = "cancel_order"
+    REPLACE_ORDER = "replace_order"
+    QUERY_ORDER = "query_order"
+    OPEN_ORDERS = "open_orders"
+    ORDER_FILL = "order_fill"
+    ORDER_RECONCILIATION = "order_reconciliation"
     PROTECTIVE_RECOVERY = "protective_recovery"
     RECONCILIATION = "reconciliation"
 
@@ -217,4 +222,3 @@ class BrokerExecutionPort(Protocol):
 class BrokerReconciliationPort(Protocol):
     def run(self, run_date: str) -> dict:
         ...
-

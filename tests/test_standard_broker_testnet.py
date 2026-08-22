@@ -8,6 +8,7 @@ from services.broker_composition import (
     BrokerBuildContext,
     build_broker_execution_port,
 )
+from services.broker_port import BrokerCancelRequest, BrokerCapability
 from services.standard_broker_testnet import StandardBrokerTestnetHostError
 
 
@@ -143,6 +144,8 @@ def test_testnet_composition_is_explicit_local_fixture_and_ready(tmp_path: Path)
     assert preflight["external_network"] is True
     assert preflight["real_money_eligible"] is False
     assert preflight["transport_state"] == "local_fixture"
+    assert adapter.capabilities.supports(BrokerCapability.REPLACE_ORDER)
+    assert adapter.capabilities.supports(BrokerCapability.ORDER_RECONCILIATION)
 
 
 def test_testnet_composition_maps_canonical_order_lifecycle(tmp_path: Path) -> None:
@@ -183,6 +186,13 @@ def test_testnet_composition_maps_canonical_order_lifecycle(tmp_path: Path) -> N
     duplicate = adapter.request("order_execution", "submit", intent)
     queried = adapter.request("order_execution", "query", first.order_id)
     open_orders = adapter.request("order_execution", "open_orders", "BTC-USD-PERP")
+    canceled = adapter.cancel_order(
+        BrokerCancelRequest(
+            run_date="2026-08-22",
+            asset="BTC-USD-PERP",
+            client_order_id=first.client_order_id,
+        )
+    )
 
     assert first == duplicate
     assert first.environment is BrokerEnvironment.TESTNET
@@ -191,7 +201,8 @@ def test_testnet_composition_maps_canonical_order_lifecycle(tmp_path: Path) -> N
     assert first.release_sha == "a" * 40
     assert queried.state is OrderState.RESTING
     assert open_orders[0].order_id == first.order_id
-    assert [call[1] for call in backend.calls] == ["submit", "query", "open_orders"]
+    assert canceled.state is OrderState.CANCEL_PENDING
+    assert [call[1] for call in backend.calls] == ["submit", "query", "open_orders", "cancel"]
 
 
 def test_testnet_missing_fixture_fails_without_fallback(tmp_path: Path) -> None:
@@ -214,4 +225,27 @@ def test_testnet_missing_fixture_fails_without_fallback(tmp_path: Path) -> None:
     )
 
     with pytest.raises(StandardBrokerTestnetHostError, match="missing backend"):
+        build_broker_execution_port(context)
+
+
+def test_testnet_rejects_secret_like_credential_source(tmp_path: Path) -> None:
+    from standard_broker import CapabilityDescriptor, BrokerEnvironment
+
+    profile = CapabilityDescriptor(
+        broker_id="hyperliquid",
+        environment=BrokerEnvironment.TESTNET,
+        operations={"order_execution": frozenset({"submit"})},
+        revision="testnet-order-v1",
+    )
+    backend = FixtureBackend(profile)
+    config = _testnet_config(backend, _approval())
+    config["credential_source"] = "testnet-secret-token-123"
+    context = BrokerBuildContext(
+        output_root=tmp_path / "outputs",
+        execution_mode="live",
+        live_trading_enabled=False,
+        broker_config=config,
+    )
+
+    with pytest.raises(StandardBrokerTestnetHostError, match="credential_source"):
         build_broker_execution_port(context)

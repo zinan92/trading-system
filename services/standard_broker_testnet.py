@@ -9,11 +9,16 @@ from typing import Any
 from schemas.market_data import PaperOrder
 from services.broker_port import (
     BrokerCapabilities,
+    BrokerCancelRequest,
     BrokerCapability,
     BrokerOrderRequest,
     BrokerPortDescriptor,
     UnsupportedBrokerCapability,
     broker_port_descriptor,
+)
+from services.standard_broker_host import (
+    StandardBrokerEnvironmentIdentity,
+    validate_standard_broker_credential_source,
 )
 
 
@@ -23,6 +28,11 @@ STANDARD_BROKER_TESTNET_CAPABILITIES = BrokerCapabilities(
             BrokerCapability.PREFLIGHT,
             BrokerCapability.SUBMIT_ORDER,
             BrokerCapability.CANCEL_ORDER,
+            BrokerCapability.REPLACE_ORDER,
+            BrokerCapability.QUERY_ORDER,
+            BrokerCapability.OPEN_ORDERS,
+            BrokerCapability.ORDER_FILL,
+            BrokerCapability.ORDER_RECONCILIATION,
         }
     )
 )
@@ -105,12 +115,27 @@ class StandardBrokerTestnetExecutionAdapter:
         if not isinstance(instrument_meta, Mapping):
             raise StandardBrokerTestnetHostError("Testnet instrument metadata is required")
 
+        credential_source = validate_standard_broker_credential_source(
+            credential_source,
+            environment="testnet",
+        )
+        self.identity = StandardBrokerEnvironmentIdentity(
+            broker_id=broker_id,
+            environment="testnet",
+            environment_fingerprint=environment_fingerprint,
+            execution_scope=execution_scope,
+            account_id=account_id,
+            credential_source=credential_source,
+            runtime_id=runtime_id,
+            ledger_namespace=ledger_namespace,
+            release_sha=release_sha,
+        )
         self.broker_config = {
             "provider": self.provider,
             "broker_id": broker_id,
             "environment": "testnet",
             "account_id": account_id,
-            "credential_source": credential_source,
+            "credential_source": self.identity.credential_source,
             "runtime_id": runtime_id,
             "ledger_namespace": ledger_namespace,
             "environment_fingerprint": environment_fingerprint,
@@ -209,11 +234,17 @@ class StandardBrokerTestnetExecutionAdapter:
             "account_id": self.broker_config["account_id"],
             "runtime_id": self.broker_config["runtime_id"],
             "release_sha": self.broker_config["release_sha"],
+            "environment_fingerprint": self.broker_config["environment_fingerprint"],
+            "ledger_namespace": self.broker_config["ledger_namespace"],
             "capability_revision": result.capability_revision,
         }
 
     def submit_order(self, request: BrokerOrderRequest) -> Any:
         return self._orders.submit(self._intent_from_request(request))
+
+    def cancel_order(self, request: BrokerCancelRequest) -> Any:
+        order_id = request.client_order_id or request.broker_order_id
+        return self.request("order_execution", "cancel", order_id)
 
     def request(self, port: str, operation: str, payload: object | None = None) -> Any:
         if port != "order_execution":

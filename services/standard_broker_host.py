@@ -127,6 +127,26 @@ class StandardBrokerHostError(RuntimeError):
     """Stable host-level diagnostic for canonical broker composition failures."""
 
 
+def validate_standard_broker_credential_source(
+    value: str,
+    *,
+    environment: str,
+) -> str:
+    """Validate and return an opaque environment-variable reference name."""
+
+    normalized = str(value or "").strip()
+    canonical_environment = "mainnet" if str(environment).strip().lower() == "live" else str(environment).strip().lower()
+    if canonical_environment == "paper" and normalized.lower() == "none":
+        return "none"
+    if not _CREDENTIAL_SOURCE_RE.fullmatch(normalized):
+        raise StandardBrokerHostError(
+            "credential_source must be a non-secret environment variable reference"
+        )
+    if not _is_environment_bound(normalized, canonical_environment):
+        raise StandardBrokerHostError("credential_source is not environment-bound")
+    return normalized
+
+
 class StandardBrokerEnvironmentGateAdapter:
     """Read-only identity gate for explicitly selected non-Paper environments."""
 
