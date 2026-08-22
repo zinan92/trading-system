@@ -235,6 +235,9 @@ class LiveDcaCanary:
         if fill:
             quantity = _number(fill.get("quantity", fill.get("sz")), "fill quantity")
             actual_price = _number(fill.get("price", fill.get("px")), "fill price")
+            if quantity > entry["quantity"]:
+                self._recover_after_protection_gap(state, "fill_quantity_exceeded", timestamp=timestamp)
+                raise LiveDcaCanaryError("fill_quantity_exceeded", "fill quantity exceeds the approved DCA entry")
             state["fills"].append({"order_id": order_id, **dict(fill), "quantity": quantity, "price": actual_price, "index": int(index), "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"]})
             if abs(actual_price - entry["price"]) > state["risk_limits"]["max_slippage"]:
                 self._recover_after_protection_gap(state, "entry_slippage_exceeded", timestamp=timestamp)
@@ -242,6 +245,11 @@ class LiveDcaCanary:
             if self._projected_loss(state) > state["risk_limits"]["max_acceptable_loss"]:
                 self._recover_after_protection_gap(state, "filled_risk_budget_exceeded", timestamp=timestamp)
                 raise LiveDcaCanaryError("filled_risk_budget_exceeded", "actual fill prices consume more than the approved loss budget")
+            try:
+                self._account_snapshot(state["risk_limits"], state=state, timestamp=timestamp)
+            except LiveDcaCanaryError as exc:
+                self._recover_after_protection_gap(state, exc.code, timestamp=timestamp)
+                raise
         state["status"] = "running"
         self._event(state, "entry_submitted", timestamp=timestamp, order_id=order_id, index=int(index))
         self._save(state)
@@ -301,7 +309,7 @@ class LiveDcaCanary:
             response = self._call("cancel_order", {"order_id": order_id, "activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"], "idempotency_key": f"{state['activation_digest']}:cancel:{order_id}"}, timestamp=timestamp)
             self._require(response.get("status") not in {"unknown", "error"}, "cancel_unknown", response)
             if response.get("status") == "accepted":
-                terminal = self._call("query_order", {"order_id": order_id}, timestamp=timestamp)
+                terminal = self._call("query_order", {"order_id": order_id, "activation_digest": state["activation_digest"], "plan_digest": state["plan_digest"], "environment": "mainnet", "account_id": state["account_id"], "release_sha": state["release_sha"]}, timestamp=timestamp)
                 self._require(terminal.get("status") in {"canceled", "cancelled"}, "cancel_not_terminal", terminal)
         except LiveDcaCanaryError as exc:
             self._block(state, exc.code, timestamp=timestamp)
@@ -508,6 +516,15 @@ class LiveDcaCanary:
         method = getattr(self.transport, operation, None)
         if not callable(method):
             raise LiveDcaCanaryError("capability_gap", f"transport does not implement {operation}")
+        identity = getattr(self.transport, "identity", None)
+        expected_identity = {
+            "broker_id": request.get("broker_id", "hyperliquid"),
+            "environment": request.get("environment", "mainnet"),
+            "account_id": request.get("account_id"),
+            "release_sha": request.get("release_sha"),
+        }
+        if not isinstance(identity, Mapping) or any(identity.get(key) != value for key, value in expected_identity.items() if value is not None):
+            raise LiveDcaCanaryError("transport_identity_changed", "transport identity changed after activation")
         try:
             if operation == "account_snapshot":
                 response = method()
