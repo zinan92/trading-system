@@ -13,6 +13,25 @@
 多市场自动化交易系统:网格策略为主力,先 paper 盘验证、达标后进真钱;风控闸独立于策略永不妥协;每一笔行为可审计。(权威实施基线:docs/plans/implementation-plan-2026-07-24.md,完整产品 65% 评估)
 
 ## 现在在哪里(2026-08-22)
+- #862 / PR #877 merged as
+  `main@722dc46700ed4997c0f4f3da2a2684779f53d152`. The attended Live DCA
+  canary contract now admits only the exact #861 activation prerequisite and
+  its canonical approved DCA plan. A reviewed transport must declare matching
+  Hyperliquid/Mainnet/account/release identity and explicit capabilities;
+  there is no default network transport. The canary rechecks current account
+  ceilings before and after fills, binds exact entry quantity and slippage,
+  enforces sequential entry plus aggregate reduce-only TP/SL coverage, and
+  keeps `Cancel`, `Stop`, `Flatten`, `Kill`, and `Rollback` distinct and
+  idempotent. Cancel is limited to canary-owned orders and requires terminal
+  broker/query plus open-order reconciliation; protection and flatten receipts
+  require reduce-only identity, covered quantity, TP/SL identity, and flat
+  reconciliation. Unknown state, risk/protection/reconciliation failure, or
+  transport identity drift freezes the canary and preserves a hashed durable
+  receipt. `pipelines.live_dca_canary` records a durable blocker when no
+  reviewed transport is registered, so this merge does not enable network or
+  Live writes. Focused canary/activation/broker/Telegram/DCA/Grid/soak tests
+  passed 149 cases; diff check, compileall, and gitleaks passed. Actual Live
+  execution remains disabled pending a separately reviewed transport release.
 - #861 / PR #875 merged as
   `main@26f980c0ebab5dc5a2c446d9da47e5333afc31ea`. Live activation is now a
   source-bound, read-only proposal/confirmation protocol for Hyperliquid
@@ -96,9 +115,11 @@
   Mainnet currently resolve only to non-network, read-only identity gates;
   no order lifecycle, credential, deployment, or environment connection was
   enabled. Focused host/composition tests passed 56 cases; #857 is next.
-- #855 is the staged Testnet-to-Live execution spec. #860 and #861 are merged;
-  #862 is the remaining attended DCA canary/kill-control story. Live writes
-  remain disabled; the current user's dirty checkout was not modified.
+- #855 is the staged Testnet-to-Live execution spec. #860, #861, and #862 are
+  merged. The implementation is now complete through the attended canary
+  contract, but Live writes remain disabled until a separately reviewed
+  Hyperliquid transport is explicitly registered and attended; the current
+  user's dirty checkout was not modified.
 
 ## 现在在哪里(2026-08-21)
 - #852 / PR #853 consumes the merged `standard-broker` Paper host contract at
